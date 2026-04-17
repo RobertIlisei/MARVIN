@@ -1,0 +1,22 @@
+node_modules/
+.next/
+.turbo/
+dist/
+*.tsbuildinfo
+
+# MARVIN runtime data (transcripts, cost, cache) — not checked in
+data/.marvin/
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0b0b0d;
+  --foreground: #e6e6e9;
+  --muted: #1a1a1e;
+  --accent: #3ea6ff;
+  --danger: #ff6b6b;
+  --success: #3dd68c;
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, "Menlo", monospace;
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: var(--accent);
+}

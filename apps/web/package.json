@@ -1,0 +1,34 @@
+{
+  "name": "@marvin/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 3030",
+    "build": "next build",
+    "start": "next start --port 3030",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf .next .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@marvin/runtime": "workspace:*",
+    "@marvin/tools": "workspace:*",
+    "@marvin/project-context": "workspace:*",
+    "@marvin/graphify-bridge": "workspace:*",
+    "@marvin/git-watch": "workspace:*",
+    "@marvin/ui": "workspace:*",
+    "next": "^16.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.3"
+  }
+}
