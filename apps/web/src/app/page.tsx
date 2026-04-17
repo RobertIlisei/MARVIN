@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { MarvinBrain } from "@/components/brain/marvin-brain";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
+import { FileTree } from "@/components/file-tree/file-tree";
 import { ChatInput } from "@/components/input/chat-input";
 import { StatusBar } from "@/components/shell/status-bar";
 
@@ -22,6 +23,7 @@ export default function Home() {
   } = useChatStream();
 
   const [cwd, setCwd] = useState<string>("");
+  const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     try {
@@ -118,7 +120,21 @@ export default function Home() {
 
   return (
     <main className="flex h-screen w-screen overflow-hidden">
-      {/* LEFT — chat column */}
+      {/* LEFT — file tree */}
+      <aside className="hidden w-[240px] shrink-0 flex-col border-r border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/30 lg:flex">
+        <div className="flex items-center justify-between border-b border-[color:var(--color-border)] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-fg-faint)]">
+          <span>files</span>
+        </div>
+        <div className="min-h-0 flex-1">
+          <FileTree
+            cwd={cwd}
+            onSelect={setSelectedPath}
+            {...(selectedPath ? { selectedPath } : {})}
+          />
+        </div>
+      </aside>
+
+      {/* CENTER — chat column */}
       <section className="flex min-w-0 flex-1 flex-col">
         {/* Header */}
         <header className="flex items-center gap-4 px-6 py-4">

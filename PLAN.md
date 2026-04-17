@@ -299,7 +299,7 @@ http://localhost:3030/api/chat -d '{"message":"hello","cwd":"..."}'` SSE-streams
 a MARVIN-voiced reply when credentials are available (host OAuth via
 `MARVIN_USE_HOST_CREDENTIALS=1` or `ANTHROPIC_API_KEY`).
 
-### Phase 2 — Chat + tools (week 2) · **[partially shipped 2026-04-17]**
+### Phase 2 — Chat + tools (week 2) · **[shipped 2026-04-17]**
 
 - [done] Typography + design system: Geist Sans / Geist Mono via
   `next/font/google`; Tailwind v4 `@theme` tokens for the MARVIN palette;
@@ -345,15 +345,29 @@ call card), applies, runs typecheck, offers to commit. Reached once
 credentials are available in the env (`ANTHROPIC_API_KEY` or
 `MARVIN_USE_HOST_CREDENTIALS=1`).
 
-### Phase 3 — File tree + terminal + diff viewer (week 3)
+### Phase 3 — File tree + terminal + diff viewer (week 3) · **[in progress]**
 
-- `components/file-tree/` — fetches `/api/files/tree`, shows unstaged badges
-  by shelling `git status --porcelain`.
-- `components/terminal/` — xterm.js bound to `/api/terminal/run` SSE.
-- `components/diff/` — monaco diff viewer, mounts automatically when an `Edit`
-  tool call is pending.
-- Layout shell (`components/shell/layout.tsx`) wires all three panes with
-  resizable splits.
+- [done] `/api/files/tree?cwd=<path>&depth=<n>` — Node fs walker with
+  ignore-list (node_modules, .git, .next, venv, __pycache__, target,
+  dist, build, coverage, caches), MAX_ENTRIES=2000 cap, depth-limited
+  (default 6), returns `{ root, tree, truncated, count }`.
+- [done] `components/file-tree/file-tree.tsx` — collapsible folders,
+  click-to-select files, root children expanded by default, rendered
+  as a `scroll-thin` monospace column at 240px width. Left-pinned as
+  the first pane in the split-view conversation layout.
+- [done] Main layout upgraded from 2-pane to 3-pane in conversation
+  mode: tree · chat · brain/meta. Hero view unchanged.
+- [pending] Git-status badges on tree nodes (shell `git status
+  --porcelain`, render unstaged/modified/untracked markers).
+- [pending] `/api/files/content?cwd=…&path=…` — read-one endpoint with
+  binary-file guard + size cap.
+- [pending] `components/terminal/term.tsx` — xterm.js bound to
+  `/api/terminal/run` SSE. Pty-less; spawns child_process with cwd and
+  streams stdout/stderr chunked.
+- [pending] `components/diff/diff-viewer.tsx` — monaco-editor diff
+  mode, mounted automatically when an `Edit` tool call is pending.
+- [pending] Resizable splits via a thin drag handle; persists sizes to
+  localStorage.
 
 **Milestone:** visual parity with the 3-pane mock-up — tree on left, chat
 centre, terminal at the bottom; editing a file updates the tree badge; the
@@ -478,6 +492,23 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `@marvin/project-context` now injects both into every first-message
   prompt. Milestone exit checklist enforces blast-radius entries aren't
   forgotten mid-implementation.
+- **2026-04-17 (late night — Phase 2 close, Phase 3 start)** — Brain
+  density rework after the previous version felt laggy and sparse.
+  NODES went from 20 → 45, EDGES 35 → 95, organised into six clusters
+  (frontal / crown / occipital / hub / temporal / bridges). Head
+  silhouette replaced with a clean ovoid (no more bulb-base
+  artefact). Idle now has continuous low-rate firing (22% of edges);
+  writing peaks at 85% with 3 particles per firing edge. Added edge
+  opacity-pulse (cheap suggestion of latent flow), ambient dust
+  particles orbiting inside the silhouette, and firing-edge
+  baseline highlight. Replaced the expensive `<feGaussianBlur>`
+  filter on particles with CSS `filter: drop-shadow()` (GPU-
+  composited) — fixes the lag. Phase 3 kicked off: `/api/files/tree`
+  endpoint (fs-walker, ignore-list, 2000-entry cap) and
+  `<FileTree>` component landed; main layout upgraded to 3-pane
+  (tree · chat · brain) in conversation mode. Phase 2 marked
+  shipped; remaining confirm-gate + tool impls tracked under Phase 2
+  follow-ups.
 - **2026-04-17 (night — Phase 2 polish)** — Hero + ambient polish pass.
   Empty-state rewritten as a centered hero: 360px MARVIN brain with
   `hero-brain-intro` entry animation, glowing `MARVIN` wordmark
