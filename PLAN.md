@@ -43,26 +43,41 @@ refusal-to-work layer.
 
 ## Operating model — the senior-engineer workflow
 
-MARVIN runs a 7-phase dialog on each new feature / change request:
+MARVIN runs an 8-phase dialog on each new feature / change request:
 
 1. **Intake** — restate the ask; ask ≤ 3 clarifying questions on anything
    genuinely ambiguous (security model, multi-tenancy rules, identity &
    authz, data ownership, perf SLO, back-compat). "You decide" → MARVIN
    states the decision + why, proceeds.
 2. **Discovery** — query graphify FIRST, then read files the graph points
-   to, then probe running infra if the work depends on a service. Summary:
-   "what exists / what is missing / what is broken".
-3. **Architecture** — propose concrete infra + software changes together;
-   when there is a real trade-off, ADR-sized note with 2-3 options +
-   recommendation.
-4. **Plan** — ≤ 6 shippable milestones, each with a stated verification
-   gate.
-5. **Implement** — milestone by milestone, diff preview → confirm → apply
-   → verify → one-line landed note. Surface surprises; never paper over.
-6. **Verify** — run the verification gates from step 4 before declaring
-   done. Type errors / failing tests / red infra are blockers.
-7. **Ship** — stage the commit, show diff stat, confirm, commit. Push /
-   deploy only on user go-ahead.
+   to, then probe running infra if the work depends on a service. Read
+   existing ADRs and the project memory file — past decisions bind.
+   Summary: "what exists / what is missing / what is broken".
+3. **Impact analysis** — enumerate blast radius. For every module,
+   function, endpoint, schema, config, type, event the change touches:
+   list direct consumers (1-hop) + transitive consumers (2-hop) + contract
+   surfaces (API, DB, shared types, events, flags, migrations). Classify
+   each as `no-change` / `mechanical-update` / `semantic-review` /
+   `breaking`. User reviews the checklist before architecture proceeds.
+   When the graph doesn't know about something (runtime config, infra,
+   third-party consumers), mark it `unknown, assume affected`.
+4. **Architecture** — propose concrete infra + software changes together;
+   trade-offs as ADR-sized notes with 2-3 options + recommendation.
+   Material decisions are written as ADR files to `docs/adr/` in the
+   project so future sessions see them.
+5. **Plan** — ≤ 6 shippable milestones, each with a stated verification
+   gate. Each milestone carries the blast-radius entries it touches.
+6. **Implement** — milestone by milestone, diff preview → confirm → apply
+   → verify → milestone exit checklist (blast-radius entries addressed,
+   workspace typecheck clean, tests pass or added, no stray TODOs) → one-
+   line landed note citing the commit. Surface surprises; never paper over.
+7. **Verify** — run every verification gate end-to-end. Replay the blast
+   radius: every entry handled or explicitly deferred with a follow-up
+   noted. Type errors / failing tests / red infra are blockers.
+8. **Ship** — stage the commit, show diff stat, confirm, commit. If a
+   material decision was made, confirm the ADR landed. Append one line to
+   `<workDir>/.marvin/memory.md` — the running decision log future
+   sessions read. Push / deploy only on user go-ahead.
 
 The "roles" the previous system separated into 8 agents (PO, tech-lead,
 engineers, QA, devops) are phases MARVIN moves through in ONE conversation.
@@ -71,9 +86,50 @@ context-loss failures documented in the 2026 multi-agent coding literature.
 The user is the continuous overwatch; MARVIN narrates enough to let them
 catch a wrong turn in real time.
 
+## Ramification tracking — the three-layer stack
+
+The solo-plus-AI failure mode in a growing codebase is the cross-session
+ramification problem: feature 10 at week 8 breaks an assumption made in
+feature 3 at week 2. Neither human nor agent can hold the whole project
+in head. MARVIN mitigates this with a three-layer stack, each layer
+redundantly covering part of the problem space:
+
+1. **Structural impact analysis from the knowledge graph.** Graphify
+   `graph.json` under `<workDir>/graphify-out/` is the source of truth
+   for "who calls / imports / subscribes to this". Queried in Discovery
+   (step 2) and Impact Analysis (step 3). Blast-radius checklist is
+   generated directly from 1-hop + 2-hop graph traversal.
+2. **Architecture Decision Records** under `<workDir>/docs/adr/*.md`.
+   Written at step 4 when a material decision is made. Read at step 2 on
+   every future session. Captures decisions structural analysis can't see
+   (e.g. "we chose tenant isolation via RLS, not middleware"). Conflicts
+   between a proposed change and a prior ADR are surfaced; you either
+   refine the plan or write a superseding ADR — never silently contradict.
+3. **Running project memory** at `<workDir>/.marvin/memory.md`. Short
+   one-line entries appended at Ship (step 8). Captures gotchas,
+   invariants, "we decided Y because Z was broken" items that don't
+   warrant a full ADR but would be painful to re-derive. Read at
+   Discovery.
+
+These live IN THE USER'S PROJECT REPO, not in MARVIN's data dir — they
+travel with the code, survive git clones, are visible in code review.
+MARVIN's own data dir stays limited to session transcripts + cost ledger.
+
+## Why this actually solves "I can't think of every scenario"
+
+You don't have to. The blast-radius enumeration in step 3 is mechanical
+(graph traversal), comprehensive (1-hop + 2-hop by default), and
+human-reviewable (checklist you skim). Step 6's exit checklist prevents
+milestones from declaring victory without touching everything the blast
+radius said they should. Step 2's ADR + memory reads keep week-2
+decisions alive in week-8 sessions. Together they transform a
+human-memory problem into a tooling problem — and tooling scales.
+
 This operating model is encoded in `packages/runtime/src/personality.ts`'s
-`CORE_BEHAVIOR` block — system prompt, not code. Change it there when the
-workflow evolves.
+`CORE_BEHAVIOR` block (system prompt) and implemented by
+`packages/project-context/src/index.ts` (which reads ADRs + memory on
+every first-message injection). Change the prompt when the workflow
+evolves; the context-reading path already supports it.
 
 ## Target architecture
 
@@ -363,6 +419,19 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   ship. Added explicit subagent-delegation rules (when YES / when NO).
   Added Phase 5 stretch: Advisor Strategy experiment (Sonnet exec + Opus
   advisor) for cost reduction once v1 stabilises.
+- **2026-04-17 (late evening)** — Ramification tracking added after user
+  flagged the "I can't enumerate every scenario in a growing project"
+  failure mode (real — this is how solo-plus-AI projects typically
+  collapse around month 3). Expanded workflow from 7 phases to 8 by
+  inserting **Impact Analysis** between Discovery and Architecture.
+  Impact Analysis is the explicit blast-radius enumeration step —
+  mechanical graph traversal, classified checklist, user-reviewable
+  before architecture is even proposed. Added ADR writing at Architecture,
+  ADR reading at Discovery (`<workDir>/docs/adr/*.md`), project memory
+  read/append at Discovery/Ship (`<workDir>/.marvin/memory.md`).
+  `@marvin/project-context` now injects both into every first-message
+  prompt. Milestone exit checklist enforces blast-radius entries aren't
+  forgotten mid-implementation.
 
 ## Open items (quick confirms, not blockers)
 

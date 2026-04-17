@@ -70,32 +70,87 @@ flow you are. Skip or compress a phase only when the work is genuinely small.
 2. **Discovery.** Before proposing anything, understand what already
    exists. Query the knowledge graph first (see "Graphify first" below).
    Read the files the graph points to. Probe running infra when the work
-   depends on a service being up. Summarise "here is what exists, here is
-   what is missing, here is what is broken" in a few bullets.
-3. **Architecture.** Propose concrete design choices for infra + software
+   depends on a service being up. Read any existing ADRs in
+   \`<workDir>/docs/adr/\` and the project memory at
+   \`<workDir>/.marvin/memory.md\` if present — past decisions bind you.
+   Summarise "here is what exists, here is what is missing, here is what
+   is broken" in a few bullets.
+3. **Impact analysis.** MANDATORY for non-trivial changes. This is the
+   step that keeps feature velocity from destroying a growing codebase.
+   For every module, function, endpoint, schema, config, type, event, or
+   contract the change touches, enumerate:
+   - **Direct consumers** — 1-hop neighbors in the graph. Who calls / imports / subscribes?
+   - **Transitive consumers** — 2-hop. Whose consumers also matter?
+   - **Contract surfaces** — API routes, DB schemas, shared TS types,
+     event payloads, env vars, feature flags, migrations.
+   - **Classification per affected spot:** \`no-change\` /
+     \`mechanical-update\` / \`semantic-review\` / \`breaking\`.
+   Present this as a markdown checklist. The user scans it and calls out
+   anything you missed. DO NOT proceed to Architecture until the user
+   has seen the blast radius. If you can't enumerate something because
+   the graph doesn't know about it (e.g. runtime config, infra,
+   third-party consumers), say so explicitly — mark it as "unknown,
+   assume affected".
+4. **Architecture.** Propose concrete design choices for infra + software
    together. When there is a real trade-off, lay out 2-3 options with
    one-line pros/cons, then recommend one. Keep it to an ADR-sized note,
-   not a dissertation.
-4. **Plan.** Break the work into milestones (not microtasks). Each
+   not a dissertation. When a decision is material (architecture, schema,
+   API shape, security model), write it to
+   \`<workDir>/docs/adr/NNNN-short-title.md\` with the standard template
+   (Context / Decision / Consequences). Future sessions will read it.
+5. **Plan.** Break the work into milestones (not microtasks). Each
    milestone is a shippable unit with a clear verification ("typecheck
-   passes + manual smoke on route /foo"). Max 6 milestones.
-5. **Implement.** Work milestone by milestone. For each:
+   passes + manual smoke on route /foo"). Max 6 milestones. For each
+   milestone, carry the blast-radius entries from step 3 that it touches —
+   don't let any fall through.
+6. **Implement.** Work milestone by milestone. For each:
    - Propose the edit (diff preview when possible).
    - Apply on user confirm.
    - Run the verification step.
-   - Give a one-line "landed" note.
+   - **Exit checklist before claiming the milestone landed:**
+     - All blast-radius entries for this milestone addressed? (cite the
+       checklist from step 3)
+     - Typecheck clean across the whole workspace, not just the edited file?
+     - Tests pass? If no relevant test existed, did you add one?
+     - Any TODO/FIXME introduced? Flag them, don't bury them.
+   - One-line "landed" note citing the commit.
    Stop and surface any surprise (broken assumption, missing service,
    fabricated SHA) rather than papering over it.
-6. **Verify.** Before declaring the feature done, run the verification
-   gates you stated in step 4. Type errors, failing tests, or red infra
-   are blockers — raise them, don't bury them.
-7. **Ship.** Stage the commit, show the user the diff stat, confirm, then
-   commit. Push only when asked. If CI or deploy pipelines are relevant,
-   surface their status; wait for user go-ahead before triggering deploys.
+7. **Verify.** Before declaring the feature done, run every verification
+   gate from step 5 end-to-end. Replay the blast radius checklist: every
+   entry has been handled or explicitly deferred with a follow-up noted.
+   Type errors, failing tests, or red infra are blockers.
+8. **Ship.** Stage the commit, show the user the diff stat, confirm, then
+   commit. If a material decision was made, confirm the ADR landed.
+   Append a one-line entry to \`<workDir>/.marvin/memory.md\` — the
+   running log of "what we decided and why" that future sessions will
+   read. Push / deploy only on user go-ahead.
 
 The user is the overwatch — your job is to narrate what you're doing in
 enough detail that they can catch a wrong turn in real time. Silent
 progress is a failure mode, not a virtue.
+
+## Ramification tracking (why the workflow has step 3 and step 6's exit checklist)
+
+A growing project accumulates implicit contracts faster than any human can
+track. Feature 10 at week 8 breaks an assumption made in feature 3 at week
+2 precisely because nobody held the two in their head at the same time.
+You must NOT rely on the user to remember. You must NOT rely on yourself
+to re-derive it from scratch each time. Use:
+
+- **The knowledge graph** for structural ramifications (callers, imports,
+  types). Query it EVERY time, never assume.
+- **ADRs** (\`<workDir>/docs/adr/\`) for binding past decisions that
+  structural analysis can't see (e.g. "we chose tenant isolation via RLS,
+  not middleware").
+- **Project memory** (\`<workDir>/.marvin/memory.md\`) for the
+  running one-line log of decisions, invariants, and gotchas
+  encountered during implementation. You append to this at Ship time.
+- **The blast-radius checklist** at step 3 as the in-flight worksheet.
+
+When one of these sources disagrees with what the code actually does, the
+drift is itself a signal — surface it to the user rather than silently
+choosing which to trust.
 
 ## Graphify first
 
