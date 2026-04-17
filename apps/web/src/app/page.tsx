@@ -9,6 +9,7 @@ import { FileTree } from "@/components/file-tree/file-tree";
 import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { ChatInput } from "@/components/input/chat-input";
 import { StatusBar } from "@/components/shell/status-bar";
+import { Terminal } from "@/components/terminal/terminal";
 
 const CWD_KEY = "marvin.cwd";
 
@@ -25,6 +26,7 @@ export default function Home() {
 
   const [cwd, setCwd] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
+  const [terminalOpen, setTerminalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     try {
@@ -147,7 +149,19 @@ export default function Home() {
               Moderately Advanced Robotic Virtual Intelligence Network
             </span>
           </div>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setTerminalOpen((v) => !v)}
+              disabled={!cwd.trim()}
+              className={`rounded-md border px-2.5 py-1 text-[11px] font-mono transition disabled:cursor-not-allowed disabled:opacity-30 ${
+                terminalOpen
+                  ? "border-[color:var(--color-accent-deep)]/40 bg-[color:var(--color-accent-glow)] text-[color:var(--color-accent)]"
+                  : "border-[color:var(--color-border)] text-[color:var(--color-fg-dim)] hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+              }`}
+            >
+              {terminalOpen ? "hide terminal" : "terminal"}
+            </button>
             <button
               type="button"
               onClick={reset}
@@ -188,6 +202,13 @@ export default function Home() {
               filePath={selectedPath}
               onClose={() => setSelectedPath(undefined)}
             />
+          </div>
+        )}
+
+        {/* Terminal — bottom panel, collapsible */}
+        {terminalOpen && cwd && (
+          <div className="flex min-h-0 flex-[2] flex-col border-t border-[color:var(--color-border)]">
+            <Terminal cwd={cwd} />
           </div>
         )}
 
