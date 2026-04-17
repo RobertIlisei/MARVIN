@@ -47,8 +47,74 @@ export default function Home() {
     el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  // Drive the ambient backdrop from MARVIN's current state.
+  useEffect(() => {
+    document.body.setAttribute("data-marvin", marvinState);
+    return () => {
+      document.body.setAttribute("data-marvin", "idle");
+    };
+  }, [marvinState]);
+
   const isEmpty = messages.length === 0;
   const busy = marvinState !== "idle" && marvinState !== "error";
+
+  if (isEmpty) {
+    return (
+      <main className="flex h-screen w-screen flex-col overflow-hidden">
+        {/* Header (minimal) */}
+        <header className="flex items-center gap-4 px-6 py-4">
+          <div className="flex items-baseline gap-3">
+            <span className="font-mono text-sm font-medium tracking-[0.18em] text-[color:var(--color-fg-dim)]">
+              M · A · R · V · I · N
+            </span>
+          </div>
+          <div className="ml-auto font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
+            v0.0.1 · phase 2
+          </div>
+        </header>
+
+        {/* Hero centerpiece */}
+        <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center justify-center gap-6 overflow-y-auto px-6 py-4">
+          <div className="hero-brain-intro flex flex-col items-center gap-3">
+            <MarvinBrain state={marvinState} size={360} />
+            <div className="flex flex-col items-center gap-1.5 text-center">
+              <h1 className="title-glow font-mono text-3xl font-semibold tracking-tight text-[color:var(--color-accent)] md:text-4xl">
+                MARVIN
+              </h1>
+              <p className="max-w-md text-xs text-[color:var(--color-fg-dim)] md:text-sm">
+                Moderately Advanced Robotic Virtual Intelligence Network.
+                <br />
+                <span className="text-[color:var(--color-fg-faint)]">
+                  Point me at a project, tell me what you want. I&apos;ll ask,
+                  check the code, propose a plan, then write it.
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <blockquote className="glass max-w-xl rounded-2xl px-5 py-3 text-center text-xs italic text-[color:var(--color-fg)]/80 md:text-sm">
+            &ldquo;Here I am, brain the size of a planet, and they ask me to
+            build a login page. Fine. Reading your codebase…&rdquo;
+            <div className="mt-1.5 text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
+              — MARVIN
+            </div>
+          </blockquote>
+        </div>
+
+        {/* Input dock — pinned to bottom */}
+        <div className="mx-auto w-full max-w-2xl px-6 pb-8">
+          <ChatInput
+            cwd={cwd}
+            onCwdChange={setCwd}
+            onSend={(text) => send(text, cwd)}
+            onCancel={cancel}
+            busy={busy}
+            disabled={!cwd.trim()}
+          />
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="flex h-screen w-screen overflow-hidden">
@@ -57,7 +123,7 @@ export default function Home() {
         {/* Header */}
         <header className="flex items-center gap-4 px-6 py-4">
           <div className="flex items-baseline gap-3">
-            <span className="font-mono text-2xl font-semibold tracking-tight text-[color:var(--color-accent)]">
+            <span className="title-glow font-mono text-2xl font-semibold tracking-tight text-[color:var(--color-accent)]">
               MARVIN
             </span>
             <span className="text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
@@ -90,15 +156,11 @@ export default function Home() {
           ref={scrollerRef}
           className="scroll-thin flex-1 overflow-y-auto px-6 py-6"
         >
-          {isEmpty ? (
-            <EmptyState cwd={cwd} />
-          ) : (
-            <div className="mx-auto flex max-w-3xl flex-col gap-4">
-              {messages.map((m) => (
-                <MessageView key={m.id} message={m} />
-              ))}
-            </div>
-          )}
+          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+            {messages.map((m) => (
+              <MessageView key={m.id} message={m} />
+            ))}
+          </div>
         </div>
 
         {/* Input dock */}
@@ -161,60 +223,3 @@ function labelFor(state: string): string {
   );
 }
 
-function EmptyState({ cwd }: { cwd: string }) {
-  return (
-    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 pt-12 text-center">
-      <div className="font-mono text-xs uppercase tracking-[0.4em] text-[color:var(--color-fg-faint)]">
-        what are we building?
-      </div>
-      <h1 className="text-3xl font-semibold leading-snug text-[color:var(--color-fg)]">
-        Point me at a project and{" "}
-        <span className="text-[color:var(--color-accent)]">tell me what you want</span>.
-        <br />
-        <span className="text-[color:var(--color-fg-dim)] text-2xl">
-          I&apos;ll ask the questions, check the code, and propose a plan before
-          I write a single line.
-        </span>
-      </h1>
-
-      <div className="flex flex-col gap-2 pt-2 text-left text-sm text-[color:var(--color-fg-dim)]">
-        <div className="flex gap-3">
-          <span className="font-mono text-[color:var(--color-accent)]">1.</span>
-          <span>
-            Set a <strong className="text-[color:var(--color-fg)]">project directory</strong> below
-            {cwd ? "" : " (required)"}.
-          </span>
-        </div>
-        <div className="flex gap-3">
-          <span className="font-mono text-[color:var(--color-accent)]">2.</span>
-          <span>
-            Tell me what to build. E.g.{" "}
-            <em className="text-[color:var(--color-fg)]">
-              &ldquo;add admin-dashboard auth separate from the business dashboard,
-              multi-tenant&rdquo;
-            </em>
-            .
-          </span>
-        </div>
-        <div className="flex gap-3">
-          <span className="font-mono text-[color:var(--color-accent)]">3.</span>
-          <span>
-            I move through{" "}
-            <strong className="text-[color:var(--color-fg)]">
-              intake → discovery → impact analysis → architecture → plan → implement → verify → ship
-            </strong>
-            , surfacing the blast radius before touching anything.
-          </span>
-        </div>
-      </div>
-
-      <blockquote className="glass mt-4 max-w-xl rounded-2xl px-5 py-4 text-left text-sm italic text-[color:var(--color-fg)]/80">
-        &ldquo;Here I am, brain the size of a planet, and they ask me to build
-        a login page. Fine. Reading your codebase…&rdquo;
-        <div className="mt-2 text-right text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
-          — MARVIN
-        </div>
-      </blockquote>
-    </div>
-  );
-}

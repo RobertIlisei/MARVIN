@@ -164,7 +164,7 @@ const HEAD_PATH = `
   .replace(/\s+/g, " ")
   .trim();
 
-function activityPerState(state: MarvinState): {
+interface ActivityProfile {
   /** Fraction of edges that carry firing particles. */
   firingRatio: number;
   /** Max particles active simultaneously. */
@@ -173,16 +173,39 @@ function activityPerState(state: MarvinState): {
   duration: number;
   /** CSS class applied to the SVG root for hue / filter. */
   rootClass: string;
-} {
+  /** Concentric halo rings rippling outward (0 = none). */
+  haloRings: number;
+  /** Escape sparks drifting off the silhouette (0 = none). */
+  sparks: number;
+  /** Node breathing intensity. */
+  breathe: "calm" | "normal" | "intense";
+  /** Node glow outer-radius scale. */
+  nodeGlowScale: number;
+}
+
+function activityPerState(state: MarvinState): ActivityProfile {
   switch (state) {
     case "idle":
-      return { firingRatio: 0, maxParticles: 0, duration: 2.4, rootClass: "" };
+      return {
+        firingRatio: 0,
+        maxParticles: 0,
+        duration: 2.4,
+        rootClass: "",
+        haloRings: 1,
+        sparks: 0,
+        breathe: "calm",
+        nodeGlowScale: 2.2,
+      };
     case "thinking":
       return {
         firingRatio: 0.35,
         maxParticles: 6,
         duration: 2.1,
         rootClass: "",
+        haloRings: 2,
+        sparks: 3,
+        breathe: "normal",
+        nodeGlowScale: 2.6,
       };
     case "tool":
       return {
@@ -190,6 +213,10 @@ function activityPerState(state: MarvinState): {
         maxParticles: 10,
         duration: 1.6,
         rootClass: "",
+        haloRings: 3,
+        sparks: 5,
+        breathe: "normal",
+        nodeGlowScale: 2.8,
       };
     case "writing":
       return {
@@ -197,6 +224,10 @@ function activityPerState(state: MarvinState): {
         maxParticles: 14,
         duration: 1.2,
         rootClass: "",
+        haloRings: 3,
+        sparks: 7,
+        breathe: "intense",
+        nodeGlowScale: 3.1,
       };
     case "error":
       return {
@@ -204,6 +235,10 @@ function activityPerState(state: MarvinState): {
         maxParticles: 6,
         duration: 1.8,
         rootClass: "marvin-brain-error",
+        haloRings: 2,
+        sparks: 2,
+        breathe: "normal",
+        nodeGlowScale: 2.6,
       };
   }
 }
@@ -248,6 +283,53 @@ export function MarvinBrain({
     );
     return shuffled.slice(0, count);
   }, [state, activity.firingRatio, activity.maxParticles]);
+
+  // Deterministic spark trajectories around the silhouette. Same state → same
+  // positions, so the animation doesn't churn across renders.
+  const sparks = useMemo(() => {
+    if (activity.sparks === 0) return [];
+    const out: Array<{
+      x: number;
+      y: number;
+      dx: number;
+      dy: number;
+      delay: number;
+      duration: number;
+    }> = [];
+    let h = 0x811c9dc5;
+    for (let i = 0; i < state.length; i++) {
+      h ^= state.charCodeAt(i);
+      h = (h * 16777619) >>> 0;
+    }
+    const next = () => {
+      h = (h * 16807 + 17) >>> 0;
+      return (h & 0xffff) / 0xffff;
+    };
+    for (let i = 0; i < activity.sparks; i++) {
+      const angle = next() * Math.PI * 2;
+      const r = 180 + next() * 40;
+      const x = 250 + Math.cos(angle) * r;
+      const y = 260 + Math.sin(angle) * r * 0.9;
+      const dx = Math.cos(angle) * (60 + next() * 40);
+      const dy = Math.sin(angle) * (60 + next() * 40) * 0.85;
+      out.push({
+        x,
+        y,
+        dx,
+        dy,
+        delay: next() * 3,
+        duration: 2.4 + next() * 1.6,
+      });
+    }
+    return out;
+  }, [state, activity.sparks]);
+
+  const breatheName =
+    activity.breathe === "calm"
+      ? "breathe-calm"
+      : activity.breathe === "intense"
+        ? "fire-intense"
+        : "breathe";
 
   return (
     <div
@@ -299,7 +381,7 @@ export function MarvinBrain({
           </filter>
         </defs>
 
-        {/* Halo */}
+        {/* Core halo (soft glow behind the head) */}
         <circle
           cx="250"
           cy="260"
@@ -308,13 +390,41 @@ export function MarvinBrain({
           style={{
             animation:
               state === "idle"
-                ? "halo-pulse 4s ease-in-out infinite"
+                ? "halo-pulse 5s ease-in-out infinite"
                 : state === "writing"
                   ? "halo-pulse 1.6s ease-in-out infinite"
                   : "halo-pulse 2.4s ease-in-out infinite",
             transformOrigin: "250px 260px",
           }}
         />
+
+        {/* Concentric rippling halo rings — one per activity step */}
+        {Array.from({ length: activity.haloRings }).map((_, i) => {
+          const ringDuration =
+            state === "idle"
+              ? 7.5
+              : state === "writing"
+                ? 2.8
+                : 4.2;
+          const delay = (ringDuration / activity.haloRings) * i;
+          const ringAnim = state === "idle" ? "halo-ring-calm" : "halo-ring";
+          return (
+            <circle
+              key={`ring-${i}`}
+              cx="250"
+              cy="260"
+              r={180}
+              fill="none"
+              stroke="var(--color-accent)"
+              strokeOpacity={state === "idle" ? 0.1 : 0.2}
+              strokeWidth={0.8}
+              style={{
+                animation: `${ringAnim} ${ringDuration}s ease-out ${delay}s infinite`,
+                transformOrigin: "250px 260px",
+              }}
+            />
+          );
+        })}
 
         {/* Head outline */}
         <path
@@ -360,17 +470,22 @@ export function MarvinBrain({
           {NODES.map((n, i) => {
             const r = 2.8 + (n.weight ?? 1) * 0.8;
             const delay = `${(i * 0.13) % 2.4}s`;
-            const duration = state === "writing" ? "1.3s" : "2.4s";
+            const duration =
+              activity.breathe === "intense"
+                ? "1.3s"
+                : activity.breathe === "calm"
+                  ? "3.6s"
+                  : "2.4s";
             return (
               <g key={n.id}>
                 <circle
                   cx={n.x}
                   cy={n.y}
-                  r={r * 2.6}
+                  r={r * activity.nodeGlowScale}
                   fill="url(#marvin-node-glow)"
                   opacity={0.5}
                   style={{
-                    animation: `${state === "error" || state === "writing" ? "fire-intense" : "breathe"} ${duration} ease-in-out infinite`,
+                    animation: `${breatheName} ${duration} ease-in-out infinite`,
                     animationDelay: delay,
                     transformOrigin: `${n.x}px ${n.y}px`,
                   }}
@@ -381,7 +496,7 @@ export function MarvinBrain({
                   r={r}
                   fill="var(--color-accent)"
                   style={{
-                    animation: `breathe ${duration} ease-in-out infinite`,
+                    animation: `${breatheName} ${duration} ease-in-out infinite`,
                     animationDelay: delay,
                     transformOrigin: `${n.x}px ${n.y}px`,
                   }}
@@ -390,6 +505,29 @@ export function MarvinBrain({
             );
           })}
         </g>
+
+        {/* Escape sparks — drift off the silhouette while MARVIN works */}
+        {sparks.length > 0 && (
+          <g filter="url(#marvin-particle-glow)">
+            {sparks.map((s, i) => (
+              <circle
+                key={`spark-${i}`}
+                cx={s.x}
+                cy={s.y}
+                r={1.6}
+                fill="#e8f8ff"
+                style={
+                  {
+                    "--spark-dx": `${s.dx}px`,
+                    "--spark-dy": `${s.dy}px`,
+                    animation: `spark-drift ${s.duration}s ease-out ${s.delay}s infinite`,
+                    transformOrigin: `${s.x}px ${s.y}px`,
+                  } as React.CSSProperties
+                }
+              />
+            ))}
+          </g>
+        )}
 
         {/* Firing particles — CSS offset-path along the edge shape */}
         <g filter="url(#marvin-particle-glow)">
