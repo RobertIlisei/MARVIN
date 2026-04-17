@@ -299,18 +299,51 @@ http://localhost:3030/api/chat -d '{"message":"hello","cwd":"..."}'` SSE-streams
 a MARVIN-voiced reply when credentials are available (host OAuth via
 `MARVIN_USE_HOST_CREDENTIALS=1` or `ANTHROPIC_API_KEY`).
 
-### Phase 2 — Chat + tools (week 2)
+### Phase 2 — Chat + tools (week 2) · **[partially shipped 2026-04-17]**
 
-- Build `packages/tools/` (the 8 tools + policy).
-- Wire tools into `packages/runtime/`.
-- Build chat UI: `chat-stream`, `confirm-prompt`, cost meter.
-- Port `packages/git-watch/` and `packages/graphify-bridge/`.
-- Confirm-before-act: every `Edit` / `Write` / risky `Bash` renders a prompt
-  card the user must allow / deny before execution.
+- [done] Typography + design system: Geist Sans / Geist Mono via
+  `next/font/google`; Tailwind v4 `@theme` tokens for the MARVIN palette;
+  glass-morphism + ambient radial backdrop; thin scrollbars; `rise-in`
+  animation for streaming chat; five keyframes for the brain states.
+- [done] **MARVIN brain** (`components/brain/marvin-brain.tsx`) — hand-authored
+  SVG head silhouette + 20 nodes + 35 synaptic edges + firing particles
+  via CSS `offset-path` along each edge. Five states: idle / thinking /
+  tool / writing / error. Scales activity (particle count, duration, hue)
+  with state. No runtime deps.
+- [done] Chat stream hook (`components/chat/use-chat-stream.ts`) — SSE
+  client that parses `turn.started` / `cli.event` / `turn.completed` /
+  `turn.error`; reshapes Claude CLI NDJSON into assistant blocks
+  (text + tool_use + merged tool_result); derives the MARVIN UI state
+  (idle / thinking / tool / writing / error) from event flow.
+- [done] Message rendering (`message-view.tsx`, `tool-call-card.tsx`) —
+  user / assistant bubbles, minimal markdown (fenced code + inline code),
+  collapsible tool-call cards with status pill (running / done / failed)
+  and expandable input/output panels.
+- [done] Input dock (`input/chat-input.tsx`) — project-path field,
+  auto-grow textarea, ⏎ to send / ⇧⏎ newline, cancel button during runs.
+- [done] Status bar (`shell/status-bar.tsx`) — MARVIN state indicator,
+  duration, tokens, cost, session id.
+- [done] Main layout (`app/page.tsx`) — left conversation column
+  (header → status → message list → input dock) + right MARVIN brain
+  pane with meta (project / model / version).
+- [done] Prompt improvements landed in `personality.ts`: runtime grep
+  step in Impact Analysis, enforced ADR template, Future-MARVIN critique
+  subagent pass, explicit skip for trivial changes.
+- [pending] Confirm-before-act gate — needs the CLI runtime path changed
+  from `--dangerously-skip-permissions` to the interactive permission
+  mode, OR a move to the Claude Agent SDK. V1 relies on MARVIN asking in
+  prose before destructive actions (system-prompt enforced). Structural
+  gate tracked as a Phase 2 follow-up.
+- [pending] `packages/tools/` actual tool implementations — not needed
+  while we run through the Claude CLI (the CLI provides Bash / Edit /
+  Write / Read / Grep / Glob / WebFetch / WebSearch / Task natively).
+  Becomes relevant only when/if we switch to the Agent SDK.
 
-**Milestone:** in a throw-away sample project, chat "build a logout route" —
-MARVIN reads files, proposes the edit, renders the diff, asks for confirm,
-applies on approval, runs typecheck, offers to commit.
+**Milestone:** in a throw-away sample project, chat "build a logout
+route" — MARVIN reads files, proposes the edit (rendered in the tool-
+call card), applies, runs typecheck, offers to commit. Reached once
+credentials are available in the env (`ANTHROPIC_API_KEY` or
+`MARVIN_USE_HOST_CREDENTIALS=1`).
 
 ### Phase 3 — File tree + terminal + diff viewer (week 3)
 
@@ -419,6 +452,19 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   ship. Added explicit subagent-delegation rules (when YES / when NO).
   Added Phase 5 stretch: Advisor Strategy experiment (Sonnet exec + Opus
   advisor) for cost reduction once v1 stabilises.
+- **2026-04-17 (night — Phase 2 core)** — Modern chat UI + MARVIN brain
+  shipped. Geist font family, Tailwind v4 theme tokens, glass-morphism,
+  ambient radial backdrop. `<MarvinBrain state={...} />` is a pure-SVG
+  component: head silhouette, 20 neural nodes (breathing glow), 35 edges,
+  firing particles via CSS `offset-path` animation — no canvas/WebGL
+  deps. States idle / thinking / tool / writing / error drive activity
+  intensity and hue. Chat stream hook parses Claude CLI NDJSON into
+  assistant blocks; tool-call cards are collapsible; cost + token meter
+  in status bar. Prompt improvements A/D/E/F/J landed in
+  `personality.ts`: runtime grep in Impact Analysis, enforced ADR
+  template with Future-MARVIN critique subagent, explicit skip for
+  trivial changes. Structural confirm-before-act gate deferred as Phase
+  2 follow-up (requires CLI permission-mode change or Agent SDK move).
 - **2026-04-17 (late evening)** — Ramification tracking added after user
   flagged the "I can't enumerate every scenario in a growing project"
   failure mode (real — this is how solo-plus-AI projects typically
