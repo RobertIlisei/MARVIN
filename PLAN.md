@@ -351,19 +351,38 @@ credentials are available in the env (`ANTHROPIC_API_KEY` or
   ignore-list (node_modules, .git, .next, venv, __pycache__, target,
   dist, build, coverage, caches), MAX_ENTRIES=2000 cap, depth-limited
   (default 6), returns `{ root, tree, truncated, count }`.
+- [done] `/api/files/content?cwd=…&path=…` — read-one endpoint with
+  cwd-sandboxed path (rejects `..` escapes), 512KB cap, binary-file
+  detection (null-byte + non-printable heuristic). Returns
+  `{ path, size, binary, truncated, content }`.
+- [done] `/api/files/status?cwd=…` — shells
+  `git status --porcelain=v1` + `rev-parse --abbrev-ref HEAD` with
+  a 5s per-call timeout. Returns `{ isGit, branch, status }` keyed by
+  absolute path. Falls back to `isGit: false` outside a work tree.
+- [done] `/api/terminal/run` — POST `{ cwd, cmd }` → SSE stream of
+  `started` / `stdout` / `stderr` / `exit` events. Spawns via
+  `$SHELL -c` so pipes + `&&` + env vars work. 10-minute cap;
+  request-abort kills the child; 8KB cmd-length cap.
 - [done] `components/file-tree/file-tree.tsx` — collapsible folders,
   click-to-select files, root children expanded by default, rendered
   as a `scroll-thin` monospace column at 240px width. Left-pinned as
-  the first pane in the split-view conversation layout.
+  the first pane in the split-view conversation layout. Shows a
+  branch badge in the header and per-file git-status glyphs (M / A /
+  D / ?) with a dot on dirty ancestor directories.
+- [done] `components/file-viewer/file-viewer.tsx` — splits the center
+  column below the chat when a tree file is clicked. Sticky line
+  numbers, extension-based language label, size + line-count header,
+  close button. Binary and oversize files show a placeholder.
+- [done] `components/terminal/terminal.tsx` — xterm.js (`@xterm/xterm`)
+  + fit-addon. MARVIN palette tokens wired into the xterm theme.
+  Maintains its own line buffer + localStorage-persisted command
+  history (↑/↓). Ctrl-C cancels the running command or clears the
+  line; Ctrl-L clears the screen. stderr rendered red; exit line
+  shows `[ok · 1.23s]` or `[exit N · 1.23s]`. Mounted behind a
+  header toggle as a collapsible bottom pane in the center column.
 - [done] Main layout upgraded from 2-pane to 3-pane in conversation
-  mode: tree · chat · brain/meta. Hero view unchanged.
-- [pending] Git-status badges on tree nodes (shell `git status
-  --porcelain`, render unstaged/modified/untracked markers).
-- [pending] `/api/files/content?cwd=…&path=…` — read-one endpoint with
-  binary-file guard + size cap.
-- [pending] `components/terminal/term.tsx` — xterm.js bound to
-  `/api/terminal/run` SSE. Pty-less; spawns child_process with cwd and
-  streams stdout/stderr chunked.
+  mode: tree · chat · brain/meta. Hero view unchanged. Chat pane
+  vertically subdivides when a file viewer and/or terminal is open.
 - [pending] `components/diff/diff-viewer.tsx` — monaco-editor diff
   mode, mounted automatically when an `Edit` tool call is pending.
 - [pending] Resizable splits via a thin drag handle; persists sizes to
@@ -492,6 +511,20 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `@marvin/project-context` now injects both into every first-message
   prompt. Milestone exit checklist enforces blast-radius entries aren't
   forgotten mid-implementation.
+- **2026-04-17 (deep night — Phase 3 rounds 1 + 2)** — File viewer,
+  git-status, embedded terminal. Round 1 landed
+  `/api/files/content` (cwd-sandboxed, 512KB cap, binary guard) and
+  `/api/files/status` (porcelain v1 + branch, 5s timeout). FileTree
+  gained per-file M/A/D/? badges plus a branch pill and dirty-
+  ancestor dots. FileViewer splits the center column below the
+  chat with sticky line numbers and an extension-based language
+  label. Round 2 added `@xterm/xterm` + fit-addon, wrote
+  `/api/terminal/run` (SSE with `started` / `stdout` / `stderr` /
+  `exit`, spawning `$SHELL -c`, 10-minute cap, abort-kills-child),
+  and a Terminal component with its own line buffer, persisted
+  command history, Ctrl-C cancellation, Ctrl-L clear, and red
+  stderr. A header toggle opens/hides the terminal below the chat.
+  Phase 3 remainder: monaco diff viewer + resizable drag handles.
 - **2026-04-17 (late night — Phase 2 close, Phase 3 start)** — Brain
   density rework after the previous version felt laggy and sparse.
   NODES went from 20 → 45, EDGES 35 → 95, organised into six clusters
