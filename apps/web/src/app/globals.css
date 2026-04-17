@@ -236,6 +236,32 @@ body::after {
   }
 }
 
+/* Ambient dust — slow orbital drift inside the silhouette. */
+@keyframes dust-drift {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  15%, 85% {
+    opacity: var(--dust-opacity, 0.45);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dust-dx, 20px), var(--dust-dy, -14px));
+  }
+}
+
+/* Edge rhythm — edges brighten subtly as if data is flowing, even without
+ * a visible particle. Cheap (opacity only, composites well). */
+@keyframes edge-pulse {
+  0%, 100% {
+    stroke-opacity: 0.18;
+  }
+  50% {
+    stroke-opacity: 0.52;
+  }
+}
+
 @keyframes error-flicker {
   0%, 100% {
     filter: hue-rotate(0deg);
