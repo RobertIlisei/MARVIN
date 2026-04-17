@@ -58,8 +58,12 @@ export function discoverClaudeBinary(): string {
 export function defaultModel(): string {
   return (
     process.env.MARVIN_MODEL?.trim() ||
-    // Sensible default — newest Sonnet is cheap + capable. Override per session.
-    "claude-sonnet-4-6"
+    // MARVIN defaults to Opus 4.7. The pair-programming loop is sequential code
+    // work, which is the regime where Opus pulls furthest ahead of Sonnet/Haiku.
+    // Multi-agent / smaller-executor strategies (Advisor Strategy, subagent
+    // delegation) are layered on top when helpful — the user-facing partner
+    // stays top-tier.
+    "claude-opus-4-7"
   );
 }
 

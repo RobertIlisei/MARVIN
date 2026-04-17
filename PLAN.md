@@ -32,6 +32,48 @@ refusal-to-work layer.
   are baked into the source. Each session is scoped to ONE workDir picked
   by the user, and MARVIN knows only what that workDir contains. A fresh
   project starts from zero — no cross-session memory, no inherited state.
+- **Default model:** Claude Opus 4.7 (user-facing partner stays top-tier).
+- **Architecture:** single agent with on-demand subagent spawning via
+  Claude Code's native `Task` tool. NOT agent teams, NOT autonomous peers.
+  Rationale: research (Google, UIUC, Microsoft, Anthropic Research) shows
+  multi-agent autonomy degrades up to 70% on sequential code work and
+  amplifies errors 17× in flat-topology "bag of agents" setups — exactly
+  the failure mode JARVIS hit. Subagents are used only for breadth-first
+  exploration, bulk independent work, and context relief.
+
+## Operating model — the senior-engineer workflow
+
+MARVIN runs a 7-phase dialog on each new feature / change request:
+
+1. **Intake** — restate the ask; ask ≤ 3 clarifying questions on anything
+   genuinely ambiguous (security model, multi-tenancy rules, identity &
+   authz, data ownership, perf SLO, back-compat). "You decide" → MARVIN
+   states the decision + why, proceeds.
+2. **Discovery** — query graphify FIRST, then read files the graph points
+   to, then probe running infra if the work depends on a service. Summary:
+   "what exists / what is missing / what is broken".
+3. **Architecture** — propose concrete infra + software changes together;
+   when there is a real trade-off, ADR-sized note with 2-3 options +
+   recommendation.
+4. **Plan** — ≤ 6 shippable milestones, each with a stated verification
+   gate.
+5. **Implement** — milestone by milestone, diff preview → confirm → apply
+   → verify → one-line landed note. Surface surprises; never paper over.
+6. **Verify** — run the verification gates from step 4 before declaring
+   done. Type errors / failing tests / red infra are blockers.
+7. **Ship** — stage the commit, show diff stat, confirm, commit. Push /
+   deploy only on user go-ahead.
+
+The "roles" the previous system separated into 8 agents (PO, tech-lead,
+engineers, QA, devops) are phases MARVIN moves through in ONE conversation.
+No handoffs between peers → none of the 17× error-amplification and
+context-loss failures documented in the 2026 multi-agent coding literature.
+The user is the continuous overwatch; MARVIN narrates enough to let them
+catch a wrong turn in real time.
+
+This operating model is encoded in `packages/runtime/src/personality.ts`'s
+`CORE_BEHAVIOR` block — system prompt, not code. Change it there when the
+workflow evolves.
 
 ## Target architecture
 
@@ -245,6 +287,14 @@ to manual editing.
 
 ### Phase 5 — Stretch (weeks 5-6, optional)
 
+- **Advisor Strategy experiment.** Anthropic launched `advisor_20260301`
+  April 9 2026: Sonnet 4.6 or Haiku 4.5 as the executor driving the task
+  loop, escalating to Opus 4.6 as an advisor on demand. Reported +2.7 pts
+  SWE-bench Multilingual for Sonnet at -11.9% cost, and Haiku BrowseComp
+  19.7 → 41.2. Worth an A/B on MARVIN once Phase 2-3 are stable: could
+  reduce per-session cost ~30-40% with minimal quality loss for routine
+  code work. Add a `runtimeMode: "opus" | "advisor"` setting; keep Opus as
+  default.
 - Honeycomb MCP integration for observability (port-over from command_center).
 - Playwright live browser preview inside the web UI.
 - Graph-aware chat: "why is module X coupled to module Y?" answered from the
@@ -306,6 +356,13 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   ported (button, input, card, badge, separator, scroll-area, skeleton,
   dialog, sheet, tabs, select, tooltip, dropdown-menu, avatar, table) with
   `cn()` helper in `@marvin/ui/utils`.
+- **2026-04-17 (evening)** — Architecture decisions locked after research
+  pass on 2026 multi-agent literature. Default model → Opus 4.7. Encoded
+  the 7-phase senior-engineer workflow in `personality.ts`: intake →
+  discovery (graphify-first) → architecture → plan → implement → verify →
+  ship. Added explicit subagent-delegation rules (when YES / when NO).
+  Added Phase 5 stretch: Advisor Strategy experiment (Sonnet exec + Opus
+  advisor) for cost reduction once v1 stabilises.
 
 ## Open items (quick confirms, not blockers)
 
