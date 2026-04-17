@@ -6,6 +6,7 @@ import { MarvinBrain } from "@/components/brain/marvin-brain";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { FileTree } from "@/components/file-tree/file-tree";
+import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { ChatInput } from "@/components/input/chat-input";
 import { StatusBar } from "@/components/shell/status-bar";
 
@@ -167,10 +168,10 @@ export default function Home() {
           />
         </div>
 
-        {/* Conversation */}
+        {/* Conversation (shrinks when a file viewer is open) */}
         <div
           ref={scrollerRef}
-          className="scroll-thin flex-1 overflow-y-auto px-6 py-6"
+          className={`scroll-thin min-h-0 overflow-y-auto px-6 py-6 ${selectedPath ? "flex-[3]" : "flex-1"}`}
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-4">
             {messages.map((m) => (
@@ -178,6 +179,17 @@ export default function Home() {
             ))}
           </div>
         </div>
+
+        {/* File viewer — splits the center column when a file is selected */}
+        {selectedPath && cwd && (
+          <div className="flex min-h-0 flex-[2] flex-col">
+            <FileViewer
+              cwd={cwd}
+              filePath={selectedPath}
+              onClose={() => setSelectedPath(undefined)}
+            />
+          </div>
+        )}
 
         {/* Input dock */}
         <div className="mx-auto w-full max-w-3xl px-6 pb-6">
