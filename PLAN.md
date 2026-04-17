@@ -27,6 +27,11 @@ refusal-to-work layer.
   reuse — the plumbing only). No autonomous-agent vestiges.
 - **Primary surface:** web app on `localhost:3030` — left file tree, centre
   chat + work log, right / bottom embedded terminal + diff viewer.
+- **Isolation:** MARVIN carries zero hardcoded knowledge of any prior
+  project. No service names, stack choices, realm ids, ports, or workflows
+  are baked into the source. Each session is scoped to ONE workDir picked
+  by the user, and MARVIN knows only what that workDir contains. A fresh
+  project starts from zero — no cross-session memory, no inherited state.
 
 ## Target architecture
 
@@ -108,16 +113,20 @@ pattern we are walking away from:
 - All `/api/admin/*`, `/api/tasks/*`, `/api/human-questions/*` routes
 - `jarvis/.data/agents/<role>/workspace/ROLE.md` files (no roles in MARVIN)
 
-**Disposition of existing data:**
-- `~/command_center/jarvis/.data/` → archive read-only. Historical memories,
-  audit logs, session transcripts, cost-tracker. Not migrated.
-- `~/command_center/J.A.R.V.I.S/` → leave in place with a `DEPRECATED.md`
-  pointing to `~/marvin/`. Delete after MARVIN has shipped v1 and proven out.
-- `~/command_center/graphify-out/` → stays; referenced by `~/marvin/` as the
-  `~/command_center` project graph. New project graphs live under each
-  project's `graphify-out/`.
-- `~/Projects/sans-platform/` → continues unchanged. MARVIN operates on it the
-  same way it operates on any project, just through the new UX.
+**Disposition of existing data (all archive, none referenced by MARVIN):**
+- `~/command_center/jarvis/.data/` → archive, read-only. MARVIN neither
+  reads nor writes anything here. The path is not referenced anywhere in
+  the MARVIN source tree — this bullet is historical for human readers.
+- `~/command_center/J.A.R.V.I.S/` → archive. No runtime tie from MARVIN.
+  Port-provenance comments in MARVIN source files mention it as the origin
+  of individual files, but no code path depends on anything in that tree.
+- `~/command_center/graphify-out/` → archive. MARVIN does not read from it.
+  Each user-project gets its own `graphify-out/` under its own workDir.
+- **Any prior projects MARVIN's predecessor worked on** → not referenced.
+  Starting a new project with MARVIN means starting from zero: no shared
+  session history, no inherited memory, no assumed services. The user
+  picks a workDir at session start; anything outside that workDir is
+  opaque to MARVIN.
 
 ## Net-new code (packages/tools + apps/web)
 
@@ -276,8 +285,10 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
    context.
 9. Cost meter reflects today's spend; daily breakdown matches
    `~/.marvin/cost-tracker.json`.
-10. Infra probes surface in system prompt — verified by asking "what services
-    does this project depend on?" and checking MARVIN cites the probe block.
+10. Infra probes — **off by default**. A project opts in by configuring
+    probes in its own repo (Phase 2+ will add a discovery mechanism, likely
+    reading `docker-compose.yml` services). Confirm the default session
+    prompt contains no probe block for a bare project directory.
 
 ## Changelog
 
@@ -286,6 +297,15 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   scaffolded; 4 fully ported (runtime, project-context, graphify-bridge,
   git-watch). Typecheck clean across the workspace. PLAN.md lives in-repo
   at `~/marvin/PLAN.md` (mirror at `~/.claude/plans/glowing-cooking-reddy.md`).
+- **2026-04-17 (afternoon)** — Isolation audit. Stripped every runtime tie
+  to any specific prior project. `infra-probes.ts` rewritten — no hardcoded
+  service list, no realm URL; only exports project-agnostic probe primitives.
+  `buildProjectContext()` no longer runs probes by default (caller passes
+  them explicitly). Placeholder project paths in `page.tsx`, `CLAUDE.md`,
+  `PLAN.md` replaced with generic `/path/to/your/project`. UI primitives
+  ported (button, input, card, badge, separator, scroll-area, skeleton,
+  dialog, sheet, tabs, select, tooltip, dropdown-menu, avatar, table) with
+  `cn()` helper in `@marvin/ui/utils`.
 
 ## Open items (quick confirms, not blockers)
 

@@ -18,11 +18,18 @@ the authoritative delivery plan. Update it as you ship things.
    `Glob`, `WebFetch`, `WebSearch`) are auto-allowed.
 4. **The user's project is a separate workspace.** MARVIN's own code lives
    here in `~/marvin/`. The user's active project (the thing MARVIN is
-   helping build) lives elsewhere (e.g. `~/Projects/sans-platform/`). Never
-   confuse the two.
-5. **No truncation of project context.** `BUSINESS_OVERVIEW.md` /
-   `PROJECT_STATUS.md` from the active project are injected whole. We've
-   already learned that lesson.
+   helping build) lives in its own directory chosen by the user at session
+   start. MARVIN holds no persistent knowledge of past projects between
+   sessions — starting a new project means starting from zero. Never cross-
+   contaminate one project's context with another.
+5. **No truncation of project context.** If the project includes context
+   documents (`PROJECT_STATUS.md`, `BUSINESS_OVERVIEW.md`, `README.md`, etc.),
+   they are injected whole. No hardcoded 6 KB cap — that was a lesson
+   learned the hard way.
+6. **No hardcoded project knowledge.** MARVIN must not ship assumptions
+   about any specific project (service names, realm ids, stack choices,
+   workflow). Every such assumption goes into the user's project repository,
+   not into MARVIN's source.
 
 ## Repo layout
 
