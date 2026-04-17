@@ -1,0 +1,24 @@
+{
+  "name": "@marvin/runtime",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./paths": "./src/paths.ts",
+    "./auth": "./src/auth.ts",
+    "./claude-cli": "./src/claude-cli.ts",
+    "./session": "./src/session.ts",
+    "./personality": "./src/personality.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.10.0"
+  }
+}
