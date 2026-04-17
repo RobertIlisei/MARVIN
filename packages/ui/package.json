@@ -6,11 +6,37 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./utils": "./src/utils.ts",
+    "./button": "./src/button.tsx",
+    "./input": "./src/input.tsx",
+    "./textarea": "./src/textarea.tsx",
+    "./card": "./src/card.tsx",
+    "./badge": "./src/badge.tsx",
+    "./separator": "./src/separator.tsx",
+    "./scroll-area": "./src/scroll-area.tsx",
+    "./skeleton": "./src/skeleton.tsx",
+    "./dialog": "./src/dialog.tsx",
+    "./sheet": "./src/sheet.tsx",
+    "./tabs": "./src/tabs.tsx",
+    "./select": "./src/select.tsx",
+    "./tooltip": "./src/tooltip.tsx",
+    "./dropdown-menu": "./src/dropdown-menu.tsx",
+    "./avatar": "./src/avatar.tsx",
+    "./table": "./src/table.tsx",
+    "./resizable": "./src/resizable.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.400.0",
+    "radix-ui": "^1.4.3",
+    "react-resizable-panels": "^2.1.7",
+    "tailwind-merge": "^3.5.0"
   },
   "peerDependencies": {
     "react": "^19.0.0",

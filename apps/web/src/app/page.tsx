@@ -27,7 +27,7 @@ export default function Home() {
         <pre className="rounded bg-black/50 p-3 text-xs overflow-x-auto">
 {`curl -N http://localhost:3030/api/chat \\
   -H "Content-Type: application/json" \\
-  -d '{"message":"hello","cwd":"~/Projects/my-other-project"}'`}
+  -d '{"message":"hello","cwd":"/path/to/your/project"}'`}
         </pre>
       </section>
 
