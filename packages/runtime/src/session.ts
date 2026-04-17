@@ -19,7 +19,7 @@ import type { ClaudeStreamEvent, TokenUsage } from "./claude-cli";
 
 export type SessionTurn =
   | { type: "turn.user"; at: string; message: string }
-  | { type: "cli.event"; at: string; event: ClaudeStreamEvent }
+  | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {
       type: "turn.completed";
       at: string;
@@ -32,6 +32,28 @@ export type SessionTurn =
       type: "turn.error";
       at: string;
       error: string;
+    }
+  | {
+      type: "confirm.request";
+      at: string;
+      payload: {
+        turnId: string;
+        toolUseId: string;
+        toolName: string;
+        input: Record<string, unknown>;
+        reason: string;
+        title?: string;
+        description?: string;
+        displayName?: string;
+      };
+    }
+  | {
+      type: "confirm.decision";
+      at: string;
+      turnId: string;
+      toolUseId: string;
+      decision: "allow" | "deny";
+      message?: string;
     };
 
 export interface SessionRecord {

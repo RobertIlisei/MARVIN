@@ -11,14 +11,20 @@
     "./auth": "./src/auth.ts",
     "./claude-cli": "./src/claude-cli.ts",
     "./session": "./src/session.ts",
-    "./personality": "./src/personality.ts"
+    "./personality": "./src/personality.ts",
+    "./sdk-runner": "./src/sdk-runner.ts",
+    "./confirm-registry": "./src/confirm-registry.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/node": "^22.10.0"
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.113",
+    "@marvin/tools": "workspace:*"
   }
 }

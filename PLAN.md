@@ -299,7 +299,7 @@ http://localhost:3030/api/chat -d '{"message":"hello","cwd":"..."}'` SSE-streams
 a MARVIN-voiced reply when credentials are available (host OAuth via
 `MARVIN_USE_HOST_CREDENTIALS=1` or `ANTHROPIC_API_KEY`).
 
-### Phase 2 — Chat + tools (week 2) · **[shipped 2026-04-17]**
+### Phase 2 — Chat + tools (week 2) · **[shipped 2026-04-17 · final 2026-04-17]**
 
 - [done] Typography + design system: Geist Sans / Geist Mono via
   `next/font/google`; Tailwind v4 `@theme` tokens for the MARVIN palette;
@@ -329,15 +329,25 @@ a MARVIN-voiced reply when credentials are available (host OAuth via
 - [done] Prompt improvements landed in `personality.ts`: runtime grep
   step in Impact Analysis, enforced ADR template, Future-MARVIN critique
   subagent pass, explicit skip for trivial changes.
-- [pending] Confirm-before-act gate — needs the CLI runtime path changed
-  from `--dangerously-skip-permissions` to the interactive permission
-  mode, OR a move to the Claude Agent SDK. V1 relies on MARVIN asking in
-  prose before destructive actions (system-prompt enforced). Structural
-  gate tracked as a Phase 2 follow-up.
-- [pending] `packages/tools/` actual tool implementations — not needed
-  while we run through the Claude CLI (the CLI provides Bash / Edit /
-  Write / Read / Grep / Glob / WebFetch / WebSearch / Task natively).
-  Becomes relevant only when/if we switch to the Agent SDK.
+- [done] Confirm-before-act gate — **structural**, via migration from
+  the CLI spawn path (`claude -p --dangerously-skip-permissions`) to
+  `@anthropic-ai/claude-agent-sdk`'s programmatic `query()` with a real
+  `canUseTool` callback. `packages/runtime/src/sdk-runner.ts` registers
+  a pending-resolver keyed by `(turnId, toolUseID)` whenever the tool
+  policy classifies a call as `confirm`; `/api/chat` forwards a
+  `confirm.request` SSE event; the client renders an inline
+  `<ConfirmPrompt>` (with a monaco diff for Edit / Write or a `$ cmd`
+  block for Bash) inside the tool-call card; the user's allow / deny
+  posts to `/api/confirm`, which looks up the resolver and returns
+  `{ behavior: "allow" }` or `{ behavior: "deny", message }` to the
+  SDK. Auto-allowed (Read / Grep / Glob / WebFetch / WebSearch +
+  whitelisted Bash) and hard-deny (`rm -rf /`, force-push to main,
+  etc.) short-circuit without prompting. Policy lives in
+  `@marvin/tools/policy`.
+- [deferred] `packages/tools/` actual tool implementations. Not needed
+  even after the SDK migration — the SDK executes built-in tools
+  itself; our policy layer only gates, it doesn't reimplement them.
+  Revisit only if we need custom tool code (Honeycomb MCP, etc.).
 
 **Milestone:** in a throw-away sample project, chat "build a logout
 route" — MARVIN reads files, proposes the edit (rendered in the tool-
@@ -345,7 +355,7 @@ call card), applies, runs typecheck, offers to commit. Reached once
 credentials are available in the env (`ANTHROPIC_API_KEY` or
 `MARVIN_USE_HOST_CREDENTIALS=1`).
 
-### Phase 3 — File tree + terminal + diff viewer (week 3) · **[in progress]**
+### Phase 3 — File tree + terminal + diff viewer (week 3) · **[shipped 2026-04-17]**
 
 - [done] `/api/files/tree?cwd=<path>&depth=<n>` — Node fs walker with
   ignore-list (node_modules, .git, .next, venv, __pycache__, target,
@@ -383,10 +393,16 @@ credentials are available in the env (`ANTHROPIC_API_KEY` or
 - [done] Main layout upgraded from 2-pane to 3-pane in conversation
   mode: tree · chat · brain/meta. Hero view unchanged. Chat pane
   vertically subdivides when a file viewer and/or terminal is open.
-- [pending] `components/diff/diff-viewer.tsx` — monaco-editor diff
-  mode, mounted automatically when an `Edit` tool call is pending.
-- [pending] Resizable splits via a thin drag handle; persists sizes to
-  localStorage.
+- [done] `components/diff/diff-viewer.tsx` — monaco-editor DiffEditor
+  (via `@monaco-editor/react`) with a custom MARVIN dark theme. Auto-
+  mounts inside Edit / Write tool-call cards and inside Confirm
+  prompts, showing the pre-execution diff so you see what MARVIN is
+  about to do before allowing it. Inline diff mode, read-only,
+  language detected from extension.
+- [done] Resizable splits via `react-resizable-panels`: horizontal
+  between tree / center / brain, vertical within the center column
+  when the file viewer or terminal is open. Sizes persist to
+  localStorage via the `autoSaveId` on each `PanelGroup`.
 
 **Milestone:** visual parity with the 3-pane mock-up — tree on left, chat
 centre, terminal at the bottom; editing a file updates the tree badge; the
@@ -511,6 +527,35 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `@marvin/project-context` now injects both into every first-message
   prompt. Milestone exit checklist enforces blast-radius entries aren't
   forgotten mid-implementation.
+- **2026-04-17 (pre-dawn — Phase 2 + 3 closeout)** — Two big swings.
+  (1) Runtime migrated from the raw CLI (`claude -p
+  --dangerously-skip-permissions`) to `@anthropic-ai/claude-agent-sdk`
+  so we can register a real `canUseTool` pre-flight gate. New
+  `packages/runtime/src/sdk-runner.ts` + `confirm-registry.ts`
+  (in-process resolver map keyed by `turnId + toolUseID`). New
+  `/api/confirm` POST endpoint. `/api/chat` emits a new
+  `confirm.request` SSE event; client renders `<ConfirmPrompt>`
+  inline in the tool-call card with a monaco diff for Edit / Write
+  or a `$ cmd` block for Bash. Auto-allowed (Read / Grep / Glob /
+  WebFetch / WebSearch / whitelisted Bash) and hard-deny patterns
+  short-circuit without prompting, driven by
+  `@marvin/tools/policy.ts`. (2) Phase 3 finished: monaco diff viewer
+  (`@monaco-editor/react`) with a MARVIN-themed palette, mounted in
+  Edit / Write tool-call cards AND in ConfirmPrompt so the pre-flight
+  diff shows before you allow. Resizable splits via
+  `react-resizable-panels` — horizontal between tree / chat / brain,
+  vertical between chat / file-viewer / terminal inside the center
+  column; layouts persist via `autoSaveId` to localStorage. Typecheck
+  clean across all 7 packages.
+- **2026-04-17 (graphify baseline)** — First graphify run on MARVIN's
+  own source + PLAN + CLAUDE.md. 233 nodes · 248 edges · 44
+  communities. God nodes: `GET()` (11), `8-Phase Senior-Engineer
+  Workflow` (10), `Target Architecture` (9), `POST()` (8), `JARVIS
+  Failure Mode` (8). Token-reduction benchmark: 36× fewer tokens per
+  architecture question vs reading files. Graph + report checked in at
+  `graphify-out/`; extraction cache gitignored. CLAUDE.md gained a
+  graphify section so future sessions consult the graph before
+  answering structural questions.
 - **2026-04-17 (deep night — Phase 3 rounds 1 + 2)** — File viewer,
   git-status, embedded terminal. Round 1 landed
   `/api/files/content` (cwd-sandboxed, 512KB cap, binary guard) and

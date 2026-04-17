@@ -75,7 +75,17 @@ function renderInline(body: string): React.ReactNode {
   return <>{out}</>;
 }
 
-export function MessageView({ message }: { message: Message }) {
+export function MessageView({
+  message,
+  onDecideConfirm,
+}: {
+  message: Message;
+  onDecideConfirm?: (
+    toolUseId: string,
+    decision: "allow" | "deny",
+    message?: string,
+  ) => Promise<void> | void;
+}) {
   const isUser = message.role === "user";
   return (
     <div
@@ -96,7 +106,11 @@ export function MessageView({ message }: { message: Message }) {
             b.type === "text" ? (
               <RenderText key={i} text={b.text} />
             ) : (
-              <ToolCallCard key={b.id ?? i} block={b} />
+              <ToolCallCard
+                key={b.id ?? i}
+                block={b}
+                {...(onDecideConfirm ? { onDecideConfirm } : {})}
+              />
             ),
           )}
           {message.blocks.length === 0 && !isUser && (

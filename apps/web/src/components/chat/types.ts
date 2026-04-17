@@ -18,6 +18,17 @@ export type Block =
       resultIsError?: boolean;
       /** Truthy while the CLI is executing; false once we see tool_result. */
       running?: boolean;
+      /** Pending confirm gate — rendered as an inline allow/deny card. */
+      pendingConfirm?: {
+        turnId: string;
+        toolUseId: string;
+        reason: string;
+        title?: string;
+        description?: string;
+        displayName?: string;
+      };
+      /** User's decision, once made. */
+      confirmDecision?: "allow" | "deny";
     };
 
 export interface Message {
