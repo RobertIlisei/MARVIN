@@ -27,6 +27,7 @@ export function useChatStream() {
   const [marvinSessionId, setMarvinSessionId] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const turnIdRef = useRef<string | null>(null);
 
   const send = useCallback(
     async (text: string, cwd: string) => {
@@ -152,6 +153,9 @@ export function useChatStream() {
                 setMarvinState,
                 setStats,
                 applyAssistantBlocks,
+                setTurnId: (v) => {
+                  turnIdRef.current = v;
+                },
               });
             }
           }
@@ -188,12 +192,46 @@ export function useChatStream() {
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    turnIdRef.current = null;
     setMarvinState("idle");
   }, []);
+
+  const decideConfirm = useCallback(
+    async (
+      toolUseId: string,
+      decision: "allow" | "deny",
+      message?: string,
+    ) => {
+      const turnId = turnIdRef.current;
+      if (!turnId) return;
+      try {
+        await fetch("/api/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ turnId, toolUseId, decision, message }),
+        });
+      } catch {
+        // Best-effort; if /api/confirm is unreachable the SDK will eventually
+        // time out or the abort controller will kill the turn.
+      }
+      setMessages((prev) =>
+        prev.map((m) => ({
+          ...m,
+          blocks: m.blocks.map((b) =>
+            b.type === "tool_use" && b.id === toolUseId && b.pendingConfirm
+              ? { ...b, confirmDecision: decision, pendingConfirm: undefined }
+              : b,
+          ),
+        })),
+      );
+    },
+    [],
+  );
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    turnIdRef.current = null;
     setMessages([]);
     setMarvinState("idle");
     setStats(null);
@@ -210,6 +248,7 @@ export function useChatStream() {
     send,
     cancel,
     reset,
+    decideConfirm,
   };
 }
 
@@ -231,12 +270,82 @@ function handleSseEvent(
     setMarvinState: (v: MarvinUiState) => void;
     setStats: (v: TurnStats) => void;
     applyAssistantBlocks: (mutator: (blocks: Block[]) => Block[]) => void;
+    setTurnId: (v: string) => void;
   },
 ): void {
   if (eventName === "turn.started") {
     if (typeof data.marvinSessionId === "string") {
       ctx.setMarvinSessionId(data.marvinSessionId);
     }
+    if (typeof data.turnId === "string") {
+      ctx.setTurnId(data.turnId);
+    }
+    return;
+  }
+
+  if (eventName === "confirm.request") {
+    const payload = data as {
+      turnId?: string;
+      toolUseId?: string;
+      toolName?: string;
+      input?: unknown;
+      reason?: string;
+      title?: string;
+      description?: string;
+      displayName?: string;
+    };
+    const toolUseId = payload.toolUseId;
+    if (!toolUseId || !payload.turnId) return;
+    ctx.setTurnId(payload.turnId);
+    ctx.applyAssistantBlocks((prev) => {
+      const exists = prev.some(
+        (b) => b.type === "tool_use" && b.id === toolUseId,
+      );
+      if (exists) {
+        return prev.map((b) =>
+          b.type === "tool_use" && b.id === toolUseId
+            ? {
+                ...b,
+                pendingConfirm: {
+                  turnId: payload.turnId!,
+                  toolUseId,
+                  reason: payload.reason ?? "",
+                  ...(payload.title ? { title: payload.title } : {}),
+                  ...(payload.description
+                    ? { description: payload.description }
+                    : {}),
+                  ...(payload.displayName
+                    ? { displayName: payload.displayName }
+                    : {}),
+                },
+              }
+            : b,
+        );
+      }
+      return [
+        ...prev,
+        {
+          type: "tool_use",
+          id: toolUseId,
+          name: payload.toolName ?? "unknown",
+          input: payload.input,
+          running: false,
+          pendingConfirm: {
+            turnId: payload.turnId!,
+            toolUseId,
+            reason: payload.reason ?? "",
+            ...(payload.title ? { title: payload.title } : {}),
+            ...(payload.description
+              ? { description: payload.description }
+              : {}),
+            ...(payload.displayName
+              ? { displayName: payload.displayName }
+              : {}),
+          },
+        },
+      ];
+    });
+    ctx.setMarvinState("tool");
     return;
   }
 

@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";
 
-import { runClaudeCli, defaultModel } from "@marvin/runtime/claude-cli";
+import { defaultModel } from "@marvin/runtime/claude-cli";
+import { runAgent } from "@marvin/runtime/sdk-runner";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
 import { appendSessionTurn } from "@marvin/runtime/session";
 import { buildProjectContext } from "@marvin/project-context";
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
   const cwd = body.cwd?.trim() || process.cwd();
   const projectId = body.projectId?.trim() || slugifyCwd(cwd);
   const marvinSessionId = body.marvinSessionId?.trim() || randomUUID();
+  const turnId = randomUUID();
   const personality: PersonalityMode = body.personality ?? "marvin";
   const model = body.model?.trim() || defaultModel();
   const firstMessage = !body.marvinSessionId;
@@ -94,12 +96,19 @@ export async function POST(req: NextRequest) {
         }
       };
 
-      send("turn.started", { marvinSessionId, projectId, model, personality });
+      send("turn.started", {
+        marvinSessionId,
+        projectId,
+        model,
+        personality,
+        turnId,
+      });
 
-      const result = await runClaudeCli({
+      const result = await runAgent({
         message,
         cwd,
         model,
+        turnId,
         sessionId: body.sessionId,
         appendSystemPrompt,
         onEvent: (event) => {
@@ -109,6 +118,14 @@ export async function POST(req: NextRequest) {
             event,
           });
           send("cli.event", event);
+        },
+        onConfirmRequest: (payload) => {
+          appendSessionTurn(projectId, marvinSessionId, {
+            type: "confirm.request",
+            at: new Date().toISOString(),
+            payload,
+          });
+          send("confirm.request", payload);
         },
         signal: req.signal,
       });
@@ -124,10 +141,10 @@ export async function POST(req: NextRequest) {
         appendSessionTurn(projectId, marvinSessionId, {
           type: "turn.completed",
           at: new Date().toISOString(),
-          durationMs: result.durationMs,
-          costUsd: result.costUsd,
-          tokenUsage: result.tokenUsage,
-          sessionId: result.sessionId,
+          durationMs: result.durationMs ?? null,
+          costUsd: result.costUsd ?? null,
+          tokenUsage: result.tokenUsage ?? null,
+          sessionId: result.sessionId ?? null,
         });
         send("turn.completed", {
           sessionId: result.sessionId,

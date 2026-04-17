@@ -1,9 +1,32 @@
 "use client";
 
 import { useState } from "react";
+
+import { ConfirmPrompt } from "./confirm-prompt";
+import { DiffViewer } from "@/components/diff/diff-viewer";
 import type { Block } from "./types";
 
 type ToolBlock = Extract<Block, { type: "tool_use" }>;
+
+type EditInput = {
+  file_path?: string;
+  old_string?: string;
+  new_string?: string;
+  replace_all?: boolean;
+};
+
+type WriteInput = {
+  file_path?: string;
+  content?: string;
+};
+
+function isEditInput(name: string, input: unknown): input is EditInput {
+  return name === "Edit" && typeof input === "object" && input !== null;
+}
+
+function isWriteInput(name: string, input: unknown): input is WriteInput {
+  return name === "Write" && typeof input === "object" && input !== null;
+}
 
 function toolDescriptor(name: string, input: unknown): string {
   const o = (input ?? {}) as Record<string, unknown>;
@@ -42,22 +65,41 @@ const ICONS: Record<string, string> = {
   Task: "▶",
 };
 
-export function ToolCallCard({ block }: { block: ToolBlock }) {
-  const [expanded, setExpanded] = useState(false);
+export function ToolCallCard({
+  block,
+  onDecideConfirm,
+}: {
+  block: ToolBlock;
+  onDecideConfirm?: (
+    toolUseId: string,
+    decision: "allow" | "deny",
+    message?: string,
+  ) => Promise<void> | void;
+}) {
+  const hasPendingConfirm = Boolean(block.pendingConfirm);
+  const [expanded, setExpanded] = useState(hasPendingConfirm);
   const descriptor = toolDescriptor(block.name, block.input);
   const icon = ICONS[block.name] ?? "⊗";
 
   const statusColor = block.resultIsError
     ? "text-[color:var(--color-danger)]"
-    : block.running
-      ? "text-[color:var(--color-accent)]"
-      : "text-[color:var(--color-success)]";
+    : hasPendingConfirm
+      ? "text-[color:var(--color-warn)]"
+      : block.confirmDecision === "deny"
+        ? "text-[color:var(--color-danger)]"
+        : block.running
+          ? "text-[color:var(--color-accent)]"
+          : "text-[color:var(--color-success)]";
 
   const statusLabel = block.resultIsError
     ? "failed"
-    : block.running
-      ? "running…"
-      : "done";
+    : hasPendingConfirm
+      ? "awaiting confirm"
+      : block.confirmDecision === "deny"
+        ? "denied"
+        : block.running
+          ? "running…"
+          : "done";
 
   return (
     <div className="rise-in group my-1.5 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 text-xs">
@@ -85,14 +127,55 @@ export function ToolCallCard({ block }: { block: ToolBlock }) {
           {expanded ? "−" : "+"}
         </span>
       </button>
-      {expanded && (
+      {block.pendingConfirm && onDecideConfirm && block.id && (
+        <div className="border-t border-[color:var(--color-border)] px-3 pb-3 pt-3">
+          <ConfirmPrompt
+            toolName={block.name}
+            input={block.input}
+            reason={block.pendingConfirm.reason}
+            {...(block.pendingConfirm.title
+              ? { title: block.pendingConfirm.title }
+              : {})}
+            {...(block.pendingConfirm.description
+              ? { description: block.pendingConfirm.description }
+              : {})}
+            onAllow={() => onDecideConfirm(block.id!, "allow")}
+            onDeny={(message) => onDecideConfirm(block.id!, "deny", message)}
+          />
+        </div>
+      )}
+      {expanded && !block.pendingConfirm && (
         <div className="border-t border-[color:var(--color-border)] px-3 py-2 font-mono text-[11px]">
-          <div className="text-[color:var(--color-fg-dim)]">input</div>
-          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[color:var(--color-fg)]/80">
-            {typeof block.input === "string"
-              ? block.input
-              : JSON.stringify(block.input, null, 2)}
-          </pre>
+          {isEditInput(block.name, block.input) ? (
+            <>
+              <div className="mb-1 text-[color:var(--color-fg-dim)]">diff</div>
+              <DiffViewer
+                filePath={block.input.file_path ?? "untitled"}
+                original={block.input.old_string ?? ""}
+                modified={block.input.new_string ?? ""}
+              />
+            </>
+          ) : isWriteInput(block.name, block.input) ? (
+            <>
+              <div className="mb-1 text-[color:var(--color-fg-dim)]">
+                new file
+              </div>
+              <DiffViewer
+                filePath={block.input.file_path ?? "untitled"}
+                original=""
+                modified={block.input.content ?? ""}
+              />
+            </>
+          ) : (
+            <>
+              <div className="text-[color:var(--color-fg-dim)]">input</div>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[color:var(--color-fg)]/80">
+                {typeof block.input === "string"
+                  ? block.input
+                  : JSON.stringify(block.input, null, 2)}
+              </pre>
+            </>
+          )}
           {block.result !== undefined && (
             <>
               <div className="mt-3 text-[color:var(--color-fg-dim)]">

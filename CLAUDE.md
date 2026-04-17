@@ -82,3 +82,28 @@ How thrilling."), always delivers. Toggle lives in user settings:
 3. Update the bullet with a `[done YYYY-MM-DD]` marker and a one-line summary.
 4. If you discover a follow-up while building, add it to the same phase (or
    the appropriate later phase) — don't let it live only in your head.
+
+## graphify
+
+A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
+(233 nodes · 248 edges · 44 communities as of 2026-04-17).
+
+### Before answering architecture / "how does X work" questions
+
+1. Check the graph first: `/graphify query "<question>"` — 36× cheaper than
+   reading raw files for questions about structure.
+2. `/graphify path "A" "B"` to trace how two concepts connect.
+3. `/graphify explain "NodeName"` for full context on any entity.
+
+### After changes
+
+- Code-only changes: `/graphify . --update` (AST-only, no LLM cost).
+- Docs / PLAN / personality.ts changes: `/graphify . --update` (triggers
+  semantic re-extraction — minimal cost at this corpus size).
+
+### God nodes (most-connected abstractions)
+
+`GET()`, `8-Phase Senior-Engineer Workflow`, `Target Architecture`,
+`POST()`, `JARVIS Autonomous Multi-Agent Failure Mode`, `apps/web`,
+`Pivot: Single Pair-Programming Assistant`, `@marvin/project-context`,
+`getAnthropicAuth()`, `Decision: Single Agent with On-Demand Subagents`.
