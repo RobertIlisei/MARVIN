@@ -35,6 +35,7 @@ body {
   font-feature-settings: "cv11", "ss01", "ss03";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background 0.6s ease;
 }
 
 code,
@@ -47,16 +48,59 @@ pre,
   box-sizing: border-box;
 }
 
-/* Ambient backdrop */
+/* Ambient backdrop — intensity reacts to --marvin-activity 0..1 */
+body {
+  --marvin-activity: 0.05;
+}
+body[data-marvin="idle"]     { --marvin-activity: 0.08; }
+body[data-marvin="thinking"] { --marvin-activity: 0.55; }
+body[data-marvin="tool"]     { --marvin-activity: 0.70; }
+body[data-marvin="writing"]  { --marvin-activity: 0.92; }
+body[data-marvin="error"]    { --marvin-activity: 0.45; }
+
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse at 15% 20%, rgba(62, 166, 255, 0.12), transparent 55%),
-    radial-gradient(ellipse at 85% 80%, rgba(127, 211, 255, 0.08), transparent 55%);
+    radial-gradient(
+      ellipse at 18% 22%,
+      rgba(62, 166, 255, calc(0.06 + var(--marvin-activity) * 0.14)),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 82% 78%,
+      rgba(127, 211, 255, calc(0.04 + var(--marvin-activity) * 0.12)),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 50% 115%,
+      rgba(62, 166, 255, calc(0.03 + var(--marvin-activity) * 0.14)),
+      transparent 55%
+    );
   pointer-events: none;
   z-index: -1;
+  transition: background 0.9s ease;
+}
+
+/* Slow drift of a soft haze, keeps the background breathing when idle. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: -12%;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(127, 211, 255, 0.04), transparent 40%),
+    radial-gradient(circle at 70% 60%, rgba(62, 166, 255, 0.03), transparent 40%);
+  filter: blur(45px);
+  pointer-events: none;
+  z-index: -1;
+  animation: backdrop-drift 28s ease-in-out infinite;
+}
+
+@keyframes backdrop-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(2%, -1%) scale(1.04); }
+  66%      { transform: translate(-1%, 2%) scale(0.97); }
 }
 
 /* Panel glass treatment */
@@ -85,20 +129,29 @@ body::before {
 
 /* --- MARVIN brain animation --- */
 @keyframes breathe {
-  0%,
-  100% {
-    opacity: 0.5;
+  0%, 100% {
+    opacity: 0.35;
     transform: scale(1);
   }
   50% {
-    opacity: 1;
-    transform: scale(1.08);
+    opacity: 0.95;
+    transform: scale(1.07);
+  }
+}
+
+@keyframes breathe-calm {
+  0%, 100% {
+    opacity: 0.22;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.03);
   }
 }
 
 @keyframes fire-intense {
-  0%,
-  100% {
+  0%, 100% {
     opacity: 0.7;
     transform: scale(1);
   }
@@ -126,40 +179,94 @@ body::before {
 }
 
 @keyframes halo-pulse {
-  0%,
-  100% {
+  0%, 100% {
     opacity: 0.2;
     transform: scale(1);
   }
   50% {
     opacity: 0.45;
-    transform: scale(1.04);
+    transform: scale(1.05);
+  }
+}
+
+/* Concentric halo rings that ripple outward during activity. */
+@keyframes halo-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.42;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+@keyframes halo-ring-calm {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.15;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+/* Sparks that drift off the brain when MARVIN is actively thinking / writing. */
+@keyframes spark-drift {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--spark-dx, 40px), var(--spark-dy, -30px)) scale(1.1);
   }
 }
 
 @keyframes error-flicker {
-  0%,
-  100% {
+  0%, 100% {
     filter: hue-rotate(0deg);
   }
-  10%,
-  30%,
-  50% {
+  10%, 30%, 50% {
     filter: hue-rotate(-160deg);
   }
-  20%,
-  40% {
+  20%, 40% {
     filter: hue-rotate(0deg);
   }
 }
 
-@keyframes glow-sweep {
+@keyframes hero-brain-intro {
   from {
-    stroke-dashoffset: 0;
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
   }
   to {
-    stroke-dashoffset: -140;
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
+}
+
+.hero-brain-intro {
+  animation: hero-brain-intro 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+
+.title-glow {
+  text-shadow:
+    0 0 24px rgba(127, 211, 255, 0.35),
+    0 0 48px rgba(62, 166, 255, 0.18);
 }
 
 /* Slight "rise-in" for incoming chat messages */

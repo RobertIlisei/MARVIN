@@ -478,6 +478,21 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `@marvin/project-context` now injects both into every first-message
   prompt. Milestone exit checklist enforces blast-radius entries aren't
   forgotten mid-implementation.
+- **2026-04-17 (night — Phase 2 polish)** — Hero + ambient polish pass.
+  Empty-state rewritten as a centered hero: 360px MARVIN brain with
+  `hero-brain-intro` entry animation, glowing `MARVIN` wordmark
+  (`.title-glow`), tagline, Hitchhiker's quote, and input dock pinned
+  bottom. Once the first message arrives, the layout switches to the
+  split view (chat left, brain sidebar right). The ambient backdrop now
+  reacts to activity: `document.body[data-marvin]` drives
+  `--marvin-activity` 0..1, which scales the three radial gradient
+  opacities; a 28s `backdrop-drift` keyframe keeps the screen breathing
+  when idle. Brain component gained an activity profile with
+  `haloRings`, `sparks`, breathe mode (calm/normal/intense), and
+  `nodeGlowScale` — idle renders one calm ring and no sparks; writing
+  ripples three fast rings plus seven escape sparks drifting beyond
+  the silhouette via a new `spark-drift` keyframe driven by
+  `--spark-dx`/`--spark-dy` CSS vars. Typecheck clean.
 
 ## Open items (quick confirms, not blockers)
 
