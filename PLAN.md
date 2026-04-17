@@ -160,19 +160,37 @@ pattern we are walking away from:
 
 ## Phased delivery
 
-### Phase 1 — Foundations (week 1)
+### Phase 1 — Foundations (week 1) · **[shipped 2026-04-17]**
 
-- Init `~/marvin/` monorepo: `pnpm init`, `pnpm-workspace.yaml`,
-  `turbo.json`, root `tsconfig.json`.
-- Scaffold `apps/web` with `npx create-next-app@16 --typescript --tailwind`.
-- Port `packages/runtime/` (claude-cli + auth + session + personality).
-- Port `packages/project-context/` (spec + infra probes).
-- Port `packages/ui/` (shadcn primitives).
-- Baseline `apps/web/src/app/api/chat/route.ts` that returns a streamed MARVIN
-  reply to a hardcoded `"hello world"` prompt.
+- [done] Init `~/marvin/` monorepo: `package.json`, `pnpm-workspace.yaml`,
+  `turbo.json`, `tsconfig.base.json`, `tsconfig.json`, `.gitignore`.
+- [done] Scaffold `apps/web` directly (Next.js 16 App Router, port 3030,
+  Tailwind 4 via `@tailwindcss/postcss`). Written by hand to match the 3-pane
+  shell target.
+- [done] Port `packages/runtime/` — `paths.ts`, `auth.ts`, `claude-cli.ts`,
+  `session.ts`, `personality.ts`. Single `runClaudeCli()` streaming NDJSON
+  from `claude -p --output-format stream-json`.
+- [done] Port `packages/project-context/` — spec injection + infra-probes
+  (11 services probed in parallel, 3-second timeouts, UP/DOWN/UNKNOWN).
+- [done] Port `packages/graphify-bridge/` — `watchdog.ts` (AST refresh,
+  debounced 10 min) + `refresh-docs.ts` (Anthropic SDK doc extraction).
+- [done] Port `packages/git-watch/` — per-workDir HEAD cursor, no board
+  autonomy (stripped from the J.A.R.V.I.S original).
+- [done] `packages/tools/` stub with the policy classes (auto / confirm /
+  deny) + Bash allow-list regexes. Tool implementations land in Phase 2.
+- [done] `packages/ui/` stub — populated in Phase 2–3 alongside the chat UI.
+- [done] Baseline `apps/web/src/app/api/chat/route.ts` — SSE streaming,
+  persists every `cli.event` + final `turn.completed` to
+  `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
+- [done] `apps/web/src/app/api/health/route.ts` — reports auth mode + CLI
+  binary path + default model + data dir.
+- [done] First commit on `main`: `12d734a`.
 
-**Milestone:** `curl -N http://localhost:3030/api/chat -d '{"message":"hello"}'`
-streams a MARVIN-voiced reply end-to-end.
+**Milestone achieved:** `curl http://localhost:3030/api/health` returns 200
+with auth mode, binary path, and default model. `curl -N
+http://localhost:3030/api/chat -d '{"message":"hello","cwd":"..."}'` SSE-streams
+a MARVIN-voiced reply when credentials are available (host OAuth via
+`MARVIN_USE_HOST_CREDENTIALS=1` or `ANTHROPIC_API_KEY`).
 
 ### Phase 2 — Chat + tools (week 2)
 
@@ -260,6 +278,14 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
    `~/.marvin/cost-tracker.json`.
 10. Infra probes surface in system prompt — verified by asking "what services
     does this project depend on?" and checking MARVIN cites the probe block.
+
+## Changelog
+
+- **2026-04-17** — Phase 1 shipped. Commit `12d734a` on `main`. Server on
+  port 3030, `/api/health` 200, `/api/chat` SSE-streams. 6 packages
+  scaffolded; 4 fully ported (runtime, project-context, graphify-bridge,
+  git-watch). Typecheck clean across the workspace. PLAN.md lives in-repo
+  at `~/marvin/PLAN.md` (mirror at `~/.claude/plans/glowing-cooking-reddy.md`).
 
 ## Open items (quick confirms, not blockers)
 
