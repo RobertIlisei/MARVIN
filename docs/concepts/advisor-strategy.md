@@ -1,37 +1,52 @@
-# Advisor strategy — executor + advisor
+# Advisor strategy — executor + consulted second opinion
 
-The default MARVIN runtime is **Opus 4.7 alone**. The advisor strategy is an opt-in alternative that saves ~30–40% on routine code work by running a cheaper executor (Sonnet 4.6) with a smarter advisor (Opus) on call for hard steps.
+The default MARVIN runtime is **Opus 4.7 alone**. The advisor strategy is an opt-in alternative that runs a cheaper executor (typically Sonnet 4.6) with Opus available as a consulted second opinion on hard steps.
 
-This doc explains what the two modes do, when to use which, and how the handoff actually works.
+This doc explains what the two modes do, when to use which, and how the consult actually happens. **The mechanism changed on 2026-04-19** — see [ADR-0007](../decisions/0007-advisor-as-subagent-pattern.md) for the history.
 
 ## The two modes
 
-| Mode | Executor | Advisor | Cost | Trade-off |
+| Mode | Executor | Consulted advisor | Cost | Trade-off |
 |---|---|---|---|---|
-| **Opus** (default) | Claude Opus 4.7 | — | highest | Best quality on every step. No handoffs. |
-| **Advisor** | Claude Sonnet 4.6 | Claude Opus 4.6 | ~30–40% less | Sonnet does routine work, escalates on demand. |
+| **Opus** (default) | Claude Opus 4.7 | — | highest | Best quality on every step. No consults. |
+| **Advisor** | Claude Sonnet 4.6 | Opus via Task subagent | ~30–40% less on routine work | Sonnet does routine work, consults Opus on hard steps via a subagent. |
 
-The mode is picked via the `models` dropdown in the header (two slots: executor + advisor) and persisted to `localStorage`. At the API layer, the client sends explicit `model` + `advisorModel` in the chat body. See [Models picker](../reference/api.md#post-apichat).
+The mode is picked via the `models` dropdown in the header (two slots: executor + advisor) and persisted to `localStorage`. The executor slot picks which model runs the turn; the advisor slot is used as a hint when MARVIN spawns a consult subagent.
 
 ## What "advisor" means mechanically
 
-When `advisorModel` is set in the Agent SDK `Options`, the SDK registers an **internal `advisor` tool**. The executor sees it as one tool among its usual set (`Read`, `Grep`, `Edit`, etc.) and can call it at its own discretion.
+**The advisor is a userland pattern on top of the Task subagent tool** — it is *not* a callable tool registered by the Agent SDK. See [ADR-0007](../decisions/0007-advisor-as-subagent-pattern.md) for the full rationale; short version: the SDK has an `advisorModel` Options field described as "the server-side advisor tool", but attempting `tool_use {name: "advisor", ...}` returns `No such tool available: advisor`. The routing knob exists; the client-visible tool does not.
 
-Calling the advisor tool:
+A consult looks like this:
 
-1. Executor emits `tool_use` with name `advisor` and an input (usually a focused question + relevant context snippet).
-2. SDK dispatches a **one-shot** call to the advisor model with that input.
-3. Advisor's response returns as `tool_result` into the executor's ongoing turn.
-4. Executor continues with the new information in context.
+```
+tool_use Task:
+  subagent_type: "general-purpose"
+  model:          "opus"                            ← required
+  description:    "advisor: <topic>"                 ← prefix is UI contract
+  prompt: |
+    You are an advisor consulted by MARVIN's executor on a hard step.
+    Be blunt. Structure your response:
 
-The trigger is **model-driven, not rule-driven**. There's no code in MARVIN that says "after N tool calls, consult the advisor." The executor decides based on its reasoning about task difficulty. Typical triggers:
+    ## Risks the plan misses
+    ## Alternatives worth considering
+    ## Pushback on the weakest points
+    ## Verdict: go / go-with-caveats / reject
 
-- Ambiguous architecture decision with multiple viable paths.
-- Complex refactor where the blast radius is non-obvious.
-- Edge-case planning (concurrency, auth, migrations under load).
-- Anything where the executor hits the end of what it can reason about alone.
+    Full context: ...
+```
 
-The executor's system prompt implicitly instructs it: "you have an advisor tool, call it on hard steps."
+`model: "opus"` is required — without it the subagent runs on the parent turn's model (Sonnet), which defeats the point of a second opinion.
+
+The leading `advisor:` prefix on `description` is how MARVIN's UI detects the consult is happening: the companion orb ([`advisor-orb.tsx`](../../apps/web/src/components/brain/advisor-orb.tsx)) watches `tool_use` events with `name === "Task"` and description matching `/^\s*advisor[\s:—-]/i`.
+
+Consult lifecycle:
+
+1. Executor emits the Task `tool_use` above.
+2. Claude Code spawns a subagent on the hinted model.
+3. The subagent reads context, forms its structured response, and returns.
+4. Executor receives the response as `tool_result` and continues the turn with the advisor's input in context.
+5. Executor cites the advisor's substantive input in its reply ("Advisor flagged X; I'm going with Y because ...").
 
 ## Why this is faster *and* cheaper
 
@@ -39,17 +54,15 @@ The executor's system prompt implicitly instructs it: "you have an advisor tool,
 
 **Often faster**: Sonnet has lower TTFT than Opus. The bulk of a turn — especially the tool-use loop — latency-benefits.
 
-**Not lossy (per Anthropic's launch data)**: the "minimal quality loss" claim lives in [`packages/runtime/src/sdk-runner.ts:42-44`](../../packages/runtime/src/sdk-runner.ts):
+The logic: most code-work steps are routine, Sonnet handles them fine. The rare hard step gets escalated to Opus via a consult — Opus is still the one making the consequential decision, just without being paid to grep 40 files.
 
-> Per Anthropic's launch data (advisor_20260301), this saves ~30-40% on routine code work with minimal quality loss.
-
-The logic: most code-work steps are routine, Sonnet handles them fine. The rare hard step gets escalated — Opus is still the one making the consequential decision, just without being paid to grep 40 files.
+**Cost caveat vs the SDK-native version imagined in ADR-0003**: a Task subagent runs a full sub-conversation, not a true one-shot completion. More tokens per consult than a hypothetical native advisor tool would use. Still a net win on routine-heavy turns; not as clean on consult-heavy turns.
 
 ## Rule enforcement
 
-**At turn time, MARVIN uses a deterministic list — not judgement — to decide when to call the advisor.** The authoritative rules live in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under "Advisor tool — when to call it" (right after the Skills block). Two enforcement surfaces:
+**At turn time, MARVIN uses a deterministic list — not judgement — to decide when to consult.** The authoritative rules live in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under "Advisor consult — how to run one" (right after the Skills block). Two enforcement surfaces:
 
-1. **User-directed is non-negotiable** (cross-phase hard rule 7). "Use the advisor" / "consult the advisor" / "get the advisor to help you with this" → `advisor` tool MUST fire at least once in Phase 4 or 5. Cite the reply. Silent skipping is the "MARVIN ignored me" failure mode the rule is named for.
+1. **User-directed is non-negotiable** (cross-phase hard rule 7). "Use the advisor" / "consult the advisor" / "get the advisor to help you with this" → a Task-based advisor consult MUST fire at least once in Phase 4 or 5. Cite the reply. Silent skipping is the "MARVIN ignored me" failure mode the rule is named for.
 
 2. **Seven deterministic auto-triggers** (beyond user direction):
 
@@ -65,7 +78,7 @@ The logic: most code-work steps are routine, Sonnet handles them fine. The rare 
 
    Plus an anti-trigger list (typos, lint, mechanical renames, doc-only updates, regenerated artefacts, anything scoped trivial/fast-path) so advisor tokens don't get wasted.
 
-The **companion orb** (`apps/web/src/components/brain/advisor-orb.tsx`) surfaces advisor activity in the UI — when it flies in next to the main brain, the `advisor` tool is firing on the current turn.
+The **companion orb** (`apps/web/src/components/brain/advisor-orb.tsx`) surfaces consult activity in the UI — when it flies in next to the main brain, a Task-based advisor consult is running on the current turn. The caption reads `advisor · <model hint> · <topic>`.
 
 ## When to use which
 
@@ -75,30 +88,21 @@ The **companion orb** (`apps/web/src/components/brain/advisor-orb.tsx`) surfaces
 - You want the simplest, most predictable cost behavior.
 - Cost is not the binding constraint.
 
-**Advisor (Sonnet executor, Opus advisor)** when:
+**Advisor (Sonnet executor, Opus consulted)** when:
 - Routine feature work in a codebase MARVIN already knows.
 - Mechanical refactors, test additions, documentation passes.
-- Long sessions where the 30–40% savings compound.
-- You're dog-fooding MARVIN on MARVIN itself (where you're less worried about the executor making a plausible-looking mistake).
+- Long sessions on well-understood code where you want the cost saving.
+- You want MARVIN to actually show you when it's second-guessing itself.
 
 ## How to switch
 
-Header → `models` pill → two dropdowns.
-
-**Executor** runs the turn loop. **Advisor** is escalated to for hard steps.
-
-Model IDs (as of 2026-04-19):
-
-- `claude-opus-4-7` — flagship, latest
-- `claude-opus-4-6` — one version back
-- `claude-sonnet-4-6` — balanced, fast, cheap
-- `claude-haiku-4-5` — very fast, very cheap, reserved for subagent bulk work
-
-Set **Advisor = off** (`—`) to disable the advisor tool entirely; executor runs solo.
+- Header → `models` pill → pick executor (e.g. `claude-sonnet-4-6`) and advisor (`claude-opus-4-7`).
+- Persisted to `localStorage.marvin.executorModel` + `localStorage.marvin.advisorModel`.
+- MARVIN's runtime passes both to the Agent SDK via `Options.model` + `Options.advisorModel`. `advisorModel` is opaque today — Anthropic does something with it server-side, we don't rely on it for anything visible. Kept for forward-compat.
 
 ## Resolution order
 
-`/api/chat` picks the actual model via this fallback chain ([route.ts:89-92](../../apps/web/src/app/api/chat/route.ts)):
+`/api/chat` picks the runtime model via this fallback chain ([`route.ts:89-92`](../../apps/web/src/app/api/chat/route.ts)):
 
 ```
 const model = body.model?.trim() || resolved.model || defaultModel();
@@ -111,13 +115,19 @@ const advisorModel = body.advisorModel?.trim() || resolved.advisorModel;
 
 The `/api/health` endpoint's `defaultModel` field reports step 3's fallback — it is NOT the live model for any active turn. See [Health checks](../operations/health.md).
 
-## History
+## What changed on 2026-04-19
 
-MARVIN shipped originally with a binary `"opus" | "advisor"` toggle. That was replaced with the two-slot picker on 2026-04-18 when users asked to mix & match (e.g., Sonnet executor + latest Opus-4.7 advisor). The picker values "win over `runtimeMode`" — see [PLAN.md changelog for 2026-04-18 refresh-safe turns + dynamic models](../../PLAN.md).
+- **Invocation** moved from `tool_use {name: "advisor", ...}` (never worked — tool doesn't exist) to `tool_use {name: "Task", subagent_type: "general-purpose", model: "opus", description: "advisor: ..."}`.
+- **Orb detection** retargeted from `name === "advisor"` to `name === "Task"` with the advisor description prefix.
+- **Rule 7** still mandates user-directed advisor calls; the target is now a Task call.
+- **Deterministic triggers and anti-triggers** unchanged — they're about *when* to escalate, not *how*.
+- **ADR-0003** marked superseded; ADR-0007 carries the corrected history.
 
 ## Related
 
-- [ADR-0003 — advisor strategy as Phase 5 experiment](../decisions/0003-advisor-strategy.md) — the decision record.
-- [ADR-0002 — default to Claude Opus 4.7](../decisions/0002-default-to-opus-4-7.md) — why Opus is the default.
-- [`resolveRuntimeMode()` in `sdk-runner.ts`](../../packages/runtime/src/sdk-runner.ts) — the implementation.
-- [Models endpoint](../reference/api.md#get-apimodels) — how the dropdown gets its options.
+- [ADR-0007 — Advisor as userland subagent pattern](../decisions/0007-advisor-as-subagent-pattern.md) — current.
+- [ADR-0003 — Advisor strategy](../decisions/0003-advisor-strategy.md) — superseded, kept for history.
+- [ADR-0002 — default to Opus 4.7](../decisions/0002-default-to-opus-4-7.md)
+- [`resolveRuntimeMode()` source](../../packages/runtime/src/sdk-runner.ts)
+- [`personality.ts` "Advisor consult — how to run one"](../../packages/runtime/src/personality.ts)
+- [`advisor-orb.tsx`](../../apps/web/src/components/brain/advisor-orb.tsx) — UI signal component.

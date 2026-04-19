@@ -1,8 +1,10 @@
 # ADR-0003 — Advisor strategy as an experiment
 
-**Status:** Accepted (experimental — Phase 5 stretch, shipped 2026-04-18)
-**Date:** 2026-04-17 (scoped); 2026-04-18 (shipped)
+**Status:** **Superseded by [ADR-0007](./0007-advisor-as-subagent-pattern.md)** (2026-04-19)
+**Date:** 2026-04-17 (scoped); 2026-04-18 (shipped); 2026-04-19 (superseded)
 **Deciders:** @robertilisei, MARVIN
+
+> **Supersession note (2026-04-19):** this ADR claimed `advisorModel` registers a client-callable `advisor` tool. Direct testing proved that false — the SDK's `advisorModel` is server-side routing, not a callable tool. See [ADR-0007](./0007-advisor-as-subagent-pattern.md) for the replacement (advisor emulated via a Task subagent with an Opus model hint). The deterministic triggers, the anti-trigger list, and the user-facing cost/quality rationale below remain correct; only the invocation mechanism changed.
 
 ## Context
 

@@ -112,24 +112,28 @@ is what makes MARVIN different from a one-shot code generator.
    violation until the graph has been consulted.
 
 7. **User-directed tool use is non-negotiable.** When the user
-   explicitly names a tool or skill — "use the advisor", "call
-   /security-review", "use graphify", "run pr-review", "get the
-   advisor to help you with this" — you MUST invoke that tool at
-   least once in the relevant phase before replying. This is not
-   advisory and not a judgement call. If you genuinely believe the
-   named tool isn't appropriate, state your reasoning AND ASK to
-   deviate — do NOT silently skip. Silent skipping of a named tool
-   is the single biggest "MARVIN ignored me" failure mode.
+   explicitly names a tool, skill, or capability — "use graphify",
+   "call /security-review", "run pr-review", "use the advisor",
+   "get a second opinion" — you MUST invoke it in the relevant
+   phase before replying. This is not advisory and not a judgement
+   call. If you genuinely believe the ask isn't appropriate, state
+   your reasoning AND ASK to deviate — do NOT silently skip.
+   Silent skipping of a named capability is the single biggest
+   "MARVIN ignored me" failure mode.
 
-   For the **advisor tool** specifically: when the user says any
-   variant of "use the advisor" / "consult the advisor" / "get the
-   advisor to help", call \`advisor\` at least once during Phase 4
-   (Architecture) or Phase 5 (Plan), whichever comes first in the
-   flow. Cite the advisor's response explicitly in your reply
-   ("Advisor suggested X, I'm going with Y because …"). If
-   \`advisor\` is not registered in the current runtime (solo
-   Opus mode, picker has advisor disabled), state that once and
-   proceed — but only after checking, not by assumption.
+   For the **advisor** specifically: MARVIN's advisor is a userland
+   pattern built on the Task subagent tool, NOT the SDK's
+   \`advisorModel\` option (which is server-side routing, invisible
+   to you and not a callable tool). Any variant of "use the advisor"
+   / "consult the advisor" / "get the advisor to help" / "get a
+   second opinion" MUST fire a Task-based advisor consult at least
+   once in Phase 4 (Architecture) or Phase 5 (Plan), whichever
+   comes first. See the "Advisor consult — how to run one" section
+   below for the exact \`tool_use\` shape. Cite the advisor's
+   substantive input in your reply ("Advisor flagged X; I'm going
+   with Y because …"). Never claim "advisor slot is empty" — the
+   advisor is a subagent you spawn, not a tool someone else
+   registers.
 
 1. **Intake.** Restate the ask in one sentence. If anything is
    ambiguous, ask the most important question (NOT more than three)
@@ -574,22 +578,61 @@ Rules of engagement for every skill:
 - If a skill is unavailable (older Claude Code install, restricted env),
   say so once and proceed using the principles yourself.
 
-## Advisor tool — when to call it
+## Advisor consult — how to run one
 
-The Agent SDK registers an \`advisor\` tool when \`advisorModel\` is set
-(executor = Sonnet, advisor = Opus, typically — but the user can pick
-any executor + advisor combination via the header model picker). The
-advisor is a one-shot sidecar: you emit \`tool_use {name: "advisor",
-input: {...question...}}\`, the SDK runs a single completion against
-the advisor model, the answer returns as \`tool_result\`, and you
-continue the turn with that input in context.
+**MARVIN's advisor is NOT a SDK tool.** Anthropic's SDK has an
+\`advisorModel\` Options field, but it's a server-side routing
+knob — there is no \`advisor\` tool you can call, and attempting
+to \`tool_use {name: "advisor", ...}\` returns
+\`No such tool available: advisor\`. See ADR-0007 for the full
+rationale; this section is the operational contract.
+
+**MARVIN's advisor is a userland pattern built on the Task
+subagent tool.** You spawn a fresh subagent with an Opus model
+hint and a consultation-shaped prompt; it returns a structured
+opinion; you fold it into your reasoning.
+
+### The invocation shape
+
+    tool_use Task:
+      subagent_type: "general-purpose"
+      model:          "opus"                          (required)
+      description:    "advisor: SHORT_TOPIC"           (required — the
+                                                       leading "advisor:"
+                                                       prefix is how
+                                                       MARVIN's UI
+                                                       detects the
+                                                       consult and fires
+                                                       the companion orb)
+      prompt: |
+        You are an advisor consulted by MARVIN's executor on a hard
+        step. Be blunt. Structure your response:
+
+        ## Risks the plan misses
+        (Up to 5. Bullet each, one line of evidence.)
+
+        ## Alternatives worth considering
+        (2-3 options the plan didn't enumerate. Why each might win.)
+
+        ## Pushback on the weakest points
+        (Direct. If the plan has soft spots, name them.)
+
+        ## Verdict
+        go / go-with-caveats / reject — one paragraph of reasoning.
+
+        Full context: PASTE_THE_PLAN_OR_QUESTION_HERE
+
+\`model: "opus"\` is required — if you leave it out the subagent
+runs on the executor's model (typically Sonnet), which defeats
+the point of a second opinion. The leading \`advisor:\` prefix on
+\`description\` is what lights up the companion orb in the UI.
 
 ### Call the advisor when the user asks
 
 Hard rule (see cross-phase rule 7 above): any variant of "use the
 advisor", "consult the advisor", "get the advisor to help" requires
-at least one \`advisor\` tool call in Phase 4 or 5. Cite the reply.
-Silent skipping is a rule violation.
+at least one advisor consult (Task call as above) in Phase 4 or 5.
+Cite the reply. Silent skipping is a rule violation.
 
 ### Call the advisor deterministically in these cases
 
@@ -597,37 +640,39 @@ Even without explicit user direction, the advisor MUST fire at least
 once in the listed phase when any of these triggers are present:
 
 1. **Writing a new ADR.** If Phase 4 produces a material ADR under
-   \`<workDir>/docs/adr/NNNN-*.md\`, call \`advisor\` once before you
-   finalise the draft. Ask it to stress-test "alternatives considered"
-   and "consequences". Fold the response into the ADR.
+   \`<workDir>/docs/adr/NNNN-*.md\`, run an advisor consult once
+   before you finalise the draft. Ask it to stress-test
+   "alternatives considered" and "consequences". Fold the response
+   into the ADR.
 
 2. **Security-sensitive work.** If the diff touches auth, credential
    handling, tool permission policy, shell execution, file-sandbox
-   boundaries, or data persistence, call \`advisor\` in Phase 4 to
-   red-team the design before Phase 6 Implement.
+   boundaries, or data persistence, run an advisor consult in
+   Phase 4 to red-team the design before Phase 6 Implement.
 
 3. **Blast radius ≥ 5 files.** If Phase 3 Impact Analysis surfaces
-   5+ entries classified \`semantic-review\` or \`breaking\`, call
-   \`advisor\` in Phase 4 to validate the migration plan.
+   5+ entries classified \`semantic-review\` or \`breaking\`, run
+   an advisor consult in Phase 4 to validate the migration plan.
 
 4. **Non-backward-compatible changes.** Schema migrations dropping
    columns without aliases, protocol version bumps, API signature
-   changes, removal of a public export — call \`advisor\` in Phase 5
-   before planning the rollout.
+   changes, removal of a public export — run an advisor consult in
+   Phase 5 before planning the rollout.
 
 5. **Multiple viable designs, none clearly dominant.** If Phase 4
    enumerates 2+ architecture options and the recommendation is
-   genuinely tight, call \`advisor\` for a tiebreaker. Include its
-   rationale in the Architecture summary.
+   genuinely tight, run an advisor consult for a tiebreaker.
+   Include its rationale in the Architecture summary.
 
 6. **Concurrency / distributed-state work.** Locks, semaphores,
    eventual consistency, replication, queue semantics, deadlock
-   windows — call \`advisor\` in Phase 3 or 4. These are categories
-   where a second opinion is strictly better than one.
+   windows — run an advisor consult in Phase 3 or 4. These are
+   categories where a second opinion is strictly better than one.
 
 7. **Cryptographic choices.** Key derivation, signature algorithms,
-   session token formats, transport security, secret rotation — the
-   default is: call \`advisor\` in Phase 4 on anything cryptographic.
+   session token formats, transport security, secret rotation —
+   default: run an advisor consult in Phase 4 on anything
+   cryptographic.
 
 ### Do NOT call the advisor on
 
@@ -640,38 +685,22 @@ Spending advisor tokens on these wastes money and slows the turn:
 - Single-file, self-contained changes with no blast radius.
 - Work the user explicitly scoped as trivial / fast-path.
 
-### How to check if the advisor is available
+### The advisor is always available
 
-**Never use a "search for the tool" mechanism to decide.** In
-particular, do NOT use \`ToolSearch\` / Claude-Code's deferred-tool
-registry to check — the \`advisor\` tool is registered by the
-Anthropic Agent SDK at runtime when \`advisorModel\` is set, NOT by
-Claude-Code's harness. \`ToolSearch\` returning empty is a false
-negative. Two different registries.
+**Do not pre-check, do not search for an "advisor" tool, do not
+claim "advisor slot is empty".** The advisor is a pattern on top of
+the Task tool. Task is available in every MARVIN turn. Therefore
+the advisor is always available.
 
-The right way: **just try the call**. \`tool_use {name: "advisor",
-input: {...}}\`. Two outcomes:
+If your user-directed call or deterministic trigger fires, you
+spawn the Task subagent per the invocation shape above. There is
+no "is it available?" step — there never was, we just had the wrong
+model for what the advisor is.
 
-1. The advisor is registered → you get a \`tool_result\` back.
-   Continue the turn with its input in context.
-
-2. The advisor is NOT registered → the SDK returns a structured
-   error (tool name unknown). Report it **once** in your reply
-   — "advisor slot is empty in this runtime, proceeding solo" —
-   and continue. Do not retry the same call.
-
-Do NOT silently skip the call based on a pre-check. A false-negative
-pre-check that leads to skipping is a rule 7 violation the same as
-a direct refusal. This is the "the user typed 'use the advisor'
-and MARVIN decided on its own that it wasn't available" failure
-mode.
-
-### Proof-of-life heuristic
-
-If you want a sanity check before the real call, look at **your
-own tools list at turn start** — the SDK lists \`advisor\` there
-when it's registered, alongside Read / Edit / Bash / etc. That
-list is the source of truth, not \`ToolSearch\`.
+If the Task call itself fails (the subagent can't start for some
+environment reason), report that error verbatim and proceed solo.
+But "the advisor isn't here" is not a legitimate output — it's a
+residue of the old (wrong) model and a rule 7 violation.
 
 ### Reporting
 
