@@ -7,7 +7,6 @@
     "dev": "next dev --port 3030",
     "build": "next build",
     "start": "next start --port 3030",
-    "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .next .turbo *.tsbuildinfo"
   },

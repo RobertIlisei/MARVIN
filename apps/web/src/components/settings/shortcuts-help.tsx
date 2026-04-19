@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+
 interface Shortcut {
   keys: string;
   description: string;
@@ -26,9 +28,21 @@ export function ShortcutsHelp({
   open: boolean;
   onClose: () => void;
 }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-help-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -36,12 +50,16 @@ export function ShortcutsHelp({
     >
       <div className="glass w-[min(480px,calc(100vw-2rem))] rounded-2xl p-5">
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="font-mono text-sm font-medium tracking-[0.18em] text-[color:var(--color-fg)]">
+          <h2
+            id="shortcuts-help-title"
+            className="font-mono text-sm font-medium tracking-[0.18em] text-[color:var(--color-fg)]"
+          >
             keyboard shortcuts
           </h2>
           <button
             type="button"
             onClick={onClose}
+            aria-label="close shortcuts help"
             className="font-mono text-[11px] text-[color:var(--color-fg-faint)] transition hover:text-[color:var(--color-fg)]"
           >
             close ✕
