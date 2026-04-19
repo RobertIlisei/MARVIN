@@ -36,6 +36,21 @@ export const metadata: Metadata = {
     "Moderately Advanced Robotic Virtual Intelligence Network — pair-programming AI.",
 };
 
+// Blocking script that sets `<html data-theme>` before first paint.
+// Reads `localStorage.marvin.theme` first (user's explicit pick wins);
+// falls back to `prefers-color-scheme: light` for a fresh visitor.
+// Default is dark — omitting the attribute leaves MARVIN in its original
+// sulphur-amber look for anyone who hasn't opted in.
+const THEME_BOOTSTRAP = `
+try {
+  var saved = localStorage.getItem('marvin.theme');
+  var wantLight =
+    saved === 'light' ||
+    (saved !== 'dark' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+  if (wantLight) document.documentElement.setAttribute('data-theme', 'light');
+} catch (_) {}
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -44,8 +59,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      className={`${geistSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+      </head>
       <body>{children}</body>
     </html>
   );
