@@ -106,11 +106,24 @@ data/.marvin/                # session transcripts, cost tracker, graph cache (g
 ## Status
 
 **v1 shipped.** Phases 1–4 landed 2026-04-17; Phase 5 stretch items (advisor
-mode, preview pane, graph-aware chat, keyboard shortcuts + session search)
-shipped 2026-04-18. Honeycomb MCP integration remains explicitly deferred
-(needs Honeycomb account + team setup). See [PLAN.md](./PLAN.md) for the
-phase-by-phase changelog.
+mode, preview pane, graph-aware chat, keyboard shortcuts + session search,
+dual-theme support, BrainLiquid canvas particle brain) shipped 2026-04-18/19.
+Honeycomb MCP integration remains explicitly deferred (needs Honeycomb
+account + team setup). See [PLAN.md](./PLAN.md) for the phase-by-phase
+changelog and [docs/roadmap.md](./docs/roadmap.md) for the narrative view.
+
+## Documentation
+
+Full documentation at [docs/](./docs/). Modeled on Claude Code's docs site.
+
+**Entry points:**
+- [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
+- [Quickstart](./docs/getting-started/quickstart.md) — install → first session
+- [Architecture at a glance](./docs/getting-started/architecture.md)
+- [Core concepts](./docs/README.md#core-concepts) — single-assistant, 8-phase workflow, isolation, confirm gate, advisor, graphify, ADRs
+- [HTTP API reference](./docs/reference/api.md) — all 17 endpoints
+- [Architecture decisions](./docs/decisions/) — six ADRs covering the design choices
 
 ## License
 
-Not yet specified.
+Not yet specified. See [docs/business/licensing.md](./docs/business/licensing.md) for the consideration.
