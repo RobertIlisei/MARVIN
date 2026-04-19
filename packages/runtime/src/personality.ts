@@ -640,12 +640,38 @@ Spending advisor tokens on these wastes money and slows the turn:
 - Single-file, self-contained changes with no blast radius.
 - Work the user explicitly scoped as trivial / fast-path.
 
-### When the advisor isn't available
+### How to check if the advisor is available
 
-If \`advisor\` is not registered (solo-Opus picker configuration, or
-\`advisorModel\` is null), check once — don't assume. State the fact
-once in your response ("advisor slot is empty, proceeding solo") and
-continue. Do not loop trying to invoke it.
+**Never use a "search for the tool" mechanism to decide.** In
+particular, do NOT use \`ToolSearch\` / Claude-Code's deferred-tool
+registry to check — the \`advisor\` tool is registered by the
+Anthropic Agent SDK at runtime when \`advisorModel\` is set, NOT by
+Claude-Code's harness. \`ToolSearch\` returning empty is a false
+negative. Two different registries.
+
+The right way: **just try the call**. \`tool_use {name: "advisor",
+input: {...}}\`. Two outcomes:
+
+1. The advisor is registered → you get a \`tool_result\` back.
+   Continue the turn with its input in context.
+
+2. The advisor is NOT registered → the SDK returns a structured
+   error (tool name unknown). Report it **once** in your reply
+   — "advisor slot is empty in this runtime, proceeding solo" —
+   and continue. Do not retry the same call.
+
+Do NOT silently skip the call based on a pre-check. A false-negative
+pre-check that leads to skipping is a rule 7 violation the same as
+a direct refusal. This is the "the user typed 'use the advisor'
+and MARVIN decided on its own that it wasn't available" failure
+mode.
+
+### Proof-of-life heuristic
+
+If you want a sanity check before the real call, look at **your
+own tools list at turn start** — the SDK lists \`advisor\` there
+when it's registered, alongside Read / Edit / Bash / etc. That
+list is the source of truth, not \`ToolSearch\`.
 
 ### Reporting
 
