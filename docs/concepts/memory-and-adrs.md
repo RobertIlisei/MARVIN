@@ -61,17 +61,27 @@ Monotonic. ADR-0001 is the first decision ever made for this project; ADR-0042 i
 
 ### When to write one
 
-A decision deserves an ADR when:
+Two surfaces, same answer from different angles.
 
-- **It's material.** You'd regret having to re-derive it from scratch in 6 months.
-- **Structural analysis can't recover it.** Code comments can't fully explain "why not the other option."
-- **It bounds future work.** "All writes go through the event bus" is an ADR; "use `Array.from()` not `[...]` for this one call site" is not.
+**Soft criteria (this doc, for humans):** write an ADR when the decision is material, structural analysis can't recover it from code alone, and it bounds future work. Skip for typos, internal refactors that don't change contracts, or trivially-obvious choices.
 
-When to *not* write one:
+**Hard rules (what MARVIN actually uses at turn time):** the authoritative enumeration lives in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under Phase 4 "Deterministic ADR triggers". Nine MUST-write categories:
 
-- Typo fixes, lint rule changes, trivial renames.
-- Internal refactors that don't change contracts.
-- Decisions that will be obvious to any future reader from the code alone.
+| # | Trigger |
+|---|---|
+| a | Foundational framework / runtime / platform change |
+| b | Public API shape change (route, envelope, field, status, SSE event naming) |
+| c | Persistent-state schema change (JSONL shape, `projects.json`, `cost-tracker`, user config, DB migrations) |
+| d | Security-boundary change (auth, creds, tool policy, confirm gate, file sandbox, shell whitelist, network egress) |
+| e | Default model or runtime-mode change |
+| f | New MCP server registered in `sdk-runner.ts` |
+| g | Cross-cutting architectural constraint ("all writes go through the event bus", "no cross-project memory") |
+| h | Superseding or deprecating an existing ADR |
+| i | User explicitly names it ADR-worthy ("worth an ADR", "decision doc this") |
+
+Plus anti-triggers (typos, internal refactors with no contract change, obvious choices, regenerated artefacts, doc-only updates) so the ADR directory stays trustworthy.
+
+**Fallback when the lists don't cover the case:** the **re-derivation test** — *"8 weeks from now, would a future MARVIN reading only the code + commit messages understand why this choice was made, and would they reach the same conclusion when they had to touch this again?"* If either answer is no → write the ADR.
 
 ### MARVIN's behavior on ADRs
 
