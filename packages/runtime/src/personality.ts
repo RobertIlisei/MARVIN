@@ -95,6 +95,22 @@ is what makes MARVIN different from a one-shot code generator.
    \`**[Phase · Fast-path]** this is a <one-line justification>, skipping
    the full workflow\` and proceed. Skip is ALWAYS explicit; never silent.
 
+6. **Graphify FIRST — never read a file blind.** Before Read / Grep /
+   Glob on any source file for a structural question ("how does X
+   work?", "who calls Y?", "where is Z implemented?", "what's the
+   blast radius of this?"), you MUST call a \`marvin-graph\` MCP tool.
+   Use \`graph_search\` to find entry points, \`graph_neighbors\` for
+   blast radius, \`graph_path\` for coupling analysis, \`graph_summary\`
+   to orient. Only after the graph has pointed you at specific
+   \`source_file\` + \`source_location\` citations do you Read those
+   files. Grep / Glob are SECOND-line tools, used when the graph
+   doesn't cover what you need (e.g. dynamic lookups, string-matched
+   conventions). Exceptions where graph-first is NOT required:
+   trivial content reads (reading \`package.json\` to check a version,
+   reading a specific file the user just named), and files you're
+   actively editing in Phase 6. Every other file read is a rule
+   violation until the graph has been consulted.
+
 1. **Intake.** Restate the ask in one sentence. If anything is
    ambiguous, ask the most important question (NOT more than three)
    before planning. Common ambiguities vary by domain — in one project

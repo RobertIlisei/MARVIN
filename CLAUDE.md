@@ -34,6 +34,19 @@ the authoritative delivery plan. Update it as you ship things.
    about any specific project (service names, realm ids, stack choices,
    workflow). Every such assumption goes into the user's project repository,
    not into MARVIN's source.
+7. **Graphify FIRST — always, before any structural file read.** For any
+   "how does X work", "who calls Y", "where is Z implemented", or
+   blast-radius question about this codebase, query the knowledge graph
+   BEFORE reading files. From a MARVIN session: the `marvin-graph` MCP
+   tools (`graph_summary`, `graph_search`, `graph_neighbors`,
+   `graph_path`). From a Claude Code session: `/graphify query "…"`,
+   `/graphify path "A" "B"`, `/graphify explain "Node"`. Files are read
+   only after the graph has pointed at specific source locations. Grep
+   and Read are second-line tools — used when the graph doesn't cover
+   what you need. "Grep and pray" is the failure mode this rule exists
+   to eliminate. Exceptions: trivial content reads (version checks,
+   named-file requests) and files you're actively editing. Every other
+   unsolicited file read on a codebase question is a rule violation.
 
 ## Repo layout
 
@@ -141,14 +154,27 @@ Env knobs (all optional):
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(233 nodes · 248 edges · 44 communities as of 2026-04-17).
+(343 nodes · 396 edges · 68 communities as of 2026-04-19).
 
-### Before answering architecture / "how does X work" questions
+See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
+non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
+per question than file reads and catches structural couplings grep would
+miss.
 
-1. Check the graph first: `/graphify query "<question>"` — 36× cheaper than
-   reading raw files for questions about structure.
-2. `/graphify path "A" "B"` to trace how two concepts connect.
-3. `/graphify explain "NodeName"` for full context on any entity.
+### Before any structural exploration or codebase question
+
+**MANDATORY.** Do this before Read / Grep / Glob on any source file:
+
+1. **Orient.** `/graphify query "<the question>"` — returns BFS-ranked
+   relevant nodes with source citations.
+2. **Trace couplings.** `/graphify path "A" "B"` — shortest path between
+   two concepts.
+3. **Explain a single thing.** `/graphify explain "NodeName"` — full
+   neighborhood of one node.
+
+Only read files **after** the graph has pointed at specific
+`source_file` + `source_location`s. Cite those locations in the
+answer. Never synthesize a structural explanation from imagination.
 
 ### After changes
 
