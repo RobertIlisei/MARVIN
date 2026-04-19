@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
+import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
@@ -357,6 +358,23 @@ export default function Home() {
   const isEmpty = messages.length === 0;
   const hint = active ? undefined : "pick a project up in the header first";
 
+  // Advisor is "firing" when any in-flight tool call on any assistant
+  // message is the SDK's `advisor` tool. The block's `running` flag is
+  // flipped to `false` by `hydrateFromSession`/`tool_result`, so this
+  // derivation tracks the live state per turn without extra plumbing.
+  const advisorActive = useMemo(
+    () =>
+      messages.some((m) =>
+        m.blocks.some(
+          (b) =>
+            b.type === "tool_use" &&
+            b.name === "advisor" &&
+            b.running === true,
+        ),
+      ),
+    [messages],
+  );
+
   // --- Header ------------------------------------------------------------
   const header = (
     <>
@@ -490,6 +508,12 @@ export default function Home() {
             <div className="grid w-full grid-cols-1 items-center gap-10 md:grid-cols-[auto_1fr]">
               <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
                 <BrainLiquid state={marvinState} size={340} />
+                <AdvisorOrb
+                  active={advisorActive}
+                  model={advisorModel}
+                  size={88}
+                  offset={{ top: 20, right: 0 }}
+                />
                 {/* Coordinate marks — editorial instrument framing */}
                 <div
                   aria-hidden
@@ -767,8 +791,14 @@ export default function Home() {
                 </aside>
               ) : (
                 <aside className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-8">
-                  <div className="flex flex-col items-center gap-4">
+                  <div className="relative flex flex-col items-center gap-4">
                     <BrainLiquid state={marvinState} size={260} />
+                    <AdvisorOrb
+                      active={advisorActive}
+                      model={advisorModel}
+                      size={64}
+                      offset={{ top: 0, right: -12 }}
+                    />
                     <div className="text-center">
                       <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
                         state

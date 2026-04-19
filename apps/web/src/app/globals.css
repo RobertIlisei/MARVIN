@@ -511,6 +511,47 @@ html::after {
 }
 
 /* ---------------------------------------------------------------------------
+ * Advisor companion orb — hidden by default; animates in when the
+ * `advisor` tool is actively firing in the current turn. Transforms +
+ * opacity on the wrapper; the inner halo + orbit ring keep their own
+ * loops while visible. See `advisor-orb.tsx`.
+ * ------------------------------------------------------------------------ */
+
+.advisor-orb-wrap {
+  opacity: 0;
+  transform: translateX(32px) scale(0.7);
+  transition:
+    opacity 0.45s cubic-bezier(0.22, 0.9, 0.3, 1),
+    transform 0.55s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.advisor-orb-wrap.is-active {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+.advisor-orb-wrap.is-active .advisor-orb-svg {
+  animation: advisor-breathe 2.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px oklch(0.82 0.10 230 / 0.55));
+}
+.advisor-orb-wrap.is-active .advisor-orbit-ring {
+  transform-origin: 50% 50%;
+  animation: advisor-orbit 12s linear infinite;
+}
+@keyframes advisor-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+@keyframes advisor-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Design-system primitives ported from the Claude Design handoff.
  * Adapted to MARVIN's existing sulphur-amber dark palette — same visual
  * vocabulary (pill / kbd / timeline / status-rail), warmer accent colors.
