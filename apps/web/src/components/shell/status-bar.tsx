@@ -54,10 +54,9 @@ export function StatusBar({
           aria-hidden
           className={`text-[13px] leading-none ${active ? "animate-pulse" : ""}`}
           style={{
-            textShadow:
-              active
-                ? "0 0 8px currentColor, 0 0 16px rgba(217,200,106,0.35)"
-                : "none",
+            textShadow: active
+              ? "0 0 8px currentColor, 0 0 16px var(--color-accent-glow)"
+              : "none",
           }}
         >
           {STATE_GLYPH[state]}

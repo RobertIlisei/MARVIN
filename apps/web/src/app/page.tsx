@@ -20,6 +20,7 @@ import {
   type PersonalityMode,
 } from "@/components/settings/personality-toggle";
 import { ModelPicker } from "@/components/settings/model-picker";
+import { ThemeToggle } from "@/components/settings/theme-toggle";
 import {
   PermissionToggle,
   type PermissionStrategy,
@@ -402,6 +403,9 @@ export default function Home() {
         </LabeledGroup>
         <LabeledGroup label="voice">
           <PersonalityToggle value={personality} onChange={setPersonality} />
+        </LabeledGroup>
+        <LabeledGroup label="theme">
+          <ThemeToggle />
         </LabeledGroup>
         <LabeledGroup label="panes">
           <PaneToggle
