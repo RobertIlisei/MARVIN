@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+# marvin — lifecycle script for the MARVIN dev server.
+#
+# Usage:
+#   marvin [start|stop|restart|status|logs|doctor|help]
+#
+# Subcommands:
+#   start    (default) — preflight checks, install deps if stale, start Next.js on :3030
+#   stop     — stop the running MARVIN (matches the process bound to :3030)
+#   restart  — stop + start
+#   status   — is MARVIN running? hit /api/health, report auth mode + model
+#   logs     — tail the dev server log
+#   doctor   — run every preflight check and report; don't start anything
+#   help     — this message
+#
+# Exit codes:
+#   0  success
+#   1  generic failure
+#   2  preflight check failed (toolchain, credentials)
+#   3  port conflict with a non-MARVIN process
+#
+# The script keeps a PID file at .marvin/pid and a log at .marvin/dev.log
+# (both gitignored by MARVIN's own .gitignore). `pnpm dev` is what actually
+# runs; this script is the professional wrapper with checks and lifecycle.
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────
+# Paths + constants
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+readonly PORT="${MARVIN_PORT:-3030}"
+readonly STATE_DIR=".marvin"
+readonly PID_FILE="$STATE_DIR/pid"
+readonly LOG_FILE="$STATE_DIR/dev.log"
+readonly MIN_NODE_MAJOR=22
+
+mkdir -p "$STATE_DIR"
+
+# ─────────────────────────────────────────────────────────────────────
+# Pretty printing (colour only when stdout is a TTY)
+
+if [ -t 1 ]; then
+  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'
+  C_BLU=$'\033[34m'; C_DIM=$'\033[2m'; C_RST=$'\033[0m'
+else
+  C_RED=''; C_GRN=''; C_YEL=''; C_BLU=''; C_DIM=''; C_RST=''
+fi
+
+info()  { printf '%s%s%s %s\n' "$C_BLU" "ℹ" "$C_RST" "$*"; }
+ok()    { printf '%s%s%s %s\n' "$C_GRN" "✓" "$C_RST" "$*"; }
+warn()  { printf '%s%s%s %s\n' "$C_YEL" "!" "$C_RST" "$*"; }
+fail()  { printf '%s%s%s %s\n' "$C_RED" "✗" "$C_RST" "$*" >&2; }
+dim()   { printf '%s%s%s\n'    "$C_DIM" "$*"   "$C_RST"; }
+
+# ─────────────────────────────────────────────────────────────────────
+# Preflight checks — each returns 0 on pass, non-zero on fail.
+
+check_node() {
+  if ! command -v node >/dev/null 2>&1; then
+    fail "node not found on PATH"
+    dim "  install: https://nodejs.org  or  brew install node@${MIN_NODE_MAJOR}"
+    return 2
+  fi
+  local version major
+  version="$(node --version | sed 's/^v//')"
+  major="${version%%.*}"
+  if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then
+    fail "node $version is too old (need >= $MIN_NODE_MAJOR)"
+    return 2
+  fi
+  ok "node v$version"
+}
+
+check_pnpm() {
+  if ! command -v pnpm >/dev/null 2>&1; then
+    fail "pnpm not found on PATH"
+    dim "  install: npm install -g pnpm@10.33.0  (or use corepack)"
+    return 2
+  fi
+  ok "pnpm $(pnpm --version)"
+}
+
+check_deps() {
+  if [ ! -d node_modules ] || [ ! -f node_modules/.modules.yaml ]; then
+    warn "node_modules missing — running pnpm install"
+    pnpm install
+  else
+    ok "node_modules present"
+  fi
+}
+
+check_skills() {
+  if [ ! -d "$HOME/.claude/skills" ] || [ -z "$(ls -A "$HOME/.claude/skills" 2>/dev/null)" ]; then
+    warn "no skills installed at ~/.claude/skills — running scripts/install-skills.sh"
+    bash scripts/install-skills.sh
+  else
+    local count
+    count="$(ls -1 "$HOME/.claude/skills" 2>/dev/null | wc -l | tr -d ' ')"
+    ok "~/.claude/skills has $count skills installed"
+  fi
+}
+
+check_port() {
+  if lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | grep -q .; then
+    local pid; pid="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+    if [ -f "$PID_FILE" ] && [ "$pid" = "$(cat "$PID_FILE")" ]; then
+      # It's our own previous instance.
+      ok "port $PORT already bound by MARVIN (pid $pid)"
+      return 10  # sentinel — already-running
+    fi
+    fail "port $PORT is bound by a non-MARVIN process (pid $pid)"
+    dim "  kill it:  kill $pid"
+    return 3
+  fi
+  ok "port $PORT is free"
+}
+
+check_credentials() {
+  # Warnings only; the Agent SDK will fail with a clear error at turn time
+  # if auth is missing, and /api/health surfaces the detected mode.
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    ok "ANTHROPIC_API_KEY in env"
+    return 0
+  fi
+  if [ -f "$HOME/.claude/.credentials.json" ] || [ -f "$HOME/.claude/auth.json" ]; then
+    ok "~/.claude/.credentials.json present"
+    return 0
+  fi
+  if ls "$HOME/Library/Application Support/claude-cli/history.jsonl" >/dev/null 2>&1; then
+    ok "macOS Keychain credentials (host-credentials mode)"
+    return 0
+  fi
+  warn "no Anthropic credentials detected"
+  dim "  set ANTHROPIC_API_KEY or run 'claude auth login'"
+  dim "  MARVIN will start but /api/health will report ok:false"
+  return 0
+}
+
+check_chromium() {
+  # Purely advisory — Playwright works without it, but marvin-playwright
+  # MCP needs Chromium to drive localhost. Not a gate.
+  if [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+    ok "Playwright Chromium installed (marvin-playwright MCP ready)"
+  else
+    dim "  Chromium not installed — marvin-playwright MCP will be unavailable"
+    dim "  install:  npx playwright install chromium"
+  fi
+  return 0
+}
+
+preflight() {
+  info "preflight checks"
+  check_node || return $?
+  check_pnpm || return $?
+  check_deps || return $?
+  check_skills || return $?
+  check_credentials || return $?
+  check_chromium || return $?
+  check_port
+  local port_status=$?
+  return $port_status
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# Lifecycle
+
+cmd_doctor() {
+  preflight || true
+  echo
+  info "doctor pass complete"
+}
+
+cmd_start() {
+  info "starting MARVIN on port $PORT"
+
+  preflight
+  local pf=$?
+  if [ $pf -eq 10 ]; then
+    warn "MARVIN already running — nothing to do"
+    dim "  open http://localhost:$PORT  or  run:  $0 restart"
+    return 0
+  fi
+  if [ $pf -ne 0 ]; then
+    fail "preflight failed (exit $pf) — aborting"
+    return $pf
+  fi
+
+  info "spawning 'pnpm dev' (output → $LOG_FILE)"
+  # nohup so the server keeps running if this shell exits.
+  # setsid keeps it in a new process group so `stop` can kill cleanly.
+  nohup env MARVIN_PORT="$PORT" pnpm dev >"$LOG_FILE" 2>&1 &
+  local pid=$!
+  echo "$pid" >"$PID_FILE"
+  ok "spawned pid $pid"
+
+  # Wait up to 30s for /api/health to respond
+  info "waiting for /api/health …"
+  local n=0
+  while [ $n -lt 30 ]; do
+    if curl -sf "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+      local body; body="$(curl -sf "http://localhost:$PORT/api/health" 2>/dev/null || echo '{}')"
+      local mode model
+      mode="$(printf '%s' "$body" | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')"
+      model="$(printf '%s' "$body" | sed -n 's/.*"defaultModel":"\([^"]*\)".*/\1/p')"
+      echo
+      ok "MARVIN is up"
+      printf '  %-12s %s\n' "URL:"   "http://localhost:$PORT"
+      printf '  %-12s %s\n' "auth:"  "${mode:-unknown}"
+      printf '  %-12s %s\n' "model:" "${model:-unknown}"
+      printf '  %-12s %s (pid $pid)\n' "logs:"  "tail -f $LOG_FILE"
+      return 0
+    fi
+    printf '.' ; n=$((n + 1)) ; sleep 1
+  done
+  echo
+  fail "server did not respond to /api/health within 30s"
+  dim "  last log lines:"
+  tail -20 "$LOG_FILE" | sed 's/^/    /'
+  return 1
+}
+
+cmd_stop() {
+  if [ ! -f "$PID_FILE" ]; then
+    warn "no pid file — is MARVIN running?"
+    # Best-effort port-bound kill in case the pid file is missing.
+    local pid; pid="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+    if [ -n "$pid" ]; then
+      info "found process on port $PORT (pid $pid) — killing"
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+      ok "stopped"
+    fi
+    return 0
+  fi
+
+  local pid; pid="$(cat "$PID_FILE")"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    warn "pid $pid in pidfile is not running — cleaning up"
+    rm -f "$PID_FILE"
+    return 0
+  fi
+
+  info "stopping MARVIN (pid $pid)"
+  # Kill the whole process group so pnpm + next + turbopack all go together.
+  kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  sleep 2
+  if kill -0 "$pid" 2>/dev/null; then
+    warn "didn't exit on SIGTERM — sending SIGKILL"
+    kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
+  ok "stopped"
+}
+
+cmd_restart() {
+  cmd_stop || true
+  sleep 1
+  cmd_start
+}
+
+cmd_status() {
+  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    local pid; pid="$(cat "$PID_FILE")"
+    ok "MARVIN running (pid $pid)"
+  else
+    local port_pid; port_pid="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+    if [ -n "$port_pid" ]; then
+      warn "port $PORT bound by pid $port_pid but no MARVIN pidfile — foreign process?"
+    else
+      warn "MARVIN is not running"
+      return 1
+    fi
+  fi
+
+  if ! curl -sf "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+    fail "MARVIN is up but /api/health is not responding"
+    return 1
+  fi
+
+  local body; body="$(curl -sf "http://localhost:$PORT/api/health" 2>/dev/null || echo '{}')"
+  local mode credhint model datadir
+  mode="$(printf '%s' "$body"     | sed -n 's/.*"mode":"\([^"]*\)".*/\1/p')"
+  credhint="$(printf '%s' "$body" | sed -n 's/.*"credentialHint":"\([^"]*\)".*/\1/p')"
+  model="$(printf '%s' "$body"    | sed -n 's/.*"defaultModel":"\([^"]*\)".*/\1/p')"
+  datadir="$(printf '%s' "$body"  | sed -n 's/.*"dataDir":"\([^"]*\)".*/\1/p')"
+
+  printf '  %-14s %s\n' "URL:"     "http://localhost:$PORT"
+  printf '  %-14s %s\n' "auth:"    "${mode:-unknown}"
+  [ -n "$credhint" ] && printf '  %-14s %s\n' "credentials:" "$credhint"
+  printf '  %-14s %s\n' "model:"   "${model:-unknown}"
+  printf '  %-14s %s\n' "data dir:" "${datadir:-unknown}"
+  printf '  %-14s %s\n' "logs:"    "tail -f $LOG_FILE"
+}
+
+cmd_logs() {
+  if [ ! -f "$LOG_FILE" ]; then
+    fail "no log file at $LOG_FILE — is MARVIN running?"
+    return 1
+  fi
+  exec tail -f -n 100 "$LOG_FILE"
+}
+
+cmd_help() {
+  cat <<'EOF'
+marvin — lifecycle script for the MARVIN dev server
+
+  marvin              (alias for start)
+  marvin start        preflight + start Next.js on port 3030
+  marvin stop         stop the running instance
+  marvin restart      stop + start
+  marvin status       is it running? show auth + model + data dir
+  marvin logs         tail the dev server log
+  marvin doctor       run every preflight check, don't start anything
+  marvin help         this message
+
+Environment:
+  MARVIN_PORT         override the port (default 3030)
+  MARVIN_DATA_DIR     where MARVIN keeps its runtime state (default ~/.marvin/)
+  ANTHROPIC_API_KEY   direct API key; wins over host credentials
+
+State:
+  .marvin/pid         pid of the live instance
+  .marvin/dev.log     dev server stdout/stderr
+EOF
+}
+
+# ─────────────────────────────────────────────────────────────────────
+# Dispatch
+
+case "${1:-start}" in
+  start)    cmd_start   ;;
+  stop)     cmd_stop    ;;
+  restart)  cmd_restart ;;
+  status)   cmd_status  ;;
+  logs)     cmd_logs    ;;
+  doctor)   cmd_doctor  ;;
+  help|-h|--help)  cmd_help ;;
+  *)
+    fail "unknown subcommand: $1"
+    echo
+    cmd_help
+    exit 1
+    ;;
+esac
