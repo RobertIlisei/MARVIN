@@ -358,7 +358,8 @@ export default function Home() {
 
   // --- Header ------------------------------------------------------------
   const header = (
-    <header className="flex items-center gap-3 border-b border-[color:var(--color-border)]/40 px-5 py-2.5">
+    <>
+    <header className="flex items-center gap-3 px-5 py-2.5">
       <span className="font-display text-[22px] italic leading-none text-[color:var(--color-fg)]">
         marvin
       </span>
@@ -459,6 +460,8 @@ export default function Home() {
         </button>
       </div>
     </header>
+    <div className="status-rail" aria-hidden />
+    </>
   );
 
   if (isEmpty) {

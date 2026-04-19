@@ -415,3 +415,209 @@ html::after {
 .rise-in {
   animation: rise-in 0.25s ease-out;
 }
+
+/* ---------------------------------------------------------------------------
+ * Design-system primitives ported from the Claude Design handoff.
+ * Adapted to MARVIN's existing sulphur-amber dark palette — same visual
+ * vocabulary (pill / kbd / timeline / status-rail), warmer accent colors.
+ * ------------------------------------------------------------------------ */
+
+::selection {
+  background: var(--color-accent-glow);
+  color: var(--color-fg);
+}
+
+.hairline {
+  background: var(--color-border);
+  height: 1px;
+}
+
+/* Mono uppercase eyebrow label — tiny, wide-tracked, ghost-colored. Used
+ * for section headings inside panels, metadata rows, and the state
+ * indicator. Named `.eyebrow` (not `.label`) to avoid clashing with
+ * semantic <label> elements. */
+.eyebrow {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-fg-faint);
+}
+
+/* Keyboard-hint chip — slim, MARVIN-palette. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-elev);
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--color-fg-dim);
+}
+
+/* Unified pill button. `data-active="true"` flips to inverted amber fill. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  font-size: 12px;
+  color: var(--color-fg-dim);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+.pill:hover {
+  color: var(--color-fg);
+  border-color: var(--color-border-strong);
+  background: var(--color-bg-elev);
+}
+.pill[data-active="true"] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-deep);
+}
+.pill[data-active="true"]:hover {
+  background: var(--color-accent-deep);
+  border-color: var(--color-accent-deep);
+}
+.pill-sm {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.pill-ghost {
+  border-color: transparent;
+}
+.pill-ghost:hover {
+  border-color: var(--color-border);
+}
+
+/* Left marginal rule — used by block quotes or inset notes. */
+.marginalia {
+  position: relative;
+}
+.marginalia::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+
+/* Timeline thread for stacked tool calls — a single hairline spine with
+ * dots at each node. Mirrors the design's departure from boxed cards. */
+.timeline {
+  position: relative;
+  padding-left: 22px;
+}
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+.timeline-node {
+  position: relative;
+}
+.timeline-node::before {
+  content: "";
+  position: absolute;
+  left: -19px;
+  top: 12px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-fg-dim);
+}
+.timeline-node[data-status="running"]::before {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+.timeline-node[data-status="error"]::before {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+}
+.timeline-node[data-status="warn"]::before {
+  border-color: var(--color-warn);
+  background: var(--color-warn);
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-accent-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(217, 200, 106, 0);
+  }
+}
+
+/* Status hairline — sits under the header. Width + opacity react to
+ * `data-marvin` state; error state swaps the shimmer color for danger. */
+@keyframes hairline-flow {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.status-rail {
+  position: relative;
+  height: 1px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+.status-rail::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent) 50%,
+    transparent
+  );
+  opacity: var(--rail-opacity, 0);
+  animation: hairline-flow var(--rail-duration, 2.4s) linear infinite;
+}
+body[data-marvin="thinking"] .status-rail::after {
+  --rail-opacity: 0.5;
+  --rail-duration: 2.2s;
+}
+body[data-marvin="tool"] .status-rail::after {
+  --rail-opacity: 0.65;
+  --rail-duration: 1.6s;
+}
+body[data-marvin="writing"] .status-rail::after {
+  --rail-opacity: 0.75;
+  --rail-duration: 1.2s;
+}
+body[data-marvin="error"] .status-rail::after {
+  --rail-opacity: 0.55;
+  --rail-duration: 3s;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-danger),
+    transparent
+  );
+}
