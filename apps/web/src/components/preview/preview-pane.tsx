@@ -10,17 +10,21 @@ const LS_PREVIEW_URL_PREFIX = "marvin.previewUrl.";
  * framing — when one doesn't (X-Frame-Options / CSP frame-ancestors), the
  * fallback overlay offers "open in new tab".
  */
+const FRAME_LOAD_TIMEOUT_MS = 15_000;
+
 export function PreviewPane({ projectId }: { projectId: string | null }) {
   const storageKey = projectId ? `${LS_PREVIEW_URL_PREFIX}${projectId}` : null;
   const [url, setUrl] = useState<string>("");
   const [pendingUrl, setPendingUrl] = useState<string>("");
   const [reloadKey, setReloadKey] = useState(0);
   const [frameLoaded, setFrameLoaded] = useState(false);
+  const [loadStalled, setLoadStalled] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Hydrate persisted URL when the active project changes.
   useEffect(() => {
     setFrameLoaded(false);
+    setLoadStalled(false);
     if (!storageKey) {
       setUrl("");
       setPendingUrl("");
@@ -36,11 +40,23 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
     }
   }, [storageKey]);
 
+  // If onLoad never fires (blocked by X-Frame-Options / CSP, offline target),
+  // surface a stalled state after the timeout instead of spinning forever.
+  useEffect(() => {
+    if (!url || frameLoaded) return;
+    const timer = window.setTimeout(
+      () => setLoadStalled(true),
+      FRAME_LOAD_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [url, reloadKey, frameLoaded]);
+
   const apply = () => {
     const next = pendingUrl.trim();
     if (!next) return;
     setUrl(next);
     setFrameLoaded(false);
+    setLoadStalled(false);
     setReloadKey((v) => v + 1);
     if (storageKey) {
       try {
@@ -54,6 +70,7 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
   const refresh = () => {
     if (!url) return;
     setFrameLoaded(false);
+    setLoadStalled(false);
     setReloadKey((v) => v + 1);
   };
 
@@ -102,6 +119,7 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
           type="button"
           onClick={refresh}
           disabled={!url}
+          aria-label="refresh preview"
           title="refresh"
           className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[10px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -111,6 +129,7 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
           type="button"
           onClick={openExternal}
           disabled={!url}
+          aria-label="open preview in a new tab"
           title="open in a new tab"
           className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[10px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -139,9 +158,17 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
               sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
               className="h-full w-full border-0 bg-white"
             />
-            {!frameLoaded && (
+            {!frameLoaded && !loadStalled && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[11px] text-[color:var(--color-fg-faint)]">
                 loading {url}…
+              </div>
+            )}
+            {!frameLoaded && loadStalled && (
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 px-4 text-center font-mono text-[11px] text-[color:var(--color-warn)]">
+                <span>still loading {url}…</span>
+                <span className="text-[10px] text-[color:var(--color-fg-faint)]">
+                  the page may be blocking frames (X-Frame-Options / CSP). Try ↻ or ↗.
+                </span>
               </div>
             )}
           </>

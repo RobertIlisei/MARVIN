@@ -12,6 +12,7 @@ import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { GraphPanel } from "@/components/graph/graph-panel";
 import { ChatInput } from "@/components/input/chat-input";
 import { PreviewPane } from "@/components/preview/preview-pane";
+import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
 import { useProjects } from "@/components/project/use-projects";
 import {
@@ -375,6 +376,10 @@ export default function Home() {
         verifyWorkDir={verifyWorkDir}
         onResumeSession={handleResumeSession}
         openSignal={pickerOpenSignal}
+      />
+      <BranchBadge
+        cwd={active?.workDir ?? null}
+        refreshKey={sessionRefreshKey}
       />
       <div className="ml-auto flex items-center gap-3">
         <CostPill projectId={active?.id ?? null} refreshKey={sessionRefreshKey} />

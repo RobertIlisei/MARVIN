@@ -49,19 +49,28 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
+    setFetchError(null);
     fetch("/api/models")
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((d) => {
         if (!cancelled && d) setData(d as ModelsResponse);
       })
-      .catch(() => {
-        /* leave as-is */
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setFetchError(
+            err instanceof Error ? err.message : "failed to fetch /api/models",
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -78,8 +87,15 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
         setOpen(false);
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", handler);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const grouped = useMemo(() => {
@@ -112,6 +128,13 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={
+          advisor
+            ? `model: executor ${labelFor(executor)}, advisor ${labelFor(advisor)}`
+            : `model: executor ${labelFor(executor)}, no advisor`
+        }
         title={
           advisor
             ? `executor: ${labelFor(executor)}  ·  advisor: ${labelFor(advisor)}`
@@ -170,6 +193,15 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
           {data?.error && (
             <div className="mt-3 rounded border border-[color:var(--color-warn)]/30 bg-[color:var(--color-warn)]/5 px-2 py-1.5 font-mono text-[10px] text-[color:var(--color-warn)]">
               {data.error}
+            </div>
+          )}
+
+          {fetchError && !data && (
+            <div
+              role="alert"
+              className="mt-3 rounded border border-[color:var(--color-warn)]/30 bg-[color:var(--color-warn)]/5 px-2 py-1.5 font-mono text-[10px] text-[color:var(--color-warn)]"
+            >
+              couldn&apos;t load models: {fetchError}
             </div>
           )}
         </div>

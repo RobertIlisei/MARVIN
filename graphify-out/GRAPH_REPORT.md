@@ -1,11 +1,12 @@
-# Graph Report - .  (2026-04-18)
+# Graph Report - .  (2026-04-19)
 
 ## Corpus Check
-- Corpus is ~46,854 words - fits in a single context window. You may not need a graph.
+- 0 files · ~99,999 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 310 nodes · 358 edges · 61 communities detected
-- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 64 edges (avg confidence: 0.81)
+- 343 nodes · 396 edges · 68 communities detected
+- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 68 edges (avg confidence: 0.81)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
@@ -70,18 +71,25 @@
 - [[_COMMUNITY_Community 58|Community 58]]
 - [[_COMMUNITY_Community 59|Community 59]]
 - [[_COMMUNITY_Community 60|Community 60]]
+- [[_COMMUNITY_Community 61|Community 61]]
+- [[_COMMUNITY_Community 62|Community 62]]
+- [[_COMMUNITY_Community 63|Community 63]]
+- [[_COMMUNITY_Community 64|Community 64]]
+- [[_COMMUNITY_Community 65|Community 65]]
+- [[_COMMUNITY_Community 66|Community 66]]
+- [[_COMMUNITY_Community 67|Community 67]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `GET()` - 36 edges
-2. `POST()` - 17 edges
+1. `GET()` - 43 edges
+2. `POST()` - 22 edges
 3. `8-Phase Senior-Engineer Workflow` - 9 edges
 4. `Target Architecture (Repo Layout)` - 8 edges
 5. `getAnthropicAuth()` - 7 edges
-6. `DELETE()` - 7 edges
-7. `MARVIN` - 7 edges
-8. `MARVIN Project Instructions (CLAUDE.md)` - 7 edges
-9. `Golden Rules for Working in This Repo` - 7 edges
-10. `readProjectsFile()` - 6 edges
+6. `MARVIN` - 7 edges
+7. `MARVIN Project Instructions (CLAUDE.md)` - 7 edges
+8. `Golden Rules for Working in This Repo` - 7 edges
+9. `readProjectsFile()` - 6 edges
+10. `removeProject()` - 6 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Repo Layout (apps/web + packages)` --semantically_similar_to--> `Target Architecture (Repo Layout)`  [INFERRED] [semantically similar]
@@ -107,64 +115,64 @@ Cohesion: 0.07
 Nodes (34): Adding a New Feature (PLAN.md first), MARVIN_DATA_DIR Default ~/.marvin/, Golden Rules for Working in This Repo, Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui), Personality: marvin | neutral Toggle, MARVIN Project Instructions (CLAUDE.md), Rule 3: Confirm-Before-Act for Risky Tools, Rule 6: No Hardcoded Project Knowledge (+26 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.13
-Nodes (15): computeDegrees(), emptySummary(), getNeighbors(), loadRaw(), resolveNode(), searchGraph(), shortestPath(), summarizeGraph() (+7 more)
+Cohesion: 0.1
+Nodes (18): getPendingOriginalInput(), registerPendingConfirm(), resolvePendingConfirm(), computeDegrees(), emptySummary(), getNeighbors(), loadRaw(), resolveNode() (+10 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.15
-Nodes (18): ensureDir(), buildSystemPrompt(), addProject(), getActiveProjectId(), getProject(), listProjects(), readActiveFile(), readProjectsFile() (+10 more)
+Cohesion: 0.11
+Nodes (11): defaultModel(), discoverClaudeBinary(), runClaudeCli(), buildSystemPrompt(), verifyWorkDir(), POST(), shellFor(), cancelLiveTurn() (+3 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.11
-Nodes (16): clearTurnConfirms(), registerPendingConfirm(), resolvePendingConfirm(), detectNewCommits(), getCurrentHead(), gitHead(), listCommitsSince(), resetCommitCursor() (+8 more)
-
-### Community 4 - "Community 4"
 Cohesion: 0.12
 Nodes (19): Advisor Strategy (Sonnet exec + Opus advisor), Blast-Radius Enumeration (1-hop + 2-hop graph traversal), Browser Preview Pane (iframe-based), 8-Phase Senior-Engineer Workflow, Graph-Aware Chat via In-Process MCP Server, Keyboard Shortcuts + Session Search, Layer 2: Architecture Decision Records (docs/adr/), Layer 1: Structural Impact Analysis from Knowledge Graph (+11 more)
+
+### Community 4 - "Community 4"
+Cohesion: 0.22
+Nodes (16): ensureDir(), getHomeDir(), getMarvinDataDir(), addProject(), getActiveProjectId(), getProject(), listProjects(), readActiveFile() (+8 more)
 
 ### Community 5 - "Community 5"
 Cohesion: 0.11
 Nodes (18): God Nodes: GET, POST, Target Architecture, 8-Phase Workflow, etc., Graph Queries 36x Cheaper than Raw File Reads, Graphify Usage Guide, Graphify Baseline (233 nodes / 248 edges / 44 communities), Moderately Advanced Robotic Virtual Intelligence Network, Claude CLI runtime (@marvin/runtime), 8-Phase Workflow in One Conversation, Graphify Knowledge Graph Integration (+10 more)
 
 ### Community 6 - "Community 6"
+Cohesion: 0.21
+Nodes (11): detectNewCommits(), getCurrentHead(), gitHead(), listCommitsSince(), resetCommitCursor(), DELETE(), findGraphifyBin(), getState() (+3 more)
+
+### Community 7 - "Community 7"
 Cohesion: 0.2
 Nodes (0): 
 
-### Community 7 - "Community 7"
+### Community 8 - "Community 8"
+Cohesion: 0.27
+Nodes (7): clearTurnConfirms(), createPlaywrightMcpConfig(), findWorkspaceRoot(), resolveCliPath(), trimEnv(), resolveRuntimeMode(), runAgent()
+
+### Community 9 - "Community 9"
+Cohesion: 0.36
+Nodes (7): buildProjectContext(), readAdrs(), checkWorkflowHealth(), countAdrs(), formatWorkflowHealthBlock(), memoryHasContent(), walkRepo()
+
+### Community 10 - "Community 10"
 Cohesion: 0.46
 Nodes (7): dayKey(), emptyAggregate(), fold(), readCostFile(), recordTurnCost(), summarizeCost(), writeCostFile()
 
-### Community 8 - "Community 8"
-Cohesion: 0.32
-Nodes (4): buildProjectContext(), readAdrs(), formatProbeBlock(), runProbes()
-
-### Community 9 - "Community 9"
+### Community 11 - "Community 11"
 Cohesion: 0.29
 Nodes (0): 
 
-### Community 10 - "Community 10"
+### Community 12 - "Community 12"
 Cohesion: 0.57
 Nodes (6): buildSubprocessEnv(), getAnthropicAuth(), hasHostCredentialsOnDisk(), isOAuthToken(), maskKey(), trimEnv()
 
-### Community 11 - "Community 11"
+### Community 13 - "Community 13"
 Cohesion: 0.33
 Nodes (0): 
-
-### Community 12 - "Community 12"
-Cohesion: 0.4
-Nodes (4): defaultReason(), toolPolicy(), classifyToolCall(), resolveRuntimeMode()
-
-### Community 13 - "Community 13"
-Cohesion: 0.4
-Nodes (3): onKey(), loadHistory(), mount()
 
 ### Community 14 - "Community 14"
 Cohesion: 0.4
 Nodes (0): 
 
 ### Community 15 - "Community 15"
-Cohesion: 0.6
-Nodes (3): defaultModel(), discoverClaudeBinary(), runClaudeCli()
+Cohesion: 0.4
+Nodes (0): 
 
 ### Community 16 - "Community 16"
 Cohesion: 0.4
@@ -183,31 +191,31 @@ Cohesion: 0.5
 Nodes (0): 
 
 ### Community 20 - "Community 20"
-Cohesion: 0.83
-Nodes (3): extractionPrompt(), parseJsonPayload(), refreshDocs()
-
-### Community 21 - "Community 21"
 Cohesion: 0.5
 Nodes (0): 
+
+### Community 21 - "Community 21"
+Cohesion: 0.83
+Nodes (3): extractionPrompt(), parseJsonPayload(), refreshDocs()
 
 ### Community 22 - "Community 22"
 Cohesion: 0.5
 Nodes (0): 
 
 ### Community 23 - "Community 23"
+Cohesion: 0.67
+Nodes (2): loadHistory(), mount()
+
+### Community 24 - "Community 24"
 Cohesion: 0.5
 Nodes (0): 
 
-### Community 24 - "Community 24"
-Cohesion: 0.67
-Nodes (0): 
-
 ### Community 25 - "Community 25"
-Cohesion: 1.0
-Nodes (2): getHomeDir(), getMarvinDataDir()
+Cohesion: 0.83
+Nodes (3): buildAuthHeaders(), listModels(), tierFor()
 
 ### Community 26 - "Community 26"
-Cohesion: 0.67
+Cohesion: 0.5
 Nodes (0): 
 
 ### Community 27 - "Community 27"
@@ -215,27 +223,27 @@ Cohesion: 0.67
 Nodes (0): 
 
 ### Community 28 - "Community 28"
+Cohesion: 1.0
+Nodes (2): defaultReason(), toolPolicy()
+
+### Community 29 - "Community 29"
 Cohesion: 0.67
 Nodes (0): 
 
-### Community 29 - "Community 29"
-Cohesion: 1.0
-Nodes (0): 
-
 ### Community 30 - "Community 30"
-Cohesion: 1.0
+Cohesion: 0.67
 Nodes (0): 
 
 ### Community 31 - "Community 31"
-Cohesion: 1.0
+Cohesion: 0.67
 Nodes (0): 
 
 ### Community 32 - "Community 32"
-Cohesion: 1.0
+Cohesion: 0.67
 Nodes (0): 
 
 ### Community 33 - "Community 33"
-Cohesion: 1.0
+Cohesion: 0.67
 Nodes (0): 
 
 ### Community 34 - "Community 34"
@@ -284,7 +292,7 @@ Nodes (0):
 
 ### Community 45 - "Community 45"
 Cohesion: 1.0
-Nodes (2): frontend-design Skill Applied to MARVIN Itself, Skill Library Expansion (14 Anthropic skills)
+Nodes (0): 
 
 ### Community 46 - "Community 46"
 Cohesion: 1.0
@@ -300,7 +308,7 @@ Nodes (0):
 
 ### Community 49 - "Community 49"
 Cohesion: 1.0
-Nodes (0): 
+Nodes (2): frontend-design Skill Applied to MARVIN Itself, Skill Library Expansion (14 Anthropic skills)
 
 ### Community 50 - "Community 50"
 Cohesion: 1.0
@@ -340,94 +348,126 @@ Nodes (0):
 
 ### Community 59 - "Community 59"
 Cohesion: 1.0
-Nodes (1): End-to-End Verification Smoke Test
+Nodes (0): 
 
 ### Community 60 - "Community 60"
 Cohesion: 1.0
+Nodes (0): 
+
+### Community 61 - "Community 61"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 62 - "Community 62"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 63 - "Community 63"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 64 - "Community 64"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 65 - "Community 65"
+Cohesion: 1.0
+Nodes (1): End-to-End Verification Smoke Test
+
+### Community 66 - "Community 66"
+Cohesion: 1.0
 Nodes (1): Open Items (quick confirms)
+
+### Community 67 - "Community 67"
+Cohesion: 1.0
+Nodes (0): 
 
 ## Knowledge Gaps
 - **31 isolated node(s):** `Moderately Advanced Robotic Virtual Intelligence Network`, `Pair-Programming AI Assistant`, `Hitchhiker's Brain-the-Size-of-a-Planet Quote`, `pnpm workspaces + Turbo`, `Claude CLI runtime (@marvin/runtime)` (+26 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Community 29`** (2 nodes): `cn()`, `tabs.tsx`
+- **Thin community `Community 34`** (2 nodes): `cn()`, `tabs.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 30`** (2 nodes): `utils.ts`, `cn()`
+- **Thin community `Community 35`** (2 nodes): `utils.ts`, `cn()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 31`** (2 nodes): `TooltipContent()`, `tooltip.tsx`
+- **Thin community `Community 36`** (2 nodes): `TooltipContent()`, `tooltip.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 32`** (2 nodes): `Badge()`, `badge.tsx`
+- **Thin community `Community 37`** (2 nodes): `Badge()`, `badge.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 33`** (2 nodes): `Separator()`, `separator.tsx`
+- **Thin community `Community 38`** (2 nodes): `Separator()`, `separator.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 34`** (2 nodes): `cn()`, `button.tsx`
+- **Thin community `Community 39`** (2 nodes): `cn()`, `button.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 35`** (2 nodes): `Input()`, `input.tsx`
+- **Thin community `Community 40`** (2 nodes): `Input()`, `input.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 36`** (2 nodes): `Skeleton()`, `skeleton.tsx`
+- **Thin community `Community 41`** (2 nodes): `Skeleton()`, `skeleton.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 37`** (2 nodes): `layout.tsx`, `RootLayout()`
+- **Thin community `Community 42`** (2 nodes): `layout.tsx`, `RootLayout()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 38`** (2 nodes): `personality-toggle.tsx`, `PersonalityToggle()`
+- **Thin community `Community 43`** (2 nodes): `personality-toggle.tsx`, `PersonalityToggle()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 39`** (2 nodes): `runtime-mode-toggle.tsx`, `RuntimeModeToggle()`
+- **Thin community `Community 44`** (2 nodes): `cost-pill.tsx`, `fmtUsd()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 40`** (2 nodes): `cost-pill.tsx`, `fmtUsd()`
+- **Thin community `Community 45`** (2 nodes): `diff-viewer.tsx`, `onMount()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 41`** (2 nodes): `diff-viewer.tsx`, `onMount()`
+- **Thin community `Community 46`** (2 nodes): `use-projects.ts`, `useProjects()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 42`** (2 nodes): `use-projects.ts`, `useProjects()`
+- **Thin community `Community 47`** (2 nodes): `submit()`, `add-project-dialog.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 43`** (2 nodes): `submit()`, `add-project-dialog.tsx`
+- **Thin community `Community 48`** (2 nodes): `project-picker.tsx`, `fmtWhen()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 44`** (2 nodes): `project-picker.tsx`, `fmtWhen()`
+- **Thin community `Community 49`** (2 nodes): `frontend-design Skill Applied to MARVIN Itself`, `Skill Library Expansion (14 Anthropic skills)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 45`** (2 nodes): `frontend-design Skill Applied to MARVIN Itself`, `Skill Library Expansion (14 Anthropic skills)`
+- **Thin community `Community 50`** (2 nodes): `page.tsx`, `onKey()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 46`** (1 nodes): `index.ts`
+- **Thin community `Community 51`** (2 nodes): `permission-toggle.tsx`, `PermissionToggle()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 47`** (1 nodes): `index.ts`
+- **Thin community `Community 52`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 48`** (1 nodes): `index.ts`
+- **Thin community `Community 53`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 49`** (1 nodes): `index.ts`
+- **Thin community `Community 54`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 50`** (1 nodes): `next-env.d.ts`
+- **Thin community `Community 55`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 51`** (1 nodes): `next.config.ts`
+- **Thin community `Community 56`** (1 nodes): `next-env.d.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 52`** (1 nodes): `shortcuts-help.tsx`
+- **Thin community `Community 57`** (1 nodes): `next.config.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 53`** (1 nodes): `message-view.tsx`
+- **Thin community `Community 58`** (1 nodes): `shortcuts-help.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 54`** (1 nodes): `types.ts`
+- **Thin community `Community 59`** (1 nodes): `message-view.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 55`** (1 nodes): `status-bar.tsx`
+- **Thin community `Community 60`** (1 nodes): `types.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 56`** (1 nodes): `graph-panel.tsx`
+- **Thin community `Community 61`** (1 nodes): `status-bar.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 57`** (1 nodes): `types.ts`
+- **Thin community `Community 62`** (1 nodes): `graph-panel.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 58`** (1 nodes): `file-tree.tsx`
+- **Thin community `Community 63`** (1 nodes): `types.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 59`** (1 nodes): `End-to-End Verification Smoke Test`
+- **Thin community `Community 64`** (1 nodes): `file-tree.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 60`** (1 nodes): `Open Items (quick confirms)`
+- **Thin community `Community 65`** (1 nodes): `End-to-End Verification Smoke Test`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 66`** (1 nodes): `Open Items (quick confirms)`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 67`** (1 nodes): `next.config.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `GET()` connect `Community 1` to `Community 2`, `Community 3`, `Community 7`, `Community 10`, `Community 15`, `Community 25`?**
-  _High betweenness centrality (0.088) - this node is a cross-community bridge._
-- **Why does `POST()` connect `Community 2` to `Community 1`, `Community 3`, `Community 8`, `Community 12`, `Community 15`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
+- **Why does `GET()` connect `Community 1` to `Community 2`, `Community 4`, `Community 6`, `Community 8`, `Community 10`, `Community 12`, `Community 25`?**
+  _High betweenness centrality (0.096) - this node is a cross-community bridge._
+- **Why does `POST()` connect `Community 2` to `Community 1`, `Community 4`, `Community 6`, `Community 8`, `Community 9`?**
+  _High betweenness centrality (0.044) - this node is a cross-community bridge._
 - **Why does `Explicitly Not a Multi-Agent Orchestration` connect `Community 5` to `Community 0`?**
-  _High betweenness centrality (0.026) - this node is a cross-community bridge._
-- **Are the 22 inferred relationships involving `GET()` (e.g. with `detectNewCommits()` and `registerPendingConfirm()`) actually correct?**
-  _`GET()` has 22 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 10 inferred relationships involving `POST()` (e.g. with `slugifyWorkDir()` and `resolveRuntimeMode()`) actually correct?**
-  _`POST()` has 10 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 2 inferred relationships involving `Target Architecture (Repo Layout)` (e.g. with `Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui)` and `Repo Layout (apps/web + packages)`) actually correct?**
+  _High betweenness centrality (0.021) - this node is a cross-community bridge._
+- **Are the 27 inferred relationships involving `GET()` (e.g. with `detectNewCommits()` and `discoverClaudeBinary()`) actually correct?**
+  _`GET()` has 27 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 14 inferred relationships involving `POST()` (e.g. with `defaultModel()` and `slugifyWorkDir()`) actually correct?**
+  _`POST()` has 14 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 2 inferred relationships involving `Target Architecture (Repo Layout)` (e.g. with `Repo Layout (apps/web + packages)` and `Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui)`) actually correct?**
   _`Target Architecture (Repo Layout)` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Moderately Advanced Robotic Virtual Intelligence Network`, `Pair-Programming AI Assistant`, `Hitchhiker's Brain-the-Size-of-a-Planet Quote` to the rest of the system?**
   _31 weakly-connected nodes found - possible documentation gaps or missing edges._
