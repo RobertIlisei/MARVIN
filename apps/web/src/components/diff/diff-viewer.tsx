@@ -3,6 +3,8 @@
 import dynamic from "next/dynamic";
 import { useMemo } from "react";
 
+import { useTheme } from "@/components/settings/use-theme";
+
 import type { DiffOnMount } from "@monaco-editor/react";
 
 const DiffEditor = dynamic(
@@ -72,14 +74,18 @@ export function DiffViewer({
   maxHeight?: number;
 }) {
   const language = useMemo(() => langFor(filePath), [filePath]);
+  const mode = useTheme();
+  const themeName = mode === "light" ? "marvin-light" : "marvin-dark";
 
   const totalLines = Math.max(countLines(original), countLines(modified));
   // Roughly 19px per line + chrome; clamp to maxHeight.
   const height = Math.min(maxHeight, Math.max(160, totalLines * 19 + 24));
 
   const onMount: DiffOnMount = (_editor, monaco) => {
-    // Define a minimal MARVIN theme so the diff sits on our dark canvas
-    // instead of the default off-black monaco background.
+    // Register both MARVIN themes so we can flip between them without
+    // a re-mount. `setTheme` is global — changing it affects every
+    // monaco instance on the page, which is the behaviour we want since
+    // they should all match the current light/dark mode.
     monaco.editor.defineTheme("marvin-dark", {
       base: "vs-dark",
       inherit: true,
@@ -100,7 +106,30 @@ export function DiffViewer({
         "editorOverviewRuler.border": "#00000000",
       },
     });
-    monaco.editor.setTheme("marvin-dark");
+    monaco.editor.defineTheme("marvin-light", {
+      base: "vs",
+      inherit: true,
+      rules: [],
+      colors: {
+        // Surfaces mirror the --color-bg / --color-bg-elev OKLCH palette
+        // expressed in hex so monaco accepts them.
+        "editor.background": "#faf8f3",
+        "editor.foreground": "#1f1d17",
+        "editor.lineHighlightBackground": "#f0ede5",
+        "editorLineNumber.foreground": "#a09e94",
+        "editorLineNumber.activeForeground": "#5a5a50",
+        // Desaturated green/rust diff fills for paper contrast.
+        "diffEditor.insertedTextBackground": "#6eb77028",
+        "diffEditor.removedTextBackground": "#c96b5c28",
+        "diffEditor.insertedLineBackground": "#6eb7701a",
+        "diffEditor.removedLineBackground": "#c96b5c1a",
+        "editorGutter.addedBackground": "#6eb770",
+        "editorGutter.deletedBackground": "#c96b5c",
+        "editorGutter.modifiedBackground": "#a58a4a",
+        "editorOverviewRuler.border": "#00000000",
+      },
+    });
+    monaco.editor.setTheme(themeName);
   };
 
   return (
@@ -113,7 +142,7 @@ export function DiffViewer({
         original={original}
         modified={modified}
         language={language}
-        theme="marvin-dark"
+        theme={themeName}
         onMount={onMount}
         options={{
           readOnly: true,

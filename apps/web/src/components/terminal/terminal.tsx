@@ -4,12 +4,66 @@ import "@xterm/xterm/css/xterm.css";
 
 import { useEffect, useRef, useState } from "react";
 
+import { useTheme } from "@/components/settings/use-theme";
+
 import type { Terminal as Xterm } from "@xterm/xterm";
 import type { FitAddon as FitAddonT } from "@xterm/addon-fit";
 
 const PROMPT = "\x1b[38;5;39m❯\x1b[0m ";
 const HISTORY_KEY = "marvin.term.history";
 const HISTORY_MAX = 100;
+
+// xterm themes keyed to MARVIN's --color-* palette. Background is always
+// transparent so the parent pane's paper / ink color shows through, which
+// is how we stay in step with the global theme toggle without re-theming
+// xterm on every var change.
+const XTERM_THEME_DARK = {
+  background: "rgba(0,0,0,0)",
+  foreground: "#e8e8ef",
+  cursor: "#7fd3ff",
+  cursorAccent: "#07070a",
+  selectionBackground: "rgba(127, 211, 255, 0.28)",
+  black: "#1a1a20",
+  red: "#ff7a7a",
+  green: "#6be4a6",
+  yellow: "#ffd27a",
+  blue: "#7fd3ff",
+  magenta: "#c38bff",
+  cyan: "#7fd3ff",
+  white: "#e8e8ef",
+  brightBlack: "#585866",
+  brightRed: "#ff9a9a",
+  brightGreen: "#8bedba",
+  brightYellow: "#ffde9a",
+  brightBlue: "#9adfff",
+  brightMagenta: "#d4a6ff",
+  brightCyan: "#9adfff",
+  brightWhite: "#ffffff",
+} as const;
+
+const XTERM_THEME_LIGHT = {
+  background: "rgba(0,0,0,0)",
+  foreground: "#1f1d17",
+  cursor: "#5a5a50",
+  cursorAccent: "#faf8f3",
+  selectionBackground: "rgba(24,22,18,0.18)",
+  black: "#1f1d17",
+  red: "#c96b5c",
+  green: "#4a8a4c",
+  yellow: "#a58a4a",
+  blue: "#5e7da8",
+  magenta: "#a07db0",
+  cyan: "#5e97a8",
+  white: "#1f1d17",
+  brightBlack: "#8a887e",
+  brightRed: "#d88a7c",
+  brightGreen: "#5fa561",
+  brightYellow: "#b89e68",
+  brightBlue: "#7b97c0",
+  brightMagenta: "#b89ac6",
+  brightCyan: "#7baec0",
+  brightWhite: "#3a3834",
+} as const;
 
 function loadHistory(): string[] {
   try {
@@ -46,6 +100,7 @@ export function Terminal({ cwd }: { cwd: string }) {
 
   const [running, setRunning] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const themeMode = useTheme();
 
   // Mount xterm once. Effect runs after the container is in the DOM.
   useEffect(() => {
@@ -59,6 +114,10 @@ export function Terminal({ cwd }: { cwd: string }) {
       ]);
       if (disposed || !containerRef.current) return;
 
+      const initialTheme =
+        document.documentElement.getAttribute("data-theme") === "light"
+          ? XTERM_THEME_LIGHT
+          : XTERM_THEME_DARK;
       const term = new XtermCtor({
         fontFamily:
           'var(--font-mono), ui-monospace, SFMono-Regular, "Menlo", monospace',
@@ -69,29 +128,7 @@ export function Terminal({ cwd }: { cwd: string }) {
         allowProposedApi: true,
         convertEol: true,
         scrollback: 5000,
-        theme: {
-          background: "rgba(0,0,0,0)",
-          foreground: "#e8e8ef",
-          cursor: "#7fd3ff",
-          cursorAccent: "#07070a",
-          selectionBackground: "rgba(127, 211, 255, 0.28)",
-          black: "#1a1a20",
-          red: "#ff7a7a",
-          green: "#6be4a6",
-          yellow: "#ffd27a",
-          blue: "#7fd3ff",
-          magenta: "#c38bff",
-          cyan: "#7fd3ff",
-          white: "#e8e8ef",
-          brightBlack: "#585866",
-          brightRed: "#ff9a9a",
-          brightGreen: "#8bedba",
-          brightYellow: "#ffde9a",
-          brightBlue: "#9adfff",
-          brightMagenta: "#d4a6ff",
-          brightCyan: "#9adfff",
-          brightWhite: "#ffffff",
-        },
+        theme: initialTheme,
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
@@ -290,6 +327,16 @@ export function Terminal({ cwd }: { cwd: string }) {
       fitRef.current = null;
     };
   }, [cwd]);
+
+  // Swap xterm's palette live whenever the global theme flips. Kept
+  // separate from the mount effect so toggling theme doesn't tear down
+  // the PTY or lose scrollback.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme =
+      themeMode === "light" ? XTERM_THEME_LIGHT : XTERM_THEME_DARK;
+  }, [themeMode, mounted]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
