@@ -1,24 +1,33 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #07070a;
-  --color-bg-elev: #0d0d12;
-  --color-bg-glass: rgba(22, 22, 30, 0.55);
-  --color-fg: #e8e8ef;
-  --color-fg-dim: #9a9aa8;
-  --color-fg-faint: #585866;
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-strong: rgba(255, 255, 255, 0.16);
-  --color-accent: #7fd3ff;       /* marvin cyan */
-  --color-accent-deep: #3ea6ff;
-  --color-accent-glow: rgba(127, 211, 255, 0.28);
-  --color-success: #6be4a6;
-  --color-warn: #ffd27a;
-  --color-danger: #ff7a7a;
+  /* Ink — warm near-black (slightly olive) instead of cold blue-black. */
+  --color-bg: #0b0a08;
+  --color-bg-elev: #121110;
+  --color-bg-glass: rgba(28, 26, 22, 0.58);
 
-  --shadow-glow: 0 0 28px 2px rgba(127, 211, 255, 0.18);
-  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
-                  0 20px 60px -24px rgba(0, 0, 0, 0.6);
+  /* Type — bone/cream instead of cool grey. Reads warmer, more literary. */
+  --color-fg: #ece7d6;
+  --color-fg-dim: #c4bfae;
+  --color-fg-faint: #8a8575;
+
+  --color-border: rgba(236, 231, 214, 0.08);
+  --color-border-strong: rgba(236, 231, 214, 0.18);
+
+  /* Accent — sulphur / depressed-genius gold. Hitchhiker's MARVIN, not
+   * Bladerunner-lite cyan. Deep: amber for buttons on hover; glow: the
+   * edge-of-a-radioactive-page wash used everywhere. */
+  --color-accent: #d9c86a;
+  --color-accent-deep: #b28c2c;
+  --color-accent-glow: rgba(217, 200, 106, 0.24);
+
+  --color-success: #9cc176;
+  --color-warn: #e8b65a;
+  --color-danger: #d97a5e;
+
+  --shadow-glow: 0 0 30px 2px rgba(217, 200, 106, 0.18);
+  --shadow-panel: 0 1px 0 rgba(236, 231, 214, 0.04) inset,
+                  0 20px 60px -24px rgba(0, 0, 0, 0.7);
 }
 
 :root {
@@ -44,11 +53,23 @@ pre,
   font-family: var(--font-mono), ui-monospace, SFMono-Regular, "Menlo", monospace;
 }
 
+/* Editorial display — for the MARVIN wordmark, hero heading, and any
+ * display-serif moment. Italic variant set at usage sites. */
+.font-display {
+  font-family: var(--font-display), "Iowan Old Style", "Apple Garamond",
+    Georgia, "Times New Roman", serif;
+  font-feature-settings: "liga", "dlig", "salt";
+  letter-spacing: -0.01em;
+}
+
 * {
   box-sizing: border-box;
 }
 
-/* Ambient backdrop — intensity reacts to --marvin-activity 0..1 */
+/* Ambient backdrop — intensity reacts to --marvin-activity 0..1. The
+ * colour shifted from cyan/blue to amber + rust, matching the new
+ * sulphur accent. Keeps the same "breathing when idle, brightening
+ * when busy" behaviour. */
 body {
   --marvin-activity: 0.05;
 }
@@ -65,17 +86,17 @@ body::before {
   background:
     radial-gradient(
       ellipse at 18% 22%,
-      rgba(62, 166, 255, calc(0.06 + var(--marvin-activity) * 0.14)),
+      rgba(217, 200, 106, calc(0.05 + var(--marvin-activity) * 0.12)),
       transparent 55%
     ),
     radial-gradient(
       ellipse at 82% 78%,
-      rgba(127, 211, 255, calc(0.04 + var(--marvin-activity) * 0.12)),
+      rgba(178, 140, 44, calc(0.04 + var(--marvin-activity) * 0.10)),
       transparent 55%
     ),
     radial-gradient(
       ellipse at 50% 115%,
-      rgba(62, 166, 255, calc(0.03 + var(--marvin-activity) * 0.14)),
+      rgba(217, 110, 60, calc(0.03 + var(--marvin-activity) * 0.10)),
       transparent 55%
     );
   pointer-events: none;
@@ -89,12 +110,30 @@ body::after {
   position: fixed;
   inset: -12%;
   background:
-    radial-gradient(circle at 30% 40%, rgba(127, 211, 255, 0.04), transparent 40%),
-    radial-gradient(circle at 70% 60%, rgba(62, 166, 255, 0.03), transparent 40%);
-  filter: blur(45px);
+    radial-gradient(circle at 30% 40%, rgba(217, 200, 106, 0.04), transparent 40%),
+    radial-gradient(circle at 70% 60%, rgba(178, 140, 44, 0.03), transparent 40%);
+  filter: blur(48px);
   pointer-events: none;
   z-index: -1;
   animation: backdrop-drift 28s ease-in-out infinite;
+}
+
+/* Grain overlay — SVG turbulence at very low opacity. Adds paper-like
+ * tactility without murdering contrast. Fixed so it doesn't scroll
+ * with content; positioned above the backdrop but below everything else. */
+html {
+  position: relative;
+}
+html::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.92  0 0 0 0 0.85  0 0 0 0 0.6  0 0 0 0.45 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+  background-size: 160px 160px;
+  opacity: 0.055;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  z-index: 0;
 }
 
 @keyframes backdrop-drift {
@@ -274,25 +313,92 @@ body::after {
   }
 }
 
-@keyframes hero-brain-intro {
+/* Staggered hero entry — think of it as a planetarium show opening.
+ * Each stage uses the same keyframe but starts at a different delay. */
+@keyframes hero-stage {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.97);
+    transform: translateY(18px) scale(0.96);
+    letter-spacing: 0.04em;
+    filter: blur(6px);
   }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+    letter-spacing: inherit;
+    filter: blur(0);
   }
 }
 
 .hero-brain-intro {
-  animation: hero-brain-intro 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+  animation: hero-stage 1.15s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.hero-stage-1 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.25s both; }
+.hero-stage-2 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.55s both; }
+.hero-stage-3 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.85s both; }
+.hero-stage-4 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 1.15s both; }
+.hero-stage-5 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 1.45s both; }
+
+/* Slow orbital sweep behind the hero brain — a thin amber line that
+ * traces a wide ellipse, evoking a planetarium or orrery. Only visible
+ * on the empty-state canvas (use .hero-orbit on the wrapper). */
+@keyframes orbit-sweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.hero-orbit::before,
+.hero-orbit::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 480px;
+  height: 480px;
+  margin-left: -240px;
+  margin-top: -240px;
+  border-radius: 50%;
+  border: 1px solid rgba(217, 200, 106, 0.12);
+  pointer-events: none;
+  animation: orbit-sweep 40s linear infinite;
+}
+.hero-orbit::after {
+  width: 620px;
+  height: 620px;
+  margin-left: -310px;
+  margin-top: -310px;
+  border-color: rgba(178, 140, 44, 0.08);
+  border-style: dashed;
+  animation-duration: 90s;
+  animation-direction: reverse;
+}
+
+/* Constellation — a very faint dot grid that scrolls slowly across the
+ * hero view. Implemented as a radial-gradient tile so it composites
+ * cheaply and doesn't pop when the window is resized. */
+@keyframes constellation-drift {
+  0%   { background-position: 0 0, 40px 40px; }
+  100% { background-position: 800px -800px, 840px -760px; }
+}
+
+.constellation {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, rgba(236, 231, 214, 0.28) 1px, transparent 1.5px),
+    radial-gradient(circle, rgba(217, 200, 106, 0.18) 1px, transparent 1.5px);
+  background-size: 80px 80px, 120px 120px;
+  background-position: 0 0, 40px 40px;
+  opacity: 0.25;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: constellation-drift 320s linear infinite;
 }
 
 .title-glow {
   text-shadow:
-    0 0 24px rgba(127, 211, 255, 0.35),
-    0 0 48px rgba(62, 166, 255, 0.18);
+    0 0 22px rgba(217, 200, 106, 0.38),
+    0 0 52px rgba(178, 140, 44, 0.18);
 }
 
 /* Slight "rise-in" for incoming chat messages */

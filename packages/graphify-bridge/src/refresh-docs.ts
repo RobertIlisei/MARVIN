@@ -4,9 +4,8 @@
  * prompt the /graphify skill uses, then merges the result into
  * `<workDir>/graphify-out/graph.json`.
  *
- * Ported from `~/command_center/J.A.R.V.I.S/src/app/api/orchestrator/graphify-docs-refresh/route.ts`.
- * MARVIN changes: no Next.js route wrapper — a plain async function; caller
- * owns the HTTP layer when / if it wants one.
+ * Exposed as a plain async function; the caller owns the HTTP layer when /
+ * if it wants one.
  */
 
 import { readFile, stat, writeFile } from "fs/promises";

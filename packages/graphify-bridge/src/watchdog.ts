@@ -4,9 +4,8 @@
  * Re-runs AST-only `graphify update <workDir>` when HEAD advances, debounced
  * to one run per GRAPHIFY_REFRESH_MIN_INTERVAL_MS (default 10 min).
  *
- * Ported from `~/command_center/J.A.R.V.I.S/src/lib/orchestrator/graphify-watchdog.ts`.
- * MARVIN changes: no multi-project readActiveProject layer — we pass workDir
- * in directly; caller owns project selection.
+ * The caller passes `workDir` in directly; project selection lives
+ * in `@marvin/runtime/projects`, not here.
  */
 
 import { execFile, spawn } from "child_process";

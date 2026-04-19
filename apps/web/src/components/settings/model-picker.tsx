@@ -1,0 +1,246 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+export interface ModelInfo {
+  id: string;
+  displayName: string;
+  tier: "opus" | "sonnet" | "haiku" | "other";
+  createdAt: string | null;
+  live: boolean;
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+  source: "anthropic-api" | "fallback";
+  error: string | null;
+  fetchedAt: string;
+}
+
+interface ModelPickerProps {
+  /** Currently-selected executor model id. `null` = "default". */
+  executor: string | null;
+  /** Currently-selected advisor model id. `null` = no advisor. */
+  advisor: string | null;
+  onChange: (next: { executor: string | null; advisor: string | null }) => void;
+}
+
+const TIER_LABEL: Record<ModelInfo["tier"], string> = {
+  opus: "Opus — flagship reasoning",
+  sonnet: "Sonnet — balanced",
+  haiku: "Haiku — fast, cheap",
+  other: "Other",
+};
+
+/**
+ * Header control for picking executor + advisor models.
+ *
+ * Fetches `/api/models` on open. Two stacked dropdowns:
+ *   - **executor** — the model that runs MARVIN's main turn loop.
+ *   - **advisor** — optional; enables the SDK's server-side advisor
+ *     tool so the executor can escalate to a bigger model for the
+ *     hard steps. `null` disables.
+ *
+ * Both dropdowns draw from the same live-or-fallback list. When the
+ * list is the fallback the user sees a small pill warning "fallback
+ * list — run claude auth login or set ANTHROPIC_API_KEY for live".
+ */
+export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<ModelsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    fetch("/api/models")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) setData(d as ModelsResponse);
+      })
+      .catch(() => {
+        /* leave as-is */
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const grouped = useMemo(() => {
+    const models = data?.models ?? [];
+    const buckets: Record<ModelInfo["tier"], ModelInfo[]> = {
+      opus: [],
+      sonnet: [],
+      haiku: [],
+      other: [],
+    };
+    for (const m of models) buckets[m.tier].push(m);
+    return buckets;
+  }, [data]);
+
+  const labelFor = (id: string | null): string => {
+    if (!id) return "default";
+    const hit = data?.models.find((m) => m.id === id);
+    if (hit) return hit.displayName.replace(/^Claude\s+/, "");
+    // Before /api/models has answered, show the bare id so the button
+    // doesn't read "undefined".
+    return id.replace(/^claude-/, "");
+  };
+
+  const summary = advisor
+    ? `${labelFor(executor)} · ${labelFor(advisor)}↑`
+    : labelFor(executor);
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={
+          advisor
+            ? `executor: ${labelFor(executor)}  ·  advisor: ${labelFor(advisor)}`
+            : `executor: ${labelFor(executor)}  ·  no advisor`
+        }
+        className="flex items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+      >
+        <span className="truncate">{summary}</span>
+        <span className="text-[10px] text-[color:var(--color-fg-faint)]">▾</span>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-40 mt-2 w-80 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/95 p-3 shadow-2xl backdrop-blur">
+          <div className="mb-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">
+            <span>model slots</span>
+            {data && (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[9px] ${
+                  data.source === "anthropic-api"
+                    ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-accent)]"
+                    : "bg-[color:var(--color-warn)]/15 text-[color:var(--color-warn)]"
+                }`}
+                title={data.error ?? undefined}
+              >
+                {data.source === "anthropic-api" ? "live" : "fallback"}
+              </span>
+            )}
+          </div>
+
+          <ModelSelect
+            label="executor"
+            helper="runs the turn loop"
+            value={executor}
+            models={data?.models ?? []}
+            grouped={grouped}
+            loading={loading}
+            onChange={(next) => onChange({ executor: next, advisor })}
+            allowNone={true}
+            noneLabel="default (runtime decides)"
+          />
+
+          <div className="mt-3">
+            <ModelSelect
+              label="advisor"
+              helper="optional; escalated to for hard steps"
+              value={advisor}
+              models={data?.models ?? []}
+              grouped={grouped}
+              loading={loading}
+              onChange={(next) => onChange({ executor, advisor: next })}
+              allowNone={true}
+              noneLabel="off — no advisor"
+            />
+          </div>
+
+          {data?.error && (
+            <div className="mt-3 rounded border border-[color:var(--color-warn)]/30 bg-[color:var(--color-warn)]/5 px-2 py-1.5 font-mono text-[10px] text-[color:var(--color-warn)]">
+              {data.error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModelSelect({
+  label,
+  helper,
+  value,
+  models,
+  grouped,
+  loading,
+  onChange,
+  allowNone,
+  noneLabel,
+}: {
+  label: string;
+  helper: string;
+  value: string | null;
+  models: ModelInfo[];
+  grouped: Record<ModelInfo["tier"], ModelInfo[]>;
+  loading: boolean;
+  onChange: (next: string | null) => void;
+  allowNone: boolean;
+  noneLabel: string;
+}) {
+  const total = models.length;
+  return (
+    <label className="block">
+      <div className="mb-1 flex items-baseline justify-between font-mono text-[10px] uppercase tracking-[0.22em]">
+        <span className="text-[color:var(--color-fg-dim)]">{label}</span>
+        <span className="normal-case tracking-normal text-[color:var(--color-fg-faint)]">
+          {helper}
+        </span>
+      </div>
+      <div className="relative">
+        <select
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          disabled={loading && total === 0}
+          className="w-full appearance-none rounded-md border border-[color:var(--color-border)] bg-transparent px-2 py-1.5 pr-7 font-mono text-[11px] text-[color:var(--color-fg)] outline-none focus:border-[color:var(--color-accent-deep)]/50 disabled:opacity-50"
+        >
+          {allowNone && <option value="">{noneLabel}</option>}
+          {(["opus", "sonnet", "haiku", "other"] as const).map(
+            (tier) =>
+              grouped[tier].length > 0 && (
+                <optgroup key={tier} label={TIER_LABEL[tier]}>
+                  {grouped[tier].map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.displayName.replace(/^Claude\s+/, "")}
+                      {m.createdAt
+                        ? `  (${m.createdAt.slice(0, 10)})`
+                        : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              ),
+          )}
+          {total === 0 && !loading && (
+            <option value="" disabled>
+              no models available
+            </option>
+          )}
+        </select>
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[color:var(--color-fg-faint)]">
+          ▾
+        </span>
+      </div>
+    </label>
+  );
+}

@@ -2,8 +2,8 @@
  * Git watch — detect new commits on the active project repo between calls.
  *
  * MARVIN uses this to surface "you just committed X" inline in the chat
- * without having to ask you. No board, no task auto-posting, no agent-to-task
- * attribution — that complexity belonged to J.A.R.V.I.S.
+ * without having to ask you. No board, no task auto-posting, no agent-to-
+ * task attribution — MARVIN is a single assistant, not an agent team.
  *
  * The watchdog is **stateless** across sessions: it keeps a cursor in-memory
  * per workDir (last-seen HEAD) and returns the commits that landed since.

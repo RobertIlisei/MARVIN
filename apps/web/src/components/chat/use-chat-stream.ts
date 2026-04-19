@@ -3,6 +3,27 @@
 import { useCallback, useRef, useState } from "react";
 import type { Block, MarvinUiState, Message, TurnStats } from "./types";
 
+/** Shape of a persisted session transcript entry (from /api/sessions/[id]). */
+type StoredTurn =
+  | { type: "turn.user"; at: string; message: string }
+  | { type: "cli.event"; at: string; event: Record<string, unknown> }
+  | {
+      type: "turn.completed";
+      at: string;
+      durationMs: number | null;
+      costUsd: number | null;
+      tokenUsage: { input_tokens?: number; output_tokens?: number } | null;
+      sessionId: string | null;
+    }
+  | { type: "turn.error"; at: string; error: string }
+  | Record<string, unknown>;
+
+interface SessionRecord {
+  sessionId: string;
+  projectId: string;
+  turns: StoredTurn[];
+}
+
 /**
  * React hook that drives MARVIN's streaming chat.
  *
@@ -30,7 +51,17 @@ export function useChatStream() {
   const turnIdRef = useRef<string | null>(null);
 
   const send = useCallback(
-    async (text: string, cwd: string) => {
+    async (
+      text: string,
+      cwd: string,
+      options: {
+        personality?: "marvin" | "neutral";
+        runtimeMode?: "opus" | "advisor";
+        permissionStrategy?: "auto" | "gated";
+        model?: string | null;
+        advisorModel?: string | null;
+      } = {},
+    ) => {
       if (!text.trim()) return;
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -62,6 +93,11 @@ export function useChatStream() {
             cwd,
             sessionId,
             marvinSessionId,
+            ...(options.personality ? { personality: options.personality } : {}),
+            ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
+            ...(options.permissionStrategy ? { permissionStrategy: options.permissionStrategy } : {}),
+            ...(options.model ? { model: options.model } : {}),
+            ...(options.advisorModel ? { advisorModel: options.advisorModel } : {}),
           }),
           signal: controller.signal,
         });
@@ -184,17 +220,179 @@ export function useChatStream() {
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
+        // Stream closed without a terminal event (turn.completed /
+        // turn.error) — most commonly the SDK crashed after handshake.
+        // Surface it so the UI doesn't sit in "thinking" forever.
+        setMarvinState((prev) => {
+          if (prev === "thinking" || prev === "writing" || prev === "tool") {
+            setMessages((msgs) =>
+              msgs.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      blocks: [
+                        ...m.blocks,
+                        {
+                          type: "text",
+                          text: "⚠ Stream ended without a result. Check the server logs (auth, SDK crash, or cwd doesn't exist).",
+                        },
+                      ],
+                    }
+                  : m,
+              ),
+            );
+            return "error";
+          }
+          return prev;
+        });
       }
     },
     [sessionId, marvinSessionId],
   );
 
   const cancel = useCallback(() => {
+    // Close this client's SSE stream immediately so the UI snaps back to
+    // idle, then ask the server to actually abort the SDK turn. The
+    // server no longer treats stream-close as cancellation on its own —
+    // the explicit /api/chat/cancel call is what stops the agent.
     abortRef.current?.abort();
     abortRef.current = null;
     turnIdRef.current = null;
     setMarvinState("idle");
-  }, []);
+    const sid = marvinSessionId;
+    if (sid) {
+      void fetch("/api/chat/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ marvinSessionId: sid }),
+      }).catch(() => {
+        /* best-effort */
+      });
+    }
+  }, [marvinSessionId]);
+
+  /**
+   * Attach to a still-running turn (after page refresh / tab reopen).
+   *
+   * Flow:
+   *   1. Hit `/api/chat/resume?marvinSessionId=…`.
+   *   2. If the server replies 204, there's no live turn — return `false`
+   *      so the caller can load the transcript from disk.
+   *   3. If SSE events start flowing, reuse the same event handler used
+   *      by `send()` and target the latest assistant message (creating
+   *      one if needed).
+   */
+  const attachLive = useCallback(
+    async (attachId: string): Promise<boolean> => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      let res: Response;
+      try {
+        res = await fetch(
+          `/api/chat/resume?marvinSessionId=${encodeURIComponent(attachId)}`,
+          { signal: controller.signal },
+        );
+      } catch {
+        abortRef.current = null;
+        return false;
+      }
+      if (res.status === 204 || !res.body) {
+        abortRef.current = null;
+        return false;
+      }
+      if (!res.ok) {
+        abortRef.current = null;
+        return false;
+      }
+
+      // Guarantee there's an assistant bubble to route blocks into. If
+      // the last message is already an assistant one, reuse it; else
+      // create a fresh shell.
+      let assistantId = "";
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === "assistant") {
+          assistantId = last.id;
+          return prev;
+        }
+        assistantId = `a-resume-${Date.now()}`;
+        return [
+          ...prev,
+          {
+            id: assistantId,
+            role: "assistant",
+            blocks: [],
+            at: new Date().toISOString(),
+          },
+        ];
+      });
+      setMarvinSessionId(attachId);
+      setMarvinState("thinking");
+
+      const applyAssistantBlocks = (mutator: (blocks: Block[]) => Block[]) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, blocks: mutator(m.blocks) } : m,
+          ),
+        );
+      };
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let currentEvent = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, idx);
+            buf = buf.slice(idx + 1);
+            if (line === "") {
+              currentEvent = "";
+              continue;
+            }
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim();
+              continue;
+            }
+            if (line.startsWith("data: ")) {
+              const payload = line.slice(6);
+              let data: Record<string, unknown>;
+              try {
+                data = JSON.parse(payload) as Record<string, unknown>;
+              } catch {
+                continue;
+              }
+              // resume.attached is informational only.
+              if (currentEvent === "resume.attached") continue;
+              handleSseEvent(currentEvent, data, {
+                setMarvinSessionId,
+                setSessionId,
+                setMarvinState,
+                setStats,
+                applyAssistantBlocks,
+                setTurnId: (v) => {
+                  turnIdRef.current = v;
+                },
+              });
+            }
+          }
+        }
+      } catch {
+        // Disconnect mid-stream — user's problem to re-open a tab; we
+        // leave the UI in whatever state it's in.
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
+      }
+      return true;
+    },
+    [],
+  );
 
   const decideConfirm = useCallback(
     async (
@@ -239,6 +437,126 @@ export function useChatStream() {
     setMarvinSessionId(null);
   }, []);
 
+  /**
+   * Replace the current message list with the result of a stored session
+   * transcript (as returned by `GET /api/sessions/[sessionId]`). Re-uses the
+   * same `mergeAssistantContent` pipeline as the live stream so tool calls
+   * and their results render identically.
+   */
+  const hydrateFromSession = useCallback((record: SessionRecord) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    turnIdRef.current = null;
+
+    const nextMessages: Message[] = [];
+    let currentAssistant: Message | null = null;
+    let lastCompleted: TurnStats | null = null;
+    let lastCliSessionId: string | null = null;
+
+    const ensureAssistant = (at: string): Message => {
+      if (!currentAssistant) {
+        currentAssistant = {
+          id: `a-${nextMessages.length}-${Date.now()}`,
+          role: "assistant",
+          blocks: [],
+          at,
+        };
+        nextMessages.push(currentAssistant);
+      }
+      return currentAssistant;
+    };
+
+    const closeAssistant = () => {
+      currentAssistant = null;
+    };
+
+    for (const turn of record.turns) {
+      const t = turn as { type?: string };
+      if (t.type === "turn.user") {
+        const u = turn as { at: string; message: string };
+        closeAssistant();
+        nextMessages.push({
+          id: `u-${nextMessages.length}-${Date.now()}`,
+          role: "user",
+          blocks: [{ type: "text", text: u.message }],
+          at: u.at,
+        });
+      } else if (t.type === "cli.event") {
+        const ev = (turn as { event?: Record<string, unknown> }).event ?? {};
+        const msg = (ev as {
+          type?: string;
+          message?: { content?: Array<Record<string, unknown>> };
+        });
+        if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+          const assistant = ensureAssistant((turn as { at: string }).at);
+          assistant.blocks = mergeAssistantContent(
+            assistant.blocks,
+            msg.message!.content ?? [],
+          );
+        } else if (msg.type === "user" && Array.isArray(msg.message?.content)) {
+          const assistant = ensureAssistant((turn as { at: string }).at);
+          for (const b of msg.message!.content!) {
+            const r = b as {
+              type?: string;
+              tool_use_id?: string;
+              content?: string;
+              is_error?: boolean;
+            };
+            if (r.type === "tool_result" && r.tool_use_id) {
+              assistant.blocks = assistant.blocks.map((block) =>
+                block.type === "tool_use" && block.id === r.tool_use_id
+                  ? {
+                      ...block,
+                      result:
+                        typeof r.content === "string"
+                          ? r.content
+                          : JSON.stringify(r.content ?? ""),
+                      resultIsError: r.is_error === true,
+                      running: false,
+                    }
+                  : block,
+              );
+            }
+          }
+        }
+      } else if (t.type === "turn.completed") {
+        const c = turn as {
+          durationMs: number | null;
+          costUsd: number | null;
+          tokenUsage: { input_tokens?: number; output_tokens?: number } | null;
+          sessionId: string | null;
+        };
+        lastCompleted = {
+          sessionId: c.sessionId,
+          durationMs: c.durationMs,
+          costUsd: c.costUsd,
+          tokens: {
+            input: c.tokenUsage?.input_tokens ?? 0,
+            output: c.tokenUsage?.output_tokens ?? 0,
+          },
+        };
+        lastCliSessionId = c.sessionId;
+        closeAssistant();
+      } else if (t.type === "turn.error") {
+        const assistant = ensureAssistant((turn as { at: string }).at);
+        assistant.blocks = [
+          ...assistant.blocks,
+          {
+            type: "text",
+            text: `⚠ ${(turn as { error: string }).error}`,
+          },
+        ];
+        closeAssistant();
+      }
+    }
+
+    setMessages(nextMessages);
+    setStats(lastCompleted);
+    setSessionId(lastCliSessionId);
+    setMarvinSessionId(record.sessionId);
+    setMarvinState("idle");
+  }, []);
+
   return {
     messages,
     marvinState,
@@ -249,6 +567,8 @@ export function useChatStream() {
     cancel,
     reset,
     decideConfirm,
+    hydrateFromSession,
+    attachLive,
   };
 }
 

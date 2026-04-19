@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { resolvePendingConfirm } from "@marvin/runtime/confirm-registry";
+import {
+  getPendingOriginalInput,
+  resolvePendingConfirm,
+} from "@marvin/runtime/confirm-registry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,17 +35,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const ok =
-    decision === "allow"
-      ? resolvePendingConfirm(turnId, toolUseId, {
-          behavior: "allow",
-          ...(body.updatedInput ? { updatedInput: body.updatedInput } : {}),
-        })
-      : resolvePendingConfirm(turnId, toolUseId, {
-          behavior: "deny",
-          message: body.message ?? "user denied the tool use",
-          interrupt: false,
-        });
+  let ok: boolean;
+  if (decision === "allow") {
+    // The SDK's PermissionResult zod schema rejects an `allow` reply that
+    // omits `updatedInput`. Prefer the client-supplied edit; otherwise fall
+    // back to the original input the SDK handed us when the tool was first
+    // proposed; as a last resort, an empty object — never undefined.
+    const original = getPendingOriginalInput(turnId, toolUseId) ?? {};
+    const updatedInput: Record<string, unknown> =
+      body.updatedInput && typeof body.updatedInput === "object" && !Array.isArray(body.updatedInput)
+        ? body.updatedInput
+        : original;
+    ok = resolvePendingConfirm(turnId, toolUseId, {
+      behavior: "allow",
+      updatedInput,
+    });
+  } else {
+    ok = resolvePendingConfirm(turnId, toolUseId, {
+      behavior: "deny",
+      message:
+        typeof body.message === "string" && body.message.trim().length > 0
+          ? body.message
+          : "user denied the tool use",
+      interrupt: false,
+    });
+  }
 
   if (!ok) {
     return NextResponse.json(

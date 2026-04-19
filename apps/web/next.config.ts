@@ -14,8 +14,15 @@ const nextConfig: NextConfig = {
     "@marvin/ui",
   ],
   // Next.js 16: formerly `experimental.serverComponentsExternalPackages`.
-  // Keeps the Anthropic SDK out of the Edge bundle so it can use Node APIs.
-  serverExternalPackages: ["@anthropic-ai/sdk"],
+  // Keeps these packages out of the server bundle so they keep real
+  // module identity at runtime — important for `@playwright/mcp`
+  // (we resolve its CLI path via `require.resolve`) and
+  // `@anthropic-ai/*` (need full Node APIs, not bundler shims).
+  serverExternalPackages: [
+    "@anthropic-ai/sdk",
+    "@anthropic-ai/claude-agent-sdk",
+    "@playwright/mcp",
+  ],
 };
 
 export default nextConfig;

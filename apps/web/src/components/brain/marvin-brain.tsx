@@ -212,10 +212,15 @@ const NODE_BY_ID: Record<string, Node> = Object.fromEntries(
 function edgePath(e: Edge): string {
   const a = NODE_BY_ID[e.from]!;
   const b = NODE_BY_ID[e.to]!;
-  // Gentle midpoint lift for organic curvature; direction depends on dy
-  // so edges flowing down sag, edges flowing up arc.
-  const mx = (a.x + b.x) / 2;
-  const my = (a.y + b.y) / 2 - 6;
+  // Bias the curve toward the head centroid (248, 240) so edges always bend
+  // *inward* rather than pushing over the silhouette edge.
+  const mx0 = (a.x + b.x) / 2;
+  const my0 = (a.y + b.y) / 2;
+  const cx = 248;
+  const cy = 240;
+  const pull = 0.08; // 0..1 — how strongly the control point is pulled inward
+  const mx = mx0 + (cx - mx0) * pull;
+  const my = my0 + (cy - my0) * pull;
   return `M ${a.x} ${a.y} Q ${mx} ${my} ${b.x} ${b.y}`;
 }
 
@@ -275,7 +280,7 @@ function activityPerState(state: MarvinState): ActivityProfile {
         duration: 2.1,
         rootClass: "",
         haloRings: 2,
-        sparks: 4,
+        sparks: 0,
         dust: 10,
         breathe: "normal",
         nodeGlowScale: 2.7,
@@ -289,7 +294,7 @@ function activityPerState(state: MarvinState): ActivityProfile {
         duration: 1.7,
         rootClass: "",
         haloRings: 3,
-        sparks: 6,
+        sparks: 0,
         dust: 10,
         breathe: "normal",
         nodeGlowScale: 2.9,
@@ -303,7 +308,7 @@ function activityPerState(state: MarvinState): ActivityProfile {
         duration: 1.25,
         rootClass: "",
         haloRings: 3,
-        sparks: 8,
+        sparks: 0,
         dust: 12,
         breathe: "intense",
         nodeGlowScale: 3.1,
@@ -317,7 +322,7 @@ function activityPerState(state: MarvinState): ActivityProfile {
         duration: 1.8,
         rootClass: "marvin-brain-error",
         haloRings: 2,
-        sparks: 3,
+        sparks: 0,
         dust: 8,
         breathe: "normal",
         nodeGlowScale: 2.7,
@@ -685,6 +690,11 @@ export function MarvinBrain({
           {NODES.map((n, i) => {
             const r = 2.4 + (n.weight ?? 1) * 0.7;
             const delay = `${(i * 0.11) % 2.4}s`;
+            // Delay folded into the `animation` shorthand — React warns
+            // when the shorthand and the `animationDelay` longhand are
+            // set on the same style object during render (the shorthand
+            // implicitly sets delay to 0, conflicting with the longhand).
+            const breatheAnim = `${breatheName} ${nodeDuration} ease-in-out ${delay} infinite`;
             return (
               <g key={n.id}>
                 <circle
@@ -694,8 +704,7 @@ export function MarvinBrain({
                   fill="url(#marvin-node-glow)"
                   opacity={0.55}
                   style={{
-                    animation: `${breatheName} ${nodeDuration} ease-in-out infinite`,
-                    animationDelay: delay,
+                    animation: breatheAnim,
                     transformOrigin: `${n.x}px ${n.y}px`,
                   }}
                 />
@@ -705,8 +714,7 @@ export function MarvinBrain({
                   r={r}
                   fill="var(--color-accent)"
                   style={{
-                    animation: `${breatheName} ${nodeDuration} ease-in-out infinite`,
-                    animationDelay: delay,
+                    animation: breatheAnim,
                     transformOrigin: `${n.x}px ${n.y}px`,
                   }}
                 />
