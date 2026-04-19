@@ -2,6 +2,20 @@
 
 import type { MarvinUiState, TurnStats } from "../chat/types";
 
+/**
+ * Editorial masthead strip. Reads top-to-bottom like a nautical log:
+ * state glyph → label → hairline → runtime stats separated by thin
+ * vertical rulings. State-glyph characters use phases of the moon to
+ * carry MARVIN's slightly melancholy instrument aesthetic.
+ */
+const STATE_GLYPH: Record<MarvinUiState, string> = {
+  idle: "◯",
+  thinking: "◒",
+  tool: "◐",
+  writing: "◑",
+  error: "◉",
+};
+
 const STATE_LABELS: Record<MarvinUiState, string> = {
   idle: "standing by",
   thinking: "thinking",
@@ -28,39 +42,80 @@ export function StatusBar({
   marvinSessionId: string | null;
 }) {
   const tokensTotal = stats ? stats.tokens.input + stats.tokens.output : 0;
+  const active = state !== "idle";
+
   return (
-    <div className="glass flex items-center gap-4 rounded-xl px-4 py-2 text-[11px] font-mono">
-      <div className="flex items-center gap-2">
+    <div className="flex items-center gap-0 rounded-md border border-[color:var(--color-border)]/60 bg-[color:var(--color-bg-elev)]/40 px-0 py-0 font-mono text-[11px]">
+      {/* State column — glyph + label, with a fine vertical ruling rhs */}
+      <div
+        className={`flex items-center gap-2 border-r border-[color:var(--color-border)]/60 px-3 py-1.5 ${STATE_COLOR[state]}`}
+      >
         <span
-          className={`inline-block h-2 w-2 rounded-full ${state === "idle" ? "bg-[color:var(--color-fg-faint)]" : "animate-pulse bg-[color:var(--color-accent)]"}`}
+          aria-hidden
+          className={`text-[13px] leading-none ${active ? "animate-pulse" : ""}`}
+          style={{
+            textShadow:
+              active
+                ? "0 0 8px currentColor, 0 0 16px rgba(217,200,106,0.35)"
+                : "none",
+          }}
+        >
+          {STATE_GLYPH[state]}
+        </span>
+        <span className="tracking-[0.08em]">
+          marvin · {STATE_LABELS[state]}
+        </span>
+      </div>
+
+      {/* Stats ledger — each column has its label above the value, separated by hairlines */}
+      <div className="flex flex-1 items-stretch divide-x divide-[color:var(--color-border)]/40 text-[color:var(--color-fg-dim)]">
+        <StatCell
+          label="dur"
+          value={stats?.durationMs != null ? `${(stats.durationMs / 1000).toFixed(1)}s` : "—"}
         />
-        <span className={STATE_COLOR[state]}>MARVIN — {STATE_LABELS[state]}</span>
+        <StatCell
+          label="tok"
+          value={tokensTotal > 0 ? tokensTotal.toLocaleString() : "—"}
+        />
+        <StatCell
+          label="usd"
+          value={
+            stats?.costUsd != null && stats.costUsd > 0
+              ? stats.costUsd < 0.01
+                ? "<0.01"
+                : stats.costUsd.toFixed(3)
+              : "—"
+          }
+        />
+        <StatCell
+          label="session"
+          value={marvinSessionId ? marvinSessionId.slice(0, 8) : "—"}
+          mono
+        />
       </div>
-      <div className="ml-auto flex items-center gap-5 text-[color:var(--color-fg-dim)]">
-        {stats?.durationMs != null && (
-          <span>
-            <span className="text-[color:var(--color-fg-faint)]">dur </span>
-            {(stats.durationMs / 1000).toFixed(1)}s
-          </span>
-        )}
-        {tokensTotal > 0 && (
-          <span>
-            <span className="text-[color:var(--color-fg-faint)]">tok </span>
-            {tokensTotal.toLocaleString()}
-          </span>
-        )}
-        {stats?.costUsd != null && stats.costUsd > 0 && (
-          <span>
-            <span className="text-[color:var(--color-fg-faint)]">$ </span>
-            {stats.costUsd < 0.01 ? "<0.01" : stats.costUsd.toFixed(3)}
-          </span>
-        )}
-        {marvinSessionId && (
-          <span className="text-[color:var(--color-fg-faint)]">
-            session {marvinSessionId.slice(0, 8)}
-          </span>
-        )}
-      </div>
+    </div>
+  );
+}
+
+function StatCell({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col justify-center px-3 py-0.5">
+      <span className="text-[8px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)]">
+        {label}
+      </span>
+      <span
+        className={`truncate leading-tight text-[color:var(--color-fg)]/90 ${mono ? "font-mono" : ""}`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

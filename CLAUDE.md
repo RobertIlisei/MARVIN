@@ -7,15 +7,19 @@ the authoritative delivery plan. Update it as you ship things.
 
 1. **Single assistant, not an agent team.** MARVIN is one Claude session in a
    user-MARVIN loop. Do not reintroduce multi-agent dispatch, role catalogs,
-   pipeline rules, or Kanban-as-source-of-truth. That pattern lived in the
-   tombstoned J.A.R.V.I.S repo (`~/command_center/J.A.R.V.I.S/`) and is what
-   MARVIN is the pivot away from.
+   pipeline rules, or Kanban-as-source-of-truth — that pattern degrades up to
+   70 % on sequential code work and amplifies errors 17× in flat-topology
+   "bag of agents" setups (2026 multi-agent coding literature).
 2. **Plan-first, execute-second, verify-third.** Every feature has an entry in
    PLAN.md before code lands. Mark entries as `[done]` and add a brief "what
    shipped" note when complete.
-3. **Confirm-before-act for risky tools.** `Edit`, `Write`, and non-read-only
-   `Bash` calls render an in-chat confirm card. Pure reads (`Read`, `Grep`,
-   `Glob`, `WebFetch`, `WebSearch`) are auto-allowed.
+3. **Auto-mode by default — full bypass.** MARVIN runs every tool without a
+   confirm prompt, matching `claude --dangerously-skip-permissions`. The
+   header `perms` toggle flips to `gated` when you want the pre-flight
+   confirm card back (Edit / Write / unsafe Bash render a card; reads +
+   whitelisted commands auto-allow; destructive regexes hard-deny). Auto
+   mode is stored in `localStorage.marvin.permissionStrategy` so it
+   persists across reloads.
 4. **The user's project is a separate workspace.** MARVIN's own code lives
    here in `~/marvin/`. The user's active project (the thing MARVIN is
    helping build) lives in its own directory chosen by the user at session
@@ -45,20 +49,17 @@ packages/
 data/.marvin/                # transcripts, cost tracker, graph cache (gitignored)
 ```
 
-## Key files to reference when building
+## Key packages
 
-Ports originate from `~/command_center/J.A.R.V.I.S/src/`:
-
-| Target in `~/marvin/` | Source in J.A.R.V.I.S |
+| Path | Responsibility |
 |---|---|
-| `packages/runtime/src/claude-cli.ts` | `lib/gateway/runtimes/claude-cli-runtime.ts` |
-| `packages/runtime/src/auth.ts` | `lib/gateway/auth-manager.ts` |
-| `packages/runtime/src/paths.ts` | `lib/paths.ts` (rename to `getMarvinDataDir`) |
-| `packages/project-context/src/index.ts` | `lib/project-context.ts` (drop `contextAwareAgents`) |
-| `packages/project-context/src/infra-probes.ts` | `lib/orchestrator/infra-probes.ts` |
-| `packages/graphify-bridge/src/watchdog.ts` | `lib/orchestrator/graphify-watchdog.ts` |
-| `packages/graphify-bridge/src/refresh-docs.ts` | `app/api/orchestrator/graphify-docs-refresh/route.ts` |
-| `packages/git-watch/src/index.ts` | `lib/orchestrator/git-watchdog.ts` (strip board autonomy) |
+| `apps/web/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
+| `packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
+| `packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
+| `packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
+| `packages/git-watch/` | Commit detector — surfaces new commits inline, per `workDir`. |
+| `packages/ui/` | shadcn primitives shared by the web app. |
 
 ## Data directory
 
@@ -73,6 +74,60 @@ Ports originate from `~/command_center/J.A.R.V.I.S/src/`:
 MARVIN's persona is a style layer, not a refusal layer. Dry wit ("A login page.
 How thrilling."), always delivers. Toggle lives in user settings:
 `personality: "marvin" | "neutral"`.
+
+## Skills MARVIN expects
+
+MARVIN's SDK sessions inherit the user's Claude Code skills from
+`~/.claude/skills/`. Install them once with:
+
+```bash
+bash scripts/install-skills.sh
+```
+
+The repo ships a pinned mirror of the Anthropic skill set at
+`.claude/skills/`. The install script copies from that bundle into
+`~/.claude/skills/` (idempotent — existing user-level skills are left
+alone) and only falls back to a GitHub clone when a skill is missing
+from the bundle:
+
+| Category | Skill |
+|---|---|
+| Design | `frontend-design`, `canvas-design`, `theme-factory`, `brand-guidelines` |
+| Productivity — docs | `doc-coauthoring`, `docx`, `pdf`, `pptx` |
+| Data | `xlsx` |
+| Engineering | `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`, `skill-creator` |
+| Operations / PM | `internal-comms` |
+| Knowledge graph | `graphify` (install separately — see `~/.claude/skills/graphify/SKILL.md`) |
+| Observability | Honeycomb skills ship as a Claude Code plugin — `/plugin install honeycomb` |
+
+`packages/runtime/src/personality.ts` tells MARVIN when to invoke each.
+If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
+reach for" section so MARVIN knows the trigger conditions.
+
+## Playwright MCP
+
+MARVIN ships its own Playwright MCP server so agent sessions can drive
+a real browser against `localhost` / LAN URLs — the host's own
+Playwright MCP (if any) is often sandboxed. Registered in
+`packages/runtime/src/sdk-runner.ts` as `marvin-playwright`, backed by
+[`@playwright/mcp`](https://www.npmjs.com/package/@playwright/mcp).
+
+One-time setup on a fresh machine (needed for the browser binaries —
+they're not shipped via npm):
+
+```bash
+npx playwright install chromium
+```
+
+Env knobs (all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MARVIN_PLAYWRIGHT` | unset (= enabled) | set to `0` to skip registering the MCP |
+| `MARVIN_PLAYWRIGHT_HEADED` | `0` (headless) | set to `1` for a visible window |
+| `MARVIN_PLAYWRIGHT_BROWSER` | chromium | `chromium` / `firefox` / `webkit` |
+| `MARVIN_PLAYWRIGHT_PROFILE` | isolated | path to a persistent user-data-dir |
+| `MARVIN_PLAYWRIGHT_VIEWPORT` | default | e.g. `1440,900` |
 
 ## Adding a new feature
 
@@ -103,7 +158,9 @@ A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
 
 ### God nodes (most-connected abstractions)
 
-`GET()`, `8-Phase Senior-Engineer Workflow`, `Target Architecture`,
-`POST()`, `JARVIS Autonomous Multi-Agent Failure Mode`, `apps/web`,
-`Pivot: Single Pair-Programming Assistant`, `@marvin/project-context`,
-`getAnthropicAuth()`, `Decision: Single Agent with On-Demand Subagents`.
+`GET()`, `POST()`, `Target Architecture (Repo Layout)`, `8-Phase
+Senior-Engineer Workflow`, `apps/web new API routes`,
+`getAnthropicAuth()`, `runAgent()`, `buildProjectContext()`,
+`createGraphMcpServer()`, `toolPolicy()`.
+
+_Refresh this list with `/graphify . --update` when it drifts._

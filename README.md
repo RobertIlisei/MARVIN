@@ -45,6 +45,8 @@ data/.marvin/                # session transcripts, cost tracker, graph cache (g
 
 ## Context
 
-Formerly the JARVIS multi-agent orchestration project at `~/command_center/`.
-The autonomous multi-agent pattern did not deliver reliably; MARVIN is the
-pivot to a single pair-programming assistant.
+MARVIN is explicitly not a multi-agent orchestration. Published research on
+sequential coding tasks shows multi-agent autonomy degrades quality up to
+~70 % and amplifies error rates 17× in flat-topology setups. MARVIN is one
+assistant moving through an 8-phase workflow in one conversation, with the
+user as continuous overwatch.

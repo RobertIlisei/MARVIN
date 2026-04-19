@@ -15,8 +15,14 @@
 import { readFile, readdir, stat } from "fs/promises";
 import { join } from "path";
 
+import { summarizeGraph } from "@marvin/graphify-bridge";
+
 import type { InfraProbe } from "./infra-probes";
 import { formatProbeBlock, runProbes } from "./infra-probes";
+import {
+  checkWorkflowHealth,
+  formatWorkflowHealthBlock,
+} from "./workflow-health";
 
 export interface ProjectContextOptions {
   /** The active project's working directory. Docs are read from here. */
@@ -89,13 +95,46 @@ async function readAdrs(
 }
 
 /**
- * Build a markdown context block to prepend to the user's first message in
- * a session. Returns `""` when nothing is available.
+ * Build a markdown context block prepended to the system prompt.
+ *
+ * Two layers:
+ *   - **Heavy context** (docs, ADRs, project memory, graph god-nodes) —
+ *     injected only on the FIRST message of a session, because repeating
+ *     them every turn burns tokens for no gain; Claude carries them in
+ *     the running conversation.
+ *   - **Workflow health** — injected on EVERY turn while gaps exist, so
+ *     an ambiguous continuation prompt like "check again" still sees
+ *     the audit instruction. The block disappears automatically once
+ *     the gaps close (ADRs land, memory fills, graph gets built).
+ *
+ * Returns `""` when nothing is available.
  */
 export async function buildProjectContext(
   options: ProjectContextOptions,
 ): Promise<string> {
-  if (!options.firstMessage) return "";
+  // Workflow-health runs every turn — cheap, high-signal, and self-
+  // expiring. Done first so even an early-return path still includes it.
+  let workflowHealthBlock = "";
+  try {
+    const health = checkWorkflowHealth(options.workDir);
+    workflowHealthBlock = formatWorkflowHealthBlock(health);
+  } catch {
+    /* non-fatal */
+  }
+
+  // Non-first-message turns still get the workflow-health header so MARVIN
+  // keeps seeing the gap reminder. Skip the expensive doc/ADR/memory/graph
+  // re-injection — those already landed on turn 1.
+  if (!options.firstMessage) {
+    if (!workflowHealthBlock) return "";
+    const header =
+      "# Project context (ongoing turn)\n\n" +
+      "Workflow deliverables still missing. The audit supersedes the " +
+      "immediate ask until you close these gaps or the user explicitly " +
+      "tells you to skip.\n\n---\n\n";
+    return `${header}${workflowHealthBlock}`;
+  }
+
   const files = options.files ?? DEFAULT_FILES;
   const adrDirs = options.adrDirs ?? DEFAULT_ADR_DIRS;
   const memoryFile = options.memoryFile ?? DEFAULT_MEMORY_FILE;
@@ -151,7 +190,55 @@ export async function buildProjectContext(
     }
   }
 
-  if (sections.length === 0 && !probeBlock) return "";
+  // Knowledge-graph header. When the project has a graphify graph, orient
+  // MARVIN to the structural spine so it can decide whether to query the
+  // graph (via mcp tools) vs. read files. The block is compact on purpose —
+  // detailed queries happen through the graph_* tools at runtime.
+  let graphBlock = "";
+  try {
+    const summary = summarizeGraph(options.workDir);
+    if (summary.ok) {
+      const godNodeLines = summary.godNodes
+        .slice(0, 8)
+        .map((g) => `- **${g.label}**  (id: \`${g.id}\`, ${g.degree} edges)`)
+        .join("\n");
+      const communityLines = summary.communities
+        .slice(0, 6)
+        .map(
+          (c) =>
+            `- [${c.id}] ${c.size} nodes — ${c.sampleLabels.slice(0, 4).join(" · ")}`,
+        )
+        .join("\n");
+      graphBlock =
+        "## Knowledge graph (graphify)\n\n" +
+        `A graphify graph lives at \`graphify-out/graph.json\` ` +
+        `(${summary.stats.nodes} nodes · ${summary.stats.edges} edges · ` +
+        `${summary.stats.communities} communities, updated ${summary.updatedAt ?? "unknown"}).\n\n` +
+        `**Use the graph BEFORE reading files** for any architectural or ` +
+        `"how does X work" question. It's ~36× cheaper than a file sweep and ` +
+        `points you at the right file + line directly. Available MCP tools:\n\n` +
+        `- \`graph_summary\` — full overview\n` +
+        `- \`graph_search\` — find nodes by label (start here)\n` +
+        `- \`graph_neighbors\` — 1-hop blast radius for a node\n` +
+        `- \`graph_path\` — shortest path between two concepts\n\n` +
+        `### God nodes (most-connected abstractions — the structural spine)\n\n${godNodeLines}\n\n` +
+        `### Top communities\n\n${communityLines}`;
+    }
+  } catch {
+    /* graphify is optional — absence is normal */
+  }
+
+  // `workflowHealthBlock` was computed at the top of the function so that
+  // non-first-message turns also get it. Re-used here.
+
+  if (
+    sections.length === 0 &&
+    !probeBlock &&
+    !graphBlock &&
+    !workflowHealthBlock
+  ) {
+    return "";
+  }
 
   const header =
     "# Project context\n\n" +
@@ -159,10 +246,16 @@ export async function buildProjectContext(
     "Use them to ground your work. If you notice drift between what they " +
     "describe and what the code actually contains, surface it before acting.\n\n---\n\n";
 
-  const body = sections.join("\n\n---\n\n");
+  const parts: string[] = [];
+  if (workflowHealthBlock) parts.push(workflowHealthBlock);
+  if (graphBlock) parts.push(graphBlock);
+  if (sections.length > 0) parts.push(sections.join("\n\n---\n\n"));
+  const body = parts.join("\n\n---\n\n");
   const probe = probeBlock ? `\n\n---\n\n${probeBlock}` : "";
   return `${header}${body}${probe}`;
 }
 
 export { probeHttp, probeDockerContainer, runProbes, formatProbeBlock } from "./infra-probes";
 export type { InfraProbe } from "./infra-probes";
+export { checkWorkflowHealth, formatWorkflowHealthBlock } from "./workflow-health";
+export type { WorkflowHealth } from "./workflow-health";

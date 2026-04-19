@@ -9,10 +9,6 @@
  * state lives under the project's own `workDir` — this directory only holds
  * MARVIN-owned state: conversation transcripts, cost tracker, registered
  * project list, MARVIN's own config.
- *
- * Ported from `~/command_center/J.A.R.V.I.S/src/lib/paths.ts`. The multi-agent
- * board / pipeline / mailbox / skills / charter files are intentionally gone —
- * MARVIN does not have agents, tasks, workflows, roles, or charters.
  */
 
 import { existsSync, mkdirSync } from "fs";

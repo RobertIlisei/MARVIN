@@ -1,326 +1,433 @@
-# Graph Report - .  (2026-04-17)
+# Graph Report - .  (2026-04-18)
 
 ## Corpus Check
-- Corpus is ~29,174 words - fits in a single context window. You may not need a graph.
+- Corpus is ~46,854 words - fits in a single context window. You may not need a graph.
 
 ## Summary
-- 233 nodes · 248 edges · 44 communities detected
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 24 edges (avg confidence: 0.83)
+- 310 nodes · 358 edges · 61 communities detected
+- Extraction: 82% EXTRACTED · 18% INFERRED · 0% AMBIGUOUS · INFERRED: 64 edges (avg confidence: 0.81)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_API Surface & Data Layout|API Surface & Data Layout]]
-- [[_COMMUNITY_Runtime Claude CLI & Paths|Runtime: Claude CLI & Paths]]
-- [[_COMMUNITY_Project Context & Infra Probes|Project Context & Infra Probes]]
-- [[_COMMUNITY_Context Hierarchy & Workflow|Context Hierarchy & Workflow]]
-- [[_COMMUNITY_Architectural Decisions & Phases|Architectural Decisions & Phases]]
-- [[_COMMUNITY_UI Select Primitive|UI: Select Primitive]]
-- [[_COMMUNITY_Golden Rules & Confirm Gate|Golden Rules & Confirm Gate]]
-- [[_COMMUNITY_UI Sheet Primitive|UI: Sheet Primitive]]
-- [[_COMMUNITY_UI Dialog Primitive|UI: Dialog Primitive]]
-- [[_COMMUNITY_Git Watch|Git Watch]]
-- [[_COMMUNITY_Runtime Auth & Env|Runtime: Auth & Env]]
-- [[_COMMUNITY_Chat Page & SSE Stream|Chat Page & SSE Stream]]
-- [[_COMMUNITY_MARVIN Persona & Phase 2|MARVIN Persona & Phase 2]]
-- [[_COMMUNITY_UI Table Primitive|UI: Table Primitive]]
-- [[_COMMUNITY_MARVIN Brain Visualization|MARVIN Brain Visualization]]
-- [[_COMMUNITY_UI Card Primitive|UI: Card Primitive]]
-- [[_COMMUNITY_UI Avatar Primitive|UI: Avatar Primitive]]
-- [[_COMMUNITY_UI Dropdown Menu|UI: Dropdown Menu]]
-- [[_COMMUNITY_Graphify Bridge Docs Refresh|Graphify Bridge: Docs Refresh]]
-- [[_COMMUNITY_Embedded Terminal|Embedded Terminal]]
-- [[_COMMUNITY_UI Scroll Area|UI: Scroll Area]]
-- [[_COMMUNITY_Tools Policy|Tools: Policy]]
-- [[_COMMUNITY_File Viewer|File Viewer]]
-- [[_COMMUNITY_UI Tabs Primitive|UI: Tabs Primitive]]
-- [[_COMMUNITY_UI Utils (cn)|UI: Utils (cn)]]
-- [[_COMMUNITY_UI Tooltip|UI: Tooltip]]
-- [[_COMMUNITY_UI Badge|UI: Badge]]
-- [[_COMMUNITY_UI Separator|UI: Separator]]
-- [[_COMMUNITY_UI Button|UI: Button]]
-- [[_COMMUNITY_UI Input|UI: Input]]
-- [[_COMMUNITY_UI Skeleton|UI: Skeleton]]
-- [[_COMMUNITY_Root Layout|Root Layout]]
-- [[_COMMUNITY_Chat Tool Call Card|Chat: Tool Call Card]]
-- [[_COMMUNITY_Chat Input Box|Chat: Input Box]]
-- [[_COMMUNITY_UI Package Index|UI Package Index]]
-- [[_COMMUNITY_Tools Package Index|Tools Package Index]]
-- [[_COMMUNITY_Runtime Package Index|Runtime Package Index]]
-- [[_COMMUNITY_Graphify Bridge Index|Graphify Bridge Index]]
-- [[_COMMUNITY_Next.js Type Shim|Next.js Type Shim]]
-- [[_COMMUNITY_Next.js Config|Next.js Config]]
-- [[_COMMUNITY_Chat Message View|Chat: Message View]]
-- [[_COMMUNITY_Chat Types|Chat: Types]]
-- [[_COMMUNITY_Shell Status Bar|Shell: Status Bar]]
-- [[_COMMUNITY_File Tree|File Tree]]
+- [[_COMMUNITY_Community 0|Community 0]]
+- [[_COMMUNITY_Community 1|Community 1]]
+- [[_COMMUNITY_Community 2|Community 2]]
+- [[_COMMUNITY_Community 3|Community 3]]
+- [[_COMMUNITY_Community 4|Community 4]]
+- [[_COMMUNITY_Community 5|Community 5]]
+- [[_COMMUNITY_Community 6|Community 6]]
+- [[_COMMUNITY_Community 7|Community 7]]
+- [[_COMMUNITY_Community 8|Community 8]]
+- [[_COMMUNITY_Community 9|Community 9]]
+- [[_COMMUNITY_Community 10|Community 10]]
+- [[_COMMUNITY_Community 11|Community 11]]
+- [[_COMMUNITY_Community 12|Community 12]]
+- [[_COMMUNITY_Community 13|Community 13]]
+- [[_COMMUNITY_Community 14|Community 14]]
+- [[_COMMUNITY_Community 15|Community 15]]
+- [[_COMMUNITY_Community 16|Community 16]]
+- [[_COMMUNITY_Community 17|Community 17]]
+- [[_COMMUNITY_Community 18|Community 18]]
+- [[_COMMUNITY_Community 19|Community 19]]
+- [[_COMMUNITY_Community 20|Community 20]]
+- [[_COMMUNITY_Community 21|Community 21]]
+- [[_COMMUNITY_Community 22|Community 22]]
+- [[_COMMUNITY_Community 23|Community 23]]
+- [[_COMMUNITY_Community 24|Community 24]]
+- [[_COMMUNITY_Community 25|Community 25]]
+- [[_COMMUNITY_Community 26|Community 26]]
+- [[_COMMUNITY_Community 27|Community 27]]
+- [[_COMMUNITY_Community 28|Community 28]]
+- [[_COMMUNITY_Community 29|Community 29]]
+- [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 31|Community 31]]
+- [[_COMMUNITY_Community 32|Community 32]]
+- [[_COMMUNITY_Community 33|Community 33]]
+- [[_COMMUNITY_Community 34|Community 34]]
+- [[_COMMUNITY_Community 35|Community 35]]
+- [[_COMMUNITY_Community 36|Community 36]]
+- [[_COMMUNITY_Community 37|Community 37]]
+- [[_COMMUNITY_Community 38|Community 38]]
+- [[_COMMUNITY_Community 39|Community 39]]
+- [[_COMMUNITY_Community 40|Community 40]]
+- [[_COMMUNITY_Community 41|Community 41]]
+- [[_COMMUNITY_Community 42|Community 42]]
+- [[_COMMUNITY_Community 43|Community 43]]
+- [[_COMMUNITY_Community 44|Community 44]]
+- [[_COMMUNITY_Community 45|Community 45]]
+- [[_COMMUNITY_Community 46|Community 46]]
+- [[_COMMUNITY_Community 47|Community 47]]
+- [[_COMMUNITY_Community 48|Community 48]]
+- [[_COMMUNITY_Community 49|Community 49]]
+- [[_COMMUNITY_Community 50|Community 50]]
+- [[_COMMUNITY_Community 51|Community 51]]
+- [[_COMMUNITY_Community 52|Community 52]]
+- [[_COMMUNITY_Community 53|Community 53]]
+- [[_COMMUNITY_Community 54|Community 54]]
+- [[_COMMUNITY_Community 55|Community 55]]
+- [[_COMMUNITY_Community 56|Community 56]]
+- [[_COMMUNITY_Community 57|Community 57]]
+- [[_COMMUNITY_Community 58|Community 58]]
+- [[_COMMUNITY_Community 59|Community 59]]
+- [[_COMMUNITY_Community 60|Community 60]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `GET()` - 11 edges
-2. `8-Phase Senior-Engineer Workflow` - 10 edges
-3. `Target Architecture (apps + packages tree)` - 9 edges
-4. `POST()` - 8 edges
-5. `JARVIS Autonomous Multi-Agent Failure Mode` - 8 edges
-6. `App: apps/web (Next.js 16 on port 3030)` - 8 edges
-7. `Pivot: Single Pair-Programming Assistant` - 7 edges
-8. `Package: @marvin/project-context (spec + infra probes)` - 7 edges
-9. `getAnthropicAuth()` - 6 edges
-10. `Decision: Single Agent with On-Demand Subagents via Task tool` - 6 edges
+1. `GET()` - 36 edges
+2. `POST()` - 17 edges
+3. `8-Phase Senior-Engineer Workflow` - 9 edges
+4. `Target Architecture (Repo Layout)` - 8 edges
+5. `getAnthropicAuth()` - 7 edges
+6. `DELETE()` - 7 edges
+7. `MARVIN` - 7 edges
+8. `MARVIN Project Instructions (CLAUDE.md)` - 7 edges
+9. `Golden Rules for Working in This Repo` - 7 edges
+10. `readProjectsFile()` - 6 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Rule: Single Assistant, Not an Agent Team` --semantically_similar_to--> `Decision: Single Agent with On-Demand Subagents via Task tool`  [INFERRED] [semantically similar]
-  CLAUDE.md → PLAN.md
-- `Rule: Plan-first, Execute-second, Verify-third` --semantically_similar_to--> `8-Phase Senior-Engineer Workflow`  [INFERRED] [semantically similar]
-  CLAUDE.md → PLAN.md
-- `Marvin Repo Layout (apps/web + packages/*)` --semantically_similar_to--> `Target Architecture (apps + packages tree)`  [INFERRED] [semantically similar]
+- `Repo Layout (apps/web + packages)` --semantically_similar_to--> `Target Architecture (Repo Layout)`  [INFERRED] [semantically similar]
   README.md → PLAN.md
-- `Rule: User Project is a Separate Workspace` --semantically_similar_to--> `Decision: Zero hardcoded project knowledge (isolation)`  [INFERRED] [semantically similar]
-  CLAUDE.md → PLAN.md
-- `Rule: No Hardcoded Project Knowledge` --semantically_similar_to--> `Decision: Zero hardcoded project knowledge (isolation)`  [INFERRED] [semantically similar]
+- `Rule 1: Single Assistant, Not an Agent Team` --semantically_similar_to--> `Explicitly Not a Multi-Agent Orchestration`  [INFERRED] [semantically similar]
+  CLAUDE.md → README.md
+- `Multi-Agent Autonomy Degrades ~70% / 17x Error Amplification` --semantically_similar_to--> `2026 Multi-Agent Coding Literature (Google/UIUC/Microsoft/Anthropic)`  [INFERRED] [semantically similar]
+  README.md → PLAN.md
+- `8-Phase Workflow in One Conversation` --semantically_similar_to--> `8-Phase Senior-Engineer Workflow`  [INFERRED] [semantically similar]
+  README.md → PLAN.md
+- `Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui)` --semantically_similar_to--> `Target Architecture (Repo Layout)`  [INFERRED] [semantically similar]
   CLAUDE.md → PLAN.md
 
 ## Hyperedges (group relationships)
-- **Three-layer ramification stack (graph + ADRs + memory)** — plan_layer_graphify, plan_layer_adr, plan_layer_memory, plan_rationale_ramification_problem [EXTRACTED 0.95]
-- **8-phase senior-engineer workflow** — plan_phase_intake, plan_phase_discovery, plan_phase_impact_analysis, plan_phase_architecture, plan_phase_plan, plan_phase_implement, plan_phase_verify, plan_phase_ship [EXTRACTED 1.00]
-- **Single-agent architecture decision + rationales** — plan_decision_single_agent, plan_rationale_multi_agent_research, plan_rationale_70pct_degradation, plan_rationale_17x_error_amplification, plan_jarvis_failure [EXTRACTED 0.95]
+- **Isolation Contract Enforcement** — claude_rule_separate_workspace, claude_rule_no_hardcoded, plan_isolation_contract [INFERRED 0.90]
+- **Anti-Multi-Agent Architecture Rationale** — readme_multi_agent_research, plan_2026_literature, plan_non_goal_multi_agent, claude_rule_single_assistant [EXTRACTED 0.95]
+- **Ramification Tracking Three-Layer Stack** — plan_layer_graph, plan_layer_adr, plan_layer_memory, plan_blast_radius [EXTRACTED 1.00]
 
 ## Communities
 
-### Community 0 - "API Surface & Data Layout"
-Cohesion: 0.09
-Nodes (28): MARVIN_DATA_DIR (~/.marvin/) — sessions, cost-tracker, projects, API: POST /api/chat (SSE streaming), API: GET /api/files/content, API: GET /api/files/status (git porcelain), API: GET /api/files/tree, API: POST /api/graph/query (graphify passthrough), API: POST /api/terminal/run (SSE stdout/stderr), App: apps/web (Next.js 16 on port 3030) (+20 more)
+### Community 0 - "Community 0"
+Cohesion: 0.07
+Nodes (34): Adding a New Feature (PLAN.md first), MARVIN_DATA_DIR Default ~/.marvin/, Golden Rules for Working in This Repo, Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui), Personality: marvin | neutral Toggle, MARVIN Project Instructions (CLAUDE.md), Rule 3: Confirm-Before-Act for Risky Tools, Rule 6: No Hardcoded Project Knowledge (+26 more)
 
-### Community 1 - "Runtime: Claude CLI & Paths"
+### Community 1 - "Community 1"
 Cohesion: 0.13
-Nodes (11): defaultModel(), discoverClaudeBinary(), runClaudeCli(), getHomeDir(), getMarvinDataDir(), GET(), runGit(), findGraphifyBin() (+3 more)
+Nodes (15): computeDegrees(), emptySummary(), getNeighbors(), loadRaw(), resolveNode(), searchGraph(), shortestPath(), summarizeGraph() (+7 more)
 
-### Community 2 - "Project Context & Infra Probes"
-Cohesion: 0.12
-Nodes (10): buildProjectContext(), readAdrs(), formatProbeBlock(), runProbes(), buildSystemPrompt(), POST(), shellFor(), slugifyCwd() (+2 more)
-
-### Community 3 - "Context Hierarchy & Workflow"
+### Community 2 - "Community 2"
 Cohesion: 0.15
-Nodes (19): Rule: No Truncation of Project Context, Layer 2: Architecture Decision Records (docs/adr/*.md), Layer 1: Structural Impact Analysis (graphify graph.json), Layer 3: Running Project Memory (.marvin/memory.md), Workflow Step 4: Architecture (ADRs), Workflow Step 2: Discovery (graphify-first), Workflow Step 3: Impact Analysis (blast radius), Workflow Step 6: Implement (diff preview gate) (+11 more)
+Nodes (18): ensureDir(), buildSystemPrompt(), addProject(), getActiveProjectId(), getProject(), listProjects(), readActiveFile(), readProjectsFile() (+10 more)
 
-### Community 4 - "Architectural Decisions & Phases"
-Cohesion: 0.16
-Nodes (16): Advisor Strategy (Sonnet executor + Opus advisor), Decision: Name is MARVIN, Decision: Default model Claude Opus 4.7, Decision: Rebuild from scratch at ~/marvin/, Decision: Single Agent with On-Demand Subagents via Task tool, Decision: Primary surface is web app on localhost:3030, JARVIS Autonomous Multi-Agent Failure Mode, Phase 5: Stretch (Advisor Strategy, Honeycomb MCP, Playwright) (+8 more)
+### Community 3 - "Community 3"
+Cohesion: 0.11
+Nodes (16): clearTurnConfirms(), registerPendingConfirm(), resolvePendingConfirm(), detectNewCommits(), getCurrentHead(), gitHead(), listCommitsSince(), resetCommitCursor() (+8 more)
 
-### Community 5 - "UI: Select Primitive"
+### Community 4 - "Community 4"
+Cohesion: 0.12
+Nodes (19): Advisor Strategy (Sonnet exec + Opus advisor), Blast-Radius Enumeration (1-hop + 2-hop graph traversal), Browser Preview Pane (iframe-based), 8-Phase Senior-Engineer Workflow, Graph-Aware Chat via In-Process MCP Server, Keyboard Shortcuts + Session Search, Layer 2: Architecture Decision Records (docs/adr/), Layer 1: Structural Impact Analysis from Knowledge Graph (+11 more)
+
+### Community 5 - "Community 5"
+Cohesion: 0.11
+Nodes (18): God Nodes: GET, POST, Target Architecture, 8-Phase Workflow, etc., Graph Queries 36x Cheaper than Raw File Reads, Graphify Usage Guide, Graphify Baseline (233 nodes / 248 edges / 44 communities), Moderately Advanced Robotic Virtual Intelligence Network, Claude CLI runtime (@marvin/runtime), 8-Phase Workflow in One Conversation, Graphify Knowledge Graph Integration (+10 more)
+
+### Community 6 - "Community 6"
 Cohesion: 0.2
 Nodes (0): 
 
-### Community 6 - "Golden Rules & Confirm Gate"
-Cohesion: 0.22
-Nodes (10): MARVIN Golden Rules (CLAUDE.md), Rule: Confirm-before-act for Risky Tools, Rule: No Hardcoded Project Knowledge, Rule: Plan-first, Execute-second, Verify-third, Rule: User Project is a Separate Workspace, Rule: Single Assistant, Not an Agent Team, API: POST /api/confirm (allow/deny), Decision: Zero hardcoded project knowledge (isolation) (+2 more)
+### Community 7 - "Community 7"
+Cohesion: 0.46
+Nodes (7): dayKey(), emptyAggregate(), fold(), readCostFile(), recordTurnCost(), summarizeCost(), writeCostFile()
 
-### Community 7 - "UI: Sheet Primitive"
+### Community 8 - "Community 8"
+Cohesion: 0.32
+Nodes (4): buildProjectContext(), readAdrs(), formatProbeBlock(), runProbes()
+
+### Community 9 - "Community 9"
 Cohesion: 0.29
 Nodes (0): 
 
-### Community 8 - "UI: Dialog Primitive"
+### Community 10 - "Community 10"
+Cohesion: 0.57
+Nodes (6): buildSubprocessEnv(), getAnthropicAuth(), hasHostCredentialsOnDisk(), isOAuthToken(), maskKey(), trimEnv()
+
+### Community 11 - "Community 11"
 Cohesion: 0.33
 Nodes (0): 
 
-### Community 9 - "Git Watch"
-Cohesion: 0.53
-Nodes (4): detectNewCommits(), getCurrentHead(), gitHead(), listCommitsSince()
+### Community 12 - "Community 12"
+Cohesion: 0.4
+Nodes (4): defaultReason(), toolPolicy(), classifyToolCall(), resolveRuntimeMode()
 
-### Community 10 - "Runtime: Auth & Env"
-Cohesion: 0.67
-Nodes (5): buildSubprocessEnv(), getAnthropicAuth(), isOAuthToken(), maskKey(), trimEnv()
+### Community 13 - "Community 13"
+Cohesion: 0.4
+Nodes (3): onKey(), loadHistory(), mount()
 
-### Community 11 - "Chat Page & SSE Stream"
-Cohesion: 0.33
-Nodes (2): Home(), useChatStream()
-
-### Community 12 - "MARVIN Persona & Phase 2"
-Cohesion: 0.33
-Nodes (6): Component: MarvinBrain (SVG neural visualization), MARVIN Persona (Hitchhiker's Guide Dry Wit), personality.ts (CORE_BEHAVIOR system prompt), Phase 2: Chat + Tools (shipped 2026-04-17), Pending (Phase 2): Structural confirm-before-act gate, Pending (Phase 2): packages/tools actual tool implementations
-
-### Community 13 - "UI: Table Primitive"
+### Community 14 - "Community 14"
 Cohesion: 0.4
 Nodes (0): 
 
-### Community 14 - "MARVIN Brain Visualization"
+### Community 15 - "Community 15"
+Cohesion: 0.6
+Nodes (3): defaultModel(), discoverClaudeBinary(), runClaudeCli()
+
+### Community 16 - "Community 16"
 Cohesion: 0.4
 Nodes (0): 
 
-### Community 15 - "UI: Card Primitive"
+### Community 17 - "Community 17"
 Cohesion: 0.5
 Nodes (0): 
 
-### Community 16 - "UI: Avatar Primitive"
+### Community 18 - "Community 18"
 Cohesion: 0.5
 Nodes (0): 
 
-### Community 17 - "UI: Dropdown Menu"
+### Community 19 - "Community 19"
 Cohesion: 0.5
 Nodes (0): 
 
-### Community 18 - "Graphify Bridge: Docs Refresh"
+### Community 20 - "Community 20"
 Cohesion: 0.83
 Nodes (3): extractionPrompt(), parseJsonPayload(), refreshDocs()
 
-### Community 19 - "Embedded Terminal"
+### Community 21 - "Community 21"
+Cohesion: 0.5
+Nodes (0): 
+
+### Community 22 - "Community 22"
+Cohesion: 0.5
+Nodes (0): 
+
+### Community 23 - "Community 23"
+Cohesion: 0.5
+Nodes (0): 
+
+### Community 24 - "Community 24"
 Cohesion: 0.67
-Nodes (2): loadHistory(), mount()
+Nodes (0): 
 
-### Community 20 - "UI: Scroll Area"
+### Community 25 - "Community 25"
+Cohesion: 1.0
+Nodes (2): getHomeDir(), getMarvinDataDir()
+
+### Community 26 - "Community 26"
 Cohesion: 0.67
 Nodes (0): 
 
-### Community 21 - "Tools: Policy"
-Cohesion: 1.0
-Nodes (2): defaultReason(), toolPolicy()
-
-### Community 22 - "File Viewer"
+### Community 27 - "Community 27"
 Cohesion: 0.67
 Nodes (0): 
 
-### Community 23 - "UI: Tabs Primitive"
+### Community 28 - "Community 28"
+Cohesion: 0.67
+Nodes (0): 
+
+### Community 29 - "Community 29"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 24 - "UI: Utils (cn)"
+### Community 30 - "Community 30"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 25 - "UI: Tooltip"
+### Community 31 - "Community 31"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 26 - "UI: Badge"
+### Community 32 - "Community 32"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 27 - "UI: Separator"
+### Community 33 - "Community 33"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 28 - "UI: Button"
+### Community 34 - "Community 34"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 29 - "UI: Input"
+### Community 35 - "Community 35"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 30 - "UI: Skeleton"
+### Community 36 - "Community 36"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 31 - "Root Layout"
+### Community 37 - "Community 37"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 32 - "Chat: Tool Call Card"
+### Community 38 - "Community 38"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 33 - "Chat: Input Box"
+### Community 39 - "Community 39"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 34 - "UI Package Index"
+### Community 40 - "Community 40"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 35 - "Tools Package Index"
+### Community 41 - "Community 41"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 36 - "Runtime Package Index"
+### Community 42 - "Community 42"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 37 - "Graphify Bridge Index"
+### Community 43 - "Community 43"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 38 - "Next.js Type Shim"
+### Community 44 - "Community 44"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 39 - "Next.js Config"
+### Community 45 - "Community 45"
+Cohesion: 1.0
+Nodes (2): frontend-design Skill Applied to MARVIN Itself, Skill Library Expansion (14 Anthropic skills)
+
+### Community 46 - "Community 46"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 40 - "Chat: Message View"
+### Community 47 - "Community 47"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 41 - "Chat: Types"
+### Community 48 - "Community 48"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 42 - "Shell: Status Bar"
+### Community 49 - "Community 49"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 43 - "File Tree"
+### Community 50 - "Community 50"
 Cohesion: 1.0
 Nodes (0): 
+
+### Community 51 - "Community 51"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 52 - "Community 52"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 53 - "Community 53"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 54 - "Community 54"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 55 - "Community 55"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 56 - "Community 56"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 57 - "Community 57"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 58 - "Community 58"
+Cohesion: 1.0
+Nodes (0): 
+
+### Community 59 - "Community 59"
+Cohesion: 1.0
+Nodes (1): End-to-End Verification Smoke Test
+
+### Community 60 - "Community 60"
+Cohesion: 1.0
+Nodes (1): Open Items (quick confirms)
 
 ## Knowledge Gaps
-- **28 isolated node(s):** `Pair-Programming AI Assistant`, `Decision: Name is MARVIN`, `Decision: Primary surface is web app on localhost:3030`, `Rationale: 2026 Multi-Agent Research (Google/UIUC/MS/Anthropic)`, `Rationale: Multi-agent degrades up to 70% on sequential code` (+23 more)
+- **31 isolated node(s):** `Moderately Advanced Robotic Virtual Intelligence Network`, `Pair-Programming AI Assistant`, `Hitchhiker's Brain-the-Size-of-a-Planet Quote`, `pnpm workspaces + Turbo`, `Claude CLI runtime (@marvin/runtime)` (+26 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `UI: Tabs Primitive`** (2 nodes): `cn()`, `tabs.tsx`
+- **Thin community `Community 29`** (2 nodes): `cn()`, `tabs.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Utils (cn)`** (2 nodes): `utils.ts`, `cn()`
+- **Thin community `Community 30`** (2 nodes): `utils.ts`, `cn()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Tooltip`** (2 nodes): `TooltipContent()`, `tooltip.tsx`
+- **Thin community `Community 31`** (2 nodes): `TooltipContent()`, `tooltip.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Badge`** (2 nodes): `Badge()`, `badge.tsx`
+- **Thin community `Community 32`** (2 nodes): `Badge()`, `badge.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Separator`** (2 nodes): `Separator()`, `separator.tsx`
+- **Thin community `Community 33`** (2 nodes): `Separator()`, `separator.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Button`** (2 nodes): `cn()`, `button.tsx`
+- **Thin community `Community 34`** (2 nodes): `cn()`, `button.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Input`** (2 nodes): `Input()`, `input.tsx`
+- **Thin community `Community 35`** (2 nodes): `Input()`, `input.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI: Skeleton`** (2 nodes): `Skeleton()`, `skeleton.tsx`
+- **Thin community `Community 36`** (2 nodes): `Skeleton()`, `skeleton.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Root Layout`** (2 nodes): `RootLayout()`, `layout.tsx`
+- **Thin community `Community 37`** (2 nodes): `layout.tsx`, `RootLayout()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Chat: Tool Call Card`** (2 nodes): `toolDescriptor()`, `tool-call-card.tsx`
+- **Thin community `Community 38`** (2 nodes): `personality-toggle.tsx`, `PersonalityToggle()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Chat: Input Box`** (2 nodes): `submit()`, `chat-input.tsx`
+- **Thin community `Community 39`** (2 nodes): `runtime-mode-toggle.tsx`, `RuntimeModeToggle()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `UI Package Index`** (1 nodes): `index.ts`
+- **Thin community `Community 40`** (2 nodes): `cost-pill.tsx`, `fmtUsd()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Tools Package Index`** (1 nodes): `index.ts`
+- **Thin community `Community 41`** (2 nodes): `diff-viewer.tsx`, `onMount()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Runtime Package Index`** (1 nodes): `index.ts`
+- **Thin community `Community 42`** (2 nodes): `use-projects.ts`, `useProjects()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Graphify Bridge Index`** (1 nodes): `index.ts`
+- **Thin community `Community 43`** (2 nodes): `submit()`, `add-project-dialog.tsx`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Next.js Type Shim`** (1 nodes): `next-env.d.ts`
+- **Thin community `Community 44`** (2 nodes): `project-picker.tsx`, `fmtWhen()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Next.js Config`** (1 nodes): `next.config.ts`
+- **Thin community `Community 45`** (2 nodes): `frontend-design Skill Applied to MARVIN Itself`, `Skill Library Expansion (14 Anthropic skills)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Chat: Message View`** (1 nodes): `message-view.tsx`
+- **Thin community `Community 46`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Chat: Types`** (1 nodes): `types.ts`
+- **Thin community `Community 47`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Shell: Status Bar`** (1 nodes): `status-bar.tsx`
+- **Thin community `Community 48`** (1 nodes): `index.ts`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `File Tree`** (1 nodes): `file-tree.tsx`
+- **Thin community `Community 49`** (1 nodes): `index.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 50`** (1 nodes): `next-env.d.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 51`** (1 nodes): `next.config.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 52`** (1 nodes): `shortcuts-help.tsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 53`** (1 nodes): `message-view.tsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 54`** (1 nodes): `types.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 55`** (1 nodes): `status-bar.tsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 56`** (1 nodes): `graph-panel.tsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 57`** (1 nodes): `types.ts`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 58`** (1 nodes): `file-tree.tsx`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 59`** (1 nodes): `End-to-End Verification Smoke Test`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 60`** (1 nodes): `Open Items (quick confirms)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Target Architecture (apps + packages tree)` connect `API Surface & Data Layout` to `Context Hierarchy & Workflow`, `Golden Rules & Confirm Gate`?**
-  _High betweenness centrality (0.047) - this node is a cross-community bridge._
-- **Why does `GET()` connect `Runtime: Claude CLI & Paths` to `Git Watch`, `Runtime: Auth & Env`?**
-  _High betweenness centrality (0.038) - this node is a cross-community bridge._
-- **Why does `Package: @marvin/project-context (spec + infra probes)` connect `Context Hierarchy & Workflow` to `API Surface & Data Layout`?**
+- **Why does `GET()` connect `Community 1` to `Community 2`, `Community 3`, `Community 7`, `Community 10`, `Community 15`, `Community 25`?**
+  _High betweenness centrality (0.088) - this node is a cross-community bridge._
+- **Why does `POST()` connect `Community 2` to `Community 1`, `Community 3`, `Community 8`, `Community 12`, `Community 15`?**
   _High betweenness centrality (0.032) - this node is a cross-community bridge._
-- **Are the 6 inferred relationships involving `GET()` (e.g. with `detectNewCommits()` and `getState()`) actually correct?**
-  _`GET()` has 6 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 2 inferred relationships involving `Target Architecture (apps + packages tree)` (e.g. with `Marvin Tech Stack (Next.js 16 + TS + Tailwind 4 + shadcn)` and `Marvin Repo Layout (apps/web + packages/*)`) actually correct?**
-  _`Target Architecture (apps + packages tree)` has 2 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 4 inferred relationships involving `POST()` (e.g. with `defaultModel()` and `buildSystemPrompt()`) actually correct?**
-  _`POST()` has 4 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `Pair-Programming AI Assistant`, `Decision: Name is MARVIN`, `Decision: Primary surface is web app on localhost:3030` to the rest of the system?**
-  _28 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `Explicitly Not a Multi-Agent Orchestration` connect `Community 5` to `Community 0`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
+- **Are the 22 inferred relationships involving `GET()` (e.g. with `detectNewCommits()` and `registerPendingConfirm()`) actually correct?**
+  _`GET()` has 22 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 10 inferred relationships involving `POST()` (e.g. with `slugifyWorkDir()` and `resolveRuntimeMode()`) actually correct?**
+  _`POST()` has 10 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 2 inferred relationships involving `Target Architecture (Repo Layout)` (e.g. with `Key Packages Table (apps/web, runtime, tools, project-context, graphify-bridge, git-watch, ui)` and `Repo Layout (apps/web + packages)`) actually correct?**
+  _`Target Architecture (Repo Layout)` has 2 INFERRED edges - model-reasoned connections that need verification._
+- **What connects `Moderately Advanced Robotic Virtual Intelligence Network`, `Pair-Programming AI Assistant`, `Hitchhiker's Brain-the-Size-of-a-Planet Quote` to the rest of the system?**
+  _31 weakly-connected nodes found - possible documentation gaps or missing edges._

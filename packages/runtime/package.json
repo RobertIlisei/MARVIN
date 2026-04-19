@@ -13,7 +13,12 @@
     "./session": "./src/session.ts",
     "./personality": "./src/personality.ts",
     "./sdk-runner": "./src/sdk-runner.ts",
-    "./confirm-registry": "./src/confirm-registry.ts"
+    "./confirm-registry": "./src/confirm-registry.ts",
+    "./projects": "./src/projects.ts",
+    "./cost-tracker": "./src/cost-tracker.ts",
+    "./playwright-mcp": "./src/playwright-mcp.ts",
+    "./turn-registry": "./src/turn-registry.ts",
+    "./models": "./src/models.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -25,6 +30,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.113",
-    "@marvin/tools": "workspace:*"
+    "@marvin/tools": "workspace:*",
+    "@marvin/graphify-bridge": "workspace:*",
+    "@playwright/mcp": "^0.0.70"
   }
 }

@@ -1,52 +1,69 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+/**
+ * Pure chat input. Project selection now lives in the top-level
+ * `<ProjectPicker />`; this component just handles the textarea, send, and
+ * cancel. Parent passes `disabled` when no project is active so we can
+ * render a clear hint.
+ */
 export function ChatInput({
-  cwd,
-  onCwdChange,
   onSend,
   onCancel,
   busy,
   disabled,
+  hint,
+  draft,
+  draftKey,
 }: {
-  cwd: string;
-  onCwdChange: (cwd: string) => void;
   onSend: (text: string) => void;
   onCancel: () => void;
   busy: boolean;
   disabled?: boolean;
+  /** Short message shown below the input explaining why it's disabled, if so. */
+  hint?: string;
+  /** Optional external draft to prefill the textarea with. */
+  draft?: string;
+  /** Bump this to force the draft to re-apply even with identical text. */
+  draftKey?: number;
 }) {
   const [text, setText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-grow the textarea with content, up to a ceiling.
+  useEffect(() => {
+    if (draft != null) setText(draft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, draftKey]);
+
   useEffect(() => {
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`;
+    ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
   }, [text]);
 
+  useEffect(() => {
+    if (!disabled && !busy) taRef.current?.focus();
+  }, [disabled, busy]);
+
+  const canSend = !disabled && !busy && text.trim().length > 0;
+
   const submit = () => {
-    const trimmed = text.trim();
-    if (!trimmed || busy || disabled) return;
-    onSend(trimmed);
+    if (!canSend) return;
+    onSend(text.trim());
     setText("");
   };
 
+  const tooltip = useMemo(() => {
+    if (busy) return "cancel the current turn";
+    if (disabled) return hint ?? "disabled";
+    if (!text.trim()) return "type a message";
+    return "send message (⏎)";
+  }, [busy, disabled, text, hint]);
+
   return (
     <div className="glass rounded-2xl p-3">
-      <div className="flex items-center gap-2 pb-2 text-[11px] text-[color:var(--color-fg-dim)]">
-        <span className="font-mono text-[10px] uppercase tracking-[0.25em]">project</span>
-        <input
-          type="text"
-          value={cwd}
-          onChange={(e) => onCwdChange(e.target.value)}
-          placeholder="/path/to/your/project"
-          className="flex-1 rounded-md border border-[color:var(--color-border)] bg-transparent px-2 py-1 font-mono text-[12px] text-[color:var(--color-fg)] outline-none focus:border-[color:var(--color-accent-deep)]/50"
-        />
-      </div>
       <div className="flex items-end gap-2">
         <textarea
           ref={taRef}
@@ -61,19 +78,20 @@ export function ChatInput({
           }}
           placeholder={
             disabled
-              ? "pick a project directory first"
+              ? (hint ?? "pick a project first")
               : busy
                 ? "marvin is thinking — enter sends on next turn"
                 : "what are we building? (⏎ to send · ⇧⏎ for newline)"
           }
-          disabled={disabled}
-          className="scroll-thin flex-1 resize-none rounded-lg border border-transparent bg-transparent px-2 py-2 text-sm leading-relaxed text-[color:var(--color-fg)] outline-none placeholder:text-[color:var(--color-fg-faint)] focus:border-[color:var(--color-border-strong)] disabled:opacity-50"
+          disabled={disabled || busy}
+          className="scroll-thin flex-1 resize-none rounded-lg border border-transparent bg-transparent px-3 py-2.5 text-[15px] leading-relaxed text-[color:var(--color-fg)] outline-none placeholder:text-[color:var(--color-fg-faint)] focus:border-[color:var(--color-border-strong)] disabled:opacity-50"
         />
         {busy ? (
           <button
             type="button"
             onClick={onCancel}
-            className="shrink-0 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-danger)]/10 px-3 py-2 text-xs text-[color:var(--color-danger)] transition hover:border-[color:var(--color-danger)]/30"
+            title={tooltip}
+            className="shrink-0 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-danger)]/10 px-4 py-2.5 text-xs text-[color:var(--color-danger)] transition hover:border-[color:var(--color-danger)]/30"
           >
             stop
           </button>
@@ -81,13 +99,19 @@ export function ChatInput({
           <button
             type="button"
             onClick={submit}
-            disabled={!text.trim() || disabled}
-            className="shrink-0 rounded-lg border border-[color:var(--color-accent-deep)]/40 bg-[color:var(--color-accent-glow)] px-4 py-2 text-xs font-medium text-[color:var(--color-accent)] transition hover:border-[color:var(--color-accent-deep)] disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!canSend}
+            title={tooltip}
+            className="shrink-0 rounded-lg border border-[color:var(--color-accent-deep)]/40 bg-[color:var(--color-accent-glow)] px-5 py-2.5 text-sm font-medium text-[color:var(--color-accent)] transition hover:border-[color:var(--color-accent-deep)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             send ⏎
           </button>
         )}
       </div>
+      {disabled && hint && (
+        <div className="mt-1 px-1 font-mono text-[10px] text-[color:var(--color-fg-faint)]">
+          {hint}
+        </div>
+      )}
     </div>
   );
 }

@@ -29,15 +29,59 @@ import {
   registerPendingConfirm,
 } from "./confirm-registry";
 import { toolPolicy, type ToolName } from "@marvin/tools/policy";
+import { createGraphMcpServer } from "@marvin/graphify-bridge";
+import { createPlaywrightMcpConfig } from "./playwright-mcp";
+
+export type RuntimeMode = "opus" | "advisor";
+
+/** Map a user-facing runtime mode to the SDK's model + advisorModel pair.
+ *
+ *  - `opus`: full Opus 4.7 everywhere — the default, highest quality.
+ *  - `advisor`: Sonnet 4.6 drives the turn loop (cheap, fast), Opus 4.6 is
+ *    registered as the `advisorModel` so the executor can call it through
+ *    the server-side advisor tool on hard steps. Per Anthropic's launch
+ *    data (advisor_20260301), this saves ~30-40% on routine code work
+ *    with minimal quality loss.
+ */
+export function resolveRuntimeMode(mode: RuntimeMode): {
+  model: string;
+  advisorModel?: string;
+} {
+  if (mode === "advisor") {
+    return {
+      model: "claude-sonnet-4-6",
+      advisorModel: "claude-opus-4-6",
+    };
+  }
+  return { model: "claude-opus-4-7" };
+}
+
+/**
+ * Permission strategy for a turn.
+ *
+ *   - `auto` (default): SDK runs with `permissionMode: "bypassPermissions"`,
+ *     no `canUseTool` callback installed. Every tool call executes
+ *     immediately — MARVIN behaves like Claude Code with
+ *     `--dangerously-skip-permissions`. Best for experienced users who
+ *     want uninterrupted flow.
+ *   - `gated`: the pre-flight confirm gate is installed. Edit / Write /
+ *     non-read-only Bash render a confirm card; reads + whitelisted
+ *     commands auto-allow; destructive patterns hard-deny.
+ */
+export type PermissionStrategy = "auto" | "gated";
 
 export interface RunAgentInput {
   message: string;
   cwd: string;
   model: string;
+  /** Optional advisor model — enables the SDK's server-side advisor tool. */
+  advisorModel?: string | undefined;
   /** Unique ID for this turn — used to key the confirm registry. */
   turnId: string;
   /** Resume a previous SDK session by ID (omit for a new one). */
   sessionId?: string | undefined;
+  /** Permission strategy. Defaults to `auto` when omitted. */
+  permissionStrategy?: PermissionStrategy;
   appendSystemPrompt: string;
   onEvent: (event: SDKMessage) => void;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
@@ -104,6 +148,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     message,
     cwd,
     model,
+    advisorModel,
     turnId,
     sessionId,
     appendSystemPrompt,
@@ -111,6 +156,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     onConfirmRequest,
     signal,
   } = input;
+  const permissionStrategy: PermissionStrategy = input.permissionStrategy ?? "auto";
 
   const abortController = new AbortController();
   if (signal) {
@@ -120,24 +166,33 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 
   const canUseTool: CanUseTool = async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
     const cls = classifyToolCall(toolName, toolInput);
+    // The SDK's PermissionResult zod schema requires `updatedInput` to be a
+    // record on `allow`. When the SDK hands us `toolInput === undefined` (or
+    // a non-object), passing it through produces "Invalid input: expected
+    // record, received undefined" and the turn dies. Always normalise.
+    const safeInput: Record<string, unknown> =
+      toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
+        ? (toolInput as Record<string, unknown>)
+        : {};
+
     if (cls.decision === "allow") {
-      return { behavior: "allow", updatedInput: toolInput } as PermissionResult;
+      return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
     }
     if (cls.decision === "deny") {
       return {
         behavior: "deny",
-        message: cls.reason,
+        message: cls.reason || "tool use denied",
         interrupt: false,
       } as PermissionResult;
     }
     // confirm — wait on the client.
     return new Promise<PermissionResult>((resolve) => {
-      registerPendingConfirm(turnId, toolUseID, resolve);
+      registerPendingConfirm(turnId, toolUseID, resolve, safeInput);
       onConfirmRequest({
         turnId,
         toolUseId: toolUseID,
         toolName,
-        input: toolInput,
+        input: safeInput,
         reason: cls.reason,
         ...(title ? { title } : {}),
         ...(description ? { description } : {}),
@@ -146,17 +201,41 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     });
   };
 
+  // In-process MCP server exposing graphify graph tools to MARVIN. Built
+  // per-turn so the server is scoped to the current workDir. Safe to always
+  // include: if the project has no `graphify-out/`, the tools politely report
+  // that instead of failing the turn.
+  const graphMcp = createGraphMcpServer(cwd);
+
+  // Playwright MCP — a real browser MARVIN controls, for screenshotting /
+  // interacting with / verifying localhost sites. Registered only if
+  // `@playwright/mcp` resolves on disk AND `MARVIN_PLAYWRIGHT != "0"`. The
+  // stdio process is spawned by the SDK per turn.
+  const playwrightMcp = createPlaywrightMcpConfig();
+
+  // Permission wiring. In `auto` mode we don't install canUseTool at all
+  // and ask the SDK for full bypass — MARVIN's agents just execute. In
+  // `gated` mode we install the pre-flight gate so Edit / Write / unsafe
+  // Bash render a confirm card, reads auto-allow, and destructive
+  // patterns hard-deny.
   const options: Options = {
     model,
     cwd,
     abortController,
-    canUseTool,
+    permissionMode:
+      permissionStrategy === "auto" ? "bypassPermissions" : "default",
+    ...(permissionStrategy === "gated" ? { canUseTool } : {}),
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
       append: appendSystemPrompt,
     },
+    mcpServers: {
+      "marvin-graph": graphMcp,
+      ...(playwrightMcp ? { "marvin-playwright": playwrightMcp } : {}),
+    },
     includePartialMessages: false,
+    ...(advisorModel ? { advisorModel } : {}),
     ...(sessionId ? { resume: sessionId } : {}),
   } as Options;
 

@@ -5,9 +5,6 @@
  * MARVIN runs one Claude session per (project, sessionId) — no multi-agent
  * dispatch, no tool-loop orchestration layer. The CLI itself drives its
  * tool loop; we just pass messages in and stream events out.
- *
- * Ported (heavily stripped) from
- * `~/command_center/J.A.R.V.I.S/src/lib/gateway/runtimes/claude-cli-runtime.ts`.
  */
 
 import { spawn } from "child_process";
