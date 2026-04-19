@@ -1,57 +1,10 @@
 @import "tailwindcss";
 
+/* Tailwind sees these names and generates utilities; the *values* below
+ * are the light (default) baseline. Dark mode overrides them via
+ * [data-theme="dark"] further down. This matches the Claude-Design
+ * handoff's cascade: light = :root, dark = opt-in attribute. */
 @theme {
-  /* Ink — warm near-black (slightly olive) instead of cold blue-black. */
-  --color-bg: #0b0a08;
-  --color-bg-elev: #121110;
-  --color-bg-glass: rgba(28, 26, 22, 0.58);
-
-  /* Type — bone/cream instead of cool grey. Reads warmer, more literary. */
-  --color-fg: #ece7d6;
-  --color-fg-dim: #c4bfae;
-  --color-fg-faint: #8a8575;
-
-  --color-border: rgba(236, 231, 214, 0.08);
-  --color-border-strong: rgba(236, 231, 214, 0.18);
-
-  /* Accent — sulphur / depressed-genius gold. Hitchhiker's MARVIN, not
-   * Bladerunner-lite cyan. Deep: amber for buttons on hover; glow: the
-   * edge-of-a-radioactive-page wash used everywhere. */
-  --color-accent: #d9c86a;
-  --color-accent-deep: #b28c2c;
-  --color-accent-glow: rgba(217, 200, 106, 0.24);
-
-  --color-success: #9cc176;
-  --color-warn: #e8b65a;
-  --color-danger: #d97a5e;
-
-  --shadow-glow: 0 0 30px 2px rgba(217, 200, 106, 0.18);
-  --shadow-panel: 0 1px 0 rgba(236, 231, 214, 0.04) inset,
-                  0 20px 60px -24px rgba(0, 0, 0, 0.7);
-}
-
-/* Theme-responsive palette.
- * The @theme block above declares the Tailwind-visible names with their
- * dark values as defaults. :root restates them for cascade clarity, and
- * [data-theme="light"] replaces them with the Claude-Design light palette
- * (OKLCH, warm whites, ink). Theme gets toggled via a single
- * `data-theme="light"` attribute on <html>, set pre-paint by the layout
- * bootstrap script and flipped at runtime by <ThemeToggle>. */
-:root {
-  color-scheme: dark;
-
-  /* Halo seeds used by body::before / body::after. Triplets so they can
-   * drop into rgba() with a dynamic alpha. Dark mode keeps the sulphur
-   * palette; light mode swaps to iridescent (purple-blue-pink) below. */
-  --color-halo-1: 217, 200, 106;
-  --color-halo-2: 178, 140, 44;
-  --color-halo-3: 217, 110, 60;
-}
-
-[data-theme="light"] {
-  color-scheme: light;
-
-  /* Surface — warm whites, near-black ink (Claude-Design handoff palette). */
   --color-bg: oklch(0.985 0.003 80);
   --color-bg-elev: oklch(0.975 0.003 80);
   --color-bg-glass: oklch(1 0 0 / 0.65);
@@ -63,20 +16,84 @@
   --color-border: oklch(0.18 0.005 80 / 0.08);
   --color-border-strong: oklch(0.18 0.005 80 / 0.16);
 
-  /* Amber retained but muted for light-mode legibility. */
-  --color-accent: oklch(0.55 0.15 75);
-  --color-accent-deep: oklch(0.42 0.13 75);
-  --color-accent-glow: oklch(0.85 0.12 75 / 0.3);
+  /* Accent — monochrome ink on paper (handoff palette). */
+  --color-accent: oklch(0.18 0.005 80);
+  --color-accent-deep: oklch(0.28 0.005 80);
+  --color-accent-glow: oklch(0.18 0.005 80 / 0.12);
 
-  /* Iridescent halo seeds — the Apple-Intelligence cue the design uses. */
+  --color-success: oklch(0.6 0.12 150);
+  --color-warn: oklch(0.7 0.14 70);
+  --color-danger: oklch(0.6 0.18 25);
+
+  --shadow-glow: 0 0 24px 2px oklch(0.18 0.005 80 / 0.06);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
+                  0 6px 16px -10px rgba(24, 22, 18, 0.1),
+                  0 30px 60px -30px rgba(24, 22, 18, 0.16);
+}
+
+/* Light defaults repeated on :root for explicit cascade + halo seeds.
+ * Dark override lives in [data-theme="dark"] below. */
+:root {
+  color-scheme: light;
+
+  /* Halo seeds for body::before / body::after. Comma triplets so they
+   * drop into rgba() with a dynamic alpha. Light = iridescent
+   * (purple/blue/pink) Apple-Intelligence cue. */
   --color-halo-1: 180, 156, 216;
   --color-halo-2: 156, 204, 220;
   --color-halo-3: 216, 168, 196;
 
-  --shadow-glow: 0 0 24px 2px oklch(0.85 0.12 75 / 0.25);
-  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
-                  0 6px 16px -10px rgba(24, 22, 18, 0.1),
-                  0 30px 60px -30px rgba(24, 22, 18, 0.16);
+  /* Display-tint / wordmark dot defaults to the foreground ink so
+   * .font-display renders unchanged in light. Dark overrides below. */
+  --display-tint: var(--color-fg);
+  --display-dot: var(--color-fg);
+}
+
+/* ---------------- Dark theme ----------------
+ * Pure black canvas, icy-blue accent (matches the brain particle palette),
+ * slightly elevated panel surfaces with hairline borders.
+ * Per the DARK_THEME_HANDOFF.md spec from Claude Design. */
+[data-theme="dark"] {
+  --color-bg: #000;
+  --color-bg-elev: oklch(0.18 0.012 240);
+  --color-bg-glass: oklch(0.14 0.012 240 / 0.72);
+
+  --color-fg: oklch(0.95 0.020 220);
+  --color-fg-dim: oklch(0.74 0.030 220);
+  --color-fg-faint: oklch(0.54 0.025 220);
+
+  --color-border: oklch(0.85 0.04 220 / 0.10);
+  --color-border-strong: oklch(0.85 0.04 220 / 0.20);
+
+  /* Icy-blue accent — same family as the nebula particle highlights. */
+  --color-accent: oklch(0.82 0.10 230);
+  --color-accent-deep: oklch(0.60 0.12 230);
+  --color-accent-glow: oklch(0.82 0.10 230 / 0.24);
+
+  --color-success: oklch(0.74 0.14 160);
+  --color-warn: oklch(0.78 0.13 75);
+  --color-danger: oklch(0.72 0.18 25);
+
+  /* Cool halo seeds for the ambient body::before wash. */
+  --color-halo-1: 140, 180, 230;
+  --color-halo-2: 110, 150, 210;
+  --color-halo-3: 170, 200, 240;
+
+  --shadow-glow: 0 0 30px 2px oklch(0.82 0.10 230 / 0.18);
+  --shadow-panel: 0 1px 0 oklch(0.85 0.04 220 / 0.05) inset,
+                  0 20px 60px -24px rgba(0, 0, 0, 0.7);
+
+  /* Icy-blue display tint & wordmark dot per handoff. */
+  --display-tint: oklch(0.86 0.08 225);
+  --display-dot: oklch(0.78 0.12 230);
+
+  color-scheme: dark;
+}
+
+/* Tint the display serif — falls back to --color-fg in light mode via
+ * the --display-tint default above. */
+.font-display {
+  color: var(--display-tint);
 }
 
 html,
@@ -173,22 +190,22 @@ html::after {
   content: "";
   position: fixed;
   inset: 0;
-  /* Dark-theme grain: cream specks, overlay-blend to brighten ink. */
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.92  0 0 0 0 0.85  0 0 0 0 0.6  0 0 0 0.45 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
-  background-size: 160px 160px;
-  opacity: 0.055;
-  mix-blend-mode: overlay;
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* Light-theme grain: black ink specks, multiply-blend for paper texture. */
-[data-theme="light"] html::after,
-html[data-theme="light"]::after {
+  /* Light (default) grain: black ink specks, multiply-blend for paper. */
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.42 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
   background-size: 220px 220px;
   opacity: 0.025;
   mix-blend-mode: multiply;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Dark-theme grain: light specks, screen-blend to lift black. Per the
+ * handoff's Edit 2 tone-down: opacity stays subtle, blend inverts. */
+[data-theme="dark"] html::after {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9  0 0 0 0 0.93  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+  background-size: 160px 160px;
+  opacity: 0.04;
+  mix-blend-mode: screen;
 }
 
 @keyframes backdrop-drift {
@@ -402,6 +419,8 @@ html[data-theme="light"]::after {
   to   { transform: rotate(360deg); }
 }
 
+/* Hero orbital rings — light (default) = desaturated ink; dark =
+ * icy-blue to match the nebula palette. */
 .hero-orbit::before,
 .hero-orbit::after {
   content: "";
@@ -413,7 +432,7 @@ html[data-theme="light"]::after {
   margin-left: -240px;
   margin-top: -240px;
   border-radius: 50%;
-  border: 1px solid rgba(217, 200, 106, 0.12);
+  border: 1px solid oklch(0.18 0.005 80 / 0.08);
   pointer-events: none;
   animation: orbit-sweep 40s linear infinite;
 }
@@ -422,18 +441,16 @@ html[data-theme="light"]::after {
   height: 620px;
   margin-left: -310px;
   margin-top: -310px;
-  border-color: rgba(178, 140, 44, 0.08);
+  border-color: oklch(0.18 0.005 80 / 0.06);
   border-style: dashed;
   animation-duration: 90s;
   animation-direction: reverse;
 }
-
-/* Light-theme orbital rings — desaturated ink, more subtle. */
-[data-theme="light"] .hero-orbit::before {
-  border-color: oklch(0.18 0.005 80 / 0.08);
+[data-theme="dark"] .hero-orbit::before {
+  border-color: oklch(0.82 0.10 230 / 0.16);
 }
-[data-theme="light"] .hero-orbit::after {
-  border-color: oklch(0.18 0.005 80 / 0.06);
+[data-theme="dark"] .hero-orbit::after {
+  border-color: oklch(0.82 0.10 230 / 0.10);
 }
 
 /* Constellation — a very faint dot grid that scrolls slowly across the
@@ -444,39 +461,38 @@ html[data-theme="light"]::after {
   100% { background-position: 800px -800px, 840px -760px; }
 }
 
+/* Light (default) — faint ink specks under multiply; dark = icy-blue
+ * specks under screen so they lift off the black canvas. */
 .constellation {
   position: absolute;
   inset: 0;
   background-image:
-    radial-gradient(circle, rgba(236, 231, 214, 0.28) 1px, transparent 1.5px),
-    radial-gradient(circle, rgba(217, 200, 106, 0.18) 1px, transparent 1.5px);
+    radial-gradient(circle, oklch(0.18 0.005 80 / 0.18) 1px, transparent 1.5px),
+    radial-gradient(circle, oklch(0.18 0.005 80 / 0.1) 1px, transparent 1.5px);
   background-size: 80px 80px, 120px 120px;
   background-position: 0 0, 40px 40px;
-  opacity: 0.25;
-  mix-blend-mode: screen;
+  opacity: 0.35;
+  mix-blend-mode: multiply;
   pointer-events: none;
   animation: constellation-drift 320s linear infinite;
 }
-
-/* Light mode: star-field becomes faint ink specks under a multiply blend
- * so it doesn't torch the warm paper backdrop. */
-[data-theme="light"] .constellation {
+[data-theme="dark"] .constellation {
   background-image:
-    radial-gradient(circle, oklch(0.18 0.005 80 / 0.18) 1px, transparent 1.5px),
-    radial-gradient(circle, oklch(0.18 0.005 80 / 0.1) 1px, transparent 1.5px);
-  opacity: 0.35;
-  mix-blend-mode: multiply;
+    radial-gradient(circle, oklch(0.92 0.04 220 / 0.28) 1px, transparent 1.5px),
+    radial-gradient(circle, oklch(0.82 0.10 230 / 0.18) 1px, transparent 1.5px);
+  opacity: 0.25;
+  mix-blend-mode: screen;
 }
 
+/* Wordmark glow — light mode drops it (ink on paper doesn't glow);
+ * dark mode gets the icy-blue shimmer. */
 .title-glow {
-  text-shadow:
-    0 0 22px rgba(217, 200, 106, 0.38),
-    0 0 52px rgba(178, 140, 44, 0.18);
-}
-
-/* In light mode the wordmark glow would just muddy the ink — drop it. */
-[data-theme="light"] .title-glow {
   text-shadow: none;
+}
+[data-theme="dark"] .title-glow {
+  text-shadow:
+    0 0 22px oklch(0.82 0.10 230 / 0.38),
+    0 0 52px oklch(0.60 0.12 230 / 0.22);
 }
 
 /* Slight "rise-in" for incoming chat messages */

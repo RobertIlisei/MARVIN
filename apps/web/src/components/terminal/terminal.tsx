@@ -115,9 +115,9 @@ export function Terminal({ cwd }: { cwd: string }) {
       if (disposed || !containerRef.current) return;
 
       const initialTheme =
-        document.documentElement.getAttribute("data-theme") === "light"
-          ? XTERM_THEME_LIGHT
-          : XTERM_THEME_DARK;
+        document.documentElement.getAttribute("data-theme") === "dark"
+          ? XTERM_THEME_DARK
+          : XTERM_THEME_LIGHT;
       const term = new XtermCtor({
         fontFamily:
           'var(--font-mono), ui-monospace, SFMono-Regular, "Menlo", monospace',
@@ -335,7 +335,7 @@ export function Terminal({ cwd }: { cwd: string }) {
     const term = termRef.current;
     if (!term) return;
     term.options.theme =
-      themeMode === "light" ? XTERM_THEME_LIGHT : XTERM_THEME_DARK;
+      themeMode === "dark" ? XTERM_THEME_DARK : XTERM_THEME_LIGHT;
   }, [themeMode, mounted]);
 
   return (

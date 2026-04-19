@@ -37,17 +37,17 @@ export const metadata: Metadata = {
 };
 
 // Blocking script that sets `<html data-theme>` before first paint.
-// Reads `localStorage.marvin.theme` first (user's explicit pick wins);
-// falls back to `prefers-color-scheme: light` for a fresh visitor.
-// Default is dark — omitting the attribute leaves MARVIN in its original
-// sulphur-amber look for anyone who hasn't opted in.
+// Matches DARK_THEME_HANDOFF.md: light is the baseline, `data-theme="dark"`
+// is the opt-in attribute. Reads `localStorage.marvin-theme` first
+// (user's explicit pick wins); falls back to `prefers-color-scheme: dark`
+// so a system-dark visitor doesn't get flashed with paper-white.
 const THEME_BOOTSTRAP = `
 try {
-  var saved = localStorage.getItem('marvin.theme');
-  var wantLight =
-    saved === 'light' ||
-    (saved !== 'dark' && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
-  if (wantLight) document.documentElement.setAttribute('data-theme', 'light');
+  var saved = localStorage.getItem('marvin-theme');
+  var wantDark =
+    saved === 'dark' ||
+    (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (wantDark) document.documentElement.setAttribute('data-theme', 'dark');
 } catch (_) {}
 `;
 
