@@ -59,7 +59,7 @@ turn time.
 | Rule | Location | Purpose |
 |---|---|---|
 | **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above | When to consult the graph before reading source files |
-| **Advisor triggers** | Cross-phase rule 7 + "Advisor tool — when to call it" section | When to invoke the `advisor` tool (user-directed + 7 deterministic triggers + anti-triggers) |
+| **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 
 The pattern is the same across all three: a MUST list, a MUST-NOT list,
