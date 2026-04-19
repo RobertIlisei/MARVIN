@@ -790,9 +790,31 @@ export default function Home() {
                         </div>
                       )}
                     </div>
-                    <div className="flex items-center justify-between border-t border-[color:var(--color-border)] pt-3">
-                      <span className="text-[color:var(--color-fg-faint)]">model</span>
-                      <span className="text-[color:var(--color-fg)]/85">claude-opus-4-7</span>
+                    <div className="border-t border-[color:var(--color-border)] pt-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[color:var(--color-fg-faint)]">executor</span>
+                        <span
+                          className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                          title="runs the turn loop"
+                        >
+                          {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-[color:var(--color-fg-faint)]">advisor</span>
+                        <span
+                          className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                          title={
+                            advisorModel
+                              ? "called by the executor on hard steps"
+                              : "disabled"
+                          }
+                        >
+                          {advisorModel
+                            ? advisorModel.replace(/^claude-/, "")
+                            : "—"}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-[color:var(--color-fg-faint)]">v</span>
