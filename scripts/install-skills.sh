@@ -14,6 +14,12 @@
 # data (xlsx), engineering (claude-api, mcp-builder, webapp-testing,
 # web-artifacts-builder, skill-creator), operations / PM (internal-comms).
 #
+# MARVIN-adopted skills (not in anthropics/skills; bundle-only source):
+#   pr-review, security-audit, systematic-debugging, test-driven-development.
+# These are ports of third-party open-source skills from Jesse Vincent's
+# Superpowers (obra/superpowers) and Garry Tan's gstack (garrytan/gstack).
+# Attribution lives at the bottom of each SKILL.md.
+#
 # Honeycomb skills ship via the honeycomb@honeycomb-plugins Claude Code
 # plugin — install separately with `/plugin install honeycomb` inside
 # Claude Code if you want them.
@@ -28,6 +34,7 @@ BUNDLE="$REPO_ROOT/.claude/skills"
 mkdir -p "$DEST"
 
 SKILLS=(
+  # Anthropic-authored (upstream)
   brand-guidelines
   canvas-design
   claude-api
@@ -43,6 +50,12 @@ SKILLS=(
   web-artifacts-builder
   webapp-testing
   xlsx
+  # MARVIN-adopted — ported / adapted from third-party open-source.
+  # These don't exist in anthropics/skills; the bundle is their only source.
+  pr-review
+  security-audit
+  systematic-debugging
+  test-driven-development
 )
 
 # Only clone from GitHub if at least one skill is missing from the bundle.

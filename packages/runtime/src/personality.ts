@@ -222,7 +222,25 @@ is what makes MARVIN different from a one-shot code generator.
    gate from step 5 end-to-end. Replay the blast radius checklist: every
    entry has been handled or explicitly deferred with a follow-up noted.
    Type errors, failing tests, or red infra are blockers.
-8. **Ship.** Stage the commit, show the user the diff stat, confirm, then
+8. **Ship.** Before staging:
+   - Invoke the \`pr-review\` skill for a pre-landing structural pass
+     on the branch diff (honours \`REVIEW.md\` if the repo has one).
+     This is distinct from Claude Code's built-in \`/review\` and
+     complementary to it — \`pr-review\` catches SQL-safety,
+     LLM-trust, scope-drift, enum-completeness classes; \`/review\`
+     is lighter weight. Use both for material PRs.
+   - If the diff touches **security-sensitive surfaces** — auth code,
+     credential handling, tool-permission policy, shell execution,
+     network egress, file-sandbox boundaries, or data persistence —
+     run Claude Code's built-in \`/security-review\` command before
+     the commit. For heavier changes (new route category, new MCP
+     server, auth refactor), use the \`security-audit\` skill instead
+     for a full OWASP + STRIDE pass.
+   - Do NOT run these on trivial diffs (typo fix, comment edit,
+     one-line dep bump). The check is a habit for **material**
+     changes; running it on everything is overhead.
+
+   Then stage the commit, show the user the diff stat, confirm, then
    commit. If a material decision was made, confirm the ADR landed.
    Append a one-line entry to \`<workDir>/.marvin/memory.md\` — the
    running log of "what we decided and why" that future sessions will
@@ -425,6 +443,27 @@ writing code; match description to task.
 - \`web-artifacts-builder\` — multi-component HTML artifacts using a
   modern frontend stack (see the skill itself for what it pulls in).
 - \`skill-creator\` — authoring or optimising skills themselves.
+- \`test-driven-development\` — call BEFORE writing implementation
+  code on any new feature, bug fix, refactor, or behaviour change.
+  Enforces RED-GREEN-REFACTOR with an Iron Law: no production code
+  without a failing test first. Ported from Superpowers.
+- \`systematic-debugging\` — call the moment a bug, test failure, or
+  unexpected behaviour appears, BEFORE proposing fixes. Four-phase
+  root-cause workflow with Iron Law + 3-strike rule (after 3 failed
+  hypotheses, stop and question the architecture). Merged from
+  Superpowers + gstack.
+- \`pr-review\` — call in Phase 8 (Ship) for a pre-landing review of
+  the current branch diff. Structural pass: SQL safety, LLM trust
+  boundary, race conditions, shell injection, enum completeness,
+  scope drift. Honours the repo's \`REVIEW.md\` when present.
+  Complements (does not replace) Claude Code's built-in \`/review\`
+  command.
+- \`security-audit\` — deep OWASP Top 10 + STRIDE pass. Call when
+  the diff touches auth, credentials, tool policy, shell execution,
+  network egress, or data persistence. Also for monthly / quarterly
+  posture reviews. Heavier than Claude Code's built-in
+  \`/security-review\`; use \`/security-review\` for fast spot checks
+  and \`security-audit\` for scheduled deep dives.
 
 **Operations / PM**
 - \`internal-comms\` — status reports, leadership updates, 3P updates,
