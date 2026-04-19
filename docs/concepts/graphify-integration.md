@@ -14,6 +14,16 @@ For any architecture or "how does X work" question, MARVIN asks the knowledge gr
 
 The output is stored in `<workDir>/graphify-out/graph.json` plus an interactive `graph.html` and a plain-language `GRAPH_REPORT.md`.
 
+## Rule enforcement
+
+**Graphify-first is a hard rule, not a default.** The authoritative enforcement lives in two places that MARVIN actually reads at turn time:
+
+1. **`packages/runtime/src/personality.ts`** — cross-phase hard rule 6 (near the top of CORE_BEHAVIOR, alongside the phase-discipline rules): *"Graphify FIRST — never read a file blind."* Read / Grep / Glob on any source file for a structural question ("how does X work?", "who calls Y?", "blast radius of Z?") is forbidden until a `marvin-graph` MCP tool has pointed at a specific `source_file` + `source_location` citation. Explicit exceptions for trivial content reads (version checks, files the user just named) and files under active edit.
+
+2. **`CLAUDE.md`** Golden Rule 7 — the same directive, scoped to Claude Code sessions working on MARVIN itself. References the `/graphify query`, `/graphify path`, `/graphify explain` slash commands rather than the in-session `marvin-graph` MCP tools.
+
+Both rules spell out the failure mode they exist to prevent: "grep and pray." A file sweep without a graph query first is a rule violation.
+
 ## How MARVIN uses it
 
 **Two integration points:**

@@ -48,6 +48,23 @@ the authoritative delivery plan. Update it as you ship things.
    named-file requests) and files you're actively editing. Every other
    unsolicited file read on a codebase question is a rule violation.
 
+### The three firm surfaces
+
+MARVIN's prompt (`packages/runtime/src/personality.ts`) codifies three
+enumerated trigger lists that replace soft "use judgement" language with
+deterministic MUST / MUST-NOT categories. When the prompt and a human
+doc disagree, the prompt wins — it's what MARVIN actually reads at
+turn time.
+
+| Rule | Location | Purpose |
+|---|---|---|
+| **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above | When to consult the graph before reading source files |
+| **Advisor triggers** | Cross-phase rule 7 + "Advisor tool — when to call it" section | When to invoke the `advisor` tool (user-directed + 7 deterministic triggers + anti-triggers) |
+| **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
+
+The pattern is the same across all three: a MUST list, a MUST-NOT list,
+and a fallback judgement test for cases the lists don't cover.
+
 ## Repo layout
 
 ```

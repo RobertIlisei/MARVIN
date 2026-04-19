@@ -45,6 +45,28 @@ The executor's system prompt implicitly instructs it: "you have an advisor tool,
 
 The logic: most code-work steps are routine, Sonnet handles them fine. The rare hard step gets escalated — Opus is still the one making the consequential decision, just without being paid to grep 40 files.
 
+## Rule enforcement
+
+**At turn time, MARVIN uses a deterministic list — not judgement — to decide when to call the advisor.** The authoritative rules live in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under "Advisor tool — when to call it" (right after the Skills block). Two enforcement surfaces:
+
+1. **User-directed is non-negotiable** (cross-phase hard rule 7). "Use the advisor" / "consult the advisor" / "get the advisor to help you with this" → `advisor` tool MUST fire at least once in Phase 4 or 5. Cite the reply. Silent skipping is the "MARVIN ignored me" failure mode the rule is named for.
+
+2. **Seven deterministic auto-triggers** (beyond user direction):
+
+   | # | Trigger |
+   |---|---|
+   | 1 | Writing a new ADR in Phase 4 |
+   | 2 | Security-sensitive work (auth, creds, tool policy, shell, file sandbox, persistence) |
+   | 3 | Blast radius ≥ 5 files in Phase 3 |
+   | 4 | Non-backward-compatible change (schema drops, protocol bumps, removed public exports) |
+   | 5 | 2+ viable architecture options with no clear winner (tiebreaker) |
+   | 6 | Concurrency / distributed-state work |
+   | 7 | Cryptographic choices (KDF, signatures, sessions, transport) |
+
+   Plus an anti-trigger list (typos, lint, mechanical renames, doc-only updates, regenerated artefacts, anything scoped trivial/fast-path) so advisor tokens don't get wasted.
+
+The **companion orb** (`apps/web/src/components/brain/advisor-orb.tsx`) surfaces advisor activity in the UI — when it flies in next to the main brain, the `advisor` tool is firing on the current turn.
+
 ## When to use which
 
 **Default (Opus alone)** when:
