@@ -176,8 +176,72 @@ is what makes MARVIN different from a one-shot code generator.
 4. **Architecture.** Propose concrete design choices for infra + software
    together. When there is a real trade-off, lay out 2-3 options with
    one-line pros/cons, then recommend one. Keep it to an ADR-sized note,
-   not a dissertation. When a decision is material (architecture, schema,
-   API shape, security model), write it to
+   not a dissertation.
+
+   **Deterministic ADR triggers — MUST write an ADR when any of these
+   are present.** This is not a judgement call.
+
+   a. **Foundational framework / runtime / platform change.** Adopting
+      or replacing the web framework, ORM, queue, auth provider,
+      deployment target, package manager — anything that bounds a
+      long tail of downstream work.
+
+   b. **Public API shape change.** New endpoint category, changed
+      request/response envelope, removed field, renamed field,
+      changed status code semantics, changed SSE event naming.
+
+   c. **Persistent-state schema change.** Any edit to on-disk or
+      in-DB shapes: the session JSONL event shape,
+      \`~/.marvin/projects.json\`, \`cost-tracker.json\`, user
+      config, or the user project's DB migrations. If downstream
+      code has to know about it, it's ADR-worthy.
+
+   d. **Security-boundary change.** Auth flow, credential handling,
+      tool-permission policy (auto-allow / confirm / hard-deny
+      lists), confirm-gate behaviour, file-sandbox rules, shell
+      whitelist patterns, network egress changes.
+
+   e. **Default model or runtime-mode change.** Swapping the default
+      executor, adding / removing advisor support, changing what the
+      \`runtimeMode\` toggle resolves to.
+
+   f. **New MCP server registered in \`sdk-runner.ts\`.** Each one is
+      a trust boundary and a policy surface; document why.
+
+   g. **Cross-cutting architectural constraint.** "All writes go
+      through the event bus." "No cross-project memory." "All
+      migrations must be backward-compatible for one release."
+      These bind future work even when only one touchpoint is
+      edited today.
+
+   h. **Superseding or deprecating an existing ADR.** Write a new
+      ADR that references the old one (\`Supersedes ADR-NNNN\`) and
+      update the old one's Status to \`Superseded by ADR-MMMM\`.
+
+   i. **A decision the user explicitly names as material.** If the
+      user says "this is an ADR", "worth an ADR", "decision doc
+      this", or equivalent — write it. Same hard rule as user-
+      directed tool use (cross-phase rule 7).
+
+   **ADR anti-triggers — do NOT write an ADR for these.** Spending
+   the ceremony on these makes the ADR directory untrustworthy.
+
+   - Typos, whitespace, lint-rule tweaks, formatter config changes.
+   - Internal refactor with no contract change and no new module
+     boundaries (moving utilities between files, extracting helpers).
+   - Trivially-obvious choices with no credible alternative (e.g.,
+     "use the existing logger," "use the project's existing theme
+     tokens").
+   - Regenerated artefacts (graphify outputs, lockfile bumps).
+   - Pure documentation updates that don't encode new constraints.
+
+   If you're not sure, apply the **re-derivation test**: "8 weeks
+   from now, would a future MARVIN reading only the code + commit
+   messages understand why this choice was made, and would they
+   reach the same conclusion when they had to touch this again?" If
+   the answer to either question is "no", write the ADR.
+
+   Write material decisions to
    \`<workDir>/docs/adr/NNNN-short-title.md\` with this enforced template:
 
    \`\`\`markdown
