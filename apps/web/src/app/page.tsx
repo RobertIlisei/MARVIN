@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
-import { MarvinBrain } from "@/components/brain/marvin-brain";
+import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { CostPill } from "@/components/cost/cost-pill";
@@ -361,9 +361,16 @@ export default function Home() {
   const header = (
     <>
     <header className="flex items-center gap-3 px-5 py-2.5">
-      <span className="font-display text-[22px] italic leading-none text-[color:var(--color-fg)]">
+      <button
+        type="button"
+        onClick={isEmpty ? undefined : reset}
+        disabled={isEmpty}
+        aria-label={isEmpty ? "marvin" : "return to home — start a new session"}
+        title={isEmpty ? undefined : "return to home · ⌘⇧N"}
+        className="font-display text-[22px] italic leading-none text-[color:var(--color-fg)] outline-none transition hover:opacity-80 disabled:cursor-default disabled:opacity-100"
+      >
         marvin
-      </span>
+      </button>
       <span className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline">
         v0.0.1 · phase 5
       </span>
@@ -482,7 +489,7 @@ export default function Home() {
           <div className="flex w-full max-w-5xl flex-col items-center gap-6 pt-4">
             <div className="grid w-full grid-cols-1 items-center gap-10 md:grid-cols-[auto_1fr]">
               <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
-                <MarvinBrain state={marvinState} size={340} />
+                <BrainLiquid state={marvinState} size={340} />
                 {/* Coordinate marks — editorial instrument framing */}
                 <div
                   aria-hidden
@@ -761,7 +768,7 @@ export default function Home() {
               ) : (
                 <aside className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-8">
                   <div className="flex flex-col items-center gap-4">
-                    <MarvinBrain state={marvinState} size={260} />
+                    <BrainLiquid state={marvinState} size={260} />
                     <div className="text-center">
                       <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
                         state

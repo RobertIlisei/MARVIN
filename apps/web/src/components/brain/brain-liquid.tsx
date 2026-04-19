@@ -1,0 +1,526 @@
+// @ts-nocheck — ported canvas physics engine. Uses Float32/Uint8/Int32
+// typed arrays with rigorously bounded indexing (0 <= i < N <= MAX_N),
+// so every lookup is defined at runtime. Under `noUncheckedIndexedAccess`
+// this would require ~100 `!` assertions on every px[i]/sx[i]/leader[i]
+// read, which is pure noise. Scoping the opt-out here keeps the rest of
+// the tree fully strict.
+"use client";
+
+import { useEffect, useRef } from "react";
+
+import type { MarvinUiState } from "../chat/types";
+
+/**
+ * BrainLiquid — canvas particle-field brain ported verbatim from the
+ * Claude Design handoff (`MARVIN Light.html` / `BrainLiquid`). Curl-noise
+ * flow, roaming attractors with synapse pulses, density boost, per-state
+ * behaviour profiles, and theme-aware painting (nebula iridescent on
+ * dark, desaturated slate-ink on light).
+ *
+ * Drop-in replacement for the old SVG-based MarvinBrain: same `state` +
+ * `size` props, no other wiring needed. Self-observes `<html data-theme>`
+ * so the paint loop picks up theme changes without a remount.
+ */
+interface Profile {
+  N: number;
+  flowMag: number;
+  damp: number;
+  swirl: number;
+  shellPull: number;
+  nfreq: number;
+  neps: number;
+  lmin: number;
+  lrange: number;
+  dotR: number;
+  dotA: number;
+  chroma: number;
+  trail: number;
+  turb: number;
+  coh: number;
+  leaders: number;
+  dim: number;
+  attractors: number;
+  synapse: number;
+  pulse: number;
+  dens: number;
+  pulseRate: number;
+  redMix: number;
+  rot: number;
+  jitter: number;
+}
+
+const PROFILES: Record<MarvinUiState, Profile> = {
+  idle: {
+    N: 4500, flowMag: 180, damp: 0.95, swirl: 0.6, shellPull: 1.2,
+    nfreq: 0.3, neps: 1.4, lmin: 4.0, lrange: 6.0, dotR: 1.0, dotA: 0.55,
+    chroma: 2.0, trail: 0.82, turb: 0.3, coh: 0.16, leaders: 0.18, dim: 0.18,
+    attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.6,
+    redMix: 0.05, rot: 0.0015, jitter: 0,
+  },
+  thinking: {
+    N: 7000, flowMag: 370, damp: 0.93, swirl: 1.75, shellPull: 1.4,
+    nfreq: 0.41, neps: 1.95, lmin: 3.7, lrange: 3.0, dotR: 0.95, dotA: 0.22,
+    chroma: 5.0, trail: 0.55, turb: 0.3, coh: 0.14, leaders: 0.7, dim: 0.46,
+    attractors: 8, synapse: 1.2, pulse: 2.0, dens: 2.0, pulseRate: 0.9,
+    redMix: 0.25, rot: 0.0025, jitter: 0,
+  },
+  tool: {
+    N: 6000, flowMag: 20, damp: 0.5, swirl: 0.4, shellPull: 0.0,
+    nfreq: 0.6, neps: 1.65, lmin: 2.5, lrange: 4.0, dotR: 1.0, dotA: 0.6,
+    chroma: 3.5, trail: 0.72, turb: 0.45, coh: 0.18, leaders: 0.32, dim: 0.22,
+    attractors: 8, synapse: 3.0, pulse: 1.4, dens: 1.0, pulseRate: 1.2,
+    redMix: 0.3, rot: 0.0035, jitter: 0,
+  },
+  writing: {
+    N: 6000, flowMag: 430, damp: 0.63, swirl: 1.5, shellPull: 1.3,
+    nfreq: 0.38, neps: 1.8, lmin: 4.5, lrange: 5.0, dotR: 1.05, dotA: 0.32,
+    chroma: 5.0, trail: 0.76, turb: 0.22, coh: 0.11, leaders: 0.3, dim: 0.48,
+    attractors: 5, synapse: 3.0, pulse: 2.0, dens: 2.0, pulseRate: 1.7,
+    redMix: 0.45, rot: 0.008, jitter: 0,
+  },
+  error: {
+    N: 5000, flowMag: 370, damp: 0.94, swirl: 1.75, shellPull: 0.65,
+    nfreq: 0.41, neps: 1.4, lmin: 0.5, lrange: 10.0, dotR: 1.05, dotA: 0.9,
+    chroma: 5.0, trail: 0.69, turb: 0.3, coh: 0.25, leaders: 0.12, dim: 0.26,
+    attractors: 3, synapse: 3.0, pulse: 2.0, dens: 1.0, pulseRate: 2.2,
+    redMix: 0.85, rot: 0.002, jitter: 0.15,
+  },
+};
+
+// Nebula palette (dark-theme iridescent tint).
+const NEBULA: Array<[number, number, number]> = [
+  [64, 96, 160],
+  [96, 128, 192],
+  [128, 160, 224],
+  [160, 192, 224],
+  [192, 224, 240],
+  [224, 232, 248],
+];
+
+export function BrainLiquid({
+  size = 280,
+  state = "idle",
+}: {
+  size?: number;
+  state?: MarvinUiState;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef<MarvinUiState>(state);
+  const themeRef = useRef<"dark" | "light">("light");
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    const update = () => {
+      themeRef.current =
+        document.documentElement.getAttribute("data-theme") === "dark"
+          ? "dark"
+          : "light";
+    };
+    update();
+    const obs = new MutationObserver(update);
+    obs.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+
+    const profile = (): Profile =>
+      PROFILES[stateRef.current] ?? PROFILES.idle;
+
+    // Allocate for max N across any state so we never reallocate.
+    const MAX_N = 7000;
+    const px = new Float32Array(MAX_N);
+    const py = new Float32Array(MAX_N);
+    const pz = new Float32Array(MAX_N);
+    const vx = new Float32Array(MAX_N);
+    const vy = new Float32Array(MAX_N);
+    const vz = new Float32Array(MAX_N);
+    const age = new Float32Array(MAX_N);
+    const life = new Float32Array(MAX_N);
+    const hue = new Float32Array(MAX_N);
+    const leader = new Uint8Array(MAX_N);
+    const sx = new Float32Array(MAX_N);
+    const sy = new Float32Array(MAX_N);
+    const sd = new Float32Array(MAX_N);
+    const pulseBoost = new Float32Array(MAX_N);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const R = size * 0.42;
+
+    function respawn(i: number, p: Profile) {
+      const u = Math.random();
+      const v = Math.random();
+      const theta = 2 * Math.PI * u;
+      const phi = Math.acos(2 * v - 1);
+      const r = R * (0.55 + Math.random() * 0.45);
+      px[i] = r * Math.sin(phi) * Math.cos(theta);
+      py[i] = r * Math.sin(phi) * Math.sin(theta);
+      pz[i] = r * Math.cos(phi);
+      vx[i] = 0;
+      vy[i] = 0;
+      vz[i] = 0;
+      age[i] = 0;
+      life[i] = p.lmin + Math.random() * p.lrange;
+      hue[i] = Math.random();
+      leader[i] = Math.random() < p.leaders ? 1 : 0;
+    }
+    {
+      const p0 = profile();
+      for (let i = 0; i < MAX_N; i++) respawn(i, p0);
+    }
+
+    // Curl noise — sums of sinusoidal noise, differenced to form curl.
+    function noise(
+      x: number,
+      y: number,
+      z: number,
+      seed: number,
+      nfreq: number,
+    ): number {
+      const f = nfreq;
+      return (
+        Math.sin(x * f + seed) * Math.cos(y * f * 0.9 + seed * 1.7) +
+        Math.sin(y * f * 1.1 + seed * 2.1) * Math.cos(z * f + seed * 0.9) +
+        Math.sin(z * f * 0.95 + seed * 1.3) *
+          Math.cos(x * f * 1.05 + seed * 2.3)
+      );
+    }
+    const flowOut: [number, number, number] = [0, 0, 0];
+    function curlFlow(
+      x: number,
+      y: number,
+      z: number,
+      t: number,
+      p: Profile,
+      out: [number, number, number],
+    ) {
+      const e = p.neps;
+      const ts = t * 0.5;
+      const f1 = p.coh;
+      const A1a = (pp: number, qq: number) =>
+        noise(pp * f1, qq * f1, 0, 11 + ts, p.nfreq);
+      const A2a = (pp: number, qq: number) =>
+        noise(pp * f1, qq * f1, 0, 53 + ts * 0.9, p.nfreq);
+      const A3a = (pp: number, qq: number) =>
+        noise(pp * f1, qq * f1, 0, 97 + ts * 1.1, p.nfreq);
+      const cx1 =
+        (A3a(x, y + e) - A3a(x, y - e)) / (2 * e) -
+        (A2a(x, z + e) - A2a(x, z - e)) / (2 * e);
+      const cy1 =
+        (A1a(y, z + e) - A1a(y, z - e)) / (2 * e) -
+        (A3a(x + e, y) - A3a(x - e, y)) / (2 * e);
+      const cz1 =
+        (A2a(x + e, z) - A2a(x - e, z)) / (2 * e) -
+        (A1a(x, y + e) - A1a(x, y - e)) / (2 * e);
+      const f2 = p.coh * 3.5;
+      const A1b = (pp: number, qq: number) =>
+        noise(pp * f2, qq * f2, 0, 211 + ts * 1.7, p.nfreq);
+      const A2b = (pp: number, qq: number) =>
+        noise(pp * f2, qq * f2, 0, 313 + ts * 1.5, p.nfreq);
+      const A3b = (pp: number, qq: number) =>
+        noise(pp * f2, qq * f2, 0, 419 + ts * 1.9, p.nfreq);
+      const cx2 =
+        (A3b(x, y + e) - A3b(x, y - e)) / (2 * e) -
+        (A2b(x, z + e) - A2b(x, z - e)) / (2 * e);
+      const cy2 =
+        (A1b(y, z + e) - A1b(y, z - e)) / (2 * e) -
+        (A3b(x + e, y) - A3b(x - e, y)) / (2 * e);
+      const cz2 =
+        (A2b(x + e, z) - A2b(x - e, z)) / (2 * e) -
+        (A1b(x, y + e) - A1b(x, y - e)) / (2 * e);
+      const mix = p.turb;
+      out[0] = cx1 * (1 - mix * 0.5) + cx2 * mix * 0.6;
+      out[1] = cy1 * (1 - mix * 0.5) + cy2 * mix * 0.6;
+      out[2] = cz1 * (1 - mix * 0.5) + cz2 * mix * 0.6;
+    }
+
+    // Attractors — moving focal points that particles are gently pulled
+    // towards; pulse periodically to produce synapse-like flashes.
+    const MAX_ATT = 8;
+    const attX = new Float32Array(MAX_ATT);
+    const attY = new Float32Array(MAX_ATT);
+    const attZ = new Float32Array(MAX_ATT);
+    const attPhase = new Float32Array(MAX_ATT);
+    const attPeriod = new Float32Array(MAX_ATT);
+    const attSeed = new Float32Array(MAX_ATT);
+    const attPulse = new Float32Array(MAX_ATT);
+    for (let i = 0; i < MAX_ATT; i++) {
+      attPhase[i] = Math.random() * 3;
+      attPeriod[i] = 2.2 + Math.random() * 2.8;
+      attSeed[i] = Math.random() * 1000;
+    }
+
+    const DG = 24;
+    const dgrid = new Int32Array(DG * DG);
+
+    let rotY = 0;
+    let rotX = -0.18;
+    let last = performance.now();
+    let t = 0;
+    let raf = 0;
+
+    function step(now: number) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      t += dt;
+
+      const p = profile();
+      const N = p.N;
+
+      rotY += p.rot * dt * 60;
+      rotX = -0.18 + Math.sin(t * 0.25) * 0.06;
+
+      const shellR = R * 0.95;
+      const nAtt = Math.min(MAX_ATT, p.attractors | 0);
+      for (let a = 0; a < nAtt; a++) {
+        const s = attSeed[a];
+        const jitter = p.jitter ? Math.sin(t * 7 + s * 3) * p.jitter : 0;
+        attX[a] = Math.sin(t * 0.11 + s) * R * 0.55 + jitter * R;
+        attY[a] = Math.sin(t * 0.17 + s * 1.3) * R * 0.45 + jitter * R * 0.7;
+        attZ[a] = Math.cos(t * 0.13 + s * 0.7) * R * 0.55 + jitter * R * 0.8;
+        attPhase[a] += dt * p.pulseRate;
+        const ph = (attPhase[a] % attPeriod[a]) / attPeriod[a];
+        attPulse[a] =
+          ph < 0.08 ? ph / 0.08 : Math.max(0, Math.exp(-(ph - 0.08) * 4));
+      }
+
+      for (let i = 0; i < N; i++) {
+        curlFlow(px[i], py[i], pz[i], t, p, flowOut);
+        vx[i] = vx[i] * p.damp + flowOut[0] * p.flowMag * dt;
+        vy[i] = vy[i] * p.damp + flowOut[1] * p.flowMag * dt;
+        vz[i] = vz[i] * p.damp + flowOut[2] * p.flowMag * dt;
+
+        let nearPulse = 0;
+        if (nAtt > 0 && p.synapse > 0) {
+          let minD2 = Infinity;
+          let minA = 0;
+          for (let a = 0; a < nAtt; a++) {
+            const dx = attX[a] - px[i];
+            const dy = attY[a] - py[i];
+            const dz = attZ[a] - pz[i];
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < minD2) {
+              minD2 = d2;
+              minA = a;
+            }
+          }
+          const d = Math.sqrt(minD2) || 0.0001;
+          const pullF = (p.synapse * 40) / (1 + d * 0.02);
+          vx[i] += ((attX[minA] - px[i]) / d) * pullF * dt;
+          vy[i] += ((attY[minA] - py[i]) / d) * pullF * dt;
+          vz[i] += ((attZ[minA] - pz[i]) / d) * pullF * dt;
+          const closeness = Math.max(0, 1 - d / (R * 0.6));
+          nearPulse = attPulse[minA] * closeness;
+        }
+        pulseBoost[i] = Math.max(
+          pulseBoost[i] * Math.exp(-dt * 3),
+          nearPulse,
+        );
+
+        const r2 = px[i] * px[i] + py[i] * py[i] + pz[i] * pz[i];
+        const r = Math.sqrt(r2) || 0.0001;
+        const shellForce = -(r - shellR) * p.shellPull;
+        vx[i] += (px[i] / r) * shellForce * dt * 3;
+        vy[i] += (py[i] / r) * shellForce * dt * 3;
+        vz[i] += (pz[i] / r) * shellForce * dt * 3;
+
+        const sw = p.swirl * dt * 0.4;
+        const nx = px[i] * Math.cos(sw) - pz[i] * Math.sin(sw);
+        const nz = px[i] * Math.sin(sw) + pz[i] * Math.cos(sw);
+        px[i] = nx;
+        pz[i] = nz;
+
+        px[i] += vx[i] * dt * 15;
+        py[i] += vy[i] * dt * 15;
+        pz[i] += vz[i] * dt * 15;
+
+        age[i] += dt;
+        if (age[i] > life[i]) respawn(i, p);
+      }
+
+      // Trail fade via destination-out so the canvas background (CSS)
+      // remains transparent and the page bg shows through.
+      const effTrail = Math.min(0.99, p.trail);
+      if (effTrail <= 0) {
+        ctx.clearRect(0, 0, size, size);
+      } else {
+        const fade = 1 - effTrail;
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.fillStyle = `rgba(0,0,0,${fade})`;
+        ctx.fillRect(0, 0, size, size);
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      const cosY = Math.cos(rotY);
+      const sinY = Math.sin(rotY);
+      const cosX = Math.cos(rotX);
+      const sinX = Math.sin(rotX);
+      for (let i = 0; i < N; i++) {
+        const xr = px[i] * cosY + pz[i] * sinY;
+        let zr = -px[i] * sinY + pz[i] * cosY;
+        const yr = py[i] * cosX - zr * sinX;
+        zr = py[i] * sinX + zr * cosX;
+        const persp = 1 + zr / (R * 3);
+        sx[i] = cx + xr * persp;
+        sy[i] = cy + yr * persp;
+        sd[i] = (zr + R) / (2 * R);
+      }
+
+      dgrid.fill(0);
+      const cellSz = size / DG;
+      for (let i = 0; i < N; i++) {
+        const gx = (sx[i] / cellSz) | 0;
+        const gy = (sy[i] / cellSz) | 0;
+        if (gx >= 0 && gx < DG && gy >= 0 && gy < DG) {
+          dgrid[gy * DG + gx]++;
+        }
+      }
+      const meanDens = N / (DG * DG);
+
+      ctx.globalCompositeOperation = "source-over";
+      const curState = stateRef.current;
+      const isError = curState === "error";
+      const isIdle = curState === "idle";
+      const isDark = themeRef.current === "dark";
+      for (let i = 0; i < N; i++) {
+        const d = sd[i];
+        const lead = leader[i];
+        const leadK = lead ? 1 : p.dim;
+        const gx = (sx[i] / cellSz) | 0;
+        const gy = (sy[i] / cellSz) | 0;
+        let densBoost = 1;
+        if (gx >= 0 && gx < DG && gy >= 0 && gy < DG) {
+          const cc = dgrid[gy * DG + gx];
+          densBoost =
+            1 +
+            p.dens *
+              Math.min(2, Math.max(0, cc / meanDens - 0.7) * 0.6);
+        }
+        const pB = pulseBoost[i];
+        const pBoost = 1 + pB * p.pulse;
+        const a = Math.min(
+          1,
+          p.dotA * (0.5 + d * 0.6) * leadK * densBoost * pBoost,
+        );
+        const dr = p.dotR * (lead ? 1 : 0.7) * (1 + pB * 0.4);
+        const redK = pB * p.redMix;
+
+        if (isError) {
+          if (isDark) {
+            const rr = 255;
+            const gg = 90 + 40 * (1 - redK);
+            const bb = 90 + 40 * (1 - redK);
+            ctx.fillStyle = `rgba(${rr | 0}, ${gg | 0}, ${bb | 0}, ${a * 0.7})`;
+          } else {
+            ctx.fillStyle = `rgba(160, 20, 20, ${a})`;
+          }
+        } else if (isIdle) {
+          if (isDark) {
+            ctx.fillStyle = `rgba(220, 230, 255, ${a * 0.7})`;
+          } else {
+            ctx.fillStyle = `rgba(40, 48, 64, ${a})`;
+          }
+        } else {
+          if (isDark) {
+            const t01 = Math.max(
+              0,
+              Math.min(0.999, hue[i] * 0.6 + d * 0.4),
+            );
+            const idx = Math.floor(t01 * NEBULA.length);
+            const base = NEBULA[idx];
+            let r = base[0];
+            let g = base[1];
+            let b = base[2];
+            if (redK > 0) {
+              r = r + (255 - r) * redK;
+              g = g + (80 - g) * redK;
+              b = b + (100 - b) * redK;
+            }
+            ctx.fillStyle = `rgba(${r | 0}, ${g | 0}, ${b | 0}, ${Math.min(1, a * 1.2)})`;
+          } else {
+            if (redK > 0.05) {
+              const rr = 120 + 80 * redK;
+              const gg = 40 + 30 * (1 - redK);
+              const bb = 60 + 40 * (1 - redK);
+              ctx.fillStyle = `rgba(${rr | 0}, ${gg | 0}, ${bb | 0}, ${a})`;
+            } else {
+              const h = 212 + hue[i] * 18;
+              const s2 = 22 + hue[i] * 16;
+              const l = 40 + (1 - d) * 8;
+              ctx.fillStyle = `hsla(${h}, ${s2}%, ${l}%, ${a})`;
+            }
+          }
+        }
+        ctx.fillRect(sx[i] - dr, sy[i] - dr, dr * 2, dr * 2);
+      }
+
+      // Chromatic aberration ghosts — only on dark where 'lighter' blend
+      // reads legibly. Skipped on light (would produce ugly artifacts).
+      if (isDark && !isError && p.chroma > 0) {
+        const off = p.chroma;
+        ctx.globalCompositeOperation = "lighter";
+        for (let i = 0; i < N; i += 3) {
+          if (!leader[i]) continue;
+          const a = p.dotA * (0.5 + sd[i] * 0.6);
+          ctx.fillStyle = `rgba(200, 40, 60, ${a * 0.25})`;
+          ctx.fillRect(
+            sx[i] - off - p.dotR,
+            sy[i] - p.dotR,
+            p.dotR * 2,
+            p.dotR * 2,
+          );
+        }
+        for (let i = 0; i < N; i += 3) {
+          if (!leader[i]) continue;
+          const a = p.dotA * (0.5 + sd[i] * 0.6);
+          ctx.fillStyle = `rgba(40, 200, 220, ${a * 0.2})`;
+          ctx.fillRect(
+            sx[i] + off - p.dotR,
+            sy[i] - p.dotR,
+            p.dotR * 2,
+            p.dotR * 2,
+          );
+        }
+        ctx.globalCompositeOperation = "source-over";
+      }
+
+      raf = requestAnimationFrame(step);
+    }
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [size]);
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: size,
+        height: size,
+        display: "grid",
+        placeItems: "center",
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        style={{ width: size, height: size, display: "block" }}
+      />
+    </div>
+  );
+}

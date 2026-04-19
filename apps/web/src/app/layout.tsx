@@ -60,6 +60,13 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      // Bootstrap script (below) sets `data-theme="dark"` before React
+      // hydrates when the user's saved pref or system preference asks
+      // for dark. The SSR output has no such attribute, so React would
+      // otherwise warn about the mismatch. Suppressing is the canonical
+      // next-themes-style escape hatch — the warning only applies to
+      // <html>'s own attributes, not its descendants.
+      suppressHydrationWarning
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
