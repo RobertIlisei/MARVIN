@@ -109,9 +109,11 @@ from the bundle:
 | Productivity — docs | `doc-coauthoring`, `docx`, `pdf`, `pptx` |
 | Data | `xlsx` |
 | Engineering | `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`, `skill-creator` |
+| Engineering — MARVIN-adopted | `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit` (ports from Superpowers + gstack; honour `REVIEW.md` at repo root) |
 | Operations / PM | `internal-comms` |
 | Knowledge graph | `graphify` (install separately — see `~/.claude/skills/graphify/SKILL.md`) |
 | Observability | Honeycomb skills ship as a Claude Code plugin — `/plugin install honeycomb` |
+| Built-in Claude Code | `/review` (reviews a PR), `/security-review` (security pass on pending changes), `/init` (scaffolds CLAUDE.md) — no install step |
 
 `packages/runtime/src/personality.ts` tells MARVIN when to invoke each.
 If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
