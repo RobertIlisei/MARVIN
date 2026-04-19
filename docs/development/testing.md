@@ -70,6 +70,10 @@ Highest ROI, lowest cost:
 
 Tools: `vitest` or `bun test`. Pick based on whichever the pnpm workspace stays coherent with — probably vitest.
 
+When writing new tests, reach for the [`test-driven-development`](../../.claude/skills/test-driven-development/SKILL.md) skill. It enforces RED-GREEN-REFACTOR with an Iron Law — no production code without a failing test first. Ported from Superpowers; adapted for MARVIN's single-assistant constraints.
+
+For debugging a failing test or regression, the [`systematic-debugging`](../../.claude/skills/systematic-debugging/SKILL.md) skill runs the 4-phase root-cause workflow with a 3-strike rule (after 3 failed hypotheses, stop and question the architecture).
+
 ### 2. API-layer integration tests
 
 Boot a Next.js test server, fire HTTP requests, assert responses.
