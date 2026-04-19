@@ -156,7 +156,8 @@ Env knobs (all optional):
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(343 nodes · 396 edges · 68 communities as of 2026-04-19).
+(455 nodes · 497 edges · 84 communities as of 2026-04-19, post the
+docs + skills + review adoption pass).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
