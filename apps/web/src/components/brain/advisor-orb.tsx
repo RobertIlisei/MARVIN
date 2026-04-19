@@ -1,16 +1,19 @@
 "use client";
 
 /**
- * Companion orb that signals "advisor is actively firing" in the UI.
+ * Companion orb that signals "an advisor consult is actively firing" in
+ * the UI.
  *
  * Sits beside the main BrainLiquid. Invisible by default — appears only
- * when the advisor tool is mid-call (tool_use emitted but tool_result
- * hasn't landed yet). Flies in from off-orbit, pulses with an icy-blue
- * glow, fades out when the advisor completes.
+ * while a Task subagent with a description matching MARVIN's advisor
+ * pattern is mid-call (tool_use emitted but tool_result hasn't landed
+ * yet). Flies in from off-orbit, pulses with an icy-blue glow, fades out
+ * when the consult completes.
  *
- * Option C from the brain-visualisation brainstorm:
- * "Companion orb — MARVIN-appropriate theatricality ('bringing you a
- * second opinion from my even bigger brain')."
+ * See ADR-0007 (advisor as userland subagent pattern) for why this
+ * detects a Task call and not a literal `advisor` tool: the SDK's
+ * `advisorModel` option is server-side routing; there is no callable
+ * tool named "advisor".
  *
  * Intentionally SVG + CSS, not a second canvas particle engine. A
  * second BrainLiquid would compete with the main brain for visual
@@ -18,10 +21,18 @@
  */
 
 interface AdvisorOrbProps {
-  /** true while at least one `tool_use` with name=advisor is running. */
+  /** true while an advisor-pattern Task subagent is running. */
   active: boolean;
-  /** Advisor model id — rendered as a subtle caption, e.g. "opus-4-7". */
+  /**
+   * Advisor model id hinted on the Task call (e.g. "opus") — rendered
+   * as a subtle caption.
+   */
   model?: string | null;
+  /**
+   * Consult topic stripped from the Task description (the text after the
+   * "advisor:" prefix). Rendered after the model as additional caption.
+   */
+  topic?: string | null;
   /** Size in pixels of the orb itself (label adds a few below). */
   size?: number;
   /** Where to park the orb relative to its positioned parent. */
@@ -31,10 +42,12 @@ interface AdvisorOrbProps {
 export function AdvisorOrb({
   active,
   model,
+  topic,
   size = 72,
   offset = { top: -12, right: -96 },
 }: AdvisorOrbProps) {
   const label = (model ?? "").replace(/^claude-/, "");
+  const trimmedTopic = topic ? truncate(topic, 32) : null;
 
   return (
     <div
@@ -127,9 +140,30 @@ export function AdvisorOrb({
                 <span style={{ color: "var(--color-fg-dim)" }}>{label}</span>
               </>
             ) : null}
+            {trimmedTopic ? (
+              <div
+                style={{
+                  marginTop: 2,
+                  color: "var(--color-fg-faint)",
+                  letterSpacing: "0.08em",
+                  textTransform: "none",
+                  fontSize: 9.5,
+                  maxWidth: size * 2.4,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {trimmedTopic}
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>
     </div>
   );
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
