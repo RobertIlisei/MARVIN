@@ -1412,6 +1412,43 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   End-to-end verified via `pnpm -r typecheck` (all 8 packages
   green) + `pnpm lint` (0 errors) + `pnpm test` (134 passed).
   Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M2: read routes + panel scaffold)** —
+  four net-new read routes under `apps/web/src/app/api/git/` —
+  `status` (porcelain v2 + branch header → structured JSON),
+  `diff` (working / staged / head mode, 2 MB cap, binary probe via
+  `--numstat`), `branch` (local + remote list via `for-each-ref`
+  with `%00`-separated format for unicode-safe parsing), `log`
+  (stable pretty format, initial-repo fallback). Every route:
+  anchors `cwd` through `checkFsPath`, gates inputs via
+  `isSafePathspec`, returns `enabled: false, reason: "not-a-git-repo"`
+  when outside a worktree so the panel renders its empty state
+  without a second round-trip. No mutations, no confirm gate —
+  M3 lands those. New UI: `apps/web/src/components/left-column-tabs.tsx`
+  swaps the left column between Files and Source Control
+  (persisted to `localStorage.marvin.leftColumn`); new
+  `apps/web/src/components/source-control/` package —
+  `source-control-panel.tsx` (shell + three empty states),
+  `use-git-status.ts` (2 s poll, pause on hidden tab, abort on cwd
+  change), `status-list.tsx` (Conflicts / Staged / Changes /
+  Untracked buckets, row click → `onSelect`), `status-badge.tsx`
+  (token-coloured M/A/D/R/U/T/? pills), `branch-bar.tsx` (branch
+  name + upstream + ↑N↓M counters), plus a `CommitBoxPlaceholder`
+  that renders the shape M3 will fill. `page.tsx` wires the tabs
+  at the top of the existing files aside — no new `<Panel>`, just
+  a tab switcher inside the one that already existed. @marvin/git
+  added to `apps/web` workspace deps. Collateral: relative
+  imports in `packages/git/src/*` stripped of `.js` suffix —
+  Turbopack compiled them as `node:module` specifiers, breaking
+  at runtime; other workspace packages use bare relative imports
+  (see `packages/runtime/src/index.ts`). Docs: `/api/git/*`
+  entries in `api.md` promoted from placeholder to full shapes.
+  End-to-end verified via `pnpm -r typecheck` + `pnpm lint`
+  (0 errors) + `pnpm test` (134 passed) + live curl against
+  `http://localhost:3030/api/git/{status,diff,branch,log}`
+  against the MARVIN repo (200 OK, expected shapes) and against
+  `/tmp` (rejected at the sandbox with `symlink-rejected`) and
+  a pathspec-injection probe (`?path=--exec-path=/tmp` →
+  `400 invalid-pathspec`). Typecheck clean across all 8 packages.
 
 ## Status
 
