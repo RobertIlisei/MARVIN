@@ -329,16 +329,58 @@ Success: `{ enabled: true, commits: Array<{ sha, shortSha, author, email, date, 
 
 Initial repos (no commits yet) return `commits: []` rather than an error.
 
-**Mutation routes (M3 — pending):**
+**Mutation routes:**
 
-- `POST /api/git/stage` — `{ cwd, paths }` → `git add -- <paths>`.
-- `POST /api/git/unstage` — `{ cwd, paths }` → `git restore --staged -- <paths>`.
-- `POST /api/git/discard` — `{ cwd, paths, mode: "working" | "staged" }`. Working-tree discard is `confirm warn`.
-- `POST /api/git/commit` — `{ cwd, message, amend?: boolean }`. Message via stdin; amend on pushed HEAD is `confirm danger`.
-- `POST /api/git/branch/create` — `{ cwd, name, from? }`. `name` must pass `isSafeRef`.
-- `POST /api/git/branch/switch` — `{ cwd, name }`. Denies on dirty tree in v1.
-- `POST /api/git/branch/delete` — `{ cwd, name, force?: boolean }`. Current branch hard-denied; unmerged + `force` is `confirm danger`.
-- `POST /api/git/confirm` — `{ op, cwd }` → `{ token, expiresIn }`. 60 s TTL, one-shot.
+Every mutation route goes through `checkFsPath(cwd)` → `gitWritePolicy(op)`. If the policy returns `confirm`, the route returns `409 needs-confirm` with `{ severity, reason, op }`; the client round-trips to `/api/git/confirm` for a token and replays the original request with `X-Marvin-Confirmed: <token>`. Tokens are one-shot and validate the op structurally — the stored op must match the executing op or the replay is rejected with `409 token-rejected`.
+
+### `POST /api/git/stage` — `{ cwd, paths: string[] }`
+
+`git add -- <paths>`. Every path passes `isSafePathspec` (rejects leading `-`, pathspec-magic `:`, NUL, oversize). Auto-class.
+
+Success: `{ ok: true, staged: number }`.
+
+### `POST /api/git/unstage` — `{ cwd, paths: string[] }`
+
+`git restore --staged -- <paths>`. Working tree unchanged. Auto-class.
+
+Success: `{ ok: true, unstaged: number }`.
+
+### `POST /api/git/discard` — `{ cwd, paths: string[], mode: "working" | "staged" }`
+
+- `mode: "staged"` — `git restore --staged` (auto). Same effect as unstage.
+- `mode: "working"` — `git restore` (confirm **warn**). Resets working tree to index; edits are gone.
+
+Success: `{ ok: true, discarded: number, mode }`.
+
+### `POST /api/git/commit` — `{ cwd, message, amend?: boolean }`
+
+Message travels via stdin (`git commit -F -`). Never via argv. `isSafeCommitMessage` rejects empty / NUL / > 16 KB. The route detects `hasPushedHead` by `rev-parse @{u}` + `merge-base --is-ancestor HEAD @{u}`; amend with `hasPushedHead: true` is `confirm danger`.
+
+Amending with no new message passes `--no-edit` so git keeps the existing message.
+
+Success: `{ ok: true, amend, hasPushedHead }`. `409 nothing-to-commit` when the index is empty and `--amend` wasn't set.
+
+### `POST /api/git/branch/create` — `{ cwd, name, from?: string }`
+
+`git branch <name> <from>`. `from` defaults to `HEAD`. `name` and `from` (unless `HEAD`) must pass `isSafeRef`. Auto-class.
+
+Success: `{ ok: true, name, from }`. `409 branch-exists` when the branch is already present.
+
+### `POST /api/git/branch/switch` — `{ cwd, name }`
+
+`git switch <name>`. The route probes `git status --porcelain`; non-empty output denies as `policy-deny` with reason "working tree is dirty". v1 does not stash-on-switch.
+
+Success: `{ ok: true, name }`. `404 branch-not-found` when the target doesn't exist.
+
+### `POST /api/git/branch/delete` — `{ cwd, name, force?: boolean }`
+
+`git branch -d <name>` (or `-D` when `force: true` or when the branch is unmerged). The route probes `git symbolic-ref HEAD` + `git branch --merged` to populate the policy op. Current branch is hard-denied; unmerged is `confirm danger`.
+
+Success: `{ ok: true, name, merged, forced }`.
+
+### `POST /api/git/confirm` — `{ cwd, op }`
+
+Mints a one-shot token for a `confirm`-class op. Returns `{ token, expiresIn: 60, severity, reason }`. Rejects with `400 policy-auto` when the op doesn't actually need confirming, and `403 policy-deny` when the op is always-denied.
 
 **Remote routes (M5 — pending, ADR-0013):**
 

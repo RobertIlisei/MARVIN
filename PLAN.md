@@ -1449,6 +1449,50 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `/tmp` (rejected at the sandbox with `symlink-rejected`) and
   a pathspec-injection probe (`?path=--exec-path=/tmp` →
   `400 invalid-pathspec`). Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M3: mutation routes + commit box + branch switcher)** —
+  eight net-new mutation routes under `apps/web/src/app/api/git/`:
+  `stage`, `unstage`, `discard` (mode: working|staged),
+  `commit` (amend-aware, message via stdin `-F -` so user text never
+  touches argv), `branch/create`, `branch/switch` (denies on dirty
+  tree), `branch/delete` (current hard-denied, unmerged confirm-
+  danger), and `confirm` (mints one-shot tokens). Every route:
+  1) sandboxes `cwd` via `checkFsPath`, 2) passes user-supplied
+  refs / paths / remotes through `argv-guards` (`isSafeRef`,
+  `isSafePathspec`), 3) calls `gitWritePolicy(op)`, 4) on `confirm`
+  class requires `X-Marvin-Confirmed: <token>` minted by `/confirm`.
+  Shared `apps/web/src/lib/git-confirm-gate.ts` factors the
+  deny / needs-confirm / token-consume branches into one helper so
+  each route stays tight on its 4-step recipe. New UI components:
+  `use-git-mutations.ts` (hook that owns the full dispatch
+  pipeline — initial POST, 409 handling, confirm-modal await,
+  `/confirm` round-trip, retry with token, error classification),
+  `confirm-git-op-dialog.tsx` (alert-dialog with severity-aware
+  styling; danger gets the red border + "Proceed anyway" button),
+  `commit-box.tsx` (textarea with ⌘Enter to commit, Esc to exit
+  amend, auto-grow 1..6 lines, disabled until message+stage state
+  justify commit), `branch-switcher.tsx` (dropdown populated from
+  `/api/git/branch`, inline "+ new branch" form). `status-list.tsx`
+  gained hover-reveal action icons per bucket (Staged: −, Changes:
+  ↺+, Untracked: +) plus a per-bucket bulk action in the header.
+  `source-control-panel.tsx` composes everything, pipes the
+  `refresh()` from use-git-status into use-git-mutations'
+  `onChanged` so the UI updates immediately after a successful
+  mutation; renders an error banner for non-confirm failures with
+  dismiss. Live-verified via curl against a scratch repo:
+  stage → unstage → discard-working (409 → mint → replay succeeds),
+  stage + commit (`hasPushedHead: false`), branch create + switch,
+  delete-current hard-denied (403 `policy-deny`), switch-on-dirty
+  hard-denied (403 `policy-deny`), injection probe
+  (`--upload-pack=/bin/sh` as branch name → 400 `invalid-ref`),
+  mint-for-safe / replay-with-dangerous token attack
+  (`discard NEW.md` token replayed with `discard README.md` →
+  409 `token/op mismatch`), auto-class confirm probe
+  (`stage` op → 400 `policy-auto`). `docs/reference/api.md`
+  entries for every mutation route promoted from placeholder to
+  full request / response shapes with error tables. End-to-end
+  verified via `pnpm -r typecheck` (all 8 packages green) +
+  `pnpm lint` (0 errors, 190 files) + `pnpm test` (134 passed).
+  Typecheck clean across all 8 packages.
 
 ## Status
 

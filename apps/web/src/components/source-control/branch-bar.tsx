@@ -2,13 +2,24 @@
 
 import type { StatusBranch } from "@marvin/git";
 
+import { BranchSwitcher } from "./branch-switcher";
+
 /**
  * Top-of-panel branch indicator: current branch name, upstream, and
- * ahead / behind counters. The dropdown stub is intentionally
- * non-functional in M2 — the real branch switcher lands in M3 with
- * the mutation routes.
+ * ahead / behind counters. The dropdown arrow opens the branch
+ * switcher populated from `/api/git/branch`.
  */
-export function BranchBar({ branch }: { branch: StatusBranch }) {
+export function BranchBar({
+  branch,
+  cwd,
+  onSwitch,
+  onCreate,
+}: {
+  branch: StatusBranch;
+  cwd: string;
+  onSwitch(name: string): Promise<boolean>;
+  onCreate(name: string, from?: string): Promise<boolean>;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-[color:var(--color-border)] px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
@@ -34,23 +45,31 @@ export function BranchBar({ branch }: { branch: StatusBranch }) {
           )}
         </div>
       </div>
-      {branch.upstream && (branch.ahead !== null || branch.behind !== null) && (
-        <div className="flex items-center gap-1.5 font-mono text-[10.5px] text-[color:var(--color-fg-faint)]">
-          {branch.ahead !== null && branch.ahead > 0 && (
-            <span title={`${branch.ahead} commits ahead of upstream`}>
-              ↑{branch.ahead}
-            </span>
-          )}
-          {branch.behind !== null && branch.behind > 0 && (
-            <span title={`${branch.behind} commits behind upstream`}>
-              ↓{branch.behind}
-            </span>
-          )}
-          {branch.ahead === 0 && branch.behind === 0 && (
-            <span title="Up to date with upstream">=</span>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-1.5">
+        {branch.upstream && (branch.ahead !== null || branch.behind !== null) && (
+          <div className="flex items-center gap-1.5 font-mono text-[10.5px] text-[color:var(--color-fg-faint)]">
+            {branch.ahead !== null && branch.ahead > 0 && (
+              <span title={`${branch.ahead} commits ahead of upstream`}>
+                ↑{branch.ahead}
+              </span>
+            )}
+            {branch.behind !== null && branch.behind > 0 && (
+              <span title={`${branch.behind} commits behind upstream`}>
+                ↓{branch.behind}
+              </span>
+            )}
+            {branch.ahead === 0 && branch.behind === 0 && (
+              <span title="Up to date with upstream">=</span>
+            )}
+          </div>
+        )}
+        <BranchSwitcher
+          cwd={cwd}
+          currentBranch={branch.name}
+          onSwitch={onSwitch}
+          onCreate={onCreate}
+        />
+      </div>
     </div>
   );
 }
