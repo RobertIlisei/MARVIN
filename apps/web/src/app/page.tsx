@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 /** Match Task `input` shapes whose description marks an advisor consult. */
 function advisorDescriptionOf(input: unknown): string | null {
@@ -669,15 +669,14 @@ export default function Home() {
     );
   }
 
-  const hasWork = Boolean(
-    (selectedPath && cwd) || (panes.terminal && cwd) || (panes.preview && cwd),
-  );
-
   const showFiles = panes.files && !!cwd;
   const showBrain = panes.brain;
   const showGraph = panes.graph && !!cwd;
   const showPreview = panes.preview && !!cwd;
-  const rightTopVisible = showBrain || showGraph;
+  const showFileViewer = Boolean(selectedPath && cwd);
+  const showTerminal = Boolean(panes.terminal && cwd);
+  const hasWork =
+    showPreview || showGraph || showFileViewer || showTerminal;
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden">
@@ -706,6 +705,9 @@ export default function Home() {
                     cwd={cwd}
                     onSelect={setSelectedPath}
                     {...(selectedPath ? { selectedPath } : {})}
+                    onOpenInTerminal={() =>
+                      setPanes((p) => ({ ...p, terminal: true }))
+                    }
                   />
                 </div>
               </aside>
@@ -717,41 +719,92 @@ export default function Home() {
         <Panel id="center" order={2} defaultSize={46} minSize={24}>
           <section className="flex h-full min-w-0 flex-col">
             {hasWork ? (
-              <PanelGroup
-                direction="vertical"
-                autoSaveId="marvin-center-v-v3"
-                className="flex-1"
-              >
-                {selectedPath && cwd && (
-                  <Panel id="file-viewer" order={1} defaultSize={50} minSize={15}>
-                    <FileViewer
-                      cwd={cwd}
-                      filePath={selectedPath}
-                      onClose={() => setSelectedPath(undefined)}
-                    />
-                  </Panel>
-                )}
-                {showPreview && (
-                  <>
-                    {selectedPath && cwd && (
-                      <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
-                    )}
-                    <Panel id="preview" order={2} defaultSize={35} minSize={15}>
+              (() => {
+                // Build the center panes in display order so resize handles
+                // only render between adjacent panes (avoids a dangling
+                // handle when the top slot is empty).
+                const panesList: ReactNode[] = [];
+                let order = 1;
+                if (showPreview) {
+                  panesList.push(
+                    <Panel
+                      key="preview"
+                      id="preview"
+                      order={order++}
+                      defaultSize={35}
+                      minSize={15}
+                    >
                       <PreviewPane projectId={active?.id ?? null} />
-                    </Panel>
-                  </>
-                )}
-                {panes.terminal && cwd && (
-                  <>
-                    {(selectedPath || showPreview) && cwd && (
-                      <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
-                    )}
-                    <Panel id="terminal" order={3} defaultSize={30} minSize={15}>
+                    </Panel>,
+                  );
+                }
+                if (showGraph) {
+                  panesList.push(
+                    <Panel
+                      key="graph"
+                      id="graph"
+                      order={order++}
+                      defaultSize={45}
+                      minSize={20}
+                    >
+                      <div className="h-full border-t border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/20">
+                        <GraphPanel cwd={cwd} />
+                      </div>
+                    </Panel>,
+                  );
+                }
+                if (showFileViewer) {
+                  panesList.push(
+                    <Panel
+                      key="file-viewer"
+                      id="file-viewer"
+                      order={order++}
+                      defaultSize={50}
+                      minSize={15}
+                    >
+                      <FileViewer
+                        cwd={cwd}
+                        filePath={selectedPath!}
+                        onClose={() => setSelectedPath(undefined)}
+                      />
+                    </Panel>,
+                  );
+                }
+                if (showTerminal) {
+                  panesList.push(
+                    <Panel
+                      key="terminal"
+                      id="terminal"
+                      order={order++}
+                      defaultSize={30}
+                      minSize={15}
+                    >
                       <Terminal cwd={cwd} />
-                    </Panel>
-                  </>
-                )}
-              </PanelGroup>
+                    </Panel>,
+                  );
+                }
+                const withHandles: ReactNode[] = [];
+                for (let i = 0; i < panesList.length; i++) {
+                  if (i > 0) {
+                    withHandles.push(
+                      <PanelResizeHandle
+                        key={`h-${i}`}
+                        className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40"
+                      />,
+                    );
+                  }
+                  withHandles.push(panesList[i]);
+                }
+                return (
+                  <PanelGroup
+                    direction="vertical"
+                    autoSaveId="marvin-center-v-v4"
+                    className="flex-1"
+                  >
+                    {withHandles}
+                  </PanelGroup>
+                );
+              })()
             ) : (
               <div className="flex h-full flex-1 items-center justify-center px-6 py-10 text-center">
                 <div className="max-w-sm font-mono text-[11px] text-[color:var(--color-fg-faint)]">
@@ -761,8 +814,10 @@ export default function Home() {
                   <p className="leading-relaxed">
                     open a file from the tree, reveal a terminal
                     (<span className="text-[color:var(--color-fg)]/80">⌘ J</span>),
-                    or the preview
-                    (<span className="text-[color:var(--color-fg)]/80">⌘ P</span>)
+                    the preview
+                    (<span className="text-[color:var(--color-fg)]/80">⌘ P</span>),
+                    or the graph
+                    (<span className="text-[color:var(--color-fg)]/80">⌘ G</span>)
                     to work here. chat is on the right.
                   </p>
                 </div>
@@ -783,10 +838,10 @@ export default function Home() {
           <aside className="flex h-full min-h-0 flex-col border-l border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/20">
             <PanelGroup
               direction="vertical"
-              autoSaveId="marvin-side-v-v1"
+              autoSaveId="marvin-side-v-v2"
               className="flex-1"
             >
-              {rightTopVisible && (
+              {showBrain && (
                 <>
                   <Panel
                     id="side-top"
@@ -795,64 +850,58 @@ export default function Home() {
                     minSize={18}
                     maxSize={65}
                   >
-                    {showGraph ? (
-                      <div className="h-full bg-[color:var(--color-bg-elev)]/20">
-                        <GraphPanel cwd={cwd} />
-                      </div>
-                    ) : (
-                      <div className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
-                        <div className="relative flex flex-col items-center gap-3">
-                          <BrainLiquid state={marvinState} size={200} />
-                          <AdvisorOrb
-                            active={advisorActive}
-                            model={advisorModel}
-                            topic={advisorTopic}
-                            size={56}
-                            offset={{ top: 0, right: -12 }}
-                          />
-                          <div className="text-center">
-                            <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
-                              state
-                            </div>
-                            <div className="mt-0.5 font-mono text-sm text-[color:var(--color-accent)]">
-                              {labelFor(marvinState)}
-                            </div>
+                    <div className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                      <div className="relative flex flex-col items-center gap-3">
+                        <BrainLiquid state={marvinState} size={200} />
+                        <AdvisorOrb
+                          active={advisorActive}
+                          model={advisorModel}
+                          topic={advisorTopic}
+                          size={56}
+                          offset={{ top: 0, right: -12 }}
+                        />
+                        <div className="text-center">
+                          <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
+                            state
                           </div>
-                        </div>
-                        <div className="mt-auto space-y-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[color:var(--color-fg-faint)]">project</span>
-                            <span className="truncate text-right text-[color:var(--color-fg)]/85">
-                              {active?.name ?? "—"}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3 border-t border-[color:var(--color-border)] pt-2">
-                            <span className="text-[color:var(--color-fg-faint)]">executor</span>
-                            <span
-                              className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                              title="runs the turn loop"
-                            >
-                              {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[color:var(--color-fg-faint)]">advisor</span>
-                            <span
-                              className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                              title={
-                                advisorModel
-                                  ? "called by the executor on hard steps"
-                                  : "disabled"
-                              }
-                            >
-                              {advisorModel
-                                ? advisorModel.replace(/^claude-/, "")
-                                : "—"}
-                            </span>
+                          <div className="mt-0.5 font-mono text-sm text-[color:var(--color-accent)]">
+                            {labelFor(marvinState)}
                           </div>
                         </div>
                       </div>
-                    )}
+                      <div className="mt-auto space-y-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[color:var(--color-fg-faint)]">project</span>
+                          <span className="truncate text-right text-[color:var(--color-fg)]/85">
+                            {active?.name ?? "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-t border-[color:var(--color-border)] pt-2">
+                          <span className="text-[color:var(--color-fg-faint)]">executor</span>
+                          <span
+                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                            title="runs the turn loop"
+                          >
+                            {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[color:var(--color-fg-faint)]">advisor</span>
+                          <span
+                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                            title={
+                              advisorModel
+                                ? "called by the executor on hard steps"
+                                : "disabled"
+                            }
+                          >
+                            {advisorModel
+                              ? advisorModel.replace(/^claude-/, "")
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </Panel>
                   <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
                 </>

@@ -56,10 +56,13 @@ export function FileTree({
   cwd,
   onSelect,
   selectedPath,
+  onOpenInTerminal,
 }: {
   cwd: string;
   onSelect?: (path: string) => void;
   selectedPath?: string;
+  /** Toggle the terminal pane on (if off). Called before the `cd` event fires. */
+  onOpenInTerminal?: () => void;
 }) {
   const [data, setData] = useState<TreeResponse | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -242,11 +245,30 @@ export function FileTree({
       copyPath: (path) => {
         navigator.clipboard?.writeText(path).catch(() => undefined);
       },
-      // M6 items — noop for now but wired so the menu item can exist.
-      revealInFinder: () => undefined,
-      openInTerminal: () => undefined,
+      revealInFinder: async (path) => {
+        try {
+          await fetch("/api/files/reveal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cwd, path }),
+          });
+        } catch {
+          /* swallow; reveal is fire-and-forget UX-wise */
+        }
+      },
+      openInTerminal: (dir) => {
+        onOpenInTerminal?.();
+        // Delay the cd event so the Terminal mount effect has time to
+        // attach its listener when the pane was just toggled on.
+        setTimeout(() => {
+          const cmd = `cd ${quoteForShell(dir)}`;
+          window.dispatchEvent(
+            new CustomEvent("marvin:terminal-run", { detail: { cmd } }),
+          );
+        }, 80);
+      },
     }),
-    [cwd, mutations, openDir],
+    [cwd, mutations, openDir, onOpenInTerminal],
   );
 
   // Keyboard shortcuts (on the tree root)
@@ -628,4 +650,13 @@ function joinName(parentOrOldPath: string, name: string): string {
   const i = parentOrOldPath.lastIndexOf("/");
   const parent = i > 0 ? parentOrOldPath.slice(0, i) : parentOrOldPath;
   return `${parent}/${name}`;
+}
+
+/**
+ * Wrap a path in single-quotes for a POSIX shell. Embedded single-quotes
+ * are escaped via the standard `'\''` dance. Avoids a shell-injection
+ * footgun if a path contains spaces, `$`, or other metacharacters.
+ */
+function quoteForShell(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
