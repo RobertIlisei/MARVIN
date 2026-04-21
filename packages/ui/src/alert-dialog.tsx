@@ -42,8 +42,14 @@ function AlertDialogOverlay({
   return (
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
+      // Animation classes removed — see packages/ui/src/dialog.tsx for
+      // the full debrief. Inline style forces a visible backdrop.
+      style={{
+        backgroundColor: "var(--color-bg-glass)",
+        opacity: 1,
+      }}
       className={cn(
-        "fixed inset-0 z-50 bg-[color:var(--color-bg-glass)] backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 backdrop-blur-sm",
         className,
       )}
       {...props}
@@ -60,8 +66,25 @@ function AlertDialogContent({
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
+        // Visibility + position pinned inline; animate-in/out classes
+        // removed. See packages/ui/src/dialog.tsx for the root-cause
+        // debrief (Tailwind v4 + Turbopack + Radix + tw-animate-css
+        // leaves the content card stuck at opacity:0 when the enter
+        // animation's keyframe transform overrides the base centering
+        // translate).
+        style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          opacity: 1,
+          backgroundColor: "var(--color-bg-elev)",
+          color: "var(--color-fg)",
+          border: "1px solid var(--color-border-strong)",
+          boxShadow: "var(--shadow-panel)",
+        }}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg p-6 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg p-6 sm:max-w-lg",
           SURFACE,
           className,
         )}

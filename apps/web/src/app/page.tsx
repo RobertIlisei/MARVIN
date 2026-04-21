@@ -26,6 +26,7 @@ import {
   type PersonalityMode,
   PersonalityToggle,
 } from "@/components/settings/personality-toggle";
+import { SettingsPanel } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
@@ -107,6 +108,13 @@ export default function Home() {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings now shows only the Observability form — the tab argument
+  // that callers used to pass is accepted + ignored so existing call
+  // sites keep working. Drop the param when we've cleaned them up.
+  const openSettings = useCallback((_tab?: string) => {
+    setSettingsOpen(true);
+  }, []);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
@@ -432,7 +440,28 @@ export default function Home() {
   // --- Header ------------------------------------------------------------
   const header = (
     <>
-    <header className="flex items-center gap-3 px-5 py-2.5">
+    <header
+      // Dragging the window by the header chrome only works inside the
+      // Tauri `.app`. `data-tauri-drag-region` tells the webview "this
+      // region is the window title bar for drag purposes" — needed
+      // because tauri.conf.json sets `titleBarStyle: "Overlay"` which
+      // hides the native bar and overlays the traffic lights on top
+      // of our content. In a normal browser tab the attribute is an
+      // unknown data-* and has no effect.
+      //
+      // Interactive elements inside the header (buttons, inputs) stop
+      // the drag because Tauri treats any click on a clickable
+      // descendant as a regular click, not a drag. That's the
+      // intended behaviour.
+      data-tauri-drag-region
+      // Left padding clears the macOS traffic-light cluster (Tauri
+      // renders them at ~12px from the left edge; 3 buttons + gaps is
+      // ~72px). `pl-[82px]` leaves a comfortable gutter. In a normal
+      // browser tab the traffic lights don't exist and the extra
+      // padding simply centers branding a bit further in — acceptable
+      // trade-off since the Tauri build is the primary UI.
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-[82px] pr-5 py-2.5"
+    >
       <button
         type="button"
         onClick={isEmpty ? undefined : reset}
@@ -444,7 +473,7 @@ export default function Home() {
         marvin
       </button>
       <span className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline">
-        v0.0.1 · phase 5
+        v1
       </span>
       <div className="mx-3 h-5 w-px bg-[color:var(--color-border)]" />
       <ProjectPicker
@@ -462,15 +491,20 @@ export default function Home() {
         cwd={active?.workDir ?? null}
         refreshKey={sessionRefreshKey}
       />
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
         <CostPill projectId={active?.id ?? null} refreshKey={sessionRefreshKey} />
-        <LabeledGroup label="perms">
+        {/* perms / models / voice only show on wide viewports — they're
+         * also accessible via the ⚙ Settings panel, so we collapse them
+         * instead of letting them clip on medium screens. Theme flip
+         * stays visible since users hit it mid-session more than the
+         * others. `panes` toggles stay too (quick-flip essentials). */}
+        <LabeledGroup label="perms" className="hidden xl:inline-flex">
           <PermissionToggle
             value={permissionStrategy}
             onChange={setPermissionStrategy}
           />
         </LabeledGroup>
-        <LabeledGroup label="models">
+        <LabeledGroup label="models" className="hidden xl:inline-flex">
           <ModelPicker
             executor={executorModel}
             advisor={advisorModel}
@@ -480,7 +514,7 @@ export default function Home() {
             }}
           />
         </LabeledGroup>
-        <LabeledGroup label="voice">
+        <LabeledGroup label="voice" className="hidden 2xl:inline-flex">
           <PersonalityToggle value={personality} onChange={setPersonality} />
         </LabeledGroup>
         <LabeledGroup label="theme">
@@ -532,6 +566,15 @@ export default function Home() {
           className="rounded-md border border-[color:var(--color-border)] px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-30"
         >
           new session
+        </button>
+        <button
+          type="button"
+          onClick={() => openSettings()}
+          title="Settings — models, observability, appearance, permissions"
+          aria-label="open settings"
+          className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+        >
+          ⚙
         </button>
         <button
           type="button"
@@ -859,7 +902,11 @@ export default function Home() {
                     minSize={18}
                     maxSize={65}
                   >
-                    <div className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                    <div className="flex h-full min-h-0 flex-col items-center justify-center bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                      {/* Brain + state indicator only. Project / executor /
+                       * advisor live in the header; Honeycomb moved to
+                       * Settings → Observability. The brain panel stays
+                       * visually quiet so the animated state pulls focus. */}
                       <div className="relative flex flex-col items-center gap-3">
                         <BrainLiquid state={marvinState} size={200} />
                         <AdvisorOrb
@@ -876,38 +923,6 @@ export default function Home() {
                           <div className="mt-0.5 font-mono text-sm text-[color:var(--color-accent)]">
                             {labelFor(marvinState)}
                           </div>
-                        </div>
-                      </div>
-                      <div className="mt-auto space-y-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-[color:var(--color-fg-faint)]">project</span>
-                          <span className="truncate text-right text-[color:var(--color-fg)]/85">
-                            {active?.name ?? "—"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-t border-[color:var(--color-border)] pt-2">
-                          <span className="text-[color:var(--color-fg-faint)]">executor</span>
-                          <span
-                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                            title="runs the turn loop"
-                          >
-                            {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-[color:var(--color-fg-faint)]">advisor</span>
-                          <span
-                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                            title={
-                              advisorModel
-                                ? "called by the executor on hard steps"
-                                : "disabled"
-                            }
-                          >
-                            {advisorModel
-                              ? advisorModel.replace(/^claude-/, "")
-                              : "—"}
-                          </span>
                         </div>
                       </div>
                     </div>
@@ -962,6 +977,11 @@ export default function Home() {
           onSelect={(absPath) => setSelectedPath(absPath)}
         />
       )}
+      <SettingsPanel
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        cwd={cwd || null}
+      />
     </main>
   );
 }
@@ -969,12 +989,15 @@ export default function Home() {
 function LabeledGroup({
   label,
   children,
+  className,
 }: {
   label: string;
   children: React.ReactNode;
+  /** Extra responsive classes from the caller (e.g. `hidden xl:inline-flex`). */
+  className?: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={`flex items-center gap-1.5 ${className ?? ""}`.trim()}>
       <span className="hidden font-mono text-[9px] uppercase tracking-[0.26em] text-[color:var(--color-fg-faint)] xl:inline">
         {label}
       </span>

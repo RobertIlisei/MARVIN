@@ -1,6 +1,6 @@
 {
   "name": "@marvin/desktop",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "private": true,
   "description": "MARVIN as a native macOS app — Tauri wrapper around the localhost:3030 web shell.",
   "type": "module",
