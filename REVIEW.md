@@ -49,8 +49,12 @@ important signal.
 - **Anything `pnpm -r typecheck` already catches.** Type errors, missing
   properties, null deref. We rely on TypeScript strict mode
   (`noUncheckedIndexedAccess: true`) — duplicate coverage is noise.
-- **Formatting.** No project-wide formatter runs yet. Don't flag
-  whitespace, import order, or quote style.
+- **Anything `pnpm lint` already catches.** Biome (`biome.json`) enforces
+  the lint surface. If a concern is encoded as a Biome rule, rely on
+  that — don't flag it manually.
+- **Formatting.** Biome's formatter is intentionally disabled
+  (`formatter.enabled: false`) while we settle conventions. Don't flag
+  whitespace or quote style.
 - **Missing tests.** MARVIN currently has no automated test harness;
   see [docs/development/testing.md](./docs/development/testing.md).
   Suggesting "add a test" is expected to produce zero diff until the

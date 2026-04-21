@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-
-import { ConfirmPrompt } from "./confirm-prompt";
 import { DiffViewer } from "@/components/diff/diff-viewer";
+import { ConfirmPrompt } from "./confirm-prompt";
 import type { Block } from "./types";
 
 type ToolBlock = Extract<Block, { type: "tool_use" }>;

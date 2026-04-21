@@ -1,10 +1,9 @@
 "use client"
 
-import * as React from "react"
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
-
-import { cn } from "./utils"
+import type * as React from "react"
 import { buttonVariants } from "./button"
+import { cn } from "./utils"
 
 // Use MARVIN's `@theme` tokens (see globals.css) rather than shadcn's
 // `--background` / `--foreground` names which MARVIN doesn't declare.

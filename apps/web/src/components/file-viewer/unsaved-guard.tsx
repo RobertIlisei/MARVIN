@@ -9,6 +9,7 @@
  * Cancel → no-op, user stays on the current file.
  */
 
+import { Button } from "@marvin/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -17,7 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@marvin/ui/dialog";
-import { Button } from "@marvin/ui/button";
 
 export interface UnsavedGuardState {
   open: boolean;

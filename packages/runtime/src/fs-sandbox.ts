@@ -122,7 +122,7 @@ export async function checkFsPath(
   }
 
   // lstat to detect a symlink *at the target* without following it.
-  let lstat;
+  let lstat: Awaited<ReturnType<typeof fs.lstat>>;
   try {
     lstat = await fs.lstat(targetResolved);
   } catch (e) {

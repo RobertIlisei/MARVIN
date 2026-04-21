@@ -80,7 +80,7 @@ export function GraphPanel({ cwd }: { cwd: string | null }) {
     if (!cwd)
       return "Pick a project to see its knowledge graph.";
     if (loading) return "Reading graph…";
-    if (!summary || !summary.ok)
+    if (!summary?.ok)
       return summary?.error ?? "No graph yet. Run `/graphify` in this project.";
     const when = summary.updatedAt
       ? new Date(summary.updatedAt).toLocaleString()

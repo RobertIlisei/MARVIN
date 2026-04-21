@@ -20,15 +20,13 @@
  * renders the existing read-only panels in those cases.
  */
 
-import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
-
-import { applyMonacoTheme } from "@/components/settings/monaco-themes";
-import { useTheme } from "@/components/settings/use-theme";
-
-import { EditorToolbar, type EditorConflict } from "./editor-toolbar";
 
 import type { OnMount } from "@monaco-editor/react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { applyMonacoTheme } from "@/components/settings/monaco-themes";
+import { useTheme } from "@/components/settings/use-theme";
+import { type EditorConflict, EditorToolbar } from "./editor-toolbar";
 
 const Editor = dynamic(
   () => import("@monaco-editor/react").then((m) => m.Editor),

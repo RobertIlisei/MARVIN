@@ -12,10 +12,10 @@
  * `turn.completed` event with aggregated totals.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
-import { dirname } from "path";
-import { marvinPaths } from "./paths";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import type { ClaudeStreamEvent, TokenUsage } from "./claude-cli";
+import { marvinPaths } from "./paths";
 
 export type SessionTurn =
   | { type: "turn.user"; at: string; message: string }
@@ -76,7 +76,7 @@ export function appendSessionTurn(
 ): void {
   const path = marvinPaths.sessionFile(projectId, sessionId);
   ensureDir(dirname(path));
-  appendFileSync(path, JSON.stringify(turn) + "\n", "utf-8");
+  appendFileSync(path, `${JSON.stringify(turn)}\n`, "utf-8");
 }
 
 /** Load a session transcript from disk. Returns `null` when the file doesn't exist. */

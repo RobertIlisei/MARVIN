@@ -1,14 +1,14 @@
-export { maybeRefreshGraphify, type GraphifyRefreshResult } from "./watchdog";
-export { refreshDocs, type RefreshDocsResult } from "./refresh-docs";
+export { createGraphMcpServer } from "./mcp-server";
 export {
-  summarizeGraph,
-  searchGraph,
-  getNeighbors,
-  resolveNode,
-  shortestPath,
   type GraphSummary,
-  type SearchHit,
+  getNeighbors,
   type Neighbor,
   type PathHop,
+  resolveNode,
+  type SearchHit,
+  searchGraph,
+  shortestPath,
+  summarizeGraph,
 } from "./read-graph";
-export { createGraphMcpServer } from "./mcp-server";
+export { type RefreshDocsResult, refreshDocs } from "./refresh-docs";
+export { type GraphifyRefreshResult, maybeRefreshGraphify } from "./watchdog";
