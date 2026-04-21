@@ -88,6 +88,10 @@ export function GraphPanel({ cwd }: { cwd: string | null }) {
     return `${summary.stats.nodes} nodes · ${summary.stats.edges} edges · ${summary.stats.communities} communities · updated ${when}`;
   }, [cwd, loading, summary]);
 
+  const iframeSrc = cwd
+    ? `/api/graph/html?cwd=${encodeURIComponent(cwd)}`
+    : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-[color:var(--color-border)] px-3 py-2">
@@ -98,6 +102,19 @@ export function GraphPanel({ cwd }: { cwd: string | null }) {
           {header}
         </div>
       </div>
+
+      {summary?.ok && iframeSrc && (
+        <div className="min-h-[260px] flex-[2] border-b border-[color:var(--color-border)] bg-[color:var(--color-bg)]">
+          <iframe
+            // `key` forces a fresh load on cwd change (or after /graphify refresh)
+            key={iframeSrc}
+            src={iframeSrc}
+            title="knowledge graph"
+            className="h-full w-full"
+            sandbox="allow-scripts allow-same-origin"
+          />
+        </div>
+      )}
 
       {summary?.ok && (
         <div className="border-b border-[color:var(--color-border)] px-3 py-2">
@@ -110,7 +127,7 @@ export function GraphPanel({ cwd }: { cwd: string | null }) {
         </div>
       )}
 
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-3 py-2">
+      <div className="scroll-thin min-h-[120px] flex-1 overflow-y-auto px-3 py-2">
         {hits !== null ? (
           <>
             <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">

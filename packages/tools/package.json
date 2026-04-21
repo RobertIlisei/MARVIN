@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./policy": "./src/policy.ts"
+    "./policy": "./src/policy.ts",
+    "./fs-constants": "./src/fs-constants.ts",
+    "./fs-write-policy": "./src/fs-write-policy.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

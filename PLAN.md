@@ -1176,9 +1176,183 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   then deleted each branch locally and on origin. Repo is now
   single-trunk — only `main` exists.
 
+- **2026-04-21 (ide-mode — M1: shared fs-sandbox + write policy + ADR-0008)** —
+  foundation for the IDE-mode file-ops effort. `packages/runtime/src/
+  fs-sandbox.ts` centralises path validation: `checkFsPath({ cwd, target,
+  mustExist, allowDirectory })` does `path.resolve` + relative-escape
+  check + `fs.lstat` (rejects symlink targets) + `fs.realpath` (rejects
+  ancestor-symlink escapes) + NUL-byte + 1024-byte path-length caps. For
+  `mustExist: false` it walks to the first extant ancestor and re-runs
+  the escape check there. `packages/tools/src/fs-constants.ts` is the
+  single source of truth for `IGNORE_DIR_NAMES` (lifted from
+  `tree/route.ts`), `HARD_DENY_DIR_SEGMENTS`, `SECRET_FILE_PATTERNS` +
+  `hasDenySegment()` / `isSecretFileName()`. `packages/tools/src/
+  fs-write-policy.ts` adds the user-initiated write classifier —
+  `fsWritePolicy(op, cwd)` returning `{ class: "auto"|"confirm"|"deny",
+  reason, severity? }` over the seven user ops (create-file, create-dir,
+  write-file, rename, move, delete-trash, delete-permanent). Delete-trash
+  is `auto` (reversible). Delete-permanent is always `confirm danger`.
+  Secret-file writes + case-only renames surface as confirms. Project-
+  root delete is a hard deny. 5 MB write cap. Refactored the three read
+  routes (`content`, `tree`, `status`) to use the new sandbox — fixes a
+  latent bug where `fs.stat` silently followed symlinks, so
+  `project/leak.txt -> /etc/passwd` had been readable via
+  `/api/files/content`. `tree/route.ts` now skips symlinks during the
+  walk. ADR-0008 documents the two-write-channels model + shared
+  primitives; linked from `REVIEW.md` (new "Always check: ignore/deny
+  lists from fs-constants only") and `docs/security/tool-policy.md`
+  (new "Two write channels" section). `packages/tools/package.json` +
+  `packages/runtime/package.json` export the new subpaths. End-to-end
+  verified via `pnpm -r typecheck` green across all 7 packages + web,
+  and a manual symlink-escape read test (`ln -s /etc/passwd …/leak.txt`
+  → 400 `symlink-rejected`). No UI, no new routes — M2 adds write
+  endpoints next.
+- **2026-04-21 (ide-mode — M2: write API routes + confirm token
+  registry)** — six new `POST /api/files/write/*` endpoints: `create`
+  (file or dir, `wx` flag unless `overwrite: true`), `save` (editor
+  save with `expectedMtime` CAS — mismatch returns `409 stale` with
+  `currentMtime`), `rename` (rejects silent case-only no-ops on
+  APFS/HFS+ without a fresh confirm token), `move` (batched multi-
+  source, pre-flights all collisions and aborts the batch atomically),
+  `delete` (`mode: "trash"` via the `trash` npm pkg — macOS Trash /
+  Windows Recycle Bin / XDG trash — or `mode: "permanent"` via
+  `fs.rm` behind a mandatory confirm token), and `confirm` (mints a
+  one-shot 60 s `X-Marvin-Confirmed` token scoped structurally to the
+  op+cwd so callers can't swap the op after token issuance). Every
+  route funnels `cwd` + target(s) through `checkFsPath` → `fsWritePolicy`
+  before touching disk. `packages/runtime/src/fs-write-confirm-registry.ts`
+  holds the token ledger (in-memory, session-scoped — parallel to the
+  turn-scoped `confirm-registry.ts`, deliberately not merged since the
+  lifetimes don't compose). `trash@^9.0.0` added to `apps/web`. New
+  `scripts/smoke-file-writes.sh` curls the full happy / sandbox-deny /
+  policy-deny / needs-confirm / project-root matrix end-to-end.
+  `docs/reference/api.md` gained a 6-endpoint "Files — write channel"
+  section with the shared error-code table; `docs/security/tool-policy.md`
+  gained a "User-initiated file ops" table mirroring the LLM table;
+  `REVIEW.md` gained an "always check" rule for the sandbox+policy+token
+  triplet on new write routes. End-to-end verified via
+  `pnpm -r typecheck` green across all 7 packages + web.
+- **2026-04-21 (ide-mode — M3: tree UI — context menu · multi-select ·
+  DnD · inline rename)** — file tree becomes interactive. Added the
+  two missing shadcn primitives to `@marvin/ui`: `context-menu.tsx`
+  (full radix wrapper — items, checkbox, radio, sub-menus, shortcuts,
+  destructive variant) and `alert-dialog.tsx` (for destructive
+  confirms). Six new file-tree modules: `use-fs-mutations.ts`
+  (client-side fetch wrappers handling the `X-Marvin-Confirmed`
+  token round-trip, structured error surface with typed discriminated
+  union — `exists` / `stale` / `collisions` / `policy-deny` /
+  `sandbox` / `io-error` / `cancelled`), `use-tree-selection.ts`
+  (Shift-range via visible-order flatten, Cmd/Ctrl-toggle, plain
+  click replaces), `use-tree-dnd.ts` (HTML5 DnD on
+  `application/x-marvin-paths` MIME — no dep — drop targets only
+  accept when the MIME is present so M5's OS→tree upload can share
+  the same handlers), `inline-rename.tsx` (F2/Enter/Esc, selects
+  stem before extension so typing replaces `foo` not `foo.ts`),
+  `tree-context-menu.tsx` (single-vs-multi mode, M6 items stubbed
+  so the menu renders today), `confirm-delete-dialog.tsx` (shared
+  AlertDialog with severity-driven button colour). `file-tree.tsx`
+  rewritten to orchestrate: revalidation counter ticks after every
+  mutation, visible-order flatten powers the Shift-range select,
+  drop highlight outlines the hovered directory, pending-create
+  placeholder row appears under the target dir when "New File/
+  Folder" is clicked with the same InlineRename component. Keyboard
+  on the tree root: `⌘⌫` trash, `⌘⇧⌫` permanent delete, `F2`
+  rename, `Esc` clear selection. `docs/reference/shortcuts.md`
+  gained a "File tree" section. No new ADR — all behaviour is
+  downstream of the ADR-0008 policy surface. End-to-end verified
+  via `pnpm -r typecheck` green across all 7 packages + web, clean
+  Turbopack HMR reload against the dev server, and live tree walk
+  returning 808 entries for the MARVIN repo itself.
+- **2026-04-21 (ide-mode — M4: Monaco editor + dirty state + save
+  CAS)** — swaps the `<pre>` file viewer for a full Monaco editor
+  backed by `/api/files/write/save` (M2). Five new modules under
+  `apps/web/src/components/file-viewer/`: `monaco-editor.tsx`
+  (dynamic-import Editor, Cmd-S / Ctrl-S keybinding via
+  `editor.addAction`, `expectedMtime` CAS on every save),
+  `editor-toolbar.tsx` (relative path, dirty dot, language + line
+  count + size, save button, close button, stale-conflict banner
+  with Reload / Overwrite choices), `use-dirty-state.ts` (dirty flag
+  + `beforeunload` guard for browser-level nav, plus
+  `guardOrConfirm()` helper for in-app file/project switches),
+  `unsaved-guard.tsx` (three-choice dialog: Save / Discard /
+  Cancel). Monaco theme defs extracted from `diff-viewer.tsx` into
+  shared `apps/web/src/components/settings/monaco-themes.ts` —
+  `ensureMonacoThemes()` + `applyMonacoTheme()` called from both
+  the editor and the diff viewer; single place to tune colours.
+  `/api/files/content` now returns `mtime` (pulled from `fs.stat`)
+  so the editor has a CAS token at mount time. Editor refuses to
+  mount on `binary: true` or `truncated: true` — those fall back
+  to read-only panels with "preview not available" / "would cause
+  silent data loss on save" messaging. On `409 stale`, the toolbar
+  banner lets the user Reload (discard pending edits) or
+  Overwrite (re-save without `expectedMtime`, explicit replace).
+  `docs/reference/shortcuts.md` gained an Editor section. No new
+  ADR — per plan, editor-as-first-class-surface is a UI choice
+  downstream of ADR-0008, not a policy change. End-to-end verified
+  via `pnpm -r typecheck` green, clean Turbopack HMR reload, and
+  live live `/api/files/content` traffic from the dev server
+  returning the new `mtime` field.
+- **2026-04-21 (ide-mode — M5: OS→tree upload + ADR-0009)** —
+  `POST /api/files/write/upload` (multipart) accepts OS drops into
+  the project tree. Per-file 10 MB cap, 50 MB batch cap, 50 files
+  max; over-cap files populate `skipped[]` with reasons so the
+  rest still land. **Mandatory `X-Marvin-Client: 1` request header**
+  — multipart is a "simple" CORS request that bypasses preflight,
+  and the custom header forces the browser to preflight; cross-
+  origin drive-by POSTs can't replay it. Same `checkFsPath` +
+  `fsWritePolicy` pipeline as the other routes, so `.git/`
+  smuggling etc. is still caught. Secret-file uploads skip
+  (rather than prompt per file) to avoid modal spam on batch
+  drops. UI: `use-os-drop.ts` discriminates OS vs within-tree
+  DnD by `dataTransfer.types` (`Files` vs
+  `application/x-marvin-paths`), `upload-progress-toast.tsx`
+  surfaces the uploaded / skipped summary with auto-dismiss
+  after 6 s (hover to keep). Tree root gains an
+  accent-outlined hover state while an OS drag is overhead.
+  ADR-0009 documents the CSRF-via-preflight argument, the cap
+  rationale, the secret-file skip decision, and four named
+  alternatives with reject reasons. `docs/reference/api.md`
+  gained an `/upload` entry with the header + cap table;
+  `REVIEW.md` gained an "Always check: new multipart routes
+  require `X-Marvin-Client`" rule. End-to-end verified via
+  `pnpm -r typecheck` green and curl smoke — 400 without the
+  header, 200 with it + file written on disk.
+- **2026-04-21 (ide-mode — M6 batch: IDE layout · graph in centre ·
+  Reveal + Open-in-Terminal · ⌘P quick-open · image/PDF preview ·
+  editor breadcrumb)** — shell re-laid-out into `[files | work |
+  brain-top / chat-bottom]`, matching IDE muscle memory. `⌘P` rebound
+  from "toggle preview" to "fuzzy file quick-open" (preview toggle
+  moves to `⌘⇧P`). New quick-open modal does subsequence match with
+  boundary + consecutive + basename-contains bonuses and a length
+  penalty; ↑/↓ navigate, ⏎ opens in the Monaco editor. Graph moved
+  from right panel to centre column alongside preview / file-viewer /
+  terminal; new `/api/graph/html` route mounts the live interactive
+  `graphify-out/graph.html` in an `allow-scripts allow-same-origin`
+  iframe above the text summary — before this the summary was the
+  only graph view MARVIN surfaced. Centre ordering reshuffled to
+  preview (top) > graph > file-viewer > terminal (bottom) per user
+  feedback; resize handles only render between adjacent panes.
+  Context-menu stubs wired to real impl: `/api/files/reveal` spawns
+  `open -R`/`explorer /select`/`xdg-open` with argv-only (no shell
+  interpolation); Terminal component gains a window-event bridge
+  (`marvin:terminal-run`) so the tree's "Open in Terminal" toggles
+  the pane on then dispatches a POSIX-quoted `cd <dir>` through
+  xterm's normal run path. Binary-file viewer upgraded: images
+  (png/jpg/gif/webp/avif/svg/ico/bmp/heic) render inline via a new
+  sandbox-gated `/api/files/raw` route (10 MB cap, MIME allowlist —
+  unsupported types return 415 so the handler never serves mystery
+  octet-streams), PDFs render in an iframe with the same allowlist.
+  Editor toolbar path rendered as a `<nav>` breadcrumb with `/`
+  separators, last segment emphasised in fg colour. Shortcut
+  overlay + `docs/reference/shortcuts.md` updated for the `⌘P` /
+  `⌘⇧P` swap. End-to-end verified via `pnpm -r typecheck` green,
+  Turbopack HMR clean, and curl smoke on `/api/files/raw` returning
+  200 for `hero.png` and `/api/graph/html` returning 200 for the
+  MARVIN repo graph.
+
 ## Status
 
-**MARVIN v1 shipped.** Every phase (1-5) complete. The only Phase 5
+**MARVIN v1 shipped + ide-mode M1.** Every phase (1-5) complete. The only Phase 5
 stretch item not shipped is the Honeycomb MCP integration, which is
 explicitly deferred until a Honeycomb account + team setup are
 available (tracked in `docs/operations/observability.md`). No open

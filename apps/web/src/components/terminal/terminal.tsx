@@ -92,6 +92,10 @@ export function Terminal({ cwd }: { cwd: string }) {
   const fitRef = useRef<FitAddonT | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  // Exposed via ref so the window-event bridge below can inject commands
+  // from outside the xterm input loop (e.g. "Open in Terminal" from the
+  // file tree context menu).
+  const runCmdRef = useRef<(cmd: string) => Promise<void>>(async () => {});
 
   // Line buffer + history state kept in refs to avoid re-mounting xterm.
   const lineRef = useRef("");
@@ -305,6 +309,7 @@ export function Terminal({ cwd }: { cwd: string }) {
 
       termRef.current = term;
       fitRef.current = fit;
+      runCmdRef.current = runCommand;
 
       resizeObserver = new ResizeObserver(() => {
         try {
@@ -337,6 +342,27 @@ export function Terminal({ cwd }: { cwd: string }) {
     term.options.theme =
       themeMode === "dark" ? XTERM_THEME_DARK : XTERM_THEME_LIGHT;
   }, [themeMode, mounted]);
+
+  // External command bridge — `window.dispatchEvent(new CustomEvent(
+  // "marvin:terminal-run", { detail: { cmd: "cd …" }}))` types and runs
+  // a command. Used by "Open in Terminal" from the file tree.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ cmd?: string }>).detail;
+      const cmd = detail?.cmd;
+      const term = termRef.current;
+      if (!cmd || !term || busyRef.current) return;
+      // Echo the command as if typed, then run through the normal path.
+      term.write(`${cmd}\r\n`);
+      lineRef.current = "";
+      histRef.current.push(cmd);
+      saveHistory(histRef.current);
+      histIdxRef.current = histRef.current.length;
+      void runCmdRef.current(cmd);
+    };
+    window.addEventListener("marvin:terminal-run", handler);
+    return () => window.removeEventListener("marvin:terminal-run", handler);
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

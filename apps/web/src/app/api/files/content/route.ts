@@ -1,12 +1,18 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 
+import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_SIZE = 512 * 1024;
+// Cap for the in-editor preview. Files up to this size are fully loaded;
+// larger files are read up to the cap and returned with `truncated: true`
+// so the editor can render them read-only (save is disabled). The cap
+// balances Monaco's performance envelope against real-world generated
+// artefacts (lockfiles, minified bundles, etc.) that are legitimately
+// > 1 MB but still worth scanning.
+const MAX_SIZE = 4 * 1024 * 1024;
 
 export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
@@ -18,32 +24,35 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const root = path.resolve(cwd);
-  const target = path.resolve(file);
-  const rel = path.relative(root, target);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    return NextResponse.json({ error: "path escapes cwd" }, { status: 400 });
+  const check = await checkFsPath({ cwd, target: file, mustExist: true });
+  if (!check.ok) {
+    const status =
+      check.error === "not-found"
+        ? 404
+        : check.error === "path-escapes-cwd" ||
+            check.error === "symlink-rejected" ||
+            check.error === "symlink-escapes-cwd"
+          ? 400
+          : check.error === "is-directory"
+            ? 400
+            : 500;
+    return NextResponse.json({ error: check.error }, { status });
   }
+  const target = check.absolutePath;
 
   try {
     const stat = await fs.stat(target);
-    if (!stat.isFile()) {
-      return NextResponse.json({ error: "not a file" }, { status: 400 });
+    const truncated = stat.size > MAX_SIZE;
+    const readSize = truncated ? MAX_SIZE : stat.size;
+    const fh = await fs.open(target, "r");
+    let buf: Buffer;
+    try {
+      const holder = Buffer.alloc(readSize);
+      if (readSize > 0) await fh.read(holder, 0, readSize, 0);
+      buf = holder;
+    } finally {
+      await fh.close();
     }
-    if (stat.size > MAX_SIZE) {
-      return NextResponse.json(
-        {
-          path: target,
-          size: stat.size,
-          maxSize: MAX_SIZE,
-          binary: false,
-          truncated: true,
-          content: null,
-        },
-        { status: 200 },
-      );
-    }
-    const buf = await fs.readFile(target);
     const sample = buf.subarray(0, Math.min(4096, buf.length));
     let nonPrint = 0;
     for (let i = 0; i < sample.length; i++) {
@@ -59,16 +68,24 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         path: target,
         size: stat.size,
+        mtime: stat.mtimeMs,
+        maxSize: MAX_SIZE,
         binary: true,
-        truncated: false,
+        truncated,
         content: null,
       });
     }
     return NextResponse.json({
       path: target,
       size: stat.size,
+      mtime: stat.mtimeMs,
+      maxSize: MAX_SIZE,
       binary: false,
-      truncated: false,
+      truncated,
+      // For truncated files we still ship the first MAX_SIZE bytes so
+      // the editor can mount in read-only mode. Save is disabled client-
+      // side when `truncated: true` — prevents the "overwrite a 10 MB
+      // file with 4 MB" data-loss scenario.
       content: buf.toString("utf8"),
     });
   } catch {

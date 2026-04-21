@@ -9,11 +9,12 @@ interface Shortcut {
 
 const SHORTCUTS: Shortcut[] = [
   { keys: "⌘ K", description: "Open the project picker" },
+  { keys: "⌘ P", description: "Go to file (fuzzy quick-open)" },
   { keys: "⌘ ⇧ N", description: "Start a new session" },
   { keys: "⌘ B", description: "Toggle the files pane" },
   { keys: "⌘ G", description: "Toggle the graph pane" },
   { keys: "⌘ J", description: "Toggle the embedded terminal" },
-  { keys: "⌘ P", description: "Toggle the browser preview pane" },
+  { keys: "⌘ ⇧ P", description: "Toggle the browser preview pane" },
   { keys: "⌘ .", description: "Cancel the current turn" },
   { keys: "⏎", description: "Send message (in chat input)" },
   { keys: "⇧ ⏎", description: "Newline (in chat input)" },

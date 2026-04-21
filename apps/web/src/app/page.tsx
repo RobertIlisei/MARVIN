@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 /** Match Task `input` shapes whose description marks an advisor consult. */
 function advisorDescriptionOf(input: unknown): string | null {
@@ -25,6 +25,7 @@ import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { CostPill } from "@/components/cost/cost-pill";
 import { FileTree } from "@/components/file-tree/file-tree";
+import { QuickOpen } from "@/components/file-tree/quick-open";
 import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { GraphPanel } from "@/components/graph/graph-panel";
 import { ChatInput } from "@/components/input/chat-input";
@@ -106,6 +107,7 @@ export default function Home() {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
   const [heroDraftKey, setHeroDraftKey] = useState(0);
@@ -291,7 +293,8 @@ export default function Home() {
         (target?.isContentEditable ?? false);
 
       if (e.key === "Escape") {
-        if (shortcutsOpen) setShortcutsOpen(false);
+        if (quickOpenOpen) setQuickOpenOpen(false);
+        else if (shortcutsOpen) setShortcutsOpen(false);
         return;
       }
 
@@ -333,8 +336,14 @@ export default function Home() {
         togglePane("terminal");
         return;
       }
-      // Cmd+P — toggle preview
+      // Cmd+P — file quick-open (IDE muscle memory)
       if (e.key === "p" && !e.shiftKey) {
+        e.preventDefault();
+        if (cwd) setQuickOpenOpen(true);
+        return;
+      }
+      // Cmd+Shift+P — toggle preview (moved from ⌘P to make room for quick-open)
+      if ((e.key === "P" || e.key === "p") && e.shiftKey) {
         e.preventDefault();
         togglePane("preview");
         return;
@@ -348,7 +357,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [shortcutsOpen, reset, togglePane, cancel]);
+  }, [shortcutsOpen, quickOpenOpen, reset, togglePane, cancel, cwd]);
 
   const handleResumeSession = useCallback(
     async (projectId: string, sessionId: string) => {
@@ -669,21 +678,21 @@ export default function Home() {
     );
   }
 
-  const centerNeedsVerticalSplit = Boolean(
-    (selectedPath && cwd) || (panes.terminal && cwd) || (panes.preview && cwd),
-  );
-
   const showFiles = panes.files && !!cwd;
   const showBrain = panes.brain;
   const showGraph = panes.graph && !!cwd;
   const showPreview = panes.preview && !!cwd;
+  const showFileViewer = Boolean(selectedPath && cwd);
+  const showTerminal = Boolean(panes.terminal && cwd);
+  const hasWork =
+    showPreview || showGraph || showFileViewer || showTerminal;
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden">
       {header}
       <PanelGroup
         direction="horizontal"
-        autoSaveId="marvin-shell-h-v2"
+        autoSaveId="marvin-shell-h-v3"
         className="min-h-0 flex-1 w-full"
       >
         {showFiles && (
@@ -705,6 +714,9 @@ export default function Home() {
                     cwd={cwd}
                     onSelect={setSelectedPath}
                     {...(selectedPath ? { selectedPath } : {})}
+                    onOpenInTerminal={() =>
+                      setPanes((p) => ({ ...p, terminal: true }))
+                    }
                   />
                 </div>
               </aside>
@@ -713,198 +725,243 @@ export default function Home() {
           </>
         )}
 
-        <Panel id="center" order={2} defaultSize={60} minSize={40}>
+        <Panel id="center" order={2} defaultSize={46} minSize={24}>
           <section className="flex h-full min-w-0 flex-col">
-            <div className="px-6 pt-3">
-              <StatusBar
-                state={marvinState}
-                stats={stats}
-                marvinSessionId={marvinSessionId}
-              />
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col">
-              {centerNeedsVerticalSplit ? (
-                <PanelGroup
-                  direction="vertical"
-                  autoSaveId="marvin-center-v-v2"
-                  className="flex-1"
-                >
-                  <Panel id="chat" order={1} defaultSize={58} minSize={25}>
-                    <div
-                      ref={scrollerRef}
-                      className="scroll-thin h-full overflow-y-auto px-6 py-6"
+            {hasWork ? (
+              (() => {
+                // Build the center panes in display order so resize handles
+                // only render between adjacent panes (avoids a dangling
+                // handle when the top slot is empty).
+                const panesList: ReactNode[] = [];
+                let order = 1;
+                if (showPreview) {
+                  panesList.push(
+                    <Panel
+                      key="preview"
+                      id="preview"
+                      order={order++}
+                      defaultSize={35}
+                      minSize={15}
                     >
-                      <div className="mx-auto flex max-w-4xl flex-col gap-4">
-                        {messages.map((m) => (
-                          <MessageView
-                            key={m.id}
-                            message={m}
-                            onDecideConfirm={decideConfirm}
-                          />
-                        ))}
+                      <PreviewPane projectId={active?.id ?? null} />
+                    </Panel>,
+                  );
+                }
+                if (showGraph) {
+                  panesList.push(
+                    <Panel
+                      key="graph"
+                      id="graph"
+                      order={order++}
+                      defaultSize={45}
+                      minSize={20}
+                    >
+                      <div className="h-full border-t border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/20">
+                        <GraphPanel cwd={cwd} />
                       </div>
-                    </div>
-                  </Panel>
-                  {selectedPath && cwd && (
-                    <>
-                      <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
-                      <Panel
-                        id="file-viewer"
-                        order={2}
-                        defaultSize={30}
-                        minSize={15}
-                      >
-                        <FileViewer
-                          cwd={cwd}
-                          filePath={selectedPath}
-                          onClose={() => setSelectedPath(undefined)}
-                        />
-                      </Panel>
-                    </>
-                  )}
-                  {showPreview && (
-                    <>
-                      <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
-                      <Panel
-                        id="preview"
-                        order={3}
-                        defaultSize={30}
-                        minSize={15}
-                      >
-                        <PreviewPane projectId={active?.id ?? null} />
-                      </Panel>
-                    </>
-                  )}
-                  {panes.terminal && cwd && (
-                    <>
-                      <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
-                      <Panel
-                        id="terminal"
-                        order={4}
-                        defaultSize={30}
-                        minSize={15}
-                      >
-                        <Terminal cwd={cwd} />
-                      </Panel>
-                    </>
-                  )}
-                </PanelGroup>
-              ) : (
-                <div
-                  ref={scrollerRef}
-                  className="scroll-thin h-full flex-1 overflow-y-auto px-6 py-6"
-                >
-                  <div className="mx-auto flex max-w-4xl flex-col gap-4">
-                    {messages.map((m) => (
-                      <MessageView
-                        key={m.id}
-                        message={m}
-                        onDecideConfirm={decideConfirm}
+                    </Panel>,
+                  );
+                }
+                if (showFileViewer) {
+                  panesList.push(
+                    <Panel
+                      key="file-viewer"
+                      id="file-viewer"
+                      order={order++}
+                      defaultSize={50}
+                      minSize={15}
+                    >
+                      <FileViewer
+                        cwd={cwd}
+                        filePath={selectedPath!}
+                        onClose={() => setSelectedPath(undefined)}
                       />
-                    ))}
+                    </Panel>,
+                  );
+                }
+                if (showTerminal) {
+                  panesList.push(
+                    <Panel
+                      key="terminal"
+                      id="terminal"
+                      order={order++}
+                      defaultSize={30}
+                      minSize={15}
+                    >
+                      <Terminal cwd={cwd} />
+                    </Panel>,
+                  );
+                }
+                const withHandles: ReactNode[] = [];
+                for (let i = 0; i < panesList.length; i++) {
+                  if (i > 0) {
+                    withHandles.push(
+                      <PanelResizeHandle
+                        key={`h-${i}`}
+                        className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40"
+                      />,
+                    );
+                  }
+                  withHandles.push(panesList[i]);
+                }
+                return (
+                  <PanelGroup
+                    direction="vertical"
+                    autoSaveId="marvin-center-v-v4"
+                    className="flex-1"
+                  >
+                    {withHandles}
+                  </PanelGroup>
+                );
+              })()
+            ) : (
+              <div className="flex h-full flex-1 items-center justify-center px-6 py-10 text-center">
+                <div className="max-w-sm font-mono text-[11px] text-[color:var(--color-fg-faint)]">
+                  <div className="mb-2 text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-dim)]">
+                    work pane
                   </div>
+                  <p className="leading-relaxed">
+                    open a file from the tree, reveal a terminal
+                    (<span className="text-[color:var(--color-fg)]/80">⌘ J</span>),
+                    the preview
+                    (<span className="text-[color:var(--color-fg)]/80">⌘ P</span>),
+                    or the graph
+                    (<span className="text-[color:var(--color-fg)]/80">⌘ G</span>)
+                    to work here. chat is on the right.
+                  </p>
                 </div>
-              )}
-            </div>
-
-            <div className="mx-auto w-full max-w-4xl px-6 pb-6">
-              <ChatInput
-                onSend={handleSend}
-                onCancel={cancel}
-                busy={busy}
-                disabled={!cwd}
-                hint={hint}
-              />
-            </div>
+              </div>
+            )}
           </section>
         </Panel>
 
-        {(showGraph || showBrain) && (
-          <>
-            <PanelResizeHandle className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 md:block" />
-            <Panel
-              id="side"
-              order={3}
-              defaultSize={22}
-              minSize={16}
-              maxSize={36}
-              className="hidden md:block"
+        <PanelResizeHandle className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 md:block" />
+        <Panel
+          id="side"
+          order={3}
+          defaultSize={37}
+          minSize={24}
+          maxSize={55}
+          className="hidden md:block"
+        >
+          <aside className="flex h-full min-h-0 flex-col border-l border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/20">
+            <PanelGroup
+              direction="vertical"
+              autoSaveId="marvin-side-v-v2"
+              className="flex-1"
             >
-              {showGraph ? (
-                <aside className="h-full bg-[color:var(--color-bg-elev)]/20">
-                  <GraphPanel cwd={cwd} />
-                </aside>
-              ) : (
-                <aside className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-8">
-                  <div className="relative flex flex-col items-center gap-4">
-                    <BrainLiquid state={marvinState} size={260} />
-                    <AdvisorOrb
-                      active={advisorActive}
-                      model={advisorModel}
-                      topic={advisorTopic}
-                      size={64}
-                      offset={{ top: 0, right: -12 }}
-                    />
-                    <div className="text-center">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
-                        state
-                      </div>
-                      <div className="mt-1 font-mono text-sm text-[color:var(--color-accent)]">
-                        {labelFor(marvinState)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-auto space-y-3 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
-                    <div>
-                      <span className="text-[color:var(--color-fg-faint)]">project</span>
-                      <div className="mt-1 truncate text-[color:var(--color-fg)]/85">
-                        {active?.name ?? "—"}
-                      </div>
-                      {active && (
-                        <div className="mt-0.5 truncate text-[10px] text-[color:var(--color-fg-faint)]">
-                          {active.workDir}
+              {showBrain && (
+                <>
+                  <Panel
+                    id="side-top"
+                    order={1}
+                    defaultSize={38}
+                    minSize={18}
+                    maxSize={65}
+                  >
+                    <div className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                      <div className="relative flex flex-col items-center gap-3">
+                        <BrainLiquid state={marvinState} size={200} />
+                        <AdvisorOrb
+                          active={advisorActive}
+                          model={advisorModel}
+                          topic={advisorTopic}
+                          size={56}
+                          offset={{ top: 0, right: -12 }}
+                        />
+                        <div className="text-center">
+                          <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
+                            state
+                          </div>
+                          <div className="mt-0.5 font-mono text-sm text-[color:var(--color-accent)]">
+                            {labelFor(marvinState)}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                    <div className="border-t border-[color:var(--color-border)] pt-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[color:var(--color-fg-faint)]">executor</span>
-                        <span
-                          className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                          title="runs the turn loop"
-                        >
-                          {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
-                        </span>
                       </div>
-                      <div className="mt-1 flex items-center justify-between">
-                        <span className="text-[color:var(--color-fg-faint)]">advisor</span>
-                        <span
-                          className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                          title={
-                            advisorModel
-                              ? "called by the executor on hard steps"
-                              : "disabled"
-                          }
-                        >
-                          {advisorModel
-                            ? advisorModel.replace(/^claude-/, "")
-                            : "—"}
-                        </span>
+                      <div className="mt-auto space-y-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[color:var(--color-fg-faint)]">project</span>
+                          <span className="truncate text-right text-[color:var(--color-fg)]/85">
+                            {active?.name ?? "—"}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 border-t border-[color:var(--color-border)] pt-2">
+                          <span className="text-[color:var(--color-fg-faint)]">executor</span>
+                          <span
+                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                            title="runs the turn loop"
+                          >
+                            {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[color:var(--color-fg-faint)]">advisor</span>
+                          <span
+                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
+                            title={
+                              advisorModel
+                                ? "called by the executor on hard steps"
+                                : "disabled"
+                            }
+                          >
+                            {advisorModel
+                              ? advisorModel.replace(/^claude-/, "")
+                              : "—"}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[color:var(--color-fg-faint)]">v</span>
-                      <span className="text-[color:var(--color-fg)]/85">0.0.1 · phase 5</span>
+                  </Panel>
+                  <PanelResizeHandle className="h-px bg-[color:var(--color-border)] transition hover:h-[3px] hover:bg-[color:var(--color-accent-deep)]/40" />
+                </>
+              )}
+              <Panel id="side-chat" order={2} minSize={20}>
+                <div className="flex h-full min-h-0 flex-col">
+                  <div className="px-4 pt-3">
+                    <StatusBar
+                      state={marvinState}
+                      stats={stats}
+                      marvinSessionId={marvinSessionId}
+                    />
+                  </div>
+                  <div
+                    ref={scrollerRef}
+                    className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-4"
+                  >
+                    <div className="flex flex-col gap-4">
+                      {messages.map((m) => (
+                        <MessageView
+                          key={m.id}
+                          message={m}
+                          onDecideConfirm={decideConfirm}
+                        />
+                      ))}
                     </div>
                   </div>
-                </aside>
-              )}
-            </Panel>
-          </>
-        )}
+                  <div className="px-4 pb-4">
+                    <ChatInput
+                      onSend={handleSend}
+                      onCancel={cancel}
+                      busy={busy}
+                      disabled={!cwd}
+                      hint={hint}
+                    />
+                  </div>
+                </div>
+              </Panel>
+            </PanelGroup>
+          </aside>
+        </Panel>
       </PanelGroup>
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {cwd && (
+        <QuickOpen
+          cwd={cwd}
+          open={quickOpenOpen}
+          onOpenChange={setQuickOpenOpen}
+          onSelect={(absPath) => setSelectedPath(absPath)}
+        />
+      )}
     </main>
   );
 }
