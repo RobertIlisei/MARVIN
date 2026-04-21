@@ -34,7 +34,6 @@ import { SettingsPanel } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
-import { useTauriMenu } from "@/components/shell/use-tauri-menu";
 import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { Terminal } from "@/components/terminal/terminal";
 
@@ -295,23 +294,6 @@ export default function Home() {
     (key: keyof PaneState) => setPanes((p) => ({ ...p, [key]: !p[key] })),
     [],
   );
-
-  // Native menu-bar wiring for the Tauri desktop build. No-op in a
-  // browser tab. Keep IDs in sync with `src-tauri/src/lib.rs`'s
-  // `ids` module.
-  useTauriMenu({
-    newSession: reset,
-    quickOpen: () => cwd && setQuickOpenOpen(true),
-    openProjectPicker: () => setPickerOpenSignal((v) => v + 1),
-    cancelTurn: cancel,
-    toggleShortcutsHelp: () => setShortcutsOpen((v) => !v),
-    togglePane: (key) => togglePane(key as keyof PaneState),
-    openUrl: (url) => {
-      if (typeof window !== "undefined") {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-    },
-  });
 
   // ---- Global keyboard shortcuts ---------------------------------------
   useEffect(() => {

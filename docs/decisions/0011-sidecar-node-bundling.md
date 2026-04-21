@@ -1,9 +1,21 @@
 # ADR-0011 — Standalone `.app` via bundled Node sidecar
 
-**Status:** Accepted
+**Status:** Deprecated (rolled back 2026-04-21 — see §Deprecation note)
 **Date:** 2026-04-21
 **Deciders:** @robertilisei, MARVIN
 **Extends:** [ADR-0010 — Desktop wrapper via Tauri](./0010-desktop-wrapper-tauri.md)
+
+## Deprecation note (2026-04-21)
+
+The bundled-Node sidecar approach this ADR proposed was rolled back the same day it landed. Specific reasons:
+
+- **Binary-size blowup.** The aarch64 Node bundle adds ~90 MB to the `.app`. On a tool that runs locally and can always assume a host Node install, that's a lot of bytes for no functional gain.
+- **Code-signing + notarisation churn.** The sidecar binary needs its own sign + notarise step; Apple's hardening rules for bundled executables turn every release into a multi-stage dance we aren't set up for yet.
+- **Drift vs the host environment.** A bundled Node pinned at release time is a second Node version on the user's machine, drifting from what `pnpm dev` / `bin/marvin` / the user's own project runtime uses. The compatibility bugs that creates outweigh the "user runs nothing separately" ergonomic the sidecar was meant to buy.
+
+The v1 compromise from [ADR-0010](./0010-desktop-wrapper-tauri.md) — *the user runs `bin/marvin` in a terminal first; the `.app` gives them a window, dock icon, and menu bar* — is re-established as the current stance. No replacement ADR; we are not shipping a sidecar until the size + signing problems have a cleaner answer.
+
+The rest of this document is preserved for historical context. Anything describing the bundled-sidecar mechanism, `resources/next/`, `binaries/node-aarch64-apple-darwin`, or the `bundle-resources.sh` script is obsolete.
 
 ## Context
 
