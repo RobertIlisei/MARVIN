@@ -9,3 +9,11 @@ export {
   type SessionRecord,
 } from "./session";
 export { buildSystemPrompt, type PersonalityMode } from "./personality";
+export {
+  checkFsPath,
+  type SandboxCheckInput,
+  type SandboxCheckResult,
+  type SandboxCheckOk,
+  type SandboxCheckErr,
+  type SandboxErrorCode,
+} from "./fs-sandbox";

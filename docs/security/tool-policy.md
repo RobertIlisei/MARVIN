@@ -2,6 +2,15 @@
 
 Every tool call goes through [`toolPolicy()`](../../../packages/tools/src/policy.ts). The policy classifies the call into one of three outcomes: auto-allow, confirm, or hard-deny. The [confirm gate](../concepts/confirm-gate.md) enforces the classification structurally via the Agent SDK's `canUseTool` callback.
 
+## Two write channels
+
+MARVIN has two filesystem write surfaces, not one:
+
+1. **LLM-initiated** — MARVIN's `Edit`, `Write`, `Bash` tool calls, routed via `canUseTool` → `toolPolicy` → the turn-scoped [confirm registry](../../../packages/runtime/src/confirm-registry.ts). This page documents that channel.
+2. **User-initiated** — the file-tree UI's create / rename / move / delete / save / upload operations, routed through `/api/files/write/*` → `fsWritePolicy` → a session-scoped confirm-token registry. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md) and [ADR-0009](../decisions/0009-file-uploads-from-os.md) (M5, pending).
+
+Both channels share the same ignore-list, hard-deny-segment list, and secret-file patterns — [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — so tightening one surface automatically tightens the other. The sandbox helper [`checkFsPath`](../../../packages/runtime/src/fs-sandbox.ts) is also shared and is the only supported way to validate a caller-provided path before I/O.
+
 ## The three outcomes
 
 ### Auto-allow

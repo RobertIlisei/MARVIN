@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { checkFsPath } from "@marvin/runtime/fs-sandbox";
+import { IGNORE_DIR_NAMES } from "@marvin/tools/fs-constants";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -13,28 +15,6 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
-const IGNORE = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  ".turbo",
-  "dist",
-  "build",
-  "out",
-  ".venv",
-  "venv",
-  "__pycache__",
-  ".DS_Store",
-  "coverage",
-  ".parcel-cache",
-  ".cache",
-  ".pytest_cache",
-  ".mypy_cache",
-  ".ruff_cache",
-  "target",
-  "vendor",
-]);
-
 const DEFAULT_MAX_DEPTH = 6;
 const MAX_ENTRIES = 2000;
 
@@ -44,15 +24,30 @@ export async function GET(req: NextRequest) {
   if (!cwd) {
     return NextResponse.json({ error: "cwd required" }, { status: 400 });
   }
-  const root = path.resolve(cwd);
-  try {
-    const stat = await fs.stat(root);
-    if (!stat.isDirectory()) {
-      return NextResponse.json({ error: "not a directory" }, { status: 400 });
-    }
-  } catch {
-    return NextResponse.json({ error: "path not found" }, { status: 404 });
+
+  const check = await checkFsPath({
+    cwd,
+    target: cwd,
+    mustExist: true,
+    allowDirectory: true,
+  });
+  if (!check.ok) {
+    const status =
+      check.error === "not-found"
+        ? 404
+        : check.error === "is-directory" || check.error === "not-a-directory"
+          ? 400
+          : check.error === "symlink-rejected" ||
+              check.error === "symlink-escapes-cwd" ||
+              check.error === "path-escapes-cwd"
+            ? 400
+            : 500;
+    return NextResponse.json({ error: check.error }, { status });
   }
+  if (!check.isDirectory) {
+    return NextResponse.json({ error: "not a directory" }, { status: 400 });
+  }
+  const root = check.absolutePath;
 
   let count = 0;
   async function walk(dir: string, d: number): Promise<TreeNode[]> {
@@ -70,7 +65,11 @@ export async function GET(req: NextRequest) {
     const out: TreeNode[] = [];
     for (const e of entries) {
       if (count >= MAX_ENTRIES) break;
-      if (IGNORE.has(e.name)) continue;
+      if (IGNORE_DIR_NAMES.has(e.name)) continue;
+      // Skip symlinks during the walk — matches the sandbox helper's
+      // reject-symlink policy (see ADR-0008). A symlink named `cache`
+      // pointing to /tmp would otherwise leak into the tree UI.
+      if (e.isSymbolicLink()) continue;
       const fullPath = path.join(dir, e.name);
       count++;
       if (e.isDirectory()) {
