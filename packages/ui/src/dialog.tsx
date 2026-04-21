@@ -59,13 +59,20 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        // Hard-applied inline style is the belt-and-braces guarantee
+        // against a Tailwind class miss (arbitrary-value classes got
+        // tailwind-merge'd incorrectly earlier, producing an invisible
+        // card over a visible backdrop). `className` is kept for
+        // layout + animation; colour + border + shadow are forced
+        // here.
+        style={{
+          backgroundColor: "var(--color-bg-elev)",
+          color: "var(--color-fg)",
+          border: "1px solid var(--color-border-strong)",
+          boxShadow: "var(--shadow-panel)",
+        }}
         className={cn(
-          // Use MARVIN's `@theme` tokens rather than shadcn's
-          // `--background` / `--border` / `--ring` which aren't
-          // declared — otherwise the card renders transparent over
-          // the backdrop and the user sees a see-through overlay.
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg p-6 duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
-          "border border-[color:var(--color-border-strong)] bg-[color:var(--color-bg-elev)] text-[color:var(--color-fg)] shadow-[var(--shadow-panel)]",
           className
         )}
         {...props}
