@@ -19,7 +19,8 @@
     "./playwright-mcp": "./src/playwright-mcp.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./models": "./src/models.ts",
-    "./fs-sandbox": "./src/fs-sandbox.ts"
+    "./fs-sandbox": "./src/fs-sandbox.ts",
+    "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -195,6 +195,84 @@ Read one file. Path must be inside `cwd`; symlinks are rejected.
 
 Returns `{ isGit: false, status: {} }` outside a git work tree *or* when the sandbox check on `cwd` fails. Consumed by the file tree (dirty-file badges + branch pill) and the header's `<BranchBadge>`.
 
+## Files — write channel
+
+User-initiated write endpoints under `/api/files/write/*`. Parallel to the LLM write channel (`canUseTool` + `toolPolicy`): paths go through the shared sandbox (`checkFsPath`), ops go through `fsWritePolicy`, and `confirm`-classified ops require an `X-Marvin-Confirmed: <token>` header minted by `/api/files/write/confirm`. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
+
+**Shared error codes** (all `POST` bodies are JSON; all responses are JSON):
+
+| Status | Body shape | Meaning |
+|---|---|---|
+| `400` | `{ error: "<code>" }` | Bad request or sandbox rejection (`path-escapes-cwd`, `symlink-rejected`, `path-contains-null`, `path-too-long`, `is-directory`, `not-a-directory`). |
+| `403` | `{ error: "policy-deny", reason }` | `fsWritePolicy` denied (deny-list segment, project-root, oversize). |
+| `404` | `{ error: "not-found" \| "parent-not-found" }` | Required path missing. |
+| `409` | `{ error: "needs-confirm", reason, severity, tokenError? }` | Policy returned `confirm` without a valid token. |
+| `409` | `{ error: "exists" }` | Create / rename target already exists (no implicit overwrite). |
+| `409` | `{ error: "stale", currentMtime, size }` | Save CAS: on-disk mtime differs from `expectedMtime`. |
+| `409` | `{ error: "collisions", collisions: string[] }` | Move: at least one destination exists; whole batch aborted. |
+| `500` | `{ error: "io-error", detail }` | Unexpected OS error. |
+
+### `POST /api/files/write/confirm`
+
+Mint a one-shot token for a `confirm`-classified op. Tokens are scoped to the exact op+cwd, expire in 60 s, and are consumed on first use.
+
+**Request body:** `{ cwd: string, op: FsWriteOp }`
+
+**Response (confirm required):** `{ needsConfirm: true, reason, severity: "warn"|"danger", token, expiresIn: 60 }`
+
+**Response (policy auto-classified):** `{ needsConfirm: false, reason }` — caller can run the op directly without a token.
+
+**Response (policy deny):** `403 { error: "policy-deny", reason }`.
+
+### `POST /api/files/write/create`
+
+Create a new file or empty directory.
+
+**Request body:** `{ cwd, path, kind: "file"|"dir", content?: string, overwrite?: boolean }`
+
+- `kind: "file"`: writes UTF-8 `content` (default `""`). Uses `wx` flag unless `overwrite: true`.
+- `kind: "dir"`: `fs.mkdir` non-recursive; parents must exist.
+
+**Response:** `{ ok: true, path }` or an error code above.
+
+### `POST /api/files/write/save`
+
+Save an edit to an existing file. Supports optimistic-concurrency via `expectedMtime`.
+
+**Request body:** `{ cwd, path, content, expectedMtime?: number }`
+
+- Caps content at 5 MB (`WRITE_SIZE_MAX_BYTES` in `fs-write-policy.ts`); larger payloads 403.
+- On mtime mismatch returns `409 stale` with `currentMtime` so the UI can surface the conflict.
+
+**Response:** `{ ok: true, path, mtime, size }`.
+
+### `POST /api/files/write/rename`
+
+Rename a file or directory. Case-only renames on APFS/HFS+ are a `confirm` class (the operation otherwise no-ops silently).
+
+**Request body:** `{ cwd, from, to }` — `to` must not already exist unless it's a case-only collision that was confirmed.
+
+**Response:** `{ ok: true, from, to }`.
+
+### `POST /api/files/write/move`
+
+Move one or more files/dirs into a destination directory. Batched for multi-select DnD. Pre-flights all collisions; aborts the whole batch on any collision.
+
+**Request body:** `{ cwd, from: string[], to: string }`
+
+**Response:** `{ ok: true, moved: Array<{ from, to }> }`.
+
+### `POST /api/files/write/delete`
+
+Delete one or more files/dirs.
+
+**Request body:** `{ cwd, paths: string[], mode: "trash"|"permanent" }`
+
+- `mode: "trash"` → routes through the `trash` npm package (macOS Trash / Windows Recycle Bin / XDG trash). Auto-classified (reversible).
+- `mode: "permanent"` → `fs.rm({ recursive: true, force: false })`. Always `confirm danger`; always requires a fresh token.
+
+**Response:** `{ ok: true, deleted: string[], mode }`.
+
 ## Terminal
 
 ### `POST /api/terminal/run`

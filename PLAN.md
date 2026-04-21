@@ -1207,6 +1207,31 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   and a manual symlink-escape read test (`ln -s /etc/passwd …/leak.txt`
   → 400 `symlink-rejected`). No UI, no new routes — M2 adds write
   endpoints next.
+- **2026-04-21 (ide-mode — M2: write API routes + confirm token
+  registry)** — six new `POST /api/files/write/*` endpoints: `create`
+  (file or dir, `wx` flag unless `overwrite: true`), `save` (editor
+  save with `expectedMtime` CAS — mismatch returns `409 stale` with
+  `currentMtime`), `rename` (rejects silent case-only no-ops on
+  APFS/HFS+ without a fresh confirm token), `move` (batched multi-
+  source, pre-flights all collisions and aborts the batch atomically),
+  `delete` (`mode: "trash"` via the `trash` npm pkg — macOS Trash /
+  Windows Recycle Bin / XDG trash — or `mode: "permanent"` via
+  `fs.rm` behind a mandatory confirm token), and `confirm` (mints a
+  one-shot 60 s `X-Marvin-Confirmed` token scoped structurally to the
+  op+cwd so callers can't swap the op after token issuance). Every
+  route funnels `cwd` + target(s) through `checkFsPath` → `fsWritePolicy`
+  before touching disk. `packages/runtime/src/fs-write-confirm-registry.ts`
+  holds the token ledger (in-memory, session-scoped — parallel to the
+  turn-scoped `confirm-registry.ts`, deliberately not merged since the
+  lifetimes don't compose). `trash@^9.0.0` added to `apps/web`. New
+  `scripts/smoke-file-writes.sh` curls the full happy / sandbox-deny /
+  policy-deny / needs-confirm / project-root matrix end-to-end.
+  `docs/reference/api.md` gained a 6-endpoint "Files — write channel"
+  section with the shared error-code table; `docs/security/tool-policy.md`
+  gained a "User-initiated file ops" table mirroring the LLM table;
+  `REVIEW.md` gained an "always check" rule for the sandbox+policy+token
+  triplet on new write routes. End-to-end verified via
+  `pnpm -r typecheck` green across all 7 packages + web.
 
 ## Status
 
