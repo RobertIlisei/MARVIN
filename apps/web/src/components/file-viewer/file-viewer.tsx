@@ -113,6 +113,8 @@ export function FileViewer({
       )}
       {data && (data.truncated || data.binary || data.content == null) && (
         <ReadOnlyPanel
+          cwd={cwd}
+          filePath={filePath}
           data={data}
           relPath={relPath}
           onClose={handleClose}
@@ -144,15 +146,25 @@ export function FileViewer({
   );
 }
 
+const PREVIEWABLE_BINARY = /\.(png|jpe?g|gif|webp|avif|svg|ico|bmp|heic|pdf)$/i;
+
 function ReadOnlyPanel({
+  cwd,
+  filePath,
   data,
   relPath,
   onClose,
 }: {
+  cwd: string;
+  filePath: string;
   data: ContentResponse;
   relPath: string;
   onClose(): void;
 }) {
+  const canPreview = data.binary && PREVIEWABLE_BINARY.test(filePath);
+  const isPdf = /\.pdf$/i.test(filePath);
+  const rawUrl = `/api/files/raw?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`;
+
   return (
     <div className="flex h-full min-h-0 flex-col border-t border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/40">
       <div className="flex items-center gap-3 border-b border-[color:var(--color-border)] px-3 py-2 font-mono text-[11px]">
@@ -175,18 +187,35 @@ function ReadOnlyPanel({
           </button>
         </span>
       </div>
-      <div className="scroll-thin min-h-0 flex-1 overflow-auto p-4 text-xs text-[color:var(--color-fg-dim)]">
-        {data.binary && (
-          <div>
-            binary file — preview not available. Reveal in Finder (M6) or open
-            externally.
+      <div className="scroll-thin min-h-0 flex-1 overflow-auto p-4">
+        {canPreview ? (
+          isPdf ? (
+            <iframe
+              src={rawUrl}
+              title={relPath}
+              className="h-full w-full rounded border border-[color:var(--color-border)] bg-white"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={rawUrl}
+                alt={relPath}
+                className="max-h-full max-w-full rounded border border-[color:var(--color-border)] object-contain"
+              />
+            </div>
+          )
+        ) : data.binary ? (
+          <div className="text-xs text-[color:var(--color-fg-dim)]">
+            binary file — preview not available for this type. Reveal in
+            Finder or open externally.
           </div>
-        )}
-        {data.truncated && (
-          <div>
+        ) : null}
+        {data.truncated && !canPreview && (
+          <div className="mt-2 text-xs text-[color:var(--color-fg-dim)]">
             file is larger than {fmtBytes(data.maxSize ?? 0)} — not loaded.
-            MARVIN's editor refuses to open truncated files to avoid silent
-            data loss on save.
+            MARVIN&apos;s editor refuses to open truncated files to avoid
+            silent data loss on save.
           </div>
         )}
       </div>
