@@ -484,7 +484,14 @@ export default function Home() {
       // browser tab the traffic lights don't exist and the extra
       // padding simply centers branding a bit further in — acceptable
       // trade-off since the Tauri build is the primary UI.
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-[82px] pr-5 py-2.5"
+      //
+      // `pt-[var(--titlebar-h)]` reserves 28 px of vertical space for
+      // the traffic lights in the Tauri overlay-titlebar layout. The
+      // previous `py-2.5` only gave 10 px and content sometimes got
+      // clipped by the traffic-light cluster in full-screen. The
+      // --material-toolbar background makes the top bar read as a
+      // distinct layered strip rather than bleeding into the canvas.
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-[82px] pr-5 pt-[var(--titlebar-h)] pb-2.5 bg-[color:var(--material-toolbar)] border-b border-[color:var(--color-border)]"
     >
       <button
         type="button"
@@ -772,7 +779,7 @@ export default function Home() {
               maxSize={28}
               className="hidden lg:block"
             >
-              <aside className="flex h-full flex-col border-r border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/30">
+              <aside className="flex h-full flex-col border-r border-[color:var(--color-border)] bg-[color:var(--material-sidebar)]">
                 <LeftColumnTabs
                   tab={leftColumnTab}
                   onTabChange={setLeftColumnTab}
@@ -921,7 +928,7 @@ export default function Home() {
           maxSize={55}
           className="hidden md:block"
         >
-          <aside className="flex h-full min-h-0 flex-col border-l border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/20">
+          <aside className="flex h-full min-h-0 flex-col border-l border-[color:var(--color-border)] bg-[color:var(--material-sidebar)]">
             <PanelGroup
               direction="vertical"
               autoSaveId="marvin-side-v-v2"

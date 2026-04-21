@@ -1,19 +1,17 @@
 import type { Metadata } from "next";
-import { Geist, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-// Body UI — kept sans-serif for pane density. Geist is fine for buttons,
-// labels, chat text; it's the display + mono that were doing the heavy
-// "generic AI tool" lifting and needed replacement.
-const geistSans = Geist({
-  variable: "--font-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
+// Body UI — **system stack first** (see globals.css `--font-sans`). On
+// macOS this resolves to SF Pro / `-apple-system`, which is what makes
+// MARVIN look native in the Tauri window. Dropping Geist from the
+// loader (A1 polish pass) also eliminates one Google Fonts network
+// request at first paint — the old Geist import added ~60–90 ms
+// render delay on a warm cache, more on cold.
 
-// Display — `Instrument Serif`. Editorial, slightly literary, matches
-// MARVIN's Hitchhiker's-Guide persona ("brain the size of a planet…").
-// Used for the wordmark, hero headings, and any `.font-display` block.
+// Display — `Instrument Serif`. Editorial, matches MARVIN's
+// Hitchhiker's-Guide persona ("brain the size of a planet…"). Used
+// for the wordmark + hero headings only.
 const instrumentSerif = Instrument_Serif({
   variable: "--font-display",
   weight: ["400"],
@@ -22,8 +20,8 @@ const instrumentSerif = Instrument_Serif({
   display: "swap",
 });
 
-// Mono — `JetBrains Mono`. More distinctive than the default Geist Mono;
-// reads well at small sizes in the terminal + file viewer.
+// Mono — `JetBrains Mono`. More distinctive than the default system
+// mono; reads well at small sizes in the terminal + file viewer.
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
@@ -59,7 +57,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      className={`${instrumentSerif.variable} ${jetbrainsMono.variable}`}
       // Bootstrap script (below) sets `data-theme="dark"` before React
       // hydrates when the user's saved pref or system preference asks
       // for dark. The SSR output has no such attribute, so React would
