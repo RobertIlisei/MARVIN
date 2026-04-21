@@ -1822,7 +1822,6 @@ dependencies = [
 name = "marvin-desktop"
 version = "1.0.0"
 dependencies = [
- "parking_lot",
  "serde",
  "serde_json",
  "tauri",
