@@ -45,6 +45,15 @@ export function BranchSwitcher({
 }: BranchSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [branches, setBranches] = useState<BranchEntry[] | null>(null);
+  // Remote-only branch names (no local counterpart). Presented below
+  // the locals so the user can check them out — clicking one fires
+  // `onSwitch(stripped)` which the server resolves via `git switch
+  // <name>`'s DWIM (create a local tracking branch from origin if
+  // needed). Users with a freshly cloned repo often have only `main`
+  // as a local branch while origin has 20+ — without this section
+  // the switcher feels broken even though the server is returning
+  // the full list.
+  const [remoteOnly, setRemoteOnly] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const createInputRef = useRef<HTMLInputElement | null>(null);
@@ -56,7 +65,30 @@ export function BranchSwitcher({
     });
     if (!res.ok) return;
     const body = await res.json();
-    if (body?.enabled) setBranches(body.locals as BranchEntry[]);
+    if (!body?.enabled) return;
+    const locals = (body.locals ?? []) as BranchEntry[];
+    const remotes = (body.remotes ?? []) as string[];
+    setBranches(locals);
+
+    // Derive remote-only names. Drop:
+    //   - origin/HEAD (symbolic ref, not a real branch)
+    //   - any remote whose short name already exists locally
+    // Short-name form so clicking surfaces the same identifier the
+    // user would type in a terminal (`git switch foo`).
+    const localShortNames = new Set(locals.map((b) => b.name));
+    const shortNames = new Set<string>();
+    for (const r of remotes) {
+      // "origin/foo" → "foo". "upstream/feature/x" → "feature/x" is
+      // a tiny remote namespacing quirk; in practice MARVIN users
+      // have one remote ("origin") so the simple slice works.
+      const slash = r.indexOf("/");
+      if (slash < 0) continue;
+      const name = r.slice(slash + 1);
+      if (name === "HEAD" || !name) continue;
+      if (localShortNames.has(name)) continue;
+      shortNames.add(name);
+    }
+    setRemoteOnly(Array.from(shortNames).sort());
   }, [cwd]);
 
   useEffect(() => {
@@ -135,6 +167,32 @@ export function BranchSwitcher({
               </DropdownMenuItem>
             ))}
           </div>
+        )}
+        {remoteOnly.length > 0 && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">
+              remote (checkout)
+            </DropdownMenuLabel>
+            <div className="scroll-thin max-h-[200px] overflow-y-auto">
+              {remoteOnly.map((name) => (
+                <DropdownMenuItem
+                  key={`remote:${name}`}
+                  onClick={async () => {
+                    setOpen(false);
+                    // `git switch <name>` with no local match DWIMs a
+                    // tracking branch from origin. Handled server-side
+                    // in /api/git/branch/switch.
+                    await onSwitch(name);
+                  }}
+                  className="flex items-center gap-1.5 truncate font-mono text-[11.5px] text-[color:var(--color-fg-dim)]"
+                >
+                  <span className="text-[color:var(--color-fg-faint)]">↓</span>
+                  <span className="truncate">{name}</span>
+                </DropdownMenuItem>
+              ))}
+            </div>
+          </>
         )}
         <DropdownMenuSeparator />
         {creating ? (
