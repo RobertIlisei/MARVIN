@@ -46,6 +46,23 @@
   --color-warn: oklch(0.7 0.14 70);
   --color-danger: oklch(0.6 0.18 25);
 
+  /* ---------------- Git-status hues ----------------
+   * The file tree + source-control panel render single-letter status
+   * badges (M / A / D / R / ? / U / T) for each changed file. Before
+   * these tokens existed, M and R fell back to `--color-accent` /
+   * `--color-accent-deep`, which in light mode are near-black ink
+   * (0.18 / 0.28 lightness). That blends into directory-name text of
+   * the same tone → user reported the badges invisible in light.
+   *
+   * Git's conventional colour language maps well here: modified → blue,
+   * renamed → purple. Added stays green (--color-success), deleted
+   * stays red (--color-danger), untracked stays amber (--color-warn).
+   * Light values are chosen at ~0.48–0.52 lightness for AA contrast
+   * against the 0.95 paper bg; dark values at ~0.72–0.78 for AAA
+   * contrast against the near-black canvas. */
+  --color-git-modified: oklch(0.50 0.16 245);
+  --color-git-renamed: oklch(0.52 0.17 310);
+
   --shadow-glow: 0 0 24px 2px oklch(0.18 0.005 80 / 0.06);
   --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
                   0 6px 16px -10px rgba(24, 22, 18, 0.1),
@@ -158,8 +175,13 @@
   --color-fg-dim: oklch(0.74 0.030 220);
   --color-fg-faint: oklch(0.54 0.025 220);
 
-  --color-border: oklch(0.85 0.04 220 / 0.10);
-  --color-border-strong: oklch(0.85 0.04 220 / 0.20);
+  /* Borders in dark were at 0.10 / 0.20 alpha, which against pure-black
+   * --color-bg reads as basically invisible (that "a bit off" feeling —
+   * everything bleeds together without separation lines). Bumping to
+   * 0.14 / 0.26 brings them back to reading as hairlines without
+   * losing the subtle, non-harsh character the handoff specified. */
+  --color-border: oklch(0.85 0.04 220 / 0.14);
+  --color-border-strong: oklch(0.85 0.04 220 / 0.26);
 
   /* Icy-blue accent — same family as the nebula particle highlights. */
   --color-accent: oklch(0.82 0.10 230);
@@ -169,6 +191,12 @@
   --color-success: oklch(0.74 0.14 160);
   --color-warn: oklch(0.78 0.13 75);
   --color-danger: oklch(0.72 0.18 25);
+
+  /* Git-status hues in dark — lighter variants of the light tokens so
+   * they stay legible on the near-black canvas. See §Git-status hues
+   * in the light @theme block for the rationale. */
+  --color-git-modified: oklch(0.76 0.12 240);
+  --color-git-renamed: oklch(0.78 0.14 310);
 
   /* Cool halo seeds for the ambient body::before wash. */
   --color-halo-1: 140, 180, 230;
@@ -183,13 +211,15 @@
   --display-tint: oklch(0.86 0.08 225);
   --display-dot: oklch(0.78 0.12 230);
 
-  /* Dark materials — very slightly elevated slate-blue tints on top
-   * of pure-black bg. Each is 2–4 lightness points above
-   * --color-bg-elev (oklch 0.18) so elevated surfaces read as
-   * distinctly above the canvas without going reflective. */
-  --material-toolbar: oklch(0.20 0.014 240);
-  --material-sidebar: oklch(0.22 0.016 240);
-  --material-popover: oklch(0.24 0.018 240);
+  /* Dark materials — slate-blue tints on top of the pure-black
+   * canvas. Widened the spread (was toolbar 0.20 / sidebar 0.22 /
+   * popover 0.24 — only 2-point gaps, which read as "flat" even
+   * though each was technically above the next). Now 0.22 / 0.26 /
+   * 0.30 gives popover a clear "floating above the sidebar" cue,
+   * and the sidebar a clear "above the toolbar strip." */
+  --material-toolbar: oklch(0.22 0.016 240);
+  --material-sidebar: oklch(0.26 0.018 240);
+  --material-popover: oklch(0.30 0.020 240);
 
   color-scheme: dark;
 }

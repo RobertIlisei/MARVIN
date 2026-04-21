@@ -56,9 +56,12 @@ function resolveBadge(file: StatusFile): {
       return {
         label: "M",
         title: staged ? "Modified (staged)" : "Modified",
+        // Was --color-accent-deep which in light mode is near-black
+        // ink (monochrome handoff accent). Swapped to the dedicated
+        // git-modified blue so both themes show a distinct hue.
         className: staged
-          ? "bg-[color:var(--color-accent-deep)]/22 text-[color:var(--color-accent-deep)]"
-          : "bg-[color:var(--color-fg-dim)]/18 text-[color:var(--color-fg-dim)]",
+          ? "bg-[color:var(--color-git-modified)]/22 text-[color:var(--color-git-modified)]"
+          : "bg-[color:var(--color-git-modified)]/14 text-[color:var(--color-git-modified)]",
       };
     case "D":
       return {
@@ -71,15 +74,18 @@ function resolveBadge(file: StatusFile): {
       return {
         label: "R",
         title: "Renamed",
+        // Dedicated git-renamed purple (see M for rationale).
         className:
-          "bg-[color:var(--color-accent-deep)]/18 text-[color:var(--color-accent-deep)]",
+          "bg-[color:var(--color-git-renamed)]/18 text-[color:var(--color-git-renamed)]",
       };
     case "C":
       return {
         label: "C",
         title: "Copied",
+        // Copy shares the renamed family — both are "this file came
+        // from somewhere else in the tree" status.
         className:
-          "bg-[color:var(--color-accent-deep)]/18 text-[color:var(--color-accent-deep)]",
+          "bg-[color:var(--color-git-renamed)]/18 text-[color:var(--color-git-renamed)]",
       };
     case "T":
       return {
