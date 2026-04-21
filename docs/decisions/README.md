@@ -25,6 +25,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0009](./0009-file-uploads-from-os.md) | File uploads from the OS to the project tree | Accepted | 2026-04-21 |
 | [0010](./0010-desktop-wrapper-tauri.md) | Desktop wrapper via Tauri | Accepted | 2026-04-21 |
 | [0011](./0011-sidecar-node-bundling.md) | Standalone `.app` via bundled Node sidecar | Accepted | 2026-04-21 |
+| [0012](./0012-source-control-mutation-channel.md) | Source-control mutation channel | Accepted | 2026-04-21 |
 
 ## Template
 
