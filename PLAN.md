@@ -1232,6 +1232,37 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   `REVIEW.md` gained an "always check" rule for the sandbox+policy+token
   triplet on new write routes. End-to-end verified via
   `pnpm -r typecheck` green across all 7 packages + web.
+- **2026-04-21 (ide-mode — M3: tree UI — context menu · multi-select ·
+  DnD · inline rename)** — file tree becomes interactive. Added the
+  two missing shadcn primitives to `@marvin/ui`: `context-menu.tsx`
+  (full radix wrapper — items, checkbox, radio, sub-menus, shortcuts,
+  destructive variant) and `alert-dialog.tsx` (for destructive
+  confirms). Six new file-tree modules: `use-fs-mutations.ts`
+  (client-side fetch wrappers handling the `X-Marvin-Confirmed`
+  token round-trip, structured error surface with typed discriminated
+  union — `exists` / `stale` / `collisions` / `policy-deny` /
+  `sandbox` / `io-error` / `cancelled`), `use-tree-selection.ts`
+  (Shift-range via visible-order flatten, Cmd/Ctrl-toggle, plain
+  click replaces), `use-tree-dnd.ts` (HTML5 DnD on
+  `application/x-marvin-paths` MIME — no dep — drop targets only
+  accept when the MIME is present so M5's OS→tree upload can share
+  the same handlers), `inline-rename.tsx` (F2/Enter/Esc, selects
+  stem before extension so typing replaces `foo` not `foo.ts`),
+  `tree-context-menu.tsx` (single-vs-multi mode, M6 items stubbed
+  so the menu renders today), `confirm-delete-dialog.tsx` (shared
+  AlertDialog with severity-driven button colour). `file-tree.tsx`
+  rewritten to orchestrate: revalidation counter ticks after every
+  mutation, visible-order flatten powers the Shift-range select,
+  drop highlight outlines the hovered directory, pending-create
+  placeholder row appears under the target dir when "New File/
+  Folder" is clicked with the same InlineRename component. Keyboard
+  on the tree root: `⌘⌫` trash, `⌘⇧⌫` permanent delete, `F2`
+  rename, `Esc` clear selection. `docs/reference/shortcuts.md`
+  gained a "File tree" section. No new ADR — all behaviour is
+  downstream of the ADR-0008 policy surface. End-to-end verified
+  via `pnpm -r typecheck` green across all 7 packages + web, clean
+  Turbopack HMR reload against the dev server, and live tree walk
+  returning 808 entries for the MARVIN repo itself.
 
 ## Status
 

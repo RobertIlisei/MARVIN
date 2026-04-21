@@ -22,6 +22,8 @@
     "./select": "./src/select.tsx",
     "./tooltip": "./src/tooltip.tsx",
     "./dropdown-menu": "./src/dropdown-menu.tsx",
+    "./context-menu": "./src/context-menu.tsx",
+    "./alert-dialog": "./src/alert-dialog.tsx",
     "./avatar": "./src/avatar.tsx",
     "./table": "./src/table.tsx",
     "./resizable": "./src/resizable.tsx"
