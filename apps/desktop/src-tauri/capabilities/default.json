@@ -1,11 +1,21 @@
 {
   "$schema": "../../../../node_modules/@tauri-apps/cli/schemas/capabilities.schema.json",
   "identifier": "default",
-  "description": "Capabilities for the main MARVIN desktop window. Intentionally narrow — the embedded MARVIN web app on localhost:3030 does the work. The native side only exposes a TCP probe, shell.open for external-link handling, and window.start_dragging so `data-tauri-drag-region` on the app header can move the window.",
+  "description": "Capabilities for the main MARVIN desktop window. Intentionally narrow — the embedded MARVIN web app on localhost:3030 does the work. The native side only exposes a TCP probe, shell.open for external-link handling, window.start_dragging so `data-tauri-drag-region` on the app header can move the window, and the `node` sidecar spawn path used by ADR-0011's standalone bundle.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "shell:allow-open"
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "node",
+          "sidecar": true,
+          "args": [{ "validator": "\\S+" }]
+        }
+      ]
+    }
   ]
 }

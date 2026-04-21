@@ -54,14 +54,28 @@ Tauri's WKWebView.
 pnpm --filter @marvin/desktop build
 ```
 
+The `prebuild` hook runs two scripts before `tauri build`:
+
+1. `scripts/fetch-node.sh aarch64-apple-darwin` — downloads Node 22
+   into `src-tauri/binaries/node-aarch64-apple-darwin` (~60 MB, cached
+   on subsequent builds).
+2. `apps/desktop/scripts/bundle-resources.sh` — builds `apps/web` in
+   Next.js standalone mode and stages the output to
+   `src-tauri/resources/next/` for Tauri to copy into the `.app`.
+
+See [ADR-0011](../../docs/decisions/0011-sidecar-node-bundling.md) for
+the full architecture (why sidecar, how the Rust side spawns it, what
+v1 leaves out).
+
 Outputs land in `src-tauri/target/release/bundle/`:
 
-- `MARVIN.app` — the macOS app bundle
-- `MARVIN_0.0.1_aarch64.dmg` (or x86_64) — the DMG installer
+- `MARVIN.app` — standalone bundle (~110–150 MB). Spawns its own
+  Next.js server on launch; no `bin/marvin` prereq.
+- `MARVIN_0.0.1_aarch64.dmg` — DMG installer.
 
 **Unsigned builds** run fine on the build machine but Gatekeeper will
 refuse to launch them on any other Mac. Code signing + notarization
-are deferred to v2 (see ADR-0010 §"Deferred").
+are deferred to v2 (see ADR-0010 §"Deferred" and ADR-0011 §"Follow-ups").
 
 ### Icon artwork
 
@@ -81,30 +95,52 @@ PNG size Apple / Windows / Android expect).
 
 ## How it works
 
-- The Tauri main window's `url` field (set in
-  `src-tauri/tauri.conf.json`) points at `http://localhost:3030`.
-- On launch, the window loads the MARVIN web shell as if the user
-  opened `http://localhost:3030` in their browser.
-- If the dev server isn't running, the window loads a Safari "can't
-  connect" page. The Rust side exposes `marvin_server_is_up` — a
-  future PR can use it to surface a proper "start MARVIN first"
-  prompt.
-- Native menu bar + dock icon come from Tauri's defaults.
-- `withGlobalTauri: false` and the narrow
-  [capabilities](./src-tauri/capabilities/default.json) keep the web
-  shell from accidentally gaining native privileges.
+Two distinct modes, one codebase:
+
+**Dev** (`pnpm desktop:dev`)
+- Tauri's main window loads `http://localhost:3030`.
+- `#[cfg(not(debug_assertions))]` skips the sidecar spawn; the Rust
+  side assumes you've already run `bin/marvin` elsewhere.
+- HMR works through the webview like a browser tab.
+- Fast iteration — no resource bundling, no Node binary fetch.
+
+**Release** (`pnpm desktop:build` → `.app`)
+- Before Tauri starts bundling, `prebuild` runs:
+  - `scripts/fetch-node.sh` puts a Node 22 binary at
+    `src-tauri/binaries/node-<triple>`.
+  - `apps/desktop/scripts/bundle-resources.sh` builds `apps/web`
+    with `output: "standalone"` and copies `.next/standalone/` plus
+    `.next/static/` + `public/` into `src-tauri/resources/next/`.
+- Tauri embeds the Node binary as an `externalBin` sidecar and the
+  staged Next bundle as a `resources` tree.
+- On `MARVIN.app` launch, Rust `setup()` spawns the sidecar with
+  `PORT=3030 HOSTNAME=127.0.0.1 NODE_ENV=production node
+  Resources/next/apps/web/server.js`.
+- The main window loads `http://localhost:3030` once the sidecar is
+  listening. The existing `marvin_server_is_up` Tauri command + a TS
+  polling loop bridges the ~1-3 s boot delay.
+- On `WindowEvent::CloseRequested`, the sidecar gets SIGTERM so Next
+  shuts down cleanly.
+
+Native menu bar, dock icon, and menu items come from Tauri's
+`MenuBuilder` wiring in `src-tauri/src/lib.rs`. Menu clicks emit
+`marvin:menu` Tauri events; the web app's `useTauriMenu()` hook
+listens and dispatches to the existing React actions.
+`withGlobalTauri: false` + the narrow
+[capabilities](./src-tauri/capabilities/default.json) keep the web
+shell from reaching Tauri IPC beyond the sidecar spawn + shell.open
+for external links.
 
 ## What's not in v1
 
-- **Sidecar Node server** — the `.app` expects the user to run MARVIN
-  separately via `bin/marvin`. Bundling a Node runtime inside the app
-  is a separate effort.
 - **Code signing / notarization** — needs an Apple Developer
   certificate.
 - **Auto-updater** — Tauri supports it, not wired up.
-- **Native menus beyond defaults** — the macOS menu bar shows Tauri's
-  stock menu; a MARVIN-specific one (with Toggle Tree, Toggle Graph,
-  etc.) is deferred.
+- **Universal binary (x86_64 + aarch64)** — today aarch64-apple-darwin
+  only. `scripts/fetch-node.sh` supports both triples; flipping it on
+  is a one-line config change when needed. See ADR-0011 §"Alternatives".
+- **Sidecar crash recovery** — if the bundled Next.js sidecar dies
+  mid-session, the window is pointed at a dead server. No auto-restart.
 
 ## Troubleshooting
 
@@ -112,12 +148,30 @@ PNG size Apple / Windows / Android expect).
   → Rust isn't installed or your shell didn't pick it up. Re-run the
   rustup install, then `. "$HOME/.cargo/env"` in the current shell.
 
-**Window opens but shows "can't connect"**
-  → The MARVIN web server isn't running. Start it in another terminal:
-  `bin/marvin`.
+**Window opens but shows "can't connect" in `dev` mode**
+  → Dev mode intentionally skips the sidecar — it expects `bin/marvin`
+  running separately (see ADR-0010). Start it: `bin/marvin`.
+
+**`pnpm desktop:build` fails with `resource path … not found`**
+  → The bundle script hasn't staged `resources/next/` yet. Either run
+  `apps/desktop/scripts/bundle-resources.sh` manually or rely on the
+  `prebuild` script hook which `pnpm desktop:build` invokes
+  automatically.
+
+**`pnpm desktop:build` fails with `binaries/node-aarch64-apple-darwin
+  not found`**
+  → Node hasn't been fetched. Run `scripts/fetch-node.sh
+  aarch64-apple-darwin` from the repo root. The `prebuild` hook does
+  this for you; if you're running `tauri build` directly, you skip the
+  hook.
+
+**`.app` opens but hangs on a blank window for > 5 s**
+  → Bundled Next.js is slow to boot, or the sidecar failed. Launch the
+  `.app` from Terminal (`open -W /Applications/MARVIN.app --stdout -`)
+  to see the sidecar's stdout/stderr — the Rust layer forwards
+  `[marvin-server]` / `[marvin-server:err]` lines.
 
 **`pnpm tauri build` fails with an icon-related error**
   → Tauri's codegen embeds the icon at compile time. Repo ships a
-  placeholder so first-time builds work. If the placeholder is
-  corrupted or you're ready to swap in real artwork, regenerate the
-  bundle: `pnpm --filter @marvin/desktop tauri icon path/to/new-icon.png`.
+  placeholder so first-time builds work. To swap in real artwork:
+  `pnpm --filter @marvin/desktop tauri icon path/to/new-icon.png`.
