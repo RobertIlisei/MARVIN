@@ -14,7 +14,7 @@
 
 import { randomBytes } from "node:crypto";
 
-import type { GitOp } from "./git-write-policy.js";
+import type { GitOp } from "./git-write-policy";
 
 const TOKEN_TTL_MS = 60_000;
 

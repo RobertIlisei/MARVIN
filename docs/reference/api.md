@@ -297,12 +297,37 @@ Git is MARVIN's **third mutation channel** — parallel to the LLM tool channel 
 
 Every git invocation goes through [`runGit`](../../packages/git/src/exec.ts) (`execFile` with `shell: false`); user-supplied refs / paths / remotes pass through [`argv-guards`](../../packages/git/src/argv-guards.ts) before appending to argv; commit messages travel via stdin, never argv.
 
-**Read routes (M2 — pending):**
+**Read routes:**
 
-- `GET /api/git/status?cwd=…` → `{ branch: { name, upstream, ahead, behind, oid }, files: Array<{ path, indexStatus, workingStatus, entryType, renamedFrom? }>, enabled: true }` — or `{ enabled: false, reason: "not-a-git-repo" }` if `.git/` is absent. Parsed from `git status --porcelain=v2 --branch -z`.
-- `GET /api/git/diff?cwd=&path=&mode=working|staged|head` → `{ path, diff: string, binary: boolean, truncated: boolean }`. 2 MB diff cap.
-- `GET /api/git/branch?cwd=…` → `{ current, locals: [...], remotes: [...] }`.
-- `GET /api/git/log?cwd=&limit=50&path?=` → `Array<{ sha, shortSha, author, email, date, subject }>`.
+### `GET /api/git/status?cwd=…`
+
+Branch metadata + per-file status, parsed from `git status --porcelain=v2 --branch -z`.
+
+Success: `{ enabled: true, branch: { oid, name, upstream, ahead, behind }, files: Array<{ path, indexStatus, workingStatus, entryType, renamedFrom, ordinary }> }`.
+
+`enabled: false, reason: "not-a-git-repo"` when the path isn't inside a git worktree. `oid`, `name`, `upstream`, `ahead`, `behind` are all nullable (`null` for initial repos, detached HEAD, no upstream). `entryType` is one of `ordinary | rename-copy | unmerged | untracked | ignored`. `indexStatus` / `workingStatus` are single-char porcelain-v2 codes (`M A D R C U T .`).
+
+### `GET /api/git/diff?cwd=&path=&mode=working|staged|head`
+
+Per-file diff. Default `mode=working`. 2 MB cap on response body; larger returns `truncated: true` with empty `diff`.
+
+Success: `{ path, mode, diff: string, binary: boolean, truncated: boolean }`.
+
+Binary files return `binary: true` with `diff: ""`. Path is rejected with `400 invalid-pathspec` if it fails `isSafePathspec` (leading `-`, NUL, magic `:` prefix).
+
+### `GET /api/git/branch?cwd=…`
+
+Success: `{ enabled: true, current: string | null, locals: Array<{ name, isCurrent, upstream, ahead, behind }>, remotes: string[] }`.
+
+Formatted from `git for-each-ref` using `%00`-separated field strings so branch names containing `|` / tabs / unicode parse cleanly.
+
+### `GET /api/git/log?cwd=&limit=50&path?=`
+
+Recent commits. Default `limit=50`, hard cap 500. Optional `path` filters to commits touching that file.
+
+Success: `{ enabled: true, commits: Array<{ sha, shortSha, author, email, date, subject }> }`.
+
+Initial repos (no commits yet) return `commits: []` rather than an error.
 
 **Mutation routes (M3 — pending):**
 
