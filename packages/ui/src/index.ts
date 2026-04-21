@@ -16,5 +16,7 @@ export * from "./tabs";
 export * from "./select";
 export * from "./tooltip";
 export * from "./dropdown-menu";
+export * from "./context-menu";
+export * from "./alert-dialog";
 export * from "./avatar";
 export * from "./table";

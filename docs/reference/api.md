@@ -165,6 +165,8 @@ Returns zeroes for unknown `projectId` (safe default, not an error).
 
 ## Files
 
+All file routes share a single path sandbox: `checkFsPath` in [`packages/runtime/src/fs-sandbox.ts`](../../packages/runtime/src/fs-sandbox.ts). Paths outside `cwd`, symlinks (target or ancestor), paths containing NUL, and paths longer than 1024 bytes are rejected before I/O. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md). The ignore list lives in [`packages/tools/src/fs-constants.ts`](../../packages/tools/src/fs-constants.ts) and is shared with the user-initiated write policy (M2).
+
 ### `GET /api/files/tree?cwd=…&depth=…`
 
 Project-scoped file tree walker.
@@ -172,16 +174,19 @@ Project-scoped file tree walker.
 **Response:** `{ root: string, tree: FsNode, truncated: boolean, count: number }`
 
 - Default `depth: 6`, max `MAX_ENTRIES: 2000`.
-- Ignores: `node_modules`, `.git`, `.next`, `venv`, `__pycache__`, `target`, `dist`, `build`, `coverage`, caches.
+- Ignores: the shared `IGNORE_DIR_NAMES` set — `node_modules`, `.git`, `.next`, `.turbo`, `venv`, `__pycache__`, `target`, `dist`, `build`, `coverage`, `.DS_Store`, caches, `vendor`.
+- Symlinks are skipped during the walk (matches the sandbox's reject-by-default policy for read routes).
 
 ### `GET /api/files/content?cwd=…&path=…`
 
-Read one file. Path must be inside `cwd` — `..` escapes are rejected.
+Read one file. Path must be inside `cwd`; symlinks are rejected.
 
-**Response:** `{ path, size, binary, truncated, content }`
+**Response:** `{ path, size, mtime, maxSize, binary, truncated, content }`
 
-- 512 KB cap. Larger files return `truncated: true` with the first 512 KB.
-- Binary detection via null-byte + non-printable heuristic. Binary files return `binary: true, content: ""`.
+- 4 MB cap (`maxSize`). Larger files return `truncated: true` with the first 4 MB of content — the editor mounts these read-only so the user can scan the prefix without risking a save that would overwrite the tail of the real file.
+- Binary detection via null-byte + non-printable heuristic on the sampled prefix. Binary files return `binary: true, content: null`.
+- `mtime` (`fs.stat.mtimeMs`) is the CAS token for subsequent `/api/files/write/save` requests.
+- Error codes returned via `{ error: "<sandbox-error-code>" }`: `404 not-found`, `400 path-escapes-cwd | symlink-rejected | symlink-escapes-cwd | is-directory`, `500 io-error`.
 
 ### `GET /api/files/status?cwd=…`
 
@@ -189,7 +194,102 @@ Read one file. Path must be inside `cwd` — `..` escapes are rejected.
 
 **Response:** `{ isGit: boolean, branch: string | null, status: Record<absolutePath, porcelainCode> }`
 
-Returns `{ isGit: false, status: {} }` outside a git work tree. Consumed by the file tree (dirty-file badges + branch pill) and the header's `<BranchBadge>`.
+Returns `{ isGit: false, status: {} }` outside a git work tree *or* when the sandbox check on `cwd` fails. Consumed by the file tree (dirty-file badges + branch pill) and the header's `<BranchBadge>`.
+
+## Files — write channel
+
+User-initiated write endpoints under `/api/files/write/*`. Parallel to the LLM write channel (`canUseTool` + `toolPolicy`): paths go through the shared sandbox (`checkFsPath`), ops go through `fsWritePolicy`, and `confirm`-classified ops require an `X-Marvin-Confirmed: <token>` header minted by `/api/files/write/confirm`. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
+
+**Shared error codes** (all `POST` bodies are JSON; all responses are JSON):
+
+| Status | Body shape | Meaning |
+|---|---|---|
+| `400` | `{ error: "<code>" }` | Bad request or sandbox rejection (`path-escapes-cwd`, `symlink-rejected`, `path-contains-null`, `path-too-long`, `is-directory`, `not-a-directory`). |
+| `403` | `{ error: "policy-deny", reason }` | `fsWritePolicy` denied (deny-list segment, project-root, oversize). |
+| `404` | `{ error: "not-found" \| "parent-not-found" }` | Required path missing. |
+| `409` | `{ error: "needs-confirm", reason, severity, tokenError? }` | Policy returned `confirm` without a valid token. |
+| `409` | `{ error: "exists" }` | Create / rename target already exists (no implicit overwrite). |
+| `409` | `{ error: "stale", currentMtime, size }` | Save CAS: on-disk mtime differs from `expectedMtime`. |
+| `409` | `{ error: "collisions", collisions: string[] }` | Move: at least one destination exists; whole batch aborted. |
+| `500` | `{ error: "io-error", detail }` | Unexpected OS error. |
+
+### `POST /api/files/write/confirm`
+
+Mint a one-shot token for a `confirm`-classified op. Tokens are scoped to the exact op+cwd, expire in 60 s, and are consumed on first use.
+
+**Request body:** `{ cwd: string, op: FsWriteOp }`
+
+**Response (confirm required):** `{ needsConfirm: true, reason, severity: "warn"|"danger", token, expiresIn: 60 }`
+
+**Response (policy auto-classified):** `{ needsConfirm: false, reason }` — caller can run the op directly without a token.
+
+**Response (policy deny):** `403 { error: "policy-deny", reason }`.
+
+### `POST /api/files/write/create`
+
+Create a new file or empty directory.
+
+**Request body:** `{ cwd, path, kind: "file"|"dir", content?: string, overwrite?: boolean }`
+
+- `kind: "file"`: writes UTF-8 `content` (default `""`). Uses `wx` flag unless `overwrite: true`.
+- `kind: "dir"`: `fs.mkdir` non-recursive; parents must exist.
+
+**Response:** `{ ok: true, path }` or an error code above.
+
+### `POST /api/files/write/save`
+
+Save an edit to an existing file. Supports optimistic-concurrency via `expectedMtime`.
+
+**Request body:** `{ cwd, path, content, expectedMtime?: number }`
+
+- Caps content at 5 MB (`WRITE_SIZE_MAX_BYTES` in `fs-write-policy.ts`); larger payloads 403.
+- On mtime mismatch returns `409 stale` with `currentMtime` so the UI can surface the conflict.
+
+**Response:** `{ ok: true, path, mtime, size }`.
+
+### `POST /api/files/write/rename`
+
+Rename a file or directory. Case-only renames on APFS/HFS+ are a `confirm` class (the operation otherwise no-ops silently).
+
+**Request body:** `{ cwd, from, to }` — `to` must not already exist unless it's a case-only collision that was confirmed.
+
+**Response:** `{ ok: true, from, to }`.
+
+### `POST /api/files/write/move`
+
+Move one or more files/dirs into a destination directory. Batched for multi-select DnD. Pre-flights all collisions; aborts the whole batch on any collision.
+
+**Request body:** `{ cwd, from: string[], to: string }`
+
+**Response:** `{ ok: true, moved: Array<{ from, to }> }`.
+
+### `POST /api/files/write/delete`
+
+Delete one or more files/dirs.
+
+**Request body:** `{ cwd, paths: string[], mode: "trash"|"permanent" }`
+
+- `mode: "trash"` → routes through the `trash` npm package (macOS Trash / Windows Recycle Bin / XDG trash). Auto-classified (reversible).
+- `mode: "permanent"` → `fs.rm({ recursive: true, force: false })`. Always `confirm danger`; always requires a fresh token.
+
+**Response:** `{ ok: true, deleted: string[], mode }`.
+
+### `POST /api/files/write/upload`
+
+OS → tree file upload via multipart. Used by drag-and-drop from Finder onto the tree root or a directory. See [ADR-0009](../decisions/0009-file-uploads-from-os.md).
+
+**Request** (`multipart/form-data`):
+
+- `cwd` — project root (form field).
+- `destDir` — destination directory path (form field).
+- `file` — one or more file parts.
+- **Required header: `X-Marvin-Client: 1`** — forces a CORS preflight so cross-origin drive-by POSTs are blocked by the browser before reaching the route. Without it the route returns `400 missing-x-marvin-client`. Non-negotiable; see ADR-0009.
+
+**Caps:** 50 files per batch · 10 MB per file · 50 MB total batch.
+
+**Response:** `{ ok: true, uploaded: Array<{ name, path, bytes }>, skipped: Array<{ name, reason }>, destDir }`.
+
+Over-cap or policy-rejected files appear in `skipped[]` with a human-readable reason; the rest of the batch still lands. Secret-bearing files (`.env*`, keys) are skipped rather than prompted — users who want to upload one should drag it alone or paste via New File + save.
 
 ## Terminal
 

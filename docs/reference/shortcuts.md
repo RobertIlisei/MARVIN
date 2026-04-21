@@ -9,6 +9,7 @@ Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../
 | Keys | Action |
 |---|---|
 | `⌘ K` / `Ctrl K` | Open the project picker |
+| `⌘ P` / `Ctrl P` | Go to file — fuzzy quick-open over the project tree |
 | `⌘ ⇧ N` / `Ctrl ⇧ N` | Start a new session (clears the current messages, returns to hero) |
 | `⌘ .` / `Ctrl .` | Cancel the currently-running turn |
 | `?` | Toggle the shortcuts overlay |
@@ -21,7 +22,7 @@ Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../
 | `⌘ B` / `Ctrl B` | Toggle the file tree pane |
 | `⌘ G` / `Ctrl G` | Toggle the knowledge graph pane |
 | `⌘ J` / `Ctrl J` | Toggle the embedded terminal |
-| `⌘ P` / `Ctrl P` | Toggle the browser preview pane |
+| `⌘ ⇧ P` / `Ctrl ⇧ P` | Toggle the browser preview pane (moved from `⌘ P` — that shortcut now opens the fuzzy file picker, matching IDE muscle memory) |
 
 All pane states persist to `localStorage` via `react-resizable-panels`' `autoSaveId`.
 
@@ -32,6 +33,30 @@ All pane states persist to `localStorage` via `react-resizable-panels`' `autoSav
 | `⏎` | Send message |
 | `⇧ ⏎` | Newline in the input (no send) |
 | `⌘ ⏎` | Also sends (parity for Mac-intuitive users) |
+
+## File tree
+
+Right-click any row to open the context menu. Gestures below work on the tree as a whole when it has focus.
+
+| Keys / gesture | Action |
+|---|---|
+| `⌘ ⌫` / `Ctrl ⌫` | Move selected item(s) to Trash |
+| `⌘ ⇧ ⌫` / `Ctrl ⇧ ⌫` | Delete selected item(s) permanently (confirm required) |
+| `F2` | Rename the currently-selected item (inline input; `Enter` commits, `Esc` cancels) |
+| `Shift-click` | Range-select from the last anchor to the clicked row |
+| `⌘-click` / `Ctrl-click` | Toggle individual rows in/out of the selection |
+| `Esc` | Clear the selection |
+| Drag a file/dir onto a directory | Move the dragged item(s) into that directory |
+
+Destructive ops classified as `confirm` (permanent delete, secret-file writes, case-only renames) surface an AlertDialog. The user-initiated write channel is gated by `fsWritePolicy` — see [tool-policy](../security/tool-policy.md) and [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
+
+## Editor (focus inside Monaco)
+
+| Keys | Action |
+|---|---|
+| `⌘ S` / `Ctrl S` | Save the current file (CAS on mtime — banner surfaces if the file changed on disk) |
+
+The editor refuses to mount on binary or truncated (>512 KB) files so a save never silently corrupts them. Switching away from a dirty file surfaces the Unsaved Changes dialog.
 
 ## Terminal (focus inside the xterm pane)
 

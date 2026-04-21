@@ -1,6 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { ConfirmDeleteDialog, type ConfirmDeleteDialogState } from "./confirm-delete-dialog";
+import { InlineRename } from "./inline-rename";
+import { TreeContextMenu, type TreeContextMenuActions } from "./tree-context-menu";
+import {
+  UploadProgressToast,
+  type UploadToastState,
+} from "./upload-progress-toast";
+import { useFsMutations } from "./use-fs-mutations";
+import { useOsDrop } from "./use-os-drop";
+import { useTreeDnd } from "./use-tree-dnd";
+import { useTreeSelection } from "./use-tree-selection";
 
 export type TreeNode = {
   name: string;
@@ -28,6 +40,13 @@ type StatusCtx = {
   dirtyDirs: Set<string>;
 };
 
+type OpenMap = Record<string, boolean>;
+
+/** Transient state: new file/dir placeholder row awaiting a name. */
+type PendingCreate = { parent: string; kind: "file" | "dir" } | null;
+/** Transient state: row currently in rename mode. */
+type RenamingPath = string | null;
+
 const EMPTY_STATUS_CTX: StatusCtx = {
   status: {},
   dirtyDirs: new Set(),
@@ -37,15 +56,33 @@ export function FileTree({
   cwd,
   onSelect,
   selectedPath,
+  onOpenInTerminal,
 }: {
   cwd: string;
   onSelect?: (path: string) => void;
   selectedPath?: string;
+  /** Toggle the terminal pane on (if off). Called before the `cd` event fires. */
+  onOpenInTerminal?: () => void;
 }) {
   const [data, setData] = useState<TreeResponse | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [openDirs, setOpenDirs] = useState<OpenMap>({});
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate>(null);
+  const [renaming, setRenaming] = useState<RenamingPath>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmDeleteDialogState & {
+    onResolve?: (approved: boolean) => void;
+  }>({ open: false, reason: "", severity: "warn", summary: "" });
+  const [uploadToast, setUploadToast] = useState<UploadToastState>({
+    result: null,
+    error: null,
+    uploading: false,
+  });
+
+  // Fetch + revalidation --------------------------------------------------
+  const revalidate = useCallback(() => setRefreshTick((t) => t + 1), []);
 
   useEffect(() => {
     if (!cwd) {
@@ -87,10 +124,8 @@ export function FileTree({
     return () => {
       cancelled = true;
     };
-  }, [cwd]);
+  }, [cwd, refreshTick]);
 
-  // Build the "dirty ancestors" set so directory nodes can show a marker
-  // when anything inside them is modified.
   const ctx: StatusCtx = useMemo(() => {
     if (!status || !status.isGit) return EMPTY_STATUS_CTX;
     const dirty = new Set<string>();
@@ -106,6 +141,156 @@ export function FileTree({
     return { status: status.status, dirtyDirs: dirty };
   }, [status]);
 
+  // Flatten the visible tree so selection + keyboard-range arithmetic works.
+  const visibleOrder = useMemo(
+    () => (data ? flattenVisible(data.tree, openDirs) : []),
+    [data, openDirs],
+  );
+
+  const selection = useTreeSelection({ visibleOrder });
+
+  // Mutations + DnD -------------------------------------------------------
+  const requestConfirm = useCallback(
+    async (req: {
+      reason: string;
+      severity: "warn" | "danger";
+      summary: string;
+    }): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        setConfirmState({
+          open: true,
+          reason: req.reason,
+          severity: req.severity,
+          summary: req.summary,
+          onResolve: resolve,
+        });
+      }),
+    [],
+  );
+
+  const mutations = useFsMutations({
+    cwd,
+    onConfirm: requestConfirm,
+    onRevalidate: revalidate,
+  });
+
+  const dnd = useTreeDnd({
+    onMove: async ({ from, to }) => {
+      await mutations.move(from, to);
+    },
+  });
+
+  const osDrop = useOsDrop({
+    cwd,
+    onComplete: (result) => {
+      setUploadToast({ result, error: null, uploading: false });
+      revalidate();
+    },
+    onError: (message) => {
+      setUploadToast({ result: null, error: message, uploading: false });
+    },
+  });
+
+  // Keep the toast's `uploading` flag live with the hook.
+  useEffect(() => {
+    setUploadToast((s) =>
+      s.uploading === osDrop.uploading ? s : { ...s, uploading: osDrop.uploading },
+    );
+  }, [osDrop.uploading]);
+
+  // Action handlers -------------------------------------------------------
+  const openDir = useCallback((p: string) => {
+    setOpenDirs((m) => ({ ...m, [p]: true }));
+  }, []);
+
+  const actions: TreeContextMenuActions = useMemo(
+    () => ({
+      newFile: (parent) => {
+        openDir(parent);
+        setPendingCreate({ parent, kind: "file" });
+      },
+      newFolder: (parent) => {
+        openDir(parent);
+        setPendingCreate({ parent, kind: "dir" });
+      },
+      rename: (path) => {
+        setRenaming(path);
+      },
+      duplicate: async (path) => {
+        const dot = path.lastIndexOf(".");
+        const slash = path.lastIndexOf("/");
+        const dup =
+          dot > slash
+            ? `${path.slice(0, dot)}-copy${path.slice(dot)}`
+            : `${path}-copy`;
+        // Try cheap content-copy via create — server rejects oversize.
+        const read = await fetch(
+          `/api/files/content?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`,
+        );
+        if (!read.ok) return;
+        const body = (await read.json()) as {
+          content?: string;
+          binary?: boolean;
+          truncated?: boolean;
+        };
+        if (body.binary || body.truncated) return;
+        await mutations.createFile(dup, body.content ?? "", false);
+      },
+      moveToTrash: async (paths) => {
+        await mutations.del(paths, "trash");
+      },
+      deletePermanently: async (paths) => {
+        await mutations.del(paths, "permanent");
+      },
+      copyPath: (path) => {
+        navigator.clipboard?.writeText(path).catch(() => undefined);
+      },
+      revealInFinder: async (path) => {
+        try {
+          await fetch("/api/files/reveal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cwd, path }),
+          });
+        } catch {
+          /* swallow; reveal is fire-and-forget UX-wise */
+        }
+      },
+      openInTerminal: (dir) => {
+        onOpenInTerminal?.();
+        // Delay the cd event so the Terminal mount effect has time to
+        // attach its listener when the pane was just toggled on.
+        setTimeout(() => {
+          const cmd = `cd ${quoteForShell(dir)}`;
+          window.dispatchEvent(
+            new CustomEvent("marvin:terminal-run", { detail: { cmd } }),
+          );
+        }, 80);
+      },
+    }),
+    [cwd, mutations, openDir, onOpenInTerminal],
+  );
+
+  // Keyboard shortcuts (on the tree root)
+  const onRootKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const sel = Array.from(selection.selected);
+      if (sel.length === 0) return;
+      if ((e.metaKey || e.ctrlKey) && e.key === "Backspace") {
+        e.preventDefault();
+        if (e.shiftKey) actions.deletePermanently(sel);
+        else actions.moveToTrash(sel);
+      } else if (e.key === "F2" && sel.length === 1 && sel[0]) {
+        e.preventDefault();
+        actions.rename(sel[0]);
+      } else if (e.key === "Escape") {
+        selection.clear();
+      }
+    },
+    [actions, selection],
+  );
+
+  // Render ---------------------------------------------------------------
   if (!cwd) {
     return (
       <div className="p-4 text-xs text-[color:var(--color-fg-faint)]">
@@ -133,7 +318,16 @@ export function FileTree({
     data.root.split("/").filter(Boolean).slice(-1)[0] ?? data.root;
 
   return (
-    <div className="scroll-thin h-full overflow-y-auto p-2 font-mono text-[12px]">
+    <div
+      className={`scroll-thin h-full overflow-y-auto p-2 font-mono text-[12px] ${
+        osDrop.osDragHover
+          ? "outline outline-2 outline-[color:var(--color-accent)]/70"
+          : ""
+      }`}
+      tabIndex={-1}
+      onKeyDown={onRootKeyDown}
+      {...osDrop.osDropProps({ destDir: data.root })}
+    >
       <div className="mb-2 flex items-center gap-2 truncate px-1 text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-fg-faint)]">
         <span className="truncate">{rootName}</span>
         {status?.isGit && status.branch && (
@@ -146,6 +340,17 @@ export function FileTree({
         nodes={data.tree}
         depth={0}
         ctx={ctx}
+        openDirs={openDirs}
+        setOpenDirs={setOpenDirs}
+        selection={selection}
+        dnd={dnd}
+        actions={actions}
+        mutations={mutations}
+        cwd={cwd}
+        pendingCreate={pendingCreate}
+        setPendingCreate={setPendingCreate}
+        renaming={renaming}
+        setRenaming={setRenaming}
         {...(onSelect ? { onSelect } : {})}
         {...(selectedPath ? { selectedPath } : {})}
       />
@@ -154,34 +359,56 @@ export function FileTree({
           tree truncated at {data.count} entries
         </div>
       )}
+      <ConfirmDeleteDialog
+        state={confirmState}
+        onCancel={() => {
+          confirmState.onResolve?.(false);
+          setConfirmState((s) => ({ ...s, open: false }));
+        }}
+        onConfirm={() => {
+          confirmState.onResolve?.(true);
+          setConfirmState((s) => ({ ...s, open: false }));
+        }}
+      />
+      <UploadProgressToast
+        state={uploadToast}
+        onDismiss={() =>
+          setUploadToast({ result: null, error: null, uploading: false })
+        }
+      />
     </div>
   );
+}
+
+interface SharedProps {
+  ctx: StatusCtx;
+  openDirs: OpenMap;
+  setOpenDirs: (u: (m: OpenMap) => OpenMap) => void;
+  selection: ReturnType<typeof useTreeSelection>;
+  dnd: ReturnType<typeof useTreeDnd>;
+  actions: TreeContextMenuActions;
+  mutations: ReturnType<typeof useFsMutations>;
+  cwd: string;
+  pendingCreate: PendingCreate;
+  setPendingCreate: (v: PendingCreate) => void;
+  renaming: RenamingPath;
+  setRenaming: (v: RenamingPath) => void;
+  onSelect?: (path: string) => void;
+  selectedPath?: string;
 }
 
 function TreeList({
   nodes,
   depth,
-  ctx,
-  onSelect,
-  selectedPath,
+  ...shared
 }: {
   nodes: TreeNode[];
   depth: number;
-  ctx: StatusCtx;
-  onSelect?: (path: string) => void;
-  selectedPath?: string;
-}) {
+} & SharedProps) {
   return (
     <ul className="flex flex-col">
       {nodes.map((n) => (
-        <TreeItem
-          key={n.path}
-          node={n}
-          depth={depth}
-          ctx={ctx}
-          {...(onSelect ? { onSelect } : {})}
-          {...(selectedPath ? { selectedPath } : {})}
-        />
+        <TreeItem key={n.path} node={n} depth={depth} {...shared} />
       ))}
     </ul>
   );
@@ -220,81 +447,216 @@ function badgeFor(code: string): { label: string; className: string } | null {
 function TreeItem({
   node,
   depth,
-  ctx,
-  onSelect,
-  selectedPath,
+  ...shared
 }: {
   node: TreeNode;
   depth: number;
-  ctx: StatusCtx;
-  onSelect?: (path: string) => void;
-  selectedPath?: string;
-}) {
-  const [open, setOpen] = useState(depth < 1);
+} & SharedProps) {
+  const { ctx, openDirs, setOpenDirs, selection, dnd, actions, mutations, cwd, pendingCreate, setPendingCreate, renaming, setRenaming, onSelect, selectedPath } = shared;
   const padding = 6 + depth * 10;
+  const isRenaming = renaming === node.path;
+  const parentPath = parentOf(node.path);
 
   if (node.type === "dir") {
     const empty = !node.children || node.children.length === 0;
     const dirty = ctx.dirtyDirs.has(node.path);
+    const open = openDirs[node.path] ?? depth < 1;
+    const selected = selection.isSelected(node.path);
+    const dropHover = dnd.dropTarget === node.path;
+    const isPendingParent = pendingCreate?.parent === node.path;
     return (
       <li>
-        <button
-          type="button"
-          onClick={() => !empty && setOpen((v) => !v)}
-          disabled={empty}
-          className="flex w-full items-center gap-1 rounded px-1 py-[2px] text-left text-[color:var(--color-fg)]/90 transition hover:bg-[color:var(--color-bg-elev)]/60 disabled:opacity-40"
-          style={{ paddingLeft: padding }}
+        <TreeContextMenu
+          node={{ path: node.path, type: "dir", parentPath }}
+          selectedPaths={Array.from(selection.selected)}
+          actions={actions}
         >
-          <span className="w-3 text-center text-[10px] text-[color:var(--color-fg-faint)]">
-            {empty ? "·" : open ? "▾" : "▸"}
-          </span>
-          <span className="truncate text-[color:var(--color-accent)]/90">
-            {node.name}
-          </span>
-          {dirty && (
-            <span
-              className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
-              aria-label="modified"
-            />
-          )}
-        </button>
-        {open && node.children && node.children.length > 0 && (
-          <TreeList
-            nodes={node.children}
-            depth={depth + 1}
-            ctx={ctx}
-            {...(onSelect ? { onSelect } : {})}
-            {...(selectedPath ? { selectedPath } : {})}
-          />
+          <div
+            className={`flex w-full items-center gap-1 rounded px-1 py-[2px] text-left transition ${
+              selected
+                ? "bg-[color:var(--color-accent-glow)]"
+                : "hover:bg-[color:var(--color-bg-elev)]/60"
+            } ${
+              dropHover
+                ? "outline outline-1 outline-[color:var(--color-accent)]"
+                : ""
+            }`}
+            style={{ paddingLeft: padding }}
+            onClick={(e) => {
+              selection.onItemClick(node.path, e);
+              if (!empty && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                setOpenDirs((m) => ({ ...m, [node.path]: !open }));
+              }
+            }}
+            {...(isRenaming ? {} : dnd.dragProps({ path: node.path, selected: selection.selected }))}
+            {...dnd.dropProps({ path: node.path })}
+          >
+            <span className="w-3 text-center text-[10px] text-[color:var(--color-fg-faint)]">
+              {empty ? "·" : open ? "▾" : "▸"}
+            </span>
+            {isRenaming ? (
+              <InlineRename
+                initial={node.name}
+                paddingLeft={0}
+                onCancel={() => setRenaming(null)}
+                onCommit={async (newName) => {
+                  const to = joinName(node.path, newName);
+                  await mutations.rename(node.path, to);
+                  setRenaming(null);
+                }}
+              />
+            ) : (
+              <span className="truncate text-[color:var(--color-accent)]/90">
+                {node.name}
+              </span>
+            )}
+            {dirty && !isRenaming && (
+              <span
+                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
+                aria-label="modified"
+              />
+            )}
+          </div>
+        </TreeContextMenu>
+        {open && (
+          <>
+            {isPendingParent && pendingCreate && (
+              <PendingCreateRow
+                depth={depth + 1}
+                kind={pendingCreate.kind}
+                onCancel={() => setPendingCreate(null)}
+                onCommit={async (name) => {
+                  const newPath = joinName(node.path, name);
+                  if (pendingCreate.kind === "file") {
+                    await mutations.createFile(newPath, "", false);
+                  } else {
+                    await mutations.createDir(newPath);
+                  }
+                  setPendingCreate(null);
+                }}
+              />
+            )}
+            {node.children && node.children.length > 0 && (
+              <TreeList nodes={node.children} depth={depth + 1} {...shared} />
+            )}
+          </>
         )}
       </li>
     );
   }
 
-  const selected = selectedPath === node.path;
+  const selected = selectedPath === node.path || selection.isSelected(node.path);
   const code = ctx.status[node.path];
   const badge = code ? badgeFor(code) : null;
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => onSelect?.(node.path)}
-        className={`flex w-full items-center gap-1 rounded px-1 py-[2px] text-left transition hover:bg-[color:var(--color-bg-elev)]/60 ${
-          selected
-            ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-fg)]"
-            : "text-[color:var(--color-fg-dim)]"
-        }`}
-        style={{ paddingLeft: padding + 14 }}
+      <TreeContextMenu
+        node={{ path: node.path, type: "file", parentPath }}
+        selectedPaths={Array.from(selection.selected)}
+        actions={actions}
       >
-        <span className="truncate">{node.name}</span>
-        {badge && (
-          <span
-            className={`ml-auto shrink-0 font-mono text-[10px] ${badge.className}`}
-          >
-            {badge.label}
-          </span>
-        )}
-      </button>
+        <div
+          className={`flex w-full items-center gap-1 rounded px-1 py-[2px] text-left transition ${
+            selected
+              ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-fg)]"
+              : "text-[color:var(--color-fg-dim)] hover:bg-[color:var(--color-bg-elev)]/60"
+          }`}
+          style={{ paddingLeft: padding + 14 }}
+          onClick={(e) => {
+            selection.onItemClick(node.path, e);
+            if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+              onSelect?.(node.path);
+            }
+          }}
+          {...(isRenaming ? {} : dnd.dragProps({ path: node.path, selected: selection.selected }))}
+        >
+          {isRenaming ? (
+            <InlineRename
+              initial={node.name}
+              paddingLeft={0}
+              onCancel={() => setRenaming(null)}
+              onCommit={async (newName) => {
+                const to = joinName(node.path, newName);
+                await mutations.rename(node.path, to);
+                setRenaming(null);
+              }}
+            />
+          ) : (
+            <span className="truncate">{node.name}</span>
+          )}
+          {badge && !isRenaming && (
+            <span
+              className={`ml-auto shrink-0 font-mono text-[10px] ${badge.className}`}
+            >
+              {badge.label}
+            </span>
+          )}
+        </div>
+      </TreeContextMenu>
     </li>
   );
+}
+
+function PendingCreateRow({
+  depth,
+  kind,
+  onCancel,
+  onCommit,
+}: {
+  depth: number;
+  kind: "file" | "dir";
+  onCancel(): void;
+  onCommit(name: string): void;
+}) {
+  const padding = 6 + depth * 10;
+  return (
+    <div
+      className="flex w-full items-center gap-1 rounded px-1 py-[2px]"
+      style={{ paddingLeft: padding }}
+    >
+      <span className="w-3 text-center text-[10px] text-[color:var(--color-fg-faint)]">
+        {kind === "dir" ? "▸" : " "}
+      </span>
+      <InlineRename
+        initial={kind === "dir" ? "new-folder" : "untitled.txt"}
+        paddingLeft={0}
+        onCancel={onCancel}
+        onCommit={onCommit}
+      />
+    </div>
+  );
+}
+
+function flattenVisible(tree: TreeNode[], openDirs: OpenMap): string[] {
+  const out: string[] = [];
+  const walk = (nodes: TreeNode[], depth: number) => {
+    for (const n of nodes) {
+      out.push(n.path);
+      if (n.type === "dir" && (openDirs[n.path] ?? depth < 1) && n.children) {
+        walk(n.children, depth + 1);
+      }
+    }
+  };
+  walk(tree, 0);
+  return out;
+}
+
+function parentOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i > 0 ? path.slice(0, i) : path;
+}
+
+function joinName(parentOrOldPath: string, name: string): string {
+  const i = parentOrOldPath.lastIndexOf("/");
+  const parent = i > 0 ? parentOrOldPath.slice(0, i) : parentOrOldPath;
+  return `${parent}/${name}`;
+}
+
+/**
+ * Wrap a path in single-quotes for a POSIX shell. Embedded single-quotes
+ * are escaped via the standard `'\''` dance. Avoids a shell-injection
+ * footgun if a path contains spaces, `$`, or other metacharacters.
+ */
+function quoteForShell(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
