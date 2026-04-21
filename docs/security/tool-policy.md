@@ -83,6 +83,25 @@ Hard-denies return `{ behavior: "deny", message: "..." }` to the SDK. The execut
 
 The list is in `packages/tools/src/policy.ts` as `HARD_DENY_PATTERNS`. Adding one requires a decision — document in `docs/decisions/` if the pattern is controversial.
 
+## User-initiated file ops
+
+Classified by [`fsWritePolicy()`](../../../packages/tools/src/fs-write-policy.ts). Same three outcomes (`auto` / `confirm` / `deny`) enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/files/write/confirm`.
+
+| Op | Default class | Reason |
+|---|---|---|
+| `create-file` / `create-dir` | auto | Inside project, not deny-listed. |
+| `write-file` (editor save) | auto up to 5 MB | Cap lives in `WRITE_SIZE_MAX_BYTES`; bigger → deny. |
+| Write / create / rename touching `.env*`, `*.pem`, `id_rsa`, `id_ed25519`, `*.p12`, `*.pfx` | confirm **danger** | Secret-file pattern; user may not realise the target. |
+| `rename` where only case changes (`Foo.ts` → `foo.ts`) on case-insensitive volumes | confirm **warn** | APFS/HFS+ would otherwise silently no-op. |
+| `move` between project dirs | auto | — |
+| `delete-trash` | auto | Reversible via macOS Trash / Recycle Bin / XDG trash. |
+| `delete-permanent` | confirm **danger** | Irreversible regardless of count. |
+| Any op whose path contains a `HARD_DENY_DIR_SEGMENTS` entry (`.git`, `node_modules`, `.next`, …) | deny | Repo-corruption / dep-corruption risk. |
+| Any delete whose paths include `cwd` itself | deny | Project-root guardrail. |
+| Any path containing NUL bytes or > 1024 bytes | deny | Sandbox rejects before policy runs. |
+
+The deny-list and secret-pattern sources are [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — shared with the LLM-initiated channel so tightening one flows into the other.
+
 ## Mode interactions
 
 | Permission mode | Auto-allow | Confirm | Hard-deny |
