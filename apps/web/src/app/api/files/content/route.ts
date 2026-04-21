@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 
+import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -18,18 +18,24 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const root = path.resolve(cwd);
-  const target = path.resolve(file);
-  const rel = path.relative(root, target);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    return NextResponse.json({ error: "path escapes cwd" }, { status: 400 });
+  const check = await checkFsPath({ cwd, target: file, mustExist: true });
+  if (!check.ok) {
+    const status =
+      check.error === "not-found"
+        ? 404
+        : check.error === "path-escapes-cwd" ||
+            check.error === "symlink-rejected" ||
+            check.error === "symlink-escapes-cwd"
+          ? 400
+          : check.error === "is-directory"
+            ? 400
+            : 500;
+    return NextResponse.json({ error: check.error }, { status });
   }
+  const target = check.absolutePath;
 
   try {
     const stat = await fs.stat(target);
-    if (!stat.isFile()) {
-      return NextResponse.json({ error: "not a file" }, { status: 400 });
-    }
     if (stat.size > MAX_SIZE) {
       return NextResponse.json(
         {

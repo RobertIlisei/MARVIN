@@ -1176,9 +1176,41 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   then deleted each branch locally and on origin. Repo is now
   single-trunk — only `main` exists.
 
+- **2026-04-21 (ide-mode — M1: shared fs-sandbox + write policy + ADR-0008)** —
+  foundation for the IDE-mode file-ops effort. `packages/runtime/src/
+  fs-sandbox.ts` centralises path validation: `checkFsPath({ cwd, target,
+  mustExist, allowDirectory })` does `path.resolve` + relative-escape
+  check + `fs.lstat` (rejects symlink targets) + `fs.realpath` (rejects
+  ancestor-symlink escapes) + NUL-byte + 1024-byte path-length caps. For
+  `mustExist: false` it walks to the first extant ancestor and re-runs
+  the escape check there. `packages/tools/src/fs-constants.ts` is the
+  single source of truth for `IGNORE_DIR_NAMES` (lifted from
+  `tree/route.ts`), `HARD_DENY_DIR_SEGMENTS`, `SECRET_FILE_PATTERNS` +
+  `hasDenySegment()` / `isSecretFileName()`. `packages/tools/src/
+  fs-write-policy.ts` adds the user-initiated write classifier —
+  `fsWritePolicy(op, cwd)` returning `{ class: "auto"|"confirm"|"deny",
+  reason, severity? }` over the seven user ops (create-file, create-dir,
+  write-file, rename, move, delete-trash, delete-permanent). Delete-trash
+  is `auto` (reversible). Delete-permanent is always `confirm danger`.
+  Secret-file writes + case-only renames surface as confirms. Project-
+  root delete is a hard deny. 5 MB write cap. Refactored the three read
+  routes (`content`, `tree`, `status`) to use the new sandbox — fixes a
+  latent bug where `fs.stat` silently followed symlinks, so
+  `project/leak.txt -> /etc/passwd` had been readable via
+  `/api/files/content`. `tree/route.ts` now skips symlinks during the
+  walk. ADR-0008 documents the two-write-channels model + shared
+  primitives; linked from `REVIEW.md` (new "Always check: ignore/deny
+  lists from fs-constants only") and `docs/security/tool-policy.md`
+  (new "Two write channels" section). `packages/tools/package.json` +
+  `packages/runtime/package.json` export the new subpaths. End-to-end
+  verified via `pnpm -r typecheck` green across all 7 packages + web,
+  and a manual symlink-escape read test (`ln -s /etc/passwd …/leak.txt`
+  → 400 `symlink-rejected`). No UI, no new routes — M2 adds write
+  endpoints next.
+
 ## Status
 
-**MARVIN v1 shipped.** Every phase (1-5) complete. The only Phase 5
+**MARVIN v1 shipped + ide-mode M1.** Every phase (1-5) complete. The only Phase 5
 stretch item not shipped is the Honeycomb MCP integration, which is
 explicitly deferred until a Honeycomb account + team setup are
 available (tracked in `docs/operations/observability.md`). No open
