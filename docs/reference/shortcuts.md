@@ -49,6 +49,14 @@ Right-click any row to open the context menu. Gestures below work on the tree as
 
 Destructive ops classified as `confirm` (permanent delete, secret-file writes, case-only renames) surface an AlertDialog. The user-initiated write channel is gated by `fsWritePolicy` — see [tool-policy](../security/tool-policy.md) and [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
 
+## Editor (focus inside Monaco)
+
+| Keys | Action |
+|---|---|
+| `⌘ S` / `Ctrl S` | Save the current file (CAS on mtime — banner surfaces if the file changed on disk) |
+
+The editor refuses to mount on binary or truncated (>512 KB) files so a save never silently corrupts them. Switching away from a dirty file surfaces the Unsaved Changes dialog.
+
 ## Terminal (focus inside the xterm pane)
 
 | Keys | Action |
