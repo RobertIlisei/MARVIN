@@ -208,7 +208,10 @@ function ReadOnlyPanel({
             <iframe
               src={rawUrl}
               title={relPath}
-              className="h-full w-full rounded border border-[color:var(--color-border)] bg-white"
+              // PDFs paint their own page background; keeping the wrapper
+              // transparent avoids a white stripe flashing in dark mode
+              // while the viewer mounts.
+              className="h-full w-full rounded border border-[color:var(--color-border)] bg-transparent"
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center">
