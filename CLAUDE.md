@@ -180,8 +180,8 @@ Env knobs (all optional):
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(455 nodes · 497 edges · 84 communities as of 2026-04-19, post the
-docs + skills + review adoption pass).
+(873 nodes · 1006 edges · 154 communities as of 2026-04-21, post the
+v1.1.0 install-app flow + scout subagents pass).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
@@ -211,9 +211,11 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### God nodes (most-connected abstractions)
 
-`GET()`, `POST()`, `Target Architecture (Repo Layout)`, `8-Phase
-Senior-Engineer Workflow`, `apps/web new API routes`,
-`getAnthropicAuth()`, `runAgent()`, `buildProjectContext()`,
-`createGraphMcpServer()`, `toolPolicy()`.
+`POST()` (60 edges), `GET()` (58 edges), `ADR-0008 — User-initiated
+write channel`, `ADR-0009 — File uploads from OS`, `HTTP API reference
+(docs/reference/api.md)`, `apps/desktop/README.md — Tauri wrapper
+docs`, `ADR-0010 — Desktop wrapper via Tauri`, `ADR-0014 — Read-only
+scout subagents`, `ADR-0011 — .app via bundled Node sidecar (deprecated)`,
+`ADR index (docs/decisions/README.md)`.
 
 _Refresh this list with `/graphify . --update` when it drifts._
