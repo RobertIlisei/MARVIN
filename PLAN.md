@@ -1575,6 +1575,26 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   End-to-end verified via `pnpm -r typecheck` (all 8 packages
   green) + `pnpm lint` (0 errors, 196 files) + `pnpm test`
   (134 passed). Typecheck clean across all 8 packages.
+- **2026-04-21 (scout-subagents — ADR-0014)** — Read-only scout
+  subagents sanctioned. The Agent SDK's `agents` option registers
+  one custom subagent type, `scout`, with `disallowedTools:
+  ["Edit", "Write", "Bash", "NotebookEdit"]` as the SDK-level
+  backstop and `mcpServers: ["marvin-graph"]` so scouts inherit
+  graphify-first discipline. MARVIN dispatches scouts via `Task`
+  with `subagent_type: "scout"` + `description: "scout: …"`
+  prefix (mirrors the advisor orb contract from ADR-0007). The
+  two carve-outs do not overlap: advisor is Opus-hinted judgement,
+  scout is inherit-model read-only research. Golden rule 1 in
+  `CLAUDE.md` reworded to document the two sanctioned exceptions
+  explicitly; new subagent types still require a new ADR.
+  `personality.ts` "When to delegate to a subagent" section
+  tightened into a MUST / MUST-NOT surface matching the graphify-
+  first and advisor-trigger pattern. 7 new unit tests in
+  `packages/runtime/tests/scout-agent.test.ts` pin the SDK-level
+  constraints so future refactors can't silently relax them.
+  End-to-end verified via `pnpm -r typecheck` (all 8 packages
+  green) + `pnpm lint` (0 errors, 200 files) + `pnpm test`
+  (141 passed). Typecheck clean across all 8 packages.
 
 ## Status
 

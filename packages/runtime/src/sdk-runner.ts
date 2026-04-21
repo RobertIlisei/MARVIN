@@ -22,7 +22,7 @@
  *      when the user clicks allow or deny.
  */
 
-import { type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
@@ -125,6 +125,78 @@ const KNOWN_TOOL_NAMES = new Set<ToolName>([
   "WebFetch",
   "WebSearch",
 ]);
+
+// Scout agent — the sanctioned read-only research subagent, per ADR-0014.
+// MARVIN spawns one via Task when three-or-more parallel searches would
+// otherwise run serially (breadth-first exploration, competing-hypothesis
+// investigation, context-pressure offload). SDK-level disallowedTools is
+// the structural backstop: even if MARVIN's brief accidentally asks the
+// scout to edit, the SDK refuses the call before it reaches the model.
+// Keep in sync with personality.ts "When to dispatch a scout" section
+// and ADR-0014.
+//
+// `mcpServers: ["marvin-graph"]` is the reference-by-name form — the
+// scout inherits the parent session's marvin-graph registration so
+// golden rule 7 (graph-first) extends to scouts. `marvin-playwright`
+// is deliberately NOT inherited; scouts are research, not drivers.
+//
+// `model: "inherit"` keeps scout cost at the parent turn's model tier.
+// Opus-escalation is the advisor's job (ADR-0007), not the scout's.
+export const SCOUT_AGENT: AgentDefinition = {
+  description:
+    "Read-only research scout. Spawn for breadth-first exploration " +
+    "(parallel searches across a codebase, competing-hypothesis " +
+    "investigation, context-pressure offload). Never for writes or " +
+    "sequential implementation — scouts return a synthesis, not a " +
+    "change.",
+  disallowedTools: ["Edit", "Write", "Bash", "NotebookEdit"],
+  mcpServers: ["marvin-graph"],
+  model: "inherit",
+  prompt: [
+    "You are a MARVIN scout — a read-only research subagent spawned by",
+    "the main MARVIN session for a bounded, parenthetical task. You are",
+    "not MARVIN. The user does not see you. Your job is to answer one",
+    "question concisely and return.",
+    "",
+    "# Operating contract",
+    "",
+    "1. **Graph-first.** Your first tool call on any structural question",
+    '   ("how does X work?", "who calls Y?", "where is Z defined?") MUST',
+    "   be a `marvin-graph` MCP call — `graph_search`, `graph_neighbors`,",
+    "   `graph_path`, or `graph_summary`. Only after the graph has",
+    "   pointed you at specific `source_file` + `source_location`",
+    "   citations do you Read those files. Grep and Glob are second-line",
+    "   tools — used only when the graph doesn't cover what you need.",
+    "",
+    "2. **Read-only.** Edit, Write, Bash, and NotebookEdit are disallowed",
+    "   at the SDK layer. Do not attempt them. If your brief implies a",
+    "   change, return a synthesis describing what would change and",
+    "   stop — the parent MARVIN session owns all writes.",
+    "",
+    "3. **Synthesise, don't dump.** Return a short structured answer: the",
+    "   finding, the source locations that support it, and any caveats.",
+    "   Do not paste large file excerpts; cite with `path:line`. The",
+    "   parent integrates your finding into its own reasoning; a wall of",
+    "   text defeats the purpose of running you in parallel.",
+    "",
+    "4. **Stay in scope.** One brief, one answer. If the brief asks",
+    "   several unrelated questions, answer each briefly rather than",
+    "   spawning more subagents. No nested Task calls.",
+    "",
+    "# Output shape",
+    "",
+    "Return a concise prose answer (not JSON). Structure:",
+    "",
+    "- **Finding.** One-to-three sentences stating what you found.",
+    "- **Evidence.** Source citations (path:line or node labels from the",
+    "  graph) that support the finding.",
+    "- **Caveats.** Anything the parent should know — ambiguity in the",
+    "  code, places you didn't look, things that looked relevant but",
+    "  weren't.",
+    "",
+    "Skip any section that has nothing to say. Brevity is the deliverable.",
+  ].join("\n"),
+};
 
 function classifyToolCall(
   name: string,
@@ -232,6 +304,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     mcpServers: {
       "marvin-graph": graphMcp,
       ...(playwrightMcp ? { "marvin-playwright": playwrightMcp } : {}),
+    },
+    // ADR-0014: register the read-only `scout` subagent so MARVIN can
+    // dispatch parallel research (graph-first, read-only, synthesis-
+    // returning) via `Task` with `subagent_type: "scout"`. The advisor
+    // carve-out (ADR-0007) continues to use `subagent_type: "general-
+    // purpose"` with an Opus hint; scout and advisor do not overlap.
+    agents: {
+      scout: SCOUT_AGENT,
     },
     includePartialMessages: false,
     ...(advisorModel ? { advisorModel } : {}),
