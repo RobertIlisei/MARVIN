@@ -16,10 +16,11 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 |---|---|---|---|
 | [0001](./0001-single-assistant.md) | Single assistant, not an agent team | Accepted | 2026-04-17 |
 | [0002](./0002-default-to-opus-4-7.md) | Default to Claude Opus 4.7 | Accepted | 2026-04-17 |
-| [0003](./0003-advisor-strategy.md) | Advisor strategy as an experiment | Accepted | 2026-04-18 |
+| [0003](./0003-advisor-strategy.md) | Advisor strategy as an experiment | **Superseded by 0007** | 2026-04-18 |
 | [0004](./0004-structural-confirm-gate.md) | Structural confirm gate via Agent SDK | Accepted | 2026-04-17 |
 | [0005](./0005-per-project-isolation.md) | Per-project isolation | Accepted | 2026-04-17 |
 | [0006](./0006-light-first-theme-cascade.md) | Light-first theme cascade | Accepted | 2026-04-19 |
+| [0007](./0007-advisor-as-subagent-pattern.md) | Advisor as userland subagent pattern | Accepted | 2026-04-19 |
 
 ## Template
 
@@ -47,15 +48,24 @@ Monotonic. ADR-0001 is first. Never overwrite a number. A superseded ADR keeps i
 
 ## When to write one
 
-A decision deserves an ADR when it:
+**At turn time, MARVIN uses a deterministic list — not judgement.** Nine MUST-write categories + anti-triggers + the re-derivation test, enumerated in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) Phase 4 "Deterministic ADR triggers". The complete list is mirrored in [ADRs + memory](../concepts/memory-and-adrs.md#when-to-write-one).
 
-- Bounds future work (e.g., "all writes go through the event bus")
-- Would be expensive to re-derive from code alone
-- Has credible alternatives that were rejected
-- Creates contracts other code depends on
+In short, the categories that require an ADR:
 
-When to NOT write one:
+- Foundational framework / runtime / platform change
+- Public API shape change
+- Persistent-state schema change
+- Security-boundary change (auth, creds, tool policy, sandbox, shell)
+- Default model or runtime-mode change
+- New MCP server
+- Cross-cutting architectural constraint
+- Superseding / deprecating an existing ADR
+- User explicitly names it ADR-worthy
+
+Not ADR-worthy:
 
 - Typos, lint-rule tweaks, formatting
 - Internal refactors that don't change contracts
-- Trivially-obvious choices
+- Trivially-obvious choices with no credible alternative
+- Regenerated artefacts (graphify outputs, lockfile bumps)
+- Doc-only updates that don't encode new constraints
