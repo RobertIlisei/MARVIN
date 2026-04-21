@@ -47,6 +47,7 @@ import {
 } from "@/components/shell/page-helpers";
 import { StatusBar } from "@/components/shell/status-bar";
 import { TopBar } from "@/components/shell/top-bar";
+import { WorkspaceStatusBar } from "@/components/shell/workspace-status-bar";
 import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { Terminal } from "@/components/terminal/terminal";
 
@@ -676,6 +677,15 @@ export default function Home() {
                     />
                   )}
                 </div>
+                {/* VSCode / Cursor parity: footer strip with workspace
+                 * name + git branch + dirty / ahead / behind. Clicking
+                 * the branch switches the left tab to Source Control
+                 * so the branch switcher is one gesture away. */}
+                <WorkspaceStatusBar
+                  cwd={cwd || null}
+                  projectName={active?.name ?? null}
+                  onSwitchToSourceControl={setLeftColumnTab}
+                />
               </aside>
             </Panel>
             <PanelResizeHandle className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 lg:block" />
