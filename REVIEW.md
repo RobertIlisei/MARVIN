@@ -55,10 +55,13 @@ important signal.
 - **Formatting.** Biome's formatter is intentionally disabled
   (`formatter.enabled: false`) while we settle conventions. Don't flag
   whitespace or quote style.
-- **Missing tests.** MARVIN currently has no automated test harness;
-  see [docs/development/testing.md](./docs/development/testing.md).
-  Suggesting "add a test" is expected to produce zero diff until the
-  harness lands.
+- **Missing tests on surfaces not yet covered.** Vitest landed for
+  security-critical code (fs-sandbox, fs-write-policy, fs-constants,
+  fs-write-confirm-registry) — suggesting tests for those *is* in
+  scope. For the rest (Agent SDK loop, streaming UI, individual API
+  routes), test coverage is opportunistic and "add a test for this"
+  is noise unless the PR is large enough to warrant one. See
+  [docs/development/testing.md](./docs/development/testing.md).
 - **`graphify-out/*` regeneration.** The graph + report are checked-in
   artefacts. Flagging churn on `graph.json` / `GRAPH_REPORT.md` from a
   `/graphify . --update` run is noise.

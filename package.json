@@ -13,11 +13,14 @@
     "typecheck": "turbo run typecheck",
     "lint": "biome check",
     "lint:fix": "biome check --write",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.12",
     "turbo": "^2.3.0",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.4"
   }
 }
