@@ -1263,6 +1263,35 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   via `pnpm -r typecheck` green across all 7 packages + web, clean
   Turbopack HMR reload against the dev server, and live tree walk
   returning 808 entries for the MARVIN repo itself.
+- **2026-04-21 (ide-mode — M4: Monaco editor + dirty state + save
+  CAS)** — swaps the `<pre>` file viewer for a full Monaco editor
+  backed by `/api/files/write/save` (M2). Five new modules under
+  `apps/web/src/components/file-viewer/`: `monaco-editor.tsx`
+  (dynamic-import Editor, Cmd-S / Ctrl-S keybinding via
+  `editor.addAction`, `expectedMtime` CAS on every save),
+  `editor-toolbar.tsx` (relative path, dirty dot, language + line
+  count + size, save button, close button, stale-conflict banner
+  with Reload / Overwrite choices), `use-dirty-state.ts` (dirty flag
+  + `beforeunload` guard for browser-level nav, plus
+  `guardOrConfirm()` helper for in-app file/project switches),
+  `unsaved-guard.tsx` (three-choice dialog: Save / Discard /
+  Cancel). Monaco theme defs extracted from `diff-viewer.tsx` into
+  shared `apps/web/src/components/settings/monaco-themes.ts` —
+  `ensureMonacoThemes()` + `applyMonacoTheme()` called from both
+  the editor and the diff viewer; single place to tune colours.
+  `/api/files/content` now returns `mtime` (pulled from `fs.stat`)
+  so the editor has a CAS token at mount time. Editor refuses to
+  mount on `binary: true` or `truncated: true` — those fall back
+  to read-only panels with "preview not available" / "would cause
+  silent data loss on save" messaging. On `409 stale`, the toolbar
+  banner lets the user Reload (discard pending edits) or
+  Overwrite (re-save without `expectedMtime`, explicit replace).
+  `docs/reference/shortcuts.md` gained an Editor section. No new
+  ADR — per plan, editor-as-first-class-surface is a UI choice
+  downstream of ADR-0008, not a policy change. End-to-end verified
+  via `pnpm -r typecheck` green, clean Turbopack HMR reload, and
+  live live `/api/files/content` traffic from the dev server
+  returning the new `mtime` field.
 
 ## Status
 

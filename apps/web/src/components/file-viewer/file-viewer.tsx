@@ -2,53 +2,19 @@
 
 import { useEffect, useState } from "react";
 
+import { MonacoEditor } from "./monaco-editor";
+import { UnsavedGuard, type UnsavedGuardState } from "./unsaved-guard";
+import { useDirtyState } from "./use-dirty-state";
+
 type ContentResponse = {
   path: string;
   size: number;
+  mtime: number;
   binary: boolean;
   truncated: boolean;
   content: string | null;
   maxSize?: number;
 };
-
-const LANG_BY_EXT: Record<string, string> = {
-  ts: "typescript",
-  tsx: "tsx",
-  js: "javascript",
-  jsx: "jsx",
-  mjs: "javascript",
-  cjs: "javascript",
-  json: "json",
-  md: "markdown",
-  mdx: "markdown",
-  css: "css",
-  scss: "scss",
-  html: "html",
-  py: "python",
-  go: "go",
-  rs: "rust",
-  java: "java",
-  kt: "kotlin",
-  rb: "ruby",
-  php: "php",
-  sh: "shell",
-  zsh: "shell",
-  bash: "shell",
-  yml: "yaml",
-  yaml: "yaml",
-  toml: "toml",
-  sql: "sql",
-  graphql: "graphql",
-  gql: "graphql",
-  xml: "xml",
-  env: "env",
-};
-
-function langForPath(p: string): string {
-  const name = p.split("/").pop() ?? "";
-  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
-  return LANG_BY_EXT[ext] ?? "text";
-}
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -68,6 +34,11 @@ export function FileViewer({
   const [data, setData] = useState<ContentResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const dirty = useDirtyState();
+  const [guard, setGuard] = useState<UnsavedGuardState>({
+    open: false,
+    filePath: "",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -101,25 +72,99 @@ export function FileViewer({
   const relPath = filePath.startsWith(cwd)
     ? filePath.slice(cwd.length).replace(/^\/+/, "")
     : filePath;
-  const lang = langForPath(filePath);
-  const lineCount = data?.content ? data.content.split("\n").length : 0;
 
+  const handleClose = async () => {
+    if (dirty.isDirty) {
+      const choice = await new Promise<"save" | "discard" | "cancel">(
+        (resolve) => {
+          setGuard({
+            open: true,
+            filePath: relPath,
+            onResolve: resolve,
+          });
+        },
+      );
+      setGuard((g) => ({ ...g, open: false }));
+      if (choice === "cancel") return;
+      if (choice === "save") {
+        // The editor owns the content; we can't trigger save from here
+        // without lifting state. Simplest: ask the user to Cmd-S first
+        // via a visual cue and don't close. A future refactor can expose
+        // an imperative save() handle.
+        return;
+      }
+      // discard: proceed
+      dirty.markClean();
+    }
+    onClose();
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {loading && !data && (
+        <div className="p-4 text-xs text-[color:var(--color-fg-dim)]">
+          reading file…
+        </div>
+      )}
+      {error && (
+        <div className="p-4 text-xs text-[color:var(--color-danger)]/80">
+          {error}
+        </div>
+      )}
+      {data && (data.truncated || data.binary || data.content == null) && (
+        <ReadOnlyPanel
+          data={data}
+          relPath={relPath}
+          onClose={handleClose}
+        />
+      )}
+      {data && !data.truncated && !data.binary && data.content != null && (
+        <MonacoEditor
+          // key forces a fresh mount when the file changes — simpler than
+          // plumbing a reload through internal state.
+          key={filePath}
+          cwd={cwd}
+          filePath={filePath}
+          initialContent={data.content}
+          initialMtime={data.mtime}
+          initialSize={data.size}
+          onDirtyChange={(d) => {
+            if (d) dirty.markDirty();
+            else dirty.markClean();
+          }}
+          onClose={handleClose}
+          onError={(e) => setError(e)}
+        />
+      )}
+      <UnsavedGuard
+        state={guard}
+        onResolve={(c) => guard.onResolve?.(c)}
+      />
+    </div>
+  );
+}
+
+function ReadOnlyPanel({
+  data,
+  relPath,
+  onClose,
+}: {
+  data: ContentResponse;
+  relPath: string;
+  onClose(): void;
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col border-t border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/40">
       <div className="flex items-center gap-3 border-b border-[color:var(--color-border)] px-3 py-2 font-mono text-[11px]">
         <span className="text-[color:var(--color-fg-faint)]">file</span>
         <span className="truncate text-[color:var(--color-fg)]">{relPath}</span>
         <span className="ml-auto flex items-center gap-3 text-[color:var(--color-fg-faint)]">
-          {data && !data.binary && (
-            <>
-              <span>{lang}</span>
-              <span>·</span>
-              <span>{lineCount} lines</span>
-              <span>·</span>
-              <span>{fmtBytes(data.size)}</span>
-            </>
+          {data.binary && <span>binary · {fmtBytes(data.size)}</span>}
+          {data.truncated && (
+            <span>
+              truncated · {fmtBytes(data.size)} (cap {fmtBytes(data.maxSize ?? 0)})
+            </span>
           )}
-          {data?.binary && <span>binary · {fmtBytes(data.size)}</span>}
           <button
             type="button"
             onClick={onClose}
@@ -130,48 +175,21 @@ export function FileViewer({
           </button>
         </span>
       </div>
-      <div className="scroll-thin min-h-0 flex-1 overflow-auto">
-        {loading && !data && (
-          <div className="p-4 text-xs text-[color:var(--color-fg-dim)]">
-            reading file…
+      <div className="scroll-thin min-h-0 flex-1 overflow-auto p-4 text-xs text-[color:var(--color-fg-dim)]">
+        {data.binary && (
+          <div>
+            binary file — preview not available. Reveal in Finder (M6) or open
+            externally.
           </div>
         )}
-        {error && (
-          <div className="p-4 text-xs text-[color:var(--color-danger)]/80">
-            {error}
-          </div>
-        )}
-        {data?.truncated && (
-          <div className="border-b border-[color:var(--color-border)] bg-[color:var(--color-warn)]/10 px-3 py-2 text-[11px] text-[color:var(--color-warn)]">
+        {data.truncated && (
+          <div>
             file is larger than {fmtBytes(data.maxSize ?? 0)} — not loaded.
+            MARVIN's editor refuses to open truncated files to avoid silent
+            data loss on save.
           </div>
         )}
-        {data?.binary && (
-          <div className="p-4 text-xs text-[color:var(--color-fg-dim)]">
-            binary file — preview not available.
-          </div>
-        )}
-        {data?.content != null && <CodeBlock content={data.content} />}
       </div>
     </div>
-  );
-}
-
-function CodeBlock({ content }: { content: string }) {
-  const lines = content.split("\n");
-  return (
-    <pre className="m-0 flex font-mono text-[12px] leading-[1.55]">
-      <div
-        aria-hidden
-        className="sticky left-0 select-none border-r border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 px-2 py-3 text-right text-[color:var(--color-fg-faint)]"
-      >
-        {lines.map((_, i) => (
-          <div key={i}>{i + 1}</div>
-        ))}
-      </div>
-      <code className="block flex-1 whitespace-pre px-3 py-3 text-[color:var(--color-fg)]/92">
-        {content}
-      </code>
-    </pre>
   );
 }

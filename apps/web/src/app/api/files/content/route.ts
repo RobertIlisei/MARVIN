@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
         {
           path: target,
           size: stat.size,
+          mtime: stat.mtimeMs,
           maxSize: MAX_SIZE,
           binary: false,
           truncated: true,
@@ -65,6 +66,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         path: target,
         size: stat.size,
+        mtime: stat.mtimeMs,
         binary: true,
         truncated: false,
         content: null,
@@ -73,6 +75,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       path: target,
       size: stat.size,
+      mtime: stat.mtimeMs,
       binary: false,
       truncated: false,
       content: buf.toString("utf8"),
