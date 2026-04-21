@@ -51,10 +51,6 @@ Tauri's WKWebView.
 ## Build a `.app` + `.dmg`
 
 ```bash
-# One-off: drop 1024x1024 icon.png into src-tauri/icons/ and generate
-# the full icon bundle Tauri expects
-pnpm --filter @marvin/desktop tauri icon src-tauri/icons/icon.png
-
 pnpm --filter @marvin/desktop build
 ```
 
@@ -66,6 +62,22 @@ Outputs land in `src-tauri/target/release/bundle/`:
 **Unsigned builds** run fine on the build machine but Gatekeeper will
 refuse to launch them on any other Mac. Code signing + notarization
 are deferred to v2 (see ADR-0010 §"Deferred").
+
+### Icon artwork
+
+`src-tauri/icons/` ships a placeholder — a 1024×1024 PNG of a black
+"M" on warm paper, matching MARVIN's light-theme palette. It's
+legible in Dock, Finder, and ⌘-tab but it's not the final mark.
+
+To swap in real artwork:
+
+```bash
+# Drop a 1024x1024 PNG somewhere on disk
+pnpm --filter @marvin/desktop tauri icon path/to/my-icon.png
+```
+
+Tauri regenerates the full bundle (`icon.icns` + `icon.ico` + every
+PNG size Apple / Windows / Android expect).
 
 ## How it works
 
@@ -104,6 +116,8 @@ are deferred to v2 (see ADR-0010 §"Deferred").
   → The MARVIN web server isn't running. Start it in another terminal:
   `bin/marvin`.
 
-**`pnpm tauri build` fails with `icon.icns missing`**
-  → You haven't generated the icon bundle yet. See step above:
-  `pnpm --filter @marvin/desktop tauri icon src-tauri/icons/icon.png`.
+**`pnpm tauri build` fails with an icon-related error**
+  → Tauri's codegen embeds the icon at compile time. Repo ships a
+  placeholder so first-time builds work. If the placeholder is
+  corrupted or you're ready to swap in real artwork, regenerate the
+  bundle: `pnpm --filter @marvin/desktop tauri icon path/to/new-icon.png`.
