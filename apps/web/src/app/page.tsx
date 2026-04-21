@@ -25,6 +25,7 @@ import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { CostPill } from "@/components/cost/cost-pill";
 import { FileTree } from "@/components/file-tree/file-tree";
+import { QuickOpen } from "@/components/file-tree/quick-open";
 import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { GraphPanel } from "@/components/graph/graph-panel";
 import { ChatInput } from "@/components/input/chat-input";
@@ -106,6 +107,7 @@ export default function Home() {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
   const [heroDraftKey, setHeroDraftKey] = useState(0);
@@ -291,7 +293,8 @@ export default function Home() {
         (target?.isContentEditable ?? false);
 
       if (e.key === "Escape") {
-        if (shortcutsOpen) setShortcutsOpen(false);
+        if (quickOpenOpen) setQuickOpenOpen(false);
+        else if (shortcutsOpen) setShortcutsOpen(false);
         return;
       }
 
@@ -333,8 +336,14 @@ export default function Home() {
         togglePane("terminal");
         return;
       }
-      // Cmd+P — toggle preview
+      // Cmd+P — file quick-open (IDE muscle memory)
       if (e.key === "p" && !e.shiftKey) {
+        e.preventDefault();
+        if (cwd) setQuickOpenOpen(true);
+        return;
+      }
+      // Cmd+Shift+P — toggle preview (moved from ⌘P to make room for quick-open)
+      if ((e.key === "P" || e.key === "p") && e.shiftKey) {
         e.preventDefault();
         togglePane("preview");
         return;
@@ -348,7 +357,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [shortcutsOpen, reset, togglePane, cancel]);
+  }, [shortcutsOpen, quickOpenOpen, reset, togglePane, cancel, cwd]);
 
   const handleResumeSession = useCallback(
     async (projectId: string, sessionId: string) => {
@@ -945,6 +954,14 @@ export default function Home() {
         </Panel>
       </PanelGroup>
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      {cwd && (
+        <QuickOpen
+          cwd={cwd}
+          open={quickOpenOpen}
+          onOpenChange={setQuickOpenOpen}
+          onSelect={(absPath) => setSelectedPath(absPath)}
+        />
+      )}
     </main>
   );
 }
