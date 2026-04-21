@@ -18,8 +18,16 @@
  * [data-theme="dark"] further down. This matches the Claude-Design
  * handoff's cascade: light = :root, dark = opt-in attribute. */
 @theme {
-  --color-bg: oklch(0.985 0.003 80);
-  --color-bg-elev: oklch(0.975 0.003 80);
+  /* Light surfaces — warm paper, not pure white. Bumped down from the
+   * original oklch(0.985) on 2026-04-21 after user feedback "too
+   * bright, especially over long sessions." Landing zone is the
+   * 0.93–0.95 range called out in docs/roadmap.md. 0.95 keeps the
+   * "paper" identity without veering into cream; 0.935 on elev opens
+   * a visible elevation gap (was 0.010, now 0.015). Chroma held to
+   * 0.006 — enough warmth to read as paper rather than flat grey,
+   * not enough to tint the UI yellow. */
+  --color-bg: oklch(0.95 0.006 80);
+  --color-bg-elev: oklch(0.935 0.005 80);
   --color-bg-glass: oklch(1 0 0 / 0.65);
 
   --color-fg: oklch(0.18 0.005 80);
