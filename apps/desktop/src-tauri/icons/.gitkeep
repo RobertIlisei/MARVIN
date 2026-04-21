@@ -1,0 +1,9 @@
+# Icon bundle placeholder.
+#
+# Before running `pnpm --filter @marvin/desktop build`, drop a
+# 1024x1024 `icon.png` into this directory and run:
+#
+#     pnpm tauri icon icons/icon.png
+#
+# That generates icon.icns (macOS) + icon.ico (Windows) + the full PNG
+# stack Tauri expects. Kept out of git until the real artwork lands.

@@ -1,0 +1,6 @@
+# Rust build artefacts
+target/
+Cargo.lock.bak
+
+# Tauri-generated
+gen/
