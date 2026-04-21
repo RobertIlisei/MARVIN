@@ -84,6 +84,9 @@ Registered as `marvin-honeycomb`. Would expose trace querying as tools the execu
 streaming UI, and individual API routes remain uncovered — still
 opportunistic. See [Testing](./development/testing.md).
 
+### `/api/health` `model` field rename
+
+Old response has `model: claude-opus-4-7` which users mistake for "the live model." Renamed to `defaultModel` on 2026-04-19 — some docs or scripts may still reference the old name. Update callers.
 
 ### Light-theme recolour
 

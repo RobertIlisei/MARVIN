@@ -69,7 +69,7 @@ bin/marvin                     # start MARVIN on http://localhost:3030
 
 `bin/marvin` runs every preflight check (Node ≥22, pnpm, skills, port
 availability, credentials), backgrounds the dev server, polls
-`/api/health`, and prints the URL + auth mode + `defaultModel` once it's up.
+`/api/health`, and prints the URL + auth mode + model once it's up.
 
 ### Lifecycle
 
