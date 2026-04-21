@@ -87,6 +87,15 @@ export interface MonacoEditorProps {
   initialContent: string;
   initialMtime: number;
   initialSize: number;
+  /**
+   * Force read-only mode. Set for truncated files (the partial content
+   * can't safely be saved — it would overwrite the tail of the file on
+   * disk). Monaco's save action is disabled and the toolbar hides the
+   * save button.
+   */
+  readOnly?: boolean;
+  /** Optional banner text shown at the top (truncation hint, etc). */
+  notice?: string | null;
   onClose(): void;
   onDirtyChange?(dirty: boolean): void;
   /** Surface save errors to the parent (toast, etc). Optional. */
@@ -99,6 +108,8 @@ export function MonacoEditor({
   initialContent,
   initialMtime,
   initialSize,
+  readOnly = false,
+  notice = null,
   onClose,
   onDirtyChange,
   onError,
@@ -138,7 +149,7 @@ export function MonacoEditor({
 
   const save = useCallback(
     async (overwrite = false) => {
-      if (saving) return false;
+      if (saving || readOnly) return false;
       setSaving(true);
       try {
         const body: Record<string, unknown> = {
@@ -190,7 +201,7 @@ export function MonacoEditor({
         setSaving(false);
       }
     },
-    [content, cwd, filePath, mtime, onError, saving],
+    [content, cwd, filePath, mtime, onError, readOnly, saving],
   );
 
   const reload = useCallback(async () => {
@@ -212,14 +223,16 @@ export function MonacoEditor({
 
   const handleMount: OnMount = (editor, monaco) => {
     applyMonacoTheme(monaco, mode);
-    editor.addAction({
-      id: "marvin.save",
-      label: "Save",
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-      run: () => {
-        void save();
-      },
-    });
+    if (!readOnly) {
+      editor.addAction({
+        id: "marvin.save",
+        label: "Save",
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+        run: () => {
+          void save();
+        },
+      });
+    }
   };
 
   const lineCount = useMemo(
@@ -236,6 +249,8 @@ export function MonacoEditor({
         size={size}
         isDirty={isDirty}
         saving={saving}
+        readOnly={readOnly}
+        notice={notice}
         onSave={() => void save()}
         onClose={onClose}
         conflict={conflict}
@@ -258,7 +273,7 @@ export function MonacoEditor({
             folding: true,
             padding: { top: 8, bottom: 8 },
             automaticLayout: true,
-            readOnly: false,
+            readOnly,
           }}
         />
       </div>

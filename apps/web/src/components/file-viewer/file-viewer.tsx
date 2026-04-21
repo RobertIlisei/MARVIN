@@ -111,7 +111,7 @@ export function FileViewer({
           {error}
         </div>
       )}
-      {data && (data.truncated || data.binary || data.content == null) && (
+      {data && data.binary && (
         <ReadOnlyPanel
           cwd={cwd}
           filePath={filePath}
@@ -120,7 +120,7 @@ export function FileViewer({
           onClose={handleClose}
         />
       )}
-      {data && !data.truncated && !data.binary && data.content != null && (
+      {data && !data.binary && data.content != null && (
         <MonacoEditor
           // key forces a fresh mount when the file changes — simpler than
           // plumbing a reload through internal state.
@@ -130,12 +130,27 @@ export function FileViewer({
           initialContent={data.content}
           initialMtime={data.mtime}
           initialSize={data.size}
+          readOnly={data.truncated}
+          notice={
+            data.truncated
+              ? `file is ${fmtBytes(data.size)} — showing first ${fmtBytes(data.maxSize ?? 0)}, read-only to prevent truncation on save.`
+              : null
+          }
           onDirtyChange={(d) => {
             if (d) dirty.markDirty();
             else dirty.markClean();
           }}
           onClose={handleClose}
           onError={(e) => setError(e)}
+        />
+      )}
+      {data && !data.binary && data.content == null && (
+        <ReadOnlyPanel
+          cwd={cwd}
+          filePath={filePath}
+          data={data}
+          relPath={relPath}
+          onClose={handleClose}
         />
       )}
       <UnsavedGuard

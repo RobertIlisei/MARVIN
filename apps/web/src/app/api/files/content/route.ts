@@ -6,7 +6,13 @@ import { type NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_SIZE = 512 * 1024;
+// Cap for the in-editor preview. Files up to this size are fully loaded;
+// larger files are read up to the cap and returned with `truncated: true`
+// so the editor can render them read-only (save is disabled). The cap
+// balances Monaco's performance envelope against real-world generated
+// artefacts (lockfiles, minified bundles, etc.) that are legitimately
+// > 1 MB but still worth scanning.
+const MAX_SIZE = 4 * 1024 * 1024;
 
 export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
@@ -36,21 +42,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const stat = await fs.stat(target);
-    if (stat.size > MAX_SIZE) {
-      return NextResponse.json(
-        {
-          path: target,
-          size: stat.size,
-          mtime: stat.mtimeMs,
-          maxSize: MAX_SIZE,
-          binary: false,
-          truncated: true,
-          content: null,
-        },
-        { status: 200 },
-      );
+    const truncated = stat.size > MAX_SIZE;
+    const readSize = truncated ? MAX_SIZE : stat.size;
+    const fh = await fs.open(target, "r");
+    let buf: Buffer;
+    try {
+      const holder = Buffer.alloc(readSize);
+      if (readSize > 0) await fh.read(holder, 0, readSize, 0);
+      buf = holder;
+    } finally {
+      await fh.close();
     }
-    const buf = await fs.readFile(target);
     const sample = buf.subarray(0, Math.min(4096, buf.length));
     let nonPrint = 0;
     for (let i = 0; i < sample.length; i++) {
@@ -67,8 +69,9 @@ export async function GET(req: NextRequest) {
         path: target,
         size: stat.size,
         mtime: stat.mtimeMs,
+        maxSize: MAX_SIZE,
         binary: true,
-        truncated: false,
+        truncated,
         content: null,
       });
     }
@@ -76,8 +79,13 @@ export async function GET(req: NextRequest) {
       path: target,
       size: stat.size,
       mtime: stat.mtimeMs,
+      maxSize: MAX_SIZE,
       binary: false,
-      truncated: false,
+      truncated,
+      // For truncated files we still ship the first MAX_SIZE bytes so
+      // the editor can mount in read-only mode. Save is disabled client-
+      // side when `truncated: true` — prevents the "overwrite a 10 MB
+      // file with 4 MB" data-loss scenario.
       content: buf.toString("utf8"),
     });
   } catch {
