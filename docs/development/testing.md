@@ -1,18 +1,38 @@
 # Testing
 
-Honest status: **MARVIN has no automated tests of its own.** This doc explains why, what we have instead, and when that might change.
+**Status as of 2026-04-21:** unit tests land for security-critical surfaces via Vitest (`pnpm test`). Everything else is still typecheck + manual probes — see the roadmap under "Not yet covered" below.
 
-## Why there are no tests
+## What runs on `pnpm test`
 
-MARVIN shipped v1 (Phases 1-4 + most of Phase 5 stretch) on 2026-04-17/18 without writing tests. Stated reasons:
+```bash
+pnpm test          # one-shot; 61 tests in ~160 ms today
+pnpm test:watch    # interactive; reruns on change
+```
 
-1. **Pace.** The delivery plan explicitly prioritized a shipping shell over test coverage for v1. Every phase exit checklist mentions "typecheck clean" and sometimes "tests pass or added" — but in practice, "added" has been zero.
-2. **Hard-to-unit-test surface.** Most of MARVIN's value lives in the Agent SDK interaction loop + the streaming UI. Good tests for that surface are integration tests that spin up a Next.js server, proxy SDK calls, and drive the browser. Expensive to build, easy to get wrong.
-3. **Dog-fooding.** MARVIN is used on MARVIN. Every new feature is exercised by the developer immediately. Catches a different class of bugs than unit tests would, but catches a lot.
+Config: `vitest.config.ts` at the repo root. Node environment (no jsdom — the tested code is runtime / tools / sandbox). Tests live next to their package: `packages/<pkg>/tests/*.test.ts`.
 
-None of those reasons are durable. Tests will be needed before any serious team adoption.
+**Coverage today** — the security surface that ADR-0008 / ADR-0009 hinge on:
 
-## What we have instead
+| Module | File | Focus |
+|---|---|---|
+| `fs-sandbox` | `packages/runtime/tests/fs-sandbox.test.ts` | real tmp-dir fs — `..` escape, symlink rejection, ancestor-symlink realpath escape, NUL-byte, path-length cap, directory vs file, non-existent target + parent |
+| `fs-write-policy` | `packages/tools/tests/fs-write-policy.test.ts` | auto / confirm / deny classification for every op kind — `.git` / `node_modules` denies, project-root delete guard, secret-file confirm (`.env*`, `id_rsa`, `*.pem`, etc.), case-only rename warn, permanent delete always confirm, size cap deny |
+| `fs-constants` | `packages/tools/tests/fs-constants.test.ts` | ignore-list and secret-pattern membership — pinned so a casual removal shows up as a failing test |
+| `fs-write-confirm-registry` | `packages/runtime/tests/fs-write-confirm-registry.test.ts` | token one-shot consumption, cwd + op-kind + path-list structural match, rename from/to swap rejected |
+
+These tests are chosen because they're pure (no Agent SDK, no Next.js, no UI) and they cover the routes where a silent regression would re-open the write-channel attack surface.
+
+## Not yet covered
+
+The same three categories the original version of this doc flagged still apply to the *rest* of the codebase:
+
+1. **Agent SDK interaction loop** (runtime + `/api/chat`). Needs integration tests that proxy SDK calls. Not built.
+2. **Streaming UI** (chat message rendering, confirm cards, tree interactions). Needs a jsdom + playwright mix. Not built.
+3. **Next.js API routes** individually. `scripts/smoke-file-writes.sh` is an end-to-end curl battery that proxies a fraction of this; structured tests would catch more.
+
+Expansion is opportunistic: when a bug surfaces in untested code, add the test with the fix.
+
+## What we have instead (for surfaces not yet covered)
 
 ### Typecheck
 

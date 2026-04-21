@@ -153,7 +153,6 @@ export function ConfirmPrompt({
                   onChange={(e) => setDenyNote(e.target.value)}
                   placeholder="optional note for MARVIN"
                   className="flex-1 rounded-md border border-[color:var(--color-border)] bg-transparent px-2 py-1 text-[11px] text-[color:var(--color-fg)] outline-none focus:border-[color:var(--color-danger)]/50"
-                  autoFocus
                 />
                 <button
                   type="button"

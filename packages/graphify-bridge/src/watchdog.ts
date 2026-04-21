@@ -8,10 +8,10 @@
  * in `@marvin/runtime/projects`, not here.
  */
 
-import { execFile, spawn } from "child_process";
-import { promisify } from "util";
-import { stat } from "fs/promises";
-import { join } from "path";
+import { execFile, spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 
 const pExecFile = promisify(execFile);
 

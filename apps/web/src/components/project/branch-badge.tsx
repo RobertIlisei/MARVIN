@@ -46,7 +46,7 @@ export function BranchBadge({
     };
   }, [cwd, refreshKey]);
 
-  if (!data || !data.isGit || !data.branch) return null;
+  if (!data?.isGit || !data.branch) return null;
 
   const dirtyCount = Object.keys(data.status).length;
   const title =
@@ -56,6 +56,7 @@ export function BranchBadge({
 
   return (
     <span
+      role="status"
       title={title}
       aria-label={`git branch ${data.branch}${
         dirtyCount > 0 ? `, ${dirtyCount} uncommitted changes` : ", clean"

@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
 import { getAnthropicAuth } from "@marvin/runtime/auth";
-import { discoverClaudeBinary, defaultModel } from "@marvin/runtime/claude-cli";
+import { defaultModel, discoverClaudeBinary } from "@marvin/runtime/claude-cli";
 import { getMarvinDataDir } from "@marvin/runtime/paths";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
