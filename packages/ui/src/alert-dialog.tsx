@@ -84,7 +84,8 @@ function AlertDialogContent({
           boxShadow: "var(--shadow-panel)",
         }}
         className={cn(
-          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg p-6 sm:max-w-lg",
+          // A4 polish: match Dialog's rounded-xl.
+          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 sm:max-w-lg",
           SURFACE,
           className,
         )}
