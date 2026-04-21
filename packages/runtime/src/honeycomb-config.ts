@@ -55,6 +55,19 @@ export interface HoneycombConfigStatus {
 }
 
 export const DEFAULT_HONEYCOMB_API_URL = "https://api.honeycomb.io";
+export const EU_HONEYCOMB_API_URL = "https://api.eu1.honeycomb.io";
+
+/**
+ * Honeycomb runs two independently-keyed clusters: US (default) and EU
+ * (`*.eu1.*`). A key minted in one region is unknown to the other, so
+ * MARVIN keeps a short list of canonical hosts to probe when the user
+ * doesn't pick explicitly. Ordered most-common-first for fewer round
+ * trips on the happy path.
+ */
+export const HONEYCOMB_CANDIDATE_URLS: readonly string[] = [
+  DEFAULT_HONEYCOMB_API_URL,
+  EU_HONEYCOMB_API_URL,
+];
 
 /** Tail-masked form for surfacing in UIs / logs. Never returns the full key. */
 export function redactApiKey(apiKey: string): string {
@@ -237,5 +250,154 @@ export function honeycombConfigStatus(
     dataset: resolved.config.dataset ?? null,
     apiUrl: resolved.config.apiUrl ?? DEFAULT_HONEYCOMB_API_URL,
     path: resolved.path,
+  };
+}
+
+/* -------------------------------------------------------------------------
+ * Region probing
+ * ---------------------------------------------------------------------- */
+
+export interface HoneycombProbeSuccess {
+  ok: true;
+  apiUrl: string;
+  team: { name: string | null; slug: string | null };
+  environment: { name: string | null; slug: string | null };
+  apiKeyAccess: Record<string, boolean>;
+}
+
+export interface HoneycombProbeFailure {
+  ok: false;
+  /** The last error we hit (usually the second try). */
+  error: "unauthorized" | "network-error" | "upstream-error";
+  status?: number;
+  detail?: string;
+  /** Every host we tried + their result — helps the UI show "we tried US and EU". */
+  attempts: Array<{
+    apiUrl: string;
+    status: number | "network-error";
+    detail?: string;
+  }>;
+}
+
+export type HoneycombProbeResult = HoneycombProbeSuccess | HoneycombProbeFailure;
+
+interface AuthResponseShape {
+  api_key_access?: Record<string, boolean>;
+  environment?: { name?: string; slug?: string };
+  team?: { name?: string; slug?: string };
+}
+
+/**
+ * Hit `GET /1/auth` on a specific Honeycomb cluster with the given
+ * apiKey. The cluster is identified by `apiUrl` (e.g.
+ * `https://api.honeycomb.io` or `https://api.eu1.honeycomb.io`). A 401
+ * is treated as a negative result (the key isn't valid on that cluster)
+ * rather than a transport error. Other non-2xx responses and network
+ * errors propagate as failures.
+ *
+ * This is a standalone primitive — `probeHoneycombKey` wraps it to
+ * walk the candidate-URL list. Exposed directly for tests and callers
+ * that want to hit a single cluster.
+ */
+export async function probeHoneycombKeyAt(
+  apiKey: string,
+  apiUrl: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<
+  | { ok: true; payload: AuthResponseShape }
+  | { ok: false; status: number | "network-error"; detail?: string }
+> {
+  const base = apiUrl.replace(/\/$/, "");
+  const timeoutMs = opts.timeoutMs ?? 6_000;
+  try {
+    const res = await fetch(`${base}/1/auth`, {
+      method: "GET",
+      headers: {
+        "X-Honeycomb-Team": apiKey,
+        "User-Agent": "marvin/0.0.1",
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401) {
+      return { ok: false, status: 401, detail: "unauthorized" };
+    }
+    if (!res.ok) {
+      return { ok: false, status: res.status, detail: `upstream ${res.status}` };
+    }
+    const payload = (await res.json()) as AuthResponseShape;
+    return { ok: true, payload };
+  } catch (e) {
+    return {
+      ok: false,
+      status: "network-error",
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+/**
+ * Probe one or more Honeycomb clusters with the given apiKey and return
+ * the first one that authenticates successfully. Used by:
+ *
+ *   - `POST /api/honeycomb/config` to auto-select the right cluster
+ *     when the user didn't pick explicitly (Honeycomb doesn't tell you
+ *     from the key alone which region minted it).
+ *   - `POST /api/honeycomb/test` as a fallback when the saved cluster
+ *     rejects the key — catches the "I moved regions / regenerated in
+ *     the wrong region" footgun.
+ *
+ * @param apiKey  the Honeycomb API key to validate.
+ * @param candidates  ordered list of apiUrls to try. Defaults to US → EU.
+ *                    Pass a single-element array to force one cluster.
+ */
+export async function probeHoneycombKey(
+  apiKey: string,
+  candidates: readonly string[] = HONEYCOMB_CANDIDATE_URLS,
+): Promise<HoneycombProbeResult> {
+  const attempts: HoneycombProbeFailure["attempts"] = [];
+  let lastFail: { status: number | "network-error"; detail?: string } | null =
+    null;
+
+  for (const apiUrl of candidates) {
+    if (!isValidApiUrl(apiUrl)) continue;
+    const r = await probeHoneycombKeyAt(apiKey, apiUrl);
+    if (r.ok) {
+      return {
+        ok: true,
+        apiUrl,
+        team: {
+          name: r.payload.team?.name ?? null,
+          slug: r.payload.team?.slug ?? null,
+        },
+        environment: {
+          name: r.payload.environment?.name ?? null,
+          slug: r.payload.environment?.slug ?? null,
+        },
+        apiKeyAccess: r.payload.api_key_access ?? {},
+      };
+    }
+    attempts.push({
+      apiUrl,
+      status: r.status,
+      ...(r.detail ? { detail: r.detail } : {}),
+    });
+    lastFail = r;
+  }
+
+  // Classify: if *every* attempt was 401, it's definitively a bad key.
+  // If any was a network or upstream error, surface that as the reason
+  // since a single 401 on an unreachable cluster is misleading.
+  const allUnauthorized = attempts.every((a) => a.status === 401);
+  const errorKind: HoneycombProbeFailure["error"] = allUnauthorized
+    ? "unauthorized"
+    : lastFail?.status === "network-error"
+      ? "network-error"
+      : "upstream-error";
+  return {
+    ok: false,
+    error: errorKind,
+    ...(typeof lastFail?.status === "number" ? { status: lastFail.status } : {}),
+    ...(lastFail?.detail ? { detail: lastFail.detail } : {}),
+    attempts,
   };
 }

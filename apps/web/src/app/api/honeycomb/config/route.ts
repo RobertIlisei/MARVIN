@@ -11,8 +11,10 @@
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import {
+  DEFAULT_HONEYCOMB_API_URL,
   deleteHoneycombConfig,
   honeycombConfigStatus,
+  probeHoneycombKey,
   writeHoneycombConfig,
 } from "@marvin/runtime/honeycomb-config";
 import { type NextRequest, NextResponse } from "next/server";
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
   }
   const dataset =
     typeof body.dataset === "string" ? body.dataset.trim() : undefined;
-  const apiUrl =
+  const rawApiUrl =
     typeof body.apiUrl === "string" ? body.apiUrl.trim() : undefined;
 
   const check = await checkFsPath({
@@ -83,6 +85,34 @@ export async function POST(req: NextRequest) {
   });
   if (!check.ok) {
     return NextResponse.json({ error: check.error }, { status: 400 });
+  }
+
+  // Region auto-detect: when the user didn't pick a URL (or left the
+  // default US one) we probe US then EU with their key and persist
+  // whichever cluster accepts it. Honeycomb doesn't tell you from the
+  // key string alone which region it belongs to, so this removes the
+  // "saved config works locally but Test fails 401" footgun that
+  // bites every new EU user.
+  //
+  // If the user explicitly set a non-default apiUrl we trust them —
+  // they may be pointing at a proxy, local mock, or a future region we
+  // don't know about. We don't want to second-guess that.
+  const userPickedCustomUrl =
+    typeof rawApiUrl === "string" &&
+    rawApiUrl.length > 0 &&
+    rawApiUrl !== DEFAULT_HONEYCOMB_API_URL;
+  let apiUrl = rawApiUrl;
+  let regionAutoDetected = false;
+  if (!userPickedCustomUrl) {
+    const probe = await probeHoneycombKey(apiKey);
+    if (probe.ok) {
+      apiUrl = probe.apiUrl;
+      regionAutoDetected = probe.apiUrl !== DEFAULT_HONEYCOMB_API_URL;
+    }
+    // If the probe failed we still save what the user asked for — the
+    // key might be valid but Honeycomb was briefly unreachable, and
+    // saving is the action the user explicitly requested. The failing
+    // Test call they'll run next will tell them more.
   }
 
   const result = writeHoneycombConfig({
@@ -107,6 +137,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     path: result.path,
+    regionAutoDetected,
     // Surface the new status so the UI can render the freshly-saved
     // (masked) state without an extra GET round-trip.
     status: honeycombConfigStatus(check.absolutePath),

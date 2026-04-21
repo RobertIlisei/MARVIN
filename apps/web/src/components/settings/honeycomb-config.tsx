@@ -50,9 +50,34 @@ interface TestResult {
   } | null;
   error?: string;
   hint?: string;
+  /** Set when the server had to fall back to another region to auth. */
+  regionFallback?: boolean;
+  /** The URL that actually worked — UI can offer a one-click fix. */
+  suggestedApiUrl?: string;
+  /** The URL the server originally tried (before fallback). */
+  configuredApiUrl?: string;
 }
 
 const DEFAULT_API_URL = "https://api.honeycomb.io";
+const EU_API_URL = "https://api.eu1.honeycomb.io";
+
+type Region = "us" | "eu" | "custom";
+
+function regionOf(apiUrl: string): Region {
+  if (apiUrl === DEFAULT_API_URL) return "us";
+  if (apiUrl === EU_API_URL) return "eu";
+  return "custom";
+}
+
+function urlOfRegion(region: Region, currentApiUrl: string): string {
+  if (region === "us") return DEFAULT_API_URL;
+  if (region === "eu") return EU_API_URL;
+  // Preserving whatever was in the field lets "custom" not wipe the
+  // user's typed value when they toggle back to it.
+  return currentApiUrl === DEFAULT_API_URL || currentApiUrl === EU_API_URL
+    ? ""
+    : currentApiUrl;
+}
 
 export interface HoneycombConfigFormProps {
   cwd: string | null;
@@ -136,6 +161,7 @@ export function HoneycombConfigForm({
         ok?: boolean;
         error?: string;
         detail?: string | null;
+        regionAutoDetected?: boolean;
         status?: ConfigStatus;
       };
       if (!res.ok || !body.ok) {
@@ -145,7 +171,21 @@ export function HoneycombConfigForm({
       setApiKey("");
       if (body.status) {
         setStatus(body.status);
+        // Mirror the server-picked apiUrl into local state — otherwise
+        // the form would keep showing the user's original pick (often
+        // DEFAULT_API_URL) while the saved config is actually EU.
+        setApiUrl(body.status.apiUrl || DEFAULT_API_URL);
         onStatusChange?.(body.status);
+      }
+      if (body.regionAutoDetected) {
+        setTestResult({
+          ok: true,
+          team: null,
+          environment: null,
+          hint: `Region auto-detected: ${
+            body.status?.apiUrl === EU_API_URL ? "EU" : "non-US"
+          } (${body.status?.apiUrl ?? "unknown"}). Saved.`,
+        });
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -195,10 +235,23 @@ export function HoneycombConfigForm({
     setTestResult(null);
     setError(null);
     try {
+      // If the user has typed a key into the form, validate THAT
+      // rather than the saved config — lets them verify credentials
+      // before Save. If the form is empty, fall through to testing
+      // the saved config (existing behaviour).
+      const typedKey = apiKey.trim();
+      const payload: Record<string, string> = { cwd };
+      if (typedKey.length > 0) {
+        payload.apiKey = typedKey;
+        const typedUrl = apiUrl.trim();
+        if (typedUrl.length > 0) payload.apiUrl = typedUrl;
+        const typedEnv = environment.trim();
+        if (typedEnv.length > 0) payload.environment = typedEnv;
+      }
       const res = await fetch("/api/honeycomb/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
+        body: JSON.stringify(payload),
       });
       const body = (await res.json().catch(() => ({}))) as TestResult;
       setTestResult({ ...body, ok: res.ok && body.ok === true });
@@ -211,7 +264,21 @@ export function HoneycombConfigForm({
     } finally {
       setTesting(false);
     }
-  }, [cwd]);
+  }, [cwd, apiKey, apiUrl, environment]);
+
+  /**
+   * One-click "apply the server-suggested region" — fired from the
+   * test-result banner when the server had to region-fall-back.
+   * Updates local state only; the user still needs to re-paste their
+   * key and hit Save to persist the fix, since we never cache the raw
+   * apiKey on the client after a successful save. The test-result
+   * banner shows the instruction explicitly.
+   */
+  const applySuggestedRegion = useCallback((nextUrl: string) => {
+    setApiUrl(nextUrl);
+    setTestResult(null);
+    setError(null);
+  }, []);
 
   return (
     // Wrapped in a real <form> so browsers + password managers stop
@@ -258,6 +325,59 @@ export function HoneycombConfigForm({
           spellCheck={false}
           disabled={!cwd}
         />
+      </div>
+
+      {/*
+       * Region picker — US vs EU vs custom. Save auto-detects when a
+       * user leaves this on US, but the explicit selector covers two
+       * edge cases: (a) someone who already knows they're EU and wants
+       * the form to reflect that immediately, (b) someone pointing at
+       * a custom proxy / local mock / future cluster. Switching to
+       * "custom" opens the advanced panel so the URL field is
+       * visible; switching back to US/EU keeps the advanced panel
+       * state alone (so power users keep their view).
+       */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]">
+          region
+        </span>
+        <div
+          role="radiogroup"
+          aria-label="Honeycomb region"
+          className="inline-flex self-start rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 p-0.5"
+        >
+          {(
+            [
+              { id: "us", label: "US", hint: DEFAULT_API_URL },
+              { id: "eu", label: "EU", hint: EU_API_URL },
+              { id: "custom", label: "custom", hint: "other" },
+            ] as const
+          ).map((opt) => {
+            const current = regionOf(apiUrl);
+            const active = current === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                title={opt.hint}
+                disabled={!cwd}
+                onClick={() => {
+                  setApiUrl(urlOfRegion(opt.id, apiUrl));
+                  if (opt.id === "custom") setShowAdvanced(true);
+                }}
+                className={`rounded-[5px] px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] transition ${
+                  active
+                    ? "bg-[color:var(--color-fg)]/10 text-[color:var(--color-fg)]"
+                    : "text-[color:var(--color-fg-faint)] hover:text-[color:var(--color-fg)]"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -372,6 +492,44 @@ export function HoneycombConfigForm({
                   {testResult.hint}
                 </div>
               )}
+            </div>
+          )}
+          {testResult.ok && testResult.regionFallback && testResult.suggestedApiUrl && (
+            // Success, but the server had to try another cluster. Offer
+            // a one-click fix: flip the form's region to the one that
+            // worked. The user still needs to Save to persist the
+            // switch (we never cache raw keys on the client after a
+            // successful save round-trip).
+            <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-[color:var(--color-success)]/30 pt-2 text-[10px]">
+              <span className="text-[color:var(--color-fg-dim)]">
+                your key belongs to{" "}
+                <span className="text-[color:var(--color-fg)]">
+                  {testResult.suggestedApiUrl === EU_API_URL ? "EU" : testResult.suggestedApiUrl}
+                </span>
+                {testResult.configuredApiUrl && (
+                  <>
+                    {" "}— currently configured for{" "}
+                    <span className="text-[color:var(--color-fg)]">
+                      {testResult.configuredApiUrl === DEFAULT_API_URL ? "US" : testResult.configuredApiUrl}
+                    </span>
+                  </>
+                )}
+                .
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (testResult.suggestedApiUrl) {
+                    applySuggestedRegion(testResult.suggestedApiUrl);
+                  }
+                }}
+                className="rounded border border-[color:var(--color-success)]/50 px-2 py-0.5 uppercase tracking-[0.18em] text-[color:var(--color-success)] transition hover:bg-[color:var(--color-success)]/10"
+              >
+                switch region
+              </button>
+              <span className="text-[color:var(--color-fg-faint)]">
+                then re-paste your key and Save.
+              </span>
             </div>
           )}
         </div>
