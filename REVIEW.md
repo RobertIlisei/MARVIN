@@ -101,6 +101,20 @@ important signal.
   or classifies without the policy, or skips the token check on
   `confirm`, is a 🔴 Important finding. See
   [ADR-0008](./docs/decisions/0008-user-initiated-write-channel.md).
+- **New `/api/git/*` routes** must (a) anchor `cwd` through
+  `checkFsPath`, (b) classify via `gitWritePolicy` before any
+  `runGit` call, (c) honour `X-Marvin-Confirmed` on `confirm` class,
+  (d) whitelist every user-supplied ref / path / remote via
+  `argv-guards` before appending to argv, and (e) pass commit
+  messages to `git` via stdin (`-F -`), never argv. A route missing
+  any of these is a 🔴 Important finding. See
+  [ADR-0012](./docs/decisions/0012-source-control-mutation-channel.md).
+- **No `exec` / `spawn({ shell: true })` / string-concatenated
+  git commands** anywhere under `packages/git/` or
+  `apps/web/src/app/api/git/`. Every git invocation goes through
+  [`runGit`](./packages/git/src/exec.ts), which uses `execFile`
+  with a validated argv. Finding a direct `child_process.exec` or
+  `spawn("sh", ["-c", …])` in a git path is a 🔴 Important finding.
 - **Any new `multipart/form-data` route** must require the
   `X-Marvin-Client: 1` header to force a CORS preflight — multipart
   is a "simple" CORS request otherwise and cross-origin drive-by

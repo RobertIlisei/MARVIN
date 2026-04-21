@@ -1374,6 +1374,44 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   + `docs/decisions/README.md` index updated; no typecheck or
   test matrix for the Rust crate yet (compiles on `pnpm
   desktop:dev` when Rust is installed locally).
+- **2026-04-21 (source-control — M1: git primitives + policy + ADR-0012)** —
+  new workspace package `@marvin/git` at `packages/git/` lands the
+  third mutation channel's primitives (sibling to the LLM tool
+  channel in `policy.ts` and the user-initiated filesystem channel
+  in `fs-write-policy.ts` / ADR-0008). Five modules: `exec.ts`
+  (`runGit` — the ONE place MARVIN shells to `git`, `execFile` with
+  `shell: false`, 10 s default / 60 s cap timeout, 2 MB stdout &
+  stderr buffer caps, `GIT_TERMINAL_PROMPT=0` so credential helpers
+  never block a spawn); `argv-guards.ts` (regex whitelists for
+  refs, pathspecs, remote names, commit messages + a forbidden-flag
+  scanner that rejects `-c` / `-C` / `--exec-path` /
+  `--upload-pack` / `--receive-pack` / `--git-dir` / `--work-tree`
+  / `--config-env` / `--super-prefix` with or without `=value`);
+  `parse-porcelain-v2.ts` (NUL-delimited parser for `git status
+  --porcelain=v2 --branch -z` covering ordinary / rename-copy /
+  unmerged / untracked / ignored entries plus branch.ab / oid /
+  upstream headers); `git-write-policy.ts` (pure
+  `gitWritePolicy(op)` classifier — auto/confirm/deny over the
+  10-variant `GitOp` union with push --force hard-denied, amend on
+  pushed HEAD confirm-danger, branch-switch-on-dirty denied in v1);
+  `git-write-confirm-registry.ts` (session-scoped, 60 s TTL,
+  one-shot consume, structural op-equality check — direct sibling
+  of `fs-write-confirm-registry.ts`). No routes, no UI yet; pure
+  packages land first. 52 unit tests (argv-guards 15, parser 13,
+  policy 24) lift the repo from 82 → 134 green tests. ADR-0012
+  documents the three-channel pattern and why git needs a parallel
+  sibling rather than reuse of `fsWritePolicy`. Docs: tool-policy
+  gained a "Three mutation channels" section + full user-initiated
+  git op table; `api.md` gained placeholder entries for
+  `/api/git/*` (M2/M3/M5 pending); REVIEW.md added two "always
+  check" rules (git routes pair `checkFsPath` + `gitWritePolicy`,
+  no shelled git anywhere under `packages/git/` or
+  `apps/web/src/app/api/git/`). Collateral: pre-existing
+  `honeycomb-config.tsx` a11y lint silenced via `biome-ignore`
+  (segmented-control radio pattern) so M1's CI passes cleanly.
+  End-to-end verified via `pnpm -r typecheck` (all 8 packages
+  green) + `pnpm lint` (0 errors) + `pnpm test` (134 passed).
+  Typecheck clean across all 8 packages.
 
 ## Status
 
