@@ -42,6 +42,37 @@ type StatusCtx = {
 
 type OpenMap = Record<string, boolean>;
 
+/**
+ * Per-project expansion state is persisted to
+ * `localStorage.marvin.fileTree.openDirs:<cwd>` so tab switches
+ * (Files ⇄ Source Control) and page reloads don't collapse every
+ * directory the user had open. The `<FileTree>` fully unmounts on tab
+ * switch (conditional render in `page.tsx`); without persistence each
+ * remount rehydrates to the default "only depth-0 open" state, which
+ * is what the user reported.
+ */
+const LS_OPEN_DIRS_PREFIX = "marvin.fileTree.openDirs:";
+
+/**
+ * Best-effort read. Returns an empty map when nothing is stored, the
+ * blob is unparseable, or localStorage is unavailable (private mode,
+ * Tauri quirks, SSR).
+ */
+function readStoredOpenDirs(cwd: string): OpenMap {
+  if (typeof window === "undefined" || !cwd) return {};
+  try {
+    const raw = window.localStorage.getItem(LS_OPEN_DIRS_PREFIX + cwd);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as OpenMap;
+    }
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
 /** Transient state: new file/dir placeholder row awaiting a name. */
 type PendingCreate = { parent: string; kind: "file" | "dir" } | null;
 /** Transient state: row currently in rename mode. */
@@ -69,7 +100,14 @@ export function FileTree({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
-  const [openDirs, setOpenDirs] = useState<OpenMap>({});
+  // Hydrate openDirs synchronously from localStorage on first mount
+  // for the current cwd. useState's lazy initializer runs once per
+  // component instance — subsequent cwd changes re-hydrate via the
+  // effect below. Lazy init avoids the "flash of collapsed tree"
+  // on remount after a tab switch.
+  const [openDirs, setOpenDirs] = useState<OpenMap>(() =>
+    readStoredOpenDirs(cwd),
+  );
   const [pendingCreate, setPendingCreate] = useState<PendingCreate>(null);
   const [renaming, setRenaming] = useState<RenamingPath>(null);
   const [confirmState, setConfirmState] = useState<ConfirmDeleteDialogState & {
@@ -125,6 +163,29 @@ export function FileTree({
       cancelled = true;
     };
   }, [cwd, refreshTick]);
+
+  // Re-hydrate openDirs when cwd changes — switching projects should
+  // load each project's own persisted expansion map. The lazy useState
+  // initializer above handles first mount; this effect handles
+  // subsequent cwd transitions.
+  useEffect(() => {
+    setOpenDirs(readStoredOpenDirs(cwd));
+  }, [cwd]);
+
+  // Persist every openDirs change. Trivial cost — the map only holds
+  // paths the user has explicitly toggled, not every directory in the
+  // tree. If localStorage is full / unavailable the catch swallows.
+  useEffect(() => {
+    if (typeof window === "undefined" || !cwd) return;
+    try {
+      window.localStorage.setItem(
+        LS_OPEN_DIRS_PREFIX + cwd,
+        JSON.stringify(openDirs),
+      );
+    } catch {
+      /* quota / private mode — ignore */
+    }
+  }, [cwd, openDirs]);
 
   const ctx: StatusCtx = useMemo(() => {
     if (!status?.isGit) return EMPTY_STATUS_CTX;
