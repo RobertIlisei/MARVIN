@@ -19,7 +19,7 @@
 
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 
-import { containsForbiddenFlag } from "./argv-guards.js";
+import { containsForbiddenFlag } from "./argv-guards";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
