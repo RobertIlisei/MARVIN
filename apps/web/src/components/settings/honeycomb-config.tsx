@@ -214,7 +214,20 @@ export function HoneycombConfigForm({
   }, [cwd]);
 
   return (
-    <div className="flex flex-col gap-3 font-mono text-[11px]">
+    // Wrapped in a real <form> so browsers + password managers stop
+    // warning "password field is not contained in a form". Save lives
+    // on the trailing button; the form handler calls the same save()
+    // so pressing Enter on the apiKey field submits cleanly.
+    <form
+      className="flex flex-col gap-3 font-mono text-[11px]"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSave && !saving) void save();
+      }}
+      // Honeycomb credentials aren't worth remembering across sites;
+      // nudge browsers off autofilling this form.
+      autoComplete="off"
+    >
       {!cwd && (
         <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2 text-[color:var(--color-fg-dim)]">
           Pick a project first — the Honeycomb config is per-project (see ADR-0005).
@@ -372,6 +385,7 @@ export function HoneycombConfigForm({
 
       <div className="mt-2 flex items-center justify-between gap-2">
         <Button
+          type="button"
           variant="ghost"
           onClick={remove}
           disabled={!cwd || !status?.configured || deleting}
@@ -382,6 +396,7 @@ export function HoneycombConfigForm({
         </Button>
         <div className="flex gap-2">
           <Button
+            type="button"
             variant="outline"
             onClick={test}
             disabled={!cwd || !status?.configured || testing}
@@ -389,12 +404,15 @@ export function HoneycombConfigForm({
           >
             {testing ? "testing…" : "Test connection"}
           </Button>
-          <Button onClick={save} disabled={!canSave || saving} size="sm">
+          {/* `type="submit"` makes Enter on the inputs run Save via
+           * the form's onSubmit — the parent <form> wraps everything,
+           * and the handler calls save() once it validates. */}
+          <Button type="submit" disabled={!canSave || saving} size="sm">
             {saving ? "saving…" : "Save"}
           </Button>
         </div>
       </div>
-    </div>
+    </form>
   );
 }
 
