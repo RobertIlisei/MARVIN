@@ -5,6 +5,8 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
+import { ScoutOrb } from "@/components/brain/scout-orb";
+import { taskRoleOf } from "@/components/brain/task-role";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { FileTree } from "@/components/file-tree/file-tree";
@@ -51,21 +53,10 @@ import { WorkspaceStatusBar } from "@/components/shell/workspace-status-bar";
 import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { Terminal } from "@/components/terminal/terminal";
 
-/** Match Task `input` shapes whose description marks an advisor consult. */
-function advisorDescriptionOf(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const d = (input as { description?: unknown }).description;
-  return typeof d === "string" ? d : null;
-}
-
-function looksLikeAdvisorConsult(input: unknown): boolean {
-  const desc = advisorDescriptionOf(input);
-  return desc != null && /^\s*advisor[\s:—-]/i.test(desc);
-}
-
-function stripAdvisorPrefix(desc: string): string {
-  return desc.replace(/^\s*advisor[\s:—-]+/i, "").trim();
-}
+// Advisor + scout detection is factored into `taskRoleOf` (see
+// components/brain/task-role.ts) so both orbs share one source of truth
+// for the description-prefix regex. Adding a third role becomes a
+// one-line addition there; this file shouldn't grow its own regex.
 
 const LS_PERSONALITY_KEY = "marvin.personality";
 const LS_MODEL_EXECUTOR_KEY = "marvin.model.executor";
@@ -411,50 +402,54 @@ export default function Home() {
   const isEmpty = messages.length === 0;
   const hint = active ? undefined : "pick a project up in the header first";
 
-  // Advisor is "firing" when any in-flight tool call is a Task subagent
-  // whose description starts with "advisor" — MARVIN's userland advisor
-  // pattern (see ADR-0007). The leading "advisor:" prefix on the
-  // description is the UI contract defined in personality.ts under
-  // "Advisor consult — how to run one".
+  // Companion orbs fire when any in-flight Task subagent carries a
+  // sanctioned role prefix on its description — "advisor:" (ADR-0007)
+  // or "scout:" (ADR-0014). The SDK's `advisorModel` option is
+  // server-side routing only; `tool_use name === "advisor"` never
+  // fires. The role lives in the `description` field, which is what
+  // personality.ts tells MARVIN to set.
   //
-  // NOTE: we do NOT look for a tool named "advisor" directly — the SDK's
-  // `advisorModel` option is server-side routing and doesn't register a
-  // callable tool. Looking for `name === "advisor"` would never match.
-  const advisorActive = useMemo(
-    () =>
-      messages.some((m) =>
-        m.blocks.some(
-          (b) =>
-            b.type === "tool_use" &&
-            b.name === "Task" &&
-            b.running === true &&
-            looksLikeAdvisorConsult(b.input),
-        ),
-      ),
-    [messages],
-  );
-
-  // Latest Task description starting with "advisor" — surfaces the
-  // consult topic in the orb caption.
-  const advisorTopic = useMemo(() => {
-    for (let mi = messages.length - 1; mi >= 0; mi--) {
+  // Walk messages once and emit both roles' {active, topic} in a
+  // single pass — same O(n) as the previous two-`some()`-calls
+  // version, half the iteration. Newest → oldest so the first match
+  // per role is the most recent active one, which is the topic that
+  // should light the caption.
+  const { advisorActive, advisorTopic, scoutActive, scoutTopic } = useMemo(() => {
+    let aActive = false;
+    let sActive = false;
+    let aTopic: string | null = null;
+    let sTopic: string | null = null;
+    outer: for (let mi = messages.length - 1; mi >= 0; mi--) {
       const msg = messages[mi];
       if (!msg) continue;
       for (let bi = msg.blocks.length - 1; bi >= 0; bi--) {
         const block = msg.blocks[bi];
         if (
-          block &&
-          block.type === "tool_use" &&
-          block.name === "Task" &&
-          block.running === true &&
-          looksLikeAdvisorConsult(block.input)
+          !block ||
+          block.type !== "tool_use" ||
+          block.name !== "Task" ||
+          block.running !== true
         ) {
-          const desc = advisorDescriptionOf(block.input);
-          return desc ? stripAdvisorPrefix(desc) : null;
+          continue;
         }
+        const role = taskRoleOf(block.input);
+        if (!role) continue;
+        if (role.role === "advisor" && !aActive) {
+          aActive = true;
+          aTopic = role.topic || null;
+        } else if (role.role === "scout" && !sActive) {
+          sActive = true;
+          sTopic = role.topic || null;
+        }
+        if (aActive && sActive) break outer;
       }
     }
-    return null;
+    return {
+      advisorActive: aActive,
+      advisorTopic: aTopic,
+      scoutActive: sActive,
+      scoutTopic: sTopic,
+    };
   }, [messages]);
 
   // --- Header ------------------------------------------------------------
@@ -516,6 +511,12 @@ export default function Home() {
                   topic={advisorTopic}
                   size={88}
                   offset={{ top: 20, right: 0 }}
+                />
+                <ScoutOrb
+                  active={scoutActive}
+                  topic={scoutTopic}
+                  size={88}
+                  offset={{ top: 20, left: 0 }}
                 />
                 {/* Coordinate marks — editorial instrument framing */}
                 <div
@@ -839,6 +840,12 @@ export default function Home() {
                           topic={advisorTopic}
                           size={56}
                           offset={{ top: 0, right: -12 }}
+                        />
+                        <ScoutOrb
+                          active={scoutActive}
+                          topic={scoutTopic}
+                          size={56}
+                          offset={{ top: 0, left: -12 }}
                         />
                         <div className="text-center">
                           <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
