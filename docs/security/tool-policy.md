@@ -170,6 +170,17 @@ New hard-denies should land with an ADR explaining the decision.
 
 Not currently supported. A project's `.marvin/config.json` could in principle carry a `bashAllowlist` that adds to the global one for that workDir only. Flagged as a potential extension in [Roadmap](../roadmap.md).
 
+## Subagent tool constraints
+
+MARVIN spawns two sanctioned subagent types via the Agent SDK's `agents` option (see [`sdk-runner.ts`](../../../packages/runtime/src/sdk-runner.ts)). Each carries its own SDK-level tool constraint — the parent's `canUseTool` gate does not reach subagent turns, so the `agents[*].disallowedTools` field is the structural backstop.
+
+| Subagent | ADR | Disallowed tools | MCP servers | Model |
+|---|---|---|---|---|
+| `scout` (read-only research) | [ADR-0014](../decisions/0014-scout-subagents-read-only.md) | `Edit`, `Write`, `Bash`, `NotebookEdit` | `marvin-graph` only (no Playwright) | `inherit` (parent tier) |
+| `advisor` (Opus second opinion) | [ADR-0007](../decisions/0007-advisor-as-subagent-pattern.md) | None (advisor runs as `general-purpose` subagent) | Parent's full set | `opus` hint |
+
+Why the scout denylist is load-bearing: the scout's operating-model promise ("read-only research, parent owns all writes") must be enforced structurally, not just via prompt. A misrouted brief that accidentally asks the scout to edit would otherwise succeed — the SDK refuses the tool call before the model can emit it. Loosening the denylist requires an ADR amendment.
+
 ## Observability
 
 In the JSONL session transcript, every tool call carries its policy classification as part of the `cli.event`:
@@ -188,3 +199,4 @@ Grep the transcripts for `"policy":"hard-deny"` to see what MARVIN tried to run 
 - [ADR-0004 — structural confirm gate](../decisions/0004-structural-confirm-gate.md) — why the gate moved from CLI flags into the SDK callback.
 - [ADR-0008 — User-initiated write channel](../decisions/0008-user-initiated-write-channel.md) — the second mutation channel.
 - [ADR-0012 — Source-control mutation channel](../decisions/0012-source-control-mutation-channel.md) — the third mutation channel.
+- [ADR-0014 — Read-only scout subagents](../decisions/0014-scout-subagents-read-only.md) — SDK-level enforcement of the scout's read-only contract.

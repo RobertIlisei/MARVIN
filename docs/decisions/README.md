@@ -27,6 +27,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0011](./0011-sidecar-node-bundling.md) | Standalone `.app` via bundled Node sidecar | **Deprecated** | 2026-04-21 |
 | [0012](./0012-source-control-mutation-channel.md) | Source-control mutation channel | Accepted | 2026-04-21 |
 | [0013](./0013-git-remote-ops-and-credentials.md) | Git remote ops and credentials | Accepted | 2026-04-21 |
+| [0014](./0014-scout-subagents-read-only.md) | Read-only scout subagents for parallel research | Accepted | 2026-04-21 |
 
 ## Template
 
