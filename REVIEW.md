@@ -115,6 +115,15 @@ important signal.
   [`runGit`](./packages/git/src/exec.ts), which uses `execFile`
   with a validated argv. Finding a direct `child_process.exec` or
   `spawn("sh", ["-c", …])` in a git path is a 🔴 Important finding.
+- **Remote-op routes inherit credentials, never handle them.**
+  `/api/git/push`, `/pull`, `/fetch` must not write to `child.stdin`,
+  must not prompt for credentials in the UI, must not store tokens
+  / PATs, and must not construct credential-bearing remote URLs
+  (e.g. `https://x-access-token:<pat>@host/...`). The credential
+  helper / SSH agent configured in the user's shell is the only
+  auth path. A new route that prompts, stores, or rewrites is a 🔴
+  Important finding. See
+  [ADR-0013](./docs/decisions/0013-git-remote-ops-and-credentials.md).
 - **Any new `multipart/form-data` route** must require the
   `X-Marvin-Client: 1` header to force a CORS preflight — multipart
   is a "simple" CORS request otherwise and cross-origin drive-by

@@ -384,11 +384,48 @@ Success: `{ ok: true, name, merged, forced }`.
 
 Mints a one-shot token for a `confirm`-class op. Returns `{ token, expiresIn: 60, severity, reason }`. Rejects with `400 policy-auto` when the op doesn't actually need confirming, and `403 policy-deny` when the op is always-denied.
 
-**Remote routes (M5 — pending, ADR-0013):**
+**Remote routes (ADR-0013):**
 
-- `POST /api/git/push` — `{ cwd, remote?, branch?, forceWithLease?: boolean }`. Plain `--force` always denied.
-- `POST /api/git/pull` — `{ cwd, strategy: "ff-only" | "rebase" | "merge" }`. `ff-only` default.
-- `POST /api/git/fetch` — `{ cwd, remote? }`. Read-only.
+Credentials are inherited from the user's git configuration — MARVIN never stores, proxies, or prompts. `GIT_TERMINAL_PROMPT=0` turns any interactive credential prompt into immediate stderr. See [`apps/web/src/lib/git-remote-errors.ts`](../../apps/web/src/lib/git-remote-errors.ts) for the stderr classifier.
+
+### `POST /api/git/fetch` — `{ cwd, remote?: string }`
+
+`git fetch <remote>`. Default `remote = "origin"`. Auto-class.
+
+Success: `{ ok: true, remote, note }` (`note` is the trimmed progress output on stderr).
+
+### `POST /api/git/pull` — `{ cwd, strategy: "ff-only" | "rebase" | "merge" }`
+
+- `ff-only` (auto): `git pull --ff-only`. Fails cleanly on divergence.
+- `rebase` (confirm warn): `git pull --rebase`.
+- `merge` (confirm warn): `git pull --no-rebase --no-ff`.
+
+Refuses on a dirty working tree with `409 dirty-working-tree`.
+
+Success: `{ ok: true, strategy, note }`.
+
+### `POST /api/git/push` — `{ cwd, remote?, branch?, forceWithLease?: boolean }`
+
+Default `remote = "origin"`, `branch = <current>`, `forceWithLease = false`. Plain `--force` is never available — the policy layer hard-denies it from every channel. `--force-with-lease` is `confirm danger`. A regular push when upstream is ahead is `confirm warn`.
+
+Success: `{ ok: true, remote, branch, forced, note }`.
+
+**Remote error taxonomy** (returned from all three routes on failure):
+
+| HTTP | `error` | Meaning | `remedy` |
+|---|---|---|---|
+| 502 | `auth-publickey` | SSH key rejected | check your SSH key is loaded and authorised |
+| 502 | `auth-failed` | HTTPS auth failed or no credentials | configure a git credential helper |
+| 502 | `network` | Could not resolve host / timeout / refused | check network connectivity |
+| 409 | `non-fast-forward` | Push rejected, upstream has commits you don't | pull first or push --force-with-lease |
+| 409 | `no-upstream` | No upstream configured | `git push -u <remote> <branch>` in the terminal |
+| 409 | `merge-conflict` | Pull produced conflicts | resolve in editor, stage, commit (or `git merge --abort`) |
+| 409 | `dirty-working-tree` | Pull refused — tree not clean | commit or discard changes first |
+| 409 | `detached-head` | Push refused — not on a branch | check out a branch before pushing |
+| 502 | `no-remote` | Remote URL not reachable | check `git remote -v` |
+| 502 | `git-failed` | Unclassified git error | inspect stderr |
+
+Every remote-error response includes `stderr` (raw git output) and `remedy` (one-line hint) alongside `error`.
 
 **Errors:**
 

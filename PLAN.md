@@ -1527,6 +1527,54 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   packages green) + `pnpm lint` (0 errors, 190 files) +
   `pnpm test` (134 passed) + live ETag smoke (200 → 304 → 200
   on state change). Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M5: remote ops + ADR-0013)** —
+  three net-new remote routes under `apps/web/src/app/api/git/`:
+  `fetch` (auto-class, default remote `origin`), `pull` (strategy:
+  `ff-only` auto / `rebase` confirm-warn / `merge` confirm-warn;
+  dirty-tree pre-check), `push` (forceWithLease: boolean; plain
+  `--force` hard-denied at the policy layer; upstream-ahead
+  detection via `git rev-list --count HEAD..@{u}` drives
+  confirm-warn). Every remote route: anchors `cwd` via
+  `checkFsPath`, validates refs / remotes through `argv-guards`,
+  spawns via the shared `runGit` wrapper (which sets
+  `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`). Never writes to
+  `child.stdin` on remote routes; credential helpers in the user's
+  `~/.gitconfig` / ssh-agent answer out-of-band. Shared
+  `apps/web/src/lib/git-remote-errors.ts` classifies git stderr
+  onto stable codes — `auth-publickey`, `auth-failed`, `network`,
+  `non-fast-forward`, `no-upstream`, `no-remote`, `merge-conflict`,
+  `git-failed` — each with a one-line remedy. `use-git-mutations`
+  gained `fetch` / `pull` / `push` methods, `MutationError` gained
+  a `remote: { code, remedy, stderr }` branch so the banner can
+  render specialised remote-error UI with a "show stderr" toggle.
+  New UI: `remote-bar.tsx` (Fetch single-button + Pull split-button
+  exposing ff-only/rebase/merge + Push split-button exposing
+  force-with-lease; all disable gracefully when `hasUpstream` is
+  false), `remote-error-banner.tsx` (severity-styled title +
+  remedy + collapsible stderr). `source-control-panel.tsx`
+  composes the new RemoteBar below the BranchBar, switches to
+  `RemoteErrorBanner` when the error kind is `remote`. ADR-0013
+  documents the inherit-never-handle credential decision + four
+  rejected alternatives (in-app prompt, PAT in settings, redirect
+  to terminal, always-prefer-gh, chat-surface). Docs: `api.md`
+  remote entries promoted from placeholder to full shapes with
+  an error-taxonomy table; `docs/security/data-flow.md` gained a
+  "Git credentials are inherited, never handled" section;
+  `REVIEW.md` added a rule about remote-op routes not writing to
+  stdin / prompting / storing tokens / rewriting credential-bearing
+  URLs. Live-verified: `fetch` on MARVIN's origin succeeded
+  (`From https://github.com/RobertIlisei/MARVIN  4bd1a7b..8d2beb9
+  main -> origin/main`); `fetch` on a scratch repo with no origin
+  returned 502 `no-remote` with specific stderr + remedy; `pull
+  --ff-only` on a dirty tree returned 409 `dirty-working-tree`
+  with remedy; `push --force-with-lease` returned 409 `needs-
+  confirm` with `severity: danger`; confirm-mint attempt for
+  `force: "plain"` returned 403 `policy-deny` ("use the terminal
+  if you truly need it"); injection attempt
+  (`branch: --upload-pack=/bin/sh`) returned 400 `invalid-ref`.
+  End-to-end verified via `pnpm -r typecheck` (all 8 packages
+  green) + `pnpm lint` (0 errors, 196 files) + `pnpm test`
+  (134 passed). Typecheck clean across all 8 packages.
 
 ## Status
 
