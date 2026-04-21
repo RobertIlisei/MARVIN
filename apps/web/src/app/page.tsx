@@ -17,6 +17,7 @@ import { PreviewPane } from "@/components/preview/preview-pane";
 import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
 import { useProjects } from "@/components/project/use-projects";
+import { HoneycombConfigDialog } from "@/components/settings/honeycomb-config";
 import { ModelPicker } from "@/components/settings/model-picker";
 import {
   type PermissionStrategy,
@@ -107,6 +108,13 @@ export default function Home() {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [honeycombOpen, setHoneycombOpen] = useState(false);
+  const [honeycombStatus, setHoneycombStatus] = useState<{
+    configured: boolean;
+    environment: string | null;
+    dataset: string | null;
+    source: "env" | "workdir" | "global" | "none";
+  } | null>(null);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
@@ -178,6 +186,37 @@ export default function Home() {
   // previous path is meaningless in a different workDir.
   useEffect(() => {
     setSelectedPath(undefined);
+  }, [cwd]);
+
+  // Fetch the Honeycomb config status when the project changes so the
+  // brain panel can render "configured (prod)" vs "—" without opening
+  // the dialog. Fire-and-forget; silent on failure.
+  useEffect(() => {
+    if (!cwd) {
+      setHoneycombStatus(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`,
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as {
+          configured: boolean;
+          environment: string | null;
+          dataset: string | null;
+          source: "env" | "workdir" | "global" | "none";
+        };
+        if (!cancelled) setHoneycombStatus(body);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [cwd]);
 
   // Persist the in-flight marvinSessionId per-project. Survives tab
@@ -909,6 +948,28 @@ export default function Home() {
                               : "—"}
                           </span>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => setHoneycombOpen(true)}
+                          className="flex items-center justify-between gap-3 rounded px-1 py-1 -mx-1 text-left transition hover:bg-[color:var(--color-bg-elev)]/60 disabled:opacity-50"
+                          disabled={!cwd}
+                          title={
+                            honeycombStatus?.configured
+                              ? "Honeycomb MCP configured — click to edit"
+                              : "Configure Honeycomb MCP for trace queries"
+                          }
+                        >
+                          <span className="text-[color:var(--color-fg-faint)]">honeycomb</span>
+                          <span className="truncate pl-3 text-[color:var(--color-fg)]/85">
+                            {honeycombStatus?.configured
+                              ? `${honeycombStatus.environment ?? "configured"}${
+                                  honeycombStatus.dataset
+                                    ? ` · ${honeycombStatus.dataset}`
+                                    : ""
+                                }`
+                              : "configure →"}
+                          </span>
+                        </button>
                       </div>
                     </div>
                   </Panel>
@@ -962,6 +1023,19 @@ export default function Home() {
           onSelect={(absPath) => setSelectedPath(absPath)}
         />
       )}
+      <HoneycombConfigDialog
+        cwd={cwd || null}
+        open={honeycombOpen}
+        onOpenChange={setHoneycombOpen}
+        onSaved={(status) =>
+          setHoneycombStatus({
+            configured: status.configured,
+            environment: status.environment,
+            dataset: status.dataset,
+            source: status.source,
+          })
+        }
+      />
     </main>
   );
 }
