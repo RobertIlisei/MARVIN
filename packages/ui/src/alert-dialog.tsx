@@ -8,7 +8,7 @@ import { cn } from "./utils"
 // Use MARVIN's `@theme` tokens (see globals.css) rather than shadcn's
 // `--background` / `--foreground` names which MARVIN doesn't declare.
 const SURFACE =
-  "border border-[color:var(--color-border-strong)] bg-[color:var(--color-bg-elev)] text-[color:var(--color-fg)] shadow-[var(--shadow-panel)]"
+  "border border-[color:var(--color-border-strong)] bg-[color:var(--material-popover)] text-[color:var(--color-fg)] shadow-[var(--shadow-panel)]"
 
 function AlertDialog({
   ...props
@@ -78,7 +78,7 @@ function AlertDialogContent({
           left: "50%",
           transform: "translate(-50%, -50%)",
           opacity: 1,
-          backgroundColor: "var(--color-bg-elev)",
+          backgroundColor: "var(--material-popover)",
           color: "var(--color-fg)",
           border: "1px solid var(--color-border-strong)",
           boxShadow: "var(--shadow-panel)",

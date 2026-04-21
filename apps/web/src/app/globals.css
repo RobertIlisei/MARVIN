@@ -83,6 +83,40 @@
   --color-destructive-foreground: var(--color-bg);
   --color-input: var(--color-border-strong);
   --color-ring: var(--color-accent-deep);
+
+  /* ---------------- Materials ----------------
+   * Vibrancy-inspired surface tokens. Tauri's WKWebView doesn't expose
+   * NSVisualEffectView to the web shell (would require
+   * macOSPrivateApi: true → App Store reject), so these are *simulated*
+   * via subtle tints on top of --color-bg. The goal is that toolbars
+   * and sidebars read as layered materials rather than flat paint —
+   * the cue macOS apps rely on to feel "three-dimensional."
+   *
+   *   --material-toolbar   top-bar strip + chat header
+   *   --material-sidebar   left column (Files / Source Control)
+   *   --material-popover   dialogs, menus, dropdowns
+   *
+   * Dark-theme overrides below. Add new materials here if you find
+   * yourself typing the same bg triplet twice in a component. */
+  --material-toolbar: oklch(0.965 0.005 80);
+  --material-sidebar: oklch(0.955 0.007 80);
+  --material-popover: oklch(0.965 0.004 80);
+
+  /* ---------------- Chrome spacing ----------------
+   * A1 polish introduces density tokens so the bump from "web-tight"
+   * to "macOS-loose" lands in one place. Tailwind utilities still work
+   * everywhere; these are for panel chrome that used to type
+   * `px-3 py-2` inline. */
+  --pad-chrome: 14px;     /* top-bar, panel headers */
+  --pad-panel: 18px;      /* body of a panel / dialog / card */
+  --pad-row: 10px 14px;   /* list row padding */
+  --gap-panel: 12px;      /* vertical stack gap inside a panel */
+
+  /* Tauri titleBarStyle: "Overlay" + hiddenTitle: true means traffic
+   * lights overlay the window at ~(13, 16) from top-left. Content in
+   * the top-left needs to avoid colliding with them in full-screen.
+   * Use this on the first top-level element (header / sidebar top). */
+  --titlebar-h: 28px;
 }
 
 /* Light defaults repeated on :root for explicit cascade + halo seeds.
@@ -141,6 +175,14 @@
   --display-tint: oklch(0.86 0.08 225);
   --display-dot: oklch(0.78 0.12 230);
 
+  /* Dark materials — very slightly elevated slate-blue tints on top
+   * of pure-black bg. Each is 2–4 lightness points above
+   * --color-bg-elev (oklch 0.18) so elevated surfaces read as
+   * distinctly above the canvas without going reflective. */
+  --material-toolbar: oklch(0.20 0.014 240);
+  --material-sidebar: oklch(0.22 0.016 240);
+  --material-popover: oklch(0.24 0.018 240);
+
   color-scheme: dark;
 }
 
@@ -155,9 +197,19 @@ body {
   background: var(--color-bg);
   color: var(--color-fg);
   min-height: 100vh;
-  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-feature-settings: "cv11", "ss01", "ss03";
+  /* System stack first — SF Pro on macOS/iOS, Segoe UI on Windows,
+   * system default on Linux. No Google Fonts network hit before first
+   * paint; UI feels native to whatever OS the user is on. Geist used
+   * to live at the front of this stack and was the first thing making
+   * MARVIN feel "generic web app" rather than "Mac app" in the Tauri
+   * window. A1 polish (2026-04-21): system fonts take the lead. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro",
+    "Segoe UI", "Roboto", "Helvetica Neue", "Helvetica", "Arial",
+    sans-serif;
+  /* SF Pro responds well to these OpenType features; they're harmless
+   * on Segoe / Roboto which just ignore unknown tags. */
+  font-feature-settings: "ss01", "ss08";
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   transition: background 0.6s ease;
