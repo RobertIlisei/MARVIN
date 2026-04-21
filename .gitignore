@@ -11,7 +11,7 @@ data/.marvin/
 
 # graphify — check in the graph + report, ignore the extraction cache
 # and the python-interpreter pointer.
-graphify-out/cache/
+**/graphify-out/cache/
 graphify-out/.graphify_python
 
 # Claude Code — local-only settings
