@@ -36,6 +36,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@marvin/git':
+        specifier: workspace:*
+        version: link:../../packages/git
       '@marvin/git-watch':
         specifier: workspace:*
         version: link:../../packages/git-watch

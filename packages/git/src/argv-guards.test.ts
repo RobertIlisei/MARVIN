@@ -6,7 +6,7 @@ import {
   isSafePathspec,
   isSafeRef,
   isSafeRemote,
-} from "./argv-guards.js";
+} from "./argv-guards";
 
 describe("isSafeRef", () => {
   it("accepts ordinary branch names", () => {

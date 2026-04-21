@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type GitOp, gitWritePolicy } from "./git-write-policy.js";
+import { type GitOp, gitWritePolicy } from "./git-write-policy";
 
 describe("gitWritePolicy — stage / unstage", () => {
   it("auto on stage with paths", () => {

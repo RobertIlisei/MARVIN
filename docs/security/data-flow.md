@@ -69,6 +69,19 @@ Rules of thumb:
 - **PII in data files** — same rule. If MARVIN reads a CSV with customer records, that data flows through Anthropic. For production datasets, do the work offline or use a scratch fixture.
 - **IP-sensitive codebases** — depends on your organization's policy on Anthropic. MARVIN is Anthropic-flavored at its core; you cannot use MARVIN without sending content to api.anthropic.com.
 
+## Git credentials are inherited, never handled
+
+The Source Control panel's push / pull / fetch routes ([ADR-0013](../decisions/0013-git-remote-ops-and-credentials.md)) spawn `git` with the user's env and `GIT_TERMINAL_PROMPT=0`. Credential helpers configured in the user's `~/.gitconfig` (osxkeychain, gh auth, 1password-cli) answer out-of-band; SSH keys are served by the user's ssh-agent via the inherited `SSH_AUTH_SOCK`. MARVIN itself never:
+
+- stores credentials (no PATs, SSH keys, or tokens in MARVIN's data dir);
+- prompts for credentials in the UI (no password dialog, no "paste token here" field);
+- proxies credentials (no writing to `child.stdin` on remote routes; `commit -F -` is the only stdin-using git path);
+- rewrites remote URLs to carry credentials (`https://user:token@host/...` is never constructed — if a remote URL already has creds, that's the user's own config, not something MARVIN introduces).
+
+If a remote op fails because no credential helper is configured, `git` exits with readable stderr; MARVIN's `RemoteErrorBanner` classifies it (`auth-publickey`, `auth-failed`, `no-upstream`, …) and shows a one-line remedy. The fix is always in the user's shell — configure a credential helper, load an SSH key, set an upstream. None of those fixes touch MARVIN.
+
+See [ADR-0013](../decisions/0013-git-remote-ops-and-credentials.md) for why this is the right trade-off — the shapes we considered (in-app prompt, PAT in settings) would reclassify MARVIN as a credential manager, with different supply-chain and threat-model obligations.
+
 ## Related
 
 - [Credentials](./credentials.md) — auth flow.
