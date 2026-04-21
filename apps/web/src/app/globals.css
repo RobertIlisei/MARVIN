@@ -1,4 +1,17 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+
+/* `tw-animate-css` ports the tailwindcss-animate utilities to Tailwind v4's
+ * CSS-first config. The shadcn-style primitives under `@marvin/ui` rely on
+ * `data-[state=open]:animate-in data-[state=open]:fade-in-0
+ * data-[state=open]:zoom-in-95` (and their `=closed` counterparts) to
+ * enter + leave smoothly. Without this import those classes don't exist,
+ * the content card ends up in an inconsistent state (overlay visible,
+ * card hidden at opacity:0 / scale:.95) and the Settings dialog appears
+ * as a transparent veil with no body. The inline style={} on DialogContent
+ * (see packages/ui/src/dialog.tsx) is the belt-and-braces fallback for
+ * colour + border, but the animation init state still needs these
+ * utilities. Keep both. */
 
 /* Tailwind sees these names and generates utilities; the *values* below
  * are the light (default) baseline. Dark mode overrides them via

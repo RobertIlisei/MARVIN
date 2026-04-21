@@ -26,7 +26,7 @@ import {
   type PersonalityMode,
   PersonalityToggle,
 } from "@/components/settings/personality-toggle";
-import { SettingsPanel, type SettingsTab } from "@/components/settings/settings-panel";
+import { SettingsPanel } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
@@ -109,9 +109,10 @@ export default function Home() {
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("observability");
-  const openSettings = useCallback((tab?: SettingsTab) => {
-    if (tab) setSettingsTab(tab);
+  // Settings now shows only the Observability form — the tab argument
+  // that callers used to pass is accepted + ignored so existing call
+  // sites keep working. Drop the param when we've cleaned them up.
+  const openSettings = useCallback((_tab?: string) => {
     setSettingsOpen(true);
   }, []);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
@@ -453,7 +454,13 @@ export default function Home() {
       // descendant as a regular click, not a drag. That's the
       // intended behaviour.
       data-tauri-drag-region
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5"
+      // Left padding clears the macOS traffic-light cluster (Tauri
+      // renders them at ~12px from the left edge; 3 buttons + gaps is
+      // ~72px). `pl-[82px]` leaves a comfortable gutter. In a normal
+      // browser tab the traffic lights don't exist and the extra
+      // padding simply centers branding a bit further in — acceptable
+      // trade-off since the Tauri build is the primary UI.
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-[82px] pr-5 py-2.5"
     >
       <button
         type="button"
@@ -466,7 +473,7 @@ export default function Home() {
         marvin
       </button>
       <span className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline">
-        v0.0.1 · phase 5
+        v1
       </span>
       <div className="mx-3 h-5 w-px bg-[color:var(--color-border)]" />
       <ProjectPicker
@@ -973,20 +980,7 @@ export default function Home() {
       <SettingsPanel
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        tab={settingsTab}
-        onTabChange={setSettingsTab}
         cwd={cwd || null}
-        projectName={active?.name ?? null}
-        executorModel={executorModel}
-        advisorModel={advisorModel}
-        onModelsChange={({ executor, advisor }) => {
-          setExecutorModel(executor);
-          setAdvisorModel(advisor);
-        }}
-        personality={personality}
-        onPersonalityChange={setPersonality}
-        permissionStrategy={permissionStrategy}
-        onPermissionChange={setPermissionStrategy}
       />
     </main>
   );

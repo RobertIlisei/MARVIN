@@ -37,8 +37,15 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
+      // Animation classes removed (see DialogContent comment below).
+      // Inline style forces a visible, opaque-enough backdrop regardless
+      // of the animation pipeline state.
+      style={{
+        backgroundColor: "var(--color-bg-glass)",
+        opacity: 1,
+      }}
       className={cn(
-        "fixed inset-0 z-50 bg-[color:var(--color-bg-glass)] backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 backdrop-blur-sm",
         className
       )}
       {...props}
@@ -59,20 +66,32 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
-        // Hard-applied inline style is the belt-and-braces guarantee
-        // against a Tailwind class miss (arbitrary-value classes got
-        // tailwind-merge'd incorrectly earlier, producing an invisible
-        // card over a visible backdrop). `className` is kept for
-        // layout + animation; colour + border + shadow are forced
-        // here.
+        // Visibility is forced via inline style — position + opacity +
+        // transform + surface colours — and the `data-[state=*]:animate-*`
+        // classes have been removed. Prior attempts (commits 78bc685,
+        // 3425935) leaned on `tw-animate-css` utilities to fade + zoom
+        // the card in, but in the Tailwind v4 + Turbopack + Radix combo
+        // the enter animation sometimes never settles back to the base
+        // state (fill-mode=none, keyframe overrides translate-x-[-50%] /
+        // translate-y-[-50%] mid-enter) — result is an opacity:0,
+        // off-center card sitting invisibly over a visible backdrop.
+        // The user experiences this as "a veil appears but I can't see
+        // the configurations." Dropping the animate classes and
+        // force-setting position + opacity inline is the reliable fix;
+        // we accept no enter/leave animation on the dialog for now.
         style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          opacity: 1,
           backgroundColor: "var(--color-bg-elev)",
           color: "var(--color-fg)",
           border: "1px solid var(--color-border-strong)",
           boxShadow: "var(--shadow-panel)",
         }}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg p-6 duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg p-6 outline-none sm:max-w-lg",
           className
         )}
         {...props}
