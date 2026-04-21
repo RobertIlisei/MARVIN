@@ -33,39 +33,146 @@ const Editor = dynamic(
   { ssr: false, loading: () => <EditorSkeleton /> },
 );
 
+// Extension → Monaco language ID. Keep in lockstep with Monaco's
+// bundled language registry (https://github.com/microsoft/monaco-editor
+// /tree/main/src/basic-languages). Adding an entry for a language
+// Monaco doesn't ship will fall back to plaintext — no harm done,
+// just no syntax highlighting.
 const LANG_BY_EXT: Record<string, string> = {
+  // TypeScript / JavaScript
   ts: "typescript",
   tsx: "typescript",
+  cts: "typescript",
+  mts: "typescript",
   js: "javascript",
   jsx: "javascript",
   mjs: "javascript",
   cjs: "javascript",
+  // Data / config
   json: "json",
-  md: "markdown",
-  mdx: "markdown",
-  css: "css",
-  scss: "scss",
-  html: "html",
-  py: "python",
-  go: "go",
-  rs: "rust",
-  java: "java",
-  rb: "ruby",
-  php: "php",
-  sh: "shell",
-  zsh: "shell",
-  bash: "shell",
+  jsonc: "json",
+  json5: "json",
   yml: "yaml",
   yaml: "yaml",
-  toml: "toml",
+  toml: "ini", // Monaco doesn't ship TOML; ini is the closest built-in
+  ini: "ini",
+  cfg: "ini",
+  conf: "ini",
+  env: "ini",
+  // Markup / docs
+  md: "markdown",
+  mdx: "markdown",
+  markdown: "markdown",
+  txt: "plaintext",
+  log: "plaintext",
+  // Styles
+  css: "css",
+  scss: "scss",
+  sass: "scss",
+  less: "less",
+  // Web
+  html: "html",
+  htm: "html",
+  xml: "xml",
+  svg: "xml",
+  vue: "html",
+  // Systems + compiled
+  c: "c",
+  h: "c",
+  cc: "cpp",
+  cpp: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  hxx: "cpp",
+  rs: "rust",
+  go: "go",
+  java: "java",
+  kt: "kotlin",
+  kts: "kotlin",
+  scala: "scala",
+  swift: "swift",
+  cs: "csharp",
+  fs: "fsharp",
+  vb: "vb",
+  m: "objective-c",
+  mm: "objective-c",
+  // Scripting
+  py: "python",
+  pyi: "python",
+  rb: "ruby",
+  erb: "ruby",
+  php: "php",
+  pl: "perl",
+  pm: "perl",
+  lua: "lua",
+  r: "r",
+  jl: "julia",
+  dart: "dart",
+  ex: "elixir",
+  exs: "elixir",
+  clj: "clojure",
+  cljs: "clojure",
+  // Shell
+  sh: "shell",
+  bash: "shell",
+  zsh: "shell",
+  fish: "shell",
+  ps1: "powershell",
+  bat: "bat",
+  cmd: "bat",
+  // Query / data
   sql: "sql",
   graphql: "graphql",
   gql: "graphql",
-  xml: "xml",
+  // Infra / build
+  tf: "hcl",
+  hcl: "hcl",
+  dockerfile: "dockerfile",
+  proto: "protobuf",
+};
+
+// Filename → language. Checked BEFORE the extension map. Covers
+// "no extension" well-known files (Dockerfile, Makefile, Gemfile…)
+// and filename-specific overrides (package-lock.json → json,
+// pnpm-lock.yaml → yaml).
+const LANG_BY_FILENAME: Record<string, string> = {
+  Dockerfile: "dockerfile",
+  Containerfile: "dockerfile",
+  Makefile: "plaintext", // Monaco has no makefile grammar
+  GNUmakefile: "plaintext",
+  Rakefile: "ruby",
+  Gemfile: "ruby",
+  "Gemfile.lock": "plaintext",
+  Procfile: "shell",
+  Vagrantfile: "ruby",
+  Brewfile: "ruby",
+  Podfile: "ruby",
+  // Shell dotfiles
+  ".bashrc": "shell",
+  ".zshrc": "shell",
+  ".bash_profile": "shell",
+  ".zprofile": "shell",
+  ".profile": "shell",
+  ".envrc": "shell",
+  // Lock files
+  "package-lock.json": "json",
+  "pnpm-lock.yaml": "yaml",
+  "yarn.lock": "plaintext",
+  "Cargo.lock": "ini",
+  "poetry.lock": "ini",
+  // Well-known config files
+  ".gitignore": "plaintext",
+  ".gitattributes": "plaintext",
+  ".npmrc": "ini",
+  ".editorconfig": "ini",
+  ".eslintrc": "json",
+  ".prettierrc": "json",
 };
 
 function langFor(p: string): string {
   const name = p.split("/").pop() ?? "";
+  const byFilename = LANG_BY_FILENAME[name];
+  if (byFilename) return byFilename;
   const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
   return LANG_BY_EXT[ext] ?? "plaintext";
 }
@@ -236,7 +343,19 @@ export function MonacoEditor({
     saveRef.current = save;
   }, [save]);
 
+  // Capture the Monaco namespace on mount so the theme-sync effect
+  // below can re-apply the theme when `mode` changes. Without this
+  // the editor was painting with whichever theme existed at mount
+  // time, ignoring later light/dark flips — user reported editor
+  // surface staying bright in dark mode because `applyMonacoTheme`
+  // only ran once in `handleMount`. Using the second arg of `OnMount`
+  // as the source of truth for the type so we track @monaco-editor/react's
+  // re-exports without reaching for `any`.
+  type MonacoNamespace = Parameters<OnMount>[1];
+  const monacoRef = useRef<MonacoNamespace | null>(null);
+
   const handleMount: OnMount = (editor, monaco) => {
+    monacoRef.current = monaco;
     applyMonacoTheme(monaco, mode);
     if (!readOnly) {
       editor.addAction({
@@ -249,6 +368,16 @@ export function MonacoEditor({
       });
     }
   };
+
+  // Re-apply Monaco's theme whenever the MARVIN theme flips. monaco's
+  // `editor.setTheme` is a singleton — any editor instance globally
+  // picks up the new theme — so this effect is enough to cover the
+  // diff viewer too once it mounts.
+  useEffect(() => {
+    if (monacoRef.current) {
+      applyMonacoTheme(monacoRef.current, mode);
+    }
+  }, [mode]);
 
   const lineCount = useMemo(
     () => (content === "" ? 0 : content.split("\n").length),
