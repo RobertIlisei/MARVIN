@@ -5,7 +5,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConfirmDeleteDialog, type ConfirmDeleteDialogState } from "./confirm-delete-dialog";
 import { InlineRename } from "./inline-rename";
 import { TreeContextMenu, type TreeContextMenuActions } from "./tree-context-menu";
+import {
+  UploadProgressToast,
+  type UploadToastState,
+} from "./upload-progress-toast";
 import { useFsMutations } from "./use-fs-mutations";
+import { useOsDrop } from "./use-os-drop";
 import { useTreeDnd } from "./use-tree-dnd";
 import { useTreeSelection } from "./use-tree-selection";
 
@@ -67,6 +72,11 @@ export function FileTree({
   const [confirmState, setConfirmState] = useState<ConfirmDeleteDialogState & {
     onResolve?: (approved: boolean) => void;
   }>({ open: false, reason: "", severity: "warn", summary: "" });
+  const [uploadToast, setUploadToast] = useState<UploadToastState>({
+    result: null,
+    error: null,
+    uploading: false,
+  });
 
   // Fetch + revalidation --------------------------------------------------
   const revalidate = useCallback(() => setRefreshTick((t) => t + 1), []);
@@ -166,6 +176,24 @@ export function FileTree({
       await mutations.move(from, to);
     },
   });
+
+  const osDrop = useOsDrop({
+    cwd,
+    onComplete: (result) => {
+      setUploadToast({ result, error: null, uploading: false });
+      revalidate();
+    },
+    onError: (message) => {
+      setUploadToast({ result: null, error: message, uploading: false });
+    },
+  });
+
+  // Keep the toast's `uploading` flag live with the hook.
+  useEffect(() => {
+    setUploadToast((s) =>
+      s.uploading === osDrop.uploading ? s : { ...s, uploading: osDrop.uploading },
+    );
+  }, [osDrop.uploading]);
 
   // Action handlers -------------------------------------------------------
   const openDir = useCallback((p: string) => {
@@ -269,9 +297,14 @@ export function FileTree({
 
   return (
     <div
-      className="scroll-thin h-full overflow-y-auto p-2 font-mono text-[12px]"
+      className={`scroll-thin h-full overflow-y-auto p-2 font-mono text-[12px] ${
+        osDrop.osDragHover
+          ? "outline outline-2 outline-[color:var(--color-accent)]/70"
+          : ""
+      }`}
       tabIndex={-1}
       onKeyDown={onRootKeyDown}
+      {...osDrop.osDropProps({ destDir: data.root })}
     >
       <div className="mb-2 flex items-center gap-2 truncate px-1 text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-fg-faint)]">
         <span className="truncate">{rootName}</span>
@@ -314,6 +347,12 @@ export function FileTree({
           confirmState.onResolve?.(true);
           setConfirmState((s) => ({ ...s, open: false }));
         }}
+      />
+      <UploadProgressToast
+        state={uploadToast}
+        onDismiss={() =>
+          setUploadToast({ result: null, error: null, uploading: false })
+        }
       />
     </div>
   );

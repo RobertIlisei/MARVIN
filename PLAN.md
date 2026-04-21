@@ -1292,6 +1292,31 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   via `pnpm -r typecheck` green, clean Turbopack HMR reload, and
   live live `/api/files/content` traffic from the dev server
   returning the new `mtime` field.
+- **2026-04-21 (ide-mode — M5: OS→tree upload + ADR-0009)** —
+  `POST /api/files/write/upload` (multipart) accepts OS drops into
+  the project tree. Per-file 10 MB cap, 50 MB batch cap, 50 files
+  max; over-cap files populate `skipped[]` with reasons so the
+  rest still land. **Mandatory `X-Marvin-Client: 1` request header**
+  — multipart is a "simple" CORS request that bypasses preflight,
+  and the custom header forces the browser to preflight; cross-
+  origin drive-by POSTs can't replay it. Same `checkFsPath` +
+  `fsWritePolicy` pipeline as the other routes, so `.git/`
+  smuggling etc. is still caught. Secret-file uploads skip
+  (rather than prompt per file) to avoid modal spam on batch
+  drops. UI: `use-os-drop.ts` discriminates OS vs within-tree
+  DnD by `dataTransfer.types` (`Files` vs
+  `application/x-marvin-paths`), `upload-progress-toast.tsx`
+  surfaces the uploaded / skipped summary with auto-dismiss
+  after 6 s (hover to keep). Tree root gains an
+  accent-outlined hover state while an OS drag is overhead.
+  ADR-0009 documents the CSRF-via-preflight argument, the cap
+  rationale, the secret-file skip decision, and four named
+  alternatives with reject reasons. `docs/reference/api.md`
+  gained an `/upload` entry with the header + cap table;
+  `REVIEW.md` gained an "Always check: new multipart routes
+  require `X-Marvin-Client`" rule. End-to-end verified via
+  `pnpm -r typecheck` green and curl smoke — 400 without the
+  header, 200 with it + file written on disk.
 
 ## Status
 
