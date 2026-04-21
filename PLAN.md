@@ -1412,6 +1412,169 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   End-to-end verified via `pnpm -r typecheck` (all 8 packages
   green) + `pnpm lint` (0 errors) + `pnpm test` (134 passed).
   Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M2: read routes + panel scaffold)** —
+  four net-new read routes under `apps/web/src/app/api/git/` —
+  `status` (porcelain v2 + branch header → structured JSON),
+  `diff` (working / staged / head mode, 2 MB cap, binary probe via
+  `--numstat`), `branch` (local + remote list via `for-each-ref`
+  with `%00`-separated format for unicode-safe parsing), `log`
+  (stable pretty format, initial-repo fallback). Every route:
+  anchors `cwd` through `checkFsPath`, gates inputs via
+  `isSafePathspec`, returns `enabled: false, reason: "not-a-git-repo"`
+  when outside a worktree so the panel renders its empty state
+  without a second round-trip. No mutations, no confirm gate —
+  M3 lands those. New UI: `apps/web/src/components/left-column-tabs.tsx`
+  swaps the left column between Files and Source Control
+  (persisted to `localStorage.marvin.leftColumn`); new
+  `apps/web/src/components/source-control/` package —
+  `source-control-panel.tsx` (shell + three empty states),
+  `use-git-status.ts` (2 s poll, pause on hidden tab, abort on cwd
+  change), `status-list.tsx` (Conflicts / Staged / Changes /
+  Untracked buckets, row click → `onSelect`), `status-badge.tsx`
+  (token-coloured M/A/D/R/U/T/? pills), `branch-bar.tsx` (branch
+  name + upstream + ↑N↓M counters), plus a `CommitBoxPlaceholder`
+  that renders the shape M3 will fill. `page.tsx` wires the tabs
+  at the top of the existing files aside — no new `<Panel>`, just
+  a tab switcher inside the one that already existed. @marvin/git
+  added to `apps/web` workspace deps. Collateral: relative
+  imports in `packages/git/src/*` stripped of `.js` suffix —
+  Turbopack compiled them as `node:module` specifiers, breaking
+  at runtime; other workspace packages use bare relative imports
+  (see `packages/runtime/src/index.ts`). Docs: `/api/git/*`
+  entries in `api.md` promoted from placeholder to full shapes.
+  End-to-end verified via `pnpm -r typecheck` + `pnpm lint`
+  (0 errors) + `pnpm test` (134 passed) + live curl against
+  `http://localhost:3030/api/git/{status,diff,branch,log}`
+  against the MARVIN repo (200 OK, expected shapes) and against
+  `/tmp` (rejected at the sandbox with `symlink-rejected`) and
+  a pathspec-injection probe (`?path=--exec-path=/tmp` →
+  `400 invalid-pathspec`). Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M3: mutation routes + commit box + branch switcher)** —
+  eight net-new mutation routes under `apps/web/src/app/api/git/`:
+  `stage`, `unstage`, `discard` (mode: working|staged),
+  `commit` (amend-aware, message via stdin `-F -` so user text never
+  touches argv), `branch/create`, `branch/switch` (denies on dirty
+  tree), `branch/delete` (current hard-denied, unmerged confirm-
+  danger), and `confirm` (mints one-shot tokens). Every route:
+  1) sandboxes `cwd` via `checkFsPath`, 2) passes user-supplied
+  refs / paths / remotes through `argv-guards` (`isSafeRef`,
+  `isSafePathspec`), 3) calls `gitWritePolicy(op)`, 4) on `confirm`
+  class requires `X-Marvin-Confirmed: <token>` minted by `/confirm`.
+  Shared `apps/web/src/lib/git-confirm-gate.ts` factors the
+  deny / needs-confirm / token-consume branches into one helper so
+  each route stays tight on its 4-step recipe. New UI components:
+  `use-git-mutations.ts` (hook that owns the full dispatch
+  pipeline — initial POST, 409 handling, confirm-modal await,
+  `/confirm` round-trip, retry with token, error classification),
+  `confirm-git-op-dialog.tsx` (alert-dialog with severity-aware
+  styling; danger gets the red border + "Proceed anyway" button),
+  `commit-box.tsx` (textarea with ⌘Enter to commit, Esc to exit
+  amend, auto-grow 1..6 lines, disabled until message+stage state
+  justify commit), `branch-switcher.tsx` (dropdown populated from
+  `/api/git/branch`, inline "+ new branch" form). `status-list.tsx`
+  gained hover-reveal action icons per bucket (Staged: −, Changes:
+  ↺+, Untracked: +) plus a per-bucket bulk action in the header.
+  `source-control-panel.tsx` composes everything, pipes the
+  `refresh()` from use-git-status into use-git-mutations'
+  `onChanged` so the UI updates immediately after a successful
+  mutation; renders an error banner for non-confirm failures with
+  dismiss. Live-verified via curl against a scratch repo:
+  stage → unstage → discard-working (409 → mint → replay succeeds),
+  stage + commit (`hasPushedHead: false`), branch create + switch,
+  delete-current hard-denied (403 `policy-deny`), switch-on-dirty
+  hard-denied (403 `policy-deny`), injection probe
+  (`--upload-pack=/bin/sh` as branch name → 400 `invalid-ref`),
+  mint-for-safe / replay-with-dangerous token attack
+  (`discard NEW.md` token replayed with `discard README.md` →
+  409 `token/op mismatch`), auto-class confirm probe
+  (`stage` op → 400 `policy-auto`). `docs/reference/api.md`
+  entries for every mutation route promoted from placeholder to
+  full request / response shapes with error tables. End-to-end
+  verified via `pnpm -r typecheck` (all 8 packages green) +
+  `pnpm lint` (0 errors, 190 files) + `pnpm test` (134 passed).
+  Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M4: polish — ETag + visibility pause + keyboard nav)** —
+  `/api/git/status` now emits a weak ETag derived from the raw
+  porcelain bytes and honours `If-None-Match`; the 2 s panel poll
+  returns `304 Not Modified` on an idle tree instead of re-parsing
+  + re-rendering the same JSON. Live-smoked against the scratch
+  repo: first hit → 200 + ETag `W/"accc9267058a74a7"`; replay with
+  `If-None-Match` → 304 + same ETag; stage a file → next poll
+  returns 200 with a fresh ETag `W/"7e51377853e8b5e9"`. Known
+  limitation (documented in `api.md`): porcelain v2 is content-
+  agnostic on the working tree, so an unstaged content edit on a
+  file that's already in the list doesn't change the ETag — the
+  panel picks up on it the next time the file's bucket transitions.
+  `use-git-status` was rewritten (M2 had a skip-on-hidden fetch
+  guard but left the interval running): now installs a
+  `visibilitychange` listener that actually stops the interval
+  while the tab is hidden and restarts it on return; sends
+  `If-None-Match` with every request; nulls the stored ETag on
+  cwd / enabled changes so a 304 from a previous project doesn't
+  leak into the new session; on the manual `refresh()` (fired
+  after a successful mutation) clears the ETag so the server
+  answers with the post-mutation body even if the underlying
+  porcelain bytes haven't settled yet. `status-list.tsx` gained
+  full keyboard navigation — a roving-tabindex listbox with
+  `↑ ↓ Home End` moving focus across bucket boundaries, `Enter`
+  opening the focused file in the centre viewer, `Space` firing
+  the primary action for the row's bucket (stage / unstage).
+  `aria-activedescendant` wires SR announcements to the focused
+  row's stable id. `docs/reference/shortcuts.md` gained two
+  Source-Control sections (list + commit textarea). `docs/
+  reference/api.md` gained a "Caching" subsection on the status
+  route. End-to-end verified via `pnpm -r typecheck` (all 8
+  packages green) + `pnpm lint` (0 errors, 190 files) +
+  `pnpm test` (134 passed) + live ETag smoke (200 → 304 → 200
+  on state change). Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M5: remote ops + ADR-0013)** —
+  three net-new remote routes under `apps/web/src/app/api/git/`:
+  `fetch` (auto-class, default remote `origin`), `pull` (strategy:
+  `ff-only` auto / `rebase` confirm-warn / `merge` confirm-warn;
+  dirty-tree pre-check), `push` (forceWithLease: boolean; plain
+  `--force` hard-denied at the policy layer; upstream-ahead
+  detection via `git rev-list --count HEAD..@{u}` drives
+  confirm-warn). Every remote route: anchors `cwd` via
+  `checkFsPath`, validates refs / remotes through `argv-guards`,
+  spawns via the shared `runGit` wrapper (which sets
+  `GIT_TERMINAL_PROMPT=0` and `LC_ALL=C`). Never writes to
+  `child.stdin` on remote routes; credential helpers in the user's
+  `~/.gitconfig` / ssh-agent answer out-of-band. Shared
+  `apps/web/src/lib/git-remote-errors.ts` classifies git stderr
+  onto stable codes — `auth-publickey`, `auth-failed`, `network`,
+  `non-fast-forward`, `no-upstream`, `no-remote`, `merge-conflict`,
+  `git-failed` — each with a one-line remedy. `use-git-mutations`
+  gained `fetch` / `pull` / `push` methods, `MutationError` gained
+  a `remote: { code, remedy, stderr }` branch so the banner can
+  render specialised remote-error UI with a "show stderr" toggle.
+  New UI: `remote-bar.tsx` (Fetch single-button + Pull split-button
+  exposing ff-only/rebase/merge + Push split-button exposing
+  force-with-lease; all disable gracefully when `hasUpstream` is
+  false), `remote-error-banner.tsx` (severity-styled title +
+  remedy + collapsible stderr). `source-control-panel.tsx`
+  composes the new RemoteBar below the BranchBar, switches to
+  `RemoteErrorBanner` when the error kind is `remote`. ADR-0013
+  documents the inherit-never-handle credential decision + four
+  rejected alternatives (in-app prompt, PAT in settings, redirect
+  to terminal, always-prefer-gh, chat-surface). Docs: `api.md`
+  remote entries promoted from placeholder to full shapes with
+  an error-taxonomy table; `docs/security/data-flow.md` gained a
+  "Git credentials are inherited, never handled" section;
+  `REVIEW.md` added a rule about remote-op routes not writing to
+  stdin / prompting / storing tokens / rewriting credential-bearing
+  URLs. Live-verified: `fetch` on MARVIN's origin succeeded
+  (`From https://github.com/RobertIlisei/MARVIN  4bd1a7b..8d2beb9
+  main -> origin/main`); `fetch` on a scratch repo with no origin
+  returned 502 `no-remote` with specific stderr + remedy; `pull
+  --ff-only` on a dirty tree returned 409 `dirty-working-tree`
+  with remedy; `push --force-with-lease` returned 409 `needs-
+  confirm` with `severity: danger`; confirm-mint attempt for
+  `force: "plain"` returned 403 `policy-deny` ("use the terminal
+  if you truly need it"); injection attempt
+  (`branch: --upload-pack=/bin/sh`) returned 400 `invalid-ref`.
+  End-to-end verified via `pnpm -r typecheck` (all 8 packages
+  green) + `pnpm lint` (0 errors, 196 files) + `pnpm test`
+  (134 passed). Typecheck clean across all 8 packages.
 
 ## Status
 

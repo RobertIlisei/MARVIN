@@ -297,29 +297,135 @@ Git is MARVIN's **third mutation channel** — parallel to the LLM tool channel 
 
 Every git invocation goes through [`runGit`](../../packages/git/src/exec.ts) (`execFile` with `shell: false`); user-supplied refs / paths / remotes pass through [`argv-guards`](../../packages/git/src/argv-guards.ts) before appending to argv; commit messages travel via stdin, never argv.
 
-**Read routes (M2 — pending):**
+**Read routes:**
 
-- `GET /api/git/status?cwd=…` → `{ branch: { name, upstream, ahead, behind, oid }, files: Array<{ path, indexStatus, workingStatus, entryType, renamedFrom? }>, enabled: true }` — or `{ enabled: false, reason: "not-a-git-repo" }` if `.git/` is absent. Parsed from `git status --porcelain=v2 --branch -z`.
-- `GET /api/git/diff?cwd=&path=&mode=working|staged|head` → `{ path, diff: string, binary: boolean, truncated: boolean }`. 2 MB diff cap.
-- `GET /api/git/branch?cwd=…` → `{ current, locals: [...], remotes: [...] }`.
-- `GET /api/git/log?cwd=&limit=50&path?=` → `Array<{ sha, shortSha, author, email, date, subject }>`.
+### `GET /api/git/status?cwd=…`
 
-**Mutation routes (M3 — pending):**
+Branch metadata + per-file status, parsed from `git status --porcelain=v2 --branch -z`.
 
-- `POST /api/git/stage` — `{ cwd, paths }` → `git add -- <paths>`.
-- `POST /api/git/unstage` — `{ cwd, paths }` → `git restore --staged -- <paths>`.
-- `POST /api/git/discard` — `{ cwd, paths, mode: "working" | "staged" }`. Working-tree discard is `confirm warn`.
-- `POST /api/git/commit` — `{ cwd, message, amend?: boolean }`. Message via stdin; amend on pushed HEAD is `confirm danger`.
-- `POST /api/git/branch/create` — `{ cwd, name, from? }`. `name` must pass `isSafeRef`.
-- `POST /api/git/branch/switch` — `{ cwd, name }`. Denies on dirty tree in v1.
-- `POST /api/git/branch/delete` — `{ cwd, name, force?: boolean }`. Current branch hard-denied; unmerged + `force` is `confirm danger`.
-- `POST /api/git/confirm` — `{ op, cwd }` → `{ token, expiresIn }`. 60 s TTL, one-shot.
+Success: `{ enabled: true, branch: { oid, name, upstream, ahead, behind }, files: Array<{ path, indexStatus, workingStatus, entryType, renamedFrom, ordinary }> }`.
 
-**Remote routes (M5 — pending, ADR-0013):**
+`enabled: false, reason: "not-a-git-repo"` when the path isn't inside a git worktree. `oid`, `name`, `upstream`, `ahead`, `behind` are all nullable (`null` for initial repos, detached HEAD, no upstream). `entryType` is one of `ordinary | rename-copy | unmerged | untracked | ignored`. `indexStatus` / `workingStatus` are single-char porcelain-v2 codes (`M A D R C U T .`).
 
-- `POST /api/git/push` — `{ cwd, remote?, branch?, forceWithLease?: boolean }`. Plain `--force` always denied.
-- `POST /api/git/pull` — `{ cwd, strategy: "ff-only" | "rebase" | "merge" }`. `ff-only` default.
-- `POST /api/git/fetch` — `{ cwd, remote? }`. Read-only.
+**Caching:** responses carry a weak `ETag` derived from the raw porcelain bytes. Clients that send `If-None-Match: <etag>` receive a `304 Not Modified` with an empty body when nothing structural has changed — the 2 s panel poll uses this to avoid re-parsing / re-rendering on an idle tree. Note: porcelain v2 is content-agnostic on the working tree, so unstaged content changes within a file that's already in the list don't invalidate the ETag; the panel picks them up when the file's bucket changes (stage / unstage / save-to-disk transitions).
+
+### `GET /api/git/diff?cwd=&path=&mode=working|staged|head`
+
+Per-file diff. Default `mode=working`. 2 MB cap on response body; larger returns `truncated: true` with empty `diff`.
+
+Success: `{ path, mode, diff: string, binary: boolean, truncated: boolean }`.
+
+Binary files return `binary: true` with `diff: ""`. Path is rejected with `400 invalid-pathspec` if it fails `isSafePathspec` (leading `-`, NUL, magic `:` prefix).
+
+### `GET /api/git/branch?cwd=…`
+
+Success: `{ enabled: true, current: string | null, locals: Array<{ name, isCurrent, upstream, ahead, behind }>, remotes: string[] }`.
+
+Formatted from `git for-each-ref` using `%00`-separated field strings so branch names containing `|` / tabs / unicode parse cleanly.
+
+### `GET /api/git/log?cwd=&limit=50&path?=`
+
+Recent commits. Default `limit=50`, hard cap 500. Optional `path` filters to commits touching that file.
+
+Success: `{ enabled: true, commits: Array<{ sha, shortSha, author, email, date, subject }> }`.
+
+Initial repos (no commits yet) return `commits: []` rather than an error.
+
+**Mutation routes:**
+
+Every mutation route goes through `checkFsPath(cwd)` → `gitWritePolicy(op)`. If the policy returns `confirm`, the route returns `409 needs-confirm` with `{ severity, reason, op }`; the client round-trips to `/api/git/confirm` for a token and replays the original request with `X-Marvin-Confirmed: <token>`. Tokens are one-shot and validate the op structurally — the stored op must match the executing op or the replay is rejected with `409 token-rejected`.
+
+### `POST /api/git/stage` — `{ cwd, paths: string[] }`
+
+`git add -- <paths>`. Every path passes `isSafePathspec` (rejects leading `-`, pathspec-magic `:`, NUL, oversize). Auto-class.
+
+Success: `{ ok: true, staged: number }`.
+
+### `POST /api/git/unstage` — `{ cwd, paths: string[] }`
+
+`git restore --staged -- <paths>`. Working tree unchanged. Auto-class.
+
+Success: `{ ok: true, unstaged: number }`.
+
+### `POST /api/git/discard` — `{ cwd, paths: string[], mode: "working" | "staged" }`
+
+- `mode: "staged"` — `git restore --staged` (auto). Same effect as unstage.
+- `mode: "working"` — `git restore` (confirm **warn**). Resets working tree to index; edits are gone.
+
+Success: `{ ok: true, discarded: number, mode }`.
+
+### `POST /api/git/commit` — `{ cwd, message, amend?: boolean }`
+
+Message travels via stdin (`git commit -F -`). Never via argv. `isSafeCommitMessage` rejects empty / NUL / > 16 KB. The route detects `hasPushedHead` by `rev-parse @{u}` + `merge-base --is-ancestor HEAD @{u}`; amend with `hasPushedHead: true` is `confirm danger`.
+
+Amending with no new message passes `--no-edit` so git keeps the existing message.
+
+Success: `{ ok: true, amend, hasPushedHead }`. `409 nothing-to-commit` when the index is empty and `--amend` wasn't set.
+
+### `POST /api/git/branch/create` — `{ cwd, name, from?: string }`
+
+`git branch <name> <from>`. `from` defaults to `HEAD`. `name` and `from` (unless `HEAD`) must pass `isSafeRef`. Auto-class.
+
+Success: `{ ok: true, name, from }`. `409 branch-exists` when the branch is already present.
+
+### `POST /api/git/branch/switch` — `{ cwd, name }`
+
+`git switch <name>`. The route probes `git status --porcelain`; non-empty output denies as `policy-deny` with reason "working tree is dirty". v1 does not stash-on-switch.
+
+Success: `{ ok: true, name }`. `404 branch-not-found` when the target doesn't exist.
+
+### `POST /api/git/branch/delete` — `{ cwd, name, force?: boolean }`
+
+`git branch -d <name>` (or `-D` when `force: true` or when the branch is unmerged). The route probes `git symbolic-ref HEAD` + `git branch --merged` to populate the policy op. Current branch is hard-denied; unmerged is `confirm danger`.
+
+Success: `{ ok: true, name, merged, forced }`.
+
+### `POST /api/git/confirm` — `{ cwd, op }`
+
+Mints a one-shot token for a `confirm`-class op. Returns `{ token, expiresIn: 60, severity, reason }`. Rejects with `400 policy-auto` when the op doesn't actually need confirming, and `403 policy-deny` when the op is always-denied.
+
+**Remote routes (ADR-0013):**
+
+Credentials are inherited from the user's git configuration — MARVIN never stores, proxies, or prompts. `GIT_TERMINAL_PROMPT=0` turns any interactive credential prompt into immediate stderr. See [`apps/web/src/lib/git-remote-errors.ts`](../../apps/web/src/lib/git-remote-errors.ts) for the stderr classifier.
+
+### `POST /api/git/fetch` — `{ cwd, remote?: string }`
+
+`git fetch <remote>`. Default `remote = "origin"`. Auto-class.
+
+Success: `{ ok: true, remote, note }` (`note` is the trimmed progress output on stderr).
+
+### `POST /api/git/pull` — `{ cwd, strategy: "ff-only" | "rebase" | "merge" }`
+
+- `ff-only` (auto): `git pull --ff-only`. Fails cleanly on divergence.
+- `rebase` (confirm warn): `git pull --rebase`.
+- `merge` (confirm warn): `git pull --no-rebase --no-ff`.
+
+Refuses on a dirty working tree with `409 dirty-working-tree`.
+
+Success: `{ ok: true, strategy, note }`.
+
+### `POST /api/git/push` — `{ cwd, remote?, branch?, forceWithLease?: boolean }`
+
+Default `remote = "origin"`, `branch = <current>`, `forceWithLease = false`. Plain `--force` is never available — the policy layer hard-denies it from every channel. `--force-with-lease` is `confirm danger`. A regular push when upstream is ahead is `confirm warn`.
+
+Success: `{ ok: true, remote, branch, forced, note }`.
+
+**Remote error taxonomy** (returned from all three routes on failure):
+
+| HTTP | `error` | Meaning | `remedy` |
+|---|---|---|---|
+| 502 | `auth-publickey` | SSH key rejected | check your SSH key is loaded and authorised |
+| 502 | `auth-failed` | HTTPS auth failed or no credentials | configure a git credential helper |
+| 502 | `network` | Could not resolve host / timeout / refused | check network connectivity |
+| 409 | `non-fast-forward` | Push rejected, upstream has commits you don't | pull first or push --force-with-lease |
+| 409 | `no-upstream` | No upstream configured | `git push -u <remote> <branch>` in the terminal |
+| 409 | `merge-conflict` | Pull produced conflicts | resolve in editor, stage, commit (or `git merge --abort`) |
+| 409 | `dirty-working-tree` | Pull refused — tree not clean | commit or discard changes first |
+| 409 | `detached-head` | Push refused — not on a branch | check out a branch before pushing |
+| 502 | `no-remote` | Remote URL not reachable | check `git remote -v` |
+| 502 | `git-failed` | Unclassified git error | inspect stderr |
+
+Every remote-error response includes `stderr` (raw git output) and `remedy` (one-line hint) alongside `error`.
 
 **Errors:**
 
