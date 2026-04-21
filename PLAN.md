@@ -1349,10 +1349,35 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   Turbopack HMR clean, and curl smoke on `/api/files/raw` returning
   200 for `hero.png` and `/api/graph/html` returning 200 for the
   MARVIN repo graph.
+- **2026-04-21 (desktop — Tauri wrapper scaffold · ADR-0010)** —
+  new workspace package at `apps/desktop/` wraps the existing
+  localhost:3030 web shell in a native macOS `.app` via Tauri 2.
+  Tauri's main window points at `http://localhost:3030` (devUrl
+  + window url both wired); everything IDE-mode ships unchanged,
+  no Tauri-specific code paths. Narrow capabilities
+  (`core:default` + `shell:allow-open`) + `withGlobalTauri: false`
+  keeps the loaded web shell from reaching Tauri's IPC beyond
+  the `marvin_server_is_up` TCP probe exposed in Rust. Config:
+  `src-tauri/Cargo.toml` + `tauri.conf.json` +
+  `capabilities/default.json` + `src/lib.rs` + `src/main.rs`.
+  ADR-0010 documents Tauri vs Electron (~10 MB vs ~100 MB,
+  WKWebView vs bundled Chromium, 30 MB vs 250 MB idle) vs
+  SwiftUI (macOS-only + Swift maintenance tax) + the explicit
+  "user runs `bin/marvin` separately" v1 contract so we don't
+  accidentally grow a sidecar-bundling scope. v1 deliberately
+  deferred: bundled Node sidecar, code signing / notarization,
+  auto-updater, native menu beyond Tauri defaults. Rust is a
+  build-time prereq (documented in `apps/desktop/README.md`
+  with the rustup one-liner); runtime of the compiled `.app`
+  needs nothing beyond the web server. Root `pnpm desktop:dev`
+  / `pnpm desktop:build` proxy to the desktop package. README
+  + `docs/decisions/README.md` index updated; no typecheck or
+  test matrix for the Rust crate yet (compiles on `pnpm
+  desktop:dev` when Rust is installed locally).
 
 ## Status
 
-**MARVIN v1 shipped + ide-mode M1.** Every phase (1-5) complete. The only Phase 5
+**MARVIN v1 shipped + IDE-mode (M1–M6) + lint/tests polish + desktop wrapper scaffold.** Every phase (1-5) complete. The only Phase 5
 stretch item not shipped is the Honeycomb MCP integration, which is
 explicitly deferred until a Honeycomb account + team setup are
 available (tracked in `docs/operations/observability.md`). No open
