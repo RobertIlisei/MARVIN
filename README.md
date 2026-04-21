@@ -122,7 +122,9 @@ host-credentials modes.
 ## Repo layout
 
 ```
-apps/web/                    # Next.js 16 app, port 3030
+apps/
+  web/                       # Next.js 16 app, port 3030
+  desktop/                   # Tauri 2 macOS wrapper (ADR-0010)
 packages/
   runtime/                   # Agent SDK runner, auth, session, cost, models, turn registry
   tools/                     # tool policy (auto / confirm / deny)
@@ -132,6 +134,21 @@ packages/
   ui/                        # shadcn primitives + MARVIN brain
 data/.marvin/                # session transcripts, cost tracker, graph cache (gitignored)
 ```
+
+### Running as a native macOS app
+
+`apps/desktop/` ships a Tauri wrapper — MARVIN as a dock-icon `.app`
+rather than a browser tab. Needs Rust (once):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+. "$HOME/.cargo/env"
+
+bin/marvin                # start the web server (as usual)
+pnpm desktop:dev          # in a second terminal — opens the Tauri window
+```
+
+See [`apps/desktop/README.md`](./apps/desktop/README.md) + [ADR-0010](./docs/decisions/0010-desktop-wrapper-tauri.md) for the details and what v1 deliberately leaves out.
 
 ## Status
 
