@@ -29,6 +29,47 @@
   --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
                   0 6px 16px -10px rgba(24, 22, 18, 0.1),
                   0 30px 60px -30px rgba(24, 22, 18, 0.16);
+
+  /* ---------------- Shadcn-compat aliases ----------------
+   * The `@marvin/ui` primitives (Dialog, Sheet, Tabs, Button,
+   * DropdownMenu, Select, Card, AlertDialog) are shadcn-style and
+   * reference CSS variables like `--background`, `--popover`,
+   * `--foreground`, `--muted`, `--ring`, etc. — variables MARVIN's
+   * @theme doesn't declare natively. Without these aliases, Dialog
+   * content renders transparent (`bg-background` → no bg), Button
+   * `outline` variant loses its background, Tabs' active state
+   * disappears, and so on.
+   *
+   * Each alias points at the MARVIN token it should mirror:
+   *   background / card / popover → bg-elev (surfaces)
+   *   foreground / card-foreground / popover-foreground → fg
+   *   primary / accent → accent
+   *   primary-foreground / accent-foreground → bg (contrast on top)
+   *   muted → bg-elev, muted-foreground → fg-faint
+   *   destructive → danger
+   *   ring / input → border-strong
+   *
+   * Defined once in the shared @theme block so both light and dark
+   * get them automatically via the MARVIN tokens they alias (which
+   * themselves flip in the [data-theme="dark"] override below).
+   */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-fg);
+  --color-card: var(--color-bg-elev);
+  --color-card-foreground: var(--color-fg);
+  --color-popover: var(--color-bg-elev);
+  --color-popover-foreground: var(--color-fg);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-bg);
+  --color-secondary: var(--color-bg-elev);
+  --color-secondary-foreground: var(--color-fg);
+  --color-muted: var(--color-bg-elev);
+  --color-muted-foreground: var(--color-fg-faint);
+  --color-accent-foreground: var(--color-bg);
+  --color-destructive: var(--color-danger);
+  --color-destructive-foreground: var(--color-bg);
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-accent-deep);
 }
 
 /* Light defaults repeated on :root for explicit cascade + halo seeds.

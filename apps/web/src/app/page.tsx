@@ -110,13 +110,6 @@ export default function Home() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("observability");
-  const [honeycombStatus, setHoneycombStatus] = useState<{
-    configured: boolean;
-    environment: string | null;
-    dataset: string | null;
-    source: "env" | "workdir" | "global" | "none";
-  } | null>(null);
-
   const openSettings = useCallback((tab?: SettingsTab) => {
     if (tab) setSettingsTab(tab);
     setSettingsOpen(true);
@@ -192,37 +185,6 @@ export default function Home() {
   // previous path is meaningless in a different workDir.
   useEffect(() => {
     setSelectedPath(undefined);
-  }, [cwd]);
-
-  // Fetch the Honeycomb config status when the project changes so the
-  // brain panel can render "configured (prod)" vs "—" without opening
-  // the dialog. Fire-and-forget; silent on failure.
-  useEffect(() => {
-    if (!cwd) {
-      setHoneycombStatus(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`,
-        );
-        if (!res.ok) return;
-        const body = (await res.json()) as {
-          configured: boolean;
-          environment: string | null;
-          dataset: string | null;
-          source: "env" | "workdir" | "global" | "none";
-        };
-        if (!cancelled) setHoneycombStatus(body);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, [cwd]);
 
   // Persist the in-flight marvinSessionId per-project. Survives tab
@@ -913,7 +875,11 @@ export default function Home() {
                     minSize={18}
                     maxSize={65}
                   >
-                    <div className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                    <div className="flex h-full min-h-0 flex-col items-center justify-center bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-6">
+                      {/* Brain + state indicator only. Project / executor /
+                       * advisor live in the header; Honeycomb moved to
+                       * Settings → Observability. The brain panel stays
+                       * visually quiet so the animated state pulls focus. */}
                       <div className="relative flex flex-col items-center gap-3">
                         <BrainLiquid state={marvinState} size={200} />
                         <AdvisorOrb
@@ -931,61 +897,6 @@ export default function Home() {
                             {labelFor(marvinState)}
                           </div>
                         </div>
-                      </div>
-                      <div className="mt-auto space-y-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-[color:var(--color-fg-faint)]">project</span>
-                          <span className="truncate text-right text-[color:var(--color-fg)]/85">
-                            {active?.name ?? "—"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3 border-t border-[color:var(--color-border)] pt-2">
-                          <span className="text-[color:var(--color-fg-faint)]">executor</span>
-                          <span
-                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                            title="runs the turn loop"
-                          >
-                            {(executorModel ?? "claude-opus-4-7").replace(/^claude-/, "")}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-[color:var(--color-fg-faint)]">advisor</span>
-                          <span
-                            className="truncate pl-3 text-[color:var(--color-fg)]/85"
-                            title={
-                              advisorModel
-                                ? "called by the executor on hard steps"
-                                : "disabled"
-                            }
-                          >
-                            {advisorModel
-                              ? advisorModel.replace(/^claude-/, "")
-                              : "—"}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => openSettings("observability")}
-                          className="flex items-center justify-between gap-3 rounded px-1 py-1 -mx-1 text-left transition hover:bg-[color:var(--color-bg-elev)]/60"
-                          title={
-                            honeycombStatus?.configured
-                              ? "Honeycomb MCP configured — open Settings → Observability"
-                              : cwd
-                                ? "Configure Honeycomb MCP for trace queries"
-                                : "Pick a project first; then click to configure Honeycomb"
-                          }
-                        >
-                          <span className="text-[color:var(--color-fg-faint)]">honeycomb</span>
-                          <span className="truncate pl-3 text-[color:var(--color-fg)]/85">
-                            {honeycombStatus?.configured
-                              ? `${honeycombStatus.environment ?? "configured"}${
-                                  honeycombStatus.dataset
-                                    ? ` · ${honeycombStatus.dataset}`
-                                    : ""
-                                }`
-                              : "configure →"}
-                          </span>
-                        </button>
                       </div>
                     </div>
                   </Panel>
@@ -1055,14 +966,6 @@ export default function Home() {
         onPersonalityChange={setPersonality}
         permissionStrategy={permissionStrategy}
         onPermissionChange={setPermissionStrategy}
-        onHoneycombStatusChange={(status) =>
-          setHoneycombStatus({
-            configured: status.configured,
-            environment: status.environment,
-            dataset: status.dataset,
-            source: status.source,
-          })
-        }
       />
     </main>
   );
