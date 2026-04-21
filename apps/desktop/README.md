@@ -48,7 +48,49 @@ Tauri opens a window pointed at `http://localhost:3030`. Hot-reload
 works the same way it does in a browser tab — Next.js HMR inside
 Tauri's WKWebView.
 
-## Build a `.app` + `.dmg`
+## Install as a real macOS app _(recommended)_
+
+One command builds the `.app`, drops it in `/Applications/`, and
+installs a launchd user agent so MARVIN's web server auto-starts
+in the background on every login. After that, double-click MARVIN
+from Spotlight / Launchpad / Dock and the window opens straight
+into the UI — no terminal needed.
+
+```bash
+bin/marvin install-app
+```
+
+What happens:
+
+1. Builds the `.app` via `pnpm --filter @marvin/desktop build`
+   (~1 min on a cold Cargo cache, seconds after that).
+2. Copies `MARVIN.app` to `/Applications/`.
+3. Writes `~/Library/LaunchAgents/net.marvin.desktop.server.plist`
+   that runs `pnpm dev` in the MARVIN repo on every login —
+   `KeepAlive.NetworkState` restarts it if it ever exits.
+4. `launchctl load` brings the agent up immediately (no logout
+   required the first time).
+5. Waits for `/api/health` on port 3030 before claiming success.
+
+After install:
+
+- **Logs:** `tail -f .marvin/launchd-stderr.log`
+- **Uninstall:** `bin/marvin uninstall-app` — unloads the agent,
+  removes `/Applications/MARVIN.app`. Source tree + `~/.marvin/`
+  are left alone.
+
+### What the install baked in
+
+The launchd plist captures absolute paths at install time:
+
+- `pnpm` abspath (so launchd doesn't need PATH discovery)
+- MARVIN repo root (so `WorkingDirectory` is correct)
+- The current shell's `PATH` (inherits Node / Cargo / etc.)
+
+**If you move the MARVIN source directory, re-run `install-app`.**
+The plist binds to the location where it was installed.
+
+## Build a `.app` + `.dmg` _(without auto-start)_
 
 ```bash
 pnpm --filter @marvin/desktop build
@@ -57,11 +99,15 @@ pnpm --filter @marvin/desktop build
 Outputs land in `src-tauri/target/release/bundle/`:
 
 - `MARVIN.app` — the macOS app bundle
-- `MARVIN_0.0.1_aarch64.dmg` (or x86_64) — the DMG installer
+- `MARVIN_1.0.0_aarch64.dmg` — the DMG installer
+
+Drag the `.app` to `/Applications/` yourself. You'll still need to
+run `bin/marvin` in a terminal before double-clicking MARVIN,
+since without the launchd agent nothing's serving port 3030.
 
 **Unsigned builds** run fine on the build machine but Gatekeeper will
 refuse to launch them on any other Mac. Code signing + notarization
-are deferred to v2 (see ADR-0010 §"Deferred").
+are deferred (see ADR-0010 §"Deferred").
 
 ### Icon artwork
 
@@ -96,15 +142,19 @@ PNG size Apple / Windows / Android expect).
 
 ## What's not in v1
 
-- **Sidecar Node server** — the `.app` expects the user to run MARVIN
-  separately via `bin/marvin`. Bundling a Node runtime inside the app
-  is a separate effort.
+- **Sidecar Node server inside the `.app` bundle** — see
+  [ADR-0011](../../docs/decisions/0011-sidecar-node-bundling.md) for
+  why that was tried and rolled back (binary-size blowup, signing
+  churn, runtime drift). `bin/marvin install-app`'s launchd agent is
+  the current pragmatic substitute.
 - **Code signing / notarization** — needs an Apple Developer
-  certificate.
+  certificate. Unsigned `.app` works but triggers Gatekeeper on
+  first open; right-click → Open once to trust it.
 - **Auto-updater** — Tauri supports it, not wired up.
-- **Native menus beyond defaults** — the macOS menu bar shows Tauri's
-  stock menu; a MARVIN-specific one (with Toggle Tree, Toggle Graph,
-  etc.) is deferred.
+- **Native menus beyond the current ones** — the macOS menu bar
+  already has File / Edit / View / Window / Help with keyboard
+  accelerators (see `src-tauri/src/lib.rs`). Per-feature additions
+  are ongoing.
 
 ## Troubleshooting
 
@@ -113,8 +163,31 @@ PNG size Apple / Windows / Android expect).
   rustup install, then `. "$HOME/.cargo/env"` in the current shell.
 
 **Window opens but shows "can't connect"**
-  → The MARVIN web server isn't running. Start it in another terminal:
-  `bin/marvin`.
+  → The MARVIN web server isn't running. If you installed via
+  `bin/marvin install-app`, check the launchd agent:
+
+  ```bash
+  launchctl list | grep net.marvin.desktop
+  tail -40 .marvin/launchd-stderr.log
+  ```
+
+  Re-running `install-app` is idempotent and re-loads the agent.
+  If the logs show repeated crashes, fall back to a foreground
+  run to surface the real error:
+  `bin/marvin uninstall-app && bin/marvin start`.
+
+  If you never installed the agent, start the server by hand in
+  another terminal: `bin/marvin`.
+
+**`bin/marvin install-app` says `cargo not found`**
+  → Rust toolchain missing or not on PATH. See Prerequisites
+  above. `install-app` auto-sources `$HOME/.cargo/env` if that
+  file exists; if not, re-run the rustup install.
+
+**Gatekeeper blocks the first launch** ("can't be opened because
+Apple cannot check it for malicious software")
+  → The `.app` isn't signed / notarised. Right-click the icon →
+  Open → Open. macOS remembers the choice.
 
 **`pnpm tauri build` fails with an icon-related error**
   → Tauri's codegen embeds the icon at compile time. Repo ships a
