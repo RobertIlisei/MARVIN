@@ -2,14 +2,17 @@
 
 Every tool call goes through [`toolPolicy()`](../../../packages/tools/src/policy.ts). The policy classifies the call into one of three outcomes: auto-allow, confirm, or hard-deny. The [confirm gate](../concepts/confirm-gate.md) enforces the classification structurally via the Agent SDK's `canUseTool` callback.
 
-## Two write channels
+## Three mutation channels
 
-MARVIN has two filesystem write surfaces, not one:
+MARVIN has three state-mutation surfaces, not one. Each has its own classifier + confirm registry; the only primitive they share is the path sandbox.
 
-1. **LLM-initiated** — MARVIN's `Edit`, `Write`, `Bash` tool calls, routed via `canUseTool` → `toolPolicy` → the turn-scoped [confirm registry](../../../packages/runtime/src/confirm-registry.ts). This page documents that channel.
-2. **User-initiated** — the file-tree UI's create / rename / move / delete / save / upload operations, routed through `/api/files/write/*` → `fsWritePolicy` → a session-scoped confirm-token registry. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md) and [ADR-0009](../decisions/0009-file-uploads-from-os.md) (M5, pending).
+1. **LLM tool channel** — MARVIN's `Edit`, `Write`, `Bash` tool calls, routed via `canUseTool` → `toolPolicy` → the turn-scoped [confirm registry](../../../packages/runtime/src/confirm-registry.ts). This page primarily documents that channel. See [ADR-0004](../decisions/0004-structural-confirm-gate.md).
+2. **User-initiated filesystem channel** — the file-tree UI's create / rename / move / delete / save / upload operations, routed through `/api/files/write/*` → `fsWritePolicy` → a session-scoped confirm-token registry. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md) and [ADR-0009](../decisions/0009-file-uploads-from-os.md).
+3. **User-initiated git channel** — the Source Control panel's stage / unstage / discard / commit / branch / push / pull / fetch operations, routed through `/api/git/*` → `gitWritePolicy` → a parallel session-scoped confirm registry. See [ADR-0012](../decisions/0012-source-control-mutation-channel.md) and [ADR-0013](../decisions/0013-git-remote-ops-and-credentials.md) (M5, pending).
 
-Both channels share the same ignore-list, hard-deny-segment list, and secret-file patterns — [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — so tightening one surface automatically tightens the other. The sandbox helper [`checkFsPath`](../../../packages/runtime/src/fs-sandbox.ts) is also shared and is the only supported way to validate a caller-provided path before I/O.
+The first two filesystem channels share the same ignore-list, hard-deny-segment list, and secret-file patterns — [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — so tightening one surface automatically tightens the other. The sandbox helper [`checkFsPath`](../../../packages/runtime/src/fs-sandbox.ts) is shared by all three channels and is the only supported way to validate a caller-provided path before I/O.
+
+Git ops don't share the fs constants (they operate on the git state machine, not file paths), but every `/api/git/*` route still anchors its `cwd` through `checkFsPath` before invoking [`runGit`](../../../packages/git/src/exec.ts) — symlink escapes are a cross-channel concern.
 
 ## The three outcomes
 
@@ -102,6 +105,36 @@ Classified by [`fsWritePolicy()`](../../../packages/tools/src/fs-write-policy.ts
 
 The deny-list and secret-pattern sources are [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — shared with the LLM-initiated channel so tightening one flows into the other.
 
+## User-initiated git ops
+
+Classified by [`gitWritePolicy()`](../../../packages/git/src/git-write-policy.ts). Same three outcomes enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/git/confirm`.
+
+| Op | Default class | Reason |
+|---|---|---|
+| `stage` / `unstage` | auto | Reversible by the inverse op. |
+| `commit` (non-amend, non-empty message) | auto | Reversible via `git reset HEAD@{1}`. |
+| `commit --amend` when HEAD is local-only | auto | Local reflog recovers the prior commit. |
+| `commit --amend` when HEAD has been pushed | confirm **danger** | Rewrites shared history on the upstream. |
+| `discard --staged` | auto | Changes remain in the working tree. |
+| `discard` (working-tree) | confirm **warn** | Edits are gone after; recovery only via reflog if the working copy was once in the index. |
+| `branch-create` with a valid ref name | auto | Creating a branch is cheap and reversible. |
+| `branch-switch` on a clean tree | auto | Working tree is safe. |
+| `branch-switch` with a dirty tree | deny | Commit or discard first; v1 does not stash-on-switch. |
+| `branch-delete` of current branch | deny | Git refuses; our message is clearer. |
+| `branch-delete` of merged branch | auto | Data reachable via other refs. |
+| `branch-delete` of unmerged branch (`-D`) | confirm **danger** | Commits become unreachable without a reflog lookup. |
+| `push` regular, upstream behind | auto | Fast-forward push. |
+| `push` regular, upstream ahead by N > 0 | confirm **warn** | Git rejects non-fast-forward; we surface a clearer message before the round-trip. |
+| `push --force-with-lease` | confirm **danger** | Rewrites the remote branch if the lease matches. |
+| `push --force` (plain) | **deny** | Always. The terminal is where you do this, not the panel. |
+| `pull --ff-only` | auto | Fails cleanly on divergence. |
+| `pull --rebase` / `pull --merge` | confirm **warn** | Rewrites local history or creates a merge commit. |
+| `fetch` | auto | Read-only on local refs. |
+| Any op whose `ref` / `remote` fails the argv-guards whitelist | deny | Injection vector. |
+| Any `cwd` failing `checkFsPath` | deny (at the sandbox layer) | — |
+
+The authoritative source is [`packages/git/src/git-write-policy.ts`](../../../packages/git/src/git-write-policy.ts); the classifier is pure and unit-tested.
+
 ## Mode interactions
 
 | Permission mode | Auto-allow | Confirm | Hard-deny |
@@ -153,3 +186,5 @@ Grep the transcripts for `"policy":"hard-deny"` to see what MARVIN tried to run 
 - [`packages/tools/src/policy.ts`](../../../packages/tools/src/policy.ts) — the authoritative implementation.
 - [`sdk-runner.ts`](../../../packages/runtime/src/sdk-runner.ts) — where `canUseTool` is installed.
 - [ADR-0004 — structural confirm gate](../decisions/0004-structural-confirm-gate.md) — why the gate moved from CLI flags into the SDK callback.
+- [ADR-0008 — User-initiated write channel](../decisions/0008-user-initiated-write-channel.md) — the second mutation channel.
+- [ADR-0012 — Source-control mutation channel](../decisions/0012-source-control-mutation-channel.md) — the third mutation channel.
