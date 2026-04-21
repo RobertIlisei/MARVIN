@@ -439,7 +439,22 @@ export default function Home() {
   // --- Header ------------------------------------------------------------
   const header = (
     <>
-    <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
+    <header
+      // Dragging the window by the header chrome only works inside the
+      // Tauri `.app`. `data-tauri-drag-region` tells the webview "this
+      // region is the window title bar for drag purposes" — needed
+      // because tauri.conf.json sets `titleBarStyle: "Overlay"` which
+      // hides the native bar and overlays the traffic lights on top
+      // of our content. In a normal browser tab the attribute is an
+      // unknown data-* and has no effect.
+      //
+      // Interactive elements inside the header (buttons, inputs) stop
+      // the drag because Tauri treats any click on a clickable
+      // descendant as a regular click, not a drag. That's the
+      // intended behaviour.
+      data-tauri-drag-region
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5"
+    >
       <button
         type="button"
         onClick={isEmpty ? undefined : reset}
@@ -958,7 +973,8 @@ export default function Home() {
       <SettingsPanel
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        initialTab={settingsTab}
+        tab={settingsTab}
+        onTabChange={setSettingsTab}
         cwd={cwd || null}
         projectName={active?.name ?? null}
         executorModel={executorModel}
