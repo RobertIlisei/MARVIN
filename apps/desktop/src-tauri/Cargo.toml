@@ -1,6 +1,6 @@
 [package]
 name = "marvin-desktop"
-version = "0.0.1"
+version = "1.0.0"
 description = "MARVIN desktop — native macOS shell"
 authors = ["Robert Ilisei"]
 edition = "2021"
