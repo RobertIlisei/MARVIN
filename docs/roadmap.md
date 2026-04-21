@@ -85,16 +85,14 @@ streaming UI, and individual API routes remain uncovered — still
 opportunistic. See [Testing](./development/testing.md).
 
 
-### Light-theme recolour
+### Light-theme recolour _(landed 2026-04-21)_
 
-The current light theme bases on `oklch(0.985 0.003 80)` — effectively
-pure warm white. User feedback: too bright, especially over long
-sessions. Target: drop `--color-bg` to the ~0.93–0.95 lightness range
-so surfaces read as warm paper rather than pure-white. The dark
-theme is fine; this is a light-side-only pass. Likely touches
-`apps/web/src/app/globals.css`'s `@theme` block + the Monaco `marvin-
-light` theme in `apps/web/src/components/settings/monaco-themes.ts`
-to match.
+The pre-landing light theme based on `oklch(0.985 0.003 80)` — effectively pure warm white. User feedback: too bright, especially over long sessions. Recoloured to:
+
+- `--color-bg` → `oklch(0.95 0.006 80)` (was `0.985`)
+- `--color-bg-elev` → `oklch(0.935 0.005 80)` (was `0.975`; elevation gap widened from `0.010` to `0.015`)
+
+Chroma nudged from `0.003` → `0.006` so the surfaces read as warm paper rather than flat grey. Monaco `marvin-light` theme updated in lockstep (`editor.background` `#faf8f3` → `#f1ece1`; line-highlight matched a half-step below). Dark theme untouched. Touches `apps/web/src/app/globals.css` + `apps/web/src/components/settings/monaco-themes.ts`.
 
 ## Not planned
 
