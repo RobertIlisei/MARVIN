@@ -1,8 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+/** Match Task `input` shapes whose description marks an advisor consult. */
+function advisorDescriptionOf(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const d = (input as { description?: unknown }).description;
+  return typeof d === "string" ? d : null;
+}
+
+function looksLikeAdvisorConsult(input: unknown): boolean {
+  const desc = advisorDescriptionOf(input);
+  return desc != null && /^\s*advisor[\s:—-]/i.test(desc);
+}
+
+function stripAdvisorPrefix(desc: string): string {
+  return desc.replace(/^\s*advisor[\s:—-]+/i, "").trim();
+}
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
+import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
@@ -357,6 +374,52 @@ export default function Home() {
   const isEmpty = messages.length === 0;
   const hint = active ? undefined : "pick a project up in the header first";
 
+  // Advisor is "firing" when any in-flight tool call is a Task subagent
+  // whose description starts with "advisor" — MARVIN's userland advisor
+  // pattern (see ADR-0007). The leading "advisor:" prefix on the
+  // description is the UI contract defined in personality.ts under
+  // "Advisor consult — how to run one".
+  //
+  // NOTE: we do NOT look for a tool named "advisor" directly — the SDK's
+  // `advisorModel` option is server-side routing and doesn't register a
+  // callable tool. Looking for `name === "advisor"` would never match.
+  const advisorActive = useMemo(
+    () =>
+      messages.some((m) =>
+        m.blocks.some(
+          (b) =>
+            b.type === "tool_use" &&
+            b.name === "Task" &&
+            b.running === true &&
+            looksLikeAdvisorConsult(b.input),
+        ),
+      ),
+    [messages],
+  );
+
+  // Latest Task description starting with "advisor" — surfaces the
+  // consult topic in the orb caption.
+  const advisorTopic = useMemo(() => {
+    for (let mi = messages.length - 1; mi >= 0; mi--) {
+      const msg = messages[mi];
+      if (!msg) continue;
+      for (let bi = msg.blocks.length - 1; bi >= 0; bi--) {
+        const block = msg.blocks[bi];
+        if (
+          block &&
+          block.type === "tool_use" &&
+          block.name === "Task" &&
+          block.running === true &&
+          looksLikeAdvisorConsult(block.input)
+        ) {
+          const desc = advisorDescriptionOf(block.input);
+          return desc ? stripAdvisorPrefix(desc) : null;
+        }
+      }
+    }
+    return null;
+  }, [messages]);
+
   // --- Header ------------------------------------------------------------
   const header = (
     <>
@@ -490,6 +553,13 @@ export default function Home() {
             <div className="grid w-full grid-cols-1 items-center gap-10 md:grid-cols-[auto_1fr]">
               <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
                 <BrainLiquid state={marvinState} size={340} />
+                <AdvisorOrb
+                  active={advisorActive}
+                  model={advisorModel}
+                  topic={advisorTopic}
+                  size={88}
+                  offset={{ top: 20, right: 0 }}
+                />
                 {/* Coordinate marks — editorial instrument framing */}
                 <div
                   aria-hidden
@@ -767,8 +837,15 @@ export default function Home() {
                 </aside>
               ) : (
                 <aside className="flex h-full min-h-0 flex-col bg-gradient-to-b from-transparent via-[color:var(--color-bg-elev)]/30 to-transparent px-6 py-8">
-                  <div className="flex flex-col items-center gap-4">
+                  <div className="relative flex flex-col items-center gap-4">
                     <BrainLiquid state={marvinState} size={260} />
+                    <AdvisorOrb
+                      active={advisorActive}
+                      model={advisorModel}
+                      topic={advisorTopic}
+                      size={64}
+                      offset={{ top: 0, right: -12 }}
+                    />
                     <div className="text-center">
                       <div className="font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
                         state
