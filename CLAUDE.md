@@ -9,7 +9,13 @@ the authoritative delivery plan. Update it as you ship things.
    user-MARVIN loop. Do not reintroduce multi-agent dispatch, role catalogs,
    pipeline rules, or Kanban-as-source-of-truth — that pattern degrades up to
    70 % on sequential code work and amplifies errors 17× in flat-topology
-   "bag of agents" setups (2026 multi-agent coding literature).
+   "bag of agents" setups (2026 multi-agent coding literature). The two
+   sanctioned exceptions are bounded, read-only subagents spawned by the main
+   session for a parenthetical task: the **advisor** (second opinion on hard
+   decisions — [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md))
+   and the **scout** (breadth-first read-only research — [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md)).
+   Any new subagent type requires a new ADR; the orchestrator-with-scouts
+   shape is a carve-out, not a precedent.
 2. **Plan-first, execute-second, verify-third.** Every feature has an entry in
    PLAN.md before code lands. Mark entries as `[done]` and add a brief "what
    shipped" note when complete.
@@ -60,6 +66,7 @@ turn time.
 |---|---|---|
 | **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above | When to consult the graph before reading source files |
 | **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
+| **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 
 The pattern is the same across all three: a MUST list, a MUST-NOT list,
