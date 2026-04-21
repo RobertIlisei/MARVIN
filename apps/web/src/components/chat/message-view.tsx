@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import { ToolCallCard } from "./tool-call-card";
 import type { Message } from "./types";
 
@@ -75,7 +77,17 @@ function renderInline(body: string): React.ReactNode {
   return <>{out}</>;
 }
 
-export function MessageView({
+/**
+ * MessageViewInner is the raw render. `MessageView` wraps it in
+ * `React.memo` (A2 perf deferred from A3): the chat stream mutates
+ * only the last message on each SSE chunk, so memoising individual
+ * rows means stable earlier rows skip re-renders on every streamed
+ * token instead of all re-rendering in lockstep with the parent.
+ * Default (shallow) comparison is enough — `messages.map(...)` in
+ * use-chat-stream rebuilds the array with the same refs for prior
+ * messages and a fresh ref only for the streaming one.
+ */
+function MessageViewInner({
   message,
   onDecideConfirm,
 }: {
@@ -124,3 +136,5 @@ export function MessageView({
     </div>
   );
 }
+
+export const MessageView = memo(MessageViewInner);

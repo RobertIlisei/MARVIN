@@ -7,7 +7,6 @@ import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
-import { CostPill } from "@/components/cost/cost-pill";
 import { FileTree } from "@/components/file-tree/file-tree";
 import { QuickOpen } from "@/components/file-tree/quick-open";
 
@@ -32,22 +31,22 @@ import {
   useLeftColumnTab,
 } from "@/components/left-column-tabs";
 import { PreviewPane } from "@/components/preview/preview-pane";
-import { BranchBadge } from "@/components/project/branch-badge";
-import { ProjectPicker } from "@/components/project/project-picker";
 import { useProjects } from "@/components/project/use-projects";
-import { ModelPicker } from "@/components/settings/model-picker";
-import {
-  type PermissionStrategy,
-  PermissionToggle,
-} from "@/components/settings/permission-toggle";
-import {
-  type PersonalityMode,
-  PersonalityToggle,
-} from "@/components/settings/personality-toggle";
+// `PermissionStrategy` and `PersonalityMode` are still used by
+// useState<> generics below; the actual toggle components live in
+// TopBar. ThemeToggle, ModelPicker, BranchBadge, ProjectPicker,
+// CostPill likewise moved to TopBar.
+import type { PermissionStrategy } from "@/components/settings/permission-toggle";
+import type { PersonalityMode } from "@/components/settings/personality-toggle";
 import { SettingsPanel } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
-import { ThemeToggle } from "@/components/settings/theme-toggle";
+import {
+  Capability,
+  ExamplePrompt,
+  labelFor,
+} from "@/components/shell/page-helpers";
 import { StatusBar } from "@/components/shell/status-bar";
+import { TopBar } from "@/components/shell/top-bar";
 import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { Terminal } from "@/components/terminal/terminal";
 
@@ -458,164 +457,42 @@ export default function Home() {
   }, [messages]);
 
   // --- Header ------------------------------------------------------------
-  const header = (
-    <>
-    <header
-      // Dragging the window by the header chrome only works inside the
-      // Tauri `.app`. `data-tauri-drag-region` tells the webview "this
-      // region is the window title bar for drag purposes" — needed
-      // because tauri.conf.json sets `titleBarStyle: "Overlay"` which
-      // hides the native bar and overlays the traffic lights on top
-      // of our content. In a normal browser tab the attribute is an
-      // unknown data-* and has no effect.
-      //
-      // Interactive elements inside the header (buttons, inputs) stop
-      // the drag because Tauri treats any click on a clickable
-      // descendant as a regular click, not a drag. That's the
-      // intended behaviour.
-      data-tauri-drag-region
-      // Left padding clears the macOS traffic-light cluster (Tauri
-      // renders them at ~12px from the left edge; 3 buttons + gaps is
-      // ~72px). `pl-[82px]` leaves a comfortable gutter. In a normal
-      // browser tab the traffic lights don't exist and the extra
-      // padding simply centers branding a bit further in — acceptable
-      // trade-off since the Tauri build is the primary UI.
-      //
-      // `pt-[var(--titlebar-h)]` reserves 28 px of vertical space for
-      // the traffic lights in the Tauri overlay-titlebar layout. The
-      // previous `py-2.5` only gave 10 px and content sometimes got
-      // clipped by the traffic-light cluster in full-screen. The
-      // --material-toolbar background makes the top bar read as a
-      // distinct layered strip rather than bleeding into the canvas.
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 pl-[82px] pr-5 pt-[var(--titlebar-h)] pb-2.5 bg-[color:var(--material-toolbar)] border-b border-[color:var(--color-border)]"
-    >
-      <button
-        type="button"
-        onClick={isEmpty ? undefined : reset}
-        disabled={isEmpty}
-        aria-label={isEmpty ? "marvin" : "return to home — start a new session"}
-        title={isEmpty ? undefined : "return to home · ⌘⇧N"}
-        className="font-display text-[22px] italic leading-none text-[color:var(--color-fg)] outline-none transition hover:opacity-80 disabled:cursor-default disabled:opacity-100"
-      >
-        marvin
-      </button>
-      <span className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline">
-        v1
-      </span>
-      <div className="mx-3 h-5 w-px bg-[color:var(--color-border)]" />
-      <ProjectPicker
-        projects={projects}
-        active={active}
-        loading={projectsLoading}
-        onSelect={selectProject}
-        onRemove={removeProject}
-        onAdd={addProject}
-        verifyWorkDir={verifyWorkDir}
-        onResumeSession={handleResumeSession}
-        openSignal={pickerOpenSignal}
-      />
-      <BranchBadge
-        cwd={active?.workDir ?? null}
-        refreshKey={sessionRefreshKey}
-      />
-      <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
-        <CostPill projectId={active?.id ?? null} refreshKey={sessionRefreshKey} />
-        {/* perms / models / voice only show on wide viewports — they're
-         * also accessible via the ⚙ Settings panel, so we collapse them
-         * instead of letting them clip on medium screens. Theme flip
-         * stays visible since users hit it mid-session more than the
-         * others. `panes` toggles stay too (quick-flip essentials). */}
-        <LabeledGroup label="perms" className="hidden xl:inline-flex">
-          <PermissionToggle
-            value={permissionStrategy}
-            onChange={setPermissionStrategy}
-          />
-        </LabeledGroup>
-        <LabeledGroup label="models" className="hidden xl:inline-flex">
-          <ModelPicker
-            executor={executorModel}
-            advisor={advisorModel}
-            onChange={({ executor, advisor }) => {
-              setExecutorModel(executor);
-              setAdvisorModel(advisor);
-            }}
-          />
-        </LabeledGroup>
-        <LabeledGroup label="voice" className="hidden 2xl:inline-flex">
-          <PersonalityToggle value={personality} onChange={setPersonality} />
-        </LabeledGroup>
-        <LabeledGroup label="theme">
-          <ThemeToggle />
-        </LabeledGroup>
-        <LabeledGroup label="panes">
-          <PaneToggle
-            label="files"
-            active={panes.files}
-            onClick={() => togglePane("files")}
-            kbd="⌘B"
-            tip="project file tree"
-          />
-          <PaneToggle
-            label="graph"
-            active={panes.graph}
-            onClick={() => togglePane("graph")}
-            kbd="⌘G"
-            tip="knowledge graph of the codebase"
-          />
-          <PaneToggle
-            label="brain"
-            active={panes.brain}
-            onClick={() => togglePane("brain")}
-            tip="live MARVIN brain visualization"
-          />
-          <PaneToggle
-            label="preview"
-            active={panes.preview}
-            onClick={() => togglePane("preview")}
-            disabled={!cwd}
-            kbd="⌘P"
-            tip="live web preview of dev server"
-          />
-          <PaneToggle
-            label="term"
-            active={panes.terminal}
-            onClick={() => togglePane("terminal")}
-            disabled={!cwd}
-            kbd="⌘J"
-            tip="embedded terminal in the project cwd"
-          />
-        </LabeledGroup>
-        <button
-          type="button"
-          onClick={reset}
-          disabled={isEmpty}
-          title="start a new MARVIN session (⌘⇧N)"
-          className="rounded-md border border-[color:var(--color-border)] px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          new session
-        </button>
-        <button
-          type="button"
-          onClick={() => openSettings()}
-          title="Settings — models, observability, appearance, permissions"
-          aria-label="open settings"
-          className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
-        >
-          ⚙
-        </button>
-        <button
-          type="button"
-          onClick={() => setShortcutsOpen(true)}
-          title="keyboard shortcuts (?)"
-          className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
-        >
-          ?
-        </button>
-      </div>
-    </header>
-    <div className="status-rail" aria-hidden />
-    </>
+  // `<TopBar>` lives at components/shell/top-bar.tsx (extracted as
+  // part of the A2 decomposition pass). The prop bag is explicit
+  // because the header reads from ~18 state values scattered across
+  // Home; promoting to a Context is tempting but premature.
+  const topBar = (
+    <TopBar
+      isEmpty={isEmpty}
+      onReset={reset}
+      projects={projects}
+      active={active}
+      projectsLoading={projectsLoading}
+      onSelectProject={selectProject}
+      onRemoveProject={removeProject}
+      onAddProject={addProject}
+      verifyWorkDir={verifyWorkDir}
+      onResumeSession={handleResumeSession}
+      pickerOpenSignal={pickerOpenSignal}
+      sessionRefreshKey={sessionRefreshKey}
+      permissionStrategy={permissionStrategy}
+      onPermissionStrategyChange={setPermissionStrategy}
+      executorModel={executorModel}
+      advisorModel={advisorModel}
+      onModelsChange={({ executor, advisor }) => {
+        setExecutorModel(executor);
+        setAdvisorModel(advisor);
+      }}
+      personality={personality}
+      onPersonalityChange={setPersonality}
+      panes={panes}
+      onTogglePane={togglePane}
+      cwd={cwd}
+      onOpenSettings={openSettings}
+      onOpenShortcuts={() => setShortcutsOpen(true)}
+    />
   );
+
 
   if (isEmpty) {
     const fillDraft = (text: string) => {
@@ -626,7 +503,7 @@ export default function Home() {
       <main className="relative flex h-screen w-screen flex-col overflow-hidden">
         {/* Ambient constellation layer — only on the hero canvas */}
         <div aria-hidden className="constellation" />
-        {header}
+        {topBar}
         <div className="scroll-thin relative flex min-h-0 flex-1 flex-col items-center gap-6 overflow-y-auto px-6 py-6">
           <div className="flex w-full max-w-5xl flex-col items-center gap-6 pt-4">
             <div className="grid w-full grid-cols-1 items-center gap-10 md:grid-cols-[auto_1fr]">
@@ -759,7 +636,7 @@ export default function Home() {
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden">
-      {header}
+      {topBar}
       <PanelGroup
         direction="horizontal"
         autoSaveId="marvin-shell-h-v3"
@@ -1023,121 +900,7 @@ export default function Home() {
   );
 }
 
-function LabeledGroup({
-  label,
-  children,
-  className,
-}: {
-  label: string;
-  children: React.ReactNode;
-  /** Extra responsive classes from the caller (e.g. `hidden xl:inline-flex`). */
-  className?: string;
-}) {
-  return (
-    <div className={`flex items-center gap-1.5 ${className ?? ""}`.trim()}>
-      <span className="hidden font-mono text-[9px] uppercase tracking-[0.26em] text-[color:var(--color-fg-faint)] xl:inline">
-        {label}
-      </span>
-      <div className="flex items-center gap-1">{children}</div>
-    </div>
-  );
-}
-
-function PaneToggle({
-  label,
-  active,
-  onClick,
-  disabled,
-  kbd,
-  tip,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-  /** Optional keyboard hint shown in the tooltip. */
-  kbd?: string;
-  /** Descriptive tooltip explaining what the pane does. */
-  tip?: string;
-}) {
-  const title = [tip ?? label, kbd ? `(${kbd})` : null]
-    .filter(Boolean)
-    .join(" ");
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      className={`rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] transition disabled:cursor-not-allowed disabled:opacity-30 ${
-        active
-          ? "border-[color:var(--color-accent-deep)]/40 bg-[color:var(--color-accent-glow)] text-[color:var(--color-accent)]"
-          : "border-[color:var(--color-border)] text-[color:var(--color-fg-dim)] hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function Capability({ label, hint }: { label: string; hint: string }) {
-  return (
-    <div
-      title={hint}
-      className="glass rounded-lg px-3 py-2 text-left"
-    >
-      <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-accent)]">
-        {label}
-      </div>
-      <div className="mt-0.5 text-[11px] leading-snug text-[color:var(--color-fg-dim)]">
-        {hint}
-      </div>
-    </div>
-  );
-}
-
-function ExamplePrompt({
-  title,
-  body,
-  onUse,
-  disabled,
-}: {
-  title: string;
-  body: string;
-  onUse: (text: string) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onUse(body)}
-      disabled={disabled}
-      title={disabled ? "pick a project first" : `use this prompt`}
-      className="group glass rounded-xl px-4 py-3 text-left transition enabled:hover:border-[color:var(--color-accent-deep)]/40 enabled:hover:bg-[color:var(--color-accent-glow)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-accent)]">
-          {title}
-        </div>
-        <span className="font-mono text-[10px] text-[color:var(--color-fg-faint)] transition group-enabled:group-hover:text-[color:var(--color-accent)]">
-          ↩ try
-        </span>
-      </div>
-      <div className="mt-1.5 text-[12px] leading-relaxed text-[color:var(--color-fg)]/90">
-        {body}
-      </div>
-    </button>
-  );
-}
-
-function labelFor(state: string): string {
-  return (
-    {
-      idle: "standing by",
-      thinking: "thinking",
-      tool: "running a tool",
-      writing: "writing",
-      error: "something broke",
-    }[state] ?? state
-  );
-}
+// A2 decomposition: `LabeledGroup`, `PaneToggle`, `Capability`,
+// `ExamplePrompt`, and `labelFor` moved to
+// apps/web/src/components/shell/page-helpers.tsx. Pure JSX + props
+// with no state/effects — safe to extract without behaviour change.
