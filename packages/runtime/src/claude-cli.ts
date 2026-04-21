@@ -7,9 +7,8 @@
  * tool loop; we just pass messages in and stream events out.
  */
 
-import { spawn } from "child_process";
-import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { execSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { buildSubprocessEnv } from "./auth";
 
 /* ── CLI binary discovery ──────────────────────────────────────────────── */

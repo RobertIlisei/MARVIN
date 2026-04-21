@@ -156,7 +156,10 @@ export function PreviewPane({ projectId }: { projectId: string | null }) {
               title="project preview"
               onLoad={() => setFrameLoaded(true)}
               sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
-              className="h-full w-full border-0 bg-white"
+              // No explicit background — the previewed page paints its own.
+              // Forcing `bg-white` made the iframe chrome clash with the
+              // dark-theme canvas while the page loaded.
+              className="h-full w-full border-0 bg-transparent"
             />
             {!frameLoaded && !loadStalled && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[11px] text-[color:var(--color-fg-faint)]">

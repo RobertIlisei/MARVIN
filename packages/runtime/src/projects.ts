@@ -14,8 +14,8 @@
  * transcripts keep working across the upgrade without a migration.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
-import { basename, resolve } from "path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 
 import { ensureDir, marvinPaths } from "./paths";
 
@@ -113,7 +113,7 @@ export function addProject(input: AddProjectInput): ProjectRecord {
   const existing = file.projects.find((p) => p.id === id);
   if (existing) {
     // Update name if the caller supplied a better one; treat as touch.
-    if (input.name && input.name.trim() && input.name.trim() !== existing.name) {
+    if (input.name?.trim() && input.name.trim() !== existing.name) {
       existing.name = input.name.trim();
     }
     existing.lastUsedAt = now;
@@ -122,7 +122,7 @@ export function addProject(input: AddProjectInput): ProjectRecord {
   }
   const record: ProjectRecord = {
     id,
-    name: (input.name && input.name.trim()) || basename(workDir) || id,
+    name: (input.name?.trim()) || basename(workDir) || id,
     workDir,
     createdAt: now,
     lastUsedAt: null,

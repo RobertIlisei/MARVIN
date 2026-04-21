@@ -1,10 +1,9 @@
 "use client"
 
-import * as React from "react"
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
-
-import { cn } from "./utils"
+import type * as React from "react"
 import { buttonVariants } from "./button"
+import { cn } from "./utils"
 
 // Use MARVIN's `@theme` tokens (see globals.css) rather than shadcn's
 // `--background` / `--foreground` names which MARVIN doesn't declare.
@@ -44,7 +43,7 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 bg-[color:var(--color-bg-glass)] backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className,
       )}
       {...props}

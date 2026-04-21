@@ -1,6 +1,5 @@
-import { NextResponse } from "next/server";
-
 import { listModels } from "@marvin/runtime/models";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

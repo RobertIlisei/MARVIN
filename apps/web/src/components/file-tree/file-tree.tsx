@@ -127,7 +127,7 @@ export function FileTree({
   }, [cwd, refreshTick]);
 
   const ctx: StatusCtx = useMemo(() => {
-    if (!status || !status.isGit) return EMPTY_STATUS_CTX;
+    if (!status?.isGit) return EMPTY_STATUS_CTX;
     const dirty = new Set<string>();
     for (const p of Object.keys(status.status)) {
       let cur = p;
@@ -452,7 +452,7 @@ function TreeItem({
   node: TreeNode;
   depth: number;
 } & SharedProps) {
-  const { ctx, openDirs, setOpenDirs, selection, dnd, actions, mutations, cwd, pendingCreate, setPendingCreate, renaming, setRenaming, onSelect, selectedPath } = shared;
+  const { ctx, openDirs, setOpenDirs, selection, dnd, actions, mutations, pendingCreate, setPendingCreate, renaming, setRenaming, onSelect, selectedPath } = shared;
   const padding = 6 + depth * 10;
   const isRenaming = renaming === node.path;
   const parentPath = parentOf(node.path);
@@ -512,8 +512,9 @@ function TreeItem({
             )}
             {dirty && !isRenaming && (
               <span
-                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
+                role="img"
                 aria-label="modified"
+                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
               />
             )}
           </div>
