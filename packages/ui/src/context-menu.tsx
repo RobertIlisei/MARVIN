@@ -41,16 +41,33 @@ function ContextMenuTrigger({
 
 function ContextMenuContent({
   className,
+  style,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
         data-slot="context-menu-content"
+        // Visibility forced via inline style + `data-[state=*]:animate-*`
+        // classes removed. Same bug that bit Dialog (see
+        // packages/ui/src/dialog.tsx root-cause debrief): Tailwind v4 +
+        // Turbopack + Radix + tw-animate-css leaves the content stuck at
+        // opacity:0 when the enter animation's keyframe transform
+        // overrides the base centering translate. User-visible symptom:
+        // right-click the file tree and the menu appears as a
+        // transparent veil — overlay visible, body invisible. Dropping
+        // the animate classes and forcing opacity:1 + an opaque
+        // material-popover background is the reliable fix; we accept no
+        // enter/leave animation on context menus for now.
+        style={{
+          opacity: 1,
+          backgroundColor: "var(--material-popover)",
+          ...style,
+        }}
         className={cn(
           // A4 polish: rounded-lg (8 px) matches macOS system context
           // menus better than the previous rounded-md (6 px).
-          "z-50 min-w-[12rem] origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-lg p-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          "z-50 min-w-[12rem] origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-lg p-1",
           SURFACE,
           className,
         )}
@@ -242,13 +259,21 @@ function ContextMenuSubTrigger({
 
 function ContextMenuSubContent({
   className,
+  style,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
   return (
     <ContextMenuPrimitive.SubContent
       data-slot="context-menu-sub-content"
+      // Same animate-class drop + inline opacity/material fix as the
+      // primary ContextMenuContent above.
+      style={{
+        opacity: 1,
+        backgroundColor: "var(--material-popover)",
+        ...style,
+      }}
       className={cn(
-        "z-50 min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-lg p-1 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+        "z-50 min-w-[8rem] origin-(--radix-context-menu-content-transform-origin) overflow-hidden rounded-lg p-1",
         SURFACE,
         className,
       )}
