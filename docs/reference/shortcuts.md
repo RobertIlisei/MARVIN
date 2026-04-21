@@ -9,6 +9,7 @@ Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../
 | Keys | Action |
 |---|---|
 | `⌘ K` / `Ctrl K` | Open the project picker |
+| `⌘ P` / `Ctrl P` | Go to file — fuzzy quick-open over the project tree |
 | `⌘ ⇧ N` / `Ctrl ⇧ N` | Start a new session (clears the current messages, returns to hero) |
 | `⌘ .` / `Ctrl .` | Cancel the currently-running turn |
 | `?` | Toggle the shortcuts overlay |
@@ -21,7 +22,7 @@ Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../
 | `⌘ B` / `Ctrl B` | Toggle the file tree pane |
 | `⌘ G` / `Ctrl G` | Toggle the knowledge graph pane |
 | `⌘ J` / `Ctrl J` | Toggle the embedded terminal |
-| `⌘ P` / `Ctrl P` | Toggle the browser preview pane |
+| `⌘ ⇧ P` / `Ctrl ⇧ P` | Toggle the browser preview pane (moved from `⌘ P` — that shortcut now opens the fuzzy file picker, matching IDE muscle memory) |
 
 All pane states persist to `localStorage` via `react-resizable-panels`' `autoSaveId`.
 

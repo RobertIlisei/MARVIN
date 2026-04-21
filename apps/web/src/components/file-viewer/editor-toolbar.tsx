@@ -41,11 +41,40 @@ export function EditorToolbar({
   onClose(): void;
   conflict: EditorConflict | null;
 }) {
+  const segments = relPath.split("/").filter(Boolean);
   return (
     <>
       <div className="flex items-center gap-3 border-b border-[color:var(--color-border)] px-3 py-2 font-mono text-[11px]">
         <span className="text-[color:var(--color-fg-faint)]">file</span>
-        <span className="truncate text-[color:var(--color-fg)]">{relPath}</span>
+        <nav
+          aria-label="path breadcrumb"
+          className="flex min-w-0 items-center gap-1 truncate text-[color:var(--color-fg)]"
+        >
+          {segments.map((seg, i) => {
+            const last = i === segments.length - 1;
+            return (
+              <span key={`${seg}-${i}`} className="flex shrink-0 items-center gap-1">
+                <span
+                  className={
+                    last
+                      ? "truncate text-[color:var(--color-fg)]"
+                      : "truncate text-[color:var(--color-fg-dim)]"
+                  }
+                >
+                  {seg}
+                </span>
+                {!last && (
+                  <span
+                    aria-hidden
+                    className="text-[color:var(--color-fg-faint)]"
+                  >
+                    /
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </nav>
         {isDirty && (
           <span
             className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
@@ -53,7 +82,7 @@ export function EditorToolbar({
             title="unsaved changes"
           />
         )}
-        <span className="ml-auto flex items-center gap-3 text-[color:var(--color-fg-faint)]">
+        <span className="ml-auto flex shrink-0 items-center gap-3 text-[color:var(--color-fg-faint)]">
           <span>{language}</span>
           <span>·</span>
           <span>{lineCount} lines</span>

@@ -1317,6 +1317,38 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   require `X-Marvin-Client`" rule. End-to-end verified via
   `pnpm -r typecheck` green and curl smoke — 400 without the
   header, 200 with it + file written on disk.
+- **2026-04-21 (ide-mode — M6 batch: IDE layout · graph in centre ·
+  Reveal + Open-in-Terminal · ⌘P quick-open · image/PDF preview ·
+  editor breadcrumb)** — shell re-laid-out into `[files | work |
+  brain-top / chat-bottom]`, matching IDE muscle memory. `⌘P` rebound
+  from "toggle preview" to "fuzzy file quick-open" (preview toggle
+  moves to `⌘⇧P`). New quick-open modal does subsequence match with
+  boundary + consecutive + basename-contains bonuses and a length
+  penalty; ↑/↓ navigate, ⏎ opens in the Monaco editor. Graph moved
+  from right panel to centre column alongside preview / file-viewer /
+  terminal; new `/api/graph/html` route mounts the live interactive
+  `graphify-out/graph.html` in an `allow-scripts allow-same-origin`
+  iframe above the text summary — before this the summary was the
+  only graph view MARVIN surfaced. Centre ordering reshuffled to
+  preview (top) > graph > file-viewer > terminal (bottom) per user
+  feedback; resize handles only render between adjacent panes.
+  Context-menu stubs wired to real impl: `/api/files/reveal` spawns
+  `open -R`/`explorer /select`/`xdg-open` with argv-only (no shell
+  interpolation); Terminal component gains a window-event bridge
+  (`marvin:terminal-run`) so the tree's "Open in Terminal" toggles
+  the pane on then dispatches a POSIX-quoted `cd <dir>` through
+  xterm's normal run path. Binary-file viewer upgraded: images
+  (png/jpg/gif/webp/avif/svg/ico/bmp/heic) render inline via a new
+  sandbox-gated `/api/files/raw` route (10 MB cap, MIME allowlist —
+  unsupported types return 415 so the handler never serves mystery
+  octet-streams), PDFs render in an iframe with the same allowlist.
+  Editor toolbar path rendered as a `<nav>` breadcrumb with `/`
+  separators, last segment emphasised in fg colour. Shortcut
+  overlay + `docs/reference/shortcuts.md` updated for the `⌘P` /
+  `⌘⇧P` swap. End-to-end verified via `pnpm -r typecheck` green,
+  Turbopack HMR clean, and curl smoke on `/api/files/raw` returning
+  200 for `hero.png` and `/api/graph/html` returning 200 for the
+  MARVIN repo graph.
 
 ## Status
 
