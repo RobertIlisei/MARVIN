@@ -472,7 +472,13 @@ function TreeItem({
           actions={actions}
         >
           <div
-            className={`flex w-full items-center gap-1 rounded px-1 py-[2px] text-left transition ${
+            // `cursor-default` (arrow, not I-beam) + `select-none`
+            // make clickable rows feel like list items rather than
+            // paragraphs of text. Browser default for a `<div>` over
+            // text content is the I-beam; on a native-feeling IDE
+            // row that reads as "you can select text here," which is
+            // wrong — these are buttons in all but markup.
+            className={`flex w-full cursor-default items-center gap-1 rounded px-1 py-[2px] text-left transition select-none ${
               selected
                 ? "bg-[color:var(--color-accent-glow)]"
                 : "hover:bg-[color:var(--color-bg-elev)]/60"
@@ -557,7 +563,9 @@ function TreeItem({
         actions={actions}
       >
         <div
-          className={`flex w-full items-center gap-1 rounded px-1 py-[2px] text-left transition ${
+          // Same cursor-default + select-none reasoning as the dir
+          // row above — this is a list item in all but markup.
+          className={`flex w-full cursor-default items-center gap-1 rounded px-1 py-[2px] text-left transition select-none ${
             selected
               ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-fg)]"
               : "text-[color:var(--color-fg-dim)] hover:bg-[color:var(--color-bg-elev)]/60"
