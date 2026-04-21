@@ -9,13 +9,28 @@ use std::time::Duration;
 use tauri::menu::{
     AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
-use tauri::Emitter;
+use tauri::{Emitter, WindowEvent};
+
+#[cfg(not(debug_assertions))]
+use parking_lot::Mutex;
+#[cfg(not(debug_assertions))]
+use tauri::Manager;
+#[cfg(not(debug_assertions))]
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+#[cfg(not(debug_assertions))]
+use tauri_plugin_shell::ShellExt;
+
+// Handle to the Next.js sidecar — only populated in release builds (see
+// `spawn_sidecar`). parking_lot's Mutex is non-poisoning, which matters
+// because the WindowEvent handler and the setup thread both touch it
+// across different lifecycle phases.
+#[cfg(not(debug_assertions))]
+static SIDECAR: Mutex<Option<CommandChild>> = Mutex::new(None);
 
 /// Best-effort health probe for the MARVIN web server the desktop shell
 /// wraps. Returns `true` when port 3030 is accepting connections on
-/// loopback. Used by the front-page script to show a clear "MARVIN isn't
-/// running — start `bin/marvin` first" message instead of a silent blank
-/// window.
+/// loopback. In dev (debug builds) this polls the externally-run
+/// `bin/marvin`; in release it polls the bundled sidecar.
 #[tauri::command]
 fn marvin_server_is_up() -> bool {
     TcpStream::connect_timeout(
@@ -27,13 +42,6 @@ fn marvin_server_is_up() -> bool {
 
 /// Menu-item IDs shared with the TypeScript side. Keep in sync with
 /// `apps/web/src/components/shell/use-tauri-menu.ts`.
-///
-/// Design: the native menu items emit `marvin:menu` events with one of
-/// these IDs. The web app's Tauri-event listener maps IDs to actions
-/// (toggle pane, quick-open, reset session, etc.). The web app's
-/// existing `window.keydown` handlers keep running unchanged — when the
-/// user presses a shortcut, JS `preventDefault()`s before the event
-/// reaches the native menu, so there's no double-fire.
 mod ids {
     pub const NEW_SESSION: &str = "marvin:new-session";
     pub const QUICK_OPEN: &str = "marvin:quick-open";
@@ -49,6 +57,73 @@ mod ids {
     pub const OPEN_REPO: &str = "marvin:open-repo";
 }
 
+/// Spawn the bundled Next.js standalone server via the `node` sidecar
+/// (see ADR-0011). Called only in release builds — in dev we assume
+/// the user runs `bin/marvin` separately and MARVIN already listens on
+/// localhost:3030.
+#[cfg(not(debug_assertions))]
+fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let resource_dir = app.path().resource_dir()?;
+    let server_js = resource_dir.join("resources/next/apps/web/server.js");
+    let server_js_str = server_js
+        .to_str()
+        .ok_or("resource path is not valid UTF-8")?
+        .to_string();
+
+    let sidecar = app.shell().sidecar("node")?;
+    let (mut rx, child) = sidecar
+        .args([server_js_str])
+        .env("PORT", "3030")
+        .env("HOSTNAME", "127.0.0.1")
+        .env("NODE_ENV", "production")
+        .spawn()?;
+    *SIDECAR.lock() = Some(child);
+
+    // Drain stdout/stderr so the Node process doesn't block on a full
+    // pipe. We forward lines to the Tauri log bus so users who launch
+    // the .app from a terminal see "starting MARVIN server…" output,
+    // and crashes surface there instead of silently hanging the splash.
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) => {
+                    eprintln!("[marvin-server] {}", String::from_utf8_lossy(&line));
+                }
+                CommandEvent::Stderr(line) => {
+                    eprintln!("[marvin-server:err] {}", String::from_utf8_lossy(&line));
+                }
+                CommandEvent::Terminated(payload) => {
+                    eprintln!(
+                        "[marvin-server] exited: code={:?} signal={:?}",
+                        payload.code, payload.signal
+                    );
+                    break;
+                }
+                CommandEvent::Error(e) => {
+                    eprintln!("[marvin-server] error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn kill_sidecar() {
+    if let Some(child) = SIDECAR.lock().take() {
+        // Best-effort — on macOS this sends SIGTERM. Next.js traps it
+        // and shuts down gracefully.
+        let _ = child.kill();
+    }
+}
+
+#[cfg(debug_assertions)]
+fn kill_sidecar() {
+    // no-op in dev builds
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -57,7 +132,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
 
-            // MARVIN submenu (leftmost on macOS — takes the app name).
+            // --- Native menu bar (see `on_menu_event` below for wiring) ---
             let about_metadata = AboutMetadataBuilder::new()
                 .name(Some("MARVIN".to_string()))
                 .version(Some(env!("CARGO_PKG_VERSION").to_string()))
@@ -86,7 +161,6 @@ pub fn run() {
                 .item(&PredefinedMenuItem::quit(handle, None)?)
                 .build()?;
 
-            // File — session-level actions.
             let new_session = MenuItemBuilder::with_id(ids::NEW_SESSION, "New Session")
                 .accelerator("CmdOrCtrl+Shift+N")
                 .build(handle)?;
@@ -102,8 +176,6 @@ pub fn run() {
                 .item(&close_window)
                 .build()?;
 
-            // Edit — stock platform items so Cmd-C/V/Z etc. work in text
-            // inputs (Monaco, chat input), plus MARVIN's cancel-turn.
             let cancel_turn = MenuItemBuilder::with_id(ids::CANCEL_TURN, "Cancel Turn")
                 .accelerator("CmdOrCtrl+.")
                 .build(handle)?;
@@ -119,7 +191,6 @@ pub fn run() {
                 .item(&cancel_turn)
                 .build()?;
 
-            // View — the pane toggles the user types ⌘B/⌘G/⌘J/⌘⇧P for.
             let quick_open = MenuItemBuilder::with_id(ids::QUICK_OPEN, "Go to File…")
                 .accelerator("CmdOrCtrl+P")
                 .build(handle)?;
@@ -156,7 +227,6 @@ pub fn run() {
                 .item(&shortcuts)
                 .build()?;
 
-            // Window — stock platform items.
             let window_menu = SubmenuBuilder::new(handle, "Window")
                 .item(&PredefinedMenuItem::minimize(handle, None)?)
                 .item(&PredefinedMenuItem::maximize(handle, None)?)
@@ -164,10 +234,6 @@ pub fn run() {
                 .item(&PredefinedMenuItem::close_window(handle, None)?)
                 .build()?;
 
-            // Help — external links. `shell:allow-open` (in capabilities/
-            // default.json) permits the frontend JS path; native menu
-            // items go via tauri_plugin_shell which respects the same
-            // allowlist.
             let open_docs = MenuItemBuilder::with_id(ids::OPEN_DOCS, "MARVIN Documentation")
                 .build(handle)?;
             let open_repo = MenuItemBuilder::with_id(ids::OPEN_REPO, "GitHub Repository")
@@ -188,21 +254,32 @@ pub fn run() {
                 ])
                 .build()?;
             app.set_menu(menu)?;
+
+            // --- Sidecar (release only) — ADR-0011 ---
+            #[cfg(not(debug_assertions))]
+            {
+                if let Err(e) = spawn_sidecar(&handle) {
+                    eprintln!("[marvin-desktop] failed to spawn sidecar: {}", e);
+                }
+            }
             Ok(())
         })
         .on_menu_event(|app, event| {
-            // Re-emit the click as a Tauri event the web app can listen
-            // for. We don't invoke actions from Rust because the
-            // actions themselves live in React state (togglePane,
-            // reset, etc.) — the TS side is the canonical place.
             let id = event.id().as_ref().to_string();
-            // Non-MARVIN menu events (fullscreen, minimize, platform
-            // edit items) have IDs we don't own; skip them so the TS
-            // listener doesn't see noise.
             if !id.starts_with("marvin:") {
                 return;
             }
             let _ = app.emit("marvin:menu", serde_json::json!({ "id": id }));
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                // Only act on the main window — auxiliary windows
+                // (e.g. future "About" child windows) shouldn't take
+                // the server down with them.
+                if window.label() == "main" {
+                    kill_sidecar();
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
