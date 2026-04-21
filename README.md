@@ -31,12 +31,23 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 
 ## Features
 
+- 🍎 **Installable macOS app** — `bin/marvin install-app` ships a real
+  `/Applications/MARVIN.app` plus a launchd user agent that auto-starts
+  the server on login. Double-click from Spotlight / Launchpad / Dock.
 - 🧠 **MARVIN brain** — live animated state indicator (idle / thinking / tool /
   writing / error)
-- 📁 **3-pane shell** — file tree · chat · brain/graph, with collapsible
-  embedded terminal, file viewer, and browser preview
-- 🔀 **Monaco diff viewer** — see exactly what MARVIN is about to do before
-  allowing it; structural confirm-before-act gate on Edit/Write/Bash
+- 📁 **IDE-style 3-pane shell** — file tree with icons · chat · brain/graph,
+  with collapsible embedded terminal, Monaco file editor, and browser preview
+- 🌿 **Source control panel** — VSCode-style status tree, stage/unstage,
+  commit, branch switcher (local + remote), diff viewer; structural confirm
+  gate is enforced across every mutation channel
+- 🏷️ **Workspace status bar** — persistent footer under the left column
+  shows workspace name + current branch + ahead/behind badges; click to
+  jump straight into Source Control
+- 🌓 **Light + dark themes** — OKLCH-based token cascade, paper-cream light
+  / neutral-dark dark, theme-aware Monaco + xterm + git status colours
+- 🔀 **Monaco editor + diff** — see exactly what MARVIN is about to do
+  before allowing it; structural confirm-before-act gate on Edit/Write/Bash
 - 🧰 **Model picker** — executor + advisor slots, live Anthropic model list
   when credentials are readable, fallback when not
 - 💸 **Cost tracker** — daily/weekly/lifetime spend per project
@@ -71,6 +82,23 @@ bin/marvin                     # start MARVIN on http://localhost:3030
 availability, credentials), backgrounds the dev server, polls
 `/api/health`, and prints the URL + auth mode + model once it's up.
 
+### Install as a real macOS app _(recommended)_
+
+One command builds `MARVIN.app`, drops it in `/Applications/`, and
+installs a launchd user agent so the server auto-starts on every login.
+After that, MARVIN behaves like any native app — double-click from
+Spotlight, Launchpad, or the Dock and the window opens into the UI:
+
+```bash
+bin/marvin install-app         # build → /Applications → launchd agent → health-check
+bin/marvin uninstall-app       # unload agent + remove app (source tree untouched)
+```
+
+Needs Rust once (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`).
+See [`apps/desktop/README.md`](./apps/desktop/README.md) for the full
+install contract and [ADR-0010](./docs/decisions/0010-desktop-wrapper-tauri.md)
+for the architecture rationale.
+
 ### Lifecycle
 
 ```
@@ -80,6 +108,8 @@ bin/marvin logs         # tail .marvin/dev.log
 bin/marvin stop         # kill the process group cleanly
 bin/marvin restart
 bin/marvin doctor       # preflight only — no start
+bin/marvin install-app  # build + install native macOS app (see above)
+bin/marvin uninstall-app
 bin/marvin help
 ```
 
@@ -135,32 +165,38 @@ packages/
 data/.marvin/                # session transcripts, cost tracker, graph cache (gitignored)
 ```
 
-### Running as a native macOS app
+### Desktop dev loop
 
-`apps/desktop/` ships a Tauri wrapper — MARVIN as a dock-icon `.app`
-rather than a browser tab. Needs Rust (once):
+For hot-reloading the native shell against the live dev server:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-. "$HOME/.cargo/env"
-
-bin/marvin                # start the web server (as usual)
-pnpm desktop:dev          # in a second terminal — opens the Tauri window
+bin/marvin                # terminal 1 — start the web server
+pnpm desktop:dev          # terminal 2 — opens the Tauri window
 ```
+
+This is the right loop when you're changing MARVIN's own UI. For
+day-to-day use, `bin/marvin install-app` (above) is the pragmatic path —
+no terminals, auto-start on login.
 
 See [`apps/desktop/README.md`](./apps/desktop/README.md) + [ADR-0010](./docs/decisions/0010-desktop-wrapper-tauri.md) for the details and what v1 deliberately leaves out.
 
 ## Status
 
-**v1 shipped.** Phases 1–5 complete. Phase 5's Honeycomb MCP integration
-is explicitly deferred (needs Honeycomb account + team setup). Everything
-else — advisor mode, preview pane, graph-aware chat, keyboard shortcuts,
-session search, dual-theme support, BrainLiquid canvas particle brain,
-full `docs/` tree, graphify-first hard rule, REVIEW.md + adopted skills,
-`bin/marvin` lifecycle script — shipped 2026-04-17 through 2026-04-19.
+**v1.1 shipped.** The app is now fully installable: `bin/marvin install-app`
+builds the bundle, copies it to `/Applications/`, and wires a launchd user
+agent so the server auto-starts on login. Everything from v1 — advisor
+mode, preview pane, graph-aware chat, keyboard shortcuts, session search,
+dual-theme support, BrainLiquid brain, graphify-first hard rule — plus
+the v1.1 additions: source control panel (stage / unstage / commit /
+branch switch, local + remote), user-initiated filesystem writes with
+structural confirm, Monaco editor with CAS-guarded save, VSCode-style
+workspace status bar, light-theme recolour, Tauri shell polish
+(system-font stack, vibrancy materials, traffic-light padding), and the
+launchd-agent install flow.
 
-See [PLAN.md](./PLAN.md) for the phase-by-phase changelog and
-[docs/roadmap.md](./docs/roadmap.md) for the narrative view.
+Honeycomb MCP integration remains deferred (needs Honeycomb account +
+team setup). See [PLAN.md](./PLAN.md) for the phase-by-phase changelog
+and [docs/roadmap.md](./docs/roadmap.md) for the narrative view.
 
 ## Documentation
 
@@ -171,8 +207,8 @@ Full documentation at [docs/](./docs/). Modeled on Claude Code's docs site.
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
 - [Architecture at a glance](./docs/getting-started/architecture.md)
 - [Core concepts](./docs/README.md#core-concepts) — single-assistant, 8-phase workflow, isolation, confirm gate, advisor, graphify, ADRs
-- [HTTP API reference](./docs/reference/api.md) — all 17 endpoints
-- [Architecture decisions](./docs/decisions/) — ten ADRs covering the design choices
+- [HTTP API reference](./docs/reference/api.md) — every endpoint
+- [Architecture decisions](./docs/decisions/) — ADRs covering the design choices
 
 ## License
 
