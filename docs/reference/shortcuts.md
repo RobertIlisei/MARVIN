@@ -33,6 +33,22 @@ All pane states persist to `localStorage` via `react-resizable-panels`' `autoSav
 | `⇧ ⏎` | Newline in the input (no send) |
 | `⌘ ⏎` | Also sends (parity for Mac-intuitive users) |
 
+## File tree
+
+Right-click any row to open the context menu. Gestures below work on the tree as a whole when it has focus.
+
+| Keys / gesture | Action |
+|---|---|
+| `⌘ ⌫` / `Ctrl ⌫` | Move selected item(s) to Trash |
+| `⌘ ⇧ ⌫` / `Ctrl ⇧ ⌫` | Delete selected item(s) permanently (confirm required) |
+| `F2` | Rename the currently-selected item (inline input; `Enter` commits, `Esc` cancels) |
+| `Shift-click` | Range-select from the last anchor to the clicked row |
+| `⌘-click` / `Ctrl-click` | Toggle individual rows in/out of the selection |
+| `Esc` | Clear the selection |
+| Drag a file/dir onto a directory | Move the dragged item(s) into that directory |
+
+Destructive ops classified as `confirm` (permanent delete, secret-file writes, case-only renames) surface an AlertDialog. The user-initiated write channel is gated by `fsWritePolicy` — see [tool-policy](../security/tool-policy.md) and [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
+
 ## Terminal (focus inside the xterm pane)
 
 | Keys | Action |
