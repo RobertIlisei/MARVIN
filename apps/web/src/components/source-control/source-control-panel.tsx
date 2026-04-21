@@ -23,6 +23,8 @@ import { useCallback, useMemo } from "react";
 import { BranchBar } from "./branch-bar";
 import { CommitBox } from "./commit-box";
 import { ConfirmGitOpDialog } from "./confirm-git-op-dialog";
+import { RemoteBar } from "./remote-bar";
+import { RemoteErrorBanner } from "./remote-error-banner";
 import { StatusList } from "./status-list";
 import { useGitMutations } from "./use-git-mutations";
 import { useGitStatus } from "./use-git-status";
@@ -106,6 +108,9 @@ export function SourceControlPanel({
     );
   }
 
+  const err = mutations.state.error;
+  const hasUpstream = Boolean(state.data.branch.upstream);
+
   return (
     <div className="flex h-full flex-col">
       <BranchBar
@@ -113,6 +118,13 @@ export function SourceControlPanel({
         cwd={cwd}
         onSwitch={mutations.branchSwitch}
         onCreate={mutations.branchCreate}
+      />
+      <RemoteBar
+        hasUpstream={hasUpstream}
+        busy={mutations.state.busy}
+        onFetch={() => mutations.fetch()}
+        onPull={mutations.pull}
+        onPush={mutations.push}
       />
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <StatusList
@@ -128,12 +140,19 @@ export function SourceControlPanel({
           busy={mutations.state.busy}
         />
       </div>
-      {mutations.state.error && (
-        <ErrorBanner
-          message={mutations.state.error.message}
+      {err?.kind === "remote" && err.remote ? (
+        <RemoteErrorBanner
+          code={err.remote.code}
+          remedy={err.remote.remedy}
+          stderr={err.remote.stderr}
           onDismiss={mutations.dismissError}
         />
-      )}
+      ) : err ? (
+        <ErrorBanner
+          message={err.message}
+          onDismiss={mutations.dismissError}
+        />
+      ) : null}
       <CommitBox
         stagedCount={stagedCount}
         busy={mutations.state.busy}

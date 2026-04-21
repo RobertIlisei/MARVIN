@@ -20,6 +20,18 @@
 import type { GitOp, GitWriteSeverity } from "@marvin/git";
 import { useCallback, useRef, useState } from "react";
 
+export type RemoteErrorCode =
+  | "auth-publickey"
+  | "auth-failed"
+  | "network"
+  | "non-fast-forward"
+  | "no-upstream"
+  | "no-remote"
+  | "merge-conflict"
+  | "dirty-working-tree"
+  | "detached-head"
+  | "git-failed";
+
 export interface MutationError {
   kind:
     | "network"
@@ -28,10 +40,21 @@ export interface MutationError {
     | "upstream"
     | "nothing-to-commit"
     | "branch-exists"
-    | "branch-not-found";
+    | "branch-not-found"
+    | "remote";
   message: string;
   /** Raw body from the server — useful for debugging. */
   detail?: unknown;
+  /**
+   * Populated only for `kind: "remote"`. The classifier lives in
+   * `apps/web/src/lib/git-remote-errors.ts` and drives the
+   * specialised `RemoteErrorBanner`.
+   */
+  remote?: {
+    code: RemoteErrorCode;
+    remedy: string;
+    stderr: string | null;
+  };
 }
 
 export interface PendingConfirm {
@@ -154,6 +177,23 @@ export function useGitMutations({ cwd, onChanged }: UseGitMutationsArgs) {
         }
 
         const errBody = await res.json().catch(() => ({}));
+        const remoteCode = parseRemoteErrorCode(errBody?.error);
+        if (remoteCode) {
+          patch({
+            busy: false,
+            error: {
+              kind: "remote",
+              message: errBody?.remedy ?? errBody?.error ?? `status ${res.status}`,
+              detail: errBody,
+              remote: {
+                code: remoteCode,
+                remedy: errBody?.remedy ?? "",
+                stderr: typeof errBody?.stderr === "string" ? errBody.stderr : null,
+              },
+            },
+          });
+          return false;
+        }
         const errKind = classifyError(res.status, errBody?.error);
         patch({
           busy: false,
@@ -247,6 +287,43 @@ export function useGitMutations({ cwd, onChanged }: UseGitMutationsArgs) {
     [dispatch],
   );
 
+  // Renamed to `gitFetch` so the identifier doesn't shadow the
+  // built-in `fetch()` used inside `dispatch` above.
+  const gitFetch = useCallback(
+    (remote?: string) =>
+      dispatch(
+        "fetch",
+        remote ? { remote } : {},
+        (op) => op,
+        `Fetch from ${remote ?? "origin"}`,
+      ),
+    [dispatch],
+  );
+  const pull = useCallback(
+    (strategy: "ff-only" | "rebase" | "merge") =>
+      dispatch(
+        "pull",
+        { strategy },
+        (op) => op,
+        strategy === "ff-only"
+          ? "Pull (fast-forward)"
+          : strategy === "rebase"
+            ? "Pull with rebase"
+            : "Pull with merge",
+      ),
+    [dispatch],
+  );
+  const push = useCallback(
+    (forceWithLease: boolean) =>
+      dispatch(
+        "push",
+        forceWithLease ? { forceWithLease: true } : {},
+        (op) => op,
+        forceWithLease ? "Push (force-with-lease)" : "Push",
+      ),
+    [dispatch],
+  );
+
   const dismissError = useCallback(() => patch({ error: null }), [patch]);
 
   return {
@@ -258,11 +335,33 @@ export function useGitMutations({ cwd, onChanged }: UseGitMutationsArgs) {
     branchCreate,
     branchSwitch,
     branchDelete,
+    fetch: gitFetch,
+    pull,
+    push,
     dismissError,
     unmount: useCallback(() => {
       mountedRef.current = false;
     }, []),
   };
+}
+
+function parseRemoteErrorCode(code: unknown): RemoteErrorCode | null {
+  if (typeof code !== "string") return null;
+  const known: readonly RemoteErrorCode[] = [
+    "auth-publickey",
+    "auth-failed",
+    "network",
+    "non-fast-forward",
+    "no-upstream",
+    "no-remote",
+    "merge-conflict",
+    "dirty-working-tree",
+    "detached-head",
+    "git-failed",
+  ];
+  return (known as readonly string[]).includes(code)
+    ? (code as RemoteErrorCode)
+    : null;
 }
 
 /**
