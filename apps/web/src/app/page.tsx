@@ -439,7 +439,7 @@ export default function Home() {
   // --- Header ------------------------------------------------------------
   const header = (
     <>
-    <header className="flex items-center gap-3 px-5 py-2.5">
+    <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
       <button
         type="button"
         onClick={isEmpty ? undefined : reset}
@@ -469,15 +469,20 @@ export default function Home() {
         cwd={active?.workDir ?? null}
         refreshKey={sessionRefreshKey}
       />
-      <div className="ml-auto flex items-center gap-3">
+      <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
         <CostPill projectId={active?.id ?? null} refreshKey={sessionRefreshKey} />
-        <LabeledGroup label="perms">
+        {/* perms / models / voice only show on wide viewports — they're
+         * also accessible via the ⚙ Settings panel, so we collapse them
+         * instead of letting them clip on medium screens. Theme flip
+         * stays visible since users hit it mid-session more than the
+         * others. `panes` toggles stay too (quick-flip essentials). */}
+        <LabeledGroup label="perms" className="hidden xl:inline-flex">
           <PermissionToggle
             value={permissionStrategy}
             onChange={setPermissionStrategy}
           />
         </LabeledGroup>
-        <LabeledGroup label="models">
+        <LabeledGroup label="models" className="hidden xl:inline-flex">
           <ModelPicker
             executor={executorModel}
             advisor={advisorModel}
@@ -487,7 +492,7 @@ export default function Home() {
             }}
           />
         </LabeledGroup>
-        <LabeledGroup label="voice">
+        <LabeledGroup label="voice" className="hidden 2xl:inline-flex">
           <PersonalityToggle value={personality} onChange={setPersonality} />
         </LabeledGroup>
         <LabeledGroup label="theme">
@@ -974,12 +979,15 @@ export default function Home() {
 function LabeledGroup({
   label,
   children,
+  className,
 }: {
   label: string;
   children: React.ReactNode;
+  /** Extra responsive classes from the caller (e.g. `hidden xl:inline-flex`). */
+  className?: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={`flex items-center gap-1.5 ${className ?? ""}`.trim()}>
       <span className="hidden font-mono text-[9px] uppercase tracking-[0.26em] text-[color:var(--color-fg-faint)] xl:inline">
         {label}
       </span>

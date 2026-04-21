@@ -60,6 +60,17 @@ function AlertDialogContent({
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
+        // Inline-style guarantee — see apps/web/src/app/globals.css for
+        // the tw-animate-css dependency and packages/ui/src/dialog.tsx
+        // for the root-cause debrief. AlertDialog shares the same
+        // Radix-animate-class scaffolding and risks the same
+        // rendering gap, so we pin colour + border + shadow here too.
+        style={{
+          backgroundColor: "var(--color-bg-elev)",
+          color: "var(--color-fg)",
+          border: "1px solid var(--color-border-strong)",
+          boxShadow: "var(--shadow-panel)",
+        }}
         className={cn(
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg p-6 duration-200 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           SURFACE,
