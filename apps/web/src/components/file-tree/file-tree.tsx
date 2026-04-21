@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDeleteDialog, type ConfirmDeleteDialogState } from "./confirm-delete-dialog";
+import { DirIcon, FileIcon } from "./file-icon";
 import { InlineRename } from "./inline-rename";
 import { TreeContextMenu, type TreeContextMenuActions } from "./tree-context-menu";
 import {
@@ -566,9 +567,18 @@ function TreeItem({
             {...(isRenaming ? {} : dnd.dragProps({ path: node.path, selected: selection.selected }))}
             {...dnd.dropProps({ path: node.path })}
           >
-            <span className="w-3 text-center text-[10px] text-[color:var(--color-fg-faint)]">
+            {/*
+             * Chevron + dir icon column. Chevron retains the
+             * tri-state indicator (·/▾/▸) but at reduced visual
+             * weight; DirIcon carries the open/closed affordance.
+             * The two are redundant on purpose — chevron gives keyboard
+             * users a compact toggle hint, DirIcon gives everyone else
+             * the glanceable "folder" signal.
+             */}
+            <span className="w-3 shrink-0 text-center text-[9px] text-[color:var(--color-fg-faint)]/70">
               {empty ? "·" : open ? "▾" : "▸"}
             </span>
+            <DirIcon open={open} />
             {isRenaming ? (
               <InlineRename
                 initial={node.name}
@@ -581,7 +591,15 @@ function TreeItem({
                 }}
               />
             ) : (
-              <span className="truncate text-[color:var(--color-accent)]/90">
+              // Directory names: solid fg + medium weight. In light
+              // the old --color-accent was near-black ink (monochrome
+              // handoff accent) and files were near-black too, so
+              // dirs and files rendered in effectively the same
+              // colour — nothing popped. Solid fg + font-medium gives
+              // directories the "this is structural" weight cue that
+              // works in both themes without requiring a special dir
+              // hue token.
+              <span className="truncate font-medium text-[color:var(--color-fg)]">
                 {node.name}
               </span>
             )}
@@ -648,6 +666,10 @@ function TreeItem({
           }}
           {...(isRenaming ? {} : dnd.dragProps({ path: node.path, selected: selection.selected }))}
         >
+          {/* File-type icon (tinted by extension family) — sits
+           * in the same 12 px column that directory rows use for
+           * DirIcon, so the indentation stays visually aligned. */}
+          <FileIcon filename={node.name} />
           {isRenaming ? (
             <InlineRename
               initial={node.name}
