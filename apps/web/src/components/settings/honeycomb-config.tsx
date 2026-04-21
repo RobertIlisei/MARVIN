@@ -356,6 +356,7 @@ export function HoneycombConfigForm({
             const current = regionOf(apiUrl);
             const active = current === opt.id;
             return (
+              // biome-ignore lint/a11y/useSemanticElements: segmented-control pattern; buttons carry role="radio" + aria-checked for the group semantics
               <button
                 key={opt.id}
                 type="button"
