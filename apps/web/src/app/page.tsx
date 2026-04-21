@@ -1,8 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-
 import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { MessageView } from "@/components/chat/message-view";
@@ -10,7 +10,21 @@ import { useChatStream } from "@/components/chat/use-chat-stream";
 import { CostPill } from "@/components/cost/cost-pill";
 import { FileTree } from "@/components/file-tree/file-tree";
 import { QuickOpen } from "@/components/file-tree/quick-open";
-import { FileViewer } from "@/components/file-viewer/file-viewer";
+
+// Lazy-load FileViewer (A3 perf): the wrapper itself is light, but it
+// transitively pulls in the Monaco editor ESM wrapper + the unsaved-
+// guard, dirty-state, and toolbar modules. Most sessions never open a
+// file — deferring the import until `selectedPath` goes truthy saves
+// ~60 KB of JS from the critical path. `ssr: false` because Monaco
+// requires `window`.
+const FileViewer = dynamic(
+  () =>
+    import("@/components/file-viewer/file-viewer").then((m) => ({
+      default: m.FileViewer,
+    })),
+  { ssr: false },
+);
+
 import { GraphPanel } from "@/components/graph/graph-panel";
 import { ChatInput } from "@/components/input/chat-input";
 import {
