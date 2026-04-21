@@ -550,7 +550,33 @@ export function useChatStream() {
       }
     }
 
-    setMessages(nextMessages);
+    // Any `tool_use` block still marked `running: true` after the full
+    // replay is stale: hydration is restoring past state, so by
+    // definition nothing is in flight. This happens when a session was
+    // interrupted between tool_use and tool_result (crash, ⌘W mid-
+    // turn, network drop) — the JSONL transcript captured the spawn
+    // but not the return, and replaying it leaves blocks "running"
+    // forever.
+    //
+    // The visible symptom was the scout / advisor companion orbs
+    // staying lit across page reloads whenever a Task subagent had
+    // ever been spawned. Live state comes from `send` / `attachLive`
+    // AFTER hydration, so it's safe to force-close everything here;
+    // if a turn is genuinely still in flight on the server, the
+    // resume path re-attaches to the SSE stream and re-flips those
+    // blocks to `running: true` with live events.
+    const closedMessages = nextMessages.map((m) =>
+      m.role === "assistant"
+        ? {
+            ...m,
+            blocks: m.blocks.map((b) =>
+              b.type === "tool_use" && b.running ? { ...b, running: false } : b,
+            ),
+          }
+        : m,
+    );
+
+    setMessages(closedMessages);
     setStats(lastCompleted);
     setSessionId(lastCliSessionId);
     setMarvinSessionId(record.sessionId);
