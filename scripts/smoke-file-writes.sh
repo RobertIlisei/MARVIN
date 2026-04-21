@@ -14,7 +14,10 @@
 set -euo pipefail
 
 BASE_URL="${1:-http://localhost:3030}"
-CWD="${2:-$(mktemp -d "${TMPDIR:-/tmp}/marvin-smoke-XXXXXX")}"
+# Strip any trailing slash on $TMPDIR to avoid double-slash paths on macOS.
+TMPBASE="${TMPDIR:-/tmp}"
+TMPBASE="${TMPBASE%/}"
+CWD="${2:-$(mktemp -d "$TMPBASE/marvin-smoke-XXXXXX")}"
 
 # Known-bad fixtures so we can verify sandbox rejections.
 ESCAPE_PATH="/tmp/../etc/passwd"
