@@ -1,23 +1,40 @@
 # Licensing
 
-**Status: not yet specified.**
+**Status: MIT (decided 2026-04-21).**
 
-MARVIN's GitHub repository does not currently carry a LICENSE file. This is a deliberate pause, not an oversight. The decision is pending.
+MARVIN's `LICENSE` file at the repo root carries the full MIT text.
+`package.json` declares `"license": "MIT"`.
 
-## Current practical effect
+## Practical effect
 
-Without an explicit license, default copyright applies:
+Everything MIT grants:
 
-- The code is the author's (@robertilisei's) copyrighted work.
-- Cloning the repo to your machine for personal use is generally acceptable (fair use, at-rest only).
-- **Commercial use, redistribution, modification-and-publication, or derivative works are NOT granted.** Nothing stops you reading the code; you don't have rights to build on it publicly.
-- Contributions submitted via PR are implicitly offered under the eventual license MARVIN will ship under.
+- **Use.** Run MARVIN locally, in CI, wherever.
+- **Modify.** Fork, change, rebuild.
+- **Redistribute.** Publish modified or unmodified copies.
+- **Sublicense / sell.** Bundle into commercial products if you want.
 
-If you want to use MARVIN for anything beyond "clone and run on your own machine," wait for the license decision or open an issue to ask.
+Two obligations:
 
-## What MARVIN will likely land on
+1. Keep the copyright notice + MIT text in any copy or substantial portion you redistribute.
+2. Accept that the software is "as is" — no warranty.
 
-Under active consideration:
+Everything else is on the table.
+
+## How we got here
+
+The rest of this page is the historical reasoning for picking MIT over
+the alternatives. Kept so the choice is auditable — the ADR analogue
+for a legal decision. Summary:
+
+- MARVIN's entire dependency surface (Next.js, React, xterm.js, Monaco, Tauri plugins we touch) is MIT or Apache 2.0. Matching MIT keeps the outbound story simple.
+- The project is one author + one AI pair. Copyleft enforcement overhead would exceed any protection benefit.
+- No patents to worry about — MARVIN is glue around Anthropic's SDK. Apache 2.0's patent grant would be precautionary rather than substantive.
+- MIT's brevity matches the project's character. Every ADR has favoured the simpler option.
+
+## Alternatives considered (historical)
+
+Under consideration through 2026-04-20:
 
 ### MIT License
 
@@ -47,15 +64,15 @@ Under active consideration:
 - **Pros:** Maximum reciprocity.
 - **Cons:** Incompatible with most proprietary toolchains. Would cut MARVIN off from commercial users who might otherwise contribute.
 
-## Probable landing spot
+## Decision (2026-04-21)
 
-**MIT or Apache 2.0.** MARVIN is small enough that copyleft enforcement would be wasted effort; the value of adoption + contributions outweighs the value of forcing reciprocity.
+**MIT.** For the reasons above.
 
-MIT has the edge on simplicity; Apache 2.0 has the edge on patent safety. Decision likely comes down to whether anyone files a patent issue, which is unlikely for a tool that's mostly glue around someone else's SDK.
+Apache 2.0 was the close second — its patent grant is nice to have — but MARVIN has no patentable surface today, so the extra legal weight was protection against a threat that doesn't exist. Revisit if that changes (a new ADR would supersede this note).
 
 ## Contributor Inbound License
 
-When the project license lands, contributors' PRs will be treated as offered under the same license, inbound=outbound (the standard open-source default). No separate CLA planned.
+Contributions submitted via PR are offered under the same MIT license, inbound=outbound — the standard open-source default. No separate CLA.
 
 ## Related
 
