@@ -354,9 +354,22 @@ export function MonacoEditor({
   type MonacoNamespace = Parameters<OnMount>[1];
   const monacoRef = useRef<MonacoNamespace | null>(null);
 
+  // Mirror `mode` into a ref so `handleMount` always reads the LATEST
+  // theme, not the render-time closure value. Without this, the
+  // closure ordering + Monaco's dynamic import could leave handleMount
+  // calling `applyMonacoTheme(monaco, "light")` even after the user's
+  // system theme said "dark" — which then set the GLOBAL Monaco theme
+  // to light, flipping every existing dark editor back to bright on
+  // every new file open. (Same closure-staleness pattern as the
+  // saveRef above.)
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
   const handleMount: OnMount = (editor, monaco) => {
     monacoRef.current = monaco;
-    applyMonacoTheme(monaco, mode);
+    applyMonacoTheme(monaco, modeRef.current);
     if (!readOnly) {
       editor.addAction({
         id: "marvin.save",
