@@ -19,7 +19,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@marvin/ui/dialog";
-import { useState } from "react";
 
 import { HoneycombConfigForm } from "@/components/settings/honeycomb-config";
 import { ModelPicker } from "@/components/settings/model-picker";
@@ -44,8 +43,13 @@ export interface SettingsPanelProps {
   open: boolean;
   onOpenChange(open: boolean): void;
 
-  /** Which tab to focus on open. Caller manages so deep-links persist. */
-  initialTab?: SettingsTab;
+  /**
+   * Fully controlled — parent owns the active tab. Enables deep-links
+   * ("open at Observability") and stops SettingsPanel from owning
+   * its own state that would drift out of sync with the caller.
+   */
+  tab: SettingsTab;
+  onTabChange(next: SettingsTab): void;
 
   /** Per-project context — routes that need a cwd receive it. */
   cwd: string | null;
@@ -86,17 +90,7 @@ const TABS: Array<{ id: SettingsTab; label: string; hint: string }> = [
 ];
 
 export function SettingsPanel(props: SettingsPanelProps) {
-  const [tab, setTab] = useState<SettingsTab>(
-    props.initialTab ?? "observability",
-  );
-
-  // Re-sync when the caller explicitly asks to focus a different tab.
-  // Runs only while the dialog opens so switching tabs by hand isn't
-  // overridden by a stale `initialTab` prop on re-render.
-  if (props.open && props.initialTab && props.initialTab !== tab) {
-    setTab(props.initialTab);
-  }
-
+  const { tab, onTabChange } = props;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="sm:max-w-3xl">
@@ -120,7 +114,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => setTab(t.id)}
+                  onClick={() => onTabChange(t.id)}
                   className={`flex flex-col items-start rounded px-2 py-1.5 text-left transition ${
                     active
                       ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-fg)]"
