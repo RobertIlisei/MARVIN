@@ -88,6 +88,17 @@ opportunistic. See [Testing](./development/testing.md).
 
 Old response has `model: claude-opus-4-7` which users mistake for "the live model." Renamed to `defaultModel` on 2026-04-19 — some docs or scripts may still reference the old name. Update callers.
 
+### Light-theme recolour
+
+The current light theme bases on `oklch(0.985 0.003 80)` — effectively
+pure warm white. User feedback: too bright, especially over long
+sessions. Target: drop `--color-bg` to the ~0.93–0.95 lightness range
+so surfaces read as warm paper rather than pure-white. The dark
+theme is fine; this is a light-side-only pass. Likely touches
+`apps/web/src/app/globals.css`'s `@theme` block + the Monaco `marvin-
+light` theme in `apps/web/src/components/settings/monaco-themes.ts`
+to match.
+
 ## Not planned
 
 Things MARVIN deliberately won't do. See [Vision](./business/vision.md) for the reasoning.

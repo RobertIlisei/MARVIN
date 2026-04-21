@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * MARVIN's Honeycomb-config dialog. Surfaces the per-project config
- * stored at `<workDir>/.marvin/honeycomb.json` (see
- * `packages/runtime/src/honeycomb-config.ts`) — the UI analogue of
- * editing that JSON file by hand.
+ * MARVIN's Honeycomb-config form. Lives at two entry points:
+ *
+ *   - Embedded in the SettingsPanel's Observability tab (primary).
+ *   - Wrapped by `HoneycombConfigDialog` for the legacy standalone
+ *     modal (kept so callers outside the settings panel can pop it
+ *     directly without mounting the full panel).
  *
  * Security:
  *   - Raw apiKey only travels in a single POST. Subsequent GETs
@@ -20,7 +22,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@marvin/ui/dialog";
@@ -53,17 +54,20 @@ interface TestResult {
 
 const DEFAULT_API_URL = "https://api.honeycomb.io";
 
-export function HoneycombConfigDialog({
-  cwd,
-  open,
-  onOpenChange,
-  onSaved,
-}: {
+export interface HoneycombConfigFormProps {
   cwd: string | null;
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  onSaved?(status: ConfigStatus): void;
-}) {
+  /** Called whenever the status changes (save or delete) so the parent can refresh its own mirror. */
+  onStatusChange?(status: ConfigStatus): void;
+}
+
+/**
+ * The actual form body — input fields + status + test + save + remove.
+ * Re-usable inside a modal, a settings-panel tab, or any other shell.
+ */
+export function HoneycombConfigForm({
+  cwd,
+  onStatusChange,
+}: HoneycombConfigFormProps) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -78,15 +82,12 @@ export function HoneycombConfigDialog({
   const [error, setError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
-    if (!cwd) {
-      setStatus(null);
-      return;
-    }
     setLoadingStatus(true);
     try {
-      const res = await fetch(
-        `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`,
-      );
+      const url = cwd
+        ? `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`
+        : `/api/honeycomb/config`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(await res.text());
       const body = (await res.json()) as ConfigStatus;
       setStatus(body);
@@ -103,13 +104,11 @@ export function HoneycombConfigDialog({
   }, [cwd]);
 
   useEffect(() => {
-    if (open) {
-      setError(null);
-      setTestResult(null);
-      setApiKey(""); // never prefill; always a fresh paste
-      void refreshStatus();
-    }
-  }, [open, refreshStatus]);
+    setError(null);
+    setTestResult(null);
+    setApiKey("");
+    void refreshStatus();
+  }, [refreshStatus]);
 
   const canSave = useMemo(
     () => !!cwd && apiKey.trim().length > 0 && environment.trim().length > 0,
@@ -143,17 +142,17 @@ export function HoneycombConfigDialog({
         setError(body.detail ?? body.error ?? `save failed (${res.status})`);
         return;
       }
-      setApiKey(""); // scrub immediately after save
+      setApiKey("");
       if (body.status) {
         setStatus(body.status);
-        onSaved?.(body.status);
+        onStatusChange?.(body.status);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-  }, [cwd, canSave, apiKey, environment, dataset, apiUrl, onSaved]);
+  }, [cwd, canSave, apiKey, environment, dataset, apiUrl, onStatusChange]);
 
   const remove = useCallback(async () => {
     if (!cwd) return;
@@ -177,7 +176,7 @@ export function HoneycombConfigDialog({
       }
       if (body.status) {
         setStatus(body.status);
-        onSaved?.(body.status);
+        onStatusChange?.(body.status);
       }
       setApiKey("");
       setEnvironment("");
@@ -188,7 +187,7 @@ export function HoneycombConfigDialog({
     } finally {
       setDeleting(false);
     }
-  }, [cwd, onSaved]);
+  }, [cwd, onStatusChange]);
 
   const test = useCallback(async () => {
     if (!cwd) return;
@@ -215,195 +214,222 @@ export function HoneycombConfigDialog({
   }, [cwd]);
 
   return (
+    <div className="flex flex-col gap-3 font-mono text-[11px]">
+      {!cwd && (
+        <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2 text-[color:var(--color-fg-dim)]">
+          Pick a project first — the Honeycomb config is per-project (see ADR-0005).
+        </div>
+      )}
+
+      <StatusRow status={status} loading={loadingStatus} />
+
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor="honeycomb-api-key"
+          className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
+        >
+          api key
+        </label>
+        <Input
+          id="honeycomb-api-key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={
+            status?.configured
+              ? `configured — ${status.apiKeyMasked ?? "hidden"} (paste to replace)`
+              : "hcbik_…"
+          }
+          className="font-mono"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={!cwd}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="honeycomb-env"
+            className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
+          >
+            environment
+          </label>
+          <Input
+            id="honeycomb-env"
+            value={environment}
+            onChange={(e) => setEnvironment(e.target.value)}
+            placeholder="prod"
+            className="font-mono"
+            spellCheck={false}
+            disabled={!cwd}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="honeycomb-dataset"
+            className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
+          >
+            dataset <span className="normal-case">(optional)</span>
+          </label>
+          <Input
+            id="honeycomb-dataset"
+            value={dataset}
+            onChange={(e) => setDataset(e.target.value)}
+            placeholder="my-service"
+            className="font-mono"
+            spellCheck={false}
+            disabled={!cwd}
+          />
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setShowAdvanced((v) => !v)}
+        className="self-start text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)] transition hover:text-[color:var(--color-fg)]"
+      >
+        {showAdvanced ? "hide advanced" : "advanced"}
+      </button>
+      {showAdvanced && (
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="honeycomb-url"
+            className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
+          >
+            api url
+          </label>
+          <Input
+            id="honeycomb-url"
+            value={apiUrl}
+            onChange={(e) => setApiUrl(e.target.value)}
+            placeholder={DEFAULT_API_URL}
+            className="font-mono"
+            spellCheck={false}
+            disabled={!cwd}
+          />
+          <span className="text-[10px] text-[color:var(--color-fg-faint)]">
+            Use <code>https://api.eu1.honeycomb.io</code> for EU tenants. Must
+            be <code>https://*.honeycomb.io</code>.
+          </span>
+        </div>
+      )}
+
+      {testResult && (
+        <div
+          className={`rounded-md border px-3 py-2 text-[11px] ${
+            testResult.ok
+              ? "border-[color:var(--color-success)]/40 bg-[color:var(--color-success)]/10 text-[color:var(--color-success)]"
+              : "border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 text-[color:var(--color-danger)]"
+          }`}
+        >
+          {testResult.ok ? (
+            <div className="space-y-0.5">
+              <div>
+                connected ✓ team{" "}
+                <span className="text-[color:var(--color-fg)]">
+                  {testResult.team?.slug ?? "—"}
+                </span>
+                {testResult.team?.name &&
+                  testResult.team.name !== testResult.team.slug && (
+                    <span className="text-[color:var(--color-fg-dim)]">
+                      {" "}
+                      ({testResult.team.name})
+                    </span>
+                  )}
+              </div>
+              <div>
+                environment{" "}
+                <span className="text-[color:var(--color-fg)]">
+                  {testResult.environment?.name ?? "—"}
+                </span>
+                {testResult.environment?.matchesConfigured === false && (
+                  <span className="text-[color:var(--color-warn)]">
+                    {" "}
+                    — differs from configured "{environment}"
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div>test failed: {testResult.error ?? "unknown"}</div>
+              {testResult.hint && (
+                <div className="mt-0.5 text-[10px] opacity-80">
+                  {testResult.hint}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 px-3 py-2 text-[11px] text-[color:var(--color-danger)]">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <Button
+          variant="ghost"
+          onClick={remove}
+          disabled={!cwd || !status?.configured || deleting}
+          className="text-[color:var(--color-fg-dim)]"
+          size="sm"
+        >
+          {deleting ? "removing…" : "Remove"}
+        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={test}
+            disabled={!cwd || !status?.configured || testing}
+            size="sm"
+          >
+            {testing ? "testing…" : "Test connection"}
+          </Button>
+          <Button onClick={save} disabled={!canSave || saving} size="sm">
+            {saving ? "saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Standalone dialog wrapper around `HoneycombConfigForm`. Kept for
+ * callers that want to pop the form as a modal without mounting the
+ * full SettingsPanel (primary entry is now the panel).
+ */
+export function HoneycombConfigDialog({
+  cwd,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  cwd: string | null;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  onSaved?(status: ConfigStatus): void;
+}) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Honeycomb observability</DialogTitle>
           <DialogDescription>
             MARVIN's <code>marvin-honeycomb</code> MCP server uses this config
-            to query traces + datasets. Stored at <code>&lt;project&gt;/.marvin/honeycomb.json</code> with 600 permissions.
+            to query traces + datasets. Stored at{" "}
+            <code>&lt;project&gt;/.marvin/honeycomb.json</code> with 600
+            permissions.
           </DialogDescription>
         </DialogHeader>
-
-        {!cwd && (
-          <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2 font-mono text-[11px] text-[color:var(--color-fg-dim)]">
-            Pick a project first — the Honeycomb config is per-project (see ADR-0005).
-          </div>
-        )}
-
-        <div className="flex flex-col gap-3 font-mono text-[11px]">
-          <StatusRow status={status} loading={loadingStatus} />
-
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor="honeycomb-api-key"
-              className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
-            >
-              api key
-            </label>
-            <Input
-              id="honeycomb-api-key"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={
-                status?.configured
-                  ? `configured — ${status.apiKeyMasked ?? "hidden"} (paste to replace)`
-                  : "hcbik_…"
-              }
-              className="font-mono"
-              autoComplete="off"
-              spellCheck={false}
-              disabled={!cwd}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label
-                htmlFor="honeycomb-env"
-                className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
-              >
-                environment
-              </label>
-              <Input
-                id="honeycomb-env"
-                value={environment}
-                onChange={(e) => setEnvironment(e.target.value)}
-                placeholder="prod"
-                className="font-mono"
-                spellCheck={false}
-                disabled={!cwd}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label
-                htmlFor="honeycomb-dataset"
-                className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
-              >
-                dataset <span className="normal-case">(optional)</span>
-              </label>
-              <Input
-                id="honeycomb-dataset"
-                value={dataset}
-                onChange={(e) => setDataset(e.target.value)}
-                placeholder="my-service"
-                className="font-mono"
-                spellCheck={false}
-                disabled={!cwd}
-              />
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowAdvanced((v) => !v)}
-            className="self-start text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)] transition hover:text-[color:var(--color-fg)]"
-          >
-            {showAdvanced ? "hide advanced" : "advanced"}
-          </button>
-          {showAdvanced && (
-            <div className="flex flex-col gap-1">
-              <label
-                htmlFor="honeycomb-url"
-                className="text-[color:var(--color-fg-faint)] uppercase tracking-[0.22em] text-[10px]"
-              >
-                api url
-              </label>
-              <Input
-                id="honeycomb-url"
-                value={apiUrl}
-                onChange={(e) => setApiUrl(e.target.value)}
-                placeholder={DEFAULT_API_URL}
-                className="font-mono"
-                spellCheck={false}
-                disabled={!cwd}
-              />
-              <span className="text-[10px] text-[color:var(--color-fg-faint)]">
-                Use <code>https://api.eu1.honeycomb.io</code> for EU tenants.
-                Must be <code>https://*.honeycomb.io</code>.
-              </span>
-            </div>
-          )}
-
-          {testResult && (
-            <div
-              className={`rounded-md border px-3 py-2 text-[11px] ${
-                testResult.ok
-                  ? "border-[color:var(--color-success)]/40 bg-[color:var(--color-success)]/10 text-[color:var(--color-success)]"
-                  : "border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 text-[color:var(--color-danger)]"
-              }`}
-            >
-              {testResult.ok ? (
-                <div className="space-y-0.5">
-                  <div>
-                    connected ✓ team{" "}
-                    <span className="text-[color:var(--color-fg)]">
-                      {testResult.team?.slug ?? "—"}
-                    </span>
-                    {testResult.team?.name &&
-                      testResult.team.name !== testResult.team.slug && (
-                        <span className="text-[color:var(--color-fg-dim)]">
-                          {" "}
-                          ({testResult.team.name})
-                        </span>
-                      )}
-                  </div>
-                  <div>
-                    environment{" "}
-                    <span className="text-[color:var(--color-fg)]">
-                      {testResult.environment?.name ?? "—"}
-                    </span>
-                    {testResult.environment?.matchesConfigured === false && (
-                      <span className="text-[color:var(--color-warn)]">
-                        {" "}
-                        — differs from configured "{environment}"
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <div>test failed: {testResult.error ?? "unknown"}</div>
-                  {testResult.hint && (
-                    <div className="mt-0.5 text-[10px] opacity-80">
-                      {testResult.hint}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {error && (
-            <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 px-3 py-2 text-[11px] text-[color:var(--color-danger)]">
-              {error}
-            </div>
-          )}
-        </div>
-
-        <DialogFooter className="sm:justify-between">
-          <Button
-            variant="ghost"
-            onClick={remove}
-            disabled={!cwd || !status?.configured || deleting}
-            className="text-[color:var(--color-fg-dim)]"
-          >
-            {deleting ? "removing…" : "Remove"}
-          </Button>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={test}
-              disabled={!cwd || !status?.configured || testing}
-            >
-              {testing ? "testing…" : "Test connection"}
-            </Button>
-            <Button onClick={save} disabled={!canSave || saving}>
-              {saving ? "saving…" : "Save"}
-            </Button>
-          </div>
-        </DialogFooter>
+        <HoneycombConfigForm
+          cwd={cwd}
+          {...(onSaved ? { onStatusChange: onSaved } : {})}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -444,12 +470,20 @@ function StatusRow({
         <span className="text-[color:var(--color-fg-dim)]">{sourceLabel}</span>
       </div>
       <div className="text-[color:var(--color-fg-dim)]">
-        key <span className="text-[color:var(--color-fg)]">{status.apiKeyMasked}</span>
-        {" · "}env <span className="text-[color:var(--color-fg)]">{status.environment}</span>
+        key{" "}
+        <span className="text-[color:var(--color-fg)]">
+          {status.apiKeyMasked}
+        </span>
+        {" · "}env{" "}
+        <span className="text-[color:var(--color-fg)]">
+          {status.environment}
+        </span>
         {status.dataset && (
           <>
             {" · "}dataset{" "}
-            <span className="text-[color:var(--color-fg)]">{status.dataset}</span>
+            <span className="text-[color:var(--color-fg)]">
+              {status.dataset}
+            </span>
           </>
         )}
       </div>

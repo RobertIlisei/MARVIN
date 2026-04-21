@@ -17,7 +17,6 @@ import { PreviewPane } from "@/components/preview/preview-pane";
 import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
 import { useProjects } from "@/components/project/use-projects";
-import { HoneycombConfigDialog } from "@/components/settings/honeycomb-config";
 import { ModelPicker } from "@/components/settings/model-picker";
 import {
   type PermissionStrategy,
@@ -27,6 +26,7 @@ import {
   type PersonalityMode,
   PersonalityToggle,
 } from "@/components/settings/personality-toggle";
+import { SettingsPanel, type SettingsTab } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
@@ -108,13 +108,19 @@ export default function Home() {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [honeycombOpen, setHoneycombOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("observability");
   const [honeycombStatus, setHoneycombStatus] = useState<{
     configured: boolean;
     environment: string | null;
     dataset: string | null;
     source: "env" | "workdir" | "global" | "none";
   } | null>(null);
+
+  const openSettings = useCallback((tab?: SettingsTab) => {
+    if (tab) setSettingsTab(tab);
+    setSettingsOpen(true);
+  }, []);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
@@ -574,6 +580,15 @@ export default function Home() {
         </button>
         <button
           type="button"
+          onClick={() => openSettings()}
+          title="Settings — models, observability, appearance, permissions"
+          aria-label="open settings"
+          className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+        >
+          ⚙
+        </button>
+        <button
+          type="button"
           onClick={() => setShortcutsOpen(true)}
           title="keyboard shortcuts (?)"
           className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
@@ -950,13 +965,14 @@ export default function Home() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => setHoneycombOpen(true)}
-                          className="flex items-center justify-between gap-3 rounded px-1 py-1 -mx-1 text-left transition hover:bg-[color:var(--color-bg-elev)]/60 disabled:opacity-50"
-                          disabled={!cwd}
+                          onClick={() => openSettings("observability")}
+                          className="flex items-center justify-between gap-3 rounded px-1 py-1 -mx-1 text-left transition hover:bg-[color:var(--color-bg-elev)]/60"
                           title={
                             honeycombStatus?.configured
-                              ? "Honeycomb MCP configured — click to edit"
-                              : "Configure Honeycomb MCP for trace queries"
+                              ? "Honeycomb MCP configured — open Settings → Observability"
+                              : cwd
+                                ? "Configure Honeycomb MCP for trace queries"
+                                : "Pick a project first; then click to configure Honeycomb"
                           }
                         >
                           <span className="text-[color:var(--color-fg-faint)]">honeycomb</span>
@@ -1023,11 +1039,23 @@ export default function Home() {
           onSelect={(absPath) => setSelectedPath(absPath)}
         />
       )}
-      <HoneycombConfigDialog
+      <SettingsPanel
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        initialTab={settingsTab}
         cwd={cwd || null}
-        open={honeycombOpen}
-        onOpenChange={setHoneycombOpen}
-        onSaved={(status) =>
+        projectName={active?.name ?? null}
+        executorModel={executorModel}
+        advisorModel={advisorModel}
+        onModelsChange={({ executor, advisor }) => {
+          setExecutorModel(executor);
+          setAdvisorModel(advisor);
+        }}
+        personality={personality}
+        onPersonalityChange={setPersonality}
+        permissionStrategy={permissionStrategy}
+        onPermissionChange={setPermissionStrategy}
+        onHoneycombStatusChange={(status) =>
           setHoneycombStatus({
             configured: status.configured,
             environment: status.environment,
