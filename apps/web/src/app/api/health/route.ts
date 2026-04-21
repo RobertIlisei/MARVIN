@@ -21,7 +21,11 @@ export async function GET() {
       auth,
       claudeBinary: binaryPath,
       binaryError,
-      model: defaultModel(),
+      // Named `defaultModel` (not `model`) because this is the fallback
+      // the chat route drops to when a turn doesn't get an explicit
+      // model — NOT what any active turn is using.
+      // See docs/operations/health.md + docs/concepts/advisor-strategy.md.
+      defaultModel: defaultModel(),
       dataDir: getMarvinDataDir(),
     },
     { headers: { "Cache-Control": "no-store" } },

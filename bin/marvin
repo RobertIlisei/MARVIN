@@ -8,7 +8,7 @@
 #   start    (default) — preflight checks, install deps if stale, start Next.js on :3030
 #   stop     — stop the running MARVIN (matches the process bound to :3030)
 #   restart  — stop + start
-#   status   — is MARVIN running? hit /api/health, report auth mode + model
+#   status   — is MARVIN running? hit /api/health, report auth mode + defaultModel
 #   logs     — tail the dev server log
 #   doctor   — run every preflight check and report; don't start anything
 #   help     — this message
