@@ -165,6 +165,8 @@ Returns zeroes for unknown `projectId` (safe default, not an error).
 
 ## Files
 
+All file routes share a single path sandbox: `checkFsPath` in [`packages/runtime/src/fs-sandbox.ts`](../../packages/runtime/src/fs-sandbox.ts). Paths outside `cwd`, symlinks (target or ancestor), paths containing NUL, and paths longer than 1024 bytes are rejected before I/O. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md). The ignore list lives in [`packages/tools/src/fs-constants.ts`](../../packages/tools/src/fs-constants.ts) and is shared with the user-initiated write policy (M2).
+
 ### `GET /api/files/tree?cwd=…&depth=…`
 
 Project-scoped file tree walker.
@@ -172,16 +174,18 @@ Project-scoped file tree walker.
 **Response:** `{ root: string, tree: FsNode, truncated: boolean, count: number }`
 
 - Default `depth: 6`, max `MAX_ENTRIES: 2000`.
-- Ignores: `node_modules`, `.git`, `.next`, `venv`, `__pycache__`, `target`, `dist`, `build`, `coverage`, caches.
+- Ignores: the shared `IGNORE_DIR_NAMES` set — `node_modules`, `.git`, `.next`, `.turbo`, `venv`, `__pycache__`, `target`, `dist`, `build`, `coverage`, `.DS_Store`, caches, `vendor`.
+- Symlinks are skipped during the walk (matches the sandbox's reject-by-default policy for read routes).
 
 ### `GET /api/files/content?cwd=…&path=…`
 
-Read one file. Path must be inside `cwd` — `..` escapes are rejected.
+Read one file. Path must be inside `cwd`; symlinks are rejected.
 
 **Response:** `{ path, size, binary, truncated, content }`
 
-- 512 KB cap. Larger files return `truncated: true` with the first 512 KB.
-- Binary detection via null-byte + non-printable heuristic. Binary files return `binary: true, content: ""`.
+- 512 KB cap. Larger files return `truncated: true` with `content: null`.
+- Binary detection via null-byte + non-printable heuristic. Binary files return `binary: true, content: null`.
+- Error codes returned via `{ error: "<sandbox-error-code>" }`: `404 not-found`, `400 path-escapes-cwd | symlink-rejected | symlink-escapes-cwd | is-directory`, `500 io-error`.
 
 ### `GET /api/files/status?cwd=…`
 
@@ -189,7 +193,7 @@ Read one file. Path must be inside `cwd` — `..` escapes are rejected.
 
 **Response:** `{ isGit: boolean, branch: string | null, status: Record<absolutePath, porcelainCode> }`
 
-Returns `{ isGit: false, status: {} }` outside a git work tree. Consumed by the file tree (dirty-file badges + branch pill) and the header's `<BranchBadge>`.
+Returns `{ isGit: false, status: {} }` outside a git work tree *or* when the sandbox check on `cwd` fails. Consumed by the file tree (dirty-file badges + branch pill) and the header's `<BranchBadge>`.
 
 ## Terminal
 
