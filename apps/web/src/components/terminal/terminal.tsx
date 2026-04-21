@@ -2,12 +2,10 @@
 
 import "@xterm/xterm/css/xterm.css";
 
-import { useEffect, useRef, useState } from "react";
-
-import { useTheme } from "@/components/settings/use-theme";
-
-import type { Terminal as Xterm } from "@xterm/xterm";
 import type { FitAddon as FitAddonT } from "@xterm/addon-fit";
+import type { Terminal as Xterm } from "@xterm/xterm";
+import { useEffect, useRef, useState } from "react";
+import { useTheme } from "@/components/settings/use-theme";
 
 const PROMPT = "\x1b[38;5;39m❯\x1b[0m ";
 const HISTORY_KEY = "marvin.term.history";
@@ -252,7 +250,7 @@ export function Terminal({ cwd }: { cwd: string }) {
             buf += dec.decode(value, { stream: true });
             // Parse SSE frames: blank-line separated, each frame has
             // `event: x` and `data: {...}` lines.
-            let idx;
+            let idx: number;
             while ((idx = buf.indexOf("\n\n")) !== -1) {
               const frame = buf.slice(0, idx);
               buf = buf.slice(idx + 2);

@@ -105,7 +105,7 @@ export function useTreeDnd(opts: UseTreeDndOptions): UseTreeDnd {
         // A directory-into-its-own-child drop is caught by the server
         // (the source realpath contains the target), but we can avoid the
         // round-trip with a cheap prefix check.
-        if (from.some((src) => path === src || path.startsWith(src + "/"))) {
+        if (from.some((src) => path === src || path.startsWith(`${src}/`))) {
           return;
         }
         await opts.onMove({ from, to: path });

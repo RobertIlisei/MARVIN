@@ -18,8 +18,8 @@
  * project's workDir) add them when there are real services to watch.
  */
 
-import { execFile } from "child_process";
-import { promisify } from "util";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 const pExecFile = promisify(execFile);
 
@@ -137,5 +137,5 @@ export function formatProbeBlock(probes: InfraProbe[]): string {
   lines.push(
     "> **If a DOWN service is required for the work at hand, flag it to the user and wait for confirmation before writing code that depends on it.**",
   );
-  return lines.join("\n") + "\n\n---\n\n";
+  return `${lines.join("\n")}\n\n---\n\n`;
 }

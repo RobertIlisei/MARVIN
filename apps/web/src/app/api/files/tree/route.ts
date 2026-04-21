@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
   let count = 0;
   async function walk(dir: string, d: number): Promise<TreeNode[]> {
     if (d > depth || count >= MAX_ENTRIES) return [];
-    let entries;
+    let entries: import("node:fs").Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {

@@ -5,8 +5,8 @@
  * the UI can render.
  */
 
-import { existsSync, readFileSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 export interface GraphNode {
   id: string;

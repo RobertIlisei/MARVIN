@@ -69,6 +69,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: pre-hydration theme bootstrap — must run inline before React paints */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body>{children}</body>

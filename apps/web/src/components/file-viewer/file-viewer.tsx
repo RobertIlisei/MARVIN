@@ -111,7 +111,7 @@ export function FileViewer({
           {error}
         </div>
       )}
-      {data && data.binary && (
+      {data?.binary && (
         <ReadOnlyPanel
           cwd={cwd}
           filePath={filePath}

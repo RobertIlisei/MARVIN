@@ -165,13 +165,13 @@ function denyByPath(p: string, cwd: string): string | null {
 }
 
 function relativeFromCwd(p: string, cwd: string): string {
-  if (p.startsWith(cwd + "/")) return p.slice(cwd.length + 1);
+  if (p.startsWith(`${cwd}/`)) return p.slice(cwd.length + 1);
   if (p === cwd) return "";
   return p; // caller handles the escape case
 }
 
 function isSameOrParent(p: string, cwd: string): boolean {
-  return p === cwd || cwd.startsWith(p + "/");
+  return p === cwd || cwd.startsWith(`${p}/`);
 }
 
 function isSecretPath(p: string): boolean {

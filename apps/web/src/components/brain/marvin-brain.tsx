@@ -495,6 +495,8 @@ export function MarvinBrain({
       <svg
         viewBox="0 0 480 520"
         xmlns="http://www.w3.org/2000/svg"
+        role="presentation"
+        aria-hidden="true"
         className={`block h-full w-full ${activity.rootClass}`}
         style={{
           animation:

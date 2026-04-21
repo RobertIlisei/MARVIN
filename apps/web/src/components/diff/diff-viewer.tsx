@@ -1,12 +1,11 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useMemo } from "react";
-
-import { applyMonacoTheme, themeNameFor } from "@/components/settings/monaco-themes";
-import { useTheme } from "@/components/settings/use-theme";
 
 import type { DiffOnMount } from "@monaco-editor/react";
+import dynamic from "next/dynamic";
+import { useMemo } from "react";
+import { applyMonacoTheme, themeNameFor } from "@/components/settings/monaco-themes";
+import { useTheme } from "@/components/settings/use-theme";
 
 const DiffEditor = dynamic(
   () => import("@monaco-editor/react").then((m) => m.DiffEditor),

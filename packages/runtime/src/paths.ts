@@ -11,9 +11,9 @@
  * project list, MARVIN's own config.
  */
 
-import { existsSync, mkdirSync } from "fs";
-import { join, resolve } from "path";
-import { homedir } from "os";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 function getHomeDir(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? homedir();
