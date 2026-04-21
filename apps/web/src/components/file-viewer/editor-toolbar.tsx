@@ -27,6 +27,8 @@ export function EditorToolbar({
   size,
   isDirty,
   saving,
+  readOnly = false,
+  notice = null,
   onSave,
   onClose,
   conflict,
@@ -37,6 +39,8 @@ export function EditorToolbar({
   size: number;
   isDirty: boolean;
   saving: boolean;
+  readOnly?: boolean;
+  notice?: string | null;
   onSave(): void;
   onClose(): void;
   conflict: EditorConflict | null;
@@ -88,16 +92,26 @@ export function EditorToolbar({
           <span>{lineCount} lines</span>
           <span>·</span>
           <span>{fmtBytes(size)}</span>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={!isDirty || saving}
-            className="rounded border border-[color:var(--color-border)] px-1.5 py-0.5 text-[10px] text-[color:var(--color-fg-dim)] transition enabled:hover:border-[color:var(--color-accent)] enabled:hover:text-[color:var(--color-fg)] disabled:opacity-40"
-            aria-label="save"
-            title="save (⌘S)"
-          >
-            {saving ? "saving…" : "save"}
-          </button>
+          {readOnly && (
+            <span
+              className="rounded border border-[color:var(--color-border)] px-1.5 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[color:var(--color-fg-faint)]"
+              title="read-only — save disabled for truncated files"
+            >
+              read-only
+            </span>
+          )}
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={!isDirty || saving}
+              className="rounded border border-[color:var(--color-border)] px-1.5 py-0.5 text-[10px] text-[color:var(--color-fg-dim)] transition enabled:hover:border-[color:var(--color-accent)] enabled:hover:text-[color:var(--color-fg)] disabled:opacity-40"
+              aria-label="save"
+              title="save (⌘S)"
+            >
+              {saving ? "saving…" : "save"}
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
@@ -108,6 +122,11 @@ export function EditorToolbar({
           </button>
         </span>
       </div>
+      {notice && !conflict && (
+        <div className="border-b border-[color:var(--color-border)] bg-[color:var(--color-warn)]/10 px-3 py-2 text-[11px] text-[color:var(--color-warn)]">
+          {notice}
+        </div>
+      )}
       {conflict && (
         <div className="flex items-center gap-2 border-b border-[color:var(--color-border)] bg-[color:var(--color-warn)]/10 px-3 py-2 text-[11px] text-[color:var(--color-warn)]">
           <span>

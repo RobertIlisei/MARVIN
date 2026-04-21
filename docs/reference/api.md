@@ -181,10 +181,11 @@ Project-scoped file tree walker.
 
 Read one file. Path must be inside `cwd`; symlinks are rejected.
 
-**Response:** `{ path, size, binary, truncated, content }`
+**Response:** `{ path, size, mtime, maxSize, binary, truncated, content }`
 
-- 512 KB cap. Larger files return `truncated: true` with `content: null`.
-- Binary detection via null-byte + non-printable heuristic. Binary files return `binary: true, content: null`.
+- 4 MB cap (`maxSize`). Larger files return `truncated: true` with the first 4 MB of content — the editor mounts these read-only so the user can scan the prefix without risking a save that would overwrite the tail of the real file.
+- Binary detection via null-byte + non-printable heuristic on the sampled prefix. Binary files return `binary: true, content: null`.
+- `mtime` (`fs.stat.mtimeMs`) is the CAS token for subsequent `/api/files/write/save` requests.
 - Error codes returned via `{ error: "<sandbox-error-code>" }`: `404 not-found`, `400 path-escapes-cwd | symlink-rejected | symlink-escapes-cwd | is-directory`, `500 io-error`.
 
 ### `GET /api/files/status?cwd=…`
