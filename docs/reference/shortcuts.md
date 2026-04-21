@@ -58,6 +58,22 @@ Destructive ops classified as `confirm` (permanent delete, secret-file writes, c
 
 The editor refuses to mount on binary or truncated (>512 KB) files so a save never silently corrupts them. Switching away from a dirty file surfaces the Unsaved Changes dialog.
 
+## Source Control panel (focus inside the status list)
+
+| Keys | Action |
+|---|---|
+| `↑` / `↓` | Move focus across the status list (spans bucket boundaries — Staged / Changes / Untracked) |
+| `Home` / `End` | Jump to the first / last row |
+| `Enter` | Open the focused file in the centre viewer |
+| `Space` | Primary action for the row's bucket — stage (Changes / Untracked) or unstage (Staged). No-op in Conflicts. |
+
+## Source Control panel (focus inside the commit textarea)
+
+| Keys | Action |
+|---|---|
+| `⌘ Enter` / `Ctrl Enter` | Commit (or amend, when the amend checkbox is on) |
+| `Esc` | Exit amend mode without committing |
+
 ## Terminal (focus inside the xterm pane)
 
 | Keys | Action |

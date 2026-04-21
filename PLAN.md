@@ -1493,6 +1493,40 @@ End-to-end smoke on a sample Next.js + Prisma project in `~/scratch/login-demo/`
   verified via `pnpm -r typecheck` (all 8 packages green) +
   `pnpm lint` (0 errors, 190 files) + `pnpm test` (134 passed).
   Typecheck clean across all 8 packages.
+- **2026-04-21 (source-control — M4: polish — ETag + visibility pause + keyboard nav)** —
+  `/api/git/status` now emits a weak ETag derived from the raw
+  porcelain bytes and honours `If-None-Match`; the 2 s panel poll
+  returns `304 Not Modified` on an idle tree instead of re-parsing
+  + re-rendering the same JSON. Live-smoked against the scratch
+  repo: first hit → 200 + ETag `W/"accc9267058a74a7"`; replay with
+  `If-None-Match` → 304 + same ETag; stage a file → next poll
+  returns 200 with a fresh ETag `W/"7e51377853e8b5e9"`. Known
+  limitation (documented in `api.md`): porcelain v2 is content-
+  agnostic on the working tree, so an unstaged content edit on a
+  file that's already in the list doesn't change the ETag — the
+  panel picks up on it the next time the file's bucket transitions.
+  `use-git-status` was rewritten (M2 had a skip-on-hidden fetch
+  guard but left the interval running): now installs a
+  `visibilitychange` listener that actually stops the interval
+  while the tab is hidden and restarts it on return; sends
+  `If-None-Match` with every request; nulls the stored ETag on
+  cwd / enabled changes so a 304 from a previous project doesn't
+  leak into the new session; on the manual `refresh()` (fired
+  after a successful mutation) clears the ETag so the server
+  answers with the post-mutation body even if the underlying
+  porcelain bytes haven't settled yet. `status-list.tsx` gained
+  full keyboard navigation — a roving-tabindex listbox with
+  `↑ ↓ Home End` moving focus across bucket boundaries, `Enter`
+  opening the focused file in the centre viewer, `Space` firing
+  the primary action for the row's bucket (stage / unstage).
+  `aria-activedescendant` wires SR announcements to the focused
+  row's stable id. `docs/reference/shortcuts.md` gained two
+  Source-Control sections (list + commit textarea). `docs/
+  reference/api.md` gained a "Caching" subsection on the status
+  route. End-to-end verified via `pnpm -r typecheck` (all 8
+  packages green) + `pnpm lint` (0 errors, 190 files) +
+  `pnpm test` (134 passed) + live ETag smoke (200 → 304 → 200
+  on state change). Typecheck clean across all 8 packages.
 
 ## Status
 

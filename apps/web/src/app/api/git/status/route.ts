@@ -16,6 +16,8 @@
  * See [ADR-0012](../../../../../../../docs/decisions/0012-source-control-mutation-channel.md).
  */
 
+import { createHash } from "node:crypto";
+
 import { parsePorcelainV2, runGit } from "@marvin/git";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
@@ -72,6 +74,22 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // ETag based on the raw porcelain bytes — identical output produces
+  // identical hash, so a 2 s poll on an idle tree returns 304 with an
+  // empty body. sha1 truncated to 16 hex chars is enough entropy
+  // against the poll's state space and keeps the header compact.
+  const etag = `W/"${createHash("sha1").update(status.stdout).digest("hex").slice(0, 16)}"`;
+  const ifNoneMatch = req.headers.get("if-none-match");
+  if (ifNoneMatch && ifNoneMatch === etag) {
+    return new NextResponse(null, {
+      status: 304,
+      headers: { ETag: etag },
+    });
+  }
+
   const parsed = parsePorcelainV2(status.stdout);
-  return NextResponse.json({ enabled: true, ...parsed });
+  return NextResponse.json(
+    { enabled: true, ...parsed },
+    { headers: { ETag: etag } },
+  );
 }
