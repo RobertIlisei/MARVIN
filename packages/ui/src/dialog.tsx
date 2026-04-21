@@ -37,8 +37,15 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
+      // Animation classes removed (see DialogContent comment below).
+      // Inline style forces a visible, opaque-enough backdrop regardless
+      // of the animation pipeline state.
+      style={{
+        backgroundColor: "var(--color-bg-glass)",
+        opacity: 1,
+      }}
       className={cn(
-        "fixed inset-0 z-50 bg-[color:var(--color-bg-glass)] backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        "fixed inset-0 z-50 backdrop-blur-sm",
         className
       )}
       {...props}
@@ -59,8 +66,32 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        // Visibility is forced via inline style — position + opacity +
+        // transform + surface colours — and the `data-[state=*]:animate-*`
+        // classes have been removed. Prior attempts (commits 78bc685,
+        // 3425935) leaned on `tw-animate-css` utilities to fade + zoom
+        // the card in, but in the Tailwind v4 + Turbopack + Radix combo
+        // the enter animation sometimes never settles back to the base
+        // state (fill-mode=none, keyframe overrides translate-x-[-50%] /
+        // translate-y-[-50%] mid-enter) — result is an opacity:0,
+        // off-center card sitting invisibly over a visible backdrop.
+        // The user experiences this as "a veil appears but I can't see
+        // the configurations." Dropping the animate classes and
+        // force-setting position + opacity inline is the reliable fix;
+        // we accept no enter/leave animation on the dialog for now.
+        style={{
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          opacity: 1,
+          backgroundColor: "var(--color-bg-elev)",
+          color: "var(--color-fg)",
+          border: "1px solid var(--color-border-strong)",
+          boxShadow: "var(--shadow-panel)",
+        }}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg p-6 outline-none sm:max-w-lg",
           className
         )}
         {...props}
@@ -69,7 +100,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="absolute top-4 right-4 rounded-xs text-[color:var(--color-fg-dim)] opacity-70 transition-opacity hover:opacity-100 hover:text-[color:var(--color-fg)] focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
             <span className="sr-only">Close</span>
