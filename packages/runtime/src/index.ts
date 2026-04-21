@@ -17,3 +17,7 @@ export {
   type SandboxCheckErr,
   type SandboxErrorCode,
 } from "./fs-sandbox";
+export {
+  mintConfirmToken,
+  consumeConfirmToken,
+} from "./fs-write-confirm-registry";

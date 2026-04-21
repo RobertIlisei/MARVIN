@@ -88,6 +88,12 @@ important signal.
   route or component is a drift bug waiting to happen — both write
   channels (LLM + user-initiated) must share the same source. See
   [ADR-0008](./docs/decisions/0008-user-initiated-write-channel.md).
+- **New `/api/files/write/*` routes** must pair `checkFsPath` with
+  `fsWritePolicy` and must honour `X-Marvin-Confirmed` for the
+  `confirm` policy class. Any route that writes without the sandbox,
+  or classifies without the policy, or skips the token check on
+  `confirm`, is a 🔴 Important finding. See
+  [ADR-0008](./docs/decisions/0008-user-initiated-write-channel.md).
 - **Hardcoded model identifiers** (`claude-opus-4-7` in UI strings or
   headers). Must read from `executorModel` / `advisorModel` state, not
   inline literals. The `<BranchBadge>`-era stale "model: claude-opus-4-7"
