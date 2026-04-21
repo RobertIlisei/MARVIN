@@ -22,14 +22,13 @@
  *      when the user clicks allow or deny.
  */
 
-import { query, type CanUseTool, type Options, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-
+import { type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createGraphMcpServer } from "@marvin/graphify-bridge";
+import { type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
-import { toolPolicy, type ToolName } from "@marvin/tools/policy";
-import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { createPlaywrightMcpConfig } from "./playwright-mcp";
 
 export type RuntimeMode = "opus" | "advisor";

@@ -1,7 +1,7 @@
 "use client";
 
-import type { Message } from "./types";
 import { ToolCallCard } from "./tool-call-card";
+import type { Message } from "./types";
 
 /**
  * Render a text block with minimal markdown (fenced code + inline code + paragraphs).

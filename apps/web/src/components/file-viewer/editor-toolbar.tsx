@@ -81,9 +81,10 @@ export function EditorToolbar({
         </nav>
         {isDirty && (
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
+            role="img"
             aria-label="unsaved changes"
             title="unsaved changes"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-accent)]"
           />
         )}
         <span className="ml-auto flex shrink-0 items-center gap-3 text-[color:var(--color-fg-faint)]">

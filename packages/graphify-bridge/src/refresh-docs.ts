@@ -8,8 +8,8 @@
  * if it wants one.
  */
 
-import { readFile, stat, writeFile } from "fs/promises";
-import { join } from "path";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 
 const DEFAULT_DOCS = ["BUSINESS_OVERVIEW.md", "PROJECT_STATUS.md", "README.md"];

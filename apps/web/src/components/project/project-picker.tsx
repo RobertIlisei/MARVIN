@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-
+import { AddProjectDialog } from "./add-project-dialog";
 import type {
   ProjectRecord,
   SessionSummary,
   VerifyResult,
 } from "./types";
-import { AddProjectDialog } from "./add-project-dialog";
 
 function fmtWhen(iso: string | null): string {
   if (!iso) return "never";
@@ -134,7 +133,6 @@ export function ProjectPicker({
           <div className="absolute left-0 top-full z-40 mt-2 w-[min(560px,calc(100vw-3rem))] overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/95 shadow-2xl backdrop-blur">
             <div className="flex items-center gap-2 border-b border-[color:var(--color-border)] px-3 py-2">
               <input
-                autoFocus
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="search projects"

@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.json",
+      "!**/node_modules",
+      "!**/.next",
+      "!**/.turbo",
+      "!**/dist",
+      "!**/out",
+      "!**/build",
+      "!**/*.tsbuildinfo",
+      "!data",
+      "!graphify-out",
+      "!packages/graphify-out",
+      "!**/graphify-out/cache",
+      "!.claude/skills",
+      "!pnpm-lock.yaml"
+    ]
+  },
+  "formatter": {
+    "enabled": false,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "off",
+        "useImportType": "warn",
+        "noParameterAssign": "off",
+        "useTemplate": "warn"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "off",
+        "noExplicitAny": "warn",
+        "noAssignInExpressions": "off"
+      },
+      "complexity": {
+        "noForEach": "off",
+        "noUselessFragments": "warn"
+      },
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "off"
+      },
+      "a11y": {
+        "useKeyWithClickEvents": "off",
+        "useButtonType": "warn",
+        "noStaticElementInteractions": "off",
+        "noAutofocus": "off"
+      },
+      "performance": {
+        "noAccumulatingSpread": "off",
+        "noImgElement": "off"
+      }
+    }
+  },
+  "javascript": {
+    "globals": ["React"]
+  },
+  "overrides": [
+    {
+      "includes": ["apps/web/src/components/brain/brain-liquid.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noExplicitAny": "off" },
+          "correctness": { "noUnusedVariables": "off" },
+          "complexity": { "noBannedTypes": "off" }
+        }
+      }
+    }
+  ]
+}

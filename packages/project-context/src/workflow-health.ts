@@ -17,8 +17,8 @@
  * All checks are local FS stats; no subprocess spawns.
  */
 
-import { readdirSync, readFileSync, statSync } from "fs";
-import { join } from "path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 export interface WorkflowHealth {
   /** Absolute workDir the probe was run against. */
@@ -85,7 +85,7 @@ function walkRepo(root: string, maxEntries = 4000): {
       // still look substantive if only a workflow file exists.
       if (name.startsWith(".") && name !== ".github") continue;
       const full = `${dir}/${name}`;
-      let st;
+      let st: ReturnType<typeof statSync>;
       try {
         st = statSync(full);
       } catch {

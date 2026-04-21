@@ -49,12 +49,19 @@ important signal.
 - **Anything `pnpm -r typecheck` already catches.** Type errors, missing
   properties, null deref. We rely on TypeScript strict mode
   (`noUncheckedIndexedAccess: true`) — duplicate coverage is noise.
-- **Formatting.** No project-wide formatter runs yet. Don't flag
-  whitespace, import order, or quote style.
-- **Missing tests.** MARVIN currently has no automated test harness;
-  see [docs/development/testing.md](./docs/development/testing.md).
-  Suggesting "add a test" is expected to produce zero diff until the
-  harness lands.
+- **Anything `pnpm lint` already catches.** Biome (`biome.json`) enforces
+  the lint surface. If a concern is encoded as a Biome rule, rely on
+  that — don't flag it manually.
+- **Formatting.** Biome's formatter is intentionally disabled
+  (`formatter.enabled: false`) while we settle conventions. Don't flag
+  whitespace or quote style.
+- **Missing tests on surfaces not yet covered.** Vitest landed for
+  security-critical code (fs-sandbox, fs-write-policy, fs-constants,
+  fs-write-confirm-registry) — suggesting tests for those *is* in
+  scope. For the rest (Agent SDK loop, streaming UI, individual API
+  routes), test coverage is opportunistic and "add a test for this"
+  is noise unless the PR is large enough to warrant one. See
+  [docs/development/testing.md](./docs/development/testing.md).
 - **`graphify-out/*` regeneration.** The graph + report are checked-in
   artefacts. Flagging churn on `graph.json` / `GRAPH_REPORT.md` from a
   `/graphify . --update` run is noise.
