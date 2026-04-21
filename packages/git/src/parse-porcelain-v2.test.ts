@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePorcelainV2 } from "./parse-porcelain-v2.js";
+import { parsePorcelainV2 } from "./parse-porcelain-v2";
 
 // Helper: build a NUL-delimited record stream the way `git status -z`
 // emits it. Each record is NUL-terminated (so the final record ends

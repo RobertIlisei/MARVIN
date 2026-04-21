@@ -13,6 +13,10 @@ import { QuickOpen } from "@/components/file-tree/quick-open";
 import { FileViewer } from "@/components/file-viewer/file-viewer";
 import { GraphPanel } from "@/components/graph/graph-panel";
 import { ChatInput } from "@/components/input/chat-input";
+import {
+  LeftColumnTabs,
+  useLeftColumnTab,
+} from "@/components/left-column-tabs";
 import { PreviewPane } from "@/components/preview/preview-pane";
 import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
@@ -31,6 +35,7 @@ import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
 import { useTauriMenu } from "@/components/shell/use-tauri-menu";
+import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { Terminal } from "@/components/terminal/terminal";
 
 /** Match Task `input` shapes whose description marks an advisor consult. */
@@ -107,6 +112,7 @@ export default function Home() {
     useState<PermissionStrategy>("auto");
   const [panes, setPanes] = useState<PaneState>(DEFAULT_PANES);
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
+  const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -767,18 +773,28 @@ export default function Home() {
               className="hidden lg:block"
             >
               <aside className="flex h-full flex-col border-r border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/30">
-                <div className="flex items-center justify-between border-b border-[color:var(--color-border)] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[color:var(--color-fg-faint)]">
-                  <span>files</span>
-                </div>
+                <LeftColumnTabs
+                  tab={leftColumnTab}
+                  onTabChange={setLeftColumnTab}
+                />
                 <div className="min-h-0 flex-1">
-                  <FileTree
-                    cwd={cwd}
-                    onSelect={setSelectedPath}
-                    {...(selectedPath ? { selectedPath } : {})}
-                    onOpenInTerminal={() =>
-                      setPanes((p) => ({ ...p, terminal: true }))
-                    }
-                  />
+                  {leftColumnTab === "files" ? (
+                    <FileTree
+                      cwd={cwd}
+                      onSelect={setSelectedPath}
+                      {...(selectedPath ? { selectedPath } : {})}
+                      onOpenInTerminal={() =>
+                        setPanes((p) => ({ ...p, terminal: true }))
+                      }
+                    />
+                  ) : (
+                    <SourceControlPanel
+                      cwd={cwd}
+                      visible={leftColumnTab === "source-control"}
+                      selectedPath={selectedPath ?? null}
+                      onSelect={setSelectedPath}
+                    />
+                  )}
                 </div>
               </aside>
             </Panel>

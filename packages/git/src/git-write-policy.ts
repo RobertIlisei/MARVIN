@@ -15,7 +15,7 @@
  * See [ADR-0012](../../../docs/decisions/0012-source-control-mutation-channel.md).
  */
 
-import { isSafeRef, isSafeRemote } from "./argv-guards.js";
+import { isSafeRef, isSafeRemote } from "./argv-guards";
 
 export type GitOp =
   | { kind: "stage"; paths: string[] }
