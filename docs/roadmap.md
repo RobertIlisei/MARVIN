@@ -76,25 +76,17 @@ Registered as `marvin-honeycomb`. Would expose trace querying as tools the execu
 
 **Blocker:** requires a Honeycomb account + team-specific configuration. Violates [isolation contract](./concepts/isolation-contract.md) if baked into MARVIN's source; belongs in `<workDir>/.marvin/` config. No shipping ETA until a user has a Honeycomb environment to be the first to try.
 
-### Automated tests
+### Automated tests for surfaces beyond the write-channel security layer
 
-Currently zero. See [Testing](./development/testing.md) for the strategy and trigger conditions.
-
-### License
-
-Repo has no LICENSE file. See [Licensing](./business/licensing.md). Probable landing: MIT or Apache 2.0.
-
-### ESLint / Biome
-
-`next lint` was removed in Next 16. MARVIN has no replacement configured. Code stays clean via TypeScript strict mode, but a proper linter is overdue.
+**Partial shipment 2026-04-21** — Vitest harness + 61 tests cover
+`fs-sandbox` / `fs-write-policy` / `fs-constants` /
+`fs-write-confirm-registry`. The Agent SDK interaction loop,
+streaming UI, and individual API routes remain uncovered — still
+opportunistic. See [Testing](./development/testing.md).
 
 ### `/api/health` `model` field rename
 
 Old response has `model: claude-opus-4-7` which users mistake for "the live model." Renamed to `defaultModel` on 2026-04-19 — some docs or scripts may still reference the old name. Update callers.
-
-### Full shell audit for dark-mode hardcoded colors
-
-Per [ADR-0006](./decisions/0006-light-first-theme-cascade.md), some component-level Tailwind classes (`bg-black/40` etc.) haven't been migrated to CSS-var references. These look slightly off in one theme. Not a showstopper; low-priority sweep.
 
 ## Not planned
 
