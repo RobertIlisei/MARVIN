@@ -1,15 +1,17 @@
 "use client";
 
 /**
- * MARVIN's unified settings panel — single-entry dialog with sidebar
- * tabs for Observability, Models, Appearance, Permissions, and
- * Project info.
+ * MARVIN's Settings panel.
  *
- * Scope note: this panel *complements* the header pills rather than
- * replacing them. The pills stay for quick-flip muscle memory; the
- * panel is the authoritative "everything lives here" view. Each tab
- * re-uses an existing component (ModelPicker, ThemeToggle, etc.) so
- * there's one source of truth for each setting's behaviour.
+ * Scope: **Observability only**. Everything else that used to live in
+ * here (Models, Appearance, Permissions, Project) is accessible from
+ * the top bar — duplicating the controls in a dialog just crowded the
+ * layout and forced users to hunt in two places. The dialog now has
+ * one job: configure Honeycomb (the only setting that needs a real
+ * form with secrets, test-connection, save/delete).
+ *
+ * Single-pane layout: dialog chrome → title + subtitle → Honeycomb
+ * form. Generous padding. No sidebar, no tabs.
  */
 
 import {
@@ -21,52 +23,20 @@ import {
 } from "@marvin/ui/dialog";
 
 import { HoneycombConfigForm } from "@/components/settings/honeycomb-config";
-import { ModelPicker } from "@/components/settings/model-picker";
-import {
-  type PermissionStrategy,
-  PermissionToggle,
-} from "@/components/settings/permission-toggle";
-import {
-  type PersonalityMode,
-  PersonalityToggle,
-} from "@/components/settings/personality-toggle";
-import { ThemeToggle } from "@/components/settings/theme-toggle";
 
-export type SettingsTab =
-  | "observability"
-  | "models"
-  | "appearance"
-  | "permissions"
-  | "project";
+/**
+ * Kept for back-compat with callers that imported the type. Now a
+ * single-value union — "observability" is the only tab. Remove when
+ * nothing references it externally.
+ */
+export type SettingsTab = "observability";
 
 export interface SettingsPanelProps {
   open: boolean;
   onOpenChange(open: boolean): void;
 
-  /**
-   * Fully controlled — parent owns the active tab. Enables deep-links
-   * ("open at Observability") and stops SettingsPanel from owning
-   * its own state that would drift out of sync with the caller.
-   */
-  tab: SettingsTab;
-  onTabChange(next: SettingsTab): void;
-
-  /** Per-project context — routes that need a cwd receive it. */
+  /** Per-project context — the Honeycomb form needs the cwd to write to `<project>/.marvin/`. */
   cwd: string | null;
-  projectName: string | null;
-
-  /** Model picker state — forwarded to the existing component. */
-  executorModel: string | null;
-  advisorModel: string | null;
-  onModelsChange(next: { executor: string | null; advisor: string | null }): void;
-
-  /** Personality toggle state. */
-  personality: PersonalityMode;
-  onPersonalityChange(p: PersonalityMode): void;
-
-  /** Permission toggle state. */
-  permissionStrategy: PermissionStrategy;
-  onPermissionChange(s: PermissionStrategy): void;
 
   /** Forwarded from HoneycombConfigForm so the host can mirror status elsewhere (brain-panel row). */
   onHoneycombStatusChange?(status: {
@@ -77,24 +47,14 @@ export interface SettingsPanelProps {
   }): void;
 }
 
-const TABS: Array<{ id: SettingsTab; label: string; hint: string }> = [
-  { id: "observability", label: "Observability", hint: "Honeycomb traces" },
-  { id: "models", label: "Models", hint: "Executor + advisor" },
-  { id: "appearance", label: "Appearance", hint: "Theme + personality" },
-  {
-    id: "permissions",
-    label: "Permissions",
-    hint: "Tool-use confirm gate",
-  },
-  { id: "project", label: "Project", hint: "Active working dir" },
-];
-
 export function SettingsPanel(props: SettingsPanelProps) {
-  const { tab, onTabChange } = props;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
-        className="sm:max-w-3xl"
+        // Roomy enough for the Honeycomb form's four inputs + advanced
+        // accordion. p-0 so the panel paints its own padding and the
+        // close-X sits inside our header row, not over form content.
+        className="sm:max-w-2xl p-0 overflow-hidden"
         // Don't auto-close when the pointerdown that OPENED the dialog
         // bubbles up to the document — happens because the trigger (⚙
         // in the header) lives inside a `data-tauri-drag-region`
@@ -102,10 +62,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
         // Radix's DismissableLayer installs its listener. Without this
         // guard the dialog opens + closes in the same tick and the
         // user sees nothing.
-        //
-        // We still respect outside-clicks that are clearly user intent
-        // (clicking the backdrop away from the header). Only suppress
-        // when the target sits inside the drag region.
         onPointerDownOutside={(e) => {
           const target = e.target;
           if (
@@ -125,141 +81,78 @@ export function SettingsPanel(props: SettingsPanelProps) {
           }
         }}
       >
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            Per-project config lives under{" "}
-            <code>&lt;project&gt;/.marvin/</code>. User-global state is under{" "}
-            <code>~/.marvin/</code>.
-          </DialogDescription>
-        </DialogHeader>
+        <div className="flex flex-col max-h-[min(85vh,44rem)]">
+          {/* ------------------------------------------------------------------
+               Header — visible title + subtitle. Radix's a11y title lives
+               inside a visually-hidden wrapper so screen readers still
+               pick it up.
+               ------------------------------------------------------------------ */}
+          <DialogHeader className="sr-only">
+            <DialogTitle>Settings — Observability</DialogTitle>
+            <DialogDescription>
+              Configure Honeycomb API credentials, environment, and dataset for
+              MARVIN&apos;s tool-loop traces.
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="grid grid-cols-[9rem_1fr] gap-5 min-h-[20rem]">
-          <nav
-            aria-label="Settings sections"
-            className="flex flex-col gap-0.5 border-r border-[color:var(--color-border)] pr-2 font-mono text-[11px]"
+          <header
+            className="flex flex-col gap-1.5 px-8 pt-7 pb-5 border-b"
+            style={{ borderColor: "var(--color-border)" }}
           >
-            {TABS.map((t) => {
-              const active = t.id === tab;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => onTabChange(t.id)}
-                  className={`flex flex-col items-start rounded px-2 py-1.5 text-left transition ${
-                    active
-                      ? "bg-[color:var(--color-accent-glow)] text-[color:var(--color-fg)]"
-                      : "text-[color:var(--color-fg-dim)] hover:bg-[color:var(--color-bg-elev)]/60 hover:text-[color:var(--color-fg)]"
-                  }`}
-                >
-                  <span>{t.label}</span>
-                  <span className="text-[10px] text-[color:var(--color-fg-faint)]">
-                    {t.hint}
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
+            <div className="text-[10px] uppercase tracking-[0.26em] text-[color:var(--color-fg-faint)]">
+              marvin · settings
+            </div>
+            <h2 className="font-display text-[24px] leading-tight text-[color:var(--color-fg)]">
+              Observability
+            </h2>
+            <p className="text-[12.5px] leading-relaxed text-[color:var(--color-fg-dim)] max-w-prose">
+              Honeycomb traces for MARVIN&apos;s tool loop. Set an API key,
+              environment, and optional dataset — or let MARVIN pick up{" "}
+              <code className="font-mono text-[11.5px] text-[color:var(--color-fg)]">
+                HONEYCOMB_API_KEY
+              </code>{" "}
+              from the shell environment.
+            </p>
+          </header>
 
-          <section className="min-w-0">
-            {tab === "observability" && (
-              <HoneycombConfigForm
-                cwd={props.cwd}
-                {...(props.onHoneycombStatusChange
-                  ? { onStatusChange: props.onHoneycombStatusChange }
-                  : {})}
-              />
-            )}
-            {tab === "models" && (
-              <div className="flex flex-col gap-3 font-mono text-[11px]">
-                <SectionHeader
-                  title="Model picker"
-                  hint="Two-slot executor + advisor. Explicit body override > this picker > defaultModel."
-                />
-                <div>
-                  <ModelPicker
-                    executor={props.executorModel}
-                    advisor={props.advisorModel}
-                    onChange={props.onModelsChange}
-                  />
-                </div>
-              </div>
-            )}
-            {tab === "appearance" && (
-              <div className="flex flex-col gap-4 font-mono text-[11px]">
-                <SectionHeader
-                  title="Theme"
-                  hint="Light / dark toggle. Persists to localStorage; Monaco + xterm follow."
-                />
-                <ThemeToggle />
-                <SectionHeader
-                  title="Personality"
-                  hint="MARVIN's prose voice — dry Hitchhiker's-Guide style vs. neutral assistant."
-                />
-                <PersonalityToggle
-                  value={props.personality}
-                  onChange={props.onPersonalityChange}
-                />
-              </div>
-            )}
-            {tab === "permissions" && (
-              <div className="flex flex-col gap-3 font-mono text-[11px]">
-                <SectionHeader
-                  title="Tool-use permissions"
-                  hint="Auto bypasses the confirm card for Edit/Write/Bash. Gated pauses on each. Hard-denies always apply. See ADR-0004."
-                />
-                <PermissionToggle
-                  value={props.permissionStrategy}
-                  onChange={props.onPermissionChange}
-                />
-              </div>
-            )}
-            {tab === "project" && (
-              <div className="flex flex-col gap-3 font-mono text-[11px]">
-                <SectionHeader
-                  title="Active project"
-                  hint="Per-project MARVIN state lives at .marvin/ inside the workDir."
-                />
-                <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-[color:var(--color-fg-faint)]">
-                      name
-                    </span>
-                    <span className="truncate text-[color:var(--color-fg)]">
-                      {props.projectName ?? "—"}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-3">
-                    <span className="text-[color:var(--color-fg-faint)]">
-                      workDir
-                    </span>
-                    <span className="truncate text-[color:var(--color-fg)]/85">
-                      {props.cwd ?? "—"}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-[color:var(--color-fg-dim)]">
-                  Switch projects via the header picker (<kbd>⌘K</kbd>) — this
-                  panel doesn't change the active project, only views it.
-                </p>
-              </div>
-            )}
-          </section>
+          {/* ------------------------------------------------------------------
+               Body — the Honeycomb form. Scrolls internally if the
+               "advanced" section is open and the window is short.
+               ------------------------------------------------------------------ */}
+          <div className="scroll-thin overflow-y-auto px-8 py-7">
+            <HoneycombConfigForm
+              cwd={props.cwd}
+              {...(props.onHoneycombStatusChange
+                ? { onStatusChange: props.onHoneycombStatusChange }
+                : {})}
+            />
+          </div>
+
+          {/* ------------------------------------------------------------------
+               Footnote — where config is written, quick pointer to the
+               other settings (now in the top bar).
+               ------------------------------------------------------------------ */}
+          <footer
+            className="px-8 py-3.5 border-t text-[11px] leading-relaxed text-[color:var(--color-fg-faint)] flex flex-wrap items-center justify-between gap-x-6 gap-y-1"
+            style={{ borderColor: "var(--color-border)" }}
+          >
+            <span>
+              Saves to{" "}
+              <code className="font-mono text-[10.5px] text-[color:var(--color-fg-dim)]">
+                &lt;project&gt;/.marvin/honeycomb.json
+              </code>
+              , or{" "}
+              <code className="font-mono text-[10.5px] text-[color:var(--color-fg-dim)]">
+                ~/.marvin/
+              </code>{" "}
+              if no project is active.
+            </span>
+            <span>
+              Models, theme, permissions, project — in the top bar.
+            </span>
+          </footer>
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function SectionHeader({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">
-        {title}
-      </div>
-      <p className="mt-0.5 text-[11px] leading-relaxed text-[color:var(--color-fg-dim)]">
-        {hint}
-      </p>
-    </div>
   );
 }
