@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -45,7 +46,17 @@ export async function GET(req: NextRequest) {
   if (!cwd) {
     return NextResponse.json({ error: "cwd required" }, { status: 400 });
   }
-  const root = path.resolve(cwd);
+  const sandbox = await checkFsPath({
+    cwd,
+    target: cwd,
+    mustExist: true,
+    allowDirectory: true,
+  });
+  if (!sandbox.ok || !sandbox.isDirectory) {
+    const body: StatusResponse = { isGit: false, status: {} };
+    return NextResponse.json(body);
+  }
+  const root = sandbox.absolutePath;
 
   const check = await runGit(root, ["rev-parse", "--is-inside-work-tree"], 2000);
   if (check.code !== 0 || check.stdout.trim() !== "true") {
