@@ -291,6 +291,49 @@ OS → tree file upload via multipart. Used by drag-and-drop from Finder onto th
 
 Over-cap or policy-rejected files appear in `skipped[]` with a human-readable reason; the rest of the batch still lands. Secret-bearing files (`.env*`, keys) are skipped rather than prompted — users who want to upload one should drag it alone or paste via New File + save.
 
+## Source control
+
+Git is MARVIN's **third mutation channel** — parallel to the LLM tool channel and the user-initiated filesystem channel. Every mutating route runs `checkFsPath(cwd)` → `gitWritePolicy(op)` → (on `confirm` class) require `X-Marvin-Confirmed: <token>` minted by `/api/git/confirm`. See [ADR-0012](../decisions/0012-source-control-mutation-channel.md).
+
+Every git invocation goes through [`runGit`](../../packages/git/src/exec.ts) (`execFile` with `shell: false`); user-supplied refs / paths / remotes pass through [`argv-guards`](../../packages/git/src/argv-guards.ts) before appending to argv; commit messages travel via stdin, never argv.
+
+**Read routes (M2 — pending):**
+
+- `GET /api/git/status?cwd=…` → `{ branch: { name, upstream, ahead, behind, oid }, files: Array<{ path, indexStatus, workingStatus, entryType, renamedFrom? }>, enabled: true }` — or `{ enabled: false, reason: "not-a-git-repo" }` if `.git/` is absent. Parsed from `git status --porcelain=v2 --branch -z`.
+- `GET /api/git/diff?cwd=&path=&mode=working|staged|head` → `{ path, diff: string, binary: boolean, truncated: boolean }`. 2 MB diff cap.
+- `GET /api/git/branch?cwd=…` → `{ current, locals: [...], remotes: [...] }`.
+- `GET /api/git/log?cwd=&limit=50&path?=` → `Array<{ sha, shortSha, author, email, date, subject }>`.
+
+**Mutation routes (M3 — pending):**
+
+- `POST /api/git/stage` — `{ cwd, paths }` → `git add -- <paths>`.
+- `POST /api/git/unstage` — `{ cwd, paths }` → `git restore --staged -- <paths>`.
+- `POST /api/git/discard` — `{ cwd, paths, mode: "working" | "staged" }`. Working-tree discard is `confirm warn`.
+- `POST /api/git/commit` — `{ cwd, message, amend?: boolean }`. Message via stdin; amend on pushed HEAD is `confirm danger`.
+- `POST /api/git/branch/create` — `{ cwd, name, from? }`. `name` must pass `isSafeRef`.
+- `POST /api/git/branch/switch` — `{ cwd, name }`. Denies on dirty tree in v1.
+- `POST /api/git/branch/delete` — `{ cwd, name, force?: boolean }`. Current branch hard-denied; unmerged + `force` is `confirm danger`.
+- `POST /api/git/confirm` — `{ op, cwd }` → `{ token, expiresIn }`. 60 s TTL, one-shot.
+
+**Remote routes (M5 — pending, ADR-0013):**
+
+- `POST /api/git/push` — `{ cwd, remote?, branch?, forceWithLease?: boolean }`. Plain `--force` always denied.
+- `POST /api/git/pull` — `{ cwd, strategy: "ff-only" | "rebase" | "merge" }`. `ff-only` default.
+- `POST /api/git/fetch` — `{ cwd, remote? }`. Read-only.
+
+**Errors:**
+
+| HTTP | Error | Meaning |
+|---|---|---|
+| 400 | `not-a-git-repo` | `.git/` not found at or above `cwd`. |
+| 400 | `invalid-ref` / `invalid-remote` / `invalid-pathspec` | Argv-guard rejected the input. |
+| 403 | `policy-deny` | `gitWritePolicy` returned `deny`. Body carries `{ reason }`. |
+| 409 | `needs-confirm` | `gitWritePolicy` returned `confirm`. Body carries `{ severity, reason, op }`. Client mints a token via `/confirm` then retries with `X-Marvin-Confirmed`. |
+| 409 | `token-mismatch` | Token was minted for a different op or cwd. |
+| 409 | `token-expired` | Token older than 60 s. |
+| 502 | `git-exit-nonzero` | git exited non-zero; body carries `{ exitCode, stderr }`. |
+| 504 | `git-timeout` | Operation exceeded 10 s (60 s cap). |
+
 ## Terminal
 
 ### `POST /api/terminal/run`
