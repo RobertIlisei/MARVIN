@@ -307,6 +307,8 @@ Success: `{ enabled: true, branch: { oid, name, upstream, ahead, behind }, files
 
 `enabled: false, reason: "not-a-git-repo"` when the path isn't inside a git worktree. `oid`, `name`, `upstream`, `ahead`, `behind` are all nullable (`null` for initial repos, detached HEAD, no upstream). `entryType` is one of `ordinary | rename-copy | unmerged | untracked | ignored`. `indexStatus` / `workingStatus` are single-char porcelain-v2 codes (`M A D R C U T .`).
 
+**Caching:** responses carry a weak `ETag` derived from the raw porcelain bytes. Clients that send `If-None-Match: <etag>` receive a `304 Not Modified` with an empty body when nothing structural has changed — the 2 s panel poll uses this to avoid re-parsing / re-rendering on an idle tree. Note: porcelain v2 is content-agnostic on the working tree, so unstaged content changes within a file that's already in the list don't invalidate the ETag; the panel picks them up when the file's bucket changes (stage / unstage / save-to-disk transitions).
+
 ### `GET /api/git/diff?cwd=&path=&mode=working|staged|head`
 
 Per-file diff. Default `mode=working`. 2 MB cap on response body; larger returns `truncated: true` with empty `diff`.

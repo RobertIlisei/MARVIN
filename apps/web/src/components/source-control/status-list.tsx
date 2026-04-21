@@ -13,9 +13,20 @@
  * Action icons hover-reveal to keep rows calm when you're not
  * targeting them. Click a row → `onSelect(absolutePath)`; click an
  * action → the corresponding mutation fires.
+ *
+ * Keyboard navigation (M4):
+ *   - ↑ / ↓ move the focused row across bucket boundaries.
+ *   - Enter opens the focused file in the centre viewer.
+ *   - Space fires the primary action for the row's bucket (stage for
+ *     Changes / Untracked, unstage for Staged — no-op in Conflicts).
+ *
+ * Roving-tabindex: only the focused row has `tabIndex={0}`; all
+ * others are `-1`. This keeps the list inside a single Tab stop and
+ * lets users arrow through without re-entering on every keystroke.
  */
 
 import type { StatusFile } from "@marvin/git";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StatusBadge } from "./status-badge";
 
@@ -49,6 +60,68 @@ export function StatusList({
   busy,
 }: StatusListProps) {
   const buckets = groupFiles(files);
+  const flat = useMemo(() => flattenBuckets(buckets), [buckets]);
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Clamp focus when the list shrinks (files staged + disappearing).
+  useEffect(() => {
+    if (focusedIndex >= flat.length) {
+      setFocusedIndex(Math.max(0, flat.length - 1));
+    }
+  }, [flat.length, focusedIndex]);
+
+  const focusRow = useCallback((idx: number) => {
+    const el = rowRefs.current[idx];
+    el?.focus({ preventScroll: false });
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (flat.length === 0) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = Math.min(flat.length - 1, focusedIndex + 1);
+        setFocusedIndex(next);
+        focusRow(next);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = Math.max(0, focusedIndex - 1);
+        setFocusedIndex(prev);
+        focusRow(prev);
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        setFocusedIndex(0);
+        focusRow(0);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        const last = flat.length - 1;
+        setFocusedIndex(last);
+        focusRow(last);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const entry = flat[focusedIndex];
+        if (entry) onSelect(joinPath(cwd, entry.file.path));
+        return;
+      }
+      if (e.key === " ") {
+        e.preventDefault();
+        const entry = flat[focusedIndex];
+        if (!entry || busy) return;
+        primaryActionFor(entry.bucket, actions, [entry.file.path]);
+      }
+    },
+    [flat, focusedIndex, focusRow, onSelect, cwd, actions, busy],
+  );
+
   if (files.length === 0) {
     return (
       <div className="px-3 py-6 text-center text-[11px] italic text-[color:var(--color-fg-faint)]">
@@ -57,7 +130,14 @@ export function StatusList({
     );
   }
   return (
-    <div className="flex flex-col gap-2 py-2">
+    <div
+      className="flex flex-col gap-2 py-2 outline-none"
+      role="listbox"
+      aria-label="source control changes"
+      aria-activedescendant={flat[focusedIndex]?.rowId}
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
+    >
       {buckets.map((bucket) => {
         if (bucket.files.length === 0) return null;
         return (
@@ -69,11 +149,53 @@ export function StatusList({
             onSelect={onSelect}
             actions={actions}
             busy={busy}
+            flat={flat}
+            focusedIndex={focusedIndex}
+            setFocusedIndex={setFocusedIndex}
+            rowRefs={rowRefs}
           />
         );
       })}
     </div>
   );
+}
+
+interface FlatEntry {
+  bucket: Bucket["key"];
+  file: StatusFile;
+  rowId: string;
+}
+
+function flattenBuckets(buckets: Bucket[]): FlatEntry[] {
+  const out: FlatEntry[] = [];
+  for (const bucket of buckets) {
+    for (const file of bucket.files) {
+      out.push({
+        bucket: bucket.key,
+        file,
+        rowId: `sc-row:${bucket.key}:${file.path}`,
+      });
+    }
+  }
+  return out;
+}
+
+function primaryActionFor(
+  bucket: Bucket["key"],
+  actions: Actions,
+  paths: string[],
+): void {
+  switch (bucket) {
+    case "staged":
+      void actions.unstage(paths);
+      return;
+    case "changes":
+    case "untracked":
+      void actions.stage(paths);
+      return;
+    default:
+      return;
+  }
 }
 
 function BucketSection({
@@ -83,6 +205,10 @@ function BucketSection({
   onSelect,
   actions,
   busy,
+  flat,
+  focusedIndex,
+  setFocusedIndex,
+  rowRefs,
 }: {
   bucket: Bucket;
   cwd: string;
@@ -90,6 +216,10 @@ function BucketSection({
   onSelect(absolutePath: string): void;
   actions: Actions;
   busy: boolean;
+  flat: FlatEntry[];
+  focusedIndex: number;
+  setFocusedIndex(i: number): void;
+  rowRefs: React.MutableRefObject<Array<HTMLButtonElement | null>>;
 }) {
   // Bulk action for the bucket header (Stage all / Unstage all).
   const bulkAction = bulkActionFor(bucket);
@@ -116,18 +246,28 @@ function BucketSection({
         </div>
       </header>
       <ul className="flex flex-col">
-        {bucket.files.map((file) => (
-          <FileRow
-            key={`${bucket.key}:${file.path}`}
-            file={file}
-            bucket={bucket.key}
-            cwd={cwd}
-            selectedPath={selectedPath}
-            onSelect={onSelect}
-            actions={actions}
-            busy={busy}
-          />
-        ))}
+        {bucket.files.map((file) => {
+          const flatIndex = flat.findIndex(
+            (f) => f.bucket === bucket.key && f.file.path === file.path,
+          );
+          return (
+            <FileRow
+              key={`${bucket.key}:${file.path}`}
+              file={file}
+              bucket={bucket.key}
+              cwd={cwd}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              actions={actions}
+              busy={busy}
+              flatIndex={flatIndex}
+              focused={flatIndex === focusedIndex}
+              setFocusedIndex={setFocusedIndex}
+              rowId={`sc-row:${bucket.key}:${file.path}`}
+              rowRefs={rowRefs}
+            />
+          );
+        })}
       </ul>
     </section>
   );
@@ -141,6 +281,11 @@ function FileRow({
   onSelect,
   actions,
   busy,
+  flatIndex,
+  focused,
+  setFocusedIndex,
+  rowId,
+  rowRefs,
 }: {
   file: StatusFile;
   bucket: Bucket["key"];
@@ -149,6 +294,11 @@ function FileRow({
   onSelect(absolutePath: string): void;
   actions: Actions;
   busy: boolean;
+  flatIndex: number;
+  focused: boolean;
+  setFocusedIndex(i: number): void;
+  rowId: string;
+  rowRefs: React.MutableRefObject<Array<HTMLButtonElement | null>>;
 }) {
   const absolutePath = joinPath(cwd, file.path);
   const isSelected = selectedPath === absolutePath;
@@ -156,12 +306,22 @@ function FileRow({
     <li className="group relative">
       <button
         type="button"
+        id={rowId}
+        role="option"
+        aria-selected={isSelected}
+        tabIndex={focused ? 0 : -1}
+        ref={(el) => {
+          if (flatIndex >= 0) rowRefs.current[flatIndex] = el;
+        }}
+        onFocus={() => {
+          if (flatIndex >= 0) setFocusedIndex(flatIndex);
+        }}
         onClick={() => onSelect(absolutePath)}
-        className={`flex w-full items-center gap-2 px-3 py-[5px] pr-14 text-left font-mono text-[11.5px] transition ${
+        className={`flex w-full items-center gap-2 px-3 py-[5px] pr-14 text-left font-mono text-[11.5px] transition outline-none ${
           isSelected
             ? "bg-[color:var(--color-accent-deep)]/18 text-[color:var(--color-fg)]"
             : "text-[color:var(--color-fg-dim)] hover:bg-[color:var(--color-bg-elev)]/60 hover:text-[color:var(--color-fg)]"
-        }`}
+        } focus-visible:bg-[color:var(--color-accent-deep)]/12 focus-visible:text-[color:var(--color-fg)]`}
         title={file.path}
       >
         <StatusBadge file={file} />
