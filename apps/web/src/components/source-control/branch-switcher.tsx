@@ -95,36 +95,46 @@ export function BranchSwitcher({
             no local branches
           </div>
         ) : (
-          branches.map((b) => (
-            <DropdownMenuItem
-              key={b.name}
-              disabled={b.isCurrent}
-              onClick={async () => {
-                setOpen(false);
-                await onSwitch(b.name);
-              }}
-              className="flex items-center justify-between gap-2 font-mono text-[11.5px]"
-            >
-              <span className="flex items-center gap-1.5 truncate">
-                <span
-                  className={
-                    b.isCurrent
-                      ? "text-[color:var(--color-accent-deep)]"
-                      : "text-[color:var(--color-fg-faint)]"
-                  }
-                >
-                  {b.isCurrent ? "●" : "○"}
+          // Scrollable branch list — repos with lots of local branches
+          // would otherwise either overflow the dropdown surface (if
+          // max-h were absent) or silently trust the Radix
+          // `--radix-dropdown-menu-content-available-height` cap. The
+          // Radix var gets cramped on short viewports and only yields
+          // a handful of visible items. Explicit 280 px (≈ 11 items)
+          // with `overflow-y-auto` guarantees a predictable switcher
+          // UX regardless of how much vertical space is available.
+          <div className="scroll-thin max-h-[280px] overflow-y-auto">
+            {branches.map((b) => (
+              <DropdownMenuItem
+                key={b.name}
+                disabled={b.isCurrent}
+                onClick={async () => {
+                  setOpen(false);
+                  await onSwitch(b.name);
+                }}
+                className="flex items-center justify-between gap-2 font-mono text-[11.5px]"
+              >
+                <span className="flex items-center gap-1.5 truncate">
+                  <span
+                    className={
+                      b.isCurrent
+                        ? "text-[color:var(--color-accent-deep)]"
+                        : "text-[color:var(--color-fg-faint)]"
+                    }
+                  >
+                    {b.isCurrent ? "●" : "○"}
+                  </span>
+                  <span className="truncate">{b.name}</span>
                 </span>
-                <span className="truncate">{b.name}</span>
-              </span>
-              {b.upstream && (b.ahead !== null || b.behind !== null) && (
-                <span className="shrink-0 text-[10px] text-[color:var(--color-fg-faint)]">
-                  {b.ahead ? `↑${b.ahead}` : ""}
-                  {b.behind ? `↓${b.behind}` : ""}
-                </span>
-              )}
-            </DropdownMenuItem>
-          ))
+                {b.upstream && (b.ahead !== null || b.behind !== null) && (
+                  <span className="shrink-0 text-[10px] text-[color:var(--color-fg-faint)]">
+                    {b.ahead ? `↑${b.ahead}` : ""}
+                    {b.behind ? `↓${b.behind}` : ""}
+                  </span>
+                )}
+              </DropdownMenuItem>
+            ))}
+          </div>
         )}
         <DropdownMenuSeparator />
         {creating ? (
