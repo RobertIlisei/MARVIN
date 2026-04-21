@@ -416,6 +416,14 @@ function TreeList({
 
 function badgeFor(code: string): { label: string; className: string } | null {
   if (!code) return null;
+  // Hue map (light + dark cross-theme):
+  //   ? (untracked) → warn   (amber)
+  //   D (deleted)   → danger (red)
+  //   A (added)     → success (green)
+  //   M (modified)  → git-modified (blue) — was --color-accent which
+  //                   in light = near-black ink; invisible next to
+  //                   directory-name text of the same tone.
+  //   R (renamed)   → git-renamed  (purple) — same reason as M.
   if (code === "??")
     return {
       label: "?",
@@ -434,12 +442,12 @@ function badgeFor(code: string): { label: string; className: string } | null {
   if (code.includes("M"))
     return {
       label: "M",
-      className: "text-[color:var(--color-accent)]",
+      className: "text-[color:var(--color-git-modified)]",
     };
   if (code.includes("R"))
     return {
       label: "R",
-      className: "text-[color:var(--color-accent-deep)]",
+      className: "text-[color:var(--color-git-renamed)]",
     };
   return { label: code.trim() || "•", className: "text-[color:var(--color-fg-dim)]" };
 }
@@ -587,7 +595,12 @@ function TreeItem({
           )}
           {badge && !isRenaming && (
             <span
-              className={`ml-auto shrink-0 font-mono text-[10px] ${badge.className}`}
+              // `font-semibold` gives the single-letter badge enough
+              // weight to register as a tag against the dim row text
+              // at 10 px. Without it the hue is correct but reads as
+              // just another dimly coloured character in a monospace
+              // line, not a status marker.
+              className={`ml-auto shrink-0 font-mono text-[10px] font-semibold ${badge.className}`}
             >
               {badge.label}
             </span>
