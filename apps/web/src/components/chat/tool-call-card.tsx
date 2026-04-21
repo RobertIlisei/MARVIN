@@ -105,7 +105,7 @@ export function ToolCallCard({
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
-        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-white/[0.02]"
+        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-[color:var(--color-fg)]/[0.04]"
       >
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[color:var(--color-border)] font-mono text-[color:var(--color-accent)]">
           {icon}
