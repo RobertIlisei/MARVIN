@@ -1,11 +1,21 @@
 "use client";
 
+import {
+  ChevronsDownUp,
+  FilePlus,
+  FolderPlus,
+  RotateCw,
+  Search,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDeleteDialog, type ConfirmDeleteDialogState } from "./confirm-delete-dialog";
 import { DirIcon, FileIcon } from "./file-icon";
+import { computeFilterMatches } from "./filter-matches";
 import { InlineRename } from "./inline-rename";
 import { TreeContextMenu, type TreeContextMenuActions } from "./tree-context-menu";
+import type { TreeNode } from "./tree-node";
 import {
   UploadProgressToast,
   type UploadToastState,
@@ -15,12 +25,11 @@ import { useOsDrop } from "./use-os-drop";
 import { useTreeDnd } from "./use-tree-dnd";
 import { useTreeSelection } from "./use-tree-selection";
 
-export type TreeNode = {
-  name: string;
-  path: string;
-  type: "file" | "dir";
-  children?: TreeNode[];
-};
+// TreeNode lives in `./tree-node` so non-TSX consumers (Vitest, the
+// pure filter helper) can import it without dragging JSX through
+// Vite's import-analyser. Re-exported from here so existing
+// `import { TreeNode } from "./file-tree"` sites keep working.
+export type { TreeNode };
 
 type TreeResponse = {
   root: string;
@@ -119,6 +128,11 @@ export function FileTree({
     error: null,
     uploading: false,
   });
+  // Tree filter — substring match on node names. Matching dirs
+  // force-open during the filter (so results are visible without
+  // manual expansion); clearing the filter restores the user's
+  // persisted expansion state untouched.
+  const [filter, setFilter] = useState("");
 
   // Fetch + revalidation --------------------------------------------------
   const revalidate = useCallback(() => setRefreshTick((t) => t + 1), []);
@@ -203,10 +217,33 @@ export function FileTree({
     return { status: status.status, dirtyDirs: dirty };
   }, [status]);
 
+  // Filter results: when `filter` is empty, both sets are null and
+  // the tree renders unchanged. When non-empty, the walk returns the
+  // set of paths to render (matching nodes + every ancestor dir) and
+  // a separate set of dirs to force-open so matches are visible.
+  const filterResult = useMemo(
+    () => (data && filter.trim() ? computeFilterMatches(data.tree, filter.trim()) : null),
+    [data, filter],
+  );
+
   // Flatten the visible tree so selection + keyboard-range arithmetic works.
+  // When filtering, fold the force-open set into the effective openDirs so
+  // flattenVisible recurses into matching dirs even if the user had them
+  // collapsed.
+  const effectiveOpenDirs = useMemo(() => {
+    if (!filterResult) return openDirs;
+    const merged: OpenMap = { ...openDirs };
+    for (const p of filterResult.forceOpenDirs) merged[p] = true;
+    return merged;
+  }, [openDirs, filterResult]);
   const visibleOrder = useMemo(
-    () => (data ? flattenVisible(data.tree, openDirs) : []),
-    [data, openDirs],
+    () =>
+      data
+        ? flattenVisible(data.tree, effectiveOpenDirs).filter((p) =>
+            filterResult ? filterResult.visiblePaths.has(p) : true,
+          )
+        : [],
+    [data, effectiveOpenDirs, filterResult],
   );
 
   const selection = useTreeSelection({ visibleOrder });
@@ -398,11 +435,24 @@ export function FileTree({
           </span>
         )}
       </div>
+      <FileTreeToolbar
+        filter={filter}
+        onFilterChange={setFilter}
+        onNewFile={() => actions.newFile(data.root)}
+        onNewFolder={() => actions.newFolder(data.root)}
+        onRefresh={revalidate}
+        onCollapseAll={() => {
+          setOpenDirs(() => ({}));
+          selection.clear();
+        }}
+        refreshing={loading}
+        matchCount={filterResult?.visiblePaths.size ?? null}
+      />
       <TreeList
         nodes={data.tree}
         depth={0}
         ctx={ctx}
-        openDirs={openDirs}
+        openDirs={effectiveOpenDirs}
         setOpenDirs={setOpenDirs}
         selection={selection}
         dnd={dnd}
@@ -413,6 +463,7 @@ export function FileTree({
         setPendingCreate={setPendingCreate}
         renaming={renaming}
         setRenaming={setRenaming}
+        visiblePaths={filterResult?.visiblePaths ?? null}
         {...(onSelect ? { onSelect } : {})}
         {...(selectedPath ? { selectedPath } : {})}
       />
@@ -455,6 +506,11 @@ interface SharedProps {
   setPendingCreate: (v: PendingCreate) => void;
   renaming: RenamingPath;
   setRenaming: (v: RenamingPath) => void;
+  /**
+   * When a filter is active, only nodes in this set should render.
+   * Null = no filter active.
+   */
+  visiblePaths: Set<string> | null;
   onSelect?: (path: string) => void;
   selectedPath?: string;
 }
@@ -522,7 +578,13 @@ function TreeItem({
   node: TreeNode;
   depth: number;
 } & SharedProps) {
-  const { ctx, openDirs, setOpenDirs, selection, dnd, actions, mutations, pendingCreate, setPendingCreate, renaming, setRenaming, onSelect, selectedPath } = shared;
+  const { ctx, openDirs, setOpenDirs, selection, dnd, actions, mutations, pendingCreate, setPendingCreate, renaming, setRenaming, visiblePaths, onSelect, selectedPath } = shared;
+  // Filter hides nodes not in the match set. Skipping at the
+  // TreeItem level (vs. pre-filtering the tree upstream) preserves
+  // the tree's natural recursion — children still self-filter so an
+  // always-visible dir with a single matching descendant only shows
+  // that descendant.
+  if (visiblePaths && !visiblePaths.has(node.path)) return null;
   const padding = 6 + depth * 10;
   const isRenaming = renaming === node.path;
   const parentPath = parentOf(node.path);
@@ -764,4 +826,130 @@ function joinName(parentOrOldPath: string, name: string): string {
  */
 function quoteForShell(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * VS Code / Cursor-style toolbar rendered above the tree. Five
+ * controls in one row:
+ *   - Search input (filters the tree by name, case-insensitive
+ *     substring). Escape clears; an X button appears while the field
+ *     is non-empty.
+ *   - New file / new folder — pendants of the context-menu actions,
+ *     rooted at the project's top directory. Useful when no node is
+ *     selected to right-click onto.
+ *   - Refresh — re-runs the /api/files/tree + /api/files/status fetch.
+ *     The icon spins while `refreshing` is true.
+ *   - Collapse all — clears the persisted open-dirs map and the
+ *     current selection, returning the tree to its initial compact
+ *     state. Useful on large repos where the truncation notice
+ *     ("tree truncated at 2000 entries") is the symptom of too many
+ *     branches open.
+ */
+function FileTreeToolbar({
+  filter,
+  onFilterChange,
+  onNewFile,
+  onNewFolder,
+  onRefresh,
+  onCollapseAll,
+  refreshing,
+  matchCount,
+}: {
+  filter: string;
+  onFilterChange: (value: string) => void;
+  onNewFile: () => void;
+  onNewFolder: () => void;
+  onRefresh: () => void;
+  onCollapseAll: () => void;
+  refreshing: boolean;
+  /** Visible-node count while filtering, for the "N matches" hint. */
+  matchCount: number | null;
+}) {
+  const iconBtn =
+    "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[color:var(--color-fg-faint)] transition hover:bg-[color:var(--color-bg-elev)]/60 hover:text-[color:var(--color-fg)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-accent)]/60";
+  return (
+    <div className="mb-2 flex flex-col gap-1">
+      <div className="flex items-center gap-0.5 px-1">
+        <div className="relative flex-1">
+          <Search
+            size={11}
+            strokeWidth={1.8}
+            className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-[color:var(--color-fg-faint)]"
+            aria-hidden
+          />
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onFilterChange("");
+              }
+            }}
+            placeholder="search files"
+            aria-label="search files"
+            className="h-6 w-full rounded border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/40 pl-5 pr-5 font-mono text-[11px] text-[color:var(--color-fg)] placeholder:text-[color:var(--color-fg-faint)] focus:border-[color:var(--color-accent)]/60 focus:outline-none"
+          />
+          {filter && (
+            <button
+              type="button"
+              onClick={() => onFilterChange("")}
+              className="absolute right-1 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-[color:var(--color-fg-faint)] hover:bg-[color:var(--color-bg-elev)]/60 hover:text-[color:var(--color-fg)]"
+              title="clear filter (Esc)"
+              aria-label="clear filter"
+            >
+              <X size={10} strokeWidth={2} aria-hidden />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onNewFile}
+          className={iconBtn}
+          title="new file"
+          aria-label="new file"
+        >
+          <FilePlus size={13} strokeWidth={1.8} aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={onNewFolder}
+          className={iconBtn}
+          title="new folder"
+          aria-label="new folder"
+        >
+          <FolderPlus size={13} strokeWidth={1.8} aria-hidden />
+        </button>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className={iconBtn}
+          title="refresh tree"
+          aria-label="refresh tree"
+        >
+          <RotateCw
+            size={12}
+            strokeWidth={1.8}
+            className={refreshing ? "animate-spin" : undefined}
+            aria-hidden
+          />
+        </button>
+        <button
+          type="button"
+          onClick={onCollapseAll}
+          className={iconBtn}
+          title="collapse all"
+          aria-label="collapse all"
+        >
+          <ChevronsDownUp size={13} strokeWidth={1.8} aria-hidden />
+        </button>
+      </div>
+      {filter && (
+        <div className="px-1 font-mono text-[9.5px] tracking-[0.06em] text-[color:var(--color-fg-faint)]">
+          {matchCount ? `${matchCount} match${matchCount === 1 ? "" : "es"}` : "no matches"}
+        </div>
+      )}
+    </div>
+  );
 }
