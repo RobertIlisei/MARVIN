@@ -21,6 +21,8 @@ import { mintConfirmToken } from "@marvin/runtime/fs-write-confirm-registry";
 import { type FsWriteOp, fsWritePolicy } from "@marvin/tools/fs-write-policy";
 import { type NextRequest, NextResponse } from "next/server";
 
+import { canonicalizeOp } from "@/lib/canonicalize-op";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -51,10 +53,22 @@ export async function POST(req: NextRequest) {
   }
   const absCwd = cwdCheck.absolutePath;
 
-  const op = body.op as FsWriteOp | undefined;
-  if (!op || typeof op !== "object" || typeof op.kind !== "string") {
+  const rawOp = body.op as FsWriteOp | undefined;
+  if (!rawOp || typeof rawOp !== "object" || typeof rawOp.kind !== "string") {
     return NextResponse.json({ error: "op required" }, { status: 400 });
   }
+
+  // Canonicalise op paths the same way the mutation routes do. Otherwise
+  // `/confirm` and (say) `/delete` disagree on the op shape and the token
+  // consume-time structural compare fails with `token/op mismatch`.
+  const canon = await canonicalizeOp(rawOp, absCwd);
+  if (!canon.ok) {
+    return NextResponse.json(
+      { error: `${canon.field}: ${canon.error}` },
+      { status: 400 },
+    );
+  }
+  const op = canon.op;
 
   const decision = fsWritePolicy(op, absCwd);
   if (decision.class === "deny") {
