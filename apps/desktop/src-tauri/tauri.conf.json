@@ -39,6 +39,8 @@
     "category": "DeveloperTool",
     "shortDescription": "MARVIN — pair-programming AI assistant",
     "longDescription": "Moderately Advanced Robotic Virtual Intelligence Network. MARVIN is a single-assistant pair-programming tool — chat, edit, diff, and confirm directly against your project, with a knowledge graph and cost tracker baked in.",
+    "externalBin": ["binaries/node"],
+    "resources": ["resources/next/**/*"],
     "macOS": {
       "minimumSystemVersion": "11.0",
       "dmg": {
