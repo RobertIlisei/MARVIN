@@ -20,7 +20,8 @@
     "./turn-registry": "./src/turn-registry.ts",
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
-    "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts"
+    "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts",
+    "./honeycomb-config": "./src/honeycomb-config.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
