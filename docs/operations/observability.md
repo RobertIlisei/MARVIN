@@ -32,21 +32,39 @@ Next.js dev server logs unhandled exceptions, Turbopack messages, SDK runtime er
 - **No log aggregation.** MARVIN doesn't ship logs anywhere. If you want long-horizon analysis, point your own tooling at `~/.marvin/sessions/`.
 - **No per-request tracing.** Next.js dev mode is sufficient for debugging one user's local sessions. Distributed tracing would be overkill for a single-user local tool.
 
-## What's planned (Phase 5 stretch, deferred)
+## Honeycomb telemetry (UI-configurable)
 
-**Honeycomb MCP integration for observability** — from PLAN.md:
+MARVIN ships a per-project **Honeycomb config surface** so the executor can query production traces while debugging without leaving the conversation — once you've wired your credentials through the UI.
 
-> Phase 5 #2 (Honeycomb MCP) remains explicitly deferred until team setup is available.
+### Configure in the UI
 
-The idea: register a `marvin-honeycomb` MCP server alongside `marvin-graph` and `marvin-playwright`. The executor could then query real production traces while debugging ("what's the P99 latency on /api/search since yesterday?") without leaving the conversation.
+1. Click the **`honeycomb`** row in the brain side panel (right column). Opens the `HoneycombConfigDialog`.
+2. Paste your Honeycomb API key. Set the environment name (typically `prod`) and optionally a default dataset.
+3. Click **Test connection** to verify — MARVIN's `/api/honeycomb/test` route hits Honeycomb's `/1/auth` endpoint server-side and surfaces the team slug + environment name.
+4. **Save.** The config lands at `<workDir>/.marvin/honeycomb.json` with `0600` permissions. The UI only ever sees a masked form (`hcbik_…abcd`) after the first save.
 
-Blockers:
+### Storage precedence
 
-- Requires a Honeycomb account + API key. Per-user config surface that doesn't exist yet.
-- Team-specific conventions (dataset names, fields) need configuration. Violates [isolation contract](../concepts/isolation-contract.md) if baked into MARVIN; belongs in `<workDir>/.marvin/` config.
-- The `honeycomb-honeycomb-investigator` agent in the skills bundle is a useful reference for the shape, but it's a Claude Code plugin, not an MCP server.
+`packages/runtime/src/honeycomb-config.ts` resolves the active config in this order:
 
-No shipping ETA. Opens up if and when a user has a Honeycomb environment and wants to be the first to try.
+1. `HONEYCOMB_API_KEY` + `HONEYCOMB_ENVIRONMENT` env vars (plus optional `HONEYCOMB_DATASET`, `HONEYCOMB_API_URL`) — useful for CI.
+2. `<workDir>/.marvin/honeycomb.json` — per-project, set via the UI.
+3. `~/.marvin/honeycomb.json` — user-global fallback.
+
+Env vars beat files; workdir beats global.
+
+### Security invariants
+
+- Raw API key only travels in a single `POST /api/honeycomb/config` body. Every `GET /api/honeycomb/config` returns `apiKeyMasked`, never the full key.
+- File permissions are set to `0600` on write.
+- `apiUrl` is validated against `https://*.honeycomb.io` — a misconfigured URL can't exfiltrate the key to an attacker-controlled host.
+- The `/api/honeycomb/test` route makes the Honeycomb call server-side; the browser never sees the raw key.
+- `.marvin/` is MARVIN's convention for gitignored project-local state. Don't commit that directory.
+
+### What's *next* (not in v1)
+
+- **`marvin-honeycomb` MCP server registration** — wire `packages/runtime/src/sdk-runner.ts` to spawn the Honeycomb MCP server when a config is present. Tools: `list_datasets`, `run_query`, `get_trace`, etc. Follow-up PR — the config surface lands first so you can pin credentials before the MCP tries to use them.
+- **Skill wiring** — the `honeycomb-*` skills in `.claude/skills/` expect specific MCP tool names; the MCP PR aligns those.
 
 ## Debugging a turn
 
