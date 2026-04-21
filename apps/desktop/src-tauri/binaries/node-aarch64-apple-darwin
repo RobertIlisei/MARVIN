@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stub — real Node.js binary is fetched by scripts/fetch-node.sh before
+# `pnpm desktop:build`. See ./README.md and ADR-0011. If you're seeing
+# this message it means the production build ran without the fetch step.
+echo "MARVIN sidecar stub — run scripts/fetch-node.sh to install real Node" >&2
+exit 1
