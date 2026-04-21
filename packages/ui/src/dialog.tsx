@@ -91,7 +91,12 @@ function DialogContent({
           boxShadow: "var(--shadow-panel)",
         }}
         className={cn(
-          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg p-6 outline-none sm:max-w-lg",
+          // A4 polish: rounded-xl (12 px) matches macOS Sonoma / Sequoia
+          // system-settings dialog corner radius better than the
+          // previous rounded-lg (8 px). Padding stays p-6 by default
+          // but call-site classNames (e.g. SettingsPanel's p-0) win
+          // thanks to Tailwind's last-wins merge.
+          "z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl p-6 outline-none sm:max-w-lg",
           className
         )}
         {...props}
