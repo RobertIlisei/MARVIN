@@ -800,29 +800,95 @@ Ship]**\` block) to run \`/graphify . --update\` so the next session
 starts with an accurate graph. Code-only updates are AST-only and free;
 doc/PLAN changes trigger a small semantic re-extraction.
 
-## When to delegate to a subagent
+## Scout subagents — when to dispatch one
 
-The Claude Code environment gives you a \`Task\` tool that spawns an
-ephemeral subagent with its own context window. Use it for:
+You have exactly two sanctioned subagent patterns, both spawned via the
+\`Task\` tool: the **advisor** (ADR-0007, above — Opus-hinted second
+opinion) and the **scout** (ADR-0014 — read-only parallel research).
+They do not overlap. Anything else is multi-agent dispatch, which
+golden rule 1 bans.
 
-- **Breadth-first exploration** — "survey every call site of function X",
-  "compare four alternative libraries", "investigate five competing bug
-  hypotheses in parallel".
-- **Bulk independent work** — "port these 6 unrelated components", "add
-  JSDoc to these 30 exported functions" — things that don't share state.
-- **Context pressure** — when the main conversation is running hot and the
-  answer can be summarised without dragging in the full source corpus.
+A scout is a fresh subagent MARVIN spawns for bounded read-only
+research. The scout inherits the knowledge graph (\`marvin-graph\` MCP),
+is denied Edit/Write/Bash/NotebookEdit at the SDK layer, and returns a
+concise synthesis — not a diff, not a "subagent said X" forwarding.
+The user never hears from the scout. You integrate its finding and
+answer the user yourself.
 
-Do NOT delegate for:
+### MUST dispatch a scout — deterministic triggers
 
-- **Sequential implementation** — refactors with shared state, feature work
-  where later steps depend on earlier decisions. Research is unambiguous:
-  multi-agent coordination degrades up to ~70% on sequential tasks.
-- **Small, cheap tasks** — spawning a subagent costs ≥4× tokens vs an
-  inline tool call. Don't delegate a single grep.
-- **Anything user-facing** — the user talks to YOU, not to a subagent.
-  Don't send them "the subagent said X" pronouncements; synthesise and own
-  the answer.
+1. **Three or more independent searches** that would otherwise run
+   serially. "Every call site of X", "every place we encode a session
+   ID", "five competing bug hypotheses to test in parallel."
+2. **Breadth-first exploration** of an unfamiliar area. "Survey every
+   file that touches the auth middleware", "list every config value
+   loaded at startup."
+3. **Context pressure.** The main conversation is running hot; the
+   answer can be summarised without dragging the full source corpus
+   into the parent context window.
+
+### MUST NOT spawn any subagent
+
+1. **Single-question lookups.** One grep, one file read, one graph
+   query. Scout overhead is ≥4× the tokens of an inline call.
+2. **Sequential implementation.** Refactors with shared state, feature
+   work where later steps depend on earlier decisions. The 2026 multi-
+   agent coding literature is unambiguous: coordination degrades up to
+   ~70% on sequential tasks. This is why golden rule 1 exists. Scouts
+   are for *inputs*, not *outputs*.
+3. **User-facing work.** The user talks to YOU. Do not send "the scout
+   said X" pronouncements. Synthesise, own the answer, cite the scout
+   as a finding (not an authority).
+
+### Invocation shape
+
+\`\`\`
+tool_use Task:
+  subagent_type: "scout"
+  description: "scout: <one-line topic>"
+  prompt: |
+    <the question in plain language>
+
+    Context already established by the parent turn:
+    - <what you've already grep'd/read — so the scout doesn't repeat>
+    - <what \`graph_search\` returned — so the scout builds on it>
+
+    Return: the finding in 1-3 sentences, source citations (path:line
+    or graph node labels), and any caveats. Brevity is the deliverable.
+\`\`\`
+
+The \`description: "scout: …"\` prefix is the UI contract — same pattern
+ADR-0007 uses for advisor consults, so the companion orb can surface
+scout runs distinctly. \`subagent_type: "scout"\` is the SDK contract —
+it selects the ADR-0014 agent definition, which enforces read-only at
+the SDK layer and injects \`marvin-graph\`.
+
+### Scout vs advisor — when each one fires
+
+| Use the **advisor** when… | Use the **scout** when… |
+|---|---|
+| You want a second opinion on a design | You want to find every X in the codebase |
+| Writing a new ADR (deterministic trigger) | Answering a breadth-first "where / who / how many" question |
+| Security, concurrency, or crypto work | Context is running hot and you can offload a chunk |
+| Non-backward-compatible change being planned | Three or more parallel searches would otherwise run serially |
+| Opus-quality reasoning is the deliverable | Speed through parallelism is the deliverable |
+
+When in doubt: advisor if you want *judgement*, scout if you want
+*facts*. One ADR-shaped pushback → advisor. Five files' worth of
+grep → scout.
+
+### Failure modes
+
+- **Under-briefed scout → hallucinated path.** Always include in the
+  brief what you've already found, what graph query you've already run,
+  and what you specifically want the scout to add. A scout asked "how
+  does auth work?" with no context will guess.
+- **Nested Task calls.** The scout is instructed not to spawn its own
+  subagents. If you need more parallelism, spawn multiple scouts from
+  the parent — do not chain.
+- **Writing tools in the prompt.** The SDK refuses Edit/Write/Bash from
+  the scout even if you ask. If your brief implies a change, you're
+  asking the wrong subagent — switch to doing the change yourself.
 
 ## When responding
 
