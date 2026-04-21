@@ -93,7 +93,38 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const { tab, onTabChange } = props;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent
+        className="sm:max-w-3xl"
+        // Don't auto-close when the pointerdown that OPENED the dialog
+        // bubbles up to the document — happens because the trigger (⚙
+        // in the header) lives inside a `data-tauri-drag-region`
+        // container whose pointer events travel to the document before
+        // Radix's DismissableLayer installs its listener. Without this
+        // guard the dialog opens + closes in the same tick and the
+        // user sees nothing.
+        //
+        // We still respect outside-clicks that are clearly user intent
+        // (clicking the backdrop away from the header). Only suppress
+        // when the target sits inside the drag region.
+        onPointerDownOutside={(e) => {
+          const target = e.target;
+          if (
+            target instanceof Element &&
+            target.closest("[data-tauri-drag-region]")
+          ) {
+            e.preventDefault();
+          }
+        }}
+        onInteractOutside={(e) => {
+          const target = e.target;
+          if (
+            target instanceof Element &&
+            target.closest("[data-tauri-drag-region]")
+          ) {
+            e.preventDefault();
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
