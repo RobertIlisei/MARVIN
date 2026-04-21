@@ -85,7 +85,7 @@ function DialogContent({
           left: "50%",
           transform: "translate(-50%, -50%)",
           opacity: 1,
-          backgroundColor: "var(--color-bg-elev)",
+          backgroundColor: "var(--material-popover)",
           color: "var(--color-fg)",
           border: "1px solid var(--color-border-strong)",
           boxShadow: "var(--shadow-panel)",
