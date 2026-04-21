@@ -275,8 +275,24 @@ export function BrainLiquid({
     let last = performance.now();
     let t = 0;
     let raf = 0;
+    // A3 perf: when MARVIN is idle, render at ~30 fps instead of the
+    // native ~60 fps. The 4,500-particle idle profile costs real CPU
+    // on a MacBook battery; halving the frame rate roughly halves
+    // that cost while preserving the "breathing" feel. Active states
+    // (thinking / tool / writing) stay at full 60 fps because the
+    // motion is information-bearing — slowing them would read as lag.
+    // Time-based gate (not frame-count) so the throttle adapts to
+    // monitor refresh rates ≠ 60 Hz (ProMotion, 120 Hz, 144 Hz).
+    const IDLE_FRAME_MS = 33;
+    let lastRendered = 0;
 
     function step(now: number) {
+      if (stateRef.current === "idle" && now - lastRendered < IDLE_FRAME_MS) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      lastRendered = now;
+
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       t += dt;
