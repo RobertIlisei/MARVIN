@@ -58,11 +58,16 @@ const LIGHT: MonacoThemeData = {
   inherit: true,
   rules: [],
   colors: {
-    "editor.background": "#faf8f3",
+    // Editor bg matches globals.css's --color-bg (oklch 0.95 0.006 80).
+    // Recoloured 2026-04-21 from the previous #faf8f3 (≈0.975) as part
+    // of the light-theme luminosity drop — see docs/roadmap.md.
+    "editor.background": "#f1ece1",
     "editor.foreground": "#1f1d17",
-    "editor.lineHighlightBackground": "#f0ede5",
-    "editorLineNumber.foreground": "#a09e94",
-    "editorLineNumber.activeForeground": "#5a5a50",
+    // Line highlight stays a half-step below the editor bg so the
+    // active line reads as a subtle band, not a sharp stripe.
+    "editor.lineHighlightBackground": "#e8e2d2",
+    "editorLineNumber.foreground": "#96948a",
+    "editorLineNumber.activeForeground": "#56564d",
     "diffEditor.insertedTextBackground": "#6eb77028",
     "diffEditor.removedTextBackground": "#c96b5c28",
     "diffEditor.insertedLineBackground": "#6eb7701a",
