@@ -1,6 +1,5 @@
-import { NextResponse, type NextRequest } from "next/server";
-
 import { searchGraph, summarizeGraph } from "@marvin/graphify-bridge";
+import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

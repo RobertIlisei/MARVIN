@@ -1,6 +1,5 @@
-import { NextResponse, type NextRequest } from "next/server";
-
 import { loadSession } from "@marvin/runtime/session";
+import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

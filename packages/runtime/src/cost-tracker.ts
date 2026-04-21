@@ -8,7 +8,7 @@
  * is cheaper than maintaining a summary file in sync.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { ensureDir, marvinPaths } from "./paths";
 

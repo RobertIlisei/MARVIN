@@ -1,22 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-
-/** Match Task `input` shapes whose description marks an advisor consult. */
-function advisorDescriptionOf(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const d = (input as { description?: unknown }).description;
-  return typeof d === "string" ? d : null;
-}
-
-function looksLikeAdvisorConsult(input: unknown): boolean {
-  const desc = advisorDescriptionOf(input);
-  return desc != null && /^\s*advisor[\s:—-]/i.test(desc);
-}
-
-function stripAdvisorPrefix(desc: string): string {
-  return desc.replace(/^\s*advisor[\s:—-]+/i, "").trim();
-}
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { AdvisorOrb } from "@/components/brain/advisor-orb";
@@ -33,19 +17,35 @@ import { PreviewPane } from "@/components/preview/preview-pane";
 import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
 import { useProjects } from "@/components/project/use-projects";
-import {
-  PersonalityToggle,
-  type PersonalityMode,
-} from "@/components/settings/personality-toggle";
 import { ModelPicker } from "@/components/settings/model-picker";
-import { ThemeToggle } from "@/components/settings/theme-toggle";
 import {
-  PermissionToggle,
   type PermissionStrategy,
+  PermissionToggle,
 } from "@/components/settings/permission-toggle";
+import {
+  type PersonalityMode,
+  PersonalityToggle,
+} from "@/components/settings/personality-toggle";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
+import { ThemeToggle } from "@/components/settings/theme-toggle";
 import { StatusBar } from "@/components/shell/status-bar";
 import { Terminal } from "@/components/terminal/terminal";
+
+/** Match Task `input` shapes whose description marks an advisor consult. */
+function advisorDescriptionOf(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const d = (input as { description?: unknown }).description;
+  return typeof d === "string" ? d : null;
+}
+
+function looksLikeAdvisorConsult(input: unknown): boolean {
+  const desc = advisorDescriptionOf(input);
+  return desc != null && /^\s*advisor[\s:—-]/i.test(desc);
+}
+
+function stripAdvisorPrefix(desc: string): string {
+  return desc.replace(/^\s*advisor[\s:—-]+/i, "").trim();
+}
 
 const LS_PERSONALITY_KEY = "marvin.personality";
 const LS_MODEL_EXECUTOR_KEY = "marvin.model.executor";

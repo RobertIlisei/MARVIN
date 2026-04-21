@@ -12,9 +12,9 @@
  * service, or stack.
  */
 
-import { readFile, readdir, stat } from "fs/promises";
-import { join } from "path";
 
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { summarizeGraph } from "@marvin/graphify-bridge";
 
 import type { InfraProbe } from "./infra-probes";
@@ -255,7 +255,7 @@ export async function buildProjectContext(
   return `${header}${body}${probe}`;
 }
 
-export { probeHttp, probeDockerContainer, runProbes, formatProbeBlock } from "./infra-probes";
 export type { InfraProbe } from "./infra-probes";
-export { checkWorkflowHealth, formatWorkflowHealthBlock } from "./workflow-health";
+export { formatProbeBlock, probeDockerContainer, probeHttp, runProbes } from "./infra-probes";
 export type { WorkflowHealth } from "./workflow-health";
+export { checkWorkflowHealth, formatWorkflowHealthBlock } from "./workflow-health";
