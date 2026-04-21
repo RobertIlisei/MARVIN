@@ -94,6 +94,12 @@ important signal.
   or classifies without the policy, or skips the token check on
   `confirm`, is a 🔴 Important finding. See
   [ADR-0008](./docs/decisions/0008-user-initiated-write-channel.md).
+- **Any new `multipart/form-data` route** must require the
+  `X-Marvin-Client: 1` header to force a CORS preflight — multipart
+  is a "simple" CORS request otherwise and cross-origin drive-by
+  POSTs would reach the handler. A new multipart route without this
+  guard is a 🔴 Important finding. See
+  [ADR-0009](./docs/decisions/0009-file-uploads-from-os.md).
 - **Hardcoded model identifiers** (`claude-opus-4-7` in UI strings or
   headers). Must read from `executorModel` / `advisorModel` state, not
   inline literals. The `<BranchBadge>`-era stale "model: claude-opus-4-7"

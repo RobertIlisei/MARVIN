@@ -273,6 +273,23 @@ Delete one or more files/dirs.
 
 **Response:** `{ ok: true, deleted: string[], mode }`.
 
+### `POST /api/files/write/upload`
+
+OS → tree file upload via multipart. Used by drag-and-drop from Finder onto the tree root or a directory. See [ADR-0009](../decisions/0009-file-uploads-from-os.md).
+
+**Request** (`multipart/form-data`):
+
+- `cwd` — project root (form field).
+- `destDir` — destination directory path (form field).
+- `file` — one or more file parts.
+- **Required header: `X-Marvin-Client: 1`** — forces a CORS preflight so cross-origin drive-by POSTs are blocked by the browser before reaching the route. Without it the route returns `400 missing-x-marvin-client`. Non-negotiable; see ADR-0009.
+
+**Caps:** 50 files per batch · 10 MB per file · 50 MB total batch.
+
+**Response:** `{ ok: true, uploaded: Array<{ name, path, bytes }>, skipped: Array<{ name, reason }>, destDir }`.
+
+Over-cap or policy-rejected files appear in `skipped[]` with a human-readable reason; the rest of the batch still lands. Secret-bearing files (`.env*`, keys) are skipped rather than prompted — users who want to upload one should drag it alone or paste via New File + save.
+
 ## Terminal
 
 ### `POST /api/terminal/run`
