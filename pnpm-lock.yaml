@@ -60,15 +60,15 @@ importers:
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@tauri-apps/api':
-        specifier: ^2.10.1
-        version: 2.10.1
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
+      lucide-react:
+        specifier: ^0.400.0
+        version: 0.400.0(react@19.2.5)
       next:
         specifier: ^16.1.6
         version: 16.2.4(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
