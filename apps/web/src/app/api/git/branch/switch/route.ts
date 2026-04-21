@@ -56,9 +56,18 @@ export async function POST(req: NextRequest) {
   }
   const root = sandbox.absolutePath;
 
+  // `--untracked-files=no` excludes new-but-not-added files from the
+  // dirtiness check. Vanilla `git status --porcelain` flags *any*
+  // untracked file (.DS_Store, scratch notes, node_modules junk) as
+  // dirty, which meant we were blocking legitimate branch switches
+  // on a repo that was fine by git's own standards. Git itself
+  // allows the switch unless an untracked file would be
+  // *overwritten* by the target branch — which git catches in its
+  // own refusal, not ours. Our gate now only trips on modified /
+  // staged files, same as `git status` in short form.
   const statusProbe = await runGit(
     root,
-    ["status", "--porcelain"],
+    ["status", "--porcelain", "--untracked-files=no"],
     { timeoutMs: 3000 },
   );
   if (!statusProbe.ok) {
