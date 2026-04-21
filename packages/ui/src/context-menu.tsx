@@ -14,7 +14,7 @@ import { cn } from "./utils"
 // here means the menu stays opaque without depending on a separate CSS
 // layer.
 const SURFACE =
-  "border border-[color:var(--color-border-strong)] bg-[color:var(--color-bg-elev)] text-[color:var(--color-fg)] shadow-[var(--shadow-panel)]"
+  "border border-[color:var(--color-border-strong)] bg-[color:var(--material-popover)] text-[color:var(--color-fg)] shadow-[var(--shadow-panel)]"
 const ITEM_BASE =
   "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-[color:var(--color-fg-faint)]"
 const ITEM_FOCUS =
