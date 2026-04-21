@@ -62,23 +62,53 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 ## Quickstart
 
 ```bash
-pnpm install
-pnpm dev          # http://localhost:3030
+pnpm install                   # one-time — pulls deps across 7 packages
+bash scripts/install-skills.sh # one-time — mirror skills bundle to ~/.claude/skills/
+bin/marvin                     # start MARVIN on http://localhost:3030
 ```
 
-First boot — MARVIN will pick up the Agent SDK's auth (host Keychain on macOS,
-`~/.claude/.credentials.json` on Linux/Windows, or `ANTHROPIC_API_KEY`). Hit
-[`/api/health`](http://localhost:3030/api/health) to verify.
+`bin/marvin` runs every preflight check (Node ≥22, pnpm, skills, port
+availability, credentials), backgrounds the dev server, polls
+`/api/health`, and prints the URL + auth mode + model once it's up.
 
-Skills bundle (one-time):
+### Lifecycle
+
+```
+bin/marvin              # alias for start
+bin/marvin status       # is it up? auth + model + data dir
+bin/marvin logs         # tail .marvin/dev.log
+bin/marvin stop         # kill the process group cleanly
+bin/marvin restart
+bin/marvin doctor       # preflight only — no start
+bin/marvin help
+```
+
+### Raw fallback
+
+If you want to drive `pnpm dev` directly (skipping `bin/marvin`'s
+preflight + pid tracking):
 
 ```bash
-bash scripts/install-skills.sh
+pnpm dev          # foreground, Ctrl-C to stop
 ```
 
-This mirrors the pinned Anthropic skills (`frontend-design`, `canvas-design`,
-`claude-api`, `mcp-builder`, `webapp-testing`, `skill-creator`, etc.) into
-`~/.claude/skills/` so MARVIN's SDK sessions can invoke them.
+### Skills bundle
+
+The `install-skills.sh` step mirrors the pinned Anthropic skills
+(`frontend-design`, `canvas-design`, `claude-api`, `mcp-builder`,
+`webapp-testing`, `skill-creator`, etc.) plus MARVIN's own adopted skills
+(`test-driven-development`, `systematic-debugging`, `pr-review`,
+`security-audit`) into `~/.claude/skills/` so MARVIN's SDK sessions can
+invoke them. Idempotent — re-running is safe.
+
+### Credentials
+
+MARVIN uses the Agent SDK's auth detection in priority order: direct
+`ANTHROPIC_API_KEY` env var → `~/.claude/.credentials.json` /
+`~/.claude/auth.json` (Linux / Windows) → macOS Keychain (state dir
+activity). See [docs/security/credentials.md](./docs/security/credentials.md)
+for the full detection rules and how to pick between API-key and
+host-credentials modes.
 
 ## Stack
 
@@ -105,12 +135,15 @@ data/.marvin/                # session transcripts, cost tracker, graph cache (g
 
 ## Status
 
-**v1 shipped.** Phases 1–4 landed 2026-04-17; Phase 5 stretch items (advisor
-mode, preview pane, graph-aware chat, keyboard shortcuts + session search,
-dual-theme support, BrainLiquid canvas particle brain) shipped 2026-04-18/19.
-Honeycomb MCP integration remains explicitly deferred (needs Honeycomb
-account + team setup). See [PLAN.md](./PLAN.md) for the phase-by-phase
-changelog and [docs/roadmap.md](./docs/roadmap.md) for the narrative view.
+**v1 shipped.** Phases 1–5 complete. Phase 5's Honeycomb MCP integration
+is explicitly deferred (needs Honeycomb account + team setup). Everything
+else — advisor mode, preview pane, graph-aware chat, keyboard shortcuts,
+session search, dual-theme support, BrainLiquid canvas particle brain,
+full `docs/` tree, graphify-first hard rule, REVIEW.md + adopted skills,
+`bin/marvin` lifecycle script — shipped 2026-04-17 through 2026-04-19.
+
+See [PLAN.md](./PLAN.md) for the phase-by-phase changelog and
+[docs/roadmap.md](./docs/roadmap.md) for the narrative view.
 
 ## Documentation
 
