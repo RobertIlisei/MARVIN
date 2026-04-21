@@ -696,6 +696,74 @@ html::after {
 }
 
 /* ---------------------------------------------------------------------------
+ * Scout orb — sibling to the advisor orb, fires while a `Task` subagent
+ * with `subagent_type: "scout"` / `description: "scout: …"` is active in
+ * the current turn. Same transition shape as the advisor so both orbs
+ * enter/leave with identical cadence (one is escalation, one is
+ * parallel research — both quiet). See `scout-orb.tsx`.
+ *
+ * Entry comes from the *left* (translateX(-32px)) so the scout and
+ * advisor arrive from opposite sides, visually suggesting "inputs
+ * converging on the main brain." If both fire at once they flank
+ * symmetrically rather than stacking.
+ * ------------------------------------------------------------------------ */
+
+.scout-orb-wrap {
+  opacity: 0;
+  transform: translateX(-32px) scale(0.7);
+  transition:
+    opacity 0.35s ease,
+    transform 0.55s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.scout-orb-wrap.is-active {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+.scout-orb-wrap.is-active .scout-orb-svg {
+  animation: scout-breathe 2.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px oklch(0.78 0.14 170 / 0.55));
+}
+.scout-orb-wrap.is-active .scout-ripple-inner {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+}
+.scout-orb-wrap.is-active .scout-ripple-mid {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+  animation-delay: 1s;
+}
+.scout-orb-wrap.is-active .scout-ripple-outer {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+  animation-delay: 2s;
+}
+@keyframes scout-breathe {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* Three concentric rings, staggered — reads as outward-radiating search
+   waves without demanding as much visual weight as the advisor's
+   continuous orbit. */
+@keyframes scout-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  18% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Design-system primitives ported from the Claude Design handoff.
  * Adapted to MARVIN's existing sulphur-amber dark palette — same visual
  * vocabulary (pill / kbd / timeline / status-rail), warmer accent colors.
