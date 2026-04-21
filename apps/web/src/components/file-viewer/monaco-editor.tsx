@@ -23,7 +23,7 @@
 
 import type { OnMount } from "@monaco-editor/react";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { applyMonacoTheme } from "@/components/settings/monaco-themes";
 import { useTheme } from "@/components/settings/use-theme";
 import { type EditorConflict, EditorToolbar } from "./editor-toolbar";
@@ -219,6 +219,23 @@ export function MonacoEditor({
     setSize(body.size);
   }, [cwd, filePath]);
 
+  // `save` is a useCallback recreated on every `content` / `mtime`
+  // change — but `editor.addAction` below captures whatever reference
+  // exists at mount time. That stale closure held the initial
+  // (empty-ish) content + the initial mtime forever; Cmd-S silently
+  // wrote the unmodified original content back to disk, so the user
+  // saw the dirty indicator stick and their edits never persist.
+  //
+  // Mirror the latest `save` into a ref on every render so the Monaco
+  // action (which only runs from inside its `run`) always calls the
+  // freshest closure. The toolbar's save button didn't have this bug
+  // because its `onClick={() => void save()}` lambda is re-created
+  // each render.
+  const saveRef = useRef(save);
+  useEffect(() => {
+    saveRef.current = save;
+  }, [save]);
+
   const handleMount: OnMount = (editor, monaco) => {
     applyMonacoTheme(monaco, mode);
     if (!readOnly) {
@@ -227,7 +244,7 @@ export function MonacoEditor({
         label: "Save",
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
         run: () => {
-          void save();
+          void saveRef.current();
         },
       });
     }
