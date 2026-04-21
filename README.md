@@ -172,8 +172,8 @@ Full documentation at [docs/](./docs/). Modeled on Claude Code's docs site.
 - [Architecture at a glance](./docs/getting-started/architecture.md)
 - [Core concepts](./docs/README.md#core-concepts) — single-assistant, 8-phase workflow, isolation, confirm gate, advisor, graphify, ADRs
 - [HTTP API reference](./docs/reference/api.md) — all 17 endpoints
-- [Architecture decisions](./docs/decisions/) — six ADRs covering the design choices
+- [Architecture decisions](./docs/decisions/) — ten ADRs covering the design choices
 
 ## License
 
-Not yet specified. See [docs/business/licensing.md](./docs/business/licensing.md) for the consideration.
+[MIT](./LICENSE) · © 2026 Robert Ilisei · See [docs/business/licensing.md](./docs/business/licensing.md) for the rationale vs Apache 2.0 / MPL / GPL.
