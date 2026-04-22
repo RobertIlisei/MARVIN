@@ -27,6 +27,7 @@ import path from "node:path";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type FsWriteOp, fsWritePolicy } from "@marvin/tools/fs-write-policy";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,15 +48,12 @@ interface SkippedEntry {
 }
 
 export async function POST(req: NextRequest) {
-  // Preflight-forcing header. Without this check, a cross-origin page
-  // could post arbitrary files into the user's project (multipart is a
-  // "simple" CORS request and bypasses preflight otherwise).
-  if (req.headers.get("x-marvin-client") !== "1") {
-    return NextResponse.json(
-      { error: "missing-x-marvin-client" },
-      { status: 400 },
-    );
-  }
+  // CSRF hardening. ADR-0009 first established this pattern for the
+  // multipart upload; the shared helper in `@/lib/csrf` now applies it
+  // uniformly across every mutating route, so the legacy inline check
+  // that used to live here is redundant and was removed.
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
 
   let form: FormData;
   try {

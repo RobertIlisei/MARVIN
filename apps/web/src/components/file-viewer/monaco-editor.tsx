@@ -26,6 +26,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { applyMonacoTheme } from "@/components/settings/monaco-themes";
 import { useTheme } from "@/components/settings/use-theme";
+import { marvinFetch } from "@/lib/csrf";
 import { type EditorConflict, EditorToolbar } from "./editor-toolbar";
 
 const Editor = dynamic(
@@ -263,7 +264,7 @@ export function MonacoEditor({
           content,
         };
         if (!overwrite) body.expectedMtime = mtime;
-        const res = await fetch("/api/files/write/save", {
+        const res = await marvinFetch("/api/files/write/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -310,7 +311,7 @@ export function MonacoEditor({
   );
 
   const reload = useCallback(async () => {
-    const res = await fetch(
+    const res = await marvinFetch(
       `/api/files/content?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`,
     );
     if (!res.ok) return;

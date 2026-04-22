@@ -1,5 +1,6 @@
 import { cancelLiveTurn } from "@marvin/runtime/turn-registry";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +13,9 @@ export const dynamic = "force-dynamic";
  * browser tab doesn't kill the agent by accident.
  */
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: { marvinSessionId?: string };
   try {
     body = (await req.json()) as { marvinSessionId?: string };

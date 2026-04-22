@@ -6,6 +6,7 @@ import type { FitAddon as FitAddonT } from "@xterm/addon-fit";
 import type { Terminal as Xterm } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import { useTheme } from "@/components/settings/use-theme";
+import { marvinFetch } from "@/lib/csrf";
 
 const PROMPT = "\x1b[38;5;39m❯\x1b[0m ";
 const HISTORY_KEY = "marvin.term.history";
@@ -229,7 +230,7 @@ export function Terminal({ cwd }: { cwd: string }) {
         const controller = new AbortController();
         controllerRef.current = controller;
         try {
-          const res = await fetch("/api/terminal/run", {
+          const res = await marvinFetch("/api/terminal/run", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ cwd, cmd }),

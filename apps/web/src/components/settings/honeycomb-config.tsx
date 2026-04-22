@@ -27,6 +27,7 @@ import {
 } from "@marvin/ui/dialog";
 import { Input } from "@marvin/ui/input";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { marvinFetch } from "@/lib/csrf";
 
 type Source = "env" | "workdir" | "global" | "none";
 
@@ -128,7 +129,7 @@ export function HoneycombConfigForm({
       const url = cwd
         ? `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`
         : `/api/honeycomb/config`;
-      const res = await fetch(url);
+      const res = await marvinFetch(url);
       if (!res.ok) throw new Error(await res.text());
       const body = (await res.json()) as ConfigStatus;
       setStatus(body);
@@ -162,7 +163,7 @@ export function HoneycombConfigForm({
     setError(null);
     setTestResult(null);
     try {
-      const res = await fetch("/api/honeycomb/config", {
+      const res = await marvinFetch("/api/honeycomb/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -216,7 +217,7 @@ export function HoneycombConfigForm({
     setError(null);
     setTestResult(null);
     try {
-      const res = await fetch(
+      const res = await marvinFetch(
         `/api/honeycomb/config?cwd=${encodeURIComponent(cwd)}`,
         { method: "DELETE" },
       );
@@ -264,7 +265,7 @@ export function HoneycombConfigForm({
         const typedEnv = environment.trim();
         if (typedEnv.length > 0) payload.environment = typedEnv;
       }
-      const res = await fetch("/api/honeycomb/test", {
+      const res = await marvinFetch("/api/honeycomb/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
