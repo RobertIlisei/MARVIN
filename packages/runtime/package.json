@@ -21,7 +21,8 @@
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
     "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts",
-    "./honeycomb-config": "./src/honeycomb-config.ts"
+    "./honeycomb-config": "./src/honeycomb-config.ts",
+    "./honeycomb-telemetry": "./src/honeycomb-telemetry.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
