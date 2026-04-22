@@ -25,6 +25,11 @@ export {
   type WriteHoneycombConfigResult,
   writeHoneycombConfig,
 } from "./honeycomb-config";
+export {
+  applyHoneycombTelemetryEnv,
+  type HoneycombTelemetryStatus,
+  honeycombTelemetryStatus,
+} from "./honeycomb-telemetry";
 export { getMarvinDataDir, marvinPaths } from "./paths";
 export { buildSystemPrompt, type PersonalityMode } from "./personality";
 export {
