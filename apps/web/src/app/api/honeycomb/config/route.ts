@@ -133,12 +133,8 @@ export async function POST(req: NextRequest) {
     ...(apiUrl ? { apiUrl } : {}),
   });
   if (!result.ok) {
-    const status =
-      result.error === "empty-api-key" ||
-      result.error === "empty-environment" ||
-      result.error === "invalid-api-url"
-        ? 400
-        : 500;
+    // All validation errors are 400; only io-error falls through to 500.
+    const status = result.error === "io-error" ? 500 : 400;
     return NextResponse.json(
       { error: result.error, detail: result.detail ?? null },
       { status },
