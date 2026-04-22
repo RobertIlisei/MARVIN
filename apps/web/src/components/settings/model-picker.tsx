@@ -2,20 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-export interface ModelInfo {
-  id: string;
-  displayName: string;
-  tier: "opus" | "sonnet" | "haiku" | "other";
-  createdAt: string | null;
-  live: boolean;
-}
+import {
+  activePreset,
+  PRESETS,
+  resolvePreset,
+} from "./model-picker-presets";
+import type { ModelInfo, ModelsResponse } from "./model-picker-types";
 
-export interface ModelsResponse {
-  models: ModelInfo[];
-  source: "anthropic-api" | "fallback";
-  error: string | null;
-  fetchedAt: string;
-}
+// Re-exported for legacy consumers that import from this module.
+export type { ModelInfo, ModelsResponse };
 
 interface ModelPickerProps {
   /** Currently-selected executor model id. `null` = "default". */
@@ -31,6 +26,10 @@ const TIER_LABEL: Record<ModelInfo["tier"], string> = {
   haiku: "Haiku — fast, cheap",
   other: "Other",
 };
+
+// All preset logic (pickTierId, resolvePreset, activePreset, PRESETS)
+// lives in ./model-picker-presets — pure .ts, Vitest-importable, and
+// re-used here via the imports at the top of the file.
 
 /**
  * Header control for picking executor + advisor models.
@@ -119,9 +118,27 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
     return id.replace(/^claude-/, "");
   };
 
-  const summary = advisor
-    ? `${labelFor(executor)} · ${labelFor(advisor)}↑`
-    : labelFor(executor);
+  const currentPreset = activePreset(executor, advisor, data?.models ?? []);
+
+  // The collapsed-button summary is the at-a-glance signal for which
+  // runtime mode is active. The previous form just showed
+  // `labelFor(executor)` which rendered "default" when nothing was
+  // picked — misleading because the user couldn't tell if they'd
+  // configured advisor mode or were on the plain Opus default.
+  //
+  //  - Solo Opus (the default)          → "opus"
+  //  - Advisor mode                     → "advisor · sonnet→opus"
+  //  - Custom pair (no preset match)    → "custom · <exec>→<adv>"
+  //  - Custom executor, no advisor      → whatever exec model they picked
+  const summary = (() => {
+    if (currentPreset === "solo") return "opus";
+    if (currentPreset === "advisor") {
+      return `advisor · ${labelFor(executor)}→${labelFor(advisor)}`;
+    }
+    return advisor
+      ? `custom · ${labelFor(executor)}→${labelFor(advisor)}`
+      : labelFor(executor);
+  })();
 
   return (
     <div ref={boxRef} className="relative">
@@ -163,6 +180,52 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
               </span>
             )}
           </div>
+
+          {/* Preset row — one-click mode switcher. For casual users
+              this is the whole picker; the per-slot dropdowns below
+              are the power-user override. The presets write both
+              slots atomically (including clearing advisor on "solo")
+              so it's not possible to land in a half-configured state
+              by clicking here. */}
+          <div className="mb-3 flex flex-col gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">
+              mode
+            </span>
+            <div role="radiogroup" aria-label="Runtime mode preset" className="flex gap-1.5">
+              {PRESETS.map((preset) => {
+                const active = currentPreset === preset.id;
+                return (
+                  // biome-ignore lint/a11y/useSemanticElements: segmented-control pattern; buttons carry role="radio" for the radiogroup above
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    title={preset.helper}
+                    onClick={() => onChange(resolvePreset(preset, data?.models ?? []))}
+                    className={`flex-1 rounded-md border px-2 py-1.5 text-left transition ${
+                      active
+                        ? "border-[color:var(--color-accent)]/60 bg-[color:var(--color-accent-glow)] text-[color:var(--color-accent)]"
+                        : "border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 text-[color:var(--color-fg-dim)] hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+                    }`}
+                  >
+                    <div className="font-mono text-[11px]">{preset.label}</div>
+                    <div className="mt-0.5 text-[9.5px] leading-tight text-[color:var(--color-fg-faint)]">
+                      {preset.helper}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {currentPreset === null && (
+              <span className="mt-0.5 font-mono text-[9.5px] text-[color:var(--color-fg-faint)]">
+                custom pair — neither preset matches. Pick one above to
+                reset, or keep the per-slot override below.
+              </span>
+            )}
+          </div>
+
+          <div className="mb-2 h-px bg-[color:var(--color-border)]" />
 
           <ModelSelect
             label="executor"
