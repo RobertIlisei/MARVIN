@@ -29,6 +29,7 @@ import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
+import { applyHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createPlaywrightMcpConfig } from "./playwright-mcp";
 
 export type RuntimeMode = "opus" | "advisor";
@@ -228,6 +229,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     signal,
   } = input;
   const permissionStrategy: PermissionStrategy = input.permissionStrategy ?? "auto";
+
+  // Wire Honeycomb telemetry before the SDK spawns the Claude CLI.
+  // This reads the saved config at `<cwd>/.marvin/honeycomb.json` (or
+  // the global fallback) and mutates process.env so the CLI inherits
+  // the right CLAUDE_CODE_ENABLE_TELEMETRY + OTEL_* vars. Re-running
+  // every turn lets per-project configs take effect without a restart
+  // and makes deleting the config cleanly reverse the mutation.
+  applyHoneycombTelemetryEnv(cwd);
 
   const abortController = new AbortController();
   if (signal) {
