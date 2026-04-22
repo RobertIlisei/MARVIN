@@ -1,7 +1,35 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
+/**
+ * POST /api/terminal/run — stream a shell command's stdout/stderr as SSE.
+ *
+ * This is the most dangerous endpoint in MARVIN by design: it runs
+ * arbitrary shell in the user's account. Three gates protect it:
+ *
+ *   1. **CSRF preflight header** (`X-Marvin-Client: 1`) via the shared
+ *      `requireMarvinClient` guard. Blocks drive-by same-browser tabs
+ *      at other origins from triggering a shell.
+ *   2. **Sandbox check on cwd** via `checkFsPath`. Prevents the route
+ *      from spawning in `/`, `/etc`, a non-existent path, or a symlink
+ *      target. The path must exist and be a directory. This does NOT
+ *      restrict cwd to registered projects — the terminal is meant to
+ *      be general — but it does stop a caller from passing empty,
+ *      poisoned, or fabricated paths.
+ *   3. **Command length cap** (`MAX_CMD_LEN`, 8 KB) and **runtime
+ *      timeout** (`MAX_RUN_MS`, 10 minutes). Localhost-only so DoS
+ *      concern is limited, but both are cheap and stop a misbehaving
+ *      long-runner from holding the server thread indefinitely.
+ *
+ * What is DELIBERATELY NOT gated: the command string itself. This is
+ * the user's terminal — arbitrary shell is the feature. A command
+ * allowlist here would break legitimate work. The CSRF guard is what
+ * keeps non-owners from hitting this route at all.
+ */
 
+import { spawn } from "node:child_process";
+
+import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+
 import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
@@ -40,7 +68,37 @@ export async function POST(req: NextRequest) {
   if (cmd.length > MAX_CMD_LEN) {
     return new Response("cmd too long", { status: 413 });
   }
-  const resolvedCwd = path.resolve(cwd);
+
+  // Sandbox check: cwd must exist, must be a directory, must not be a
+  // symlink (or contain symlink ancestors that escape). The terminal
+  // route intentionally allows arbitrary-but-existing directories — it
+  // is not restricted to registered projects. What this prevents:
+  //   - Empty or relative cwd that would default to the Node server's
+  //     own current working directory (leaking MARVIN's repo root).
+  //   - Non-existent paths that would cause spawn to error in a less
+  //     structured way than a JSON 400.
+  //   - Symlink shenanigans (fs-sandbox rejects symlinks outright).
+  //
+  // `cwd: cwd` as both the sandbox root AND the target means "the
+  // sandbox boundary IS the cwd." The absolute-path return is what we
+  // pass to spawn, so a caller can't defeat the check with a relative
+  // path that points elsewhere post-validation.
+  const cwdCheck = await checkFsPath({
+    cwd,
+    target: cwd,
+    mustExist: true,
+    allowDirectory: true,
+  });
+  if (!cwdCheck.ok) {
+    return NextResponse.json({ error: cwdCheck.error }, { status: 400 });
+  }
+  if (!cwdCheck.isDirectory) {
+    return NextResponse.json(
+      { error: "cwd is not a directory" },
+      { status: 400 },
+    );
+  }
+  const resolvedCwd = cwdCheck.absolutePath;
 
   const encoder = new TextEncoder();
   const [shBin, shArgs] = shellFor();
