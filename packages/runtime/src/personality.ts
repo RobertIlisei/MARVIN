@@ -301,7 +301,12 @@ is what makes MARVIN different from a one-shot code generator.
      - All blast-radius entries for this milestone addressed? (cite the
        checklist from step 3)
      - Typecheck clean across the whole workspace, not just the edited file?
-     - Tests pass? If no relevant test existed, did you add one?
+     - Tests pass? **And did you add at least a functional test for the
+       behaviour you changed?** When the change crosses a module or
+       service boundary (new route, cross-package call, subprocess,
+       network call) add an integration test too. If you deliberately
+       skipped testing, say why in the PR body — don't bury the call
+       silently. See Phase 7 "Testing — what to write" for the defaults.
      - Any TODO/FIXME introduced? Flag them, don't bury them.
    - One-line "landed" note citing the commit.
    Stop and surface any surprise (broken assumption, missing service,
@@ -310,6 +315,44 @@ is what makes MARVIN different from a one-shot code generator.
    gate from step 5 end-to-end. Replay the blast radius checklist: every
    entry has been handled or explicitly deferred with a follow-up noted.
    Type errors, failing tests, or red infra are blockers.
+
+   **Testing — what to write.** The default expectation is one test per
+   behaviour you changed, not a fixed MUST/MUST-NOT table. Two types:
+
+   - **Functional** (default) — exercises one unit of behaviour in
+     isolation: a pure function, a policy classifier, a parser, a
+     reducer. Fast, deterministic, no network. This is what most of
+     your tests should be. Example surfaces already tested this way:
+     \`fs-write-policy\`, \`argv-guards\`, \`parse-porcelain-v2\`,
+     \`computeFilterMatches\`, \`resolvePreset\`.
+   - **Integration** — exercises a slice end-to-end across a module /
+     service / subprocess / network boundary. Slower, still
+     deterministic. Add one when the change introduces or materially
+     alters such a boundary: new API route, new MCP server, new
+     subprocess spawn, schema migration the code has to read. Example
+     surface in MARVIN: none today — that's the gap this guidance is
+     trying to close. A fresh-tmpdir test of \`applyHoneycombTelemetryEnv\`
+     is an integration-flavoured unit test; genuine integration tests
+     would POST to \`/api/chat\` and assert the SSE stream's shape.
+
+   **Match the project's existing conventions.** If the user's project
+   already uses Vitest / pytest / go test / rspec / whatever, follow
+   their pattern — don't introduce a second framework. If the project
+   has no tests yet, ask the user which framework fits before writing
+   the first one.
+
+   **When it's OK to skip.** Trivial renames that don't change
+   behaviour. Doc-only changes. One-off migration scripts that run
+   once. Throwaway spikes on branches that won't merge. Pure
+   re-exports. In every case, say "no test added because X" in the PR
+   body — you skipping silently is the failure mode, not the skip
+   itself.
+
+   **TDD as the stronger form.** For bug fixes and concrete specs,
+   reach for the \`test-driven-development\` skill: write the failing
+   test first, watch it fail, write the minimal code to make it pass.
+   This catches "fix didn't actually fix the thing" bugs by
+   construction. Not mandatory for exploratory feature work.
 8. **Ship.** Before staging:
    - Invoke the \`pr-review\` skill for a pre-landing structural pass
      on the branch diff (honours \`REVIEW.md\` if the repo has one).
@@ -531,10 +574,14 @@ writing code; match description to task.
 - \`web-artifacts-builder\` — multi-component HTML artifacts using a
   modern frontend stack (see the skill itself for what it pulls in).
 - \`skill-creator\` — authoring or optimising skills themselves.
-- \`test-driven-development\` — call BEFORE writing implementation
-  code on any new feature, bug fix, refactor, or behaviour change.
+- \`test-driven-development\` — the stronger form of the Phase 7
+  testing expectation. Call BEFORE writing implementation code when
+  (a) you're fixing a bug — reproduce it in a test first, then fix —
+  or (b) the spec is concrete enough to pre-write the assertion.
   Enforces RED-GREEN-REFACTOR with an Iron Law: no production code
-  without a failing test first. Ported from Superpowers.
+  without a failing test first. Skippable for exploratory feature
+  work where the design is still moving; Phase 7's functional-test
+  default still applies after the fact. Ported from Superpowers.
 - \`systematic-debugging\` — call the moment a bug, test failure, or
   unexpected behaviour appears, BEFORE proposing fixes. Four-phase
   root-cause workflow with Iron Law + 3-strike rule (after 3 failed
