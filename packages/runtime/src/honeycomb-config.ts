@@ -75,13 +75,64 @@ export function redactApiKey(apiKey: string): string {
   return `${apiKey.slice(0, 6)}…${apiKey.slice(-4)}`;
 }
 
+/**
+ * Strict Honeycomb hostname validator.
+ *
+ * The previous form used `hostname.endsWith("honeycomb.io")`, which had
+ * a one-character SSRF bug: any attacker-registered domain suffixed
+ * with that substring — `evilhoneycomb.io`, `myhoneycomb.io` —
+ * passed the check. Combined with a CSRF primitive on
+ * `POST /api/honeycomb/config`, a malicious same-browser origin could
+ * redirect outbound telemetry + the `/1/auth` probe to a host it
+ * controls and exfiltrate the API key.
+ *
+ * The tight form requires the hostname to END WITH `.honeycomb.io`
+ * (note the leading dot). A dotted suffix only matches if the
+ * character before "honeycomb.io" is a `.` — i.e. it's a genuine
+ * subdomain of Honeycomb's domain. This rejects `evilhoneycomb.io`
+ * (ends with "honeycomb.io" without the dot) while still accepting
+ * any legitimate Honeycomb region (`api.honeycomb.io`,
+ * `api.eu1.honeycomb.io`, future `api.ap1.honeycomb.io`, etc.).
+ *
+ * HTTPS-only is retained from the original check. Non-HTTPS would
+ * expose the API key on the wire even if the hostname is legitimate.
+ */
 function isValidApiUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === "https:" && u.hostname.endsWith("honeycomb.io");
+    return u.protocol === "https:" && u.hostname.endsWith(".honeycomb.io");
   } catch {
     return false;
   }
+}
+
+/**
+ * Validator for user-supplied config strings that flow unescaped into
+ * OTEL env vars (headers, resource attributes). `environment` lands
+ * inside `OTEL_RESOURCE_ATTRIBUTES` and `dataset` lands inside
+ * `OTEL_EXPORTER_OTLP_HEADERS` as
+ * `x-honeycomb-dataset=<value>` — in both cases a comma, newline, or
+ * `=` would terminate the key and allow the user to splice an
+ * attacker-controlled header or attribute.
+ *
+ * Allowed characters mirror what the Honeycomb UI itself permits for
+ * environment/dataset names: alphanumerics plus `._-`. 128-char cap
+ * is generous but bounded (Honeycomb rejects names over 64 bytes, so
+ * anything longer is clearly malicious / mistyped).
+ *
+ * Low real-world risk for a single-user local tool — MARVIN writes
+ * its own config. But the whole point of ADR-0004's structural gates
+ * is that prompt hygiene isn't the only defence. Validate at the
+ * trust boundary (write) so stale or crafted files can't get past
+ * the reader either.
+ */
+const CONFIG_NAME_RE = /^[A-Za-z0-9._-]+$/;
+const CONFIG_NAME_MAX = 128;
+
+function isValidConfigName(value: string): boolean {
+  return (
+    value.length > 0 && value.length <= CONFIG_NAME_MAX && CONFIG_NAME_RE.test(value)
+  );
 }
 
 function readFile(path: string): HoneycombConfig | null {
@@ -92,6 +143,15 @@ function readFile(path: string): HoneycombConfig | null {
     if (!parsed.apiKey || !parsed.environment) return null;
     const apiUrl = parsed.apiUrl ?? DEFAULT_HONEYCOMB_API_URL;
     if (!isValidApiUrl(apiUrl)) return null;
+    // Belt-and-braces: enforce the same charset on read that we enforce
+    // on write. If a stale config file from before the validator was
+    // added carries a value with a comma / newline / `=`, drop it
+    // rather than passing it through to the OTEL headers the telemetry
+    // module will build later.
+    if (!isValidConfigName(parsed.environment)) return null;
+    if (parsed.dataset !== undefined && !isValidConfigName(parsed.dataset)) {
+      return null;
+    }
     return {
       apiKey: parsed.apiKey,
       environment: parsed.environment,
@@ -126,13 +186,21 @@ export function readHoneycombConfig(workDir: string | null): {
     const apiUrl =
       process.env.HONEYCOMB_API_URL?.trim() || DEFAULT_HONEYCOMB_API_URL;
     if (!isValidApiUrl(apiUrl)) return null;
+    // Apply the same charset check to env-var-sourced values. In theory
+    // the user sets these deliberately in their shell, but the user's
+    // shell is also the surface that proved fragile on the install-app
+    // launch path — better to fail closed than pass a crafted value
+    // through to OTEL headers.
+    if (!isValidConfigName(envEnv)) return null;
+    const envDataset = process.env.HONEYCOMB_DATASET?.trim();
+    if (envDataset !== undefined && envDataset !== "" && !isValidConfigName(envDataset)) {
+      return null;
+    }
     return {
       config: {
         apiKey: envKey,
         environment: envEnv,
-        ...(process.env.HONEYCOMB_DATASET?.trim()
-          ? { dataset: process.env.HONEYCOMB_DATASET!.trim() }
-          : {}),
+        ...(envDataset ? { dataset: envDataset } : {}),
         apiUrl,
       },
       source: "env",
@@ -163,13 +231,35 @@ export interface WriteHoneycombConfigInput {
 
 export type WriteHoneycombConfigResult =
   | { ok: true; path: string }
-  | { ok: false; error: "invalid-api-url" | "empty-api-key" | "empty-environment" | "io-error"; detail?: string };
+  | {
+      ok: false;
+      error:
+        | "invalid-api-url"
+        | "empty-api-key"
+        | "empty-environment"
+        | "invalid-environment"
+        | "invalid-dataset"
+        | "io-error";
+      detail?: string;
+    };
 
 /**
  * Persist a Honeycomb config to `<workDir>/.marvin/honeycomb.json` with
- * 600 permissions. Validates the apiUrl is `https://*.honeycomb.io`
- * before writing so a misconfigured URL can't exfiltrate the key to
- * an attacker-controlled host on subsequent use.
+ * 600 permissions. Validates:
+ *
+ *   - apiUrl is strictly `https://*.honeycomb.io` (dot required, so a
+ *     lookalike domain like `evilhoneycomb.io` is rejected).
+ *   - environment + dataset (if present) match
+ *     `[A-Za-z0-9._-]{1,128}` — the charset Honeycomb itself allows,
+ *     and the minimum set that prevents header injection when these
+ *     values get concatenated into `OTEL_EXPORTER_OTLP_HEADERS` /
+ *     `OTEL_RESOURCE_ATTRIBUTES` downstream (a comma or newline in an
+ *     unvalidated value would splice a second header).
+ *
+ * The two validators together close the SSRF → key-exfiltration path
+ * that a CSRF on this endpoint would otherwise enable: no funny
+ * hostname, no crafted dataset that smuggles a `x-honeycomb-team=`
+ * override.
  */
 export function writeHoneycombConfig(
   input: WriteHoneycombConfigInput,
@@ -181,6 +271,20 @@ export function writeHoneycombConfig(
 
   if (!apiKey) return { ok: false, error: "empty-api-key" };
   if (!environment) return { ok: false, error: "empty-environment" };
+  if (!isValidConfigName(environment)) {
+    return {
+      ok: false,
+      error: "invalid-environment",
+      detail: "must match [A-Za-z0-9._-] (1-128 chars)",
+    };
+  }
+  if (dataset !== undefined && dataset !== "" && !isValidConfigName(dataset)) {
+    return {
+      ok: false,
+      error: "invalid-dataset",
+      detail: "must match [A-Za-z0-9._-] (1-128 chars)",
+    };
+  }
   if (!isValidApiUrl(apiUrl)) {
     return {
       ok: false,
