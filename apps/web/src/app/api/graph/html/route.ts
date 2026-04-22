@@ -9,6 +9,36 @@
  * Path is sandboxed via `checkFsPath`. Response is cached for 60s so
  * repeated iframe reloads are cheap; the graph is regenerated on
  * milestone commits, not per-turn.
+ *
+ * ### Security — CSP sandbox
+ *
+ * The HTML body is produced by graphify and lives under the project's
+ * `graphify-out/`. It ships with JS that does zoom / pan interaction.
+ * Because the file sits inside the user's repo, a malicious PR could
+ * in principle land a `graph.html` with injected scripts that hit
+ * MARVIN's own API (same-origin `fetch`) — a confused-deputy attack:
+ * the reviewer opens the graph panel, their browser runs the
+ * attacker's JS with same-origin privileges, and MARVIN executes
+ * whatever state change the script requests.
+ *
+ * Mitigations, layered:
+ *
+ *   1. `Content-Security-Policy: sandbox allow-scripts` — puts the
+ *      iframe in a unique null origin. Its scripts still run (so
+ *      zoom / pan keep working), but any `fetch` it makes is
+ *      cross-origin. Combined with the CSRF guard on MARVIN's
+ *      mutating routes, same-origin API access is no longer
+ *      available to the iframe's JS.
+ *   2. `X-Content-Type-Options: nosniff` — browsers must treat the
+ *      response as `text/html` and not reinterpret it as a script
+ *      bundle or other MIME type.
+ *   3. `X-Frame-Options: SAMEORIGIN` — this response itself cannot
+ *      be framed by pages at other origins. Prevents a drive-by
+ *      from embedding the iframe and proxying clicks through it.
+ *
+ * Note we deliberately do NOT add `allow-same-origin`. That would
+ * defeat the whole point — the iframe would regain same-origin
+ * privileges and this mitigation would be cosmetic.
  */
 
 import { promises as fs } from "node:fs";
@@ -66,6 +96,14 @@ export async function GET(req: NextRequest) {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "private, max-age=60",
+        // See the file-level header comment for the threat model these
+        // three headers close. Tightening them further (e.g. dropping
+        // `allow-scripts`) would break the interactive graph viz, so
+        // CSRF on MARVIN's mutation routes is the necessary partner
+        // to these headers, not a replacement.
+        "Content-Security-Policy": "sandbox allow-scripts",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
       },
     });
   } catch (e) {
