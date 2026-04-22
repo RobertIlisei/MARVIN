@@ -19,6 +19,7 @@
 
 import type { GitOp, GitWriteSeverity } from "@marvin/git";
 import { useCallback, useRef, useState } from "react";
+import { marvinFetch } from "@/lib/csrf";
 
 export type RemoteErrorCode =
   | "auth-publickey"
@@ -119,7 +120,7 @@ export function useGitMutations({ cwd, onChanged }: UseGitMutationsArgs) {
       patch({ busy: true, error: null });
 
       const doPost = async (token?: string): Promise<Response> => {
-        return fetch(`/api/git/${route}`, {
+        return marvinFetch(`/api/git/${route}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -148,7 +149,7 @@ export function useGitMutations({ cwd, onChanged }: UseGitMutationsArgs) {
               return false;
             }
             const finalOp = opForToken(peek.op as GitOp);
-            const tokenRes = await fetch("/api/git/confirm", {
+            const tokenRes = await marvinFetch("/api/git/confirm", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ op: finalOp, cwd }),

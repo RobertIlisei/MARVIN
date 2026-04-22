@@ -19,6 +19,7 @@
  */
 
 import { useCallback } from "react";
+import { marvinFetch } from "@/lib/csrf";
 
 type Severity = "warn" | "danger";
 
@@ -107,7 +108,7 @@ async function postWithConfirm(params: {
       "Content-Type": "application/json",
     };
     if (token) headers["X-Marvin-Confirmed"] = token;
-    return fetch(params.path, {
+    return marvinFetch(params.path, {
       method: "POST",
       headers,
       body: JSON.stringify(params.body),
@@ -136,7 +137,7 @@ async function postWithConfirm(params: {
     return { res, body: { error: "cancelled" } };
   }
 
-  const mintRes = await fetch("/api/files/write/confirm", {
+  const mintRes = await marvinFetch("/api/files/write/confirm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cwd: params.cwd, op: params.op }),

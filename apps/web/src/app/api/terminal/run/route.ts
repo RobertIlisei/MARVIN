@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import type { NextRequest } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,9 @@ function sseEvent(event: string, data: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: RunBody;
   try {
     body = (await req.json()) as RunBody;
