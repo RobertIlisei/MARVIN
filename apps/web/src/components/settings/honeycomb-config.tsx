@@ -30,6 +30,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Source = "env" | "workdir" | "global" | "none";
 
+interface TelemetryStatus {
+  /** True when Claude Code's OTEL envs are actively set on the server's process.env. */
+  active: boolean;
+  source: Source | "user-override";
+  /** Honeycomb endpoint the CLI will target, when active. */
+  endpoint: string | null;
+  /** Dataset tag spans will land in, when active. */
+  dataset: string | null;
+}
+
 interface ConfigStatus {
   configured: boolean;
   source: Source;
@@ -38,6 +48,12 @@ interface ConfigStatus {
   dataset: string | null;
   apiUrl: string;
   path: string | null;
+  /**
+   * Optional because GET has always returned the older shape —
+   * we degrade gracefully when an older server version is paired
+   * with a newer client.
+   */
+  telemetry?: TelemetryStatus;
 }
 
 interface TestResult {
@@ -626,9 +642,32 @@ function StatusRow({
   }
   if (!status) return null;
   if (!status.configured) {
+    // Cover the "user pointed OTEL at their own collector via shell
+    // env vars" case — config isn't saved, but telemetry is still
+    // flowing. Don't show "no config yet" if the live process is
+    // already shipping spans.
+    if (status.telemetry?.active && status.telemetry.source === "user-override") {
+      return (
+        <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2 text-[color:var(--color-fg)]">
+          <div>
+            telemetry active ✓ source{" "}
+            <span className="text-[color:var(--color-fg-dim)]">
+              shell env vars (OTEL_EXPORTER_OTLP_HEADERS)
+            </span>
+          </div>
+          <div className="text-[color:var(--color-fg-dim)]">
+            endpoint{" "}
+            <span className="text-[color:var(--color-fg)]">
+              {status.telemetry.endpoint ?? "default"}
+            </span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/50 px-3 py-2 text-[color:var(--color-fg-dim)]">
-        no Honeycomb config yet — fill in below and save.
+        no Honeycomb config yet — fill in below and save. MARVIN will auto-export
+        telemetry env vars on the next turn; no shell exports needed.
       </div>
     );
   }
@@ -664,6 +703,24 @@ function StatusRow({
           </>
         )}
       </div>
+      {/* Telemetry line — separate so it reads as a distinct state
+          (you saved a config, AND it's being applied to outgoing
+          Claude Code CLI spawns). The historical gap was that saving
+          a config did nothing by itself; users had to exit to a shell
+          and set env vars. After this change, "configured" and
+          "telemetry active" converge on the save click. */}
+      {status.telemetry?.active ? (
+        <div className="mt-1 text-[color:var(--color-success)]">
+          telemetry active ✓ sending Claude Code spans to{" "}
+          <span className="text-[color:var(--color-fg)]">
+            {status.telemetry.dataset ?? status.dataset ?? "claude-code"}
+          </span>
+        </div>
+      ) : (
+        <div className="mt-1 text-[color:var(--color-fg-faint)]">
+          telemetry idle — next turn will pick up this config.
+        </div>
+      )}
     </div>
   );
 }
