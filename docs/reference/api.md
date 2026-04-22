@@ -7,6 +7,7 @@ Conventions:
 - **Content-Type**: `application/json` unless noted (SSE streams use `text/event-stream`).
 - **Errors**: `{ error: string }` with appropriate 4xx / 5xx status.
 - **SSE events**: `event: <name>\ndata: <json>\n\n` framing.
+- **CSRF guard on every mutating route**: `POST` / `DELETE` / `PUT` / `PATCH` handlers require the header `X-Marvin-Client: 1`. Without it the route returns `403 csrf-guard` without executing. The header forces a CORS preflight so a drive-by tab at another origin cannot trigger the request. `GET` routes are not gated — cross-origin reads are blocked by SOP. Client code should use the `marvinFetch` wrapper in `apps/web/src/lib/csrf.ts`, which attaches the header automatically on mutating methods. ADR-0009 originally established this for multipart uploads; the universal enforcement is the generalisation.
 
 ## Chat
 

@@ -22,6 +22,7 @@ import { type FsWriteOp, fsWritePolicy } from "@marvin/tools/fs-write-policy";
 import { type NextRequest, NextResponse } from "next/server";
 
 import { canonicalizeOp } from "@/lib/canonicalize-op";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +33,9 @@ interface ConfirmRequestBody {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: ConfirmRequestBody;
   try {
     body = (await req.json()) as ConfirmRequestBody;
