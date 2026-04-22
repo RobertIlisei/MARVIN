@@ -1,5 +1,6 @@
 import { searchGraph, summarizeGraph } from "@marvin/graphify-bridge";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: { cwd?: string; q?: string; limit?: number };
   try {
     body = (await req.json()) as { cwd?: string; q?: string; limit?: number };

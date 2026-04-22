@@ -17,6 +17,7 @@ import {
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,6 +59,9 @@ interface ChatRequestBody {
  * disk lets the client rebuild whatever it missed before reconnecting.
  */
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: ChatRequestBody;
   try {
     body = (await req.json()) as ChatRequestBody;

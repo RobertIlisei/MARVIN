@@ -7,6 +7,7 @@ import {
   verifyWorkDir,
 } from "@marvin/runtime/projects";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,9 @@ interface AddBody {
 
 /** POST /api/projects { name?, workDir, setActive? } → { project } */
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: AddBody;
   try {
     body = (await req.json()) as AddBody;
@@ -54,6 +58,9 @@ export async function POST(req: NextRequest) {
 
 /** DELETE /api/projects?id=… → { removed: boolean } */
 export async function DELETE(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
   const removed = removeProject(id);

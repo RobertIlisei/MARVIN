@@ -9,7 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
+import { marvinFetch } from "@/lib/csrf";
 import { ConfirmDeleteDialog, type ConfirmDeleteDialogState } from "./confirm-delete-dialog";
 import { DirIcon, FileIcon } from "./file-icon";
 import { computeFilterMatches } from "./filter-matches";
@@ -148,7 +148,7 @@ export function FileTree({
     setLoading(true);
     setError(null);
     Promise.all([
-      fetch(`/api/files/tree?cwd=${encodeURIComponent(cwd)}`).then(
+      marvinFetch(`/api/files/tree?cwd=${encodeURIComponent(cwd)}`).then(
         async (r) => {
           if (!r.ok) {
             const body = (await r.json().catch(() => ({}))) as {
@@ -159,7 +159,7 @@ export function FileTree({
           return (await r.json()) as TreeResponse;
         },
       ),
-      fetch(`/api/files/status?cwd=${encodeURIComponent(cwd)}`)
+      marvinFetch(`/api/files/status?cwd=${encodeURIComponent(cwd)}`)
         .then((r) => (r.ok ? r.json() : { isGit: false, status: {} }))
         .catch(() => ({ isGit: false, status: {} })) as Promise<StatusResponse>,
     ])
@@ -323,7 +323,7 @@ export function FileTree({
             ? `${path.slice(0, dot)}-copy${path.slice(dot)}`
             : `${path}-copy`;
         // Try cheap content-copy via create — server rejects oversize.
-        const read = await fetch(
+        const read = await marvinFetch(
           `/api/files/content?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`,
         );
         if (!read.ok) return;
@@ -346,7 +346,7 @@ export function FileTree({
       },
       revealInFinder: async (path) => {
         try {
-          await fetch("/api/files/reveal", {
+          await marvinFetch("/api/files/reveal", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ cwd, path }),
