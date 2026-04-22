@@ -6,7 +6,10 @@ import { fsWritePolicy, WRITE_SIZE_MAX_BYTES } from "../src/fs-write-policy";
 // and the mutation routes. Every decision it makes is load-bearing for
 // ADR-0008 invariants, so each rule gets explicit coverage here.
 
-const CWD = "/Users/me/project";
+// Synthetic cwd for every test in this file. Must be an absolute path;
+// the exact value doesn't matter as long as it isn't real (tests never
+// touch the filesystem — fsWritePolicy is a pure classifier).
+const CWD = "/tmp/marvin-test-project";
 
 describe("fsWritePolicy — auto", () => {
   it("create-file inside project is auto", () => {
