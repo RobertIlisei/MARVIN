@@ -51,7 +51,7 @@ Rules:
 - INFERRED: reasonable inference (shared data, implied dependency).
 - AMBIGUOUS: uncertain; flag rather than omit.
 
-Doc files: extract named concepts, entities, infrastructure services, subscription tiers, components, and rationale. Be thorough about every named service in "Development & Infrastructure" sections (TimescaleDB, Redis, Mosquitto, Keycloak, Traefik, MinIO, Prometheus, Grafana, Loki, Unleash, MailHog, API, Web).
+Doc files: extract named concepts, entities, infrastructure services, subscription tiers, components, and rationale. Be thorough about every named service, library, database, queue, or tool the document mentions — whether listed in a "Stack", "Infrastructure", "Architecture", "Dependencies" section or inline in prose. Each named service becomes a node even if the doc only mentions it once; a service that appears together with others forms edges describing their relationship (hosts, depends-on, reads-from, publishes-to). Do not bias the extraction toward any specific stack — MARVIN is project-agnostic, and the graphifier must reflect whichever technologies THIS project actually uses.
 
 For each node: file_type = "document", source_file = the relative path, snake_case stable id. confidence_score REQUIRED on every edge (1.0 EXTRACTED, 0.6-0.9 INFERRED, 0.1-0.3 AMBIGUOUS).
 
