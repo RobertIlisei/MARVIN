@@ -125,6 +125,79 @@ describe("writeHoneycombConfig", () => {
     expect(result.ok).toBe(true);
   });
 
+  // Regression: the previous validator used `hostname.endsWith("honeycomb.io")`
+  // which happily accepted any attacker-registered lookalike. This
+  // test pins the dotted-suffix fix.
+  it("rejects lookalike domains ending in 'honeycomb.io' without the leading dot", () => {
+    // Anyone can register these. Each one passed the old check.
+    const attackerHosts = [
+      "https://evilhoneycomb.io",
+      "https://myhoneycomb.io",
+      "https://api-honeycomb.io",
+      "https://attackerhoneycomb.io",
+    ];
+    for (const apiUrl of attackerHosts) {
+      const result = writeHoneycombConfig({
+        workDir: tmp,
+        apiKey: "hcbik_abc",
+        environment: "prod",
+        apiUrl,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error(`accepted: ${apiUrl}`);
+      expect(result.error).toBe("invalid-api-url");
+    }
+  });
+
+  it("rejects environment names with header-injection characters", () => {
+    // environment flows into OTEL_RESOURCE_ATTRIBUTES as
+    // `honeycomb.environment=<value>,...`. A comma / newline / `=`
+    // would splice an attacker-controlled attribute. The validator
+    // limits to the charset Honeycomb itself permits.
+    const badEnvs = [
+      "prod,x-honeycomb-team=attacker",
+      "prod\nX-Injected: evil",
+      "prod=attacker",
+      "prod rm -rf",
+      "prod;injected",
+    ];
+    for (const environment of badEnvs) {
+      const result = writeHoneycombConfig({
+        workDir: tmp,
+        apiKey: "hcbik_abc",
+        environment,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error(`accepted: ${environment}`);
+      expect(result.error).toBe("invalid-environment");
+    }
+  });
+
+  it("rejects dataset names with header-injection characters", () => {
+    // dataset flows into OTEL_EXPORTER_OTLP_HEADERS as
+    // `x-honeycomb-dataset=<value>`; same injection surface.
+    const result = writeHoneycombConfig({
+      workDir: tmp,
+      apiKey: "hcbik_abc",
+      environment: "prod",
+      dataset: "claude-code,x-honeycomb-team=attacker",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error();
+    expect(result.error).toBe("invalid-dataset");
+  });
+
+  it("accepts the benign charset for environment + dataset", () => {
+    // A.B_C-1.2.3 is typical Honeycomb-allowed for both fields.
+    const result = writeHoneycombConfig({
+      workDir: tmp,
+      apiKey: "hcbik_charset",
+      environment: "prod.eu_west-1",
+      dataset: "claude-code.v1_beta-42",
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects empty apiKey / environment", () => {
     expect(
       writeHoneycombConfig({ workDir: tmp, apiKey: "", environment: "prod" })
