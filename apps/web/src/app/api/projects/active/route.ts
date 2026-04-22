@@ -4,6 +4,7 @@ import {
   setActiveProjectId,
 } from "@marvin/runtime/projects";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,9 @@ export async function GET() {
 
 /** PUT /api/projects/active { id } → { id, project } */
 export async function PUT(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: { id?: string | null };
   try {
     body = (await req.json()) as { id?: string | null };

@@ -19,7 +19,7 @@
 import { runGit } from "@marvin/git";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
-
+import { requireMarvinClient } from "@/lib/csrf";
 import { confirmGate } from "@/lib/git-confirm-gate";
 import { remoteErrorResponse } from "@/lib/git-remote-errors";
 
@@ -35,6 +35,9 @@ function isStrategy(v: unknown): v is PullStrategy {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: { cwd?: unknown; strategy?: unknown };
   try {
     body = (await req.json()) as typeof body;

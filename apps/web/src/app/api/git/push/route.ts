@@ -18,7 +18,7 @@
 import { isSafeRef, isSafeRemote, runGit } from "@marvin/git";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
-
+import { requireMarvinClient } from "@/lib/csrf";
 import { confirmGate } from "@/lib/git-confirm-gate";
 import { remoteErrorResponse } from "@/lib/git-remote-errors";
 
@@ -29,6 +29,9 @@ const DEFAULT_REMOTE = "origin";
 const PUSH_TIMEOUT_MS = 90_000;
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: {
     cwd?: unknown;
     remote?: unknown;

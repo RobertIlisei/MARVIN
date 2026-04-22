@@ -27,11 +27,15 @@ import {
 } from "@marvin/git";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   let body: { op?: unknown; cwd?: unknown };
   try {
     body = (await req.json()) as typeof body;

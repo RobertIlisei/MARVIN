@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-
+import { marvinFetch } from "@/lib/csrf";
 import type { ProjectRecord, ProjectsResponse, VerifyResult } from "./types";
 
 const LS_ACTIVE_KEY = "marvin.activeProject";
@@ -32,7 +32,7 @@ export function useProjects(): UseProjectsApi {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/projects", { cache: "no-store" });
+      const res = await marvinFetch("/api/projects", { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ProjectsResponse;
       setProjects(data.projects);
@@ -65,7 +65,7 @@ export function useProjects(): UseProjectsApi {
 
   const addProject = useCallback<UseProjectsApi["addProject"]>(
     async (input) => {
-      const res = await fetch("/api/projects", {
+      const res = await marvinFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -98,7 +98,7 @@ export function useProjects(): UseProjectsApi {
 
   const removeProject = useCallback(
     async (id: string) => {
-      const res = await fetch(`/api/projects?id=${encodeURIComponent(id)}`, {
+      const res = await marvinFetch(`/api/projects?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       if (!res.ok) return false;
@@ -125,7 +125,7 @@ export function useProjects(): UseProjectsApi {
       /* no storage */
     }
     try {
-      await fetch("/api/projects/active", {
+      await marvinFetch("/api/projects/active", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
@@ -136,7 +136,7 @@ export function useProjects(): UseProjectsApi {
   }, []);
 
   const verifyWorkDir = useCallback(async (path: string) => {
-    const res = await fetch(
+    const res = await marvinFetch(
       `/api/projects/verify?path=${encodeURIComponent(path)}`,
       { cache: "no-store" },
     );

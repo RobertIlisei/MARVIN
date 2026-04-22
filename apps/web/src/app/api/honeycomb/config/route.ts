@@ -22,6 +22,7 @@ import {
   honeycombTelemetryStatus,
 } from "@marvin/runtime/honeycomb-telemetry";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +55,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   // Guard against oversized payloads (the real body fits in ~400 bytes).
   const raw = await req.text();
   if (raw.length > MAX_BODY_BYTES) {
@@ -161,6 +165,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
+
   const cwd = req.nextUrl.searchParams.get("cwd");
   if (!cwd) {
     return NextResponse.json({ error: "cwd required" }, { status: 400 });
