@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { marvinFetch } from "@/lib/csrf";
 
 export interface UploadOutcome {
   uploaded: Array<{ name: string; path: string; bytes: number }>;
@@ -71,7 +72,7 @@ export function useOsDrop(opts: UseOsDropOptions): UseOsDrop {
       for (const f of files) form.append("file", f);
       setUploading(true);
       try {
-        const res = await fetch("/api/files/write/upload", {
+        const res = await marvinFetch("/api/files/write/upload", {
           method: "POST",
           headers: { "X-Marvin-Client": "1" },
           body: form,

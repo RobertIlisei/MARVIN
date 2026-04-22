@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { marvinFetch } from "@/lib/csrf";
 import type { Block, MarvinUiState, Message, TurnStats } from "./types";
 
 /** Shape of a persisted session transcript entry (from /api/sessions/[id]). */
@@ -85,7 +86,7 @@ export function useChatStream() {
 
       let response: Response;
       try {
-        response = await fetch("/api/chat", {
+        response = await marvinFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -261,7 +262,7 @@ export function useChatStream() {
     setMarvinState("idle");
     const sid = marvinSessionId;
     if (sid) {
-      void fetch("/api/chat/cancel", {
+      void marvinFetch("/api/chat/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marvinSessionId: sid }),
@@ -290,7 +291,7 @@ export function useChatStream() {
 
       let res: Response;
       try {
-        res = await fetch(
+        res = await marvinFetch(
           `/api/chat/resume?marvinSessionId=${encodeURIComponent(attachId)}`,
           { signal: controller.signal },
         );
@@ -403,7 +404,7 @@ export function useChatStream() {
       const turnId = turnIdRef.current;
       if (!turnId) return;
       try {
-        await fetch("/api/confirm", {
+        await marvinFetch("/api/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ turnId, toolUseId, decision, message }),
