@@ -16,15 +16,14 @@ type TreeNode = {
 };
 
 // Walk depth + entry caps. 10 / 20000 accommodate typical large
-// monorepos — my-iot-project-scale trees at ~5-10k tracked files
-// after `node_modules` / `dist` / etc. are filtered by
-// `IGNORE_DIR_NAMES`. The previous 6 / 2000 limits truncated a
-// feature branch at that scale, which is the symptom the user
-// reported ("tree truncated at 2000 entries"). Both are overridable
-// at runtime via `MARVIN_TREE_MAX_DEPTH` / `MARVIN_TREE_MAX_ENTRIES`
-// for truly extreme repos, and a non-Infinity ceiling stays as a
-// defence against a pathological walk (e.g. a broken gitignore that
-// drops a cache dir into the tree).
+// monorepos (~5-10k tracked files after `node_modules` / `dist` /
+// etc. are filtered by `IGNORE_DIR_NAMES`). The previous 6 / 2000
+// limits truncated feature branches at that scale. Both are
+// overridable at runtime via `MARVIN_TREE_MAX_DEPTH` /
+// `MARVIN_TREE_MAX_ENTRIES` for truly extreme repos, and a
+// non-Infinity ceiling stays as a defence against a pathological
+// walk (e.g. a broken gitignore that drops a cache dir into the
+// tree).
 //
 // If your repo starts hitting 20000 routinely, the architectural
 // answer is lazy-load-on-expand, not a bigger global cap. Open an
