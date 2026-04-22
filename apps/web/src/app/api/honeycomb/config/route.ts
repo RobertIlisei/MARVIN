@@ -17,6 +17,10 @@ import {
   probeHoneycombKey,
   writeHoneycombConfig,
 } from "@marvin/runtime/honeycomb-config";
+import {
+  applyHoneycombTelemetryEnv,
+  honeycombTelemetryStatus,
+} from "@marvin/runtime/honeycomb-telemetry";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -29,7 +33,10 @@ export async function GET(req: NextRequest) {
   if (!cwd) {
     // Allow a cwd-less status so the UI can still render the env-var /
     // user-global path before the user picks a project.
-    return NextResponse.json(honeycombConfigStatus(null));
+    return NextResponse.json({
+      ...honeycombConfigStatus(null),
+      telemetry: honeycombTelemetryStatus(),
+    });
   }
   const check = await checkFsPath({
     cwd,
@@ -40,7 +47,10 @@ export async function GET(req: NextRequest) {
   if (!check.ok) {
     return NextResponse.json({ error: check.error }, { status: 400 });
   }
-  return NextResponse.json(honeycombConfigStatus(check.absolutePath));
+  return NextResponse.json({
+    ...honeycombConfigStatus(check.absolutePath),
+    telemetry: honeycombTelemetryStatus(),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -134,13 +144,23 @@ export async function POST(req: NextRequest) {
       { status },
     );
   }
+  // Re-apply telemetry env vars immediately so the user sees "active"
+  // in the UI and the next turn picks up the new config without
+  // needing a server restart. applyHoneycombTelemetryEnv sweeps any
+  // previously-exported MARVIN-managed vars before setting fresh
+  // ones, so swapping API keys / datasets mid-session is clean.
+  const telemetry = applyHoneycombTelemetryEnv(check.absolutePath);
   return NextResponse.json({
     ok: true,
     path: result.path,
     regionAutoDetected,
     // Surface the new status so the UI can render the freshly-saved
-    // (masked) state without an extra GET round-trip.
-    status: honeycombConfigStatus(check.absolutePath),
+    // (masked) state without an extra GET round-trip. Same merged
+    // shape as GET so the client only has to understand one response.
+    status: {
+      ...honeycombConfigStatus(check.absolutePath),
+      telemetry,
+    },
   });
 }
 
@@ -159,9 +179,17 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: check.error }, { status: 400 });
   }
   const { removed } = deleteHoneycombConfig(check.absolutePath);
+  // Re-apply immediately — with the per-project file gone,
+  // applyHoneycombTelemetryEnv falls back to the global config
+  // (or clears everything if there's none). The UI will show the
+  // updated active/inactive state without waiting for the next turn.
+  const telemetry = applyHoneycombTelemetryEnv(check.absolutePath);
   return NextResponse.json({
     ok: true,
     removed,
-    status: honeycombConfigStatus(check.absolutePath),
+    status: {
+      ...honeycombConfigStatus(check.absolutePath),
+      telemetry,
+    },
   });
 }

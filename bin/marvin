@@ -380,6 +380,51 @@ cmd_install_app() {
   }
   ok "installed ${APP_NAME}.app"
 
+  # Passthrough env vars. The running server needs credentials +
+  # telemetry config to work without the user later hunting through a
+  # shell. An explicit allowlist is intentional — we don't want to
+  # smuggle arbitrary shell state into a launch agent. If any of these
+  # are set in the installing shell, they get baked into the plist.
+  #
+  # Primary path for Honeycomb telemetry is still the Settings UI
+  # (MARVIN auto-exports OTEL vars from saved config at turn-start),
+  # so most users never need this. It exists for the advanced case
+  # where a user already drives telemetry via shell env vars.
+  local -a passthrough_keys=(
+    CLAUDE_CODE_ENABLE_TELEMETRY
+    OTEL_METRICS_EXPORTER
+    OTEL_LOGS_EXPORTER
+    OTEL_EXPORTER_OTLP_PROTOCOL
+    OTEL_EXPORTER_OTLP_ENDPOINT
+    OTEL_EXPORTER_OTLP_HEADERS
+    OTEL_SERVICE_NAME
+    OTEL_RESOURCE_ATTRIBUTES
+    HONEYCOMB_API_KEY
+    HONEYCOMB_ENVIRONMENT
+    HONEYCOMB_DATASET
+    HONEYCOMB_API_URL
+    ANTHROPIC_API_KEY
+    CLAUDE_CODE_OAUTH_TOKEN
+    MARVIN_USE_HOST_CREDENTIALS
+  )
+  local passthrough_env_xml=""
+  local passthrough_count=0
+  local key val val_escaped
+  for key in "${passthrough_keys[@]}"; do
+    val="${!key:-}"
+    [ -n "$val" ] || continue
+    # XML-escape the value — & < > are the only ones that matter
+    # inside a <string> node.
+    val_escaped=$(printf '%s' "$val" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+    passthrough_env_xml+="
+    <key>${key}</key>
+    <string>${val_escaped}</string>"
+    passthrough_count=$((passthrough_count + 1))
+  done
+  if [ "$passthrough_count" -gt 0 ]; then
+    dim "  passing through $passthrough_count env var(s) from the installing shell"
+  fi
+
   # Write the launchd user agent plist. Bakes in absolute paths for
   # pnpm + REPO_ROOT so launchd doesn't need PATH-discovery. If the
   # user moves either, they re-run install-app.
@@ -406,7 +451,7 @@ cmd_install_app() {
     <key>HOME</key>
     <string>${HOME}</string>
     <key>MARVIN_PORT</key>
-    <string>${PORT}</string>
+    <string>${PORT}</string>${passthrough_env_xml}
   </dict>
   <key>RunAtLoad</key>
   <true/>
