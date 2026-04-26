@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { MarvinPrefsProvider } from "@/lib/use-prefs";
 
 // Body UI — **system stack first** (see globals.css `--font-sans`). On
 // macOS this resolves to SF Pro / `-apple-system`, which is what makes
@@ -70,7 +71,13 @@ export default function RootLayout({
         {/* biome-ignore lint/security/noDangerouslySetInnerHtml: pre-hydration theme bootstrap — must run inline before React paints */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {/* Global prefs Context — replaces seven scattered localStorage
+            effects in page.tsx with a single typed surface. Audit
+            findings #16 + #18. The provider hydrates lazily on the
+            client; SSR uses DEFAULT_PREFS. */}
+        <MarvinPrefsProvider>{children}</MarvinPrefsProvider>
+      </body>
     </html>
   );
 }

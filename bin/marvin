@@ -151,6 +151,74 @@ check_chromium() {
   return 0
 }
 
+check_graph() {
+  # Audit finding #1: the graph at graphify-out/graph.json was built
+  # against a different repo (J.A.R.V.I.S nodes), silently disabling
+  # Golden Rule 7 — every `marvin-graph` MCP query MARVIN's loop
+  # makes returns answers about a different codebase.
+  #
+  # Smoke check: read graph.json, look for at least one node whose
+  # source_file starts with `apps/` or `packages/` (MARVIN's own
+  # workspace dirs). If the graph is missing, advise on rebuild. If
+  # it's present but mis-rooted, warn — the user runs the rebuild
+  # locally because `graphify` itself isn't shipped here.
+  #
+  # Advisory only (no `return 1`). The CLI still starts; users who
+  # know what they're doing can dismiss.
+  local graph="$ROOT/graphify-out/graph.json"
+  if [ ! -f "$graph" ]; then
+    warn "graphify-out/graph.json missing — Golden Rule 7 graph queries will fail"
+    dim "  rebuild: graphify . --rebuild   (from ${ROOT})"
+    return 0
+  fi
+
+  # node -e is the path of least resistance: jq isn't a hard dep,
+  # and we already require Node ≥ 22 for the rest of MARVIN.
+  if ! node -e "
+    const fs = require('fs');
+    let g;
+    try { g = JSON.parse(fs.readFileSync('$graph','utf8')); }
+    catch (e) { process.exit(2); }
+    const nodes = g.nodes || [];
+    const total = nodes.length;
+    // Accept either relative MARVIN paths (apps/ packages/ docs/ bin/
+    // scripts/) OR absolute paths that contain '/marvin/' — graphify
+    // emits both shapes depending on extraction mode. Root-level config
+    // files (vitest.config.ts, biome.json) are unrooted by this rule
+    // but they make up <1% of nodes and the threshold absorbs them.
+    const rooted = nodes.filter(n => {
+      const sf = typeof n.source_file === 'string' ? n.source_file : '';
+      if (!sf) return false;
+      if (/^(apps|packages|docs|bin|scripts)\//.test(sf)) return true;
+      if (sf.includes('/marvin/')) return true;
+      return false;
+    }).length;
+    if (total === 0) process.exit(3);
+    // Require at least 5% of nodes to be MARVIN-rooted. The threshold
+    // is generous on purpose — even a small slice of foreign nodes is
+    // fine, but a graph with zero MARVIN nodes (the audit-day state)
+    // means the rebuild ran in the wrong directory.
+    const ratio = rooted / total;
+    if (ratio < 0.05) process.exit(4);
+    console.error('  ' + total + ' nodes · ' + rooted + ' rooted in MARVIN (' + (ratio*100).toFixed(0) + '%)');
+    process.exit(0);
+  " 2>/tmp/marvin-graph-check.log; then
+    local code=$?
+    case "$code" in
+      2) warn "graphify-out/graph.json is unreadable JSON — rebuild required" ;;
+      3) warn "graphify-out/graph.json has zero nodes — rebuild required" ;;
+      4) warn "graphify-out/graph.json is mis-rooted — <5% of nodes are MARVIN's. Rebuild from ${ROOT}." ;;
+      *) warn "graph smoke check failed (exit $code)" ;;
+    esac
+    dim "  rebuild: graphify . --rebuild   (from ${ROOT})"
+    rm -f /tmp/marvin-graph-check.log
+    return 0
+  fi
+  ok "graphify graph rooted in MARVIN ($(cat /tmp/marvin-graph-check.log 2>/dev/null | tr -d '\n' || echo 'ok'))"
+  rm -f /tmp/marvin-graph-check.log
+  return 0
+}
+
 preflight() {
   info "preflight checks"
   check_node || return $?
@@ -159,6 +227,7 @@ preflight() {
   check_skills || return $?
   check_credentials || return $?
   check_chromium || return $?
+  check_graph || return $?
   check_port
   local port_status=$?
   return $port_status

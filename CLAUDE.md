@@ -177,6 +177,10 @@ Env knobs (all optional):
 4. If you discover a follow-up while building, add it to the same phase (or
    the appropriate later phase) — don't let it live only in your head.
 
+**Definition of Done.** Audit, PLAN, and task DoD live at
+[`docs/reviews/DEFINITION_OF_DONE.md`](./docs/reviews/DEFINITION_OF_DONE.md).
+Apply it before marking anything `[done]`.
+
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`

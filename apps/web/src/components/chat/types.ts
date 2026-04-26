@@ -29,6 +29,22 @@ export type Block =
       };
       /** User's decision, once made. */
       confirmDecision?: "allow" | "deny";
+    }
+  | {
+      /**
+       * Structured error block — the audit (#14) flagged that the
+       * previous "stream ended without a result" surface was a plain
+       * text block with no recovery path. The error block carries a
+       * machine-readable kind + an optional retry hint so MessageView
+       * can render a Retry button. The hook owns the actual retry
+       * logic; the block just signals "you can try this again."
+       */
+      type: "error";
+      message: string;
+      /** When true, MessageView renders a Retry button. */
+      canRetry: boolean;
+      /** Already-retried marker so we don't show the button twice. */
+      retried?: boolean;
     };
 
 export interface Message {
@@ -49,4 +65,10 @@ export interface TurnStats {
   };
 }
 
-export type MarvinUiState = "idle" | "thinking" | "tool" | "writing" | "error";
+export type MarvinUiState =
+  | "idle"
+  | "thinking"
+  | "tool"
+  | "writing"
+  | "cancelling"
+  | "error";

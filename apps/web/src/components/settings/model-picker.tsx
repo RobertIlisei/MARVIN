@@ -18,6 +18,15 @@ interface ModelPickerProps {
   /** Currently-selected advisor model id. `null` = no advisor. */
   advisor: string | null;
   onChange: (next: { executor: string | null; advisor: string | null }) => void;
+  /**
+   * When true, render the panel inline (no trigger button, no
+   * click-outside dance, no floating positioning, no border/shadow).
+   * Used by `<ModelsDialog>` so the dialog body shows the full picker
+   * directly — no nested click-to-expand. The collapsed-trigger form
+   * is the right shape for header use; this prop disables it for
+   * dialog/inline use.
+   */
+  alwaysExpanded?: boolean;
 }
 
 const TIER_LABEL: Record<ModelInfo["tier"], string> = {
@@ -44,8 +53,15 @@ const TIER_LABEL: Record<ModelInfo["tier"], string> = {
  * list is the fallback the user sees a small pill warning "fallback
  * list — run claude auth login or set ANTHROPIC_API_KEY for live".
  */
-export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
-  const [open, setOpen] = useState(false);
+export function ModelPicker({
+  executor,
+  advisor,
+  onChange,
+  alwaysExpanded = false,
+}: ModelPickerProps) {
+  // In `alwaysExpanded` mode the panel is open from mount — no
+  // collapsed trigger, no click-outside dance.
+  const [open, setOpen] = useState(alwaysExpanded);
   const [data, setData] = useState<ModelsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -80,7 +96,9 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
+    // In always-expanded mode the picker has no "outside" — the
+    // dialog owns dismissal. Skip the document listeners entirely.
+    if (!open || alwaysExpanded) return;
     const handler = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -95,7 +113,7 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
       window.removeEventListener("mousedown", handler);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, alwaysExpanded]);
 
   const grouped = useMemo(() => {
     const models = data?.models ?? [];
@@ -141,30 +159,46 @@ export function ModelPicker({ executor, advisor, onChange }: ModelPickerProps) {
   })();
 
   return (
-    <div ref={boxRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={
-          advisor
-            ? `model: executor ${labelFor(executor)}, advisor ${labelFor(advisor)}`
-            : `model: executor ${labelFor(executor)}, no advisor`
-        }
-        title={
-          advisor
-            ? `executor: ${labelFor(executor)}  ·  advisor: ${labelFor(advisor)}`
-            : `executor: ${labelFor(executor)}  ·  no advisor`
-        }
-        className="flex items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
-      >
-        <span className="truncate">{summary}</span>
-        <span className="text-[10px] text-[color:var(--color-fg-faint)]">▾</span>
-      </button>
+    <div ref={boxRef} className={alwaysExpanded ? "" : "relative"}>
+      {/* Trigger button is the header-row form. In `alwaysExpanded`
+          (dialog/inline) mode we skip it entirely — the dialog has
+          its own header + close button, and a nested click-to-expand
+          inside the dialog's own click-to-open is the bug the user
+          reported. */}
+      {!alwaysExpanded && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={
+            advisor
+              ? `model: executor ${labelFor(executor)}, advisor ${labelFor(advisor)}`
+              : `model: executor ${labelFor(executor)}, no advisor`
+          }
+          title={
+            advisor
+              ? `executor: ${labelFor(executor)}  ·  advisor: ${labelFor(advisor)}`
+              : `executor: ${labelFor(executor)}  ·  no advisor`
+          }
+          className="flex items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
+        >
+          <span className="truncate">{summary}</span>
+          <span className="text-[10px] text-[color:var(--color-fg-faint)]">▾</span>
+        </button>
+      )}
 
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-80 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/95 p-3 shadow-2xl backdrop-blur">
+        <div
+          className={
+            alwaysExpanded
+              ? // Inline form — no floating positioning, no border /
+                // shadow / fixed width. The dialog owns the chrome.
+                "w-full"
+              : // Header-row floating panel.
+                "absolute right-0 top-full z-40 mt-2 w-80 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/95 p-3 shadow-2xl backdrop-blur"
+          }
+        >
           <div className="mb-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.22em] text-[color:var(--color-fg-faint)]">
             <span>model slots</span>
             {data && (

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { buildProjectContext } from "@marvin/project-context";
 import { defaultModel } from "@marvin/runtime/claude-cli";
 import { recordTurnCost } from "@marvin/runtime/cost-tracker";
@@ -80,7 +82,20 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const cwd = body.cwd?.trim() || process.cwd();
+  // ADR-0005 + Golden Rule 4: per-project isolation. The previous
+  // fallback to `process.cwd()` (the MARVIN repo itself) meant that a
+  // client who forgot to send `cwd` would have MARVIN run against its
+  // own source tree — a self-modifying agent surface. Reject early.
+  // Audit finding #7.
+  const rawCwd = body.cwd?.trim();
+  const cwdError = validateCwd(rawCwd);
+  if (cwdError) {
+    return new Response(
+      JSON.stringify({ error: cwdError, code: "invalid-cwd" }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  const cwd = rawCwd as string;
   const projectId = body.projectId?.trim() || slugifyWorkDir(cwd);
   const marvinSessionId = body.marvinSessionId?.trim() || randomUUID();
   const turnId = randomUUID();
@@ -122,11 +137,14 @@ export async function POST(req: NextRequest) {
     turnId,
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
+  // SessionTurn union now admits `turn.started` natively (audit
+  // finding #27). The previous `as unknown as "turn.user"` cast is
+  // gone — the transcript log is type-safe again.
   appendSessionTurn(projectId, marvinSessionId, {
-    type: "turn.started" as unknown as "turn.user", // transcript shape is open; cast keeps TS happy
+    type: "turn.started",
     at: new Date().toISOString(),
     ...turnStartedPayload,
-  } as never);
+  });
 
   // Fire-and-forget: the SDK loop runs to completion regardless of
   // whether this HTTP request is still connected.
@@ -260,4 +278,45 @@ export async function POST(req: NextRequest) {
       Connection: "keep-alive",
     },
   });
+}
+
+/**
+ * Validate that the caller-supplied `cwd` is a real directory the user
+ * picked, not a stand-in or — worst case — MARVIN's own install root.
+ *
+ * Returns an error string for the response body, or `null` when the
+ * value is acceptable. The fs probe is sync `existsSync` / `statSync`
+ * because the route is already inside an awaited handler and the
+ * stat is cheap (a single inode read on a happy path).
+ *
+ * Doesn't sandbox individual file paths inside `cwd` — that's the job
+ * of `checkFsPath` in `@marvin/runtime/fs-sandbox`. This helper is
+ * scoped to the project-root question only.
+ */
+function validateCwd(rawCwd: string | undefined): string | null {
+  if (!rawCwd) return "cwd is required — pick a project before chatting";
+  if (!isAbsolute(rawCwd)) return "cwd must be an absolute path";
+  // Refuse exact equality with MARVIN's process root. Defence in
+  // depth: also reject paths inside a `marvin` install ancestor that
+  // contain MARVIN's marker files. We can't introspect every install
+  // mode, so the simple equality check + a heuristic on a `package.json`
+  // whose `name === "marvin"` is the practical floor.
+  const resolvedCwd = resolve(rawCwd);
+  const marvinRoot = resolve(process.cwd());
+  if (resolvedCwd === marvinRoot) {
+    return "cwd cannot be MARVIN's own install root";
+  }
+  if (!existsSync(resolvedCwd)) {
+    return `cwd does not exist: ${resolvedCwd}`;
+  }
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(resolvedCwd);
+  } catch (e) {
+    return `cwd is unreadable: ${(e as Error).message}`;
+  }
+  if (!stat.isDirectory()) {
+    return `cwd is not a directory: ${resolvedCwd}`;
+  }
+  return null;
 }

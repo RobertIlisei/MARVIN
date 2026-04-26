@@ -279,11 +279,13 @@ pre,
 body {
   --marvin-activity: 0.05;
 }
-body[data-marvin="idle"]     { --marvin-activity: 0.08; }
-body[data-marvin="thinking"] { --marvin-activity: 0.55; }
-body[data-marvin="tool"]     { --marvin-activity: 0.70; }
-body[data-marvin="writing"]  { --marvin-activity: 0.92; }
-body[data-marvin="error"]    { --marvin-activity: 0.45; }
+body[data-marvin="idle"]       { --marvin-activity: 0.08; }
+body[data-marvin="thinking"]   { --marvin-activity: 0.55; }
+body[data-marvin="tool"]       { --marvin-activity: 0.70; }
+body[data-marvin="writing"]    { --marvin-activity: 0.92; }
+/* `cancelling` reads as "winding down" — between thinking and idle. */
+body[data-marvin="cancelling"] { --marvin-activity: 0.30; }
+body[data-marvin="error"]      { --marvin-activity: 0.45; }
 
 body::before {
   content: "";
@@ -652,6 +654,41 @@ html::after {
 }
 .rise-in {
   animation: rise-in 0.25s ease-out;
+}
+
+/* ---------------------------------------------------------------------------
+ * Confirm-prompt attention pulse.
+ *
+ * Fires three times when a confirm card first renders, then stops. The
+ * point is to draw the eye to a high-stakes prompt (Edit / Write /
+ * Bash) without becoming a sustained nag — three soft breaths is
+ * enough that a user who isn't already looking at the chat panel
+ * notices, and not so much that a user who IS looking gets annoyed.
+ *
+ * The colour is dynamic: each instance sets `--pulse-tint` inline
+ * (warn-yellow for routine confirms, danger-red for destructive
+ * patterns) so the same animation can read at two severities. Honours
+ * `prefers-reduced-motion` by collapsing to a static glow — the visual
+ * cue stays, the motion drops.
+ *
+ * See [docs/reviews/2026-04-26-full-audit.md, finding #11].
+ * ------------------------------------------------------------------------- */
+@keyframes confirm-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--pulse-tint, var(--color-warn));
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+.confirm-pulse {
+  animation: confirm-pulse 1.6s ease-in-out 0s 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm-pulse {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--pulse-tint, var(--color-warn));
+  }
 }
 
 /* ---------------------------------------------------------------------------

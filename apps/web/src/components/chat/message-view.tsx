@@ -87,9 +87,47 @@ function renderInline(body: string): React.ReactNode {
  * use-chat-stream rebuilds the array with the same refs for prior
  * messages and a fresh ref only for the streaming one.
  */
+/**
+ * Inline error block — rendered for `block.type === "error"`. The
+ * structured shape (canRetry / retried) lets the user re-fire the
+ * last message with one click. Audit finding #14.
+ */
+function ErrorBlock({
+  message,
+  canRetry,
+  retried,
+  onRetry,
+}: {
+  message: string;
+  canRetry: boolean;
+  retried?: boolean;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="rise-in my-1.5 rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/8 px-3 py-2 text-xs text-[color:var(--color-fg)]/90">
+      <div className="flex items-start gap-2">
+        <span aria-hidden className="text-[color:var(--color-danger)]">⚠</span>
+        <span className="flex-1 leading-relaxed">{message}</span>
+      </div>
+      {canRetry && !retried && onRetry && (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-[color:var(--color-accent)] bg-[color:var(--color-accent)] px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-bg)] transition hover:opacity-90"
+          >
+            retry
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MessageViewInner({
   message,
   onDecideConfirm,
+  onRetry,
 }: {
   message: Message;
   onDecideConfirm?: (
@@ -97,6 +135,7 @@ function MessageViewInner({
     decision: "allow" | "deny",
     message?: string,
   ) => Promise<void> | void;
+  onRetry?: () => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -114,17 +153,29 @@ function MessageViewInner({
           <span>{isUser ? "you" : "marvin"}</span>
         </div>
         <div className="space-y-1.5">
-          {message.blocks.map((b, i) =>
-            b.type === "text" ? (
-              <RenderText key={i} text={b.text} />
-            ) : (
+          {message.blocks.map((b, i) => {
+            if (b.type === "text") {
+              return <RenderText key={i} text={b.text} />;
+            }
+            if (b.type === "error") {
+              return (
+                <ErrorBlock
+                  key={i}
+                  message={b.message}
+                  canRetry={b.canRetry}
+                  {...(b.retried !== undefined ? { retried: b.retried } : {})}
+                  {...(onRetry ? { onRetry } : {})}
+                />
+              );
+            }
+            return (
               <ToolCallCard
                 key={b.id ?? i}
                 block={b}
                 {...(onDecideConfirm ? { onDecideConfirm } : {})}
               />
-            ),
-          )}
+            );
+          })}
           {message.blocks.length === 0 && !isUser && (
             <div className="flex items-center gap-2 text-[color:var(--color-fg-dim)] text-sm">
               <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-[color:var(--color-accent)]" />

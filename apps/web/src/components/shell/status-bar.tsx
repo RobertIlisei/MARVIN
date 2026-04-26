@@ -13,6 +13,9 @@ const STATE_GLYPH: Record<MarvinUiState, string> = {
   thinking: "◒",
   tool: "◐",
   writing: "◑",
+  // `cancelling` borrows the half-moon glyph but at a lower-energy
+  // colour (see STATE_COLOR) — the user can read it as "winding down."
+  cancelling: "◒",
   error: "◉",
 };
 
@@ -21,6 +24,7 @@ const STATE_LABELS: Record<MarvinUiState, string> = {
   thinking: "thinking",
   tool: "running tool",
   writing: "writing",
+  cancelling: "stopping…",
   error: "error",
 };
 
@@ -29,6 +33,7 @@ const STATE_COLOR: Record<MarvinUiState, string> = {
   thinking: "text-[color:var(--color-accent)]",
   tool: "text-[color:var(--color-accent)]",
   writing: "text-[color:var(--color-success)]",
+  cancelling: "text-[color:var(--color-warn)]",
   error: "text-[color:var(--color-danger)]",
 };
 

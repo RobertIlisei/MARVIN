@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   _resetHoneycombTelemetryForTests,
   applyHoneycombTelemetryEnv,
+  computeHoneycombTelemetryEnv,
   honeycombTelemetryStatus,
 } from "../src/honeycomb-telemetry";
 
@@ -237,5 +238,78 @@ describe("applyHoneycombTelemetryEnv", () => {
     expect(status.active).toBe(true);
     expect(status.dataset).toBe("my-dataset");
     expect(status.endpoint).toBe("https://api.honeycomb.io");
+  });
+});
+
+/**
+ * Audit finding #4 — `computeHoneycombTelemetryEnv` is the pure
+ * sibling of `applyHoneycombTelemetryEnv`. The SDK runner uses it
+ * per-turn so concurrent turns don't race on `process.env`.
+ *
+ * These tests pin the contract: returned `env` is correct, and
+ * `process.env` is never mutated.
+ */
+describe("computeHoneycombTelemetryEnv (pure form)", () => {
+  it("returns an empty env when no config is configured anywhere", () => {
+    const { env, status } = computeHoneycombTelemetryEnv(workDir, {});
+    expect(env).toEqual({});
+    expect(status.active).toBe(false);
+    expect(status.source).toBe("none");
+  });
+
+  it("returns OTEL keys for a workdir config — without mutating process.env", () => {
+    writeConfig(workDir, {
+      apiKey: "hcbik_pure",
+      environment: "prod",
+      dataset: "calls",
+    });
+    const { env, status } = computeHoneycombTelemetryEnv(workDir, {});
+    expect(status.active).toBe(true);
+    expect(status.dataset).toBe("calls");
+    expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe("1");
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toContain("hcbik_pure");
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toContain("x-honeycomb-dataset=calls");
+    // The audit fix point: process.env is untouched.
+    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_ENABLE_TELEMETRY).toBeUndefined();
+  });
+
+  it("respects user-override OTLP headers in the inherited env", () => {
+    const { env, status } = computeHoneycombTelemetryEnv(workDir, {
+      OTEL_EXPORTER_OTLP_HEADERS: "x-vendor-headers=user-set",
+      OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.user.example",
+    });
+    expect(env).toEqual({});
+    expect(status.active).toBe(true);
+    expect(status.source).toBe("user-override");
+    expect(status.endpoint).toBe("https://otel.user.example");
+  });
+
+  it("two concurrent calls for two different workdirs don't cross-contaminate", () => {
+    // The race the audit flagged: two turns for two projects, each
+    // with its own honeycomb.json. The pure form must produce two
+    // independent env maps with no shared mutable state.
+    const workDirA = mkdtempSync(path.join(tmpdir(), "marvin-honeycomb-A-"));
+    const workDirB = mkdtempSync(path.join(tmpdir(), "marvin-honeycomb-B-"));
+    writeConfig(workDirA, {
+      apiKey: "hcbik_A",
+      environment: "prod",
+      dataset: "ds-A",
+    });
+    writeConfig(workDirB, {
+      apiKey: "hcbik_B",
+      environment: "staging",
+      dataset: "ds-B",
+    });
+    const a = computeHoneycombTelemetryEnv(workDirA, {});
+    const b = computeHoneycombTelemetryEnv(workDirB, {});
+    expect(a.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("hcbik_A");
+    expect(a.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("ds-A");
+    expect(b.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("hcbik_B");
+    expect(b.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("ds-B");
+    // The maps must be distinct objects, not aliases.
+    expect(a.env).not.toBe(b.env);
+    // process.env was never touched.
+    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
   });
 });
