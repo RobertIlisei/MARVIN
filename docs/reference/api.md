@@ -164,6 +164,52 @@ Aggregated spend for a project.
 
 Returns zeroes for unknown `projectId` (safe default, not an error).
 
+## Audit
+
+### `GET /api/audit/auto?cwd=…&limit=…`
+
+Returns the tail of `<cwd>/.marvin/auto-audit.jsonl` — one entry per
+auto-allowed mutating tool call (Edit / Write / Bash) under the
+`auto` permission strategy. Surfaced in the Settings panel so users
+can review what MARVIN actually ran without prompting them.
+
+Read-only Read / Grep / Glob / WebFetch / WebSearch are deliberately
+**not** logged — they have no audit value and would drown the file.
+Hard-denied calls (the `BASH_HARD_DENY` regex set) are also absent
+because they never reach the log path.
+
+**Query params:**
+
+- `cwd` (required) — absolute path to the project root. Sandboxed
+  through `checkFsPath`; same rules as every other file route.
+- `limit` — newest-N to return. Default `50`, hard cap `500`.
+
+**Response:**
+
+```ts
+{
+  entries: Array<{
+    at: string;          // ISO-8601 timestamp
+    tool: "Edit" | "Write" | "Bash";
+    reason: string;      // why the gate auto-allowed (regex match label, etc.)
+    descriptor: string;  // short, redacted descriptor — first 200 chars of the command / file path
+    turnId: string;      // correlate to the chat transcript
+    toolUseId: string;   // SDK tool-use id
+  }>;  // newest-first
+}
+```
+
+**Errors:**
+
+- `400 missing-cwd` — `cwd` query param absent or empty.
+- `400 <fs-sandbox error code>` — `cwd` failed `checkFsPath` (e.g.
+  `cwd-not-absolute`, `not-found`, `not-a-directory`).
+
+Implementation: [`apps/web/src/app/api/audit/auto/route.ts`](../../apps/web/src/app/api/audit/auto/route.ts);
+the writer lives at [`packages/runtime/src/auto-audit.ts`](../../packages/runtime/src/auto-audit.ts).
+See [ADR-0015](../decisions/0015-auto-mode-policy-floor-and-audit-log.md)
+for the policy rationale.
+
 ## Files
 
 All file routes share a single path sandbox: `checkFsPath` in [`packages/runtime/src/fs-sandbox.ts`](../../packages/runtime/src/fs-sandbox.ts). Paths outside `cwd`, symlinks (target or ancestor), paths containing NUL, and paths longer than 1024 bytes are rejected before I/O. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md). The ignore list lives in [`packages/tools/src/fs-constants.ts`](../../packages/tools/src/fs-constants.ts) and is shared with the user-initiated write policy (M2).
