@@ -284,10 +284,63 @@ export function BrainLiquid({
     // Time-based gate (not frame-count) so the throttle adapts to
     // monitor refresh rates ≠ 60 Hz (ProMotion, 120 Hz, 144 Hz).
     const IDLE_FRAME_MS = 33;
+    // Reduced-motion accommodation. When the user has
+    // `prefers-reduced-motion: reduce` set, slow every state down to
+    // ~10 fps instead of skipping the brain entirely — particle count
+    // (N) is part of MARVIN's identity and stays at the profile's
+    // setting per user feedback. The cost we trade off is responsiveness
+    // of the per-state animation, which reduced-motion users have
+    // explicitly opted out of anyway. Audit finding #17.
+    const REDUCED_FRAME_MS = 100;
     let lastRendered = 0;
 
+    // Visibility + reduced-motion gates. RAF is technically already
+    // throttled by the browser when a tab is hidden, but Chromium can
+    // still render to compositor layers and chew CPU on backgrounded
+    // canvases; explicitly cancelling the loop on hide is the safe
+    // path. Resume when the tab returns.
+    let running = typeof document !== "undefined" ? !document.hidden : true;
+    const reducedMotionQuery =
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
+    let reducedMotion = reducedMotionQuery?.matches ?? false;
+
+    const onVisibility = () => {
+      const next = !document.hidden;
+      if (next === running) return;
+      running = next;
+      if (running) {
+        // Reset the dt-baseline so we don't fast-forward physics by
+        // however long the tab was hidden.
+        last = performance.now();
+        raf = requestAnimationFrame(step);
+      } else if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+    const onReducedMotionChange = (e: MediaQueryListEvent) => {
+      reducedMotion = e.matches;
+    };
+    reducedMotionQuery?.addEventListener?.("change", onReducedMotionChange);
+
     function step(now: number) {
-      if (stateRef.current === "idle" && now - lastRendered < IDLE_FRAME_MS) {
+      if (!running) {
+        // The visibilitychange handler will reschedule. Bail without
+        // queuing a self-rAF — otherwise we'd silently consume CPU on
+        // a hidden tab.
+        return;
+      }
+      const frameMs = reducedMotion
+        ? REDUCED_FRAME_MS
+        : stateRef.current === "idle"
+          ? IDLE_FRAME_MS
+          : 0;
+      if (frameMs > 0 && now - lastRendered < frameMs) {
         raf = requestAnimationFrame(step);
         return;
       }
@@ -519,8 +572,14 @@ export function BrainLiquid({
 
       raf = requestAnimationFrame(step);
     }
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    if (running) raf = requestAnimationFrame(step);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
+      reducedMotionQuery?.removeEventListener?.("change", onReducedMotionChange);
+    };
   }, [size]);
 
   return (

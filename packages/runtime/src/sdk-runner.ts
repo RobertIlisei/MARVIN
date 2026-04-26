@@ -24,12 +24,16 @@
 
 import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
-import { type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { KNOWN_TOOL_NAMES, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import {
+  type AutoAuditEntryKind,
+  appendAutoAuditEntry,
+} from "./auto-audit";
 import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
-import { applyHoneycombTelemetryEnv } from "./honeycomb-telemetry";
+import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createPlaywrightMcpConfig } from "./playwright-mcp";
 
 export type RuntimeMode = "opus" | "advisor";
@@ -116,16 +120,9 @@ export interface RunAgentResult {
   permissionDenials?: number;
 }
 
-const KNOWN_TOOL_NAMES = new Set<ToolName>([
-  "Bash",
-  "Edit",
-  "Write",
-  "Read",
-  "Grep",
-  "Glob",
-  "WebFetch",
-  "WebSearch",
-]);
+// `KNOWN_TOOL_NAMES` is the canonical gate-set; imported from
+// `@marvin/tools/policy` so adding a new tool flows through one
+// declaration rather than two. Drift fixed per audit finding #21.
 
 // Scout agent — the sanctioned read-only research subagent, per ADR-0014.
 // MARVIN spawns one via Task when three-or-more parallel searches would
@@ -230,13 +227,18 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   } = input;
   const permissionStrategy: PermissionStrategy = input.permissionStrategy ?? "auto";
 
-  // Wire Honeycomb telemetry before the SDK spawns the Claude CLI.
-  // This reads the saved config at `<cwd>/.marvin/honeycomb.json` (or
-  // the global fallback) and mutates process.env so the CLI inherits
-  // the right CLAUDE_CODE_ENABLE_TELEMETRY + OTEL_* vars. Re-running
-  // every turn lets per-project configs take effect without a restart
-  // and makes deleting the config cleanly reverse the mutation.
-  applyHoneycombTelemetryEnv(cwd);
+  // Wire Honeycomb telemetry per-turn. `computeHoneycombTelemetryEnv`
+  // is the pure form — it reads the saved config at
+  // `<cwd>/.marvin/honeycomb.json` (or the global fallback) and
+  // returns the env-diff to merge, WITHOUT mutating `process.env`.
+  // Two concurrent turns for two different projects with different
+  // Honeycomb configs each get their own env via `Options.env`
+  // below, so they don't clobber each other. Audit finding #4.
+  const { env: honeycombEnv } = computeHoneycombTelemetryEnv(cwd);
+  const turnEnv: Record<string, string | undefined> = {
+    ...process.env,
+    ...honeycombEnv,
+  };
 
   const abortController = new AbortController();
   if (signal) {
@@ -256,6 +258,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         : {};
 
     if (cls.decision === "allow") {
+      // Audit-log mutators that auto-allow. In `auto` mode this branch
+      // is the fast path for everything; we want a record of which
+      // Edit/Write/Bash actually fired so the user can audit MARVIN's
+      // behaviour after the fact. The append is best-effort; failure
+      // is silently swallowed inside `appendAutoAuditEntry` so the
+      // SDK loop is never blocked by I/O. Audit finding #2 (deferred
+      // half).
+      appendAutoAuditEntry(cwd, {
+        tool: toolName as AutoAuditEntryKind,
+        reason: cls.reason,
+        input: safeInput,
+        turnId,
+        toolUseId: toolUseID,
+      });
       return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
     }
     if (cls.decision === "deny") {
@@ -281,6 +297,40 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     });
   };
 
+  // In `auto` mode we previously skipped installing canUseTool entirely
+  // (full SDK bypass). The auto-audit log (audit #2 deferred half)
+  // needs a hook point per tool call, so we install a "log-only"
+  // shim — same classifier, same audit append, but `confirm` and
+  // `deny` decisions both downgrade to allow because the user opted
+  // into auto mode. `gated` mode still uses the full canUseTool above.
+  const autoModeLogger: CanUseTool = async (toolName, toolInput, { toolUseID }) => {
+    const safeInput: Record<string, unknown> =
+      toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
+        ? (toolInput as Record<string, unknown>)
+        : {};
+    const cls = classifyToolCall(toolName, toolInput);
+    // Hard-deny patterns ALWAYS deny, even in auto mode — this is the
+    // single safety floor. `BASH_HARD_DENY` matches `rm -rf /`,
+    // `git push --force`, etc. (see policy.ts; tightened in
+    // packages/tools/tests/policy.test.ts).
+    if (cls.decision === "deny") {
+      return {
+        behavior: "deny",
+        message: cls.reason || "tool use denied",
+        interrupt: false,
+      } as PermissionResult;
+    }
+    // Everything else logs + allows.
+    appendAutoAuditEntry(cwd, {
+      tool: toolName as AutoAuditEntryKind,
+      reason: cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`,
+      input: safeInput,
+      turnId,
+      toolUseId: toolUseID,
+    });
+    return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
+  };
+
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
   // include: if the project has no `graphify-out/`, the tools politely report
@@ -302,9 +352,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     model,
     cwd,
     abortController,
-    permissionMode:
-      permissionStrategy === "auto" ? "bypassPermissions" : "default",
-    ...(permissionStrategy === "gated" ? { canUseTool } : {}),
+    // Per-turn env so concurrent turns don't race on `process.env`.
+    // Inherits everything currently in process.env (auth tokens,
+    // user shell vars) and overlays MARVIN-managed Honeycomb keys
+    // for this turn only. The SDK passes this straight to the
+    // spawned Claude CLI.
+    env: turnEnv,
+    // In `auto` mode we install `autoModeLogger` (audit-log only, hard
+    // denies still deny) instead of asking the SDK for full bypass.
+    // The hook point is necessary for the audit log per audit #2; the
+    // user-experience contract — no confirm prompts — is preserved
+    // because the logger only allows or denies, never blocks on a UI
+    // round-trip. In `gated` mode the full canUseTool runs as before.
+    permissionMode: "default",
+    canUseTool: permissionStrategy === "gated" ? canUseTool : autoModeLogger,
     systemPrompt: {
       type: "preset",
       preset: "claude_code",

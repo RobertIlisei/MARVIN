@@ -1,4 +1,10 @@
 export { type AnthropicAuthStatus, getAnthropicAuth } from "./auth";
+export {
+  appendAutoAuditEntry,
+  type AutoAuditEntry,
+  type AutoAuditEntryKind,
+  readAutoAuditTail,
+} from "./auto-audit";
 export { type ClaudeCliResult, runClaudeCli } from "./claude-cli";
 export {
   checkFsPath,
@@ -27,6 +33,7 @@ export {
 } from "./honeycomb-config";
 export {
   applyHoneycombTelemetryEnv,
+  computeHoneycombTelemetryEnv,
   type HoneycombTelemetryStatus,
   honeycombTelemetryStatus,
 } from "./honeycomb-telemetry";

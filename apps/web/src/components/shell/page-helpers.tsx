@@ -129,6 +129,7 @@ export function labelFor(state: string): string {
       thinking: "thinking",
       tool: "running a tool",
       writing: "writing",
+      cancelling: "stopping",
       error: "something broke",
     }[state] ?? state
   );

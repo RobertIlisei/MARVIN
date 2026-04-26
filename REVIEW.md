@@ -1,5 +1,18 @@
 # MARVIN review rules
 
+> **Note on naming.** This file is the *rules* doc — the rubric review
+> tools follow when checking a diff. *Review reports* (point-in-time
+> audits of the whole codebase) live under
+> [`docs/reviews/`](./docs/reviews/) and are dated. The audit on
+> 2026-04-26 (finding #25) flagged the `REVIEW.md` name as colliding
+> with the report genre; the rename to `REVIEW_RULES.md` was attempted
+> and reverted because the cherry-picked `pr-review` skill at
+> `.claude/skills/pr-review/SKILL.md` reads this file by hard-coded
+> name and lives in a path Cowork's sandbox treats as read-only. This
+> header + the `docs/reviews/` convention is the in-place
+> disambiguation. If MARVIN ever owns the skill bundle, the rename can
+> land cleanly.
+
 Read by the Claude Code managed code-review service and by any local
 code-review plugin that honours `REVIEW.md`. Also used by the cherry-picked
 `pr-review` skill under `.claude/skills/pr-review/`.

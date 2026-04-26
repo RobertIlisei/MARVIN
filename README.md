@@ -182,21 +182,56 @@ See [`apps/desktop/README.md`](./apps/desktop/README.md) + [ADR-0010](./docs/dec
 
 ## Status
 
-**v1.1 shipped.** The app is now fully installable: `bin/marvin install-app`
-builds the bundle, copies it to `/Applications/`, and wires a launchd user
-agent so the server auto-starts on login. Everything from v1 — advisor
-mode, preview pane, graph-aware chat, keyboard shortcuts, session search,
-dual-theme support, BrainLiquid brain, graphify-first hard rule — plus
-the v1.1 additions: source control panel (stage / unstage / commit /
-branch switch, local + remote), user-initiated filesystem writes with
-structural confirm, Monaco editor with CAS-guarded save, VSCode-style
-workspace status bar, light-theme recolour, Tauri shell polish
-(system-font stack, vibrancy materials, traffic-light padding), and the
-launchd-agent install flow.
+**v1.2 shipped.** Audit-driven hardening pass: closed every 🔴 finding
+in the [2026-04-26 full audit](./docs/reviews/2026-04-26-full-audit.md)
+and most of the 🟠 list. Highlights:
 
-Honeycomb MCP integration remains deferred (needs Honeycomb account +
-team setup). See [PLAN.md](./PLAN.md) for the phase-by-phase changelog
-and [docs/roadmap.md](./docs/roadmap.md) for the narrative view.
+- **Permission gate is now load-bearing in `auto` mode too.** Bare
+  `Task` calls and unknown subagent types require a confirm; sanctioned
+  types (`scout`, `general-purpose`) auto-allow. `BASH_HARD_DENY` no
+  longer leaks `rm -rf $HOME/...`, `rm -rf ~`, `rm -rf ../`, `rm -rf *`,
+  `git push -f`, `chmod -R 777`, `curl … | sh`. 26-case Vitest pin at
+  `packages/tools/tests/policy.test.ts`.
+- **Auto-mode audit log.** Every auto-allowed Edit/Write/Bash now
+  appends one JSONL line to `<workDir>/.marvin/auto-audit.jsonl`. New
+  `/api/audit/auto` route; first-run banner explaining `auto` =
+  bypass.
+- **Confirm prompts.** Severity classifier (warn / danger), filled
+  accent allow button, blast-radius hint, soft 3-pulse, `(N)`
+  `document.title` badge while pending, 5-minute auto-deny via the
+  registry timer. Closing the tab no longer hangs the SDK loop.
+- **Honeycomb env race fixed.** New pure
+  `computeHoneycombTelemetryEnv()` returns the env-diff to merge;
+  `runAgent` passes it via `Options.env` per-turn so concurrent turns
+  for two projects don't clobber each other.
+- **`/api/chat` cwd validation.** Returns 400 + `code: "invalid-cwd"`
+  when cwd is missing, non-absolute, or equals MARVIN's own install
+  root — closes the self-modification fallback.
+- **TopBar collapsed.** 17 controls → 7. Layout + Setup popovers via
+  Radix `DropdownMenu`. Models has its own dialog (the picker is too
+  tall for a popover). Theme stays a single icon-toggle.
+- **Empty-state hero trimmed.** Brain unchanged at `size={340}` per
+  user preference; coordinate marks, capability chips, blockquote,
+  long tagline moved to a wordmark tooltip. 12 visual elements → 6.
+- **Chat surface improvements.** Sticky-bottom scroll with 80 px
+  threshold + "↓ jump to latest" pill. Stream-end errors are now
+  structured with a Retry button. New `cancelling` state holds the
+  UI inert until `/api/chat/cancel` resolves. BrainLiquid pauses on
+  `document.hidden` + honours `prefers-reduced-motion` (particle count
+  unchanged).
+- **`page.tsx` decomposed.** Seven scattered localStorage effects
+  collapsed into a single `useMarvinPrefs()` Context with a
+  "Reset MARVIN preferences" action. Chat scroller windowed at 200
+  messages with a "show earlier" button.
+- **`bin/marvin doctor`** gained a graph smoke check that asserts at
+  least 5 % of nodes are MARVIN-rooted — catches the audit's
+  finding #1 mis-rooting silently in future.
+
+[Definition of Done](./docs/reviews/DEFINITION_OF_DONE.md) for audit /
+PLAN / tasks now lives in-tree. Honeycomb MCP integration remains
+deferred (needs Honeycomb account + team setup). See
+[PLAN.md](./PLAN.md) for the phase-by-phase changelog and
+[docs/roadmap.md](./docs/roadmap.md) for the narrative view.
 
 ## Documentation
 

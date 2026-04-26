@@ -122,7 +122,17 @@ export function ToolCallCard({
             <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current align-middle" />
           )}
         </span>
-        <span className="shrink-0 text-[color:var(--color-fg-faint)] opacity-0 group-hover:opacity-100">
+        {/*
+         * Audit finding #12: the chevron was opacity-0
+         * group-hover:opacity-100 — invisible on touch and
+         * non-discoverable at rest on desktop. Always visible at low
+         * opacity, full opacity on hover. Same role (collapse/expand)
+         * with a real affordance.
+         */}
+        <span
+          aria-hidden
+          className="shrink-0 font-mono text-[color:var(--color-fg-faint)] opacity-50 transition group-hover:opacity-100"
+        >
           {expanded ? "−" : "+"}
         </span>
       </button>
