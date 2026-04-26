@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { MonacoEditor } from "./monaco-editor";
+import { MonacoEditor, type MonacoEditorHandle } from "./monaco-editor";
 import { UnsavedGuard, type UnsavedGuardState } from "./unsaved-guard";
 import { useDirtyState } from "./use-dirty-state";
 
@@ -39,6 +39,13 @@ export function FileViewer({
     open: false,
     filePath: "",
   });
+
+  // Imperative handle to the embedded MonacoEditor. The audit (#6)
+  // flagged that the unsaved-guard's "save" branch couldn't actually
+  // save — comment in the original handleClose admitted it. Holding
+  // the handle in a ref means we can `await editorRef.current?.save()`
+  // before closing, and Monaco's content + CAS state stay private.
+  const editorRef = useRef<MonacoEditorHandle | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,10 +94,16 @@ export function FileViewer({
       setGuard((g) => ({ ...g, open: false }));
       if (choice === "cancel") return;
       if (choice === "save") {
-        // The editor owns the content; we can't trigger save from here
-        // without lifting state. Simplest: ask the user to Cmd-S first
-        // via a visual cue and don't close. A future refactor can expose
-        // an imperative save() handle.
+        // Monaco published an imperative handle via its onReady prop
+        // (see editorRef above). Awaiting `save()` fires the same
+        // /api/files/write/save call that Cmd-S does, including the
+        // CAS-on-mtime conflict path. If save returns false (conflict
+        // banner shown, or readOnly, or save errored), don't close —
+        // the user needs to deal with the editor first. Audit #6.
+        const ok = await editorRef.current?.save();
+        if (!ok) return;
+        dirty.markClean();
+        onClose();
         return;
       }
       // discard: proceed
@@ -142,6 +155,9 @@ export function FileViewer({
           }}
           onClose={handleClose}
           onError={(e) => setError(e)}
+          onReady={(handle) => {
+            editorRef.current = handle;
+          }}
         />
       )}
       {data && !data.binary && data.content == null && (

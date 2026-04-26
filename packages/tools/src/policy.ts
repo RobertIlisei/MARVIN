@@ -18,7 +18,33 @@ export type ToolName =
   | "Grep"
   | "Glob"
   | "WebFetch"
-  | "WebSearch";
+  | "WebSearch"
+  | "Task"
+  | "NotebookEdit";
+
+/**
+ * Single source of truth for the tools MARVIN's gate inspects.
+ *
+ * Imported by `@marvin/runtime/sdk-runner` so a tool added here flows
+ * to the gate without a second declaration. Previously sdk-runner
+ * carried its own `KNOWN_TOOL_NAMES` Set — that's a drift risk and
+ * was the audit-finding-#3 root cause (Task and NotebookEdit weren't
+ * listed there, so they bypassed the gate entirely).
+ *
+ * See [docs/reviews/2026-04-26-full-audit.md, finding #3 + #21].
+ */
+export const KNOWN_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
+  "Bash",
+  "Edit",
+  "Write",
+  "Read",
+  "Grep",
+  "Glob",
+  "WebFetch",
+  "WebSearch",
+  "Task",
+  "NotebookEdit",
+]);
 
 export type ToolPolicyClass = "auto" | "confirm" | "deny";
 
@@ -31,7 +57,30 @@ const BASE: Record<ToolName, ToolPolicyClass> = {
   Edit: "confirm",
   Write: "confirm",
   Bash: "confirm",
+  // Task is special-cased below — sanctioned `subagent_type` values
+  // (`scout`, `general-purpose`) auto-allow; bare/unknown subagents
+  // require a confirm. This `BASE` entry is the fallback when the
+  // special case does not match.
+  Task: "confirm",
+  NotebookEdit: "confirm",
 };
+
+/**
+ * Subagent types MARVIN may dispatch via `Task` without a confirm
+ * prompt. The set is small and ADR-bound:
+ *   - `scout`           — read-only research subagent (ADR-0014).
+ *   - `general-purpose` — the SDK's generic delegate; used by the
+ *                         advisor pattern (ADR-0007). Inherits the
+ *                         parent session's tool set, so it remains
+ *                         gated transitively.
+ *
+ * Adding a new entry requires an ADR per CLAUDE.md's deterministic
+ * ADR triggers.
+ */
+const SANCTIONED_SUBAGENT_TYPES: ReadonlySet<string> = new Set([
+  "scout",
+  "general-purpose",
+]);
 
 // Narrow regex whitelist for Bash commands that are safe enough to auto-run.
 // Anything matching these can run without a confirm card.
@@ -47,13 +96,42 @@ const BASH_AUTO_ALLOW: RegExp[] = [
 
 // Hard deny list — never run these without an explicit per-call override
 // from the user, even if they're in a confirmed batch.
+//
+// The original list (audit finding #2) only matched a literal `/` after
+// `-rf`, so `rm -rf $HOME/foo`, `rm -rf ~/foo`, `rm -rf ../foo` slipped
+// through to the auto-allow regex (none) and from there to the
+// `confirm` class — which in `auto` permission mode runs without a
+// prompt. The patterns below close those gaps. Test coverage lives at
+// `packages/tools/tests/policy.test.ts`.
+//
+// See [docs/reviews/2026-04-26-full-audit.md, finding #2].
 const BASH_HARD_DENY: RegExp[] = [
-  /\brm\s+-rf\s+\//,
-  /\bgit\s+push\s+.*--force/,
+  // `rm -rf` followed by anything that resolves to a rooted, home-,
+  // tilde-, or parent-relative target. The `-r` and `-R` flags both
+  // trigger; optional `f` because `-rf` and `-r` both warrant the same
+  // protection here (the prompt is cheap).
+  /\brm\s+-[rR]f?\s+\//,
+  /\brm\s+-[rR]f?\s+\$HOME(\b|\/)/,
+  // `~` and `..` are not word characters, so `\b` doesn't anchor
+  // here. Match an explicit boundary instead — `/`, whitespace, or
+  // end of string.
+  /\brm\s+-[rR]f?\s+~(\/|\s|$)/,
+  /\brm\s+-[rR]f?\s+\.\.(\/|\s|$)/,
+  // wildcard glob deletes (`rm -rf *`, `rm -rf .*`) — easy footgun.
+  /\brm\s+-[rR]f?\s+(\*|\.\*)/,
+  // git destructive history rewrites
+  /\bgit\s+push\s+.*--force\b/,
+  /\bgit\s+push\s+.*-f\b/,
   /\bgit\s+reset\s+--hard\b/,
   /\bgit\s+checkout\s+--\s/,
+  /\bgit\s+clean\s+-[fdx]/,
+  // database destruction
   /\bdrop\s+(database|table|schema)\b/i,
+  // permission / ownership sweeps
   /\bchown\s+-R\s+\//,
+  /\bchmod\s+-R\s+777\b/,
+  // pipe-to-shell installer pattern (`curl ... | sh`, `wget ... | bash`)
+  /\b(curl|wget)\s+.+\|\s*(sh|bash|zsh)\b/,
 ];
 
 export interface ToolPolicyDecision {
@@ -72,6 +150,27 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
       return { class: "auto", reason: "Read-only shell command." };
     }
     return { class: "confirm", reason: "Bash command not in the auto-allow list." };
+  }
+  if (name === "Task") {
+    // ADR-0007 (advisor) and ADR-0014 (scout) sanction two
+    // `subagent_type` values; everything else is a bare delegate that
+    // inherits the parent's permission posture, which in `auto` mode
+    // is bypass — a clear escalation surface (audit finding #3).
+    const sub = typeof input.subagent_type === "string"
+      ? input.subagent_type
+      : "";
+    if (sub && SANCTIONED_SUBAGENT_TYPES.has(sub)) {
+      return {
+        class: "auto",
+        reason: `Sanctioned subagent (${sub}).`,
+      };
+    }
+    return {
+      class: "confirm",
+      reason: sub
+        ? `Unknown subagent_type "${sub}" — confirm before dispatch.`
+        : "Bare Task call without subagent_type — confirm before dispatch.",
+    };
   }
   return { class: BASE[name], reason: defaultReason(name, BASE[name]) };
 }

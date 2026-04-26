@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MARVIN — TopBar redesign</title>
+<style>
+  :root {
+    --bg: oklch(0.95 0.006 80);
+    --bg-elev: oklch(0.935 0.005 80);
+    --fg: oklch(0.18 0.005 80);
+    --fg-dim: oklch(0.42 0.005 80);
+    --fg-faint: oklch(0.62 0.004 80);
+    --border: oklch(0.18 0.005 80 / 0.08);
+    --border-strong: oklch(0.18 0.005 80 / 0.16);
+    --accent: oklch(0.18 0.005 80);
+    --accent-deep: oklch(0.28 0.005 80);
+    --accent-glow: oklch(0.18 0.005 80 / 0.12);
+    --warn: oklch(0.7 0.14 70);
+    --danger: oklch(0.6 0.18 25);
+    --success: oklch(0.6 0.12 150);
+    --material-toolbar: oklch(0.965 0.005 80);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    margin: 0;
+    padding: 32px;
+  }
+  h1 { font-style: italic; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--fg-dim); margin: 0 0 24px; font-size: 14px; }
+  .label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--fg-faint);
+    margin: 28px 0 8px;
+  }
+  .frame {
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--material-toolbar);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .wordmark {
+    font-family: "Times New Roman", serif;
+    font-style: italic;
+    font-size: 22px;
+    line-height: 1;
+  }
+  .v {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--fg-faint);
+  }
+  .divider { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+  .pill {
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .pill.cost {
+    color: var(--fg-dim);
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+  }
+  .group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-elev);
+  }
+  .group .gl {
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: var(--fg-faint);
+    padding: 0 6px 0 8px;
+  }
+  .toggle {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fg-dim);
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .toggle.on {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .btn {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--fg-dim);
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .btn.icon { padding: 4px 8px; }
+  .right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  /* Annotations layer */
+  .anno {
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: oklch(0.985 0.005 80);
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+  }
+  .anno strong { color: var(--fg); }
+
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .branch-badge {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--success);
+  }
+  .countbadge {
+    background: var(--warn);
+    color: var(--bg);
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    margin-left: 4px;
+  }
+  .pop {
+    margin-top: 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--bg-elev);
+    padding: 12px;
+    width: 280px;
+    font-size: 12px;
+    box-shadow: 0 8px 28px -12px rgba(0,0,0,0.18);
+  }
+  .pop-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .pop-row:last-child { border-bottom: none; }
+  .pop-row .lbl { color: var(--fg-dim); font-family: ui-monospace, monospace; font-size: 11px; }
+  .narrow { max-width: 1080px; }
+
+  .crowded::after {
+    content: "";
+    display: block;
+  }
+  .crowded {
+    /* simulate 1280px viewport so we see wrapping */
+    overflow-x: hidden;
+  }
+</style>
+</head>
+<body>
+<h1>MARVIN — TopBar redesign</h1>
+<p class="sub">From 17 controls to 7. Same capabilities, none of them lost — perms / models / voice / panes collapse into <em>Layout</em> and <em>Setup</em> popovers.</p>
+
+<div class="compare">
+
+<!-- BEFORE -->
+<div>
+<div class="label">Before — current top-bar at 1280 px viewport</div>
+<div class="frame">
+  <div class="header">
+    <span class="wordmark">marvin</span>
+    <span class="v">v1</span>
+    <span class="divider"></span>
+    <span class="pill">📁 ~/marvin <span style="color:var(--fg-faint)">▾</span></span>
+    <span class="branch-badge"><span class="badge-dot"></span>main · clean</span>
+
+    <div class="right">
+      <span class="pill cost">$0.84 today</span>
+
+      <div class="group"><span class="gl">perms</span>
+        <button class="toggle on">auto</button>
+        <button class="toggle">gated</button>
+      </div>
+
+      <div class="group"><span class="gl">models</span>
+        <button class="toggle on">opus</button>
+        <button class="toggle">advisor</button>
+      </div>
+
+      <div class="group"><span class="gl">voice</span>
+        <button class="toggle on">marvin</button>
+        <button class="toggle">neutral</button>
+      </div>
+
+      <div class="group"><span class="gl">theme</span>
+        <button class="toggle">☀</button>
+        <button class="toggle on">☾</button>
+      </div>
+
+      <div class="group"><span class="gl">panes</span>
+        <button class="toggle on">files</button>
+        <button class="toggle">graph</button>
+        <button class="toggle on">brain</button>
+        <button class="toggle">preview</button>
+        <button class="toggle">term</button>
+      </div>
+
+      <button class="btn">new session</button>
+      <button class="btn icon">⚙</button>
+      <button class="btn icon">?</button>
+    </div>
+  </div>
+</div>
+<div class="anno">
+  <strong>17 controls.</strong> At 1280 px the row wraps to two rows. <code>perms / models / voice</code> hide below <code>xl:</code> (≤1280) and <code>2xl:</code> (≤1536), but the Settings dialog footer claims they "live in the top bar" — they don't on this viewport.
+</div>
+</div>
+
+<!-- AFTER -->
+<div>
+<div class="label">After — collapsed to 7 controls, fits 1024 px+</div>
+<div class="frame">
+  <div class="header">
+    <span class="wordmark">marvin</span>
+    <span class="v">v1</span>
+    <span class="divider"></span>
+    <span class="pill">📁 ~/marvin <span style="color:var(--fg-faint)">▾</span></span>
+    <span class="branch-badge"><span class="badge-dot"></span>main · clean</span>
+
+    <div class="right">
+      <span class="pill cost">$0.84 today</span>
+
+      <button class="btn" title="layout · ⌘B / ⌘G / ⌘J / ⌘P">
+        ▣ layout
+        <span class="countbadge">2</span>
+      </button>
+
+      <button class="btn" title="executor · advisor · perms · voice">
+        ⚒ setup
+      </button>
+
+      <button class="btn" title="theme">☾</button>
+      <button class="btn">new session</button>
+      <button class="btn icon">?</button>
+    </div>
+  </div>
+</div>
+<div class="anno">
+  <strong>7 controls.</strong> Both popovers are click-to-open with the same toggles inside, plus their kbd shortcuts. Count badge on <em>layout</em> shows how many panes are currently open. <em>Setup</em> opens a popover with the full perms / models / voice trio. Theme is a single icon-toggle (no group needed for two states).
+</div>
+</div>
+
+<!-- Popover preview -->
+<div>
+<div class="label">Layout popover (⌘L) — opens from the layout button</div>
+<div class="pop">
+  <div class="pop-row">
+    <span class="lbl">files</span>
+    <span><button class="toggle on">on</button> <span class="lbl" style="margin-left:6px">⌘B</span></span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">graph</span>
+    <span><button class="toggle">off</button> <span class="lbl" style="margin-left:6px">⌘G</span></span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">brain</span>
+    <span><button class="toggle on">on</button></span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">preview</span>
+    <span><button class="toggle">off</button> <span class="lbl" style="margin-left:6px">⌘P</span></span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">terminal</span>
+    <span><button class="toggle">off</button> <span class="lbl" style="margin-left:6px">⌘J</span></span>
+  </div>
+</div>
+</div>
+
+<div>
+<div class="label">Setup popover — perms · models · voice in one place</div>
+<div class="pop" style="width: 360px">
+  <div class="pop-row">
+    <span class="lbl">perms</span>
+    <div class="group" style="border:none;background:transparent;padding:0">
+      <button class="toggle on">auto</button>
+      <button class="toggle">gated</button>
+    </div>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">executor</span>
+    <span style="font-family:ui-monospace,monospace;font-size:11px">claude-opus-4-7 ▾</span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">advisor</span>
+    <span style="font-family:ui-monospace,monospace;font-size:11px">— off — ▾</span>
+  </div>
+  <div class="pop-row">
+    <span class="lbl">voice</span>
+    <div class="group" style="border:none;background:transparent;padding:0">
+      <button class="toggle on">marvin</button>
+      <button class="toggle">neutral</button>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+
+<div class="anno" style="margin-top: 32px">
+  <strong>Implementation notes.</strong>
+  Both popovers can reuse existing <code>@marvin/ui/dropdown-menu</code> primitives. The current <code>LabeledGroup</code> + <code>PaneToggle</code> + <code>PermissionToggle</code> + <code>ModelPicker</code> components stay — they just get rendered inside a popover instead of inline in the header. No prop changes; only the placement moves. Estimated ~150 LOC delta in <code>top-bar.tsx</code>.
+</div>
+
+</body>
+</html>

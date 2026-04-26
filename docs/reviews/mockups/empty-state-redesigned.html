@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MARVIN — Empty-state redesign</title>
+<style>
+  :root {
+    --bg: oklch(0.95 0.006 80);
+    --bg-elev: oklch(0.935 0.005 80);
+    --fg: oklch(0.18 0.005 80);
+    --fg-dim: oklch(0.42 0.005 80);
+    --fg-faint: oklch(0.62 0.004 80);
+    --border: oklch(0.18 0.005 80 / 0.08);
+    --border-strong: oklch(0.18 0.005 80 / 0.16);
+    --accent: oklch(0.18 0.005 80);
+    --accent-glow: oklch(0.18 0.005 80 / 0.12);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    margin: 0;
+    padding: 32px;
+  }
+  h1 { font-style: italic; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--fg-dim); margin: 0 0 24px; font-size: 14px; }
+  .label {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--fg-faint);
+    margin: 28px 0 8px;
+  }
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .frame {
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg);
+    height: 720px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+  .frame-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: oklch(0.965 0.005 80);
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--fg-faint);
+  }
+  .canvas { flex: 1; min-height: 0; padding: 24px; overflow: auto; }
+  .input-row {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .input {
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    border-radius: 14px;
+    padding: 10px;
+    display: flex;
+    gap: 8px;
+    align-items: end;
+  }
+  .input textarea {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    resize: none;
+    font: inherit;
+    color: var(--fg);
+    height: 24px;
+  }
+  .input button {
+    background: var(--accent);
+    color: var(--bg);
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .anno {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: oklch(0.985 0.005 80);
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+  }
+  .anno strong { color: var(--fg); }
+
+  /* BEFORE — busy hero */
+  .hero-before .center {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 32px;
+    align-items: center;
+  }
+  .hero-before .orb {
+    width: 240px; height: 240px;
+    border-radius: 999px;
+    background: radial-gradient(circle at 30% 30%, oklch(0.7 0.15 280 / 0.4), oklch(0.4 0.05 280 / 0.05) 60%);
+    position: relative;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--fg-faint);
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+  }
+  .hero-before .advisor, .hero-before .scout {
+    position: absolute;
+    width: 50px; height: 50px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    color: var(--fg-faint);
+    background: var(--bg);
+  }
+  .hero-before .advisor { top: -6px; right: -6px; }
+  .hero-before .scout { top: -6px; left: -6px; }
+  .hero-before .coord-top, .hero-before .coord-bot {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: ui-monospace, monospace;
+    font-size: 8px;
+    color: var(--fg-faint);
+    letter-spacing: 0.4em;
+    text-transform: uppercase;
+  }
+  .hero-before .coord-top { top: -16px; }
+  .hero-before .coord-bot { bottom: -16px; }
+
+  .hero-before h1 {
+    font-family: "Times New Roman", serif;
+    font-style: italic;
+    font-size: 92px;
+    line-height: 0.9;
+    margin: 0;
+  }
+  .hero-before h1 .dot { color: var(--fg-dim); }
+  .hero-before .status-chip {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--fg-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .hero-before .status-chip .dot {
+    width: 6px; height: 6px; background: var(--accent); border-radius: 999px;
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .hero-before .tagline {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: var(--fg-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    margin-top: 6px;
+  }
+  .hero-before .para {
+    color: var(--fg-dim);
+    font-size: 14px;
+    line-height: 1.5;
+    margin-top: 12px;
+    max-width: 380px;
+  }
+  .hero-before .caps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .hero-before .cap {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: left;
+  }
+  .hero-before .cap-l { font-size: 12px; color: var(--fg); }
+  .hero-before .cap-h { font-size: 10px; color: var(--fg-faint); }
+  .hero-before .examples {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 18px;
+  }
+  .hero-before .ex {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    background: var(--bg-elev);
+    text-align: left;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .hero-before .ex .t { font-weight: 500; margin-bottom: 4px; }
+  .hero-before .quote {
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    border-radius: 14px;
+    padding: 16px 20px;
+    margin-top: 16px;
+    font-style: italic;
+  }
+
+  /* AFTER — calm hero */
+  .hero-after {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding-top: 48px;
+  }
+  .hero-after .orb {
+    width: 144px; height: 144px;
+    border-radius: 999px;
+    background: radial-gradient(circle at 30% 30%, oklch(0.6 0.12 280 / 0.32), oklch(0.4 0.05 280 / 0.04) 65%);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--fg-faint);
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+  }
+  .hero-after h1 {
+    font-family: "Times New Roman", serif;
+    font-style: italic;
+    font-size: 56px;
+    line-height: 1;
+    margin: 0;
+  }
+  .hero-after .tagline {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--fg-faint);
+  }
+  .hero-after .examples {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    width: 100%;
+    max-width: 640px;
+    margin-top: 8px;
+  }
+  .hero-after .ex {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    background: var(--bg-elev);
+    text-align: left;
+    font-size: 12px;
+    cursor: pointer;
+    line-height: 1.45;
+  }
+  .hero-after .ex .t { font-weight: 500; margin-bottom: 4px; color: var(--fg); }
+  .hero-after .ex .b { color: var(--fg-dim); }
+</style>
+</head>
+<body>
+<h1>MARVIN — Empty-state redesign</h1>
+<p class="sub">From 12 visual elements to 6. Identity preserved (brain + wordmark + tagline). Editorial garnish moved to a hover-tooltip on the wordmark.</p>
+
+<div class="compare">
+
+<!-- BEFORE -->
+<div>
+<div class="label">Before — current empty state</div>
+<div class="frame">
+  <div class="frame-header">marvin · empty-state · 1440 × 900</div>
+  <div class="canvas hero-before">
+    <div class="center">
+      <div class="orb">
+        <span class="coord-top">✦ m·a·r·v·i·n</span>
+        brain canvas (4500 particles)
+        <span class="advisor">advisor</span>
+        <span class="scout">scout</span>
+        <span class="coord-bot">declination · 00°00′</span>
+      </div>
+      <div>
+        <div class="status-chip">
+          <span class="dot"></span> online · idle
+          <span style="color:var(--fg-faint)">·</span>
+          <span>log 2026-04-26</span>
+        </div>
+        <h1>marvin<span class="dot">.</span></h1>
+        <div class="tagline">— Moderately Advanced Robotic Virtual Intelligence Network</div>
+        <p class="para">The layer between you and a model that reads your codebase, drafts a plan, writes the diff, and runs the tools. Brain the size of a planet. Ask anyway.</p>
+        <div class="caps">
+          <div class="cap"><div class="cap-l">reads code</div><div class="cap-h">indexes + queries your repo</div></div>
+          <div class="cap"><div class="cap-l">plans first</div><div class="cap-h">structural confirm gate</div></div>
+          <div class="cap"><div class="cap-l">writes diffs</div><div class="cap-h">monaco diff viewer</div></div>
+          <div class="cap"><div class="cap-l">runs tools</div><div class="cap-h">shell, git, tests</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="examples">
+      <div class="ex"><div class="t">explain the architecture</div>walk me through the top 5 god nodes in this codebase and how they connect</div>
+      <div class="ex"><div class="t">find a bug</div>something is off with the chat stream — messages sometimes arrive twice. investigate.</div>
+      <div class="ex"><div class="t">ship a feature</div>add a command palette (⌘K) that surfaces recent sessions, shortcuts, and panes</div>
+    </div>
+
+    <div class="quote">"Here I am, brain the size of a planet, and they ask me to build a login page. Fine. Reading your codebase…" — marvin</div>
+  </div>
+  <div class="input-row">
+    <div class="input"><textarea>what are we building?</textarea><button>send ⏎</button></div>
+  </div>
+</div>
+<div class="anno">
+  <strong>12 visual elements</strong> + 3 RAF animations (brain, advisor orb, scout orb) + CSS constellation backdrop. The fictional <em>"messages sometimes arrive twice"</em> example is contrived for a first-time user — that bug doesn't exist (dedup at <code>use-chat-stream.ts:794</code>).
+</div>
+</div>
+
+<!-- AFTER -->
+<div>
+<div class="label">After — calmer empty state</div>
+<div class="frame">
+  <div class="frame-header">marvin · empty-state · 1440 × 900</div>
+  <div class="canvas hero-after">
+    <div class="orb">brain (1500 particles, paused on visibility)</div>
+    <h1>marvin.</h1>
+    <div class="tagline">brain the size of a planet · ask anyway</div>
+
+    <div class="examples">
+      <div class="ex"><div class="t">explain the architecture</div><div class="b">walk me through the structure of this repo and how the major pieces connect</div></div>
+      <div class="ex"><div class="t">find the hot paths</div><div class="b">show me where the chat stream could race or drop events, and propose tests</div></div>
+      <div class="ex"><div class="t">ship a feature</div><div class="b">add a command palette (⌘K) that surfaces sessions, shortcuts, panes</div></div>
+    </div>
+  </div>
+  <div class="input-row">
+    <div class="input"><textarea>what are we building?</textarea><button>send ⏎</button></div>
+  </div>
+</div>
+<div class="anno">
+  <strong>6 visual elements.</strong> Brain shrinks to 144 px (still on-brand). The full tagline ("Moderately Advanced…") and the blockquote move to a hover-tooltip on the wordmark — discoverable without dominating. Particle count drops to 1500 in idle and pauses on <code>document.hidden</code> (finding #17). One example replaces the contrived bug-find with a real one.
+</div>
+</div>
+
+</div>
+
+<div class="anno" style="margin-top: 32px">
+  <strong>Implementation notes.</strong> Two-line copy change inside <code>page.tsx:498-627</code>: drop the <code>caps</code> grid, the blockquote, the coordinate marks, and the "log 2026-04-26" status line. Replace the second example. Move tagline + tagline expansion into a shadcn <code>Tooltip</code> on the wordmark button (already present at line 140 of <code>top-bar.tsx</code>). The <code>BrainLiquid</code> profile change lands in <code>brain-liquid.tsx:51-58</code> — bump <code>idle.N</code> from 4500 → 1500 (or honour <code>prefers-reduced-motion</code> as in finding #17).
+</div>
+
+</body>
+</html>

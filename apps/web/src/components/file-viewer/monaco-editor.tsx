@@ -186,6 +186,21 @@ function EditorSkeleton() {
   );
 }
 
+/**
+ * Imperative handle exposed via `onReady`. Lets the parent (FileViewer)
+ * trigger a save without lifting the editor's content into the parent's
+ * state. Returns `true` on success, `false` on conflict / error /
+ * read-only — the caller can branch on the boolean to decide whether
+ * to proceed with whatever follow-on it queued (e.g. close after save).
+ *
+ * Audit finding #6: previously the unsaved-guard's "save" branch was a
+ * no-op because the parent had no way to invoke this — see
+ * file-viewer.tsx:88-100 (now fixed).
+ */
+export interface MonacoEditorHandle {
+  save(): Promise<boolean>;
+}
+
 export interface MonacoEditorProps {
   cwd: string;
   filePath: string;
@@ -206,6 +221,13 @@ export interface MonacoEditorProps {
   onDirtyChange?(dirty: boolean): void;
   /** Surface save errors to the parent (toast, etc). Optional. */
   onError?(error: string): void;
+  /**
+   * Called once the editor is mounted with an imperative handle the
+   * parent can hold onto. The handle's `save()` method points at the
+   * latest `save` closure (via internal ref) so calling it later still
+   * sees fresh content + mtime.
+   */
+  onReady?(handle: MonacoEditorHandle): void;
 }
 
 export function MonacoEditor({
@@ -219,6 +241,7 @@ export function MonacoEditor({
   onClose,
   onDirtyChange,
   onError,
+  onReady,
 }: MonacoEditorProps) {
   const mode = useTheme();
   const language = useMemo(() => langFor(filePath), [filePath]);
@@ -343,6 +366,18 @@ export function MonacoEditor({
   useEffect(() => {
     saveRef.current = save;
   }, [save]);
+
+  // Publish the imperative handle once on mount. The handle's `save`
+  // delegates through `saveRef`, so it always invokes the freshest
+  // closure — same pattern as the Cmd-S Monaco action above. Done in
+  // an effect (not the render body) so the parent doesn't see the
+  // handle change every render.
+  useEffect(() => {
+    onReady?.({ save: () => saveRef.current() });
+    // We genuinely want this to run once per mount; `onReady` from the
+    // parent is stable enough in practice (FileViewer holds it in a
+    // ref). If it changes, an extra publish is cheap.
+  }, [onReady]);
 
   // Capture the Monaco namespace on mount so the theme-sync effect
   // below can re-apply the theme when `mode` changes. Without this

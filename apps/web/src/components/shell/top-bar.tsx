@@ -25,17 +25,13 @@ import { CostPill } from "@/components/cost/cost-pill";
 import { BranchBadge } from "@/components/project/branch-badge";
 import { ProjectPicker } from "@/components/project/project-picker";
 import type { ProjectRecord, VerifyResult } from "@/components/project/types";
-import { ModelPicker } from "@/components/settings/model-picker";
-import {
-  type PermissionStrategy,
-  PermissionToggle,
-} from "@/components/settings/permission-toggle";
-import {
-  type PersonalityMode,
-  PersonalityToggle,
-} from "@/components/settings/personality-toggle";
+import type { PermissionStrategy } from "@/components/settings/permission-toggle";
+import type { PersonalityMode } from "@/components/settings/personality-toggle";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
-import { LabeledGroup, PaneToggle } from "@/components/shell/page-helpers";
+import {
+  LayoutPopover,
+  SetupPopover,
+} from "@/components/shell/top-bar-popovers";
 
 export interface PaneState {
   files: boolean;
@@ -76,9 +72,11 @@ export interface TopBarProps {
   // Permissions / models / voice / theme
   permissionStrategy: PermissionStrategy;
   onPermissionStrategyChange(s: PermissionStrategy): void;
+  /** Read-only summary in the Setup popover. Mutation routes
+   *  through the dedicated `<ModelsDialog>` mounted by page.tsx
+   *  (opened via `onOpenModelsDialog` below). */
   executorModel: string | null;
   advisorModel: string | null;
-  onModelsChange(v: { executor: string | null; advisor: string | null }): void;
   personality: PersonalityMode;
   onPersonalityChange(v: PersonalityMode): void;
 
@@ -90,6 +88,10 @@ export interface TopBarProps {
   // Action buttons
   onOpenSettings(): void;
   onOpenShortcuts(): void;
+  /** Open the dedicated Models dialog. The picker is too tall for the
+   *  Setup popover, so the popover hosts a "Configure" button that
+   *  triggers this. */
+  onOpenModelsDialog(): void;
 }
 
 export function TopBar({
@@ -109,7 +111,6 @@ export function TopBar({
   onPermissionStrategyChange,
   executorModel,
   advisorModel,
-  onModelsChange,
   personality,
   onPersonalityChange,
   panes,
@@ -117,6 +118,7 @@ export function TopBar({
   cwd,
   onOpenSettings,
   onOpenShortcuts,
+  onOpenModelsDialog,
 }: TopBarProps) {
   return (
     <>
@@ -174,73 +176,31 @@ export function TopBar({
             refreshKey={sessionRefreshKey}
           />
           {/*
-           * perms / models / voice only show on wide viewports — they're
-           * also accessible via the ⚙ Settings panel, so we collapse
-           * them instead of letting them clip on medium screens. Theme
-           * flip stays visible since users hit it mid-session more
-           * than the others. `panes` toggles stay too (quick-flip
-           * essentials).
+           * Two popovers replace the previous five `LabeledGroup`
+           * blocks (perms, models, voice, theme, panes). Layout
+           * holds the five pane toggles; Setup holds perms / models /
+           * voice. Theme stays inline because it's a single icon-
+           * toggle and the most-flipped control mid-session. The old
+           * inline groups were gated by `xl:` / `2xl:` Tailwind
+           * breakpoints — invisible on 1280-1536 px viewports despite
+           * the Settings dialog claiming they "live in the top bar."
+           * See [docs/reviews/2026-04-26-full-audit.md, finding #8].
            */}
-          <LabeledGroup label="perms" className="hidden xl:inline-flex">
-            <PermissionToggle
-              value={permissionStrategy}
-              onChange={onPermissionStrategyChange}
-            />
-          </LabeledGroup>
-          <LabeledGroup label="models" className="hidden xl:inline-flex">
-            <ModelPicker
-              executor={executorModel}
-              advisor={advisorModel}
-              onChange={onModelsChange}
-            />
-          </LabeledGroup>
-          <LabeledGroup label="voice" className="hidden 2xl:inline-flex">
-            <PersonalityToggle
-              value={personality}
-              onChange={onPersonalityChange}
-            />
-          </LabeledGroup>
-          <LabeledGroup label="theme">
-            <ThemeToggle />
-          </LabeledGroup>
-          <LabeledGroup label="panes">
-            <PaneToggle
-              label="files"
-              active={panes.files}
-              onClick={() => onTogglePane("files")}
-              kbd="⌘B"
-              tip="project file tree"
-            />
-            <PaneToggle
-              label="graph"
-              active={panes.graph}
-              onClick={() => onTogglePane("graph")}
-              kbd="⌘G"
-              tip="knowledge graph of the codebase"
-            />
-            <PaneToggle
-              label="brain"
-              active={panes.brain}
-              onClick={() => onTogglePane("brain")}
-              tip="live MARVIN brain visualization"
-            />
-            <PaneToggle
-              label="preview"
-              active={panes.preview}
-              onClick={() => onTogglePane("preview")}
-              disabled={!cwd}
-              kbd="⌘P"
-              tip="live web preview of dev server"
-            />
-            <PaneToggle
-              label="term"
-              active={panes.terminal}
-              onClick={() => onTogglePane("terminal")}
-              disabled={!cwd}
-              kbd="⌘J"
-              tip="embedded terminal in the project cwd"
-            />
-          </LabeledGroup>
+          <LayoutPopover
+            panes={panes}
+            onTogglePane={onTogglePane}
+            cwd={cwd}
+          />
+          <SetupPopover
+            permissionStrategy={permissionStrategy}
+            onPermissionStrategyChange={onPermissionStrategyChange}
+            executorModel={executorModel}
+            advisorModel={advisorModel}
+            onOpenModelsDialog={onOpenModelsDialog}
+            personality={personality}
+            onPersonalityChange={onPersonalityChange}
+          />
+          <ThemeToggle />
           <button
             type="button"
             onClick={onReset}

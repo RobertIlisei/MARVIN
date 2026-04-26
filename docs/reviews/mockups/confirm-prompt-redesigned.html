@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MARVIN — Confirm prompt redesign</title>
+<style>
+  :root {
+    --bg: oklch(0.95 0.006 80);
+    --bg-elev: oklch(0.935 0.005 80);
+    --fg: oklch(0.18 0.005 80);
+    --fg-dim: oklch(0.42 0.005 80);
+    --fg-faint: oklch(0.62 0.004 80);
+    --border: oklch(0.18 0.005 80 / 0.08);
+    --border-strong: oklch(0.18 0.005 80 / 0.18);
+    --accent: oklch(0.18 0.005 80);
+    --accent-deep: oklch(0.28 0.005 80);
+    --accent-glow: oklch(0.18 0.005 80 / 0.12);
+    --warn: oklch(0.7 0.14 70);
+    --danger: oklch(0.55 0.20 25);
+    --danger-bg: oklch(0.6 0.18 25 / 0.10);
+    --success: oklch(0.55 0.13 150);
+    --success-bg: oklch(0.6 0.12 150 / 0.10);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    margin: 0;
+    padding: 32px;
+  }
+  h1 { font-style: italic; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--fg-dim); margin: 0 0 24px; font-size: 14px; }
+  .label {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    color: var(--fg-faint);
+    margin: 28px 0 8px;
+  }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .stage {
+    background: oklch(0.965 0.005 80);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .anno {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: oklch(0.985 0.005 80);
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+  }
+  .anno strong { color: var(--fg); }
+  .anno code, code.inline {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    background: oklch(0.93 0.005 80);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* BEFORE */
+  .before {
+    border: 1px solid oklch(0.28 0.005 80 / 0.40);
+    background: oklch(0.18 0.005 80 / 0.06);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+  .before .h {
+    border-bottom: 1px solid oklch(0.28 0.005 80 / 0.25);
+    padding: 8px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .before .h .icon {
+    width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid oklch(0.28 0.005 80 / 0.40);
+    border-radius: 4px;
+  }
+  .before .h .right {
+    margin-left: auto;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+  }
+  .before .b { padding: 12px; }
+  .before .reason { color: var(--fg-faint); margin-bottom: 8px; }
+  .before pre {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    margin: 0;
+    overflow-x: auto;
+  }
+  .before .actions {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .before .allow {
+    border: 1px solid var(--success);
+    background: var(--success-bg);
+    color: var(--success);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .before .deny {
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    background: transparent;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  /* AFTER */
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--warn); }
+    50% { box-shadow: 0 0 0 4px transparent; }
+  }
+  .after {
+    border: 2px solid var(--warn);
+    background: oklch(0.7 0.14 70 / 0.08);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    box-shadow: 0 8px 28px -10px oklch(0.7 0.14 70 / 0.4);
+    animation: pulse 1.6s ease-in-out 0s 3;
+  }
+  .after .h {
+    background: var(--warn);
+    color: oklch(0.18 0.06 70);
+    padding: 8px 12px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .after .h .icon {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.4);
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .after .h .title {
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .after .h .right {
+    margin-left: auto;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .after .timeout-pill {
+    background: rgba(0,0,0,0.18);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .after .b { padding: 14px; }
+  .after .reason { color: var(--fg); margin-bottom: 10px; }
+  .after .reason b { font-weight: 600; }
+  .after pre {
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin: 0;
+    overflow-x: auto;
+    color: var(--fg);
+  }
+  .after .blast-radius {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .after .actions {
+    display: flex; gap: 10px; margin-top: 14px; align-items: center;
+  }
+  .after .allow {
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    padding: 6px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .after .allow .kbd {
+    margin-left: 6px;
+    font-size: 10px;
+    opacity: 0.7;
+    border: 1px solid currentColor;
+    padding: 0 3px;
+    border-radius: 3px;
+  }
+  .after .deny {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 12px;
+  }
+  .after .deny .kbd {
+    margin-left: 6px;
+    font-size: 10px;
+    opacity: 0.7;
+    border: 1px solid currentColor;
+    padding: 0 3px;
+    border-radius: 3px;
+  }
+  .after .more {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--fg-faint);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+  }
+
+  .browser-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: oklch(0.93 0.005 80);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px 8px 0 0;
+    padding: 6px 12px 8px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-top: 6px;
+  }
+  .browser-tab .ico {
+    width: 14px; height: 14px;
+    background: var(--warn);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--bg);
+    font-size: 9px;
+    font-weight: 700;
+  }
+  .browser-tab.before-state .ico {
+    background: var(--bg-elev);
+    color: var(--fg-faint);
+    border: 1px solid var(--border-strong);
+  }
+</style>
+</head>
+<body>
+<h1>MARVIN — Confirm prompt redesign</h1>
+<p class="sub">High-stakes treatment for the security boundary. Filled buttons, warn-colored frame, soft pulse for the first ~5s, document-title badge while the tab is hidden, optional system notification.</p>
+
+<div class="compare">
+
+<div>
+<div class="label">Before — current confirm card</div>
+<div class="browser-tab before-state">
+  <span class="ico">M</span>
+  <span>MARVIN — localhost:3030</span>
+</div>
+<div class="stage">
+  <div class="before">
+    <div class="h">
+      <div class="icon">⏸</div>
+      <div>MARVIN wants to use Bash</div>
+      <div class="right" style="color: var(--accent)">awaiting confirm</div>
+    </div>
+    <div class="b">
+      <div class="reason">reason: Bash command not in the auto-allow list.</div>
+      <pre>$ rm -rf $HOME/work/legacy-app/.git</pre>
+      <div class="actions">
+        <button class="allow">allow</button>
+        <button class="deny">deny</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="anno">
+  <strong>Visual weight problem.</strong> Border at <code>accent-deep/40</code>, bg at <code>accent-glow/40</code> — same neighbourhood as a normal completed tool card (<code>tool-call-card.tsx:104</code>). "allow" filled at 10 % opacity, "deny" not filled at all. Browser tab title is unchanged. If the user is alt-tabbed, they'll never know a confirm is pending.
+</div>
+</div>
+
+<div>
+<div class="label">After — high-stakes treatment</div>
+<div class="browser-tab">
+  <span class="ico">!</span>
+  <span>(1) MARVIN — confirm needed</span>
+</div>
+<div class="stage">
+  <div class="after">
+    <div class="h">
+      <div class="icon">!</div>
+      <div class="title">MARVIN wants to run a destructive shell command</div>
+      <div class="right">
+        <span class="timeout-pill">auto-deny in 4:38</span>
+      </div>
+    </div>
+    <div class="b">
+      <div class="reason"><b>Bash · destructive</b> — not in the auto-allow list. <code class="inline">rm -rf</code> with a rooted path means files cannot be recovered without a backup.</div>
+      <pre>$ rm -rf $HOME/work/legacy-app/.git</pre>
+      <div class="blast-radius">
+        <strong style="color:var(--fg)">Blast radius.</strong> 1 directory, ~412 MB, includes git history. No git remote tracked at this path.
+      </div>
+      <div class="actions">
+        <button class="allow">allow <span class="kbd">⌘⏎</span></button>
+        <button class="deny">deny <span class="kbd">⌘.</span></button>
+        <a class="more">add a note for MARVIN</a>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="anno">
+  <strong>Treatment.</strong> 2 px warn-colored frame · filled allow button (the visual primary, since denials are cheap and allows are committal) · countdown to auto-deny (finding #5) · soft 3-pulse animation on first render · blast-radius summary inferred from the command shape · keyboard shortcuts surfaced on each button. Browser tab updates to <code>(1) MARVIN — confirm needed</code> via <code>document.title</code>.
+</div>
+</div>
+
+</div>
+
+<div class="label">Notification (optional, opt-in on first session)</div>
+<div class="stage" style="max-width: 460px">
+  <div style="border-radius: 12px; background: var(--bg-elev); border: 1px solid var(--border-strong); padding: 12px; display: flex; gap: 12px; align-items: start">
+    <div style="width: 36px; height: 36px; border-radius: 8px; background: var(--warn); display: flex; align-items: center; justify-content: center; font-weight: 700; color: oklch(0.18 0.06 70)">!</div>
+    <div style="flex:1">
+      <div style="font-weight: 600; font-size: 13px;">MARVIN — confirm needed</div>
+      <div style="color: var(--fg-dim); font-size: 12px; margin-top: 4px; font-family: ui-monospace, monospace">$ rm -rf $HOME/work/legacy-app/.git</div>
+      <div style="color: var(--fg-faint); font-size: 11px; margin-top: 6px">localhost:3030 · 0s ago</div>
+    </div>
+  </div>
+</div>
+<div class="anno">
+  Fires only when <code>document.hidden</code>. Click → <code>window.focus()</code> on the MARVIN tab. Permission is requested once, on first confirm prompt the user actually sees, with a "don't ask again" affordance.
+</div>
+
+<div class="anno" style="margin-top: 24px">
+  <strong>Implementation notes.</strong>
+  <br>1. Visual treatment: <code>confirm-prompt.tsx:65-184</code>. Add a <code>severity</code> prop (<code>"warn" | "danger"</code>) and switch border / bg / icon colour. Default to <code>warn</code> for Bash-not-in-allowlist, <code>danger</code> for hard-deny-grazing patterns or paths matching <code>SECRET_FILE_PATTERNS</code>.
+  <br>2. Document title: a <code>useConfirmTitleBadge</code> hook in the chat panel that watches for any <code>tool_use</code> with <code>pendingConfirm</code> and prefixes <code>document.title</code>.
+  <br>3. Timeout: in <code>sdk-runner.ts:269-281</code>, race the <code>new Promise</code> against <code>setTimeout(reject, 5*60_000)</code>; on reject, <code>resolve({ behavior: "deny", message: "timeout" })</code>.
+  <br>4. Blast radius: small helper that classifies common Bash patterns (<code>rm -rf</code>, <code>git push --force</code>, <code>npm publish</code>) and renders a one-line summary. No actual disk probe needed for the heuristic.
+</div>
+
+</body>
+</html>

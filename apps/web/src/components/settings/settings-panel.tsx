@@ -21,8 +21,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@marvin/ui/dialog";
+import { useState } from "react";
 
 import { HoneycombConfigForm } from "@/components/settings/honeycomb-config";
+import { useMarvinPrefs } from "@/lib/use-prefs";
 
 /**
  * Kept for back-compat with callers that imported the type. Now a
@@ -48,8 +50,21 @@ export interface SettingsPanelProps {
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
+  const { reset: resetPrefs } = useMarvinPrefs();
+  // Two-step confirm — accidental click on "Reset MARVIN preferences"
+  // shouldn't wipe the user's setup. First click flips into a
+  // "really?" state; second click calls reset(). Auto-cancels if
+  // the dialog closes.
+  const [confirmingReset, setConfirmingReset] = useState(false);
+
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) setConfirmingReset(false);
+        props.onOpenChange(open);
+      }}
+    >
       <DialogContent
         // Roomy enough for the Honeycomb form's four inputs + advanced
         // accordion. p-0 so the panel paints its own padding and the
@@ -147,8 +162,43 @@ export function SettingsPanel(props: SettingsPanelProps) {
               </code>{" "}
               if no project is active.
             </span>
-            <span>
-              Models, theme, permissions, project — in the top bar.
+            <span className="flex items-center gap-3">
+              <span>Models, theme, permissions, project — in the top bar.</span>
+              {/* Audit finding #16: previous "Reset MARVIN preferences"
+                  required clearing each localStorage key by hand. The
+                  central useMarvinPrefs hook now exposes one reset()
+                  call that wipes all five managed keys. Two-step click
+                  guards against accidents; the second-click button is
+                  filled-danger so the action reads as committal. */}
+              {confirmingReset ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetPrefs();
+                      setConfirmingReset(false);
+                    }}
+                    className="rounded-md border border-[color:var(--color-danger)] bg-[color:var(--color-danger)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-bg)] transition hover:opacity-90"
+                  >
+                    really? reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingReset(false)}
+                    className="font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-fg-dim)] hover:text-[color:var(--color-fg)]"
+                  >
+                    cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingReset(true)}
+                  className="rounded-md border border-[color:var(--color-border-strong)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-danger)]/50 hover:text-[color:var(--color-fg)]"
+                >
+                  reset preferences
+                </button>
+              )}
             </span>
           </footer>
         </div>

@@ -7,8 +7,10 @@ import { AdvisorOrb } from "@/components/brain/advisor-orb";
 import { BrainLiquid } from "@/components/brain/brain-liquid";
 import { ScoutOrb } from "@/components/brain/scout-orb";
 import { taskRoleOf } from "@/components/brain/task-role";
-import { MessageView } from "@/components/chat/message-view";
 import { useChatStream } from "@/components/chat/use-chat-stream";
+import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
+import { VirtualMessageList } from "@/components/chat/virtual-message-list";
+import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
 import { QuickOpen } from "@/components/file-tree/quick-open";
 
@@ -34,19 +36,14 @@ import {
 } from "@/components/left-column-tabs";
 import { PreviewPane } from "@/components/preview/preview-pane";
 import { useProjects } from "@/components/project/use-projects";
-// `PermissionStrategy` and `PersonalityMode` are still used by
-// useState<> generics below; the actual toggle components live in
-// TopBar. ThemeToggle, ModelPicker, BranchBadge, ProjectPicker,
-// CostPill likewise moved to TopBar.
-import type { PermissionStrategy } from "@/components/settings/permission-toggle";
-import type { PersonalityMode } from "@/components/settings/personality-toggle";
+// Theme + project picker + model picker + permission/personality
+// toggles all moved to TopBar; the prefs they mutate now live in
+// `useMarvinPrefs()` (Context-backed) so we no longer need to thread
+// 18 props through.
+import { ModelsDialog } from "@/components/settings/models-dialog";
 import { SettingsPanel } from "@/components/settings/settings-panel";
 import { ShortcutsHelp } from "@/components/settings/shortcuts-help";
-import {
-  Capability,
-  ExamplePrompt,
-  labelFor,
-} from "@/components/shell/page-helpers";
+import { ExamplePrompt, labelFor } from "@/components/shell/page-helpers";
 import { StatusBar } from "@/components/shell/status-bar";
 import { TopBar } from "@/components/shell/top-bar";
 import { WorkspaceStatusBar } from "@/components/shell/workspace-status-bar";
@@ -58,30 +55,10 @@ import { Terminal } from "@/components/terminal/terminal";
 // for the description-prefix regex. Adding a third role becomes a
 // one-line addition there; this file shouldn't grow its own regex.
 
-const LS_PERSONALITY_KEY = "marvin.personality";
-const LS_MODEL_EXECUTOR_KEY = "marvin.model.executor";
-const LS_MODEL_ADVISOR_KEY = "marvin.model.advisor";
-const LS_PERMISSION_KEY = "marvin.permissionStrategy";
-const LS_PANES_KEY = "marvin.panes"; // { files, brain, graph, terminal }
 // `marvin.session.<projectId>` → the in-flight `marvinSessionId` we
-// should try to re-attach to on page refresh.
+// should try to re-attach to on page refresh. Per-project, so kept
+// local rather than folded into the global prefs hook (audit #16).
 const LS_SESSION_PREFIX = "marvin.session.";
-
-interface PaneState {
-  files: boolean;
-  brain: boolean;
-  graph: boolean;
-  preview: boolean;
-  terminal: boolean;
-}
-
-const DEFAULT_PANES: PaneState = {
-  files: true,
-  brain: true,
-  graph: false,
-  preview: false,
-  terminal: false,
-};
 
 export default function Home() {
   const {
@@ -91,6 +68,7 @@ export default function Home() {
     marvinSessionId,
     send,
     cancel,
+    retry,
     reset,
     decideConfirm,
     hydrateFromSession,
@@ -109,12 +87,27 @@ export default function Home() {
 
   const cwd = active?.workDir ?? "";
 
-  const [personality, setPersonality] = useState<PersonalityMode>("marvin");
-  const [executorModel, setExecutorModel] = useState<string | null>(null);
-  const [advisorModel, setAdvisorModel] = useState<string | null>(null);
-  const [permissionStrategy, setPermissionStrategy] =
-    useState<PermissionStrategy>("auto");
-  const [panes, setPanes] = useState<PaneState>(DEFAULT_PANES);
+  // Global prefs from the central context. Replaces five `useState`
+  // calls + five persistence effects pre-#25. Each setter persists
+  // to localStorage internally — no separate effect needed.
+  const {
+    prefs,
+    setPersonality,
+    setPermissionStrategy,
+    setModels,
+    setPanes,
+    togglePane,
+    dismissAutoModeBanner,
+  } = useMarvinPrefs();
+  const {
+    personality,
+    executorModel,
+    advisorModel,
+    permissionStrategy,
+    panes,
+    showAutoModeBanner,
+  } = prefs;
+
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
@@ -126,72 +119,19 @@ export default function Home() {
   const openSettings = useCallback((_tab?: string) => {
     setSettingsOpen(true);
   }, []);
+  // The Models dialog is separate from Settings (per memory:
+  // "MARVIN Settings = Honeycomb only"). Opened from the Setup
+  // popover's "Configure" button.
+  const [modelsDialogOpen, setModelsDialogOpen] = useState(false);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const [heroDraft, setHeroDraft] = useState<string>("");
   const [heroDraftKey, setHeroDraftKey] = useState(0);
 
-  useEffect(() => {
-    try {
-      const p = localStorage.getItem(LS_PERSONALITY_KEY);
-      if (p === "marvin" || p === "neutral") setPersonality(p);
-      const em = localStorage.getItem(LS_MODEL_EXECUTOR_KEY);
-      if (em) setExecutorModel(em);
-      const am = localStorage.getItem(LS_MODEL_ADVISOR_KEY);
-      if (am) setAdvisorModel(am);
-      const perm = localStorage.getItem(LS_PERMISSION_KEY);
-      if (perm === "auto" || perm === "gated") setPermissionStrategy(perm);
-      const raw = localStorage.getItem(LS_PANES_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<PaneState>;
-        setPanes((prev) => ({ ...prev, ...parsed }));
-      }
-    } catch {
-      /* no storage */
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_PERSONALITY_KEY, personality);
-    } catch {
-      /* no storage */
-    }
-  }, [personality]);
-
-  useEffect(() => {
-    try {
-      if (executorModel) localStorage.setItem(LS_MODEL_EXECUTOR_KEY, executorModel);
-      else localStorage.removeItem(LS_MODEL_EXECUTOR_KEY);
-    } catch {
-      /* no storage */
-    }
-  }, [executorModel]);
-
-  useEffect(() => {
-    try {
-      if (advisorModel) localStorage.setItem(LS_MODEL_ADVISOR_KEY, advisorModel);
-      else localStorage.removeItem(LS_MODEL_ADVISOR_KEY);
-    } catch {
-      /* no storage */
-    }
-  }, [advisorModel]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_PERMISSION_KEY, permissionStrategy);
-    } catch {
-      /* no storage */
-    }
-  }, [permissionStrategy]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_PANES_KEY, JSON.stringify(panes));
-    } catch {
-      /* no storage */
-    }
-  }, [panes]);
+  // (Persistence used to live here as five separate `useEffect` hooks
+  // — one per key, each with its own try/catch swallowing storage
+  // errors. They're gone now; `useMarvinPrefs` handles persistence
+  // inside its setters. Audit findings #16 + #18.)
 
   // Clear the file-viewer selection when the active project changes; the
   // previous path is meaningless in a different workDir.
@@ -264,12 +204,57 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, hydrateFromSession, attachLive]);
 
+  // Sticky-bottom scroll with a 80 px threshold. Pre-fix this effect
+  // unconditionally yanked the scroller to the bottom on every
+  // messages change — if the user scrolled up to read prior context
+  // mid-stream, they'd lose their place each time a new chunk
+  // arrived. Audit finding #13.
+  //
+  // `stickToBottom` flips to false when the user scrolls upward past
+  // the threshold; flips back to true when they re-approach the
+  // bottom. Streaming content only auto-scrolls while sticky. A
+  // "jump to latest" pill renders below when not sticky and new
+  // content has arrived.
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const [hasNewWhileScrolledUp, setHasNewWhileScrolledUp] = useState(false);
+
+  // Track user scroll position; threshold within 80 px of the bottom
+  // counts as "still tailing the stream".
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
+    const onScroll = () => {
+      const distFromBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = distFromBottom < 80;
+      setStickToBottom(atBottom);
+      if (atBottom) setHasNewWhileScrolledUp(false);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-scroll on messages change — only while sticky. When not
+  // sticky, raise the "new content available" flag so the pill
+  // can offer a click-back.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    if (stickToBottom) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      setHasNewWhileScrolledUp(true);
+    }
+  }, [messages, stickToBottom]);
+
+  const jumpToLatest = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    setStickToBottom(true);
+    setHasNewWhileScrolledUp(false);
+  }, []);
 
   // Drive the ambient backdrop from MARVIN's current state.
   useEffect(() => {
@@ -279,8 +264,19 @@ export default function Home() {
     };
   }, [marvinState]);
 
+  // Prefix `document.title` with `(N) ` when there are N tool calls
+  // waiting on a confirm. Cue is most useful when the tab is hidden
+  // — see [docs/reviews/2026-04-26-full-audit.md, finding #11].
+  useConfirmTitleBadge(messages);
+
+  // `busy` covers in-flight work; `cancelling` is its own state so the
+  // ChatInput can render "stopping…" with a distinct affordance while
+  // the /api/chat/cancel call is in flight. Audit finding #22.
+  const cancelling = marvinState === "cancelling";
   const busy =
-    marvinState !== "idle" && marvinState !== "error";
+    marvinState !== "idle" &&
+    marvinState !== "error" &&
+    marvinState !== "cancelling";
 
   const handleSend = useCallback(
     (text: string) => {
@@ -295,10 +291,9 @@ export default function Home() {
     [send, cwd, personality, permissionStrategy, executorModel, advisorModel],
   );
 
-  const togglePane = useCallback(
-    (key: keyof PaneState) => setPanes((p) => ({ ...p, [key]: !p[key] })),
-    [],
-  );
+  // `togglePane` comes from the prefs context above; the previous
+  // local useCallback wrapper around `setPanes` was redundant once
+  // the hook owned the shape.
 
   // ---- Global keyboard shortcuts ---------------------------------------
   useEffect(() => {
@@ -475,10 +470,7 @@ export default function Home() {
       onPermissionStrategyChange={setPermissionStrategy}
       executorModel={executorModel}
       advisorModel={advisorModel}
-      onModelsChange={({ executor, advisor }) => {
-        setExecutorModel(executor);
-        setAdvisorModel(advisor);
-      }}
+      onOpenModelsDialog={() => setModelsDialogOpen(true)}
       personality={personality}
       onPersonalityChange={setPersonality}
       panes={panes}
@@ -500,9 +492,60 @@ export default function Home() {
         {/* Ambient constellation layer — only on the hero canvas */}
         <div aria-hidden className="constellation" />
         {topBar}
+        {/* Audit finding #2: first-run banner explaining `auto`
+            permission strategy = full bypass. Renders only when:
+            (a) the user is on the empty state (so they're about to
+            start their first turn), (b) permissions are still on the
+            default `auto`, and (c) they haven't dismissed yet. The
+            dismiss action persists across resets so the user only
+            sees this once. */}
+        {showAutoModeBanner && permissionStrategy === "auto" && (
+          <div
+            role="status"
+            aria-label="auto mode warning"
+            className="border-b border-[color:var(--color-warn)]/40 bg-[color:var(--color-warn)]/10 px-6 py-2.5 text-[color:var(--color-fg)]/95"
+          >
+            <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3 text-[12px] leading-relaxed">
+              <span
+                aria-hidden
+                className="rounded-full bg-[color:var(--color-warn)] px-2 py-px font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-bg)]"
+              >
+                heads up
+              </span>
+              <span className="flex-1">
+                MARVIN is in <strong>auto mode</strong> — file edits and
+                shell commands run without a confirm prompt. A short
+                hard-deny list still blocks the obvious footguns
+                (<code className="font-mono text-[11px]">rm -rf /</code>,{" "}
+                <code className="font-mono text-[11px]">git push --force</code>
+                , etc.) and every auto-allowed action is logged to{" "}
+                <code className="font-mono text-[11px]">
+                  &lt;project&gt;/.marvin/auto-audit.jsonl
+                </code>
+                . Switch to <strong>gated</strong> in setup if you'd
+                rather review each call.
+              </span>
+              <button
+                type="button"
+                onClick={dismissAutoModeBanner}
+                className="rounded-md border border-[color:var(--color-border-strong)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-fg)] hover:text-[color:var(--color-fg)]"
+              >
+                got it
+              </button>
+            </div>
+          </div>
+        )}
         <div className="scroll-thin relative flex min-h-0 flex-1 flex-col items-center gap-6 overflow-y-auto px-6 py-6">
           <div className="flex w-full max-w-5xl flex-col items-center gap-6 pt-4">
             <div className="grid w-full grid-cols-1 items-center gap-10 md:grid-cols-[auto_1fr]">
+              {/* BrainLiquid is the centerpiece — kept exactly as-is per
+                  user feedback (see ~/.marvin memory: "BrainLiquid is
+                  sacred"). The hero-orbit container, particle profile,
+                  and orb sizes are unchanged. The trimming pass only
+                  drops the *surrounding* chrome — coordinate marks,
+                  capability chips, status chip, blockquote — that the
+                  audit (finding #10) found drowned the brain in
+                  decoration. */}
               <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
                 <BrainLiquid state={marvinState} size={340} />
                 <AdvisorOrb
@@ -518,70 +561,42 @@ export default function Home() {
                   size={88}
                   offset={{ top: 20, left: 0 }}
                 />
-                {/* Coordinate marks — editorial instrument framing */}
-                <div
-                  aria-hidden
-                  className="font-mono pointer-events-none absolute -top-1 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.45em] text-[color:var(--color-fg-faint)]/70"
-                >
-                  ✦ m·a·r·v·i·n
-                </div>
-                <div
-                  aria-hidden
-                  className="font-mono pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-[0.45em] text-[color:var(--color-fg-faint)]/70"
-                >
-                  declination · 00°00′
-                </div>
               </div>
               <div className="flex flex-col gap-4 text-center md:text-left">
-                <div className="hero-stage-1 flex items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)] md:justify-start">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--color-accent)] shadow-[0_0_10px_var(--color-accent)]" />
-                  <span>online · {labelFor(marvinState)}</span>
-                  <span className="text-[color:var(--color-fg-faint)]/60">·</span>
-                  <span>log {new Date().toISOString().slice(0, 10)}</span>
-                </div>
-                <h1 className="hero-stage-2 title-glow font-display text-7xl italic leading-[0.88] tracking-tight text-[color:var(--color-accent)] md:text-[108px]">
+                {/* `title` carries the long-form tagline + the
+                    Hitchhiker's-Guide quote that previously rendered as
+                    standalone elements (mono tagline strip + glass
+                    blockquote). They're discoverable via hover/focus
+                    on the wordmark; can upgrade to a real Tooltip
+                    primitive later if the hover affordance proves too
+                    quiet. */}
+                <h1
+                  title={
+                    "Moderately Advanced Robotic Virtual Intelligence Network.\n\n" +
+                    "“Here I am, brain the size of a planet, and they ask me to build a login page. Fine. Reading your codebase…”"
+                  }
+                  className="hero-stage-2 title-glow font-display text-7xl italic leading-[0.88] tracking-tight text-[color:var(--color-accent)] md:text-[108px]"
+                >
                   marvin<span className="text-[color:var(--color-accent-deep)]/70">.</span>
                 </h1>
-                <div className="hero-stage-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)] md:justify-start">
-                  <span className="h-px w-6 bg-[color:var(--color-accent-deep)]/50" />
-                  <span>Moderately Advanced Robotic Virtual Intelligence Network</span>
-                </div>
                 <p className="hero-stage-3 max-w-xl text-[15px] leading-relaxed text-[color:var(--color-fg-dim)] md:text-base">
-                  The layer between you and a model that reads your codebase,
-                  drafts a plan, writes the diff, and runs the tools.
-                  Brain the size of a planet. Ask anyway.
+                  Brain the size of a planet — reads your codebase,
+                  drafts a plan, writes the diff, runs the tools. Ask
+                  anyway.
                 </p>
-                <div className="hero-stage-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <Capability
-                    label="reads code"
-                    hint="indexes + queries your repo"
-                  />
-                  <Capability
-                    label="plans first"
-                    hint="structural confirm gate"
-                  />
-                  <Capability
-                    label="writes diffs"
-                    hint="monaco diff viewer"
-                  />
-                  <Capability
-                    label="runs tools"
-                    hint="shell, git, tests"
-                  />
-                </div>
               </div>
             </div>
 
             <div className="hero-stage-4 grid w-full grid-cols-1 gap-3 md:grid-cols-3">
               <ExamplePrompt
                 title="explain the architecture"
-                body="walk me through the top 5 god nodes in this codebase and how they connect"
+                body="walk me through the structure of this repo and how the major pieces connect"
                 onUse={fillDraft}
                 disabled={!cwd}
               />
               <ExamplePrompt
-                title="find a bug"
-                body="something is off with the chat stream — messages sometimes arrive twice. investigate."
+                title="find the hot paths"
+                body="show me where the main turn loop could race or drop events, and propose tests that would catch it"
                 onUse={fillDraft}
                 disabled={!cwd}
               />
@@ -592,22 +607,6 @@ export default function Home() {
                 disabled={!cwd}
               />
             </div>
-
-            <blockquote className="hero-stage-5 glass relative w-full max-w-3xl rounded-2xl px-6 py-5 text-center md:text-left">
-              <span
-                aria-hidden
-                className="font-display pointer-events-none absolute -left-1 -top-3 select-none text-[70px] italic leading-none text-[color:var(--color-accent-deep)]/40"
-              >
-                &ldquo;
-              </span>
-              <p className="font-display text-lg italic leading-snug text-[color:var(--color-fg)]/90 md:text-xl">
-                Here I am, brain the size of a planet, and they ask me to
-                build a login page. Fine. Reading your codebase…
-              </p>
-              <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-faint)]">
-                — marvin
-              </div>
-            </blockquote>
           </div>
         </div>
 
@@ -616,6 +615,7 @@ export default function Home() {
             onSend={handleSend}
             onCancel={cancel}
             busy={busy}
+            cancelling={cancelling}
             disabled={!cwd}
             hint={hint}
             draft={heroDraft}
@@ -870,25 +870,39 @@ export default function Home() {
                       marvinSessionId={marvinSessionId}
                     />
                   </div>
-                  <div
-                    ref={scrollerRef}
-                    className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-4"
-                  >
-                    <div className="flex flex-col gap-4">
-                      {messages.map((m) => (
-                        <MessageView
-                          key={m.id}
-                          message={m}
+                  <div className="relative min-h-0 flex-1">
+                    <div
+                      ref={scrollerRef}
+                      className="scroll-thin h-full overflow-y-auto px-4 py-4"
+                    >
+                      <div className="flex flex-col gap-4">
+                        <VirtualMessageList
+                          messages={messages}
                           onDecideConfirm={decideConfirm}
+                          onRetry={retry}
                         />
-                      ))}
+                      </div>
                     </div>
+                    {/* "Jump to latest" pill — only renders when the
+                        user has scrolled up AND new content has
+                        arrived since. Click snaps to bottom and
+                        re-engages sticky-tail. Audit finding #13. */}
+                    {!stickToBottom && hasNewWhileScrolledUp && (
+                      <button
+                        type="button"
+                        onClick={jumpToLatest}
+                        className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[color:var(--color-accent-deep)]/40 bg-[color:var(--color-accent-glow)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.2em] text-[color:var(--color-accent)] shadow-md transition hover:border-[color:var(--color-accent-deep)]"
+                      >
+                        ↓ jump to latest
+                      </button>
+                    )}
                   </div>
                   <div className="px-4 pb-4">
                     <ChatInput
                       onSend={handleSend}
                       onCancel={cancel}
                       busy={busy}
+                      cancelling={cancelling}
                       disabled={!cwd}
                       hint={hint}
                     />
@@ -912,6 +926,13 @@ export default function Home() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         cwd={cwd || null}
+      />
+      <ModelsDialog
+        open={modelsDialogOpen}
+        onOpenChange={setModelsDialogOpen}
+        executor={executorModel}
+        advisor={advisorModel}
+        onChange={setModels}
       />
     </main>
   );

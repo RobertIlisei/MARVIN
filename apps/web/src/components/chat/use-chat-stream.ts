@@ -50,6 +50,22 @@ export function useChatStream() {
 
   const abortRef = useRef<AbortController | null>(null);
   const turnIdRef = useRef<string | null>(null);
+  /**
+   * Last user message + send options. Held so the structured `error`
+   * block can offer a Retry that reuses the same arguments — closes
+   * the stream-end UX gap from audit finding #14.
+   */
+  const lastSendRef = useRef<{
+    text: string;
+    cwd: string;
+    options: {
+      personality?: "marvin" | "neutral";
+      runtimeMode?: "opus" | "advisor";
+      permissionStrategy?: "auto" | "gated";
+      model?: string | null;
+      advisorModel?: string | null;
+    };
+  } | null>(null);
 
   const send = useCallback(
     async (
@@ -67,6 +83,9 @@ export function useChatStream() {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+      // Snapshot the send args so retry() can replay them without the
+      // caller having to re-thread state. See audit finding #14.
+      lastSendRef.current = { text, cwd, options };
 
       const userMessage: Message = {
         id: `u-${Date.now()}`,
@@ -111,8 +130,9 @@ export function useChatStream() {
                   ...m,
                   blocks: [
                     {
-                      type: "text",
-                      text: `Request failed: ${err instanceof Error ? err.message : String(err)}`,
+                      type: "error",
+                      message: `Request failed: ${err instanceof Error ? err.message : String(err)}`,
+                      canRetry: true,
                     },
                   ],
                 }
@@ -125,6 +145,9 @@ export function useChatStream() {
       if (!response.ok || !response.body) {
         setMarvinState("error");
         const errText = await response.text().catch(() => "");
+        // 4xx invalid-cwd (audit fix #7) is non-retryable — the user
+        // needs to pick a project. Other 5xx are worth retrying.
+        const canRetry = response.status >= 500;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -132,8 +155,9 @@ export function useChatStream() {
                   ...m,
                   blocks: [
                     {
-                      type: "text",
-                      text: `HTTP ${response.status}: ${errText.slice(0, 200) || response.statusText}`,
+                      type: "error",
+                      message: `HTTP ${response.status}: ${errText.slice(0, 200) || response.statusText}`,
+                      canRetry,
                     },
                   ],
                 }
@@ -208,8 +232,9 @@ export function useChatStream() {
                     blocks: [
                       ...m.blocks,
                       {
-                        type: "text",
-                        text: `Stream error: ${err instanceof Error ? err.message : String(err)}`,
+                        type: "error",
+                        message: `Stream error: ${err instanceof Error ? err.message : String(err)}`,
+                        canRetry: true,
                       },
                     ],
                   }
@@ -223,7 +248,10 @@ export function useChatStream() {
         }
         // Stream closed without a terminal event (turn.completed /
         // turn.error) — most commonly the SDK crashed after handshake.
-        // Surface it so the UI doesn't sit in "thinking" forever.
+        // Pre-fix this surfaced as a plain text block. Audit #14
+        // upgraded it to a structured `error` block with a Retry
+        // hook so the user can re-fire the same message + sessionId
+        // in one click.
         setMarvinState((prev) => {
           if (prev === "thinking" || prev === "writing" || prev === "tool") {
             setMessages((msgs) =>
@@ -234,8 +262,10 @@ export function useChatStream() {
                       blocks: [
                         ...m.blocks,
                         {
-                          type: "text",
-                          text: "⚠ Stream ended without a result. Check the server logs (auth, SDK crash, or cwd doesn't exist).",
+                          type: "error",
+                          message:
+                            "Stream ended without a result. Check the server logs (auth, SDK crash, or cwd doesn't exist).",
+                          canRetry: true,
                         },
                       ],
                     }
@@ -251,26 +281,70 @@ export function useChatStream() {
     [sessionId, marvinSessionId],
   );
 
-  const cancel = useCallback(() => {
-    // Close this client's SSE stream immediately so the UI snaps back to
-    // idle, then ask the server to actually abort the SDK turn. The
-    // server no longer treats stream-close as cancellation on its own —
-    // the explicit /api/chat/cancel call is what stops the agent.
+  const cancel = useCallback(async () => {
+    // Audit finding #22: previous behaviour snapped the UI to "idle"
+    // synchronously and fired /api/chat/cancel best-effort. The user
+    // could send a new message while the server was still tearing
+    // down the previous turn, then watch the previous turn's cli.events
+    // continue to flow into the new bubble. The fix is a `cancelling`
+    // intermediate state so the input stays disabled until the server
+    // confirms.
     abortRef.current?.abort();
     abortRef.current = null;
     turnIdRef.current = null;
-    setMarvinState("idle");
     const sid = marvinSessionId;
-    if (sid) {
-      void marvinFetch("/api/chat/cancel", {
+    if (!sid) {
+      // Nothing on the server to cancel — straight to idle.
+      setMarvinState("idle");
+      return;
+    }
+    setMarvinState("cancelling");
+    try {
+      await marvinFetch("/api/chat/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marvinSessionId: sid }),
-      }).catch(() => {
-        /* best-effort */
       });
+    } catch {
+      /* best-effort — even on network failure the local abort
+         already detached us from the SSE stream. */
+    } finally {
+      setMarvinState("idle");
     }
   }, [marvinSessionId]);
+
+  /**
+   * Retry the last message. Used by the structured `error` block —
+   * see audit finding #14. Marks the most recent error block as
+   * `retried` so the button doesn't reappear if the retry also fails
+   * (next failure produces its own block).
+   */
+  const retry = useCallback(() => {
+    const last = lastSendRef.current;
+    if (!last) return;
+    setMessages((prev) => {
+      const next = [...prev];
+      // Drop the last assistant message that ended in an unretried
+      // error block — the retry creates a fresh assistant bubble.
+      const lastIdx = next.length - 1;
+      const lastMsg = next[lastIdx];
+      if (lastMsg && lastMsg.role === "assistant") {
+        const lastBlock = lastMsg.blocks[lastMsg.blocks.length - 1];
+        if (
+          lastBlock &&
+          lastBlock.type === "error" &&
+          lastBlock.canRetry &&
+          !lastBlock.retried
+        ) {
+          next.pop();
+        }
+      }
+      return next;
+    });
+    void send(last.text, last.cwd, last.options);
+    // The send body above creates a new assistant message; nothing
+    // to do for the marker — the popped error block is gone.
+  }, [send]);
 
   /**
    * Attach to a still-running turn (after page refresh / tab reopen).
@@ -592,6 +666,7 @@ export function useChatStream() {
     marvinSessionId,
     send,
     cancel,
+    retry,
     reset,
     decideConfirm,
     hydrateFromSession,

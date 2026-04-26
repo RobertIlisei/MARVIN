@@ -30,6 +30,15 @@
  *   workdir → different honeycomb.json) or deleting the config
  *   cleanly reverses the mutation rather than leaking stale values.
  *
+ * - **Per-turn isolation via `computeHoneycombTelemetryEnv`.** The
+ *   process.env-mutating path (`applyHoneycombTelemetryEnv`) is kept
+ *   for the Settings save/delete route where an immediate
+ *   `honeycombTelemetryStatus()` call needs to reflect the change.
+ *   The SDK runner uses the pure `compute*` form and passes the
+ *   resulting env map to `Options.env` per-turn, so two concurrent
+ *   turns for two different projects don't race on `process.env`.
+ *   Audit finding #4.
+ *
  * - **User overrides are respected.** If the user has set
  *   `OTEL_EXPORTER_OTLP_HEADERS` in the shell / plist themselves,
  *   the module leaves the entire OTEL surface alone. This preserves
@@ -86,6 +95,79 @@ const MARVIN_MANAGED_KEYS = new Set<string>();
 const DEFAULT_DATASET = "claude-code";
 const DEFAULT_SERVICE_NAME = "claude-code";
 
+/**
+ * Pure form: compute the Honeycomb env vars for a given workdir's
+ * config WITHOUT mutating `process.env`. Returns the env map the
+ * caller should merge into the SDK's `Options.env` (or any other
+ * per-call env path) plus the status string for reporting.
+ *
+ * Used by the SDK runner per turn so concurrent turns for different
+ * projects don't race on a shared global. The Settings save/delete
+ * route still uses `applyHoneycombTelemetryEnv` (below) because it
+ * wants an immediate `honeycombTelemetryStatus()` to reflect the
+ * change in the same request.
+ *
+ * Audit finding #4.
+ */
+export function computeHoneycombTelemetryEnv(
+  workDir: string | null,
+  /**
+   * Optional inherited env. If the user has already set
+   * `OTEL_EXPORTER_OTLP_HEADERS` here (shell / launchd plist),
+   * we leave the entire OTEL surface alone — same escape hatch
+   * as the mutating form. Defaults to `process.env` so callers
+   * don't have to thread it.
+   */
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+): { env: Record<string, string>; status: HoneycombTelemetryStatus } {
+  // Escape hatch — caller is driving telemetry by hand; we don't
+  // emit any OTEL keys at all.
+  if (inheritedEnv.OTEL_EXPORTER_OTLP_HEADERS) {
+    return {
+      env: {},
+      status: {
+        active: true,
+        source: "user-override",
+        endpoint: inheritedEnv.OTEL_EXPORTER_OTLP_ENDPOINT ?? null,
+        dataset: null,
+      },
+    };
+  }
+
+  const resolved = readHoneycombConfig(workDir);
+  if (!resolved) {
+    return {
+      env: {},
+      status: { active: false, source: "none", endpoint: null, dataset: null },
+    };
+  }
+
+  const { apiKey, environment, apiUrl, dataset } = resolved.config;
+  const endpoint = apiUrl ?? DEFAULT_HONEYCOMB_API_URL;
+  const targetDataset = dataset ?? DEFAULT_DATASET;
+
+  const env: Record<string, string> = {
+    CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+    OTEL_METRICS_EXPORTER: "otlp",
+    OTEL_LOGS_EXPORTER: "otlp",
+    OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+    OTEL_EXPORTER_OTLP_ENDPOINT: endpoint,
+    OTEL_EXPORTER_OTLP_HEADERS: `x-honeycomb-team=${apiKey},x-honeycomb-dataset=${targetDataset}`,
+    OTEL_SERVICE_NAME: DEFAULT_SERVICE_NAME,
+    OTEL_RESOURCE_ATTRIBUTES: `honeycomb.environment=${environment},honeycomb.dataset=${targetDataset}`,
+  };
+
+  return {
+    env,
+    status: {
+      active: true,
+      source: resolved.source,
+      endpoint,
+      dataset: targetDataset,
+    },
+  };
+}
+
 export function applyHoneycombTelemetryEnv(
   workDir: string | null,
 ): HoneycombTelemetryStatus {
@@ -98,76 +180,18 @@ export function applyHoneycombTelemetryEnv(
   }
   MARVIN_MANAGED_KEYS.clear();
 
-  // Escape hatch: if the user has explicitly set OTLP headers in their
-  // shell or launchd plist, they're driving telemetry manually. Don't
-  // touch the OTEL surface. We still signal "active" so the UI can
-  // show a "telemetry flowing (custom setup)" badge instead of
-  // "not configured."
-  if (process.env.OTEL_EXPORTER_OTLP_HEADERS) {
-    return {
-      active: true,
-      source: "user-override",
-      endpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? null,
-      dataset: null,
-    };
+  // Delegate to the pure form so both code paths stay in lockstep.
+  // The mutating wrapper only exists because the Settings route wants
+  // `honeycombTelemetryStatus()` (which reads `process.env`) to
+  // reflect the change in the same HTTP response. Per-turn callers
+  // (sdk-runner) should reach for `computeHoneycombTelemetryEnv`
+  // instead — it's the race-free path.
+  const { env, status } = computeHoneycombTelemetryEnv(workDir);
+  for (const [k, v] of Object.entries(env)) {
+    process.env[k] = v;
+    MARVIN_MANAGED_KEYS.add(k);
   }
-
-  const resolved = readHoneycombConfig(workDir);
-  if (!resolved) {
-    return { active: false, source: "none", endpoint: null, dataset: null };
-  }
-
-  const { apiKey, environment, apiUrl, dataset } = resolved.config;
-  const endpoint = apiUrl ?? DEFAULT_HONEYCOMB_API_URL;
-  const targetDataset = dataset ?? DEFAULT_DATASET;
-
-  const apply = (key: string, value: string): void => {
-    process.env[key] = value;
-    MARVIN_MANAGED_KEYS.add(key);
-  };
-
-  // Claude Code gates all OTEL emission on this one flag. Without it,
-  // everything else below is ignored — the CLI skips the entire
-  // telemetry code path.
-  apply("CLAUDE_CODE_ENABLE_TELEMETRY", "1");
-
-  // Claude Code emits metrics + logs today; pick the OTLP exporter for
-  // both. Traces aren't emitted by the CLI yet, so leaving
-  // OTEL_TRACES_EXPORTER unset costs nothing.
-  apply("OTEL_METRICS_EXPORTER", "otlp");
-  apply("OTEL_LOGS_EXPORTER", "otlp");
-
-  // Honeycomb's OTLP ingress prefers http/protobuf. grpc works too but
-  // requires a separate port and is more finicky on corporate networks.
-  apply("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf");
-  apply("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint);
-
-  // Headers carry the API key and dataset. Honeycomb routes payloads
-  // by (team, dataset); the team is implicit from the API key but the
-  // dataset header is what pins the data to a specific Honeycomb
-  // dataset. Without it, ingested metrics land in the default
-  // `unknown_logs` / `unknown_metrics` datasets, which is confusing.
-  apply(
-    "OTEL_EXPORTER_OTLP_HEADERS",
-    `x-honeycomb-team=${apiKey},x-honeycomb-dataset=${targetDataset}`,
-  );
-
-  // Service name surfaces in Honeycomb's "services" dropdown. Resource
-  // attributes carry the environment label so the user can split
-  // charts by prod vs staging even when the same dataset receives
-  // spans from multiple environments.
-  apply("OTEL_SERVICE_NAME", DEFAULT_SERVICE_NAME);
-  apply(
-    "OTEL_RESOURCE_ATTRIBUTES",
-    `honeycomb.environment=${environment},honeycomb.dataset=${targetDataset}`,
-  );
-
-  return {
-    active: true,
-    source: resolved.source,
-    endpoint,
-    dataset: targetDataset,
-  };
+  return status;
 }
 
 /**

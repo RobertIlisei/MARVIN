@@ -19,6 +19,27 @@ import { marvinPaths } from "./paths";
 
 export type SessionTurn =
   | { type: "turn.user"; at: string; message: string }
+  | {
+      /**
+       * Turn-start event recorded once per turn. Carries the model
+       * routing + permission posture in effect at dispatch so the
+       * transcript replay can reconstruct what was running.
+       *
+       * Audit finding #27 — previously the chat route logged this via
+       * `as unknown as "turn.user"`; the cast is gone now that the
+       * union admits the shape.
+       */
+      type: "turn.started";
+      at: string;
+      marvinSessionId: string;
+      projectId: string;
+      model: string;
+      advisorModel: string | null;
+      runtimeMode: "opus" | "advisor";
+      personality: "marvin" | "neutral";
+      permissionStrategy: "auto" | "gated";
+      turnId: string;
+    }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {
       type: "turn.completed";
