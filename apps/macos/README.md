@@ -76,14 +76,20 @@ for the full table. Short version:
   custom About panel that surfaces live sidecar info from
   `HealthMonitor` (auth mode, model, data dir) so the migration
   evaluation makes "which build am I in" obvious at a glance.
-- **Phase 1d — NSToolbar (in flight)** — unified title bar now hosts
-  a connection-status pip + `connecting/online/offline` label
-  (clickable to re-probe), and the native NSWindow title mirrors
-  the web app's `document.title` via the bridge (so the v1.2 `(N)`
-  pending-confirm badge surfaces in the title bar even when the
-  WebView is scrolled or another app is focused). Future 1d work:
-  pick which web top-bar controls graduate to native (project
-  picker? cost pill? model picker?) and add their bridge messages.
+- **Phase 1d — NSToolbar (in flight)** — unified title bar now hosts:
+  - **Connection status pip** + `connecting/online/offline` label,
+    clickable to re-probe (no bridge — reads HealthMonitor directly).
+  - **Cost pill** mirroring today's spend from the web app's
+    `<CostPill>` via the bridge (`cost-changed` message). Hides when
+    no project is active.
+  - Native NSWindow title mirrors the web app's `document.title` so
+    the v1.2 `(N)` pending-confirm badge surfaces in the title bar
+    even when the WebView is scrolled or another app is focused.
+
+  Future 1d work: project picker + model picker. Both have rich
+  popovers (recent sessions, presets) that don't trivially native-
+  port; held until the daily-use evaluation says they're worth the
+  bridge cost.
 
 ### Bridge groundwork (shipped alongside Phase 1c)
 

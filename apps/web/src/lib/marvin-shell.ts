@@ -70,6 +70,20 @@ export function announceTitle(value: string): void {
 }
 
 /**
+ * Mirrors today's cost (USD) to the Swift side so the native
+ * toolbar can render a cost pill. Phase 1d.2 — fires from CostPill
+ * whenever its `/api/cost` summary refreshes. Sending `null` clears
+ * the native pill (e.g. when no project is active).
+ */
+export function announceCost(todayUsd: number | null): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "cost-changed",
+    payload: { today: todayUsd, currency: "USD" },
+  });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

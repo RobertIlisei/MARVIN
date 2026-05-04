@@ -73,6 +73,15 @@ struct ContentView: View {
         // NSWindowDelegate) keeps the items as SwiftUI Views so
         // theme + accent colors track macOS automatically.
         .toolbar {
+            // Cost pill — bridge-fed from the web app's <CostPill>
+            // (Phase 1d.2). Hides until the web side has a project +
+            // summary loaded; placement-trailing keeps it adjacent
+            // to the connection status indicator.
+            if let cost = bridge.costToday {
+                ToolbarItem(placement: .primaryAction) {
+                    CostToolbarItem(todayUsd: cost)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 ConnectionStatusToolbarItem(state: health.state) {
                     Task { await health.refreshNow() }
@@ -136,6 +145,35 @@ struct ContentView: View {
         .frame(maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
     }
 
+}
+
+/// Cost pill for the unified title bar (Phase 1d.2). Mirrors
+/// today's spend from the web app's `<CostPill>` via the bridge.
+/// Pure label — clicking the *web* CostPill is what opens the
+/// detail popover; making the native one a button would route
+/// click intent through the bridge, which this phase doesn't wire.
+private struct CostToolbarItem: View {
+    let todayUsd: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("today")
+                .foregroundStyle(.tertiary)
+            Text(fmtUsd(todayUsd))
+                .foregroundStyle(.secondary)
+        }
+        .font(.callout.monospaced())
+        .help("Today's Claude cost for the active project")
+    }
+
+    /// Mirror of the web side's `fmtUsd` so a value like $0.0042
+    /// renders identically in both places. NumberFormatter would be
+    /// overkill — we want the bespoke micro-cent rendering.
+    private func fmtUsd(_ v: Double) -> String {
+        if v == 0 { return "$0.00" }
+        if v < 0.01 { return String(format: "$%.4f", v) }
+        return String(format: "$%.2f", v)
+    }
 }
 
 /// Connection status pip + label for the unified title bar (Phase 1d).

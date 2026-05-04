@@ -83,6 +83,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// native NSWindow title bar.
     private(set) var webTitle: String? = nil
 
+    /// Today's cost (USD) posted by the web side via `cost-changed`.
+    /// `nil` until the web side has a project selected and a cost
+    /// summary loaded — the toolbar pill hides in that case.
+    /// Phase 1d.2 — mirrors what `<CostPill>` shows in the web top
+    /// bar so the native toolbar pip doesn't go stale.
+    private(set) var costToday: Double? = nil
+
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
     /// One name keeps the WebKit configuration simple; routing
@@ -195,6 +202,21 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             if let value = payload?["value"] as? String, !value.isEmpty {
                 webTitle = value
                 NSLog("[MarvinBridge] title \(value)")
+            }
+        case "cost-changed":
+            // Today's cost (USD) — drives the native cost pill.
+            // `today` is nullable on the wire: a null payload from
+            // the web side (no project, no summary) clears the
+            // native pill rather than leaving it stale.
+            //
+            // Not NSLog'd because cost-changed fires on every
+            // /api/cost summary refresh — a chatty turn would flood
+            // the log. The toolbar item's visibility is the live
+            // signal that messages are flowing.
+            if let value = payload?["today"] as? Double {
+                costToday = value
+            } else {
+                costToday = nil
             }
         default:
             // Unknown type — log + ignore. Future phases add cases
