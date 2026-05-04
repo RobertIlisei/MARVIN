@@ -23,26 +23,72 @@ struct ChatMessageRow: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            roleGutter
-                .frame(width: 56, alignment: .topTrailing)
+        // User messages right-align in an accent-tinted bubble
+        // (chat-UI convention; matches the web `<MessageView>`'s
+        // `justify-end` + `bg-[color:var(--color-accent-glow)]`
+        // bubble in apps/web/src/components/chat/message-view.tsx).
+        // Everything else stays left-aligned with a 56pt role gutter
+        // on the left and no bubble — matches the assistant /
+        // system / result rendering on the web side.
+        if message.role == .user {
+            HStack(alignment: .top, spacing: 0) {
+                Spacer(minLength: 40)
+                userBubble
+            }
+            .padding(.vertical, 6)
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                roleGutter
+                    .frame(width: 56, alignment: .topTrailing)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(message.blocks) { block in
+                        blockView(for: block)
+                    }
+                    if message.isStreaming {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("streaming…")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    /// User message bubble — accent-tinted rounded rectangle with
+    /// the "you" label above the text. The bubble itself sizes to
+    /// content; ChatMessageRow's outer HStack provides the
+    /// minLength: 40 left spacer so a long user line doesn't span
+    /// the entire pane width (would visually fight with the
+    /// assistant's left-aligned blocks).
+    private var userBubble: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text("you")
+                .font(.caption2.monospaced())
+                .tracking(2)
+                .textCase(.uppercase)
+                .foregroundStyle(Color.accentColor.opacity(0.8))
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(message.blocks) { block in
                     blockView(for: block)
                 }
-                if message.isStreaming {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("streaming…")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
-                    }
-                }
             }
-            Spacer(minLength: 0)
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 
     /// Role label down the left gutter — keeps the message body
@@ -93,10 +139,19 @@ private struct TextBlockView: View {
     let role: ChatRole
 
     var body: some View {
+        // User-bubble text sizes to content (the bubble's outer
+        // RoundedRectangle wraps to whichever is smaller: text
+        // intrinsic width or the row's available width). Assistant
+        // / system / result text fills the row width so long
+        // paragraphs wrap naturally without ragged-right edges.
+        let isInBubble = (role == .user)
         Text(text)
             .font(role == .system || role == .result ? .caption : .body)
             .foregroundStyle(role == .system || role == .result ? .secondary : .primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(
+                maxWidth: isInBubble ? nil : .infinity,
+                alignment: .leading
+            )
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }

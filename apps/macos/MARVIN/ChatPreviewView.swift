@@ -100,6 +100,49 @@ final class ChatPreviewModel {
     /// see an empty list and assume the project has no history.
     private(set) var isHydrating: Bool = false
 
+    /// Past sessions for the active project — drives the header's
+    /// Sessions menu. Sourced from GET /api/sessions and refreshed
+    /// when the user opens the menu (so newly-completed turns from
+    /// a parallel surface show up without a relaunch).
+    private(set) var sessions: [SessionSummary] = []
+    private var sessionsFetchTask: Task<Void, Never>?
+
+    /// Refresh the sessions list for `projectId`. Idempotent: a
+    /// fetch in flight isn't re-started; subsequent calls await
+    /// the existing task. Called on menu-open + after a turn
+    /// completes (so a fresh turn shows up in history without a
+    /// relaunch).
+    func refreshSessions(projectId: String) {
+        sessionsFetchTask?.cancel()
+        sessionsFetchTask = Task { @MainActor in
+            do {
+                let res = try await ChatService.shared.fetchSessions(
+                    projectId: projectId
+                )
+                guard !Task.isCancelled else { return }
+                sessions = res.sessions
+            } catch is CancellationError {
+                /* quiet */
+            } catch {
+                NSLog("[ChatPreview] refreshSessions failed: \(error)")
+            }
+        }
+    }
+
+    /// Pick a past session — re-route hydrate to that sessionId.
+    /// Forces hydrate (loadedSessionId comparison would match if the
+    /// user picks the currently-loaded one — ignore that case as a
+    /// no-op). Called from the Sessions menu in the header.
+    func selectSession(_ sessionId: String) {
+        guard let projectId = loadedProjectId else { return }
+        if loadedSessionId == sessionId { return }
+        // Drive hydrate manually so the dedupe in `hydrate` doesn't
+        // skip — even though loadedSessionId differs we want a clean
+        // forced replay regardless of any in-flight state.
+        loadedSessionId = nil
+        hydrate(projectId: projectId, sessionId: sessionId)
+    }
+
     /// The last user-typed message, retained so the retry button
     /// can resubmit on stream errors without the user retyping.
     /// Cleared on successful completion (turn.completed) and on
@@ -523,6 +566,33 @@ struct ChatPreviewView: View {
         if model.loadedSessionId != nil || !model.messages.isEmpty {
             model.clear()
         }
+        // Phase 2h follow-up — when the bridge has a project but
+        // hasn't announced a marvinSessionId (web localStorage was
+        // empty for this WKWebView store; e.g. fresh native install
+        // on a machine with prior web sessions), look for a most-
+        // recent session on disk and auto-hydrate that. Without
+        // this the user sees a blank chat for projects they've
+        // worked in before, with no obvious way to recover history.
+        // The Sessions menu in the header is the manual escape
+        // hatch; this is the auto path.
+        if let pid = bridge.activeProjectId,
+           bridge.activeMarvinSessionId == nil,
+           model.loadedSessionId == nil {
+            Task { @MainActor in
+                model.refreshSessions(projectId: pid)
+                // Wait one runloop turn for refreshSessions to land.
+                // The fetch task is fire-and-forget; we poll its
+                // settled-via-non-empty-sessions result.
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard model.loadedSessionId == nil,
+                      bridge.activeMarvinSessionId == nil,
+                      bridge.activeProjectId == pid,
+                      let latest = model.sessions.first else {
+                    return
+                }
+                model.selectSession(latest.sessionId)
+            }
+        }
     }
 
     /// Two-way Binding into the head of pendingConfirms. `false`
@@ -531,6 +601,80 @@ struct ChatPreviewView: View {
     /// fallback. `true` is a no-op (we don't programmatically
     /// re-present; the next confirm queue head presents naturally
     /// via state observation).
+    /// Sessions menu — shows past transcripts for the active
+    /// project, lets the user pick one to load. Refreshes its list
+    /// each time it opens so a turn that just completed in another
+    /// surface (or just landed) shows up without a relaunch. Hidden
+    /// when no project is active (the menu would have nothing useful).
+    private var sessionsMenu: some View {
+        Menu {
+            if model.sessions.isEmpty {
+                Button("(no past sessions)") {}
+                    .disabled(true)
+            } else {
+                ForEach(model.sessions) { summary in
+                    Button {
+                        model.selectSession(summary.sessionId)
+                    } label: {
+                        sessionLabel(for: summary)
+                    }
+                }
+            }
+            Divider()
+            Button("Refresh") {
+                if let pid = bridge.activeProjectId {
+                    model.refreshSessions(projectId: pid)
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .menuIndicator(.hidden)
+        .frame(width: 28)
+        .disabled(bridge.activeProjectId == nil)
+        .help("Past sessions for this project")
+        .onAppear {
+            if let pid = bridge.activeProjectId {
+                model.refreshSessions(projectId: pid)
+            }
+        }
+        .onChange(of: bridge.activeProjectId) { _, pid in
+            if let pid {
+                model.refreshSessions(projectId: pid)
+            }
+        }
+    }
+
+    /// Format a session-summary label: "M/D · 12 turns · first 60 chars".
+    /// Concise enough to fit the menu width even with long first-user
+    /// messages. We trim the user message at 60 chars (vs the wire's
+    /// 120) because menu items get truncated anyway and the date +
+    /// turn count carry most of the disambiguation value.
+    private func sessionLabel(for s: SessionSummary) -> Text {
+        let preview = (s.firstUserMessage ?? "(no preview)")
+            .replacingOccurrences(of: "\n", with: " ")
+        let trimmed = preview.count > 60
+            ? String(preview.prefix(57)) + "…"
+            : preview
+        let date = friendlyDate(s.updatedAt)
+        return Text("\(date) · \(s.turnCount)t · \(trimmed)")
+    }
+
+    /// "M/D" or "M/D HH:mm" for an ISO timestamp. Falls through to
+    /// the raw string on parse failure (defensive — the route emits
+    /// strict ISO 8601 today). Today's sessions get the time so users
+    /// can disambiguate multiple same-day starts; older ones drop it.
+    private func friendlyDate(_ iso: String) -> String {
+        let parser = ISO8601DateFormatter()
+        guard let date = parser.date(from: iso) else { return iso }
+        let cal = Calendar.current
+        let formatter = DateFormatter()
+        formatter.dateFormat = cal.isDateInToday(date) ? "HH:mm" : "M/d"
+        return formatter.string(from: date)
+    }
+
     private var confirmSheetPresented: Binding<Bool> {
         Binding(
             get: { !model.pendingConfirms.isEmpty },
@@ -545,13 +689,18 @@ struct ChatPreviewView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Native chat — Phase 2 preview")
-                    .font(.callout.weight(.semibold))
                 Text(bridge.projectName ?? "no project active")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let sid = model.loadedSessionId {
+                    Text(sid.prefix(8))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer()
+            sessionsMenu
             if model.isSending {
                 // Phase 2f — Stop also POSTs /api/chat/cancel so
                 // the agent actually halts on the sidecar, not just

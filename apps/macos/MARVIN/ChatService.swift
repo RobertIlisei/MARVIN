@@ -155,6 +155,43 @@ final class ChatService {
         }
     }
 
+    /// GET /api/sessions?projectId=…
+    ///
+    /// Returns every transcript on disk for the project, newest
+    /// first, with a short preview of the first user message so the
+    /// native Sessions picker can label them usefully. Phase 3 add-
+    /// on (post-2h) — was supposed to land in 2h, but the
+    /// localStorage-only path missed transcripts that exist on disk
+    /// without a corresponding browser-state entry (e.g. fresh
+    /// install of MARVIN-Swift on a machine that has prior web
+    /// sessions). This route + the Sessions menu in ChatPreviewView
+    /// closes that gap.
+    func fetchSessions(projectId: String) async throws -> SessionsListResponse {
+        let url = baseURL.appendingPathComponent("api/sessions")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "projectId", value: projectId)]
+        guard let composed = comps.url else {
+            throw ChatServiceError.transport(underlying: URLError(.badURL))
+        }
+        var req = URLRequest(url: composed)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ChatServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        return try JSONDecoder().decode(SessionsListResponse.self, from: data)
+    }
+
     /// GET /api/sessions/[sessionId]?projectId=…  — load a stored
     /// transcript from the sidecar's on-disk JSONL log. Phase 2h. The
     /// sidecar is the source of truth for past turns; this lets the

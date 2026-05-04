@@ -170,6 +170,33 @@ struct ChatRequest: Codable {
     }
 }
 
+// MARK: - Session summary list
+
+/// One entry from GET /api/sessions?projectId=… — drives the
+/// "Sessions" menu in ChatPreviewView's header so users can pick
+/// a past transcript without having to remember its uuid. Mirrors
+/// `SessionSummary` in apps/web/src/app/api/sessions/route.ts.
+struct SessionSummary: Codable, Equatable, Identifiable {
+    let sessionId: String
+    /// ISO 8601 timestamp of the most-recent write to the JSONL file.
+    let updatedAt: String
+    let bytes: Int
+    /// First user message in the transcript, capped server-side at
+    /// 120 chars. Nil for sessions whose first event isn't a user
+    /// turn (defensive — shouldn't happen for chats started via
+    /// /api/chat, but recoveries / external writes might land here).
+    let firstUserMessage: String?
+    let turnCount: Int
+
+    var id: String { sessionId }
+}
+
+/// Wrapper around the `{ projectId, sessions }` response shape.
+struct SessionsListResponse: Codable, Equatable {
+    let projectId: String
+    let sessions: [SessionSummary]
+}
+
 // MARK: - Stored session transcript
 
 /// Wire shape returned by GET /api/sessions/[sessionId]?projectId=…
