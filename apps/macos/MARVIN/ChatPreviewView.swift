@@ -47,6 +47,21 @@ final class ChatPreviewModel {
     /// a banner in the view. Cleared on next submit.
     var lastError: String? = nil
 
+    /// Pending confirm requests, oldest first. The view renders a
+    /// sheet for the head of the queue; once the user decides, we
+    /// remove it and the next one (if any) automatically presents.
+    /// Phase 2e — a turn can fire several confirms in sequence
+    /// (e.g. multiple Bash + Edit calls); queueing keeps the UX
+    /// clean instead of stacking N modal sheets.
+    var pendingConfirms: [ConfirmRequest] = []
+
+    /// Set of toolUseIds the user has explicitly responded to in
+    /// this preview session. Phase 2e doesn't surface "Allow always"
+    /// (the API has no concept), but we track responded ids so the
+    /// inline tool card can reflect "approved" / "denied" status
+    /// without re-rendering the sheet on a duplicate event.
+    var resolvedConfirms: [String: ChatService.ConfirmDecision] = [:]
+
     /// The active stream's task, retained so we can cancel on
     /// teardown / second submit. Phase 2f surfaces this as a
     /// proper "Stop turn" button.
@@ -66,7 +81,18 @@ final class ChatPreviewModel {
         // ourselves before the assistant starts streaming.
         messages.append(.userText(trimmed))
 
-        let request = ChatRequest(message: trimmed, cwd: cwd)
+        // Phase 2e — the preview always submits with
+        // permissionStrategy: "gated" so confirm.request flows fire
+        // and the new confirm sheet path is exercisable. The web
+        // chat in the main window keeps using the user's pref
+        // (sent on its own POST bodies). Phase 2f wires a Settings
+        // toggle to surface this here so the dev surface and the
+        // user's daily mode can match again.
+        let request = ChatRequest(
+            message: trimmed,
+            cwd: cwd,
+            permissionStrategy: "gated"
+        )
         activeTask = Task { @MainActor in
             defer { isSending = false }
             do {
@@ -94,7 +120,35 @@ final class ChatPreviewModel {
     func clear() {
         cancel()
         messages.removeAll()
+        pendingConfirms.removeAll()
+        resolvedConfirms.removeAll()
         lastError = nil
+    }
+
+    /// Respond to the head of the pending-confirms queue. Called
+    /// from the ConfirmSheet view's button actions. Best-effort —
+    /// network failure is logged + the confirm stays pending so the
+    /// user can retry. The SDK timeout / explicit cancel will
+    /// eventually unwind a stuck confirm.
+    func respond(
+        to request: ConfirmRequest,
+        decision: ChatService.ConfirmDecision,
+        denyMessage: String? = nil
+    ) {
+        Task { @MainActor in
+            do {
+                try await ChatService.shared.respondToConfirm(
+                    turnId: request.turnId,
+                    toolUseId: request.toolUseId,
+                    decision: decision,
+                    denyMessage: denyMessage
+                )
+                resolvedConfirms[request.toolUseId] = decision
+                pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
+            } catch {
+                lastError = "Confirm response failed: \(error)"
+            }
+        }
     }
 
     private func handle(event: ChatTurnEvent) {
@@ -106,18 +160,19 @@ final class ChatPreviewModel {
         case .cliEvent(let data):
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
         case .confirmRequest(let c):
-            // Phase 2e replaces this with a modal sheet. For now,
-            // surface as an inline system row so we know one fired.
-            messages.append(ChatMessage(
-                id: "confirm-\(c.confirmId)",
-                role: .system,
-                blocks: [.text(
-                    id: UUID().uuidString,
-                    text: "confirm requested · tool: \(c.tool)"
-                )],
-                isStreaming: false,
-                createdAt: Date()
-            ))
+            // Phase 2e — queue the confirm; the view's sheet
+            // modifier reacts to pendingConfirms.first and presents
+            // a modal. We DON'T add a message row for it because
+            // the toolCall block already shows "running…" status;
+            // duplicating that into a system row would be noise.
+            //
+            // De-dup against existing pending entries (defensive —
+            // the SDK shouldn't re-emit confirms for the same
+            // toolUseId, but if it does we don't want a sheet
+            // reappearing after the user already decided).
+            if !pendingConfirms.contains(where: { $0.toolUseId == c.toolUseId }) {
+                pendingConfirms.append(c)
+            }
         case .turnCompleted:
             // The reducer-side `result` cli.event already mutated
             // isStreaming to false on the assistant message. No
@@ -170,6 +225,44 @@ struct ChatPreviewView: View {
         }
         .frame(minWidth: 520, minHeight: 420)
         .preferredColorScheme(bridge.preferredColorScheme)
+        // Phase 2e — present the head of the confirm queue as a
+        // modal sheet. We use isPresented bound to "is there a
+        // pending confirm" (set: false denies the head) so the user
+        // can dismiss with Esc and the model unwinds correctly. We
+        // can't use .sheet(item:) here because that needs a
+        // settable Binding<ConfirmRequest?> and the model exposes
+        // an Array; the isPresented+head pattern reads more
+        // explicitly than the binding gymnastics anyway.
+        .sheet(isPresented: confirmSheetPresented) {
+            if let request = model.pendingConfirms.first {
+                ConfirmSheet(
+                    request: request,
+                    onAllow: {
+                        model.respond(to: request, decision: .allow)
+                    },
+                    onDeny: { reason in
+                        model.respond(to: request, decision: .deny, denyMessage: reason)
+                    }
+                )
+            }
+        }
+    }
+
+    /// Two-way Binding into the head of pendingConfirms. `false`
+    /// from the system (Esc / outside-click) denies the head with
+    /// no message — matches the web's "card dismiss → deny"
+    /// fallback. `true` is a no-op (we don't programmatically
+    /// re-present; the next confirm queue head presents naturally
+    /// via state observation).
+    private var confirmSheetPresented: Binding<Bool> {
+        Binding(
+            get: { !model.pendingConfirms.isEmpty },
+            set: { isPresenting in
+                guard !isPresenting,
+                      let head = model.pendingConfirms.first else { return }
+                model.respond(to: head, decision: .deny)
+            }
+        )
     }
 
     private var header: some View {

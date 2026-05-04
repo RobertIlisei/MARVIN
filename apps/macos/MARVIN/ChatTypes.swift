@@ -68,21 +68,39 @@ struct TurnStarted: Codable {
     let personality: String?
 }
 
-/// A tool call awaiting user decision. The web side renders this as
-/// the Allow / Allow Always / Deny card; native will render it as
-/// a sheet in Phase 2e.
+/// A tool call awaiting user decision. Sidecar emits this when
+/// permissionStrategy is "gated" and the tool isn't on the auto-allow
+/// list. The web side renders an inline Allow/Deny card; native
+/// renders a modal sheet (Phase 2e). Decision goes back via
+/// POST /api/confirm with { turnId, toolUseId, decision }.
+///
+/// Wire shape mirrors the runtime's ConfirmRequestPayload — see
+/// packages/runtime/src/sdk-runner.ts. Adding a field server-side
+/// without bumping this struct is safe because every field is
+/// optional except the two ids.
 struct ConfirmRequest: Codable {
-    /// Unique id for this specific confirm — POST it back to
-    /// /api/confirm/respond with the user's decision.
-    let confirmId: String
-    /// Tool name (Bash, Edit, Write, etc.).
-    let tool: String
-    /// Free-text human description ("run `npm test`", "edit foo.ts").
-    let description: String?
+    /// Turn id — required for the response. The same one in
+    /// turn.started.
+    let turnId: String
+    /// Tool-call id assigned by the SDK. The response API keys
+    /// (turnId, toolUseId) → registered resolver.
+    let toolUseId: String
+    /// Tool name (Bash, Edit, Write, …). Drives the per-tool
+    /// renderer in the confirm sheet.
+    let toolName: String
     /// Tool-specific input — Bash command, file path + new contents,
-    /// etc. Kept as raw JSON so each tool's renderer can decode its
-    /// own slice without bloating this struct.
+    /// etc. Kept as raw JSON so the existing per-tool input view
+    /// can render it without translation.
     let input: ChatJSON?
+    /// Free-text reason from the policy ("dangerous", "edits a file
+    /// outside cwd", etc.). Helps the user judge why the confirm
+    /// was raised.
+    let reason: String?
+    /// Optional human-facing surfaces the SDK emits per tool —
+    /// title is short ("Run `npm test`"), description is longer.
+    let title: String?
+    let description: String?
+    let displayName: String?
 }
 
 /// Terminal event for a successful turn.

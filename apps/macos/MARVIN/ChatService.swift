@@ -70,6 +70,52 @@ final class ChatService {
         self.session = URLSession(configuration: config)
     }
 
+    /// POST /api/confirm — respond to a `confirm.request` event with
+    /// allow / deny. Phase 2e. The sidecar's resolver is keyed by
+    /// (turnId, toolUseId); failing to call this hangs the agent
+    /// until the turn aborts via /api/chat/cancel or the SDK times
+    /// out. `denyMessage` is shown back to the model when denying —
+    /// callers can pass nil to use the sidecar's default ("user
+    /// denied the tool use").
+    enum ConfirmDecision: String {
+        case allow
+        case deny
+    }
+
+    func respondToConfirm(
+        turnId: String,
+        toolUseId: String,
+        decision: ConfirmDecision,
+        denyMessage: String? = nil
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/confirm")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+
+        var body: [String: Any] = [
+            "turnId": turnId,
+            "toolUseId": toolUseId,
+            "decision": decision.rawValue,
+        ]
+        if decision == .deny, let denyMessage, !denyMessage.isEmpty {
+            body["message"] = denyMessage
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8)
+            throw ChatServiceError.httpStatus(http.statusCode, body: body)
+        }
+    }
+
     /// POST /api/chat with `request`, then read the SSE response and
     /// yield each parsed event. The stream terminates when the
     /// server closes the connection (turn.completed / turn.error)
