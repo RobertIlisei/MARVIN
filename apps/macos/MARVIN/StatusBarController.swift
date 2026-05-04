@@ -58,9 +58,18 @@ final class StatusBarController {
         // The button is the click target. We set the image + action
         // here; the `target` is `self` because the click handler is
         // an instance method, not a closure.
+        //
+        // sendAction(on:) tells AppKit to fire our handler on BOTH
+        // left- and right-mouse-down. The handler then routes to
+        // either "focus the window" (left) or "show the context
+        // menu" (right) based on the current event. NSStatusItem's
+        // `menu` property only fires on left-click, which is the
+        // wrong default for an app where left-click should bring
+        // the window forward (Things 3 / Slack / 1Password pattern).
         let button = item.button
         button?.target = self
         button?.action = #selector(handleClick(_:))
+        button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         button?.toolTip = "MARVIN"
 
         // Resolve the idle image. NSImage(named:) walks the main
@@ -109,13 +118,28 @@ final class StatusBarController {
         }
     }
 
-    /// Click handler — brings the main window forward, re-creating
-    /// it if the user previously closed all windows. We can't use
-    /// SwiftUI's `openWindow(id:)` here because we're outside a View
-    /// scope; NSApp.activate + windows lookup is the AppKit-native
-    /// equivalent and works whether the window is hidden, miniaturised,
-    /// or never opened.
+    /// Click handler — routes to "focus the window" on left-click,
+    /// "show context menu" on right-click. Control-click counts as
+    /// right-click on macOS.
     @objc private func handleClick(_ sender: Any?) {
+        let event = NSApp.currentEvent
+        let isRightClick = event?.type == .rightMouseDown
+            || (event?.modifierFlags.contains(.control) ?? false)
+
+        if isRightClick {
+            showContextMenu()
+        } else {
+            focusMainWindow()
+        }
+    }
+
+    /// Bring the main window forward, re-creating it if the user
+    /// previously closed all windows. We can't use SwiftUI's
+    /// `openWindow(id:)` here because we're outside a View scope;
+    /// NSApp.activate + windows lookup is the AppKit-native
+    /// equivalent and works whether the window is hidden,
+    /// miniaturised, or never opened.
+    private func focusMainWindow() {
         // Foreground the app so we steal focus. `.activateIgnoringOtherApps`
         // is what menu-bar utilities like 1Password / Things use.
         NSApp.activate(ignoringOtherApps: true)
@@ -140,6 +164,85 @@ final class StatusBarController {
                 from: nil
             )
         }
+    }
+
+    /// Build + display the right-click menu. Built fresh on every
+    /// invocation so menu items can reflect live bridge state (e.g.
+    /// disabling "Show MARVIN" if the window is already key) without
+    /// needing to plumb update notifications.
+    private func showContextMenu() {
+        let menu = NSMenu()
+        menu.addItem(menuItem(
+            title: "Show MARVIN",
+            keyEquivalent: "",
+            action: #selector(menuShowMARVIN)
+        ))
+        menu.addItem(menuItem(
+            title: "About MARVIN",
+            keyEquivalent: "",
+            action: #selector(menuAbout)
+        ))
+        menu.addItem(menuItem(
+            title: "Settings…",
+            keyEquivalent: ",",
+            action: #selector(menuSettings)
+        ))
+        menu.addItem(.separator())
+        menu.addItem(menuItem(
+            title: "Quit MARVIN",
+            keyEquivalent: "q",
+            action: #selector(menuQuit)
+        ))
+
+        // popUpMenu(_:) is the AppKit-supported way to show a menu
+        // from an NSStatusItem button without permanently binding it
+        // to the item (which would suppress our left-click handler).
+        item?.menu = menu
+        item?.button?.performClick(nil)
+        // Detach immediately after so the next left-click goes back
+        // to focusMainWindow. AppKit dispatches the menu before this
+        // line runs because performClick is synchronous on the menu
+        // present — we're safe to nil it out here.
+        item?.menu = nil
+    }
+
+    private func menuItem(
+        title: String,
+        keyEquivalent: String,
+        action: Selector
+    ) -> NSMenuItem {
+        let mi = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        mi.target = self
+        return mi
+    }
+
+    @objc private func menuShowMARVIN() {
+        focusMainWindow()
+    }
+
+    @objc private func menuAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        // SwiftUI's About-replacement menu item lives in the App
+        // menu — sending the same selector AppKit uses for "App →
+        // About <appname>" routes through our CommandGroup
+        // override and opens the marvin-about scene.
+        NSApp.sendAction(#selector(NSApplication.orderFrontStandardAboutPanel(_:)), to: nil, from: nil)
+    }
+
+    @objc private func menuSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        // SwiftUI's `Settings { }` scene installs a Settings… item
+        // in the App menu and binds ⌘, to it. We replicate that
+        // here. The selector name has shifted across macOS versions
+        // ("showSettingsWindow:" on macOS 14+, "showPreferencesWindow:"
+        // before); send both so the right one wins.
+        if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
+    }
+
+    @objc private func menuQuit() {
+        NSApp.terminate(nil)
     }
 
     /// Load a template SVG from the bundle. Setting `isTemplate = true`
