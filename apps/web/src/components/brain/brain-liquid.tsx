@@ -643,13 +643,20 @@ export function BrainLiquid({
           height: size,
           display: "block",
           position: "relative",
-          // Clip the canvas to a circle. The per-frame trail dim
-          // (`ctx.fillRect(0, 0, size, size)` in the paint loop)
-          // paints the full square, so without a CSS clip the
-          // accumulated trail reveals the canvas rectangle once
-          // particles reach the edge (R = size * 0.5). The standalone
-          // does the same — the canvas is round, not square.
-          borderRadius: "50%",
+          // Soft radial mask, NOT a hard `border-radius: 50%` clip.
+          // A hard clip turns the boundary into an "invisible wall" —
+          // particles that should organically escape the sphere
+          // (jitter, leaders, the wispy outflow at high turb) get
+          // cut off in a perfect circle and the brain stops looking
+          // alive. Soft mask: opaque through the natural sphere
+          // (R = size * 0.5 → 50% radius), fade band 55–75%, fully
+          // transparent past 75% so the canvas corners (~70.7%) and
+          // the trail-dim residue stay invisible against the page
+          // background.
+          maskImage:
+            "radial-gradient(circle at center, black 55%, transparent 75%)",
+          WebkitMaskImage:
+            "radial-gradient(circle at center, black 55%, transparent 75%)",
         }}
       />
     </div>
