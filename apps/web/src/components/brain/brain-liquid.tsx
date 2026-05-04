@@ -100,6 +100,18 @@ const PROFILES: Record<MarvinUiState, Profile> = {
   },
 };
 
+// How much larger the canvas is than the layout `size` prop. The
+// perspective projection can push particles to ~1.33×R from center;
+// at R = size * 0.5 that's ~0.67×size on the diagonal — beyond the
+// canvas's 0.5×size side. Without extra render area, particles bunch
+// up at the rectangular boundary and reveal the canvas as a square.
+// 1.5 gives the projection a comfortable margin on every side and
+// is what makes the brain feel like it sits ON the page rather than
+// inside a contained rectangle. Cost: ~2.25× pixel count for the
+// trail-dim fillRect (a single cheap GPU op); per-particle work is
+// unchanged.
+const RENDER_SCALE = 1.5;
+
 // Nebula palette (dark-theme iridescent tint).
 const NEBULA: Array<[number, number, number]> = [
   [64, 96, 160],
@@ -145,10 +157,21 @@ export function BrainLiquid({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
+    // Render canvas larger than the layout `size` so the perspective
+    // projection (`persp = 1 + zr/(R*3)` → up to ~1.33×R from center)
+    // doesn't get clipped at the canvas rectangle. With R = size*0.5,
+    // projected positions reach ~0.67×size from center; the layout
+    // canvas extends only 0.5×size on the sides, so particles bunch
+    // up at the rectangular boundary and reveal the square. The
+    // standalone hides this by being 700px in the lab — we replicate
+    // by oversizing the canvas, keeping the sphere at the same
+    // *absolute* pixel size, and centering it via negative offsets.
+    // The wrapper still measures `size` for layout.
+    const renderSize = size * RENDER_SCALE;
+    canvas.style.width = `${renderSize}px`;
+    canvas.style.height = `${renderSize}px`;
+    canvas.width = renderSize * dpr;
+    canvas.height = renderSize * dpr;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.scale(dpr, dpr);
@@ -177,11 +200,12 @@ export function BrainLiquid({
     const sd = new Float32Array(MAX_N);
     const pulseBoost = new Float32Array(MAX_N);
 
-    const cx = size / 2;
-    const cy = size / 2;
-    // Standalone's `radius %` slider defaults to 0.5 across every state;
-    // 0.42 was the legacy under-fill that left the sphere visibly small
-    // inside the canvas. Match the design.
+    const cx = renderSize / 2;
+    const cy = renderSize / 2;
+    // Sphere radius stays at `size * 0.5` in absolute pixels — the
+    // visible sphere keeps the standalone's `radius % = 0.5` look
+    // even though the canvas is RENDER_SCALE larger. The extra
+    // canvas area is "escape room" for projected particles.
     const R = size * 0.5;
 
     function respawn(i: number, p: Profile) {
@@ -445,15 +469,18 @@ export function BrainLiquid({
       }
 
       // Trail fade via destination-out so the canvas background (CSS)
-      // remains transparent and the page bg shows through.
+      // remains transparent and the page bg shows through. The
+      // rectangle is the FULL canvas (renderSize), not the layout
+      // size — anything else would leave un-faded residue in the
+      // overflow band.
       const effTrail = Math.min(0.99, p.trail);
       if (effTrail <= 0) {
-        ctx.clearRect(0, 0, size, size);
+        ctx.clearRect(0, 0, renderSize, renderSize);
       } else {
         const fade = 1 - effTrail;
         ctx.globalCompositeOperation = "destination-out";
         ctx.fillStyle = `rgba(0,0,0,${fade})`;
-        ctx.fillRect(0, 0, size, size);
+        ctx.fillRect(0, 0, renderSize, renderSize);
         ctx.globalCompositeOperation = "source-over";
       }
 
@@ -473,7 +500,10 @@ export function BrainLiquid({
       }
 
       dgrid.fill(0);
-      const cellSz = size / DG;
+      // Density grid spans the full canvas (renderSize), not the
+      // layout size — the projected sx/sy can exceed `size` when
+      // particles project past the inner sphere.
+      const cellSz = renderSize / DG;
       for (let i = 0; i < N; i++) {
         const gx = (sx[i] / cellSz) | 0;
         const gy = (sy[i] / cellSz) | 0;
@@ -602,6 +632,13 @@ export function BrainLiquid({
     };
   }, [size]);
 
+  // Canvas overflows the layout wrapper symmetrically — the wrapper
+  // measures `size` for grid/flex layout, but the canvas paints
+  // `size * RENDER_SCALE` so projected particles have room before
+  // hitting the rectangular boundary. Negative offset re-centers.
+  const renderSize = size * RENDER_SCALE;
+  const overflow = (renderSize - size) / 2;
+
   return (
     <div
       style={{
@@ -610,13 +647,19 @@ export function BrainLiquid({
         height: size,
         display: "grid",
         placeItems: "center",
+        // Let the oversized canvas paint past the wrapper edges.
+        // Without this, any ancestor with `overflow: hidden` would
+        // re-introduce the rectangular clip we're trying to avoid.
+        overflow: "visible",
       }}
     >
       {/* Halo — global iridescent CSS glow behind the canvas. Mirror of
           the standalone's `halo` div: conic-gradient (purple → cyan →
           mauve → gold), 32px blur, opacity 0.15, scaled to 0.9 of the
           container so it sits inside the sphere edge. Pure CSS so it
-          never costs a frame. */}
+          never costs a frame. Stays sized to the layout `size`, not
+          `renderSize` — the halo lives just inside the visible sphere,
+          not in the projection-overflow band. */}
       <div
         aria-hidden
         style={{
@@ -639,40 +682,31 @@ export function BrainLiquid({
       <canvas
         ref={canvasRef}
         style={{
-          width: size,
-          height: size,
+          width: renderSize,
+          height: renderSize,
           display: "block",
-          position: "relative",
-          // Soft radial mask, NOT a hard `border-radius: 50%` clip.
-          // A hard clip turns the boundary into an "invisible wall" —
-          // particles that should organically escape the sphere get
-          // cut off in a perfect circle and the brain stops looking
-          // alive.
+          position: "absolute",
+          top: -overflow,
+          left: -overflow,
+          // Soft radial mask sized to the OVERSIZE canvas. Geometry:
+          //   - sphere is at canvas center, radius = size * 0.5
+          //     (= 0.5 / RENDER_SCALE of renderSize ≈ 0.333)
+          //   - perspective projection reaches ~1.33×R from center
+          //     ≈ 0.444 of renderSize on the axis, ~0.628 of the
+          //     gradient's farthest-corner (which is √2/2 of the
+          //     canvas side ≈ 70.7% of renderSize)
+          //   - canvas corners sit at 100% of the gradient
           //
-          // Coordinate note: `radial-gradient(circle at center, …)`
-          // defaults to `farthest-corner` sizing, so 100% = the
-          // distance from center to the canvas corner (≈ √2/2 of the
-          // canvas side). The sphere edge at R = size * 0.5 lives at
-          // ≈ 70.7% of that gradient. So:
-          //   0–70%   solid: the sphere body renders at full intensity.
-          //   70–100% fade band: escapees that wisp past the sphere
-          //           edge stay visible but soften with distance —
-          //           organic, irregular, plenty of room before they
-          //           vanish.
-          //   past 100%: transparent (this is just the empty rim
-          //           outside the gradient — nothing to paint there
-          //           anyway).
-          //
-          // Trade-off vs the previous 55/75: the old band ended deep
-          // inside the canvas (~180 px from center on a 340-px canvas)
-          // so escapees were clipped well short of the canvas edge,
-          // making it look boxed. With 70/100 the fade reaches the
-          // actual corners and escapees have the full canvas radius
-          // to fade through.
+          // Mask: solid through the sphere body and the projection
+          // overflow, fade gently to transparent at the corners so
+          // trail-dim residue never reveals a rectangle. Particles
+          // never reach the corner zone in practice — the fade is
+          // there only to swallow stragglers and keep the page bg
+          // visually continuous.
           maskImage:
-            "radial-gradient(circle at center, black 70%, transparent 100%)",
+            "radial-gradient(circle at center, black 75%, transparent 100%)",
           WebkitMaskImage:
-            "radial-gradient(circle at center, black 70%, transparent 100%)",
+            "radial-gradient(circle at center, black 75%, transparent 100%)",
         }}
       />
     </div>
