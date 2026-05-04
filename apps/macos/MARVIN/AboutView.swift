@@ -100,6 +100,11 @@ struct AboutView: View {
         }
         .padding(24)
         .frame(width: 460, height: 540)
+        // Phase 1d.17 — same theme-following as the main window so
+        // opening About from a dark-themed session doesn't punch
+        // out a light panel. Still falls back to system when the
+        // web side hasn't reported a theme yet.
+        .preferredColorScheme(bridge.preferredColorScheme)
     }
 
     @ViewBuilder

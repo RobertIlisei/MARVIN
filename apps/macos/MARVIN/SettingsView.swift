@@ -114,5 +114,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 460)
+        // Phase 1d.17 — match the web theme so ⌘, doesn't pop a
+        // light panel against a dark session. nil falls back to
+        // system preference.
+        .preferredColorScheme(bridge.preferredColorScheme)
     }
 }

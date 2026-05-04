@@ -19,7 +19,12 @@
 // and `apps/macos/MARVIN/Bridge.swift` for the Swift counterpart.
 
 import { useEffect } from "react";
-import { announceShell, announceTitle, isSwiftShell } from "@/lib/marvin-shell";
+import {
+  announceShell,
+  announceTheme,
+  announceTitle,
+  isSwiftShell,
+} from "@/lib/marvin-shell";
 
 export function MarvinShellBridge() {
   useEffect(() => {
@@ -31,19 +36,40 @@ export function MarvinShellBridge() {
     // React app boots and first sets document.title.
     announceTitle(document.title);
 
+    // Initial theme — same rationale. data-theme is set by the
+    // pre-hydration bootstrap script in layout.tsx, so by the time
+    // this useEffect runs, the attribute is already present.
+    const readTheme = (): "light" | "dark" =>
+      document.documentElement.getAttribute("data-theme") === "dark"
+        ? "dark"
+        : "light";
+    announceTheme(readTheme());
+
+    // Watch <title> AND <html data-theme>. One MutationObserver per
+    // target — different `observe` configurations.
     const titleEl = document.querySelector("title");
-    if (!titleEl) return;
-    const observer = new MutationObserver(() => {
-      announceTitle(document.title);
+    const observers: MutationObserver[] = [];
+
+    if (titleEl) {
+      const o = new MutationObserver(() => announceTitle(document.title));
+      // childList catches text-node replacements; characterData on
+      // the child catches text-content edits. Subtree covers both.
+      o.observe(titleEl, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      observers.push(o);
+    }
+
+    const themeObserver = new MutationObserver(() => announceTheme(readTheme()));
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
     });
-    // childList catches text-node replacements; characterData on the
-    // child catches text-content edits. Subtree covers both cases.
-    observer.observe(titleEl, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
-    return () => observer.disconnect();
+    observers.push(themeObserver);
+
+    return () => observers.forEach((o) => o.disconnect());
   }, []);
   return null;
 }

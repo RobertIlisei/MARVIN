@@ -157,6 +157,22 @@ export function announceModels(
 }
 
 /**
+ * Mirrors the active theme ("light" | "dark") to the Swift side so
+ * the SwiftUI chrome (title bar, About panel, Settings) follows
+ * the user's web-side theme pick. Phase 1d.17 — fires from a
+ * MutationObserver on `<html data-theme>` in the bridge component.
+ * Without this, picking dark inside the WebView leaves the title
+ * bar light, which reads as a visual mismatch.
+ */
+export function announceTheme(theme: "light" | "dark"): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "theme-changed",
+    payload: { value: theme },
+  });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

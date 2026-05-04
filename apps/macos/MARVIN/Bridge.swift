@@ -51,6 +51,7 @@
 // telemetry passthrough.
 
 import Foundation
+import SwiftUI
 import WebKit
 
 /// Single inbound message from the web side.
@@ -141,6 +142,25 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// drives the About panel's "Active models" section.
     private(set) var executorModel: String? = nil
     private(set) var advisorModel: String? = nil
+
+    /// Active theme name posted by the web side via `theme-changed`.
+    /// "light" or "dark" — anything else falls back to system. The
+    /// SwiftUI chrome (title bar, About, Settings) reads
+    /// `preferredColorScheme` to follow the web theme so a dark
+    /// WebView under a light title bar doesn't look mismatched.
+    /// Phase 1d.17.
+    private(set) var themeName: String? = nil
+
+    /// SwiftUI ColorScheme equivalent of the web theme. `nil`
+    /// preserves the user's macOS system preference for the SwiftUI
+    /// surfaces (used when the bridge hasn't reported a theme yet).
+    var preferredColorScheme: ColorScheme? {
+        switch themeName {
+        case "dark": .dark
+        case "light": .light
+        default: nil
+        }
+    }
 
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
@@ -321,6 +341,16 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             // panel's Active models section.
             executorModel = (payload?["executor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             advisorModel = (payload?["advisor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        case "theme-changed":
+            // Active theme name from the web side. Drives the
+            // SwiftUI chrome's color scheme via `preferredColorScheme`.
+            // Anything other than "light"/"dark" falls back to
+            // system preference. Logged because theme-changed is
+            // infrequent (only on initial mount + manual toggle) so
+            // the log stays useful telemetry without flooding.
+            let value = payload?["value"] as? String
+            themeName = (value == "light" || value == "dark") ? value : nil
+            NSLog("[MarvinBridge] theme-changed value=\(themeName ?? "nil")")
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

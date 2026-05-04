@@ -88,6 +88,12 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 480, minHeight: 320)
+        // Phase 1d.17 — follow the web app's theme so the SwiftUI
+        // title bar / offline view / connecting view don't read as
+        // mismatched against a dark WebView. nil means "follow
+        // macOS system" (used until the web side posts its first
+        // theme).
+        .preferredColorScheme(bridge.preferredColorScheme)
         .background(WindowAccessor { window in
             // Phase 1c — window-state restoration. NSWindow's built-in
             // frameAutosaveName persists position + size to
