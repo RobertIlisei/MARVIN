@@ -136,7 +136,14 @@ export function TopBar({
         // stop the drag because Tauri treats any click on a clickable
         // descendant as a regular click, not a drag. That's the
         // intended behaviour.
+        //
+        // data-marvin-top-bar tags this header for the SwiftUI shell
+        // CSS overrides in globals.css — the `pl-[82px]` traffic-
+        // light gap and `pt-[var(--titlebar-h)]` overlay-bar gap are
+        // both wrong inside the SwiftUI shell (the native title bar
+        // is separate, not overlapping), so the rules reset both.
         data-tauri-drag-region
+        data-marvin-top-bar
         className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[color:var(--color-border)] bg-[color:var(--material-toolbar)] pt-[var(--titlebar-h)] pr-5 pb-2.5 pl-[82px]"
       >
         <button
@@ -147,14 +154,21 @@ export function TopBar({
             isEmpty ? "marvin" : "return to home — start a new session"
           }
           title={isEmpty ? undefined : "return to home · ⌘⇧N"}
+          // data-marvin-wordmark: redundant inside the SwiftUI shell
+          // (the native NSWindow title already shows MARVIN). Hidden
+          // in globals.css under [data-host-shell="swift"].
+          data-marvin-wordmark
           className="font-display text-[22px] italic leading-none text-[color:var(--color-fg)] outline-none transition hover:opacity-80 disabled:cursor-default disabled:opacity-100"
         >
           marvin
         </button>
-        <span className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline">
+        <span
+          data-marvin-version-pip
+          className="hidden text-[10px] uppercase tracking-[0.28em] text-[color:var(--color-fg-faint)] md:inline"
+        >
           v1
         </span>
-        <div className="mx-3 h-5 w-px bg-[color:var(--color-border)]" />
+        <div data-marvin-wordmark-divider className="mx-3 h-5 w-px bg-[color:var(--color-border)]" />
         <ProjectPicker
           projects={projects}
           active={active}

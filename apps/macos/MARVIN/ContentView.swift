@@ -77,6 +77,9 @@ struct ContentView: View {
             // status get explicit spacing; two separate items in
             // the same .primaryAction slot pack flush with no
             // gap (visual collision reported in 1d.3 review).
+            // .controlSize(.large) makes the auto-wrapped pill
+            // taller; without it the .callout-sized text crowded
+            // the pill's vertical padding.
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 14) {
                     if let cost = bridge.costToday {
@@ -86,6 +89,7 @@ struct ContentView: View {
                         Task { await health.refreshNow() }
                     }
                 }
+                .controlSize(.large)
             }
         }
         // Phase 1d — mirror the web app's `document.title` into the
@@ -188,7 +192,11 @@ private struct CostToolbarItem: View {
             Text(fmtUsd(todayUsd))
                 .foregroundStyle(.secondary)
         }
-        .font(.callout.monospaced())
+        // Slightly bigger than the previous .callout — the toolbar
+        // pill scales to its content, and .callout was crowding the
+        // pill borders. .body gives the text room to breathe.
+        .font(.body.monospaced())
+        .padding(.horizontal, 4)
         .help("Today's Claude cost for the active project")
     }
 
@@ -215,8 +223,9 @@ private struct ConnectionStatusToolbarItem: View {
             HStack(spacing: 6) {
                 pip
                 Text(state.shortLabel)
-                    .font(.callout.monospaced())
+                    .font(.body.monospaced())
             }
+            .padding(.horizontal, 4)
             .foregroundStyle(labelColor)
         }
         .buttonStyle(.borderless)

@@ -1018,6 +1018,20 @@ body[data-marvin="error"] .status-rail::after {
  * tag the web one with a data-marvin-* attribute and add a rule
  * here.
  * ────────────────────────────────────────────────────────────── */
-[data-host-shell="swift"] [data-marvin-cost-pill] {
+[data-host-shell="swift"] [data-marvin-cost-pill],
+[data-host-shell="swift"] [data-marvin-wordmark],
+[data-host-shell="swift"] [data-marvin-version-pip],
+[data-host-shell="swift"] [data-marvin-wordmark-divider] {
   display: none;
+}
+
+/* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
+ * traffic-light buttons (titleBarStyle="Overlay"); inside the
+ * SwiftUI shell the native title bar is separate from the content,
+ * so reclaim that left padding. Same story for `pt-[var(--titlebar-h)]`
+ * which accounts for the overlapping title bar. !important beats
+ * the inline Tailwind utilities without rewriting them. */
+[data-host-shell="swift"] [data-marvin-top-bar] {
+  padding-left: 1rem !important;
+  padding-top: 0.5rem !important;
 }
