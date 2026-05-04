@@ -61,6 +61,16 @@ import { Terminal } from "@/components/terminal/terminal";
 const LS_SESSION_PREFIX = "marvin.session.";
 
 export default function Home() {
+  // Monotonic counter the FileTree subscribes to. Bumped from anywhere
+  // the working tree is known to have changed (FS-mutating tool
+  // results, git mutations) so the user doesn't have to click refresh
+  // after every action. Declared before useChatStream so its
+  // onFsMutation callback can reference the bumper synchronously.
+  const [fsRefreshTick, setFsRefreshTick] = useState(0);
+  const bumpFsRefreshTick = useCallback(() => {
+    setFsRefreshTick((t) => t + 1);
+  }, []);
+
   const {
     messages,
     marvinState,
@@ -73,7 +83,7 @@ export default function Home() {
     decideConfirm,
     hydrateFromSession,
     attachLive,
-  } = useChatStream();
+  } = useChatStream({ onFsMutation: bumpFsRefreshTick });
 
   const {
     projects,
@@ -668,6 +678,7 @@ export default function Home() {
                       onOpenInTerminal={() =>
                         setPanes((p) => ({ ...p, terminal: true }))
                       }
+                      externalRefresh={fsRefreshTick}
                     />
                   ) : (
                     <SourceControlPanel
@@ -675,6 +686,7 @@ export default function Home() {
                       visible={leftColumnTab === "source-control"}
                       selectedPath={selectedPath ?? null}
                       onSelect={setSelectedPath}
+                      onMutation={bumpFsRefreshTick}
                     />
                   )}
                 </div>
