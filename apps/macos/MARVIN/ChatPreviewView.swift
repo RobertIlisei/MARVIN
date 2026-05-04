@@ -1,18 +1,13 @@
-// ChatPreviewView — Phase 2b dev surface for the native chat.
+// ChatPreviewView — Phase 2b/c dev surface for the native chat.
 //
-// A small, separate Window scene that hosts the new native
-// ChatInputBar. Phase 2b is send-only — the user types, hits ⌘⏎,
-// the message goes through ChatService, and event names + cli.event
-// excerpts log to a scrolling text area below the input. The web
-// chat in the main MARVIN window keeps working independently.
-//
-// Phase 2c will replace the log area with a real native message list.
-// At that point the preview window goes away (or becomes the chat
-// island that gets promoted into the main window in Phase 2g).
+// A separate Window scene hosting the native ChatInputBar +
+// (Phase 2c) the structured message list. The main MARVIN window's
+// WebView keeps rendering the existing web chat independently;
+// Phase 2g promotes this content into the main window once the
+// remaining sub-phases (cards, confirms, cancel/retry) reach
+// parity.
 //
 // ## Why a separate window during 2b/c
-//
-// Two reasons:
 //
 //   1. Decoupled iteration. The main window's WebView is a working
 //      surface the user actively uses. We don't want a half-built
@@ -20,22 +15,16 @@
 //      out streaming render shapes.
 //   2. Independent observation. The dev window can run alongside
 //      the web chat in the main window, so we can A/B parity
-//      between them — type the same message in both and watch the
+//      between them — type the same message in both, watch the
 //      same response stream into both surfaces.
-//
-// ## Why the message log is a String, not an array of typed events
-//
-// 2b is send-only — we just need to confirm the SSE stream lands.
-// Storing a textual log is the cheapest way to get visible signal
-// without locking in an event-list shape that 2c will throw away
-// the moment we render structured messages.
 
 import SwiftUI
 
 /// View-model for the preview window. Owns the text input, the
-/// in-flight turn task, and the running event log. Phase 2c
-/// replaces `eventLog` with a real `[Message]` model and adds
-/// streaming-block updates.
+/// in-flight turn task, the rendered message list, and a terminal-
+/// state surface for stream errors. Phase 2c — replaces 2b's
+/// String-based event log with a structured ChatMessage list driven
+/// by ChatStreamReducer.
 @MainActor
 @Observable
 final class ChatPreviewModel {
@@ -44,22 +33,24 @@ final class ChatPreviewModel {
 
     /// True while a turn is in flight. Disables the editor + Send
     /// button so the user can't queue a second turn (the sidecar
-    /// allows it, but the dev panel scope is one turn at a time).
+    /// allows it, but the dev panel scope is one turn at a time;
+    /// 2f will lift this when it adds proper stop / retry).
     var isSending: Bool = false
 
-    /// Append-only event log — newest at the bottom. Capped at
-    /// `logCap` lines so a long session doesn't grow the in-memory
-    /// string unboundedly.
-    var eventLog: String = ""
+    /// The full message list rendered by the native chat view.
+    /// Each user submit appends a user-side ChatMessage immediately
+    /// (optimistic echo), then ChatStreamReducer mutates the list
+    /// as cli.event payloads land.
+    var messages: [ChatMessage] = []
+
+    /// Last terminal failure for the most-recent turn, surfaced as
+    /// a banner in the view. Cleared on next submit.
+    var lastError: String? = nil
 
     /// The active stream's task, retained so we can cancel on
-    /// teardown / second submit. Phase 2f will surface this as a
+    /// teardown / second submit. Phase 2f surfaces this as a
     /// proper "Stop turn" button.
     private var activeTask: Task<Void, Never>?
-
-    /// Cap on the log buffer (chars). The log surface is dev-only,
-    /// it doesn't need to scroll back forever.
-    private let logCap = 32_000
 
     /// Send the current draft as a turn. No-op when already
     /// sending or the draft is whitespace-only.
@@ -68,11 +59,14 @@ final class ChatPreviewModel {
         guard !trimmed.isEmpty, !isSending else { return }
         draft = ""
         isSending = true
-        appendLog("→ POST /api/chat   message=\(trimmed.prefix(80))")
-        let request = ChatRequest(
-            message: trimmed,
-            cwd: cwd
-        )
+        lastError = nil
+        // Optimistic user echo. The wire never sends a `user` event
+        // for what we just typed (the SDK's `user` cli.events carry
+        // tool_results, not user inputs), so we have to add it
+        // ourselves before the assistant starts streaming.
+        messages.append(.userText(trimmed))
+
+        let request = ChatRequest(message: trimmed, cwd: cwd)
         activeTask = Task { @MainActor in
             defer { isSending = false }
             do {
@@ -80,75 +74,78 @@ final class ChatPreviewModel {
                 for try await event in stream {
                     handle(event: event)
                 }
-                appendLog("← stream ended cleanly")
             } catch {
-                appendLog("× stream failed: \(error)")
+                lastError = "\(error)"
             }
         }
     }
 
+    /// Stop the in-flight turn locally. Tears down the SSE
+    /// subscription but does NOT cancel the underlying agent run on
+    /// the sidecar — Phase 2f wires the explicit /api/chat/cancel
+    /// path. For 2c this is enough to recover the UI when a stream
+    /// hangs, which is rare against a healthy local sidecar.
+    func cancel() {
+        activeTask?.cancel()
+        activeTask = nil
+        isSending = false
+    }
+
+    func clear() {
+        cancel()
+        messages.removeAll()
+        lastError = nil
+    }
+
     private func handle(event: ChatTurnEvent) {
         switch event {
-        case .turnStarted(let s):
-            appendLog("← turn.started turnId=\(s.turnId.prefix(8))…")
+        case .turnStarted:
+            // Nothing to do for the list — Phase 2f might surface
+            // turnId for retry.
+            break
         case .cliEvent(let data):
-            // Pull just the `type` discriminator out for the log —
-            // full payloads are noisy. The full Data goes to the
-            // structured renderer in Phase 2c.
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            let kind = extractKind(from: raw)
-            appendLog("← cli.event type=\(kind)")
+            messages = ChatStreamReducer.apply(messages, cliEventData: data)
         case .confirmRequest(let c):
-            appendLog("← confirm.request tool=\(c.tool)")
-        case .turnCompleted(let c):
-            let cost = c.costUsd.map { String(format: "$%.4f", $0) } ?? "—"
-            appendLog("← turn.completed cost=\(cost) duration=\(c.durationMs ?? 0)ms")
+            // Phase 2e replaces this with a modal sheet. For now,
+            // surface as an inline system row so we know one fired.
+            messages.append(ChatMessage(
+                id: "confirm-\(c.confirmId)",
+                role: .system,
+                blocks: [.text(
+                    id: UUID().uuidString,
+                    text: "confirm requested · tool: \(c.tool)"
+                )],
+                isStreaming: false,
+                createdAt: Date()
+            ))
+        case .turnCompleted:
+            // The reducer-side `result` cli.event already mutated
+            // isStreaming to false on the assistant message. No
+            // additional list mutation needed here.
+            break
         case .turnError(let e):
-            appendLog("× turn.error: \(e.error)")
-        case .unknown(let name, _):
-            appendLog("? unknown event: \(name)")
+            lastError = e.error
+        case .unknown:
+            break
         }
-    }
-
-    /// Pull the JSON `type` field out of a cli.event payload —
-    /// cheaper than full Codable for a log line.
-    private func extractKind(from raw: String) -> String {
-        guard let typeRange = raw.range(of: "\"type\":\"") else { return "?" }
-        let after = raw[typeRange.upperBound...]
-        guard let close = after.firstIndex(of: "\"") else { return "?" }
-        return String(after[after.startIndex..<close])
-    }
-
-    private func appendLog(_ line: String) {
-        let timestamp = Date().formatted(date: .omitted, time: .standard)
-        let entry = "[\(timestamp)] \(line)\n"
-        eventLog += entry
-        if eventLog.count > logCap {
-            // Drop the oldest 25% so we don't trim every line.
-            let cut = eventLog.index(
-                eventLog.startIndex,
-                offsetBy: eventLog.count - (logCap * 3 / 4)
-            )
-            eventLog = String(eventLog[cut...])
-        }
-    }
-
-    func clearLog() {
-        eventLog = ""
     }
 }
 
 /// The preview window itself. Layout:
 ///
 ///   ┌──────────────────────────────────┐
-///   │ Phase 2b — native chat preview   │
+///   │ Phase 2 preview · project        │
 ///   ├──────────────────────────────────┤
-///   │                                  │
-///   │  event log (read-only ScrollView)│
-///   │                                  │
+///   │ you   │ message text             │
+///   │ marvin│ assistant text           │
+///   │       │ ╭──────────────╮         │
+///   │       │ │ Bash: npm test│        │
+///   │       │ ╰──────────────╯         │
+///   │ —     │ completed in 4123ms      │
 ///   ├──────────────────────────────────┤
-///   │ [text editor]                    │
-///   │                            [Send]│
+///   │ ⚠ error banner (if any)          │
+///   ├──────────────────────────────────┤
+///   │ [text editor]              [Send]│
 ///   └──────────────────────────────────┘
 struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
@@ -158,8 +155,11 @@ struct ChatPreviewView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            eventLogPane
-                .frame(minHeight: 200)
+            messagesPane
+                .frame(minHeight: 240)
+            if let err = model.lastError {
+                errorBanner(err)
+            }
             Divider()
             ChatInputBar(
                 text: Bindable(model).draft,
@@ -168,7 +168,7 @@ struct ChatPreviewView: View {
             )
             .padding(12)
         }
-        .frame(minWidth: 480, minHeight: 360)
+        .frame(minWidth: 520, minHeight: 420)
         .preferredColorScheme(bridge.preferredColorScheme)
     }
 
@@ -182,35 +182,80 @@ struct ChatPreviewView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Clear log") {
-                model.clearLog()
+            if model.isSending {
+                Button("Stop") {
+                    model.cancel()
+                }
+                .controlSize(.small)
+                .help("Stops receiving events locally. Phase 2f wires explicit /api/chat/cancel.")
+            }
+            Button("Clear") {
+                model.clear()
             }
             .controlSize(.small)
-            .disabled(model.eventLog.isEmpty)
+            .disabled(model.messages.isEmpty && !model.isSending)
         }
         .padding(12)
     }
 
-    private var eventLogPane: some View {
+    private var messagesPane: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                Text(model.eventLog.isEmpty ? "(no events yet — type a message and ⌘⏎)" : model.eventLog)
-                    .font(.body.monospaced())
-                    .foregroundStyle(model.eventLog.isEmpty ? .tertiary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(12)
-                    .id("logEnd")
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-            .onChange(of: model.eventLog) { _, _ in
-                // Auto-scroll the log to the bottom when new events
-                // land — same behaviour the dev console of every
-                // browser has.
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("logEnd", anchor: .bottom)
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if model.messages.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(model.messages) { msg in
+                            ChatMessageRow(message: msg)
+                                .padding(.horizontal, 12)
+                                .id(msg.id)
+                            Divider()
+                                .opacity(0.4)
+                        }
+                    }
+                    Color.clear.frame(height: 1).id("listEnd")
                 }
+                .padding(.vertical, 8)
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
+            .onChange(of: model.messages.count) { _, _ in
+                // Auto-scroll to the latest message on append. We
+                // don't animate the scroll because streaming
+                // updates are frequent enough that animation thrash
+                // would be worse than an instant jump.
+                proxy.scrollTo("listEnd", anchor: .bottom)
             }
         }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("(no messages yet — type a message and ⌘⏎)")
+                .font(.body.monospaced())
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Stream error")
+                    .font(.caption.weight(.semibold))
+                Text(message)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button("dismiss") { model.lastError = nil }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08))
     }
 }
