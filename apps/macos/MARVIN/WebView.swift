@@ -35,6 +35,16 @@ final class WebViewCommands {
     static let shared = WebViewCommands()
     weak var webView: WKWebView?
 
+    /// Mirrors `WKWebView.isLoading` so SwiftUI can show / hide a
+    /// progress indicator without touching the WebView directly.
+    /// Kept up to date by the Coordinator's KVO observers.
+    var isLoading: Bool = false
+
+    /// Mirrors `WKWebView.estimatedProgress` (0.0–1.0). Drives the
+    /// thin Safari-style progress bar at the top of the WebView
+    /// during page loads. Phase 1d.10.
+    var loadProgress: Double = 0
+
     /// Soft reload — uses the cache. Cheap, the common "I want the
     /// page to refetch" action. Maps to ⌘R in the View menu.
     func reload() {
@@ -102,6 +112,13 @@ struct WebView: NSViewRepresentable {
         // (⌘R) and Force Reload (⇧⌘R) reach this WebView.
         WebViewCommands.shared.webView = webView
 
+        // Phase 1d.10 — mirror `isLoading` and `estimatedProgress`
+        // into the @Observable singleton so the SwiftUI progress
+        // bar can react. KVO-via-NSKeyValueObservation, observers
+        // owned by the Coordinator so they cancel when the WebView
+        // tears down.
+        context.coordinator.observe(webView)
+
         return webView
     }
 
@@ -131,6 +148,30 @@ struct WebView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
+        /// KVO tokens for the load-progress observers. Held here so
+        /// they live as long as the WebView's Coordinator and clean
+        /// up automatically when the Representable tears down.
+        private var observers: [NSKeyValueObservation] = []
+
+        /// Wire up KVO on the new WebView's load state. Idempotent
+        /// per Coordinator instance — observers replace any prior
+        /// set. Updates the @Observable singleton on the main actor.
+        func observe(_ webView: WKWebView) {
+            observers.removeAll()
+            observers.append(webView.observe(\.isLoading, options: [.new, .initial]) { _, change in
+                guard let value = change.newValue else { return }
+                Task { @MainActor in
+                    WebViewCommands.shared.isLoading = value
+                }
+            })
+            observers.append(webView.observe(\.estimatedProgress, options: [.new, .initial]) { _, change in
+                guard let value = change.newValue else { return }
+                Task { @MainActor in
+                    WebViewCommands.shared.loadProgress = value
+                }
+            })
+        }
+
         /// Route external link clicks to NSWorkspace; keep loopback
         /// + file navigation in-app. Programmatic navigation
         /// (`.other`, `.reload`, `.backForward`) always allowed —

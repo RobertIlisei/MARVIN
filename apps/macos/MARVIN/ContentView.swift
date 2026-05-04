@@ -34,6 +34,7 @@ private let sidecarURL = URL(string: "http://localhost:3030")!
 struct ContentView: View {
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
+    @Environment(WebViewCommands.self) private var webCommands
 
     var body: some View {
         ZStack {
@@ -52,6 +53,21 @@ struct ContentView: View {
                 // status view.
                 WebView(url: sidecarURL)
                     .ignoresSafeArea()
+                    // Phase 1d.10 — Safari-style thin progress bar
+                    // pinned to the top edge of the WebView while
+                    // it's loading. Fades out at 100% so the bar
+                    // doesn't linger after the page finishes. Driven
+                    // by KVO on WKWebView.estimatedProgress / .isLoading.
+                    .overlay(alignment: .top) {
+                        if webCommands.isLoading && webCommands.loadProgress < 1.0 {
+                            ProgressView(value: webCommands.loadProgress)
+                                .progressViewStyle(.linear)
+                                .tint(.accentColor)
+                                .frame(height: 2)
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
             case .offline(let reason):
                 offlineView(reason: reason)
             }

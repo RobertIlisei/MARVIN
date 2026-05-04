@@ -40,11 +40,17 @@ struct MARVINApp: App {
     /// migration phases land).
     private let bridge = MarvinBridge.shared
 
+    /// WebView command bridge — singleton, threaded through the
+    /// environment so SwiftUI observation tracks load progress
+    /// (Phase 1d.10).
+    private let webCommands = WebViewCommands.shared
+
     var body: some Scene {
         Window("MARVIN", id: "marvin-main") {
             ContentView()
                 .environment(health)
                 .environment(bridge)
+                .environment(webCommands)
                 // 1440×900 default + 960×600 floor — matches the
                 // existing Tauri config (tauri.conf.json) so users
                 // don't see a different window geometry across the
