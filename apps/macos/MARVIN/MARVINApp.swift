@@ -82,6 +82,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // controller so it doesn't deallocate.
         statusBar.install()
     }
+
+    /// Phase 1d.28 — guard ⌘Q when MARVIN is mid-turn.
+    ///
+    /// Without this, an accidental ⌘Q during streaming kills the
+    /// WebView and the in-flight Claude CLI request together —
+    /// silently, with no chance to confirm. The confirmation is
+    /// the same modal pattern Mail / Messages show when there's
+    /// unsent draft state. We only prompt when the bridge reports
+    /// busy; idle quits proceed normally with no friction.
+    ///
+    /// Returns:
+    ///   • .terminateNow when idle or the user chose Quit.
+    ///   • .terminateCancel when the user chose Cancel.
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard MarvinBridge.shared.isBusy else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.messageText = "MARVIN is still working."
+        alert.informativeText = "Quitting now will cancel the current turn. Continue?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+
+        // .alertFirstButtonReturn = Quit; default Esc maps to the
+        // second button (Cancel) which is the safe choice.
+        let response = alert.runModal()
+        return response == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
 }
 
 @main
