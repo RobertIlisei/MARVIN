@@ -15,6 +15,19 @@
 import AppKit
 import SwiftUI
 
+/// Wraps an action that opens a SwiftUI window by id. `@Environment`
+/// is reliable inside Views but can be nil-at-runtime when read
+/// directly on an `App` — pulling it through a small View bridges
+/// it into a `.commands` closure safely.
+private struct OpenAboutButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("About MARVIN") {
+            openWindow(id: "marvin-about")
+        }
+    }
+}
+
 @main
 struct MARVINApp: App {
     /// Health monitor lives at app scope so the connection state
@@ -49,8 +62,9 @@ struct MARVINApp: App {
             // Phase 1b — native menu bar.
             //
             // Standard macOS menus (App / Edit / Window) are
-            // provided by SwiftUI for free. We extend View and Help
-            // with MARVIN-specific items.
+            // provided by SwiftUI for free. We extend the App menu
+            // (custom About), View, and Help with MARVIN-specific
+            // items.
             //
             // Deliberately NOT claimed by SwiftUI here: ⌘K, ⌘B/G/J/P,
             // ⌘⇧N, ⌘., `?`. Those are the web-app's keyboard
@@ -60,6 +74,16 @@ struct MARVINApp: App {
             // hear it. Phase 1d (NSToolbar + bridge) replaces the
             // web-rendered top bar properly; until then, the web
             // shortcuts pass through untouched.
+
+            // App → About MARVIN. Replaces SwiftUI's default
+            // generated About panel (which only shows version +
+            // copyright) with our custom AboutView that surfaces
+            // live sidecar status — useful during the migration
+            // evaluation to confirm which build is running and what
+            // the sidecar reports.
+            CommandGroup(replacing: .appInfo) {
+                OpenAboutButton()
+            }
 
             // View → Reload (⌘R) / Force Reload (⇧⌘R).
             //
@@ -109,5 +133,19 @@ struct MARVINApp: App {
                 }
             }
         }
+
+        // Phase 1c — custom About panel. Mounted as a separate
+        // Window scene so it gets its own window-state / close-
+        // button / ⌘W behavior for free. Opened via the App menu's
+        // About item (CommandGroup(replacing: .appInfo) above).
+        // .commandsRemoved() keeps the About window from
+        // contributing duplicate menu items when it has focus.
+        Window("About MARVIN", id: "marvin-about") {
+            AboutView()
+                .environment(health)
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+        .commandsRemoved()
     }
 }

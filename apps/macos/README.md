@@ -46,8 +46,9 @@ apps/macos/
 ├── project.yml           # xcodegen — source of truth for .xcodeproj
 ├── .gitignore            # ignores generated .xcodeproj + build dirs
 └── MARVIN/
-    ├── MARVINApp.swift       # @main, Window scene, ⌘R Reconnect
+    ├── MARVINApp.swift       # @main, scenes, menu bar commands
     ├── ContentView.swift     # connecting / online (WebView) / offline
+    ├── AboutView.swift       # About panel — app + live sidecar info
     ├── HealthMonitor.swift   # /api/health poller, state machine
     ├── WebView.swift         # NSViewRepresentable wrapping WKWebView
     └── Info.plist            # bundle metadata, ATS, deployment target
@@ -69,8 +70,11 @@ for the full table. Short version:
   Force Reload ⇧⌘R, GitHub / Issues. Web-app shortcuts (⌘K, ⌘B/G/J/P,
   ⌘⇧N, ⌘., `?`) deliberately not claimed here — they pass through to
   the WebView.
-- **Phase 1c — Window-state restoration** ✅ — `NSWindow.frameAutosaveName`
-  via a `WindowAccessor` bridge.
+- **Phase 1c — Window-state restoration + custom About** ✅ —
+  `NSWindow.frameAutosaveName` via a `WindowAccessor` bridge, plus a
+  custom About panel that surfaces live sidecar info from
+  `HealthMonitor` (auth mode, model, data dir) so the migration
+  evaluation makes "which build am I in" obvious at a glance.
 - **Phase 1d — NSToolbar:** replaces the web-rendered top bar.
   Requires an `apps/web` change to detect the SwiftUI shell (via the
   `MARVIN-Swift/0.1` user-agent suffix) and hide the web top bar.
