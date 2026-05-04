@@ -676,33 +676,29 @@ PLIST
   return 0
 }
 
+readonly MACOS_APP_NAME="MARVIN-Swift"
+readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
+
 cmd_install_macos_app() {
   # Builds the SwiftUI native target at apps/macos/ and installs the
-  # resulting .app bundle to /Applications/. Phase 0 uses ad-hoc
+  # resulting `.app` bundle to /Applications/. Phase 1a uses ad-hoc
   # signing — Gatekeeper warns on first open (right-click → Open).
   # Real Developer ID + notarization gets wired at the end of Phase 1
   # once a signing identity is plumbed in. See ADR-0016.
   #
-  # Coexists with `install-app` (the Tauri wrapper) — both targets
-  # are valid until the migration completes.
-  info "installing ${APP_NAME} (SwiftUI / Phase 0)"
-
-  if ! command -v xcodebuild >/dev/null 2>&1; then
-    fail "xcodebuild not found — install Xcode (App Store) first"
-    dim "  Command Line Tools alone aren't enough; the .app target needs full Xcode."
-    return 2
-  fi
-  # Check that xcode-select points at a real Xcode, not just CLT.
-  if ! xcodebuild -version >/dev/null 2>&1; then
-    fail "xcodebuild present but xcode-select points at Command Line Tools"
-    dim "  fix:  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer"
-    return 2
-  fi
-  if ! command -v xcodegen >/dev/null 2>&1; then
-    fail "xcodegen not found — required to materialise MARVIN.xcodeproj from project.yml"
-    dim "  install:  brew install xcodegen"
-    return 2
-  fi
+  # Installs as MARVIN-Swift.app — distinct from the Tauri MARVIN.app
+  # at /Applications/MARVIN.app, so both coexist during the migration
+  # evaluation period. Phase 6 (Tauri retire) renames to MARVIN.app.
+  #
+  # Two build paths, picked by what's installed:
+  #   • xcodebuild + xcodegen (preferred) — produces a real Xcode
+  #     build with all the warnings, scheme/configuration options,
+  #     and the eventual signing/notarization wiring.
+  #   • swift build (fallback) — works with just the Command Line
+  #     Tools (no full Xcode). Manually assembles the .app bundle
+  #     from the SPM executable + a substituted Info.plist. Same
+  #     binary semantics, simpler dev loop, no signing identity.
+  info "installing ${MACOS_APP_NAME} (SwiftUI / Phase 1a)"
 
   local macos_dir="$REPO_ROOT/apps/macos"
   if [ ! -f "$macos_dir/project.yml" ]; then
@@ -710,41 +706,91 @@ cmd_install_macos_app() {
     return 1
   fi
 
-  info "regenerating MARVIN.xcodeproj from project.yml"
-  ( cd "$macos_dir" && xcodegen generate ) || {
-    fail "xcodegen failed"
-    return 1
-  }
+  # Pick the build path. xcodebuild only counts as "available" if it
+  # actually runs (CLT installs ship a stub that errors out).
+  local use_spm=0
+  if command -v xcodebuild >/dev/null 2>&1 && xcodebuild -version >/dev/null 2>&1; then
+    if ! command -v xcodegen >/dev/null 2>&1; then
+      warn "xcodebuild available but xcodegen is missing — falling back to swift build"
+      dim "  to use xcodebuild:  brew install xcodegen"
+      use_spm=1
+    fi
+  else
+    use_spm=1
+  fi
 
-  info "running xcodebuild (Release)"
-  local derived="$macos_dir/build"
-  ( cd "$macos_dir" && xcodebuild \
-      -project MARVIN.xcodeproj \
-      -scheme MARVIN \
-      -configuration Release \
-      -derivedDataPath "$derived" \
-      -quiet \
-      build ) || {
-    fail "xcodebuild failed"
-    dim "  re-run without -quiet to see the full output"
-    return 1
-  }
-
-  local built_app="$derived/Build/Products/Release/${APP_NAME}.app"
-  if [ ! -d "$built_app" ]; then
-    fail "build succeeded but ${APP_NAME}.app is missing at $built_app"
-    return 1
+  local built_app
+  if [ "$use_spm" -eq 0 ]; then
+    info "regenerating MARVIN.xcodeproj from project.yml"
+    ( cd "$macos_dir" && xcodegen generate ) || {
+      fail "xcodegen failed"
+      return 1
+    }
+    info "running xcodebuild (Release)"
+    local derived="$macos_dir/build"
+    ( cd "$macos_dir" && xcodebuild \
+        -project MARVIN.xcodeproj \
+        -scheme MARVIN \
+        -configuration Release \
+        -derivedDataPath "$derived" \
+        -quiet \
+        build ) || {
+      fail "xcodebuild failed"
+      dim "  re-run without -quiet to see the full output"
+      return 1
+    }
+    built_app="$derived/Build/Products/Release/${MACOS_APP_NAME}.app"
+    if [ ! -d "$built_app" ]; then
+      fail "build succeeded but ${MACOS_APP_NAME}.app is missing at $built_app"
+      return 1
+    fi
+  else
+    if ! command -v swift >/dev/null 2>&1; then
+      fail "neither xcodebuild nor swift found — install Xcode or the Swift toolchain"
+      return 2
+    fi
+    info "no Xcode — using swift build + manual bundle assembly"
+    ( cd "$macos_dir" && swift build -c release ) || {
+      fail "swift build failed"
+      return 1
+    }
+    local exe="$macos_dir/.build/release/MARVIN"
+    if [ ! -x "$exe" ]; then
+      fail "swift build succeeded but $exe is missing"
+      return 1
+    fi
+    info "assembling ${MACOS_APP_NAME}.app"
+    local stage="$macos_dir/build-spm"
+    rm -rf "$stage"
+    built_app="$stage/${MACOS_APP_NAME}.app"
+    mkdir -p "$built_app/Contents/MacOS" "$built_app/Contents/Resources"
+    cp "$exe" "$built_app/Contents/MacOS/${MACOS_APP_NAME}"
+    chmod +x "$built_app/Contents/MacOS/${MACOS_APP_NAME}"
+    # Substitute Xcode-style template tokens in the source Info.plist
+    # so the bundle resolves cleanly without xcodebuild.
+    sed \
+      -e "s|\$(EXECUTABLE_NAME)|${MACOS_APP_NAME}|g" \
+      -e "s|\$(PRODUCT_BUNDLE_IDENTIFIER)|net.marvin.macos|g" \
+      -e "s|\$(PRODUCT_NAME)|${MACOS_APP_NAME}|g" \
+      "$macos_dir/MARVIN/Info.plist" > "$built_app/Contents/Info.plist"
+    info "ad-hoc signing"
+    codesign --force --deep --sign - "$built_app" >/dev/null 2>&1 || {
+      fail "codesign failed"
+      return 1
+    }
   fi
   ok "built $built_app"
 
   info "copying to /Applications"
-  rm -rf "$APP_BUNDLE_DIR"
-  cp -R "$built_app" "$APP_BUNDLE_DIR"
-  ok "installed at $APP_BUNDLE_DIR"
+  # Don't nuke /Applications/MARVIN.app — that's the Tauri build.
+  # Only replace MARVIN-Swift.app.
+  rm -rf "$MACOS_APP_BUNDLE_DIR"
+  cp -R "$built_app" "$MACOS_APP_BUNDLE_DIR"
+  ok "installed at $MACOS_APP_BUNDLE_DIR"
 
   echo
-  dim "  open with:  open '$APP_BUNDLE_DIR'"
-  dim "  Phase 0 polls /api/health on port $PORT — start the sidecar first:"
+  dim "  open with:  open '$MACOS_APP_BUNDLE_DIR'"
+  dim "  Phase 1a polls /api/health on port $PORT — start the sidecar first:"
   dim "    $0 start"
   dim "  Gatekeeper note: ad-hoc signed; right-click → Open on first launch."
 }
@@ -790,11 +836,14 @@ macOS .app (double-click-to-launch install flow):
   marvin install-app        build Tauri .app (ADR-0010), copy to
                             /Applications, install launchd agent so
                             the sidecar auto-starts on login
-  marvin install-macos-app  build SwiftUI .app (ADR-0016, Phase 0),
-                            copy to /Applications. No launchd agent —
-                            Phase 0 expects you to run `marvin start`
-                            separately. Coexists with install-app
-                            during the migration.
+  marvin install-macos-app  build SwiftUI .app (ADR-0016, Phase 1a),
+                            copy to /Applications/MARVIN-Swift.app
+                            (distinct from the Tauri MARVIN.app). Uses
+                            xcodebuild + xcodegen if Xcode is
+                            installed, otherwise falls back to
+                            `swift build` + manual bundle assembly.
+                            No launchd agent — start the sidecar with
+                            `marvin start` separately.
   marvin uninstall-app      remove the .app + launchd agent
 
   marvin help           this message

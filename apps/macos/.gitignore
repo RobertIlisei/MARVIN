@@ -16,5 +16,9 @@ xcuserdata/
 build/
 DerivedData/
 
+# SPM fallback bundle staging — `bin/marvin install-macos-app` builds
+# MARVIN-Swift.app here when Xcode is unavailable. Regenerated each run.
+build-spm/
+
 # macOS metadata
 .DS_Store

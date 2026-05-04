@@ -66,7 +66,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.marvin.macos
-        PRODUCT_NAME: MARVIN
+        # PRODUCT_NAME is the on-disk bundle name. Deliberately
+        # different from the Tauri "MARVIN.app" so both bundles can
+        # coexist in /Applications/ during the migration evaluation
+        # period. Phase 6 (Tauri retire — ADR-0016) renames this to
+        # `MARVIN` and uninstalls the Tauri app.
+        PRODUCT_NAME: MARVIN-Swift
         # We DON'T point at MARVIN/Info.plist here even though it's
         # the source — xcodegen wires `info.path` and Xcode auto-
         # generates the GENERATE_INFOPLIST_FILE wiring. Setting both

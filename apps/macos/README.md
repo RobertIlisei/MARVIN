@@ -6,10 +6,12 @@ sidecar at `apps/web` (Next.js + Agent SDK + all `/api/*` routes)
 stays unchanged and is accessed via HTTP/SSE on `localhost:3030`.
 This is the "shell migrates, brain stays" shape.
 
-**Status:** Phase 0 (scaffolding) shipped. Window opens, polls
-`/api/health`, surfaces connecting / online / offline. Phase 1
-(WKWebView island) is next, gated on a week of real use against
-PR #52's production-build perf wins.
+**Status:** Phase 1a (WKWebView island) shipped. Window opens, polls
+`/api/health`, and on `online` hands the entire content area to a
+WebView pointed at the Node sidecar. Phases 1b–d (native menu bar,
+window-state restoration, NSToolbar) are gated on a week of real use
+against PR #52's production-build perf wins — Phase 1a may already
+be enough.
 
 For the dev loop, prerequisites, and `bin/marvin install-macos-app`,
 see [BUILD.md](./BUILD.md).
@@ -42,8 +44,9 @@ apps/macos/
 ├── .gitignore            # ignores generated .xcodeproj + build dirs
 └── MARVIN/
     ├── MARVINApp.swift       # @main, Window scene, ⌘R Reconnect
-    ├── ContentView.swift     # Phase 0 placeholder (3 states)
+    ├── ContentView.swift     # connecting / online (WebView) / offline
     ├── HealthMonitor.swift   # /api/health poller, state machine
+    ├── WebView.swift         # NSViewRepresentable wrapping WKWebView
     └── Info.plist            # bundle metadata, ATS, deployment target
 ```
 
@@ -56,9 +59,11 @@ BUILD.md for the rationale.
 See [ADR-0016 — Migration phases](../../docs/decisions/0016-swift-migration.md#migration-phases)
 for the full table. Short version:
 
-- **Phase 0 — Scaffolding** ✅ (this commit)
-- **Phase 1 — Frame:** native NSSplitView + toolbar + menu bar; web
-  app loads inside a single WKWebView island.
+- **Phase 0 — Scaffolding** ✅
+- **Phase 1a — WebView island** ✅ (this commit) — full-bleed
+  `WKWebView` for the `.online` state; web app renders unchanged.
+- **Phase 1b–d — Frame:** native menu bar, window-state restoration,
+  NSToolbar. Gated on post-PR-#52 perf re-eval.
 - **Phase 2 — Chat surface:** native chat list + ChatInput.
 - **Phase 3 — File tree + Source Control:** native NSOutlineView +
   diff viewer.
