@@ -98,12 +98,20 @@ export function FileTree({
   onSelect,
   selectedPath,
   onOpenInTerminal,
+  externalRefresh,
 }: {
   cwd: string;
   onSelect?: (path: string) => void;
   selectedPath?: string;
   /** Toggle the terminal pane on (if off). Called before the `cd` event fires. */
   onOpenInTerminal?: () => void;
+  /**
+   * Monotonic counter from the parent. Whenever it increments, the tree
+   * refetches. Page wiring bumps this on FS-mutating tool results
+   * (Edit/Write/NotebookEdit/Bash) and on git-op completion so the user
+   * doesn't have to click refresh after every MARVIN action.
+   */
+  externalRefresh?: number;
 }) {
   const [data, setData] = useState<TreeResponse | null>(null);
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -177,7 +185,24 @@ export function FileTree({
     return () => {
       cancelled = true;
     };
-  }, [cwd, refreshTick]);
+  }, [cwd, refreshTick, externalRefresh]);
+
+  // Window-focus revalidation. When the user comes back from another
+  // tab / app (e.g. their own editor), refetch so files they touched
+  // outside MARVIN show up without a manual click. Skipped when the
+  // page is hidden so we don't fight a React 19 batched render.
+  useEffect(() => {
+    if (!cwd || typeof window === "undefined") return;
+    const onFocus = () => {
+      if (document.visibilityState === "visible") revalidate();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [cwd, revalidate]);
 
   // Re-hydrate openDirs when cwd changes — switching projects should
   // load each project's own persisted expansion map. The lazy useState

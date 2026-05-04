@@ -58,14 +58,26 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    to eliminate. Exceptions: trivial content reads (version checks,
    named-file requests) and files you're actively editing. Every other
    unsolicited file read on a codebase question is a rule violation.
+8. **Define done before doing — match-not-improve.** For any
+   non-trivial work, state a falsifiable Definition of Done (3-5
+   bullets, each something an observer could mark "yes that happened"
+   or "no, not yet") BEFORE writing code. Phase 7 verifies against
+   that DoD, not against an evolving sense of quality. If you spot
+   adjacent improvements while implementing, list them as "noticed
+   while in flight, not in scope" and ask the user — never silently
+   land them. End real-work turns with `**Scope met:** <DoD as past
+   tense>. Anything else, or should I stop?` The "helpful spiral"
+   (six commits past the small ask, each step seemed worth doing) is
+   the failure mode this rule exists to prevent. ADRs carry their own
+   `## Scope of Done` block per the template in `personality.ts`.
 
-### The three firm surfaces
+### The firm surfaces
 
-MARVIN's prompt (`packages/runtime/src/personality.ts`) codifies three
-enumerated trigger lists that replace soft "use judgement" language with
-deterministic MUST / MUST-NOT categories. When the prompt and a human
-doc disagree, the prompt wins — it's what MARVIN actually reads at
-turn time.
+MARVIN's prompt (`packages/runtime/src/personality.ts`) codifies several
+enumerated trigger / contract lists that replace soft "use judgement"
+language with deterministic MUST / MUST-NOT categories. When the prompt
+and a human doc disagree, the prompt wins — it's what MARVIN actually
+reads at turn time.
 
 | Rule | Location | Purpose |
 |---|---|---|
@@ -73,6 +85,7 @@ turn time.
 | **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
 | **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
+| **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 
 The pattern is the same across all three: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
@@ -196,8 +209,8 @@ Apply it before claiming anything is shipped.
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(823 nodes · 1010 edges · 162 communities as of 2026-05-04, post the
-PLAN.md retirement + roadmap/changelog split).
+(820 nodes · 988 edges · 167 communities as of 2026-05-04, post the
+PLAN.md retirement + DoD discipline pass).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
@@ -229,8 +242,7 @@ answer. Never synthesize a structural explanation from imagination.
 
 `GET()` (61 edges), `POST()` (58), `trim()` (29), `ADR-0015 — Auto-mode
 policy floor + audit log` (17), `/api/git/* third mutation channel` (17),
-`Changelog (docs/history/CHANGELOG.md)` (16), `ADR index` (15), `8-phase
-senior-engineer workflow` (15), `Roadmap (docs/roadmap.md)` (14),
-`projects.ts` (13).
+`ADR index` (15), `8-phase senior-engineer workflow` (15), `Changelog
+(docs/history/CHANGELOG.md)` (15), `projects.ts` (13), `resolve()` (13).
 
 _Refresh this list with `/graphify . --update` when it drifts._

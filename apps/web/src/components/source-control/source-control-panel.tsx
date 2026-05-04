@@ -34,6 +34,14 @@ export interface SourceControlPanelProps {
   visible: boolean;
   selectedPath: string | null;
   onSelect(absolutePath: string): void;
+  /**
+   * Optional notifier for parent components that care about the
+   * working tree changing (typically the file tree, which needs to
+   * refetch after commit / checkout / discard / branch switch). Fired
+   * after every successful git mutation, alongside the panel's own
+   * status refresh.
+   */
+  onMutation?(): void;
 }
 
 export function SourceControlPanel({
@@ -41,12 +49,16 @@ export function SourceControlPanel({
   visible,
   selectedPath,
   onSelect,
+  onMutation,
 }: SourceControlPanelProps) {
   const { state, refresh } = useGitStatus({ cwd, enabled: visible });
 
   const mutations = useGitMutations({
     cwd,
-    onChanged: refresh,
+    onChanged: () => {
+      refresh();
+      onMutation?.();
+    },
   });
 
   const stagedCount = useMemo(() => {

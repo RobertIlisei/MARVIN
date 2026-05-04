@@ -63,14 +63,15 @@ export function resolveRuntimeMode(mode: RuntimeMode): {
 /**
  * Permission strategy for a turn.
  *
- *   - `auto` (default): SDK runs with `permissionMode: "bypassPermissions"`,
- *     no `canUseTool` callback installed. Every tool call executes
- *     immediately — MARVIN behaves like Claude Code with
- *     `--dangerously-skip-permissions`. Best for experienced users who
- *     want uninterrupted flow.
- *   - `gated`: the pre-flight confirm gate is installed. Edit / Write /
- *     non-read-only Bash render a confirm card; reads + whitelisted
- *     commands auto-allow; destructive patterns hard-deny.
+ *   - `auto` (default): the `autoModeLogger` callback runs. Hard-deny
+ *     patterns still deny (single safety floor); everything else logs
+ *     to the auto-audit JSONL and allows. No UI confirm prompts —
+ *     MARVIN behaves like Claude Code with `--dangerously-skip-permissions`,
+ *     plus an audit trail. Best for experienced users who want
+ *     uninterrupted flow. ADR-0015.
+ *   - `gated`: the full pre-flight confirm gate is installed. Edit /
+ *     Write / non-read-only Bash render a confirm card; reads +
+ *     whitelisted commands auto-allow; destructive patterns hard-deny.
  */
 export type PermissionStrategy = "auto" | "gated";
 
@@ -196,7 +197,55 @@ export const SCOUT_AGENT: AgentDefinition = {
   ].join("\n"),
 };
 
-function classifyToolCall(
+/**
+ * Pretty-print known upstream error patterns into actionable messages.
+ *
+ * The Agent SDK forwards raw API errors verbatim — including the
+ * `API Error: 400 {…json…}` blob Anthropic returns when an account
+ * needs to accept updated Consumer Terms. That's accurate but useless
+ * to a user who's seeing it for the first time: they don't know to
+ * open claude.ai. Recognise the patterns we know and rewrite to a
+ * one-line instruction. Unknown errors pass through verbatim.
+ *
+ * Exported so tests can pin the recogniser independently of the SDK.
+ */
+export function friendlyError(raw: string): string {
+  if (!raw) return raw;
+  if (/updated our Consumer Terms/i.test(raw)) {
+    return [
+      "Anthropic account needs to accept the updated Consumer Terms.",
+      "Open https://claude.ai with the email shown in `claude /status`,",
+      "accept the banner, then retry. (Original error: see logs.)",
+    ].join(" ");
+  }
+  // Common claude-cli not-on-PATH / not-installed signature.
+  if (/ENOENT.*claude\b/.test(raw) || /spawn claude ENOENT/.test(raw)) {
+    return [
+      "Claude Code CLI not found on PATH.",
+      "Install with `npm install -g @anthropic-ai/claude-code`,",
+      "or point MARVIN at it via MARVIN_CLAUDE_BIN.",
+    ].join(" ");
+  }
+  // Auth missing — the SDK surfaces a 401 / "API key not found"
+  // depending on the credential path.
+  if (/API key not found|invalid x-api-key|401.*authentication/i.test(raw)) {
+    return [
+      "Anthropic credentials missing or invalid.",
+      "Set ANTHROPIC_API_KEY in your shell, or run `claude auth login`.",
+      "Then restart MARVIN.",
+    ].join(" ");
+  }
+  return raw;
+}
+
+/**
+ * Pure dispatcher: maps tool name + input → allow / confirm / deny via
+ * `toolPolicy`. Exposed for unit tests in
+ * `packages/runtime/tests/can-use-tool-dispatch.test.ts`. The narrow API
+ * (no logging, no I/O) lets tests exercise the classifier without
+ * touching the audit log or registering Promise resolvers.
+ */
+export function classifyToolCall(
   name: string,
   input: Record<string, unknown>,
 ): { decision: "allow" | "confirm" | "deny"; reason: string } {
@@ -210,6 +259,106 @@ function classifyToolCall(
   if (policy.class === "auto") return { decision: "allow", reason: policy.reason };
   if (policy.class === "deny") return { decision: "deny", reason: policy.reason };
   return { decision: "confirm", reason: policy.reason };
+}
+
+/** Normalise toolInput to the record shape the SDK's PermissionResult
+ *  zod schema demands. The SDK occasionally hands us `undefined` or a
+ *  non-object; un-normalised, this produces "Invalid input: expected
+ *  record, received undefined" and the turn dies. */
+function normaliseInput(toolInput: unknown): Record<string, unknown> {
+  return toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
+    ? (toolInput as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
+ * single safety floor; everything else logs to the auto-audit JSONL
+ * and allows. Never blocks on UI — that's the user-experience contract
+ * of `auto` mode.
+ *
+ * Exported so tests can pin the dispatch (ADR-0015 §1).
+ */
+export function makeAutoModeLogger(args: {
+  cwd: string;
+  turnId: string;
+}): CanUseTool {
+  const { cwd, turnId } = args;
+  return async (toolName, toolInput, { toolUseID }) => {
+    const safeInput = normaliseInput(toolInput);
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
+    if (cls.decision === "deny") {
+      return {
+        behavior: "deny",
+        message: cls.reason || "tool use denied",
+        interrupt: false,
+      } as PermissionResult;
+    }
+    appendAutoAuditEntry(cwd, {
+      tool: toolName as AutoAuditEntryKind,
+      reason: cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`,
+      input: safeInput,
+      turnId,
+      toolUseId: toolUseID,
+    });
+    return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
+  };
+}
+
+/**
+ * Build the `gated` mode `canUseTool` callback. Auto-class allows
+ * (audit-logged); deny-class hard-denies; confirm-class registers a
+ * pending Promise and emits an `onConfirmRequest` event the UI handles
+ * via `/api/confirm`.
+ *
+ * Exported so tests can pin the dispatch.
+ */
+export function makeGatedCanUseTool(args: {
+  cwd: string;
+  turnId: string;
+  onConfirmRequest: (request: ConfirmRequestPayload) => void;
+}): CanUseTool {
+  const { cwd, turnId, onConfirmRequest } = args;
+  return async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
+    const safeInput = normaliseInput(toolInput);
+
+    if (cls.decision === "allow") {
+      // Audit-log mutators that auto-allow under `gated` too. Read /
+      // Grep / Glob fall through `appendAutoAuditEntry`'s
+      // TOOLS_WORTH_LOGGING filter, so only Edit / Write / Bash
+      // actually land in the JSONL — no log explosion.
+      appendAutoAuditEntry(cwd, {
+        tool: toolName as AutoAuditEntryKind,
+        reason: cls.reason,
+        input: safeInput,
+        turnId,
+        toolUseId: toolUseID,
+      });
+      return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
+    }
+    if (cls.decision === "deny") {
+      return {
+        behavior: "deny",
+        message: cls.reason || "tool use denied",
+        interrupt: false,
+      } as PermissionResult;
+    }
+    // confirm — wait on the client.
+    return new Promise<PermissionResult>((resolve) => {
+      registerPendingConfirm(turnId, toolUseID, resolve, safeInput);
+      onConfirmRequest({
+        turnId,
+        toolUseId: toolUseID,
+        toolName,
+        input: safeInput,
+        reason: cls.reason,
+        ...(title ? { title } : {}),
+        ...(description ? { description } : {}),
+        ...(displayName ? { displayName } : {}),
+      });
+    });
+  };
 }
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
@@ -246,90 +395,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     else signal.addEventListener("abort", () => abortController.abort(), { once: true });
   }
 
-  const canUseTool: CanUseTool = async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
-    const cls = classifyToolCall(toolName, toolInput);
-    // The SDK's PermissionResult zod schema requires `updatedInput` to be a
-    // record on `allow`. When the SDK hands us `toolInput === undefined` (or
-    // a non-object), passing it through produces "Invalid input: expected
-    // record, received undefined" and the turn dies. Always normalise.
-    const safeInput: Record<string, unknown> =
-      toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
-        ? (toolInput as Record<string, unknown>)
-        : {};
-
-    if (cls.decision === "allow") {
-      // Audit-log mutators that auto-allow. In `auto` mode this branch
-      // is the fast path for everything; we want a record of which
-      // Edit/Write/Bash actually fired so the user can audit MARVIN's
-      // behaviour after the fact. The append is best-effort; failure
-      // is silently swallowed inside `appendAutoAuditEntry` so the
-      // SDK loop is never blocked by I/O. Audit finding #2 (deferred
-      // half).
-      appendAutoAuditEntry(cwd, {
-        tool: toolName as AutoAuditEntryKind,
-        reason: cls.reason,
-        input: safeInput,
-        turnId,
-        toolUseId: toolUseID,
-      });
-      return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
-    }
-    if (cls.decision === "deny") {
-      return {
-        behavior: "deny",
-        message: cls.reason || "tool use denied",
-        interrupt: false,
-      } as PermissionResult;
-    }
-    // confirm — wait on the client.
-    return new Promise<PermissionResult>((resolve) => {
-      registerPendingConfirm(turnId, toolUseID, resolve, safeInput);
-      onConfirmRequest({
-        turnId,
-        toolUseId: toolUseID,
-        toolName,
-        input: safeInput,
-        reason: cls.reason,
-        ...(title ? { title } : {}),
-        ...(description ? { description } : {}),
-        ...(displayName ? { displayName } : {}),
-      });
-    });
-  };
-
-  // In `auto` mode we previously skipped installing canUseTool entirely
-  // (full SDK bypass). The auto-audit log (audit #2 deferred half)
-  // needs a hook point per tool call, so we install a "log-only"
-  // shim — same classifier, same audit append, but `confirm` and
-  // `deny` decisions both downgrade to allow because the user opted
-  // into auto mode. `gated` mode still uses the full canUseTool above.
-  const autoModeLogger: CanUseTool = async (toolName, toolInput, { toolUseID }) => {
-    const safeInput: Record<string, unknown> =
-      toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
-        ? (toolInput as Record<string, unknown>)
-        : {};
-    const cls = classifyToolCall(toolName, toolInput);
-    // Hard-deny patterns ALWAYS deny, even in auto mode — this is the
-    // single safety floor. `BASH_HARD_DENY` matches `rm -rf /`,
-    // `git push --force`, etc. (see policy.ts; tightened in
-    // packages/tools/tests/policy.test.ts).
-    if (cls.decision === "deny") {
-      return {
-        behavior: "deny",
-        message: cls.reason || "tool use denied",
-        interrupt: false,
-      } as PermissionResult;
-    }
-    // Everything else logs + allows.
-    appendAutoAuditEntry(cwd, {
-      tool: toolName as AutoAuditEntryKind,
-      reason: cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`,
-      input: safeInput,
-      turnId,
-      toolUseId: toolUseID,
-    });
-    return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
-  };
+  // Both factories live at module scope so tests can pin the dispatch
+  // (ADR-0015 §1) without spinning up a full `runAgent` loop.
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest });
+  const autoModeLogger = makeAutoModeLogger({ cwd, turnId });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -343,11 +412,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // stdio process is spawned by the SDK per turn.
   const playwrightMcp = createPlaywrightMcpConfig();
 
-  // Permission wiring. In `auto` mode we don't install canUseTool at all
-  // and ask the SDK for full bypass — MARVIN's agents just execute. In
-  // `gated` mode we install the pre-flight gate so Edit / Write / unsafe
-  // Bash render a confirm card, reads auto-allow, and destructive
-  // patterns hard-deny.
+  // Permission wiring. Both modes install a `canUseTool` callback so the
+  // hard-deny floor (rm -rf /, force-push to main, etc.) and the auto-
+  // audit log keep firing in either path. In `auto` mode the logger
+  // never blocks on UI — confirm-class decisions downgrade to allow with
+  // an "auto-mode bypass" reason. In `gated` mode confirm-class decisions
+  // register a Promise and await `/api/confirm`. ADR-0015 §1.
   const options: Options = {
     model,
     cwd,
@@ -358,14 +428,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // for this turn only. The SDK passes this straight to the
     // spawned Claude CLI.
     env: turnEnv,
-    // In `auto` mode we install `autoModeLogger` (audit-log only, hard
-    // denies still deny) instead of asking the SDK for full bypass.
-    // The hook point is necessary for the audit log per audit #2; the
-    // user-experience contract — no confirm prompts — is preserved
-    // because the logger only allows or denies, never blocks on a UI
-    // round-trip. In `gated` mode the full canUseTool runs as before.
     permissionMode: "default",
-    canUseTool: permissionStrategy === "gated" ? canUseTool : autoModeLogger,
+    canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
@@ -424,7 +488,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           permissionDenials = ev.permission_denials.length;
         }
         if (ev.subtype === "error_during_execution" || ev.subtype === "error_max_turns") {
-          resultError = `SDK result: ${ev.subtype}`;
+          // Some SDK builds populate `result` with the upstream
+          // failure body for error subtypes; capture it so
+          // `friendlyError` can match the pattern. Fall back to the
+          // subtype label when nothing better is available.
+          const detail =
+            "result" in ev && typeof ev.result === "string" && ev.result.length > 0
+              ? ev.result
+              : ev.subtype;
+          resultError = detail;
         }
       }
     }
@@ -438,7 +510,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   if (resultError) {
     return {
       ok: false,
-      error: resultError,
+      error: friendlyError(resultError),
       ...(lastSessionId ? { sessionId: lastSessionId } : {}),
       ...(durationMs != null ? { durationMs } : {}),
       ...(costUsd != null ? { costUsd } : {}),
