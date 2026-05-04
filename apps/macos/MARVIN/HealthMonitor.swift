@@ -25,6 +25,15 @@ enum SidecarState: Equatable {
         return false
     }
 
+    /// Convenience inverse of isOnline that's stricter — `.connecting`
+    /// is treated as neither offline nor online. Phase 1d.35 uses this
+    /// so the auto-start gate doesn't fire while the first health
+    /// probe is still in flight on cold launch.
+    var isOffline: Bool {
+        if case .offline = self { return true }
+        return false
+    }
+
     /// Tiny label shown next to the toolbar indicator. Phase 1d uses
     /// these — kept terse so they fit the unified title bar without
     /// truncation across realistic window widths.

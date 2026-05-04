@@ -36,6 +36,14 @@ struct ContentView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(WebViewCommands.self) private var webCommands
 
+    /// Phase 1d.35 — gate the auto-start-sidecar attempt so it
+    /// fires at most once per launch. Without this flag, every
+    /// health probe that returns offline would spawn another
+    /// `bin/marvin start` process — which is harmless because the
+    /// shell script idempotents itself, but generates spurious
+    /// processes and confuses tail-the-launchd-log workflows.
+    @State private var autoStartAttempted = false
+
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
@@ -181,6 +189,61 @@ struct ContentView: View {
         .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
             updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
         }
+        // Phase 1d.35 — auto-start the sidecar on first cold launch
+        // if it isn't already running. Removes the friction of
+        // having to keep a Terminal open with `bin/marvin start`;
+        // for users who installed via launchd (`bin/marvin start`
+        // is idempotent and forks the dev server), this is a one-
+        // line follow-up. Only fires when:
+        //   • the health monitor is already in `.offline` (sidecar
+        //     genuinely down, not just still booting),
+        //   • a `bin/marvin` script exists somewhere we can find it,
+        //   • the user hasn't disabled auto-start in Settings,
+        //   • we haven't already tried this session.
+        // After the attempt, normal health-probe cycling takes
+        // over — if the sidecar comes up, the next probe flips us
+        // to .online and the WebView mounts.
+        .onChange(of: health.state.isOffline) { _, isOffline in
+            maybeAutoStartSidecar(isOffline: isOffline)
+        }
+        .task {
+            // Run the same check on first appearance so launches
+            // that go straight to .offline (no .connecting transit)
+            // still get the auto-start attempt.
+            maybeAutoStartSidecar(isOffline: health.state.isOffline)
+        }
+    }
+
+    /// Auto-start gate. Reads UserDefaults for the user opt-out,
+    /// resolves a marvin binary, and at most once per session
+    /// fires `startSidecar()`. The attempt is fire-and-forget —
+    /// success is visible via the next health probe, failure shows
+    /// up as the offline view continuing to render with manual
+    /// affordances.
+    private func maybeAutoStartSidecar(isOffline: Bool) {
+        guard isOffline,
+              !autoStartAttempted,
+              autoStartEnabled,
+              marvinBinaryPath != nil
+        else { return }
+        autoStartAttempted = true
+        startSidecar()
+    }
+
+    /// User pref — defaults to true (silently auto-start), set
+    /// to false via Settings → "Auto-start sidecar at launch".
+    /// UserDefaults is read on every offline transition so a flip
+    /// in Settings takes effect on the next probe without needing
+    /// a relaunch.
+    private var autoStartEnabled: Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "marvin.autoStartSidecar") == nil {
+            // First read — populate the default explicitly so the
+            // Settings toggle has a known starting state to render.
+            defaults.set(true, forKey: "marvin.autoStartSidecar")
+            return true
+        }
+        return defaults.bool(forKey: "marvin.autoStartSidecar")
     }
 
     /// Parse the leading `(N)` pending-confirm count out of a

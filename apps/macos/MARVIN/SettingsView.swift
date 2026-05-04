@@ -15,6 +15,12 @@ struct SettingsView: View {
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
 
+    /// Phase 1d.35 — bound to UserDefaults via @AppStorage. Default
+    /// true so a fresh install auto-launches the sidecar on first
+    /// open; users on shared machines / non-conventional clone paths
+    /// can flip it off here.
+    @AppStorage("marvin.autoStartSidecar") private var autoStartSidecar: Bool = true
+
     /// `~/.marvin/` — same default as the sidecar's MARVIN_DATA_DIR.
     /// Built fresh per access so the path resolves correctly on a
     /// fresh user (no caching).
@@ -36,6 +42,8 @@ struct SettingsView: View {
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                 }
+                Toggle("Auto-start at launch", isOn: $autoStartSidecar)
+                    .help("On first cold launch with no sidecar running, MARVIN spawns `bin/marvin start` from the most likely repo clone path. Disable if you manage the sidecar via launchd or a separate Terminal.")
                 HStack {
                     Spacer()
                     Button("Re-probe now") {
