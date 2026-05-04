@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 
 import { MessageView } from "./message-view";
 import type { Message } from "./types";
@@ -44,7 +44,7 @@ export interface VirtualMessageListProps {
   onRetry?: () => void;
 }
 
-export function VirtualMessageList({
+function VirtualMessageListImpl({
   messages,
   windowSize = 200,
   onDecideConfirm,
@@ -96,3 +96,12 @@ export function VirtualMessageList({
     </>
   );
 }
+
+/**
+ * Memoized export. Page.tsx re-renders on every chat token, panel
+ * resize tick, hover, etc. With shallow-compare, re-renders that
+ * don't change `messages` / callbacks are skipped — a meaningful win
+ * during heavy turns where the parent flips through `marvinState`,
+ * `stats`, and `confirmRequest` all on the same tick.
+ */
+export const VirtualMessageList = memo(VirtualMessageListImpl);

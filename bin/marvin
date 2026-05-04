@@ -310,8 +310,24 @@ cmd_doctor() {
   info "doctor pass complete"
 }
 
+# Decide whether `apps/web/.next` (the production build artefact) is
+# present and not stale relative to source. "Stale" = source files
+# under apps/web/src or packages/* are newer than the build manifest.
+# Returns 0 when a usable build exists, 1 when a (re)build is needed.
+build_is_fresh() {
+  local manifest="apps/web/.next/build-manifest.json"
+  [ -f "$manifest" ] || return 1
+  # If anything under tracked source dirs is newer than the manifest, rebuild.
+  # `find -newer` does the comparison; `-print -quit` exits at the first hit.
+  local newer
+  newer="$(find apps/web/src apps/web/next.config.ts packages/*/src \
+    -type f -newer "$manifest" -print -quit 2>/dev/null || true)"
+  [ -z "$newer" ]
+}
+
 cmd_start() {
-  info "starting MARVIN on port $PORT"
+  local mode="${MARVIN_MODE:-prod}"
+  info "starting MARVIN on port $PORT (mode: $mode)"
 
   preflight
   local pf=$?
@@ -325,10 +341,32 @@ cmd_start() {
     return $pf
   fi
 
-  info "spawning 'pnpm dev' (output → $LOG_FILE)"
+  # In prod mode, ensure a fresh build exists before starting.
+  # Audit finding: `next dev` is 5–10× slower than `next start`; the
+  # default launch should serve production. Use `marvin dev` for
+  # explicit dev mode (HMR, source maps, slower).
+  local run_cmd="pnpm start"
+  if [ "$mode" = "dev" ]; then
+    run_cmd="pnpm dev"
+  else
+    if build_is_fresh; then
+      ok "build is fresh — skipping rebuild"
+    else
+      info "production build is stale or missing — running 'pnpm build'"
+      if pnpm build >>"$LOG_FILE" 2>&1; then
+        ok "build complete"
+      else
+        fail "build failed — see $LOG_FILE for details"
+        dim "  workaround: run with dev mode → MARVIN_MODE=dev $0 start  (or)  $0 dev"
+        return 1
+      fi
+    fi
+  fi
+
+  info "spawning '$run_cmd' (output → $LOG_FILE)"
   # nohup so the server keeps running if this shell exits.
   # setsid keeps it in a new process group so `stop` can kill cleanly.
-  nohup env MARVIN_PORT="$PORT" pnpm dev >"$LOG_FILE" 2>&1 &
+  nohup env MARVIN_PORT="$PORT" $run_cmd >"$LOG_FILE" 2>&1 &
   local pid=$!
   echo "$pid" >"$PID_FILE"
   ok "spawned pid $pid"
@@ -665,9 +703,11 @@ cmd_help() {
 marvin — lifecycle script for the MARVIN dev server
 
   marvin              (alias for start)
-  marvin start        preflight + start Next.js on port 3030
+  marvin start        preflight + production build (if stale) + 'next start'
+  marvin dev          preflight + 'next dev' — HMR, source maps, ~5–10× slower
+                      (use this when iterating on MARVIN's own UI)
   marvin stop         stop the running instance
-  marvin restart      stop + start
+  marvin restart      stop + start (production mode)
   marvin status       is it running? show auth + model + data dir
   marvin logs         tail the dev server log
   marvin doctor       run every preflight check, don't start anything
@@ -698,6 +738,7 @@ EOF
 
 case "${1:-start}" in
   start)    cmd_start   ;;
+  dev)      MARVIN_MODE=dev cmd_start ;;
   stop)     cmd_stop    ;;
   restart)  cmd_restart ;;
   status)   cmd_status  ;;
