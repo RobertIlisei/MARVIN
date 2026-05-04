@@ -72,9 +72,100 @@ struct ParticleInstance {
     var pulseBoost: Float
 }
 
-/// Per-frame uniforms. Layout MUST match `BrainUniforms` in the
-/// shader (32 bytes, 7 × Float32 + 2 × Int32 with viewport packed
-/// as float2 first). Driven by the lerped BrainProfile + theme.
+/// Per-frame uniforms for the compute kernel. Layout MUST match
+/// `BrainKernelUniforms` in the shader source: 24 × Float32 + 4 ×
+/// Int32 + 1 × UInt32 = 116 bytes, no padding (every field is 4
+/// bytes, so natural alignment is 4 throughout). Field order is
+/// documented inline; if it drifts, the kernel reads garbage and
+/// the brain visibly explodes — fast feedback, but worth a comment.
+///
+/// Time, rotation, and attractor evolution all happen CPU-side
+/// (small serial work on the main actor); the kernel is per-particle
+/// only. ADR-0019 §3 4e leaves "8 attractors via a small uniform
+/// array" as the chosen path — the alternative (attractors as
+/// another buffer) buys nothing at this size.
+struct BrainKernelUniforms {
+    /// Frame delta in seconds. CPU-clamped to `min(0.05, ...)` —
+    /// the kernel doesn't re-clamp, so don't pass values above
+    /// that or the integrator destabilises.
+    var dt: Float
+    /// Total simulated seconds (`elapsedSec`). Used as the time
+    /// argument to curl noise + attractor motion. Independent of
+    /// wall-clock so a paused sim resumes at the same noise phase.
+    var time: Float
+    /// Visible-sphere radius in pixels. `min(drawableW, drawableH)
+    /// / 3` — matches the lab standalone's `R = size / 2` after
+    /// accounting for RENDER_SCALE 1.5×.
+    var sphereRadius: Float
+    /// `min(drawableW, drawableH) / 2`. Sets the half-extent of the
+    /// projected coordinate frame the density grid spans (4f wires
+    /// the grid into the kernel; at 4e it's unused but kept in
+    /// uniforms so the layout doesn't churn).
+    var halfRender: Float
+    /// `drawableW / 2` — projection center X. The kernel writes
+    /// `sx = centerX + xr * persp` so the brain renders centred
+    /// even when the drawable is non-square.
+    var centerX: Float
+    /// `drawableH / 2` — projection center Y. See `centerX`.
+    var centerY: Float
+    /// `dgSize / min(w, h)` — pre-divided so the kernel binning
+    /// step is `gx = int((sx - margin) * invCellSize)`. Unused at
+    /// 4e (no density grid yet); kept in layout for 4f.
+    var invCellSize: Float
+    /// Precomputed `cos(rotationY)`, `sin(rotationY)` etc. Doing
+    /// the trig CPU-side once per frame avoids 12 000 redundant
+    /// transcendental calls in the kernel.
+    var cosY: Float
+    var sinY: Float
+    var cosX: Float
+    var sinX: Float
+    /// Swirl rotation matrix entries. `cosSw = cos(profile.swirl *
+    /// dt * 0.4)`. Applied once per particle as a tiny in-place
+    /// Y-axis rotation around the cluster.
+    var cosSw: Float
+    var sinSw: Float
+    // Profile knobs needed by the integrator. Subset of
+    // BrainProfile — only fields the kernel reads. Render-time
+    // knobs (dotR, dotA, chroma, redMix, …) live in BrainUniforms.
+    var damp: Float
+    var flowMag: Float
+    var shellPull: Float
+    var nfreq: Float
+    var neps: Float
+    /// `profile.lmin` — minimum life seconds at respawn.
+    var lmin: Float
+    /// `profile.lrange` — additional random life range. lives ∈
+    /// [lmin, lmin + lrange).
+    var lrange: Float
+    var synapse: Float
+    var coh: Float
+    var turb: Float
+    /// `profile.leaders` — fraction of particles spawned as
+    /// leaders. The kernel does `rand01() < leadersFrac ? 1 : 0`
+    /// per respawn.
+    var leadersFrac: Float
+    /// Active particle count for this frame (`profile.n`). The
+    /// kernel early-exits for `iid >= n`.
+    var n: Int32
+    /// Active attractor count (`profile.attractors`, capped at 8).
+    var nAtt: Int32
+    /// Previous frame's `n`. Particles in `[prevN, n)` get a fresh
+    /// respawn at the start of the kernel — covers a profile-lerp
+    /// that grows the active count (e.g. idle→thinking 8000→12000).
+    var prevN: Int32
+    /// Density-grid resolution. Unused at 4e (kernel doesn't bin).
+    /// Kept so 4f can wire it without restructuring uniforms.
+    var dgSize: Int32
+    /// Per-frame seed for the kernel's Wang-hash RNG. Combined with
+    /// `iid` so each particle sees a unique stream that's also
+    /// different across frames. CPU advances this each step.
+    var frameSeed: UInt32
+}
+
+/// Per-frame uniforms for the render passes. Layout MUST match
+/// `BrainUniforms` in the shader (32 bytes, 7 × Float32 + 2 × Int32
+/// with viewport packed as float2 first). Driven by the lerped
+/// BrainProfile + theme.
 struct BrainUniforms {
     /// Drawable size in pixels. The vertex shader divides by this
     /// to convert pixel-space positions to NDC.
@@ -360,5 +451,309 @@ fragment float4 brain_composite_fs(
 ) {
     constexpr sampler s(filter::linear, address::clamp_to_edge);
     return tex.sample(s, in.uv);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Phase 4e — compute kernel for the per-frame physics.
+//
+// Mirror of BrainSimulation.step's per-particle work in MSL. The
+// CPU still drives time (elapsedSec), rotation accumulators, and
+// the eight attractors (Lissajous + pulse phase) — those are
+// trivial serial work and packing them into a uniform/attractor
+// buffer is cheaper than dispatching another kernel for them.
+//
+// Buffer bindings:
+//   0..2  — posX/Y/Z   (rw, SoA, length maxN)
+//   3..5  — velX/Y/Z   (rw, SoA, length maxN)
+//   6,7   — ages/lives (rw, length maxN)
+//   8,9   — hues/leaders (rw — written on respawn, length maxN)
+//   10    — pulseBoosts (rw, length maxN)
+//   11    — instances  (w only, length maxN — read by vertex
+//                       shader's brain_particle_vs)
+//   12    — attractors (r, float4[8] — xyz + pulse)
+//   13    — uniforms   (r, BrainKernelUniforms)
+//
+// The render passes that follow this kernel (fade + particle +
+// composite) read `instances`. Metal's automatic hazard tracking
+// inserts the compute→render barrier when both encoders run on the
+// same command buffer (default behaviour for buffers we make
+// without `hazardTrackingMode = .untracked`).
+//
+// ─────────────────────────────────────────────────────────────────
+
+constant int kDG = 24;
+
+struct BrainKernelUniforms {
+    float dt;
+    float time;
+    float sphereRadius;
+    float halfRender;
+    float centerX;
+    float centerY;
+    float invCellSize;
+    float cosY;
+    float sinY;
+    float cosX;
+    float sinX;
+    float cosSw;
+    float sinSw;
+    float damp;
+    float flowMag;
+    float shellPull;
+    float nfreq;
+    float neps;
+    float lmin;
+    float lrange;
+    float synapse;
+    float coh;
+    float turb;
+    float leadersFrac;
+    int n;
+    int nAtt;
+    int prevN;
+    int dgSize;
+    uint frameSeed;
+};
+
+// Wang hash — fast, low-quality but uniform-enough for spawn
+// positions + life jitter + leader bit. Same family the GPU
+// particle-system literature uses; the visual signature matches
+// the CPU port's `Float.random` to within "you can't tell which
+// is which side-by-side" (the 4e DoD doesn't require bit-exact
+// reproduction, see ADR-0019 §3).
+inline uint wangHash(uint x) {
+    x = (x ^ 61u) ^ (x >> 16);
+    x *= 9u;
+    x ^= x >> 4;
+    x *= 0x27d4eb2du;
+    x ^= x >> 15;
+    return x;
+}
+
+// Pull a 0..1 float from the rolling RNG state. Mutates state so
+// successive calls produce uncorrelated values.
+inline float rand01(thread uint& state) {
+    state = wangHash(state);
+    return float(state) * (1.0f / 4294967296.0f);
+}
+
+// Sum-of-sinusoids "noise" function. Verbatim from
+// BrainSimulation.swift — three sin·cos products, cheap, called 18×
+// per particle per frame inside curlFlow. Not Perlin/simplex; the
+// fingerprint is the lab's, not a textbook noise.
+inline float brainNoise(float x, float y, float z, float seed, float nfreq) {
+    float f = nfreq;
+    return sin(x * f + seed) * cos(y * f * 0.9f + seed * 1.7f)
+         + sin(y * f * 1.1f + seed * 2.1f) * cos(z * f + seed * 0.9f)
+         + sin(z * f * 0.95f + seed * 1.3f) * cos(x * f * 1.05f + seed * 2.3f);
+}
+
+// Planar 2D-evaluated noise — the third coordinate is always 0,
+// the first two are scaled by the layer's frequency. Mirrors the
+// `a1`/`a2`/`a3` (and `b1`/`b2`/`b3`) closures in the Swift port.
+inline float brainPlanar(float pp, float qq, float f, float seed, float nfreq) {
+    return brainNoise(pp * f, qq * f, 0.0f, seed, nfreq);
+}
+
+// Curl of two layered planar noise fields. The high-frequency layer
+// (`f2 = coh * 3.5`) blends in via `turb`. Same shape as
+// BrainSimulation.swift's `curlFlow`. The cross-component derivative
+// pairs are written out in full because Metal doesn't have a
+// closure or tuple-returning compound that's any cheaper than the
+// flat math here.
+inline float3 brainCurlFlow(
+    float3 p, float t,
+    float coh, float turb, float neps, float nfreq
+) {
+    float e = neps;
+    float ts = t * 0.5f;
+
+    // Layer 1.
+    float f1 = coh;
+    float s11 = 11.0f + ts;
+    float s12 = 53.0f + ts * 0.9f;
+    float s13 = 97.0f + ts * 1.1f;
+    float cx1 = (brainPlanar(p.x,     p.y + e, f1, s13, nfreq) - brainPlanar(p.x,     p.y - e, f1, s13, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x,     p.z + e, f1, s12, nfreq) - brainPlanar(p.x,     p.z - e, f1, s12, nfreq)) / (2.0f * e);
+    float cy1 = (brainPlanar(p.y,     p.z + e, f1, s11, nfreq) - brainPlanar(p.y,     p.z - e, f1, s11, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x + e, p.y,     f1, s13, nfreq) - brainPlanar(p.x - e, p.y,     f1, s13, nfreq)) / (2.0f * e);
+    float cz1 = (brainPlanar(p.x + e, p.z,     f1, s12, nfreq) - brainPlanar(p.x - e, p.z,     f1, s12, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x,     p.y + e, f1, s11, nfreq) - brainPlanar(p.x,     p.y - e, f1, s11, nfreq)) / (2.0f * e);
+
+    // Layer 2 — high-frequency turbulence.
+    float f2 = coh * 3.5f;
+    float s21 = 211.0f + ts * 1.7f;
+    float s22 = 313.0f + ts * 1.5f;
+    float s23 = 419.0f + ts * 1.9f;
+    float cx2 = (brainPlanar(p.x,     p.y + e, f2, s23, nfreq) - brainPlanar(p.x,     p.y - e, f2, s23, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x,     p.z + e, f2, s22, nfreq) - brainPlanar(p.x,     p.z - e, f2, s22, nfreq)) / (2.0f * e);
+    float cy2 = (brainPlanar(p.y,     p.z + e, f2, s21, nfreq) - brainPlanar(p.y,     p.z - e, f2, s21, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x + e, p.y,     f2, s23, nfreq) - brainPlanar(p.x - e, p.y,     f2, s23, nfreq)) / (2.0f * e);
+    float cz2 = (brainPlanar(p.x + e, p.z,     f2, s22, nfreq) - brainPlanar(p.x - e, p.z,     f2, s22, nfreq)) / (2.0f * e)
+              - (brainPlanar(p.x,     p.y + e, f2, s21, nfreq) - brainPlanar(p.x,     p.y - e, f2, s21, nfreq)) / (2.0f * e);
+
+    float mix = turb;
+    return float3(
+        cx1 * (1.0f - mix * 0.5f) + cx2 * mix * 0.6f,
+        cy1 * (1.0f - mix * 0.5f) + cy2 * mix * 0.6f,
+        cz1 * (1.0f - mix * 0.5f) + cz2 * mix * 0.6f
+    );
+}
+
+// Place particle `i` at a uniformly-random direction on the sphere
+// with radius in [0.55, 1.0] × sphereRadius. Same distribution as
+// BrainSimulation.respawn, just driven by a Wang-hash thread-local
+// RNG instead of Float.random.
+inline void brainRespawn(
+    uint i, thread uint& rng,
+    float sphereRadius,
+    float lmin, float lrange,
+    float leadersFrac,
+    device float* posX, device float* posY, device float* posZ,
+    device float* velX, device float* velY, device float* velZ,
+    device float* ages, device float* lives,
+    device float* hues, device float* leaders
+) {
+    float u = rand01(rng);
+    float v = rand01(rng);
+    float theta = 2.0f * M_PI_F * u;
+    float phi = acos(2.0f * v - 1.0f);
+    float r = sphereRadius * (0.55f + rand01(rng) * 0.45f);
+    posX[i] = r * sin(phi) * cos(theta);
+    posY[i] = r * sin(phi) * sin(theta);
+    posZ[i] = r * cos(phi);
+    velX[i] = 0.0f;
+    velY[i] = 0.0f;
+    velZ[i] = 0.0f;
+    ages[i] = 0.0f;
+    lives[i] = lmin + rand01(rng) * lrange;
+    hues[i] = rand01(rng);
+    leaders[i] = (rand01(rng) < leadersFrac) ? 1.0f : 0.0f;
+}
+
+kernel void brain_step_kernel(
+    uint iid                                 [[thread_position_in_grid]],
+    device float* posX                       [[buffer(0)]],
+    device float* posY                       [[buffer(1)]],
+    device float* posZ                       [[buffer(2)]],
+    device float* velX                       [[buffer(3)]],
+    device float* velY                       [[buffer(4)]],
+    device float* velZ                       [[buffer(5)]],
+    device float* ages                       [[buffer(6)]],
+    device float* lives                      [[buffer(7)]],
+    device float* hues                       [[buffer(8)]],
+    device float* leaders                    [[buffer(9)]],
+    device float* pulseBoosts                [[buffer(10)]],
+    device ParticleInstance* instances       [[buffer(11)]],
+    constant float4* attractors              [[buffer(12)]],
+    constant BrainKernelUniforms& u          [[buffer(13)]]
+) {
+    if (iid >= uint(u.n)) {
+        return;
+    }
+
+    // Per-particle RNG. Multiply by a large odd 32-bit constant so
+    // adjacent threads see well-separated seed streams; XOR with
+    // the per-frame seed so each frame's stream is uncorrelated
+    // with the last.
+    uint rng = wangHash(iid * 2654435761u + u.frameSeed);
+
+    // Newly-active particle when n grew this frame (e.g. profile
+    // lerp idle→thinking 8000→12000). One-shot fresh respawn.
+    if (iid >= uint(u.prevN)) {
+        brainRespawn(iid, rng, u.sphereRadius, u.lmin, u.lrange, u.leadersFrac,
+                     posX, posY, posZ, velX, velY, velZ, ages, lives, hues, leaders);
+    }
+
+    float3 pos = float3(posX[iid], posY[iid], posZ[iid]);
+    float3 vel = float3(velX[iid], velY[iid], velZ[iid]);
+
+    // Curl flow.
+    float3 flow = brainCurlFlow(pos, u.time, u.coh, u.turb, u.neps, u.nfreq);
+    vel = vel * u.damp + flow * u.flowMag * u.dt;
+
+    // Attractor pull + per-particle pulse boost.
+    float nearPulse = 0.0f;
+    if (u.nAtt > 0 && u.synapse > 0.0f) {
+        float minD2 = INFINITY;
+        int minA = 0;
+        for (int a = 0; a < u.nAtt; a++) {
+            float3 ap = attractors[a].xyz;
+            float3 d = ap - pos;
+            float d2 = dot(d, d);
+            if (d2 < minD2) {
+                minD2 = d2;
+                minA = a;
+            }
+        }
+        float d = max(0.0001f, sqrt(minD2));
+        float pullF = (u.synapse * 40.0f) / (1.0f + d * 0.02f);
+        float3 toA = (attractors[minA].xyz - pos) / d;
+        vel += toA * pullF * u.dt;
+        float closeness = max(0.0f, 1.0f - d / (u.sphereRadius * 0.6f));
+        nearPulse = attractors[minA].w * closeness;
+    }
+    pulseBoosts[iid] = max(pulseBoosts[iid] * exp(-u.dt * 3.0f), nearPulse);
+
+    // Shell pull — soft attraction toward the sphere surface.
+    float r2 = dot(pos, pos);
+    float r = max(0.0001f, sqrt(r2));
+    float shellR = u.sphereRadius * 0.95f;
+    float shellForce = -(r - shellR) * u.shellPull;
+    vel += (pos / r) * shellForce * u.dt * 3.0f;
+
+    // Swirl — incremental Y-axis rotation around the cluster.
+    float nx = pos.x * u.cosSw - pos.z * u.sinSw;
+    float nz = pos.x * u.sinSw + pos.z * u.cosSw;
+    pos = float3(nx, pos.y, nz);
+
+    // Integrate.
+    pos += vel * u.dt * 15.0f;
+
+    // Lifecycle.
+    ages[iid] += u.dt;
+    bool respawned = false;
+    if (ages[iid] > lives[iid]) {
+        brainRespawn(iid, rng, u.sphereRadius, u.lmin, u.lrange, u.leadersFrac,
+                     posX, posY, posZ, velX, velY, velZ, ages, lives, hues, leaders);
+        // Reload the freshly-spawned position for projection.
+        pos = float3(posX[iid], posY[iid], posZ[iid]);
+        respawned = true;
+    }
+    if (!respawned) {
+        posX[iid] = pos.x;
+        posY[iid] = pos.y;
+        posZ[iid] = pos.z;
+        velX[iid] = vel.x;
+        velY[iid] = vel.y;
+        velZ[iid] = vel.z;
+    }
+
+    // Project to screen + depth. Same composition as
+    // BrainSimulation: rotate by Y, then by X, then perspective.
+    float xr  =  pos.x * u.cosY + pos.z * u.sinY;
+    float zr0 = -pos.x * u.sinY + pos.z * u.cosY;
+    float yr  =  pos.y * u.cosX - zr0 * u.sinX;
+    float zr  =  pos.y * u.sinX + zr0 * u.cosX;
+    float persp = 1.0f + zr / (u.sphereRadius * 3.0f);
+
+    // Centre at the drawable midpoint, not at half-renderSize —
+    // fixes the off-centre projection visible at 4d when the
+    // preview window is non-square.
+    float sx = u.centerX + xr * persp;
+    float sy = u.centerY + yr * persp;
+    float sd = (zr + u.sphereRadius) / (2.0f * u.sphereRadius);
+
+    // Write the instance the renderer reads. We do NOT atomic-bin
+    // density here (deferred to 4f per the BrainKernelUniforms
+    // comment on `dgSize`).
+    ParticleInstance ins;
+    ins.screenX = sx;
+    ins.screenY = sy;
+    ins.depth = sd;
+    ins.hue = hues[iid];
+    ins.leader = leaders[iid];
+    ins.pulseBoost = pulseBoosts[iid];
+    instances[iid] = ins;
 }
 """
