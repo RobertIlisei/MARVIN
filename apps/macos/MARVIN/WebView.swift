@@ -45,6 +45,22 @@ final class WebViewCommands {
     /// during page loads. Phase 1d.10.
     var loadProgress: Double = 0
 
+    /// Page-level content zoom (1.0 = 100%). Persisted to
+    /// UserDefaults so the user's preferred size survives across
+    /// launches. Clamped to [0.5, 3.0] — beyond that the layout
+    /// breaks down (toolbar items overlap, text wraps badly).
+    /// Phase 1d.11. WebView reads this on mount and sets
+    /// `webView.pageZoom`; menu commands mutate via setZoom(_:).
+    var zoomLevel: Double = {
+        let saved = UserDefaults.standard.double(forKey: "marvin.zoomLevel")
+        return saved == 0 ? 1.0 : saved
+    }() {
+        didSet {
+            UserDefaults.standard.set(zoomLevel, forKey: "marvin.zoomLevel")
+            webView?.pageZoom = CGFloat(zoomLevel)
+        }
+    }
+
     /// Soft reload — uses the cache. Cheap, the common "I want the
     /// page to refetch" action. Maps to ⌘R in the View menu.
     func reload() {
@@ -56,6 +72,26 @@ final class WebViewCommands {
     /// Maps to ⇧⌘R in the View menu.
     func forceReload() {
         webView?.reloadFromOrigin()
+    }
+
+    /// Bump zoom by 10%. Hits the [0.5, 3.0] clamp at the edges.
+    /// Maps to ⌘= in the View menu (macOS displays as ⌘+).
+    func zoomIn() {
+        setZoom(zoomLevel * 1.1)
+    }
+
+    /// Cut zoom by 10%. Maps to ⌘- in the View menu.
+    func zoomOut() {
+        setZoom(zoomLevel / 1.1)
+    }
+
+    /// Reset to 100%. Maps to ⌘0 in the View menu.
+    func resetZoom() {
+        setZoom(1.0)
+    }
+
+    private func setZoom(_ level: Double) {
+        zoomLevel = min(max(level, 0.5), 3.0)
     }
 }
 
@@ -105,6 +141,11 @@ struct WebView: NSViewRepresentable {
         // bar (replaced by NSToolbar). For now, harmless metadata.
         let baseUA = (webView.value(forKey: "userAgent") as? String) ?? ""
         webView.customUserAgent = baseUA + " MARVIN-Swift/0.1"
+
+        // Apply persisted zoom (Phase 1d.11) before load so the
+        // initial paint already at the user's preferred size — no
+        // flash of 100% before the persisted level kicks in.
+        webView.pageZoom = CGFloat(WebViewCommands.shared.zoomLevel)
 
         webView.load(URLRequest(url: url))
 

@@ -127,6 +127,29 @@ struct MARVINApp: App {
                     }
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                // Phase 1d.11 — page zoom controls. Standard macOS
+                // shortcuts: ⌘0 reset, ⌘= zoom in (macOS displays
+                // as ⌘+ since the same key is shifted), ⌘- zoom
+                // out. Persisted to UserDefaults so the size
+                // survives launches. Disabled offline because the
+                // WebView isn't mounted then.
+                Divider()
+                Button("Actual Size") {
+                    WebViewCommands.shared.resetZoom()
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+                Button("Zoom In") {
+                    WebViewCommands.shared.zoomIn()
+                }
+                .keyboardShortcut("=", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+                Button("Zoom Out") {
+                    WebViewCommands.shared.zoomOut()
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(!health.state.isOnline)
             }
 
             // Help menu — quick links out to the project. macOS
