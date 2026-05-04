@@ -1,10 +1,16 @@
 # Roadmap
 
-Pulled from [PLAN.md](../PLAN.md). That file is the authoritative delivery plan; this page is the narrative view.
+The canonical view of where MARVIN stands: what's in flight, what shipped, what's deferred, what's deliberately out of scope. v1.2 (audit-driven hardening pass) closed out 2026-04-26.
 
-> Phase 1-4 shipped 2026-04-17. Most of Phase 5 shipped 2026-04-18/19. MARVIN is v1-complete pending the deferred items below.
+For the chronological history with diagnostic trails per entry, see [`docs/history/CHANGELOG.md`](./history/CHANGELOG.md). For material design decisions, see [`docs/decisions/`](./decisions/). For dated audit reports, see [`docs/reviews/`](./reviews/).
 
-## Done
+## In flight
+
+_Active work. Add a one-line entry when a piece of work starts; move it to `## Shipped` (with the date) when it lands. Keep entries terse — link out to a PR, ADR, or roadmap note for detail._
+
+_Nothing in flight right now._
+
+## Shipped
 
 ### Phase 1 — Foundations · shipped 2026-04-17
 
@@ -68,6 +74,23 @@ Pulled from [PLAN.md](../PLAN.md). That file is the authoritative delivery plan;
 - **[done 2026-04-19]** Clickable wordmark as "return to hero" nav. Hydration warning suppression.
 - **[done 2026-04-19]** Full documentation pass — `docs/` with 30 files (this page).
 
+### v1.1 — install-app + scout subagents · shipped 2026-04-21
+
+- `bin/marvin install-app` ships a real `/Applications/MARVIN.app` plus a launchd user agent that auto-starts the server on login. See [`apps/desktop/README.md`](../apps/desktop/README.md) and [ADR-0010](./decisions/0010-desktop-wrapper-tauri.md).
+- Scout subagents (`subagent_type: "scout"`) — read-only research carve-out via the SDK's `agents:` option. SDK-level `disallowedTools` is the structural backstop. See [ADR-0014](./decisions/0014-scout-subagents-read-only.md).
+- File tree toolbar, source control panel polish, model-picker presets.
+
+### v1.2 — audit-driven hardening pass · shipped 2026-04-26
+
+Closed every 🔴 finding in the [2026-04-26 full audit](./reviews/2026-04-26-full-audit.md). Highlights:
+
+- **Permission gate is now load-bearing in `auto` mode too** — bare `Task` calls require confirm; sanctioned subagent types (`scout`, `general-purpose`) auto-allow. `BASH_HARD_DENY` no longer leaks `rm -rf $HOME`, `git push -f`, `chmod -R 777`, `curl … | sh`. See [ADR-0015](./decisions/0015-auto-mode-policy-floor-and-audit-log.md).
+- **Auto-mode audit log** — every auto-allowed Edit/Write/Bash appends one JSONL line to `<workDir>/.marvin/auto-audit.jsonl`. New [`/api/audit/auto`](./reference/api.md) route.
+- **Confirm prompt redesign** — severity classifier (warn/danger), filled accent allow button, blast-radius hint, `(N)` `document.title` badge while pending, 5-minute auto-deny via the registry timer.
+- **Honeycomb env race fixed** — `computeHoneycombTelemetryEnv()` returns the env-diff to merge; per-turn `Options.env` so concurrent turns for two projects don't clobber each other.
+- **`/api/chat` cwd validation** — returns `400 invalid-cwd` when cwd is missing, non-absolute, or equals MARVIN's own install root.
+- TopBar collapsed (17 controls → 7), empty-state hero trimmed, sticky-bottom chat scroll, single `useMarvinPrefs()` Context, `bin/marvin doctor` graph smoke check.
+
 ## Deferred (blockers, not capacity)
 
 ### Honeycomb MCP integration for observability
@@ -108,6 +131,6 @@ Things MARVIN deliberately won't do. See [Vision](./business/vision.md) for the 
 
 ## Related
 
-- [PLAN.md](../PLAN.md) — authoritative delivery plan + changelog.
+- [Changelog](./history/CHANGELOG.md) — chronological record of what shipped, when, and why.
 - [Vision](./business/vision.md) — what MARVIN is trying to be.
 - [ADRs](./decisions/) — material decisions.

@@ -58,8 +58,9 @@ If you just want to run MARVIN, start with [Quickstart](./getting-started/quicks
 - [Cost model](./business/cost-model.md)
 - [Licensing](./business/licensing.md)
 
-## Roadmap
-- [Roadmap](./roadmap.md) — pulled from [PLAN.md](../PLAN.md)
+## Roadmap + history
+- [Roadmap](./roadmap.md) — current state (in flight, shipped, deferred, not planned)
+- [Changelog](./history/CHANGELOG.md) — chronological record of what shipped, when, and why
 
 ---
 
@@ -71,7 +72,7 @@ This structure mirrors [Claude Code's documentation](https://docs.claude.com/en/
 
 1. **Code** — if the docs and the code disagree, trust the code. File an issue or open a PR to fix the doc.
 2. **ADRs in [`/docs/decisions/`](./decisions/)** — material design decisions, written at the time the decision was made. Conflicts between a proposed change and an ADR are surfaced in the 8-phase workflow (see [Architecture](./concepts/eight-phase-workflow.md#phase-4-architecture)).
-3. **[PLAN.md](../PLAN.md)** — the delivery plan + changelog. Phase-level status lives there.
+3. **[Roadmap](./roadmap.md) + [Changelog](./history/CHANGELOG.md)** — current state and chronological history of shipped work.
 4. **The rest of the docs** — explanatory, contextual, should be readable without prior exposure to MARVIN.
 
 **Never baked into MARVIN's own code:** any specific user project's service names, realm ids, workflow conventions, or infrastructure assumptions. MARVIN is supposed to work the same way for a rocket-guidance solver as for a Next.js app. Those live in each user project's own `<workDir>/docs/adr/` and `<workDir>/.marvin/memory.md` — see [Memory and ADRs](./concepts/memory-and-adrs.md).
