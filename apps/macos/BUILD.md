@@ -77,13 +77,37 @@ xcodegen + xcodebuild + install steps for end-users; see below.
 ### Install as a real Application
 
 ```bash
-bin/marvin install-macos-app    # builds Release, installs to /Applications/MARVIN-Swift.app
+# 1) Build + install the .app (Release, ad-hoc signed).
+bin/marvin install-macos-app
+
+# 2) Start the Node sidecar — the .app polls /api/health and won't
+#    leave the "connecting…" screen until the sidecar is up.
+bin/marvin start
+
+# 3) Launch the .app.
+open /Applications/MARVIN-Swift.app
 ```
 
 Installs as **MARVIN-Swift.app**, distinct from the Tauri build at
 `/Applications/MARVIN.app`. Both coexist during the migration
 evaluation period; Phase 6 (Tauri retire) renames this to
 `MARVIN.app` and uninstalls the Tauri one.
+
+After step 3 you should see:
+
+- A **Brain Circuit icon** on the Dock and in `/Applications/`
+  (`AppIcon.icns`, indigo gradient on rounded corners).
+- A **menu-bar status item** with the same Brain Circuit shape (in
+  template form — black on light bars, white on dark). Left-click
+  brings the window forward; right-click opens Show / About /
+  Settings… / Quit.
+
+> **Can't see the menu-bar icon?** On MacBooks with the notch the OS
+> sometimes places new status items in the (invisible) overflow
+> region to the right of the notch. ⌘-drag the icon along the menu
+> bar to a permanent slot and it'll stick — `autosaveName` persists
+> the position across launches. If you use Bartender, Hidden Bar, or
+> similar, check that MARVIN isn't in the hidden tray.
 
 The script picks its build path automatically:
 

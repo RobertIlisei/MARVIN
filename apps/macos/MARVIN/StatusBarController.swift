@@ -55,6 +55,16 @@ final class StatusBarController {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.item = item
 
+        // Persist the user's chosen position. Without this, macOS
+        // picks a slot per-launch and on MacBook Pros with the notch
+        // the item often ends up in the (invisible) overflow region
+        // to the right of the notch. With an autosaveName, the user
+        // can ⌘-drag the icon to a permanent spot and it sticks.
+        // The name is namespaced to MARVIN so it doesn't collide
+        // with any other app's defaults entry.
+        item.autosaveName = "MARVIN-Swift.statusItem"
+        item.behavior = .terminationOnRemoval
+
         // The button is the click target. We set the image + action
         // here; the `target` is `self` because the click handler is
         // an instance method, not a closure.
@@ -78,11 +88,13 @@ final class StatusBarController {
         if let idle = loadTemplateImage(named: "marvin-idle") {
             idleImage = idle
             button?.image = idle
+            NSLog("[StatusBarController] loaded marvin-idle (\(idle.size.width)x\(idle.size.height))")
         } else {
             // Fallback so the item is still discoverable even if the
             // SVG didn't make it into the bundle (shouldn't happen,
             // but a missing icon shouldn't hide the surface).
             button?.title = "M"
+            NSLog("[StatusBarController] failed to load marvin-idle.svg — falling back to text")
         }
         if let active = loadTemplateImage(named: "marvin-active") {
             activeImage = active
@@ -245,28 +257,77 @@ final class StatusBarController {
         NSApp.terminate(nil)
     }
 
-    /// Load a template SVG from the bundle. Setting `isTemplate = true`
-    /// tells macOS to ignore the SVG's stroke colour and render it
-    /// using the menu bar's current foreground colour — black on
-    /// light, white on dark. This is the convention every native
-    /// menu-bar utility follows.
+    /// Load a template image from the bundle SVG.
     ///
-    /// We resolve the URL explicitly via Bundle.url instead of
-    /// NSImage(named:) because NSImage's name-based lookup walks
-    /// asset catalogs first; loose .svg files in Resources/ aren't
-    /// always found that way (the lookup depends on what build path
-    /// produced the bundle — Xcode vs the SPM-fallback assembler in
-    /// bin/marvin). An explicit URL load works in both cases.
+    /// We rasterise the vector SVG into an `NSBitmapImageRep` here
+    /// rather than handing the vector NSImage straight to AppKit. The
+    /// reason: `NSImage(contentsOf: someSVG).isTemplate = true` is
+    /// flaky for menu-bar drawing on macOS Sonoma — the template
+    /// flag doesn't always propagate to the SVG-backed image rep, so
+    /// the icon either renders in its source `currentColor` (which
+    /// resolves to black) and stays invisible against a dark menu
+    /// bar, or doesn't draw at all.
+    ///
+    /// Going through a concrete bitmap rep is bulletproof: the
+    /// bitmap's alpha channel is what macOS actually tints, and the
+    /// flag set on the NSImage is honoured because the rep is a
+    /// regular bitmap. We render at @2x for retina menu bars.
+    ///
+    /// Bundle.url + NSImage(contentsOf:) is used to find the source
+    /// SVG because NSImage(named:) walks asset catalogs first; loose
+    /// `.svg` files in Resources/ aren't always found by name (the
+    /// behaviour depends on what built the bundle — Xcode vs the
+    /// SPM-fallback assembler in `bin/marvin`). An explicit URL load
+    /// works in both cases.
     private func loadTemplateImage(named name: String) -> NSImage? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "svg"),
-              let img = NSImage(contentsOf: url) else {
+              let svgImage = NSImage(contentsOf: url) else {
             return nil
         }
-        // 18×18 is the standard menu-bar icon size on macOS — fits
-        // the bar comfortably without crowding the clock.
-        img.size = NSSize(width: 18, height: 18)
-        img.isTemplate = true
-        return img
+
+        // 20 pt for the menu-bar icon. The conventional "rule" is
+        // 18, but the Brain Circuit design has thin 1.75-px strokes
+        // on a 24-px grid — at 18 pt those become ~1.3 device pixels
+        // and read as a faint outline against a busy menu bar
+        // (especially on dark mode where every pixel of the icon
+        // competes with the bar's foreground). 20 pt gives the
+        // strokes ~1.5 px which lands cleanly inside the standard
+        // 22-pt menu bar height. Things 3 / Linear / Slack all use
+        // 18-22 pt depending on their icon weight.
+        let pointSize = NSSize(width: 20, height: 20)
+        let scale: CGFloat = 2
+
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(pointSize.width * scale),
+            pixelsHigh: Int(pointSize.height * scale),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        bitmap.size = pointSize
+
+        NSGraphicsContext.saveGraphicsState()
+        if let ctx = NSGraphicsContext(bitmapImageRep: bitmap) {
+            NSGraphicsContext.current = ctx
+            ctx.imageInterpolation = .high
+            // SVG `stroke="currentColor"` resolves to black inside an
+            // NSImage rasterisation context. That's fine — template
+            // images are tinted from the alpha channel, so the
+            // actual RGB doesn't matter as long as the strokes are
+            // opaque pixels.
+            svgImage.draw(in: NSRect(origin: .zero, size: pointSize))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        let templated = NSImage(size: pointSize)
+        templated.addRepresentation(bitmap)
+        templated.isTemplate = true
+        return templated
     }
 
     /// Plain timer stream — yields a tick every `seconds`, plus an
