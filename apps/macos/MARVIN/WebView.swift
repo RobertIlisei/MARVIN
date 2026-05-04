@@ -24,6 +24,31 @@
 import SwiftUI
 @preconcurrency import WebKit
 
+/// Bridge between the SwiftUI menu bar (commands fire outside the
+/// view hierarchy) and the live `WKWebView`. Single-window app, so a
+/// shared instance is fine — the WebView registers itself on mount
+/// and clears on tear-down. Phase 1+ may need a per-window registry
+/// if MARVIN ever opens multiple windows.
+@MainActor
+@Observable
+final class WebViewCommands {
+    static let shared = WebViewCommands()
+    weak var webView: WKWebView?
+
+    /// Soft reload — uses the cache. Cheap, the common "I want the
+    /// page to refetch" action. Maps to ⌘R in the View menu.
+    func reload() {
+        webView?.reload()
+    }
+
+    /// Hard reload — bypasses cache via `reloadFromOrigin()`. Use
+    /// when the page is showing stale assets after a sidecar rebuild.
+    /// Maps to ⇧⌘R in the View menu.
+    func forceReload() {
+        webView?.reloadFromOrigin()
+    }
+}
+
 struct WebView: NSViewRepresentable {
     let url: URL
 
@@ -64,7 +89,23 @@ struct WebView: NSViewRepresentable {
         webView.customUserAgent = baseUA + " MARVIN-Swift/0.1"
 
         webView.load(URLRequest(url: url))
+
+        // Register with the menu-command bridge so View → Reload
+        // (⌘R) and Force Reload (⇧⌘R) reach this WebView.
+        WebViewCommands.shared.webView = webView
+
         return webView
+    }
+
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        // Clear the singleton's weak ref proactively. The weak ref
+        // would clear on its own when the WebView deallocates, but
+        // SwiftUI sometimes keeps NSViewRepresentables alive past
+        // their visible lifetime, and we don't want a stale pointer
+        // surviving an online → offline transition.
+        if WebViewCommands.shared.webView === nsView {
+            WebViewCommands.shared.webView = nil
+        }
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {

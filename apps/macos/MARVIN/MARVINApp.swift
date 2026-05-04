@@ -1,12 +1,11 @@
-// Phase 0 entry point — see docs/decisions/0016-swift-migration.md.
+// Phase 1a/b/c entry point — see docs/decisions/0016-swift-migration.md.
 //
 // The app boots a single window, polls the Node sidecar at
 // http://localhost:3030/api/health, and renders one of three states
-// in the content view: connecting / online (with the auth + model
-// summary) / offline (with concrete instructions for starting the
-// sidecar). Phase 0 deliberately does NOT load the web app yet —
-// that's Phase 1, where this same window gets a WKWebView island
-// pointing at localhost:3030.
+// in the content view: connecting / online (full-bleed WKWebView
+// pointed at localhost:3030) / offline (with concrete instructions
+// for starting the sidecar). Phase 1d (NSToolbar) and Phase 2+ are
+// gated on the daily-use evaluation — see PHASE-1A-OBSERVATIONS.md.
 //
 // Architecture note: the sidecar is the trust boundary. The Swift
 // process never reads Anthropic credentials, never spawns the
@@ -29,7 +28,9 @@ struct MARVINApp: App {
                 // 1440×900 default + 960×600 floor — matches the
                 // existing Tauri config (tauri.conf.json) so users
                 // don't see a different window geometry across the
-                // two builds during the migration.
+                // two builds during the migration. Phase 1c adds
+                // `frameAutosaveName`, so subsequent launches restore
+                // the user's last frame in preference to ideal*.
                 .frame(
                     minWidth: 960,
                     idealWidth: 1440,
@@ -38,21 +39,74 @@ struct MARVINApp: App {
                 )
                 .task {
                     // Start polling on launch; the monitor self-stops
-                    // when the window closes (Phase 0 only has one).
+                    // when the window closes (Phase 1a only has one).
                     await health.start()
                 }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
         .commands {
-            // Replace the default New / Open menu with something
-            // useful for MARVIN's shape. Phase 1+ will flesh this
-            // out with project switching, pane toggles, etc.
-            CommandGroup(replacing: .newItem) {
-                Button("Reconnect to Sidecar") {
-                    Task { await health.refreshNow() }
+            // Phase 1b — native menu bar.
+            //
+            // Standard macOS menus (App / Edit / Window) are
+            // provided by SwiftUI for free. We extend View and Help
+            // with MARVIN-specific items.
+            //
+            // Deliberately NOT claimed by SwiftUI here: ⌘K, ⌘B/G/J/P,
+            // ⌘⇧N, ⌘., `?`. Those are the web-app's keyboard
+            // shortcuts, handled by React inside the WebView. If a
+            // SwiftUI menu item assigned `keyboardShortcut("k", ...)`
+            // it would intercept ⌘K and the web side would never
+            // hear it. Phase 1d (NSToolbar + bridge) replaces the
+            // web-rendered top bar properly; until then, the web
+            // shortcuts pass through untouched.
+
+            // View → Reload (⌘R) / Force Reload (⇧⌘R).
+            //
+            // Reload uses the cache; Force Reload bypasses it
+            // (`reloadFromOrigin()`) — useful after a sidecar rebuild
+            // when the page is showing stale Next.js assets. Both
+            // are guarded by health.state — Reload makes no sense
+            // when the WebView isn't even mounted.
+            CommandGroup(after: .toolbar) {
+                Divider()
+                Button("Reload") {
+                    if health.state.isOnline {
+                        WebViewCommands.shared.reload()
+                    } else {
+                        // When offline, ⌘R kicks the health probe —
+                        // matches the explicit "Reconnect" button in
+                        // the offline view.
+                        Task { await health.refreshNow() }
+                    }
                 }
                 .keyboardShortcut("r", modifiers: [.command])
+
+                Button("Force Reload") {
+                    if health.state.isOnline {
+                        WebViewCommands.shared.forceReload()
+                    } else {
+                        Task { await health.refreshNow() }
+                    }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+            }
+
+            // Help menu — quick links out to the project. macOS
+            // already auto-creates a Help menu with a search field
+            // and a "$AppName Help" item; CommandGroup(replacing:
+            // .help) lets us put real items there.
+            CommandGroup(replacing: .help) {
+                Button("MARVIN on GitHub") {
+                    if let url = URL(string: "https://github.com/RobertIlisei/MARVIN") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Button("Report an Issue…") {
+                    if let url = URL(string: "https://github.com/RobertIlisei/MARVIN/issues/new") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
     }

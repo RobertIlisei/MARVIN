@@ -6,12 +6,15 @@ sidecar at `apps/web` (Next.js + Agent SDK + all `/api/*` routes)
 stays unchanged and is accessed via HTTP/SSE on `localhost:3030`.
 This is the "shell migrates, brain stays" shape.
 
-**Status:** Phase 1a (WKWebView island) shipped. Window opens, polls
-`/api/health`, and on `online` hands the entire content area to a
-WebView pointed at the Node sidecar. Phases 1b–d (native menu bar,
-window-state restoration, NSToolbar) are gated on a week of real use
-against PR #52's production-build perf wins — Phase 1a may already
-be enough.
+**Status:** Phases 1a/1b/1c shipped. Window opens, polls `/api/health`,
+and on `online` hands the entire content area to a `WKWebView`
+pointed at the Node sidecar. Native menu bar (View → Reload ⌘R /
+Force Reload ⇧⌘R, Help → GitHub / Issues) and window-state
+restoration via `NSWindow.frameAutosaveName` are wired in. Phase 1d
+(NSToolbar — replaces the web-rendered top bar) needs a coordinated
+change in `apps/web` and is the next bridge decision; deliberately
+held until the daily-use evaluation argues for it. See
+[PHASE-1A-OBSERVATIONS.md](./PHASE-1A-OBSERVATIONS.md).
 
 For the dev loop, prerequisites, and `bin/marvin install-macos-app`,
 see [BUILD.md](./BUILD.md).
@@ -60,10 +63,18 @@ See [ADR-0016 — Migration phases](../../docs/decisions/0016-swift-migration.md
 for the full table. Short version:
 
 - **Phase 0 — Scaffolding** ✅
-- **Phase 1a — WebView island** ✅ (this commit) — full-bleed
-  `WKWebView` for the `.online` state; web app renders unchanged.
-- **Phase 1b–d — Frame:** native menu bar, window-state restoration,
-  NSToolbar. Gated on post-PR-#52 perf re-eval.
+- **Phase 1a — WebView island** ✅ — full-bleed `WKWebView` for the
+  `.online` state; web app renders unchanged.
+- **Phase 1b — Native menu bar** ✅ — View / Help with Reload ⌘R,
+  Force Reload ⇧⌘R, GitHub / Issues. Web-app shortcuts (⌘K, ⌘B/G/J/P,
+  ⌘⇧N, ⌘., `?`) deliberately not claimed here — they pass through to
+  the WebView.
+- **Phase 1c — Window-state restoration** ✅ — `NSWindow.frameAutosaveName`
+  via a `WindowAccessor` bridge.
+- **Phase 1d — NSToolbar:** replaces the web-rendered top bar.
+  Requires an `apps/web` change to detect the SwiftUI shell (via the
+  `MARVIN-Swift/0.1` user-agent suffix) and hide the web top bar.
+  Held until the daily-use evaluation says it's worth the bridge.
 - **Phase 2 — Chat surface:** native chat list + ChatInput.
 - **Phase 3 — File tree + Source Control:** native NSOutlineView +
   diff viewer.

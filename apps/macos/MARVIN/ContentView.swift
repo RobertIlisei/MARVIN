@@ -56,6 +56,14 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 480, minHeight: 320)
+        .background(WindowAccessor { window in
+            // Phase 1c — window-state restoration. NSWindow's built-in
+            // frameAutosaveName persists position + size to
+            // NSUserDefaults under this key and restores on relaunch,
+            // for free. SwiftUI's `Window` scene (vs `WindowGroup`)
+            // doesn't surface @SceneStorage, so we reach into AppKit.
+            window.setFrameAutosaveName("MARVINMainWindow")
+        })
     }
 
     // MARK: - States
@@ -106,6 +114,29 @@ struct ContentView: View {
         .frame(maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
     }
 
+}
+
+/// Bridge to the underlying `NSWindow` for things SwiftUI's `Window`
+/// scene doesn't expose (Phase 1c: `frameAutosaveName`). Phase 1+
+/// may grow more uses; keep them all flowing through here so the
+/// `view.window` resolution + main-thread dispatch lives in one place.
+private struct WindowAccessor: NSViewRepresentable {
+    let onWindow: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // The view isn't attached to a window during makeNSView —
+        // defer until the next runloop tick when the window hierarchy
+        // has resolved.
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onWindow(window)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Tiny inline code block — selectable, monospaced, subtly framed.

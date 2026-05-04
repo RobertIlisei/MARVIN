@@ -19,6 +19,11 @@ enum SidecarState: Equatable {
     case connecting
     case online(SidecarHealth)
     case offline(reason: String)
+
+    var isOnline: Bool {
+        if case .online = self { return true }
+        return false
+    }
 }
 
 /// Subset of /api/health we care about in Phase 0. The sidecar may
