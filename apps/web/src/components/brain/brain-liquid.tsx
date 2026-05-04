@@ -638,7 +638,19 @@ export function BrainLiquid({
       />
       <canvas
         ref={canvasRef}
-        style={{ width: size, height: size, display: "block", position: "relative" }}
+        style={{
+          width: size,
+          height: size,
+          display: "block",
+          position: "relative",
+          // Clip the canvas to a circle. The per-frame trail dim
+          // (`ctx.fillRect(0, 0, size, size)` in the paint loop)
+          // paints the full square, so without a CSS clip the
+          // accumulated trail reveals the canvas rectangle once
+          // particles reach the edge (R = size * 0.5). The standalone
+          // does the same — the canvas is round, not square.
+          borderRadius: "50%",
+        }}
       />
     </div>
   );
