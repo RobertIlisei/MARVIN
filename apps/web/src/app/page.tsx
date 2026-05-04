@@ -320,6 +320,42 @@ export default function Home() {
     announceBusy(marvinState !== "idle" && marvinState !== "error");
   }, [marvinState]);
 
+  // Phase 1d.25 — listen for native menu-bar commands dispatched by
+  // the SwiftUI shell. Each `marvin:<name>` CustomEvent maps to an
+  // existing web-side handler so the native menu items don't have
+  // to re-implement the action in Swift. No-op outside the Swift
+  // shell (the events simply never fire).
+  useEffect(() => {
+    const onNewSession = () => reset();
+    const onOpenProjectPicker = () => setPickerOpenSignal((v) => v + 1);
+    const onShowShortcuts = () => setShortcutsOpen(true);
+    const onToggleTheme = () => {
+      const current = document.documentElement.getAttribute("data-theme");
+      const next = current === "dark" ? "light" : "dark";
+      if (next === "dark") {
+        document.documentElement.setAttribute("data-theme", "dark");
+      } else {
+        document.documentElement.removeAttribute("data-theme");
+      }
+      try {
+        localStorage.setItem("marvin-theme", next);
+      } catch {
+        /* no storage — stays in-memory for the session */
+      }
+    };
+
+    window.addEventListener("marvin:new-session", onNewSession);
+    window.addEventListener("marvin:open-project-picker", onOpenProjectPicker);
+    window.addEventListener("marvin:show-shortcuts", onShowShortcuts);
+    window.addEventListener("marvin:toggle-theme", onToggleTheme);
+    return () => {
+      window.removeEventListener("marvin:new-session", onNewSession);
+      window.removeEventListener("marvin:open-project-picker", onOpenProjectPicker);
+      window.removeEventListener("marvin:show-shortcuts", onShowShortcuts);
+      window.removeEventListener("marvin:toggle-theme", onToggleTheme);
+    };
+  }, [reset]);
+
   const handleSend = useCallback(
     (text: string) => {
       if (!cwd) return;

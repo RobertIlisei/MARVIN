@@ -234,6 +234,20 @@ struct MARVINApp: App {
                 .disabled(!health.state.isOnline)
             }
 
+            // Phase 1d.25 — File → New Session (⌘⇧N) replaces
+            // SwiftUI's default "New" item which would otherwise be
+            // a no-op (we have no document model). Bridges into the
+            // web app's existing reset() handler via a dispatched
+            // CustomEvent — no need to duplicate React state into
+            // Swift just to trigger a reset.
+            CommandGroup(replacing: .newItem) {
+                Button("New Session") {
+                    WebViewCommands.shared.dispatchWebCommand("new-session")
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(!health.state.isOnline)
+            }
+
             // Phase 1d.23 — File menu items that act on the active
             // project's workDir. Both depend on the bridge —
             // disabled when no project is selected — and are net-
@@ -243,6 +257,20 @@ struct MARVINApp: App {
             // is the conventional slot for project-state actions.
             CommandGroup(after: .saveItem) {
                 Divider()
+
+                // Phase 1d.25 — bridges to the web app's project
+                // picker. The web button in the top bar still works;
+                // this just makes the action discoverable from the
+                // menu bar (and via ⌘O, the macOS-conventional
+                // shortcut for "open").
+                Button("Open Project…") {
+                    WebViewCommands.shared.dispatchWebCommand("open-project-picker")
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+
+                Divider()
+
                 Button("Reveal Project in Finder") {
                     revealProjectInFinder(workDir: bridge.projectWorkDir)
                 }
@@ -254,6 +282,28 @@ struct MARVINApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command, .option])
                 .disabled(bridge.projectWorkDir == nil)
+            }
+
+            // Phase 1d.25 — Window menu shortcuts that bridge to web
+            // app dialogs (theme toggle, keyboard shortcuts panel).
+            // Both already work via web hotkeys (⌘⇧T isn't claimed
+            // anywhere; `?` opens shortcuts), but the menu bar makes
+            // them discoverable for users who don't know the web
+            // hotkey set yet. .windowList is the conventional slot
+            // for "show me UI surfaces" actions.
+            CommandGroup(after: .windowList) {
+                Divider()
+                Button("Toggle Theme") {
+                    WebViewCommands.shared.dispatchWebCommand("toggle-theme")
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!health.state.isOnline)
+
+                Button("Keyboard Shortcuts…") {
+                    WebViewCommands.shared.dispatchWebCommand("show-shortcuts")
+                }
+                .keyboardShortcut("/", modifiers: [.command])
+                .disabled(!health.state.isOnline)
             }
 
             // Help menu — quick links out to the project. macOS

@@ -74,6 +74,25 @@ final class WebViewCommands {
         webView?.reloadFromOrigin()
     }
 
+    /// Dispatch a custom DOM event the web app can listen for.
+    /// The native menu bar uses this to invoke the web app's
+    /// existing handlers (new session, project picker, theme
+    /// toggle, shortcuts dialog) without forking the React state
+    /// into Swift. The web side wires `window.addEventListener` in
+    /// `apps/web/src/lib/marvin-shell.ts`. Fire-and-forget — there's
+    /// no return value; if the page hasn't loaded yet, the event is
+    /// silently dropped (next click works once the page is up).
+    func dispatchWebCommand(_ name: String) {
+        // Sanitise: only A-Za-z0-9- characters allowed. Defends
+        // against accidental quote injection if a future caller
+        // ever derives the name from user input. Not a security
+        // boundary (the call site is local), just hygiene.
+        let safe = name.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        guard !safe.isEmpty else { return }
+        let js = "window.dispatchEvent(new CustomEvent('marvin:\(safe)'))"
+        webView?.evaluateJavaScript(js)
+    }
+
     /// Bump zoom by 10%. Hits the [0.5, 3.0] clamp at the edges.
     /// Maps to ⌘= in the View menu (macOS displays as ⌘+).
     func zoomIn() {
