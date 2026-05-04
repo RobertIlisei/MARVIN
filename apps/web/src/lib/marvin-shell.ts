@@ -157,6 +157,20 @@ export function announceModels(
 }
 
 /**
+ * Mirrors the active personality ("marvin" | "neutral") to the Swift
+ * side so the About panel can show which mode MARVIN is in without
+ * the user having to open the web Settings popover. Phase 1d.32 —
+ * fires on every personality change in `useMarvinPrefs`.
+ */
+export function announcePersonality(personality: "marvin" | "neutral"): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "personality-changed",
+    payload: { value: personality },
+  });
+}
+
+/**
  * Mirrors a coarse "MARVIN is busy / idle" signal to the Swift side
  * so the menu-bar status item can swap between the idle (outlined
  * nodes) and active (filled nodes) Brain Circuit variants while a

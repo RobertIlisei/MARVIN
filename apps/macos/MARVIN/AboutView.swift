@@ -87,6 +87,15 @@ struct AboutView: View {
                 }
             }
 
+            // Phase 1d.32 — Personality row. Tiny but useful: the
+            // web Settings popover toggles it (Marvin vs neutral)
+            // and the user shouldn't have to dig in there to confirm
+            // which voice MARVIN is currently using.
+            if let personality = bridge.personality {
+                Divider()
+                aboutRow("personality", personality)
+            }
+
             Divider()
 
             HStack(spacing: 4) {

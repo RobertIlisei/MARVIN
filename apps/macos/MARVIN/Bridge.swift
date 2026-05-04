@@ -158,6 +158,12 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// in flight.
     private(set) var isBusy: Bool = false
 
+    /// Active personality ("marvin" or "neutral") posted via
+    /// `personality-changed`. Drives the About panel's Personality
+    /// row so the user can see which mode MARVIN is in without
+    /// opening the web Settings popover. Phase 1d.32.
+    private(set) var personality: String? = nil
+
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
     /// preserves the user's macOS system preference for the SwiftUI
     /// surfaces (used when the bridge hasn't reported a theme yet).
@@ -366,6 +372,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             // transition (including tool / writing) — chatty.
             let busy = (payload?["busy"] as? Bool) ?? false
             isBusy = busy
+        case "personality-changed":
+            // Active personality from the web Settings popover.
+            // "marvin" | "neutral"; anything else falls back to nil.
+            // Drives the About panel's Personality row.
+            let value = payload?["value"] as? String
+            personality = (value == "marvin" || value == "neutral") ? value : nil
+            NSLog("[MarvinBridge] personality-changed value=\(personality ?? "nil")")
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

@@ -13,6 +13,7 @@ import { VirtualMessageList } from "@/components/chat/virtual-message-list";
 import {
   announceBusy,
   announceModels,
+  announcePersonality,
   announceProject,
 } from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
@@ -140,6 +141,13 @@ export default function Home() {
   useEffect(() => {
     announceModels(executorModel, advisorModel);
   }, [executorModel, advisorModel]);
+
+  // Phase 1d.32 — mirror the active personality so the About panel
+  // can show "marvin" vs "neutral" without the user having to open
+  // the web Settings popover.
+  useEffect(() => {
+    announcePersonality(personality);
+  }, [personality]);
 
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();
