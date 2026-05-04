@@ -87,7 +87,7 @@ Total: usually under 1-2k tokens. The 36× number is graphify's own reported fig
 Per the [Golden Rules in CLAUDE.md](../../CLAUDE.md):
 
 - **Code-only changes**: `/graphify . --update` — AST-only incremental update, no LLM cost. Run after every milestone.
-- **Docs / PLAN / personality.ts changes**: `/graphify . --update` — triggers semantic re-extraction for the changed doc files. Minimal cost at typical corpus sizes.
+- **Docs / `personality.ts` changes**: `/graphify . --update` — triggers semantic re-extraction for the changed doc files. Minimal cost at typical corpus sizes.
 
 MARVIN itself runs on a graph of *its own code* (the one under `<workDir>/graphify-out/` when `workDir = ~/marvin`). See [`graphify-out/GRAPH_REPORT.md`](../../graphify-out/GRAPH_REPORT.md) for the current stats.
 

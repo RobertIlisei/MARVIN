@@ -82,7 +82,7 @@ MARVIN's own Playwright MCP server, backed by [`@playwright/mcp`](https://www.np
 
 The host's Playwright MCP — the one registered at the Claude Code level as `playwright-greenstack-local` or similar — **sandboxes localhost/loopback/LAN URLs**. MARVIN couldn't screenshot or drive any local dev server through it. So MARVIN registers its own instance that's unsandboxed by default (trust boundary: you're running it against your own machine).
 
-See [PLAN.md changelog for 2026-04-18 (marvin-playwright MCP)](../../PLAN.md) for the diagnostic trail.
+See the [2026-04-18 entry in the changelog](../history/CHANGELOG.md) for the diagnostic trail.
 
 ### Tools exposed
 

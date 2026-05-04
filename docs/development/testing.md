@@ -50,7 +50,7 @@ What it doesn't catch: logic bugs. A function that always returns `0` when it sh
 
 ### Manual probes via `curl`
 
-Most API endpoints are testable with a one-liner. PLAN.md's changelog has many entries ending with "verified via curl: …" as informal regression fixtures.
+Most API endpoints are testable with a one-liner. The historical changelog at [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md) has many entries ending with "verified via curl: …" as informal regression fixtures.
 
 ```bash
 curl -s http://localhost:3030/api/health | jq .
@@ -148,6 +148,6 @@ A Biome or ESLint setup is low-risk whenever anyone has the patience.
 
 ## Related
 
-- PLAN.md — search for "verified via curl" for informal fixtures.
+- [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md) — search for "verified via curl" for informal fixtures.
 - [Workspace layout](./workspace.md) — where tests would live.
 - [Contributing](./contributing.md)
