@@ -6,7 +6,9 @@
 // the tree fully strict.
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
+
+import { isResizing } from "@/lib/panel-resize-signal";
 
 import type { MarvinUiState } from "../chat/types";
 
@@ -182,7 +184,7 @@ const NEBULA: Array<[number, number, number]> = [
   [224, 232, 248],
 ];
 
-export function BrainLiquid({
+function BrainLiquidImpl({
   size = 280,
   state = "idle",
   autoCycle = false,
@@ -533,6 +535,16 @@ export function BrainLiquid({
         // a hidden tab.
         return;
       }
+      // While the user is dragging a PanelResizeHandle, skip the paint
+      // and just reschedule. The drag handler in react-resizable-panels
+      // does heavy synchronous layout work; competing with it for the
+      // main thread makes both the drag and the brain feel laggy.
+      // `isResizing()` flips back to false ~120 ms after the last
+      // layout pulse, so the brain catches up smoothly.
+      if (isResizing()) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       const frameMs = reducedMotion
         ? REDUCED_FRAME_MS
         : stateRef.current === "idle"
@@ -876,3 +888,16 @@ export function BrainLiquid({
     </div>
   );
 }
+
+/**
+ * Memoized export. Without this, every parent re-render (page.tsx
+ * fires one per chat token, panel resize tick, hover / focus event
+ * etc.) re-invokes BrainLiquidImpl's render function. The render
+ * itself is cheap — the useEffect doesn't re-run on stable props —
+ * but the function call + JSX construction + reconciler diff still
+ * adds up. Worse, in dev mode with React Strict Mode it doubles.
+ *
+ * Stable props (`size`, `state`, `autoCycle`) make the default
+ * shallow-compare the right contract.
+ */
+export const BrainLiquid = memo(BrainLiquidImpl);

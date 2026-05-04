@@ -10,6 +10,7 @@ import { taskRoleOf } from "@/components/brain/task-role";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
 import { VirtualMessageList } from "@/components/chat/virtual-message-list";
+import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
 import { QuickOpen } from "@/components/file-tree/quick-open";
@@ -669,6 +670,7 @@ export default function Home() {
         direction="horizontal"
         autoSaveId="marvin-shell-h-v3"
         className="min-h-0 flex-1 w-full"
+        onLayout={pulseResize}
       >
         {showFiles && (
           <>
@@ -805,6 +807,7 @@ export default function Home() {
                     direction="vertical"
                     autoSaveId="marvin-center-v-v4"
                     className="flex-1"
+                    onLayout={pulseResize}
                   >
                     {withHandles}
                   </PanelGroup>
@@ -845,6 +848,7 @@ export default function Home() {
               direction="vertical"
               autoSaveId="marvin-side-v-v2"
               className="flex-1"
+              onLayout={pulseResize}
             >
               {showBrain && (
                 <>
