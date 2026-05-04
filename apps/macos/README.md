@@ -49,6 +49,7 @@ apps/macos/
     ├── MARVINApp.swift       # @main, scenes, menu bar commands
     ├── ContentView.swift     # connecting / online (WebView) / offline
     ├── AboutView.swift       # About panel — app + live sidecar info
+    ├── SettingsView.swift    # ⌘, native preferences (open dirs, reset window)
     ├── HealthMonitor.swift   # /api/health poller, state machine
     ├── WebView.swift         # NSViewRepresentable wrapping WKWebView
     ├── Bridge.swift          # JS↔Swift message channel (window.marvinShell)

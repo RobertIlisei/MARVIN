@@ -155,5 +155,19 @@ struct MARVINApp: App {
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
         .commandsRemoved()
+
+        // Phase 1d.9 — native Settings scene (⌘,). SwiftUI's
+        // `Settings` scene is special: it auto-installs the
+        // "Settings…" item in the App menu and binds ⌘, to it,
+        // no manual command wiring needed. The view itself only
+        // touches local native affordances — open data dir, open
+        // project workDir, reset window frame, re-probe sidecar.
+        // Anything that should mutate sidecar state stays in the
+        // web app's existing settings popover.
+        Settings {
+            SettingsView()
+                .environment(health)
+                .environment(bridge)
+        }
     }
 }
