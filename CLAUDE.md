@@ -184,8 +184,8 @@ Apply it before marking anything `[done]`.
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(873 nodes · 1006 edges · 154 communities as of 2026-04-21, post the
-v1.1.0 install-app flow + scout subagents pass).
+(878 nodes · 1042 edges · 189 communities as of 2026-05-04, post the
+v1.2 audit-driven hardening pass + README troubleshooting refresh).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
@@ -215,11 +215,10 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### God nodes (most-connected abstractions)
 
-`POST()` (60 edges), `GET()` (58 edges), `ADR-0008 — User-initiated
-write channel`, `ADR-0009 — File uploads from OS`, `HTTP API reference
-(docs/reference/api.md)`, `apps/desktop/README.md — Tauri wrapper
-docs`, `ADR-0010 — Desktop wrapper via Tauri`, `ADR-0014 — Read-only
-scout subagents`, `ADR-0011 — .app via bundled Node sidecar (deprecated)`,
-`ADR index (docs/decisions/README.md)`.
+`GET()` (70 edges), `POST()` (69 edges), `trim()` (33), `ADR index
+(docs/decisions/README.md)` (20), `ADR-0015 — Auto-mode policy floor +
+audit log` (18), `/api/git/* third mutation channel` (17), `DELETE()`
+(15), `resolve()` (14), `checkFsPath()` (10), `readHoneycombConfig()`
+(10).
 
 _Refresh this list with `/graphify . --update` when it drifts._
