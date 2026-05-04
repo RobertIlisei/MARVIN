@@ -10,6 +10,7 @@ import { taskRoleOf } from "@/components/brain/task-role";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
 import { VirtualMessageList } from "@/components/chat/virtual-message-list";
+import { announceProject } from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
@@ -97,6 +98,15 @@ export default function Home() {
   } = useProjects();
 
   const cwd = active?.workDir ?? "";
+
+  // Phase 1d.3 — mirror the active project to the SwiftUI native
+  // shell so the NSWindow subtitle can show "$projectName" without
+  // duplicating the work the React side already did. No-op outside
+  // the Swift shell. Includes workDir so a future native NSToolbar
+  // item can render the path on hover without an extra round-trip.
+  useEffect(() => {
+    announceProject(active?.name ?? null, active?.workDir ?? null);
+  }, [active?.name, active?.workDir]);
 
   // Global prefs from the central context. Replaces five `useState`
   // calls + five persistence effects pre-#25. Each setter persists

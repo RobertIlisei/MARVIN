@@ -90,6 +90,17 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// bar so the native toolbar pip doesn't go stale.
     private(set) var costToday: Double? = nil
 
+    /// Active project name posted by the web side via
+    /// `project-changed`. Drives the native NSWindow subtitle so
+    /// the active project is always visible in the title bar.
+    /// Phase 1d.3 — `nil` when no project is active.
+    private(set) var projectName: String? = nil
+
+    /// Active project workDir posted alongside `projectName`.
+    /// Stored for future toolbar tooltips / About panel; not yet
+    /// consumed by any view.
+    private(set) var projectWorkDir: String? = nil
+
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
     /// One name keeps the WebKit configuration simple; routing
@@ -218,6 +229,12 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             } else {
                 costToday = nil
             }
+        case "project-changed":
+            // Active project name + workDir — drives the NSWindow
+            // subtitle. Both fields nullable; null clears them.
+            projectName = (payload?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            projectWorkDir = (payload?["workDir"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            NSLog("[MarvinBridge] project-changed name=\(projectName ?? "nil")")
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

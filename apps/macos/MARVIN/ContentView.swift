@@ -95,6 +95,32 @@ struct ContentView: View {
         // The web app's title includes the v1.2 `(N)` confirm-
         // pending badge, so this surfaces the badge natively too.
         .navigationTitle(bridge.webTitle ?? "MARVIN")
+        // Phase 1d.3 — active project name as the NSWindow subtitle.
+        // Fed by the bridge's `project-changed` message; empty
+        // string suppresses the subtitle when there's no project.
+        .navigationSubtitle(bridge.projectName ?? "")
+        // Phase 1d.3 — mirror the `(N)` pending-confirm count into
+        // the dock tile badge. Parsed from the same webTitle the
+        // navigation title shows; no extra bridge message needed.
+        // Visible from any app, not just when MARVIN is focused —
+        // exactly the affordance the dock badge is designed for.
+        .onChange(of: bridge.webTitle ?? "") { _, newTitle in
+            updateDockBadge(from: newTitle)
+        }
+    }
+
+    /// Parse `(N) ...` out of a document.title and set the macOS
+    /// Dock badge accordingly. Empty badge label clears the badge.
+    private func updateDockBadge(from title: String) {
+        // Anchored prefix match to avoid false positives like
+        // "(deferred) MARVIN".
+        let pattern = #"^\((\d+)\)"#
+        if let range = title.range(of: pattern, options: .regularExpression) {
+            let inner = title[range].dropFirst().dropLast() // strip "(" and ")"
+            NSApp.dockTile.badgeLabel = String(inner)
+        } else {
+            NSApp.dockTile.badgeLabel = ""
+        }
     }
 
     // MARK: - States

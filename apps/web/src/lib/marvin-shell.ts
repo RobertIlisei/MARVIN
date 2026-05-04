@@ -84,6 +84,23 @@ export function announceCost(todayUsd: number | null): void {
 }
 
 /**
+ * Mirrors the active project name + workDir to the Swift side so
+ * the native NSWindow can show the project as a subtitle. Phase
+ * 1d.3 — fires on project-changed transitions in `useProjects()`.
+ * Sending `null` for both clears the native subtitle (no project).
+ */
+export function announceProject(
+  name: string | null,
+  workDir: string | null,
+): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "project-changed",
+    payload: { name, workDir },
+  });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

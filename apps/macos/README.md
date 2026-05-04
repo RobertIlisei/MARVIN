@@ -80,11 +80,16 @@ for the full table. Short version:
   - **Connection status pip** + `connecting/online/offline` label,
     clickable to re-probe (no bridge — reads HealthMonitor directly).
   - **Cost pill** mirroring today's spend from the web app's
-    `<CostPill>` via the bridge (`cost-changed` message). Hides when
-    no project is active.
-  - Native NSWindow title mirrors the web app's `document.title` so
-    the v1.2 `(N)` pending-confirm badge surfaces in the title bar
-    even when the WebView is scrolled or another app is focused.
+    `<CostPill>` via the bridge (`cost-changed`). Hides when no
+    project is active.
+  - **NSWindow title** mirrors the web app's `document.title` so the
+    v1.2 `(N)` pending-confirm badge surfaces in the title bar even
+    when the WebView is scrolled or another app is focused.
+  - **NSWindow subtitle** shows the active project name via the
+    bridge (`project-changed`).
+  - **Dock tile badge** parses the `(N)` count out of `webTitle` and
+    sets `NSApp.dockTile.badgeLabel` so pending confirms are visible
+    from any app, not just when MARVIN is focused.
 
   Future 1d work: project picker + model picker. Both have rich
   popovers (recent sessions, presets) that don't trivially native-
