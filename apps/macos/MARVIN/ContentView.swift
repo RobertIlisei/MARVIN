@@ -151,6 +151,22 @@ struct ContentView: View {
             updateDockBadge(count: count)
             NotificationManager.shared.updateConfirmCount(count)
         }
+        // Phase 1d.27 — represented URL. NSWindow.representedURL +
+        // .representedFilename make the title bar show the project
+        // folder's Finder icon next to the window title. ⌘-click on
+        // that icon opens the path-hierarchy popup macOS users
+        // expect from any document-window app (Xcode, BBEdit, even
+        // Pages); drag-out copies the path. With this set, the
+        // window stops looking generic and starts behaving like a
+        // window onto a specific filesystem location, which is the
+        // truth of what MARVIN-with-a-project-loaded is.
+        //
+        // Drives the icon proxy, the ⌘-click path popup, AND
+        // window-list grouping in macOS Sonoma's Window menu —
+        // three native affordances for one bridge field.
+        .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
+            updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
+        }
     }
 
     /// Parse the leading `(N)` pending-confirm count out of a
@@ -168,6 +184,23 @@ struct ContentView: View {
     /// Set the macOS Dock badge to a non-empty count, or clear it.
     private func updateDockBadge(count: Int) {
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : ""
+    }
+
+    /// Set NSWindow.representedURL on the main window so the title
+    /// bar shows the project folder's Finder icon. Looking up the
+    /// window via NSApp.windows is fine for our single-main-window
+    /// app; if the migration ever goes multi-window, this needs to
+    /// take a window reference instead.
+    private func updateRepresentedURL(workDir: String?) {
+        let aboutTitle = "About MARVIN"
+        guard let mainWindow = NSApp.windows.first(where: { $0.title != aboutTitle }) else {
+            return
+        }
+        if let workDir, !workDir.isEmpty {
+            mainWindow.representedURL = URL(fileURLWithPath: workDir)
+        } else {
+            mainWindow.representedURL = nil
+        }
     }
 
     /// Compose the NSWindow subtitle from the bridge state. Three
