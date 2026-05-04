@@ -28,6 +28,40 @@ private struct OpenAboutButton: View {
     }
 }
 
+/// Reveal a directory in Finder, with the directory itself
+/// selected (not its contents shown). `activateFileViewerSelecting`
+/// is the AppKit idiom — same as Finder's "Reveal in Finder" entry.
+/// No-op when workDir is nil or the path doesn't resolve.
+@MainActor
+private func revealProjectInFinder(workDir: String?) {
+    guard let workDir, !workDir.isEmpty else { return }
+    let url = URL(fileURLWithPath: workDir)
+    NSWorkspace.shared.activateFileViewerSelecting([url])
+}
+
+/// Open Terminal.app with the working directory cd'd to workDir.
+/// We hand Terminal the directory path directly via NSWorkspace —
+/// `open -a Terminal /some/path` is the AppKit-equivalent of what
+/// the Finder context menu's "New Terminal at Folder" does, and
+/// crucially DOESN'T require Apple Events / Automation permission
+/// (which AppleScript would prompt for on first use).
+@MainActor
+private func openTerminalAt(workDir: String?) {
+    guard let workDir, !workDir.isEmpty else { return }
+    let dirURL = URL(fileURLWithPath: workDir)
+    let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+    let config = NSWorkspace.OpenConfiguration()
+    NSWorkspace.shared.open(
+        [dirURL],
+        withApplicationAt: terminalURL,
+        configuration: config
+    ) { _, error in
+        if let error {
+            NSLog("[openTerminalAt] failed to launch Terminal: \(error)")
+        }
+    }
+}
+
 /// SwiftUI lifecycle hook for app-scope AppKit state. We use this
 /// only for things that genuinely don't fit in a SwiftUI scene —
 /// currently the menu-bar `NSStatusItem` (Phase 1d.19), which has
@@ -198,6 +232,28 @@ struct MARVINApp: App {
                 }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(!health.state.isOnline)
+            }
+
+            // Phase 1d.23 — File menu items that act on the active
+            // project's workDir. Both depend on the bridge —
+            // disabled when no project is selected — and are net-
+            // additive native affordances expected of any project-
+            // oriented Mac app. SwiftUI's default "File" menu has
+            // .newItem / .undoRedo / .pasteboard groups; .saveItem
+            // is the conventional slot for project-state actions.
+            CommandGroup(after: .saveItem) {
+                Divider()
+                Button("Reveal Project in Finder") {
+                    revealProjectInFinder(workDir: bridge.projectWorkDir)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(bridge.projectWorkDir == nil)
+
+                Button("Open Terminal Here") {
+                    openTerminalAt(workDir: bridge.projectWorkDir)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+                .disabled(bridge.projectWorkDir == nil)
             }
 
             // Help menu — quick links out to the project. macOS
