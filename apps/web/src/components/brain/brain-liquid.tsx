@@ -63,12 +63,23 @@ interface Profile {
 // standalone is the source of truth — when these drift from the lab, the
 // lab wins.
 const PROFILES: Record<MarvinUiState, Profile> = {
+  // `idle` deliberately deviates from the lab's idle preset (which
+  // still carries an active-brainstorm energy: flowMag=180, swirl=0.6,
+  // turb=0.3, rot=0.0015). User feedback was that MARVIN's idle
+  // shouldn't read as "thinking quietly" — it should read as actually
+  // resting. So motion knobs are slowed; visual knobs (N, chroma,
+  // dotR, dotA, halo, palette, trail) are kept lab-faithful so the
+  // brain still LOOKS the same, just calmer.
+  //
+  // If you re-extract the lab via Playwright, do NOT overwrite this
+  // block — the slowdown is intentional. Only the four other states
+  // (thinking, tool, writing, error) are mirror-aligned.
   idle: {
-    N: 8000, flowMag: 180, damp: 0.95, swirl: 0.6, shellPull: 1.2,
-    nfreq: 0.3, neps: 1.4, lmin: 4.0, lrange: 6.0, dotR: 1.0, dotA: 0.55,
-    chroma: 2.0, trail: 0.82, turb: 0.3, coh: 0.16, leaders: 0.18, dim: 0.18,
-    attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.6,
-    redMix: 0.05, rot: 0.0015, jitter: 0,
+    N: 8000, flowMag: 70, damp: 0.97, swirl: 0.22, shellPull: 1.2,
+    nfreq: 0.16, neps: 1.4, lmin: 5.5, lrange: 7.0, dotR: 1.0, dotA: 0.55,
+    chroma: 2.0, trail: 0.86, turb: 0.10, coh: 0.16, leaders: 0.18, dim: 0.18,
+    attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.4,
+    redMix: 0.05, rot: 0.0007, jitter: 0,
   },
   thinking: {
     N: 12000, flowMag: 370, damp: 0.93, swirl: 1.75, shellPull: 1.4,
@@ -100,6 +111,67 @@ const PROFILES: Record<MarvinUiState, Profile> = {
   },
 };
 
+// Smoothstep cubic — used to ease parameter transitions when the
+// state changes. 0→1 with zero derivative at both ends, so the
+// transition starts gently, accelerates through the middle, and
+// settles softly into the new profile rather than snapping.
+function easeInOutCubic(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
+
+// Lerp every numeric field of a Profile. N is rounded so per-frame
+// loops can use it as an integer index. Every other field is a
+// plain float lerp.
+const PROFILE_KEYS = [
+  "N", "flowMag", "damp", "swirl", "shellPull",
+  "nfreq", "neps", "lmin", "lrange", "dotR", "dotA",
+  "chroma", "trail", "turb", "coh", "leaders", "dim",
+  "attractors", "synapse", "pulse", "dens", "pulseRate",
+  "redMix", "rot", "jitter",
+] as const satisfies readonly (keyof Profile)[];
+
+function lerpProfile(a: Profile, b: Profile, t: number): Profile {
+  const out = {} as Profile;
+  for (const k of PROFILE_KEYS) {
+    const va = a[k];
+    const vb = b[k];
+    const lerped = va + (vb - va) * t;
+    out[k] = (k === "N" || k === "attractors" ? Math.round(lerped) : lerped);
+  }
+  return out;
+}
+
+// How long state→state transitions take. ~700 ms feels naturally
+// soft without dragging — long enough that flow / chroma / trail
+// shifts are visible, short enough that a stalled "thinking" state
+// settles before the user notices.
+const TRANSITION_MS = 700;
+
+// Default cycle for `autoCycle`. `error` is included so the landing
+// hero shows the brain's full vocabulary; it's brief so it doesn't
+// read as a real failure to a user passing through.
+const CYCLE: ReadonlyArray<{ state: MarvinUiState; holdMs: number }> = [
+  { state: "idle",     holdMs: 6000 },
+  { state: "thinking", holdMs: 4500 },
+  { state: "tool",     holdMs: 3500 },
+  { state: "writing",  holdMs: 4500 },
+  { state: "error",    holdMs: 1800 },
+];
+
+// How much larger the canvas is than the layout `size` prop. The
+// perspective projection can push particles to ~1.33×R from center;
+// at R = size * 0.5 that's ~0.67×size on the diagonal — beyond the
+// canvas's 0.5×size side. Without extra render area, particles bunch
+// up at the rectangular boundary and reveal the canvas as a square.
+// 1.5 gives the projection a comfortable margin on every side and
+// is what makes the brain feel like it sits ON the page rather than
+// inside a contained rectangle. Cost: ~2.25× pixel count for the
+// trail-dim fillRect (a single cheap GPU op); per-particle work is
+// unchanged.
+const RENDER_SCALE = 1.5;
+
 // Nebula palette (dark-theme iridescent tint).
 const NEBULA: Array<[number, number, number]> = [
   [64, 96, 160],
@@ -113,17 +185,80 @@ const NEBULA: Array<[number, number, number]> = [
 export function BrainLiquid({
   size = 280,
   state = "idle",
+  autoCycle = false,
 }: {
   size?: number;
   state?: MarvinUiState;
+  /**
+   * If true, the brain ignores the `state` prop and rotates through
+   * the `CYCLE` table on its own — used by the landing-page hero so
+   * the brain has presence even when there's no real MARVIN session
+   * driving it. Each state still uses the standalone-derived
+   * profile; transitions between them are smoothed via the lerp
+   * machinery below.
+   */
+  autoCycle?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The state we are TARGETING (most recently set, by prop or cycle).
+  // `stateRef.current` always matches; the rendered profile lerps
+  // toward `PROFILES[targetStateRef.current]`.
+  const targetStateRef = useRef<MarvinUiState>(state);
   const stateRef = useRef<MarvinUiState>(state);
+  // Snapshots used to interpolate between the previous fully-settled
+  // (or in-flight) profile and the new target. `transitionStartRef`
+  // stores the timestamp when the most recent target change kicked
+  // off — `easeInOutCubic((now - start) / TRANSITION_MS)` is the
+  // mix factor each frame.
+  const fromProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const toProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const currentProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const transitionStartRef = useRef<number>(0);
   const themeRef = useRef<"dark" | "light">("light");
 
+  // Internal helper: kick off a transition from whatever the brain
+  // is rendering RIGHT NOW (currentProfileRef) toward the new state.
+  // Snapshotting the in-flight profile (not the previous target)
+  // means rapid state changes blend smoothly instead of snapping
+  // back to whatever the previous "from" was.
+  const beginTransition = (next: MarvinUiState) => {
+    if (next === stateRef.current && next === targetStateRef.current) return;
+    fromProfileRef.current = { ...currentProfileRef.current };
+    toProfileRef.current = PROFILES[next] ?? PROFILES.idle;
+    transitionStartRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    targetStateRef.current = next;
+    stateRef.current = next;
+  };
+
+  // Prop-driven state changes (skipped when autoCycle owns the brain).
   useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+    if (autoCycle) return;
+    beginTransition(state);
+    // beginTransition is referentially stable enough — only refs are touched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, autoCycle]);
+
+  // Auto-cycle the state through `CYCLE` for the landing hero. Skips
+  // the interval entirely when `autoCycle` is false, so MARVIN's
+  // real-state brain (project page) is unaffected. Hold times come
+  // from CYCLE; the lerp smooths the actual visual change.
+  useEffect(() => {
+    if (!autoCycle) return;
+    let i = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const advance = () => {
+      const step = CYCLE[i] ?? CYCLE[0];
+      if (step) beginTransition(step.state);
+      i = (i + 1) % CYCLE.length;
+      timer = setTimeout(advance, step?.holdMs ?? 4000);
+    };
+    advance();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCycle]);
 
   useEffect(() => {
     const update = () => {
@@ -145,16 +280,53 @@ export function BrainLiquid({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
+    // Render canvas larger than the layout `size` so the perspective
+    // projection (`persp = 1 + zr/(R*3)` → up to ~1.33×R from center)
+    // doesn't get clipped at the canvas rectangle. With R = size*0.5,
+    // projected positions reach ~0.67×size from center; the layout
+    // canvas extends only 0.5×size on the sides, so particles bunch
+    // up at the rectangular boundary and reveal the square. The
+    // standalone hides this by being 700px in the lab — we replicate
+    // by oversizing the canvas, keeping the sphere at the same
+    // *absolute* pixel size, and centering it via negative offsets.
+    // The wrapper still measures `size` for layout.
+    const renderSize = size * RENDER_SCALE;
+    canvas.style.width = `${renderSize}px`;
+    canvas.style.height = `${renderSize}px`;
+    canvas.width = renderSize * dpr;
+    canvas.height = renderSize * dpr;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.scale(dpr, dpr);
 
-    const profile = (): Profile =>
-      PROFILES[stateRef.current] ?? PROFILES.idle;
+    // Lerped profile getter. Each frame asks for the *interpolated*
+    // current profile rather than snapping to the new state immediately.
+    // beginTransition() (above) sets fromProfileRef + toProfileRef +
+    // transitionStartRef when state changes; here we mix between them
+    // by `easeInOutCubic((now - start) / TRANSITION_MS)`. Once t
+    // reaches 1 the function returns the target verbatim.
+    const profile = (): Profile => {
+      const start = transitionStartRef.current;
+      if (start === 0) {
+        // No transition has ever fired — render the seed target.
+        currentProfileRef.current = toProfileRef.current;
+        return currentProfileRef.current;
+      }
+      const now =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+      const raw = (now - start) / TRANSITION_MS;
+      if (raw >= 1) {
+        currentProfileRef.current = toProfileRef.current;
+        return currentProfileRef.current;
+      }
+      const t = easeInOutCubic(Math.max(0, raw));
+      currentProfileRef.current = lerpProfile(
+        fromProfileRef.current,
+        toProfileRef.current,
+        t,
+      );
+      return currentProfileRef.current;
+    };
 
     // Allocate for max N across any state so we never reallocate. Must be
     // >= max(PROFILES[*].N) — `thinking` is currently the ceiling at
@@ -177,11 +349,12 @@ export function BrainLiquid({
     const sd = new Float32Array(MAX_N);
     const pulseBoost = new Float32Array(MAX_N);
 
-    const cx = size / 2;
-    const cy = size / 2;
-    // Standalone's `radius %` slider defaults to 0.5 across every state;
-    // 0.42 was the legacy under-fill that left the sphere visibly small
-    // inside the canvas. Match the design.
+    const cx = renderSize / 2;
+    const cy = renderSize / 2;
+    // Sphere radius stays at `size * 0.5` in absolute pixels — the
+    // visible sphere keeps the standalone's `radius % = 0.5` look
+    // even though the canvas is RENDER_SCALE larger. The extra
+    // canvas area is "escape room" for projected particles.
     const R = size * 0.5;
 
     function respawn(i: number, p: Profile) {
@@ -295,6 +468,11 @@ export function BrainLiquid({
     let last = performance.now();
     let t = 0;
     let raf = 0;
+    // Tracks the previous frame's particle count so we can respawn
+    // newly-active indices when N grows mid-transition. Without this,
+    // particles 8000–11999 would pop in from stale positions when
+    // idle (N=8000) lerps up to thinking (N=12000).
+    let prevN = 0;
     // A3 perf: when MARVIN is idle, render at ~30 fps instead of the
     // native ~60 fps. The 4,500-particle idle profile costs real CPU
     // on a MacBook battery; halving the frame rate roughly halves
@@ -372,6 +550,14 @@ export function BrainLiquid({
 
       const p = profile();
       const N = p.N;
+      // Respawn freshly-active particles so transitions that GROW N
+      // (idle→thinking: 8000→12000) bring particles in from valid
+      // sphere positions instead of the stale coords left over from
+      // the last time those indices were active.
+      if (N > prevN) {
+        for (let i = prevN; i < N; i++) respawn(i, p);
+      }
+      prevN = N;
 
       rotY += p.rot * dt * 60;
       rotX = -0.18 + Math.sin(t * 0.25) * 0.06;
@@ -445,15 +631,18 @@ export function BrainLiquid({
       }
 
       // Trail fade via destination-out so the canvas background (CSS)
-      // remains transparent and the page bg shows through.
+      // remains transparent and the page bg shows through. The
+      // rectangle is the FULL canvas (renderSize), not the layout
+      // size — anything else would leave un-faded residue in the
+      // overflow band.
       const effTrail = Math.min(0.99, p.trail);
       if (effTrail <= 0) {
-        ctx.clearRect(0, 0, size, size);
+        ctx.clearRect(0, 0, renderSize, renderSize);
       } else {
         const fade = 1 - effTrail;
         ctx.globalCompositeOperation = "destination-out";
         ctx.fillStyle = `rgba(0,0,0,${fade})`;
-        ctx.fillRect(0, 0, size, size);
+        ctx.fillRect(0, 0, renderSize, renderSize);
         ctx.globalCompositeOperation = "source-over";
       }
 
@@ -473,7 +662,10 @@ export function BrainLiquid({
       }
 
       dgrid.fill(0);
-      const cellSz = size / DG;
+      // Density grid spans the full canvas (renderSize), not the
+      // layout size — the projected sx/sy can exceed `size` when
+      // particles project past the inner sphere.
+      const cellSz = renderSize / DG;
       for (let i = 0; i < N; i++) {
         const gx = (sx[i] / cellSz) | 0;
         const gy = (sy[i] / cellSz) | 0;
@@ -602,26 +794,42 @@ export function BrainLiquid({
     };
   }, [size]);
 
+  // The wrapper takes `renderSize` for layout — that's the actual
+  // visible footprint of the canvas, including the projection
+  // overflow band. Earlier this wrapper measured `size` and the
+  // canvas overflowed via negative offsets, which caused siblings
+  // (like the project-side state label) to render INSIDE the
+  // overflow zone and overlap the brain. Wrapper = renderSize means
+  // siblings position correctly with no overlap.
+  //
+  // Caller contract: `size` is the visible-sphere diameter; the
+  // layout block is `size * RENDER_SCALE` (= renderSize) on each
+  // side. Halo is sized to the visible sphere (centered inset
+  // matching `size`, not the wrapper).
+  const renderSize = size * RENDER_SCALE;
+  const haloInset = (renderSize - size) / 2;
+
   return (
     <div
       style={{
         position: "relative",
-        width: size,
-        height: size,
-        display: "grid",
-        placeItems: "center",
+        width: renderSize,
+        height: renderSize,
       }}
     >
       {/* Halo — global iridescent CSS glow behind the canvas. Mirror of
           the standalone's `halo` div: conic-gradient (purple → cyan →
           mauve → gold), 32px blur, opacity 0.15, scaled to 0.9 of the
-          container so it sits inside the sphere edge. Pure CSS so it
-          never costs a frame. */}
+          visible sphere. Sized to `size` (the sphere area), centered
+          inside the larger wrapper via inset. */}
       <div
         aria-hidden
         style={{
           position: "absolute",
-          inset: 0,
+          top: haloInset,
+          left: haloInset,
+          width: size,
+          height: size,
           borderRadius: "50%",
           pointerEvents: "none",
           background:
@@ -639,40 +847,30 @@ export function BrainLiquid({
       <canvas
         ref={canvasRef}
         style={{
-          width: size,
-          height: size,
+          width: renderSize,
+          height: renderSize,
           display: "block",
-          position: "relative",
-          // Soft radial mask, NOT a hard `border-radius: 50%` clip.
-          // A hard clip turns the boundary into an "invisible wall" —
-          // particles that should organically escape the sphere get
-          // cut off in a perfect circle and the brain stops looking
-          // alive.
+          position: "absolute",
+          inset: 0,
+          // Soft radial mask sized to the OVERSIZE canvas. Geometry:
+          //   - sphere is at canvas center, radius = size * 0.5
+          //     (= 0.5 / RENDER_SCALE of renderSize ≈ 0.333)
+          //   - perspective projection reaches ~1.33×R from center
+          //     ≈ 0.444 of renderSize on the axis, ~0.628 of the
+          //     gradient's farthest-corner (which is √2/2 of the
+          //     canvas side ≈ 70.7% of renderSize)
+          //   - canvas corners sit at 100% of the gradient
           //
-          // Coordinate note: `radial-gradient(circle at center, …)`
-          // defaults to `farthest-corner` sizing, so 100% = the
-          // distance from center to the canvas corner (≈ √2/2 of the
-          // canvas side). The sphere edge at R = size * 0.5 lives at
-          // ≈ 70.7% of that gradient. So:
-          //   0–70%   solid: the sphere body renders at full intensity.
-          //   70–100% fade band: escapees that wisp past the sphere
-          //           edge stay visible but soften with distance —
-          //           organic, irregular, plenty of room before they
-          //           vanish.
-          //   past 100%: transparent (this is just the empty rim
-          //           outside the gradient — nothing to paint there
-          //           anyway).
-          //
-          // Trade-off vs the previous 55/75: the old band ended deep
-          // inside the canvas (~180 px from center on a 340-px canvas)
-          // so escapees were clipped well short of the canvas edge,
-          // making it look boxed. With 70/100 the fade reaches the
-          // actual corners and escapees have the full canvas radius
-          // to fade through.
+          // Mask: solid through the sphere body and the projection
+          // overflow, fade gently to transparent at the corners so
+          // trail-dim residue never reveals a rectangle. Particles
+          // never reach the corner zone in practice — the fade is
+          // there only to swallow stragglers and keep the page bg
+          // visually continuous.
           maskImage:
-            "radial-gradient(circle at center, black 70%, transparent 100%)",
+            "radial-gradient(circle at center, black 75%, transparent 100%)",
           WebkitMaskImage:
-            "radial-gradient(circle at center, black 70%, transparent 100%)",
+            "radial-gradient(circle at center, black 75%, transparent 100%)",
         }}
       />
     </div>
