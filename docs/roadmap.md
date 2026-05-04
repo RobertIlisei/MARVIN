@@ -8,7 +8,7 @@ For the chronological history with diagnostic trails per entry, see [`docs/histo
 
 _Active work. Add a one-line entry when a piece of work starts; move it to `## Shipped` (with the date) when it lands. Keep entries terse — link out to a PR, ADR, or roadmap note for detail._
 
-- **SwiftUI macOS migration** ([ADR-0016](./decisions/0016-swift-migration.md)) — phased migration from the Tauri WebView shell ([ADR-0010](./decisions/0010-desktop-wrapper-tauri.md)) to a native SwiftUI/AppKit app at `apps/macos/`. Node sidecar (`apps/web`) stays unchanged. ADR `Accepted`; **Phase 0 (scaffolding) shipped** — window opens, polls `/api/health`, surfaces connecting/online/offline. Phase 1 (WKWebView island) gated on a week of real use against PR #52's production-build perf wins. Branch: `feat/swift-migration`.
+- **SwiftUI macOS migration** ([ADR-0016](./decisions/0016-swift-migration.md)) — phased migration from the Tauri WebView shell ([ADR-0010](./decisions/0010-desktop-wrapper-tauri.md)) to a native SwiftUI/AppKit app at `apps/macos/`. Node sidecar (`apps/web`) stays unchanged. ADR `Accepted`. **Phases 0 + 1a shipped** on branch `feat/swift-migration` (not yet on `main`): window opens, polls `/api/health`, and on `online` hands the entire content area to a full-bleed `WKWebView` pointed at `localhost:3030`. Installable side-by-side with the Tauri build via `bin/marvin install-macos-app` (produces `/Applications/MARVIN-Swift.app`; works with or without full Xcode). Phases 1b–d (native menu bar, window-state restoration, NSToolbar) are gated on a week of daily use against the Tauri build per ADR-0016 §5 — observations collected at [`apps/macos/PHASE-1A-OBSERVATIONS.md`](../apps/macos/PHASE-1A-OBSERVATIONS.md) on the migration branch.
 
 ## Shipped
 
