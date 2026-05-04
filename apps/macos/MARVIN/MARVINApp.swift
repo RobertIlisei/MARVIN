@@ -152,6 +152,29 @@ struct MARVINApp: App {
                 .disabled(!health.state.isOnline)
             }
 
+            // Phase 1d.12 — Find in page. Conventionally lives in
+            // the Edit menu; placed after .textEditing so the
+            // standard Find / Find Next / Find Previous slot is
+            // taken by ours. Disabled offline (no WebView mounted).
+            CommandGroup(after: .textEditing) {
+                Divider()
+                Button("Find…") {
+                    WebViewCommands.shared.showFind()
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+                Button("Find Next") {
+                    WebViewCommands.shared.findNext()
+                }
+                .keyboardShortcut("g", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+                Button("Find Previous") {
+                    WebViewCommands.shared.findPrevious()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!health.state.isOnline)
+            }
+
             // Help menu — quick links out to the project. macOS
             // already auto-creates a Help menu with a search field
             // and a "$AppName Help" item; CommandGroup(replacing:

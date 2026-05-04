@@ -51,23 +51,38 @@ struct ContentView: View {
                 // status` from the terminal — the SwiftUI app's
                 // job here is to host the UI, not duplicate its
                 // status view.
-                WebView(url: sidecarURL)
-                    .ignoresSafeArea()
-                    // Phase 1d.10 — Safari-style thin progress bar
-                    // pinned to the top edge of the WebView while
-                    // it's loading. Fades out at 100% so the bar
-                    // doesn't linger after the page finishes. Driven
-                    // by KVO on WKWebView.estimatedProgress / .isLoading.
-                    .overlay(alignment: .top) {
-                        if webCommands.isLoading && webCommands.loadProgress < 1.0 {
-                            ProgressView(value: webCommands.loadProgress)
-                                .progressViewStyle(.linear)
-                                .tint(.accentColor)
-                                .frame(height: 2)
-                                .transition(.opacity)
+                ZStack(alignment: .top) {
+                    WebView(url: sidecarURL)
+                        .ignoresSafeArea()
+                        // Phase 1d.10 — Safari-style thin progress bar
+                        // pinned to the top edge of the WebView while
+                        // it's loading. Fades out at 100% so the bar
+                        // doesn't linger after the page finishes. Driven
+                        // by KVO on WKWebView.estimatedProgress / .isLoading.
+                        .overlay(alignment: .top) {
+                            if webCommands.isLoading && webCommands.loadProgress < 1.0 {
+                                ProgressView(value: webCommands.loadProgress)
+                                    .progressViewStyle(.linear)
+                                    .tint(.accentColor)
+                                    .frame(height: 2)
+                                    .transition(.opacity)
+                            }
                         }
+                        .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
+
+                    // Phase 1d.12 — find bar overlays the WebView's
+                    // top edge when ⌘F is pressed. Sits inside the
+                    // ZStack so it draws above the WebView (which
+                    // would otherwise eat all hits). Slides in from
+                    // the top, dismisses with Esc or the Done button.
+                    if webCommands.isFindVisible {
+                        FindBarView()
+                            .padding(.top, 8)
+                            .padding(.horizontal, 12)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
-                    .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
+                }
+                .animation(.easeOut(duration: 0.18), value: webCommands.isFindVisible)
             case .offline(let reason):
                 offlineView(reason: reason)
             }
@@ -424,6 +439,66 @@ private struct ConnectionStatusToolbarItem: View {
         switch state {
         case .connecting, .offline: .secondary
         case .online: .primary
+        }
+    }
+}
+
+/// Find-in-page bar overlay (Phase 1d.12). Sits at the top of the
+/// WebView region; live-searches as the user types, advances on
+/// Enter, dismisses with Esc or the Done button. Uses
+/// WKWebView.find under the hood — match highlight is handled by
+/// WebKit, no DOM manipulation needed.
+private struct FindBarView: View {
+    @Environment(WebViewCommands.self) private var webCommands
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        @Bindable var webCommands = webCommands
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find in page", text: $webCommands.findText)
+                .textFieldStyle(.plain)
+                .focused($fieldFocused)
+                .onSubmit {
+                    webCommands.findNext()
+                }
+            Button {
+                webCommands.findPrevious()
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(webCommands.findText.isEmpty)
+            .help("Previous match · ⇧⌘G")
+            Button {
+                webCommands.findNext()
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(webCommands.findText.isEmpty)
+            .help("Next match · ⌘G")
+            Button("Done") {
+                webCommands.hideFind()
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .frame(maxWidth: 360)
+        // Force focus to the field whenever the bar appears OR when
+        // it's already visible and ⌘F is pressed again (re-focus
+        // pattern matches Safari's "tap ⌘F to refocus").
+        .onAppear { fieldFocused = true }
+        .onChange(of: webCommands.isFindVisible) { _, visible in
+            if visible { fieldFocused = true }
         }
     }
 }

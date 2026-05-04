@@ -93,6 +93,55 @@ final class WebViewCommands {
     private func setZoom(_ level: Double) {
         zoomLevel = min(max(level, 0.5), 3.0)
     }
+
+    // MARK: - Find in page (Phase 1d.12)
+
+    /// Whether the find bar is currently shown over the WebView.
+    /// Toggled by ⌘F (show) and Esc / Done button (hide).
+    var isFindVisible: Bool = false
+
+    /// Current search query. Bound to the find bar's TextField; the
+    /// WebView re-searches on every change so results highlight as
+    /// the user types — matches Safari/Mail's find-bar behavior.
+    var findText: String = "" {
+        didSet {
+            if isFindVisible && !findText.isEmpty && oldValue != findText {
+                findNext()
+            }
+        }
+    }
+
+    /// Open the find bar and focus its TextField.
+    func showFind() {
+        isFindVisible = true
+    }
+
+    /// Close the find bar and clear the search query so a stale
+    /// match doesn't linger when reopened.
+    func hideFind() {
+        isFindVisible = false
+        findText = ""
+    }
+
+    /// Forward search. WKFindConfiguration handles the highlight
+    /// automatically; result.matchFound is ignored here because
+    /// our minimal find bar doesn't show a match count yet.
+    func findNext() {
+        guard let webView, !findText.isEmpty else { return }
+        let config = WKFindConfiguration()
+        config.backwards = false
+        config.wraps = true
+        webView.find(findText, configuration: config) { _ in }
+    }
+
+    /// Backward search — ⇧⌘G or the find bar's chevron-up button.
+    func findPrevious() {
+        guard let webView, !findText.isEmpty else { return }
+        let config = WKFindConfiguration()
+        config.backwards = true
+        config.wraps = true
+        webView.find(findText, configuration: config) { _ in }
+    }
 }
 
 struct WebView: NSViewRepresentable {
