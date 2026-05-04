@@ -195,6 +195,28 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// follow.
     private(set) var activeMarvinSessionId: String? = nil
 
+    /// Phase 5a — currently-selected file path in the native file
+    /// tree. Drives the native file viewer's content. The native
+    /// tree (FileTreeView.selectRow) writes via `setSelectedFile`;
+    /// the file viewer reads via @Observable. Kept distinct from
+    /// the web side's `select-file` dispatchWebCommand so the two
+    /// surfaces are independently driven during the Phase 5a→5c
+    /// promotion (the WebView's Monaco still consumes the
+    /// `select-file` event; the native viewer reads from here).
+    private(set) var selectedFilePath: String? = nil
+
+    /// Phase 5a write hook for the native file tree. Called from
+    /// FileTreeView.selectRow alongside the existing
+    /// dispatchWebCommand("select-file", …) so both the WebView's
+    /// Monaco AND the native preview viewer see the same source.
+    /// Setter is kept distinct from the postMessage update path so
+    /// `private(set)` continues to mean "the bridge owns writes
+    /// from the wire" — native-driven mutations get explicit
+    /// methods.
+    func setSelectedFile(_ path: String?) {
+        selectedFilePath = path
+    }
+
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
     /// preserves the user's macOS system preference for the SwiftUI
     /// surfaces (used when the bridge hasn't reported a theme yet).

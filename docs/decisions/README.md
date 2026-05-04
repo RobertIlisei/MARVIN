@@ -33,6 +33,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0017](./0017-phase-2-chat-native.md) | Phase 2 native chat surface: shape and sub-phases | Accepted | 2026-05-04 |
 | [0018](./0018-phase-3-files-source-control-native.md) | Phase 3 native files + source control: shape and sub-phases | Accepted | 2026-05-04 |
 | [0019](./0019-phase-4-brain-metalkit.md) | Phase 4 native BrainLiquid: shape and sub-phases | Accepted | 2026-05-04 |
+| [0020](./0020-phase-5-embedded-surfaces-native.md) | Phase 5 native embedded surfaces: shape and sub-phases | Accepted | 2026-05-05 |
 
 ## Template
 
