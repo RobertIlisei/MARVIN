@@ -59,19 +59,6 @@ private struct OpenRecentMenuContent: View {
     }
 }
 
-/// Phase 2b — Window menu item that opens the native chat preview.
-/// Wrapped in a View so `@Environment(\.openWindow)` resolves; the
-/// pattern matches OpenAboutButton.
-private struct OpenChatPreviewButton: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Button("Native Chat (preview)") {
-            openWindow(id: "marvin-chat-preview")
-        }
-        .keyboardShortcut("c", modifiers: [.command, .option])
-    }
-}
-
 /// Reveal a directory in Finder, with the directory itself
 /// selected (not its contents shown). `activateFileViewerSelecting`
 /// is the AppKit idiom — same as Finder's "Reveal in Finder" entry.
@@ -490,16 +477,12 @@ struct MARVINApp: App {
                 .keyboardShortcut("/", modifiers: [.command])
                 .disabled(!health.state.isOnline)
 
-                // Phase 2b — opens the native chat preview window.
-                // Dev surface for iterating on the SwiftUI chat
-                // island while the WebView keeps rendering the real
-                // chat in the main window. Goes away once Phase 2g
-                // promotes the native island into the main window.
-                // Disabled when offline so submitting can't fire
-                // into a dead sidecar.
-                Divider()
-                OpenChatPreviewButton()
-                    .disabled(!health.state.isOnline)
+                // Phase 2g.3 retired the standalone "Native Chat
+                // (preview)" window. The native chat now lives
+                // inline as the left pane of the main window's
+                // HSplitView. ChatPreviewView is reused there
+                // unchanged — only the hosting Window scene + menu
+                // entry went away.
             }
 
             // Help menu — quick links out to the project. macOS
@@ -549,20 +532,5 @@ struct MARVINApp: App {
                 .environment(bridge)
         }
 
-        // Phase 2b — native chat preview Window. Dev surface for
-        // iterating on the SwiftUI chat island. Send-only today;
-        // Phase 2c populates a structured message list above the
-        // input. Phase 2g eventually promotes this content into
-        // the main window and the standalone preview goes away.
-        Window("Native Chat (preview)", id: "marvin-chat-preview") {
-            ChatPreviewView()
-                .environment(bridge)
-        }
-        .windowResizability(.contentSize)
-        // .commandsRemoved keeps the preview window from re-emitting
-        // the menu items the main window provides — e.g. we don't
-        // want a second "Reload" / "Open Project…" menu when the
-        // preview is focused.
-        .commandsRemoved()
     }
 }

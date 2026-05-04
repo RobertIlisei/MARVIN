@@ -52,57 +52,23 @@ struct ContentView: View {
             case .connecting:
                 connectingView
             case .online:
-                // Phase 1a: full-bleed WebView. Once the sidecar is
-                // reachable, hand the entire content area over to
-                // the existing web UI. The auth/model summary that
-                // Phase 0 rendered is discoverable via `bin/marvin
-                // status` from the terminal — the SwiftUI app's
-                // job here is to host the UI, not duplicate its
-                // status view.
-                ZStack(alignment: .top) {
-                    WebView(url: sidecarURL)
-                        .ignoresSafeArea()
-                        // Phase 1d.29 — drag a folder from Finder
-                        // anywhere onto the WebView to add it as a
-                        // MARVIN project. The drop is forwarded to
-                        // the web side via a typed CustomEvent
-                        // (`marvin:dropped-folder`); the web's
-                        // useProjects().addProject handler is the
-                        // canonical place to validate the path
-                        // (manifest sniff, CLAUDE.md detection, etc.)
-                        // and prompt for a display name. Native
-                        // doesn't try to short-circuit any of that
-                        // — it just hands the path over.
-                        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                            handleFolderDrop(providers: providers)
-                        }
-                        // Phase 1d.10 — Safari-style thin progress bar
-                        // pinned to the top edge of the WebView while
-                        // it's loading. Fades out at 100% so the bar
-                        // doesn't linger after the page finishes. Driven
-                        // by KVO on WKWebView.estimatedProgress / .isLoading.
-                        .overlay(alignment: .top) {
-                            if webCommands.isLoading && webCommands.loadProgress < 1.0 {
-                                ProgressView(value: webCommands.loadProgress)
-                                    .progressViewStyle(.linear)
-                                    .tint(.accentColor)
-                                    .frame(height: 2)
-                                    .transition(.opacity)
-                            }
-                        }
-                        .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
-
-                    // Phase 1d.12 — find bar overlays the WebView's
-                    // top edge when ⌘F is pressed. Sits inside the
-                    // ZStack so it draws above the WebView (which
-                    // would otherwise eat all hits). Slides in from
-                    // the top, dismisses with Esc or the Done button.
-                    if webCommands.isFindVisible {
-                        FindBarView()
-                            .padding(.top, 8)
-                            .padding(.horizontal, 12)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
+                // Phase 2g.3 — main window splits horizontally:
+                // native chat on the left (Phase 2c-f surface),
+                // WebView on the right (file tree / brain / work
+                // area, with the in-page chat hidden via the
+                // [data-host-shell="swift"] [data-marvin-chat-pane]
+                // CSS rule from Phase 2g.2). The native chat is
+                // now the primary chat surface in MARVIN-Swift.
+                //
+                // HSplitView is the macOS-native draggable splitter.
+                // Default fractions roughly mirror the web app's
+                // 60/40 main:chat ratio — chat-side first because
+                // it's where the user types most.
+                HSplitView {
+                    ChatPreviewView()
+                        .frame(minWidth: 320, idealWidth: 540)
+                    webIsland
+                        .frame(minWidth: 320)
                 }
                 .animation(.easeOut(duration: 0.18), value: webCommands.isFindVisible)
             case .offline(let reason):
@@ -261,6 +227,38 @@ struct ContentView: View {
     /// Set the macOS Dock badge to a non-empty count, or clear it.
     private func updateDockBadge(count: Int) {
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : ""
+    }
+
+    /// The WebView side of Phase 2g.3's HSplitView — the same
+    /// content the Phase 1a full-bleed island used to render, just
+    /// scoped to the right-hand pane. Drag-drop, find bar, and the
+    /// loading progress bar all stay attached here because they
+    /// belong to the WebView, not the chat.
+    private var webIsland: some View {
+        ZStack(alignment: .top) {
+            WebView(url: sidecarURL)
+                .ignoresSafeArea()
+                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                    handleFolderDrop(providers: providers)
+                }
+                .overlay(alignment: .top) {
+                    if webCommands.isLoading && webCommands.loadProgress < 1.0 {
+                        ProgressView(value: webCommands.loadProgress)
+                            .progressViewStyle(.linear)
+                            .tint(.accentColor)
+                            .frame(height: 2)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
+
+            if webCommands.isFindVisible {
+                FindBarView()
+                    .padding(.top, 8)
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
     }
 
     /// Resolve dropped NSItemProviders to file URLs, take the first
