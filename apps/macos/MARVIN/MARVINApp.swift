@@ -35,6 +35,22 @@ private struct OpenAboutButton: View {
 // scene + menu entry went away (same retirement pattern Phase 2g.3
 // used for the chat preview window).
 
+/// Phase 4c — opens the standalone "Brain (preview)" window hosting
+/// the MTKView. Same `@Environment(\.openWindow)` pattern as
+/// `OpenAboutButton`. The preview window is a development surface
+/// while 4c–4f iterate on the render pipeline; 4g promotes the
+/// MTKView into the main window's work-pane empty state and this
+/// button retires alongside the standalone window scene (matching
+/// the 2g.3 / 3d retirement pattern).
+private struct OpenBrainPreviewButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Brain (preview)") {
+            openWindow(id: "marvin-brain-preview")
+        }
+    }
+}
+
 /// File → Open Recent submenu content. Reads the @Observable
 /// singleton directly — SwiftUI's command tree does NOT inherit
 /// the Window scene's environment, so an `@Environment(MarvinBridge
@@ -490,6 +506,14 @@ struct MARVINApp: App {
                 // live inline as panes of the main window's
                 // HSplitView; nothing in this Window menu group
                 // hosts a child window today.
+
+                // Phase 4c — Brain (preview) is the active dev surface
+                // for the MetalKit port. 4g retires this entry once
+                // the MTKView promotes into the work-pane empty
+                // state of the main window.
+                Divider()
+                OpenBrainPreviewButton()
+                    .keyboardShortcut("b", modifiers: [.command, .option])
             }
 
             // Help menu — quick links out to the project. macOS
@@ -523,6 +547,26 @@ struct MARVINApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commandsRemoved()
+
+        // Phase 4c — Brain (preview) Window scene. Standalone window
+        // hosting the MTKView so 4d/4e shader iteration doesn't
+        // disturb the WebView's <BrainLiquid> in the main window.
+        // Retired in 4g once the native renderer reaches parity with
+        // the WebView and the work-pane empty-state promotes it
+        // inline. Same retirement pattern as Phase 2g.3 (chat
+        // preview) and Phase 3d (files preview).
+        //
+        // The bridge environment is forwarded so the preview's
+        // theme follows the main window's preferredColorScheme — 4f
+        // wires this through end-to-end into the Metal palette.
+        // .commandsRemoved() avoids duplicate menu items when the
+        // preview window has focus.
+        Window("Brain (preview)", id: "marvin-brain-preview") {
+            BrainPreviewView()
+                .environment(bridge)
+        }
+        .windowStyle(.titleBar)
         .commandsRemoved()
 
         // Phase 1d.9 — native Settings scene (⌘,). SwiftUI's
