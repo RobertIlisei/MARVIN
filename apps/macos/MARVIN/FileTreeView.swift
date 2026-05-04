@@ -145,6 +145,25 @@ struct FileTreeView: View {
         .onChange(of: bridge.projectWorkDir) { _, _ in
             syncFetchFromBridge()
         }
+        // Phase 3h — Finder-style space-bar Quick Look. .focusable()
+        // gives the tree a focus ring (subtle; SwiftUI's default
+        // styling is appropriate here) so macOS routes key events
+        // through `.onKeyPress` once the user has clicked into the
+        // tree. We swallow the press by returning `.handled` only
+        // when there's a selected file to preview — otherwise the
+        // event bubbles up so a non-file selection (or no selection)
+        // doesn't eat the space-bar in case some ancestor wants it.
+        .focusable()
+        .onKeyPress(.space) {
+            guard let selected = model.selectedPath,
+                  !selected.isEmpty else {
+                return .ignored
+            }
+            QuickLookCoordinator.shared.show(
+                url: URL(fileURLWithPath: selected)
+            )
+            return .handled
+        }
     }
 
     /// Phase 3c — handle a tap on a row. Files dispatch through the
@@ -302,8 +321,10 @@ struct FileTreeView: View {
 
 /// One row in the tree. Phase 3c: clicking a file fires `onTap`
 /// which the parent uses to dispatch a `marvin:select-file` event
-/// to the web side. Selected rows render with the macOS standard
-/// accent-color highlight; unselected rows are transparent.
+/// to the web side. Phase 3h: file rows are drag sources for
+/// Finder (drop into a Finder window copies the file) and offer
+/// Quick Look via context menu / space bar (handled at the
+/// FileTreeView level).
 ///
 /// The folder/file icon is an SF Symbol so we get the user's accent
 /// colour for free; the row is tagged with the node's absolute path
@@ -333,7 +354,65 @@ private struct FileTreeRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // Phase 3h — drag a file row into Finder to copy the file.
+        // SwiftUI's `.draggable` with a URL transferable produces the
+        // standard NSPasteboard fileURL type Finder accepts; the OS
+        // handles the copy operation including drag preview, drop
+        // animation, and post-drop progress UI without us doing
+        // anything else. Folders are deliberately not draggable —
+        // dragging a directory into Finder would copy the whole
+        // subtree which is rarely what the user wants from the
+        // sidebar; Reveal in Finder via context menu + use Finder
+        // is the more sensible flow.
+        .ifLet(node.isDirectory ? nil : URL(fileURLWithPath: node.path)) { view, fileURL in
+            view.draggable(fileURL)
+        }
+        // Phase 3h — context menu surfaces the affordances that
+        // don't fit on a tappable row: Quick Look (also bound to
+        // space bar at the tree level), Reveal in Finder, Copy path.
+        // Folders get only Reveal + Copy — Quick Look on a directory
+        // would just open Finder, which the Reveal action already
+        // does directly.
+        .contextMenu {
+            if !node.isDirectory {
+                Button("Quick Look") {
+                    QuickLookCoordinator.shared.show(
+                        url: URL(fileURLWithPath: node.path)
+                    )
+                }
+                .keyboardShortcut(.space, modifiers: [])
+                Divider()
+            }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    [URL(fileURLWithPath: node.path)]
+                )
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(node.path, forType: .string)
+            }
+        }
         .accessibilityIdentifier("file-tree-row:\(node.path)")
+    }
+}
+
+/// Conditional view-builder helper. SwiftUI doesn't have a native
+/// `.if` modifier (and adding `.draggable(nil)` directly isn't
+/// supported), so we wrap the optional-conditional shape that the
+/// drag source needs into a small extension. Used here only —
+/// keeps the modifier private.
+private extension View {
+    @ViewBuilder
+    func ifLet<T, Content: View>(
+        _ value: T?,
+        @ViewBuilder transform: (Self, T) -> Content
+    ) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
+        }
     }
 }
 
