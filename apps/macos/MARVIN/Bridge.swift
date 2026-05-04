@@ -128,6 +128,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// consumed by any view.
     private(set) var projectWorkDir: String? = nil
 
+    /// Active git branch + dirty-count, posted by the web side via
+    /// `branch-changed`. `nil` branch when not a git repo (or no
+    /// project). Phase 1d.7 — drives the NSWindow subtitle alongside
+    /// projectName.
+    private(set) var branch: String? = nil
+    private(set) var branchDirtyCount: Int = 0
+
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
     /// One name keeps the WebKit configuration simple; routing
@@ -291,6 +298,15 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             projectName = (payload?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             projectWorkDir = (payload?["workDir"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             NSLog("[MarvinBridge] project-changed name=\(projectName ?? "nil")")
+        case "branch-changed":
+            // Active git branch + dirty-count — appended to the
+            // NSWindow subtitle. Empty/nil branch means not a git
+            // repo; subtitle falls back to just projectName.
+            // Not NSLog'd because branch-changed fires on every
+            // /api/files/status refresh (after every completed turn);
+            // the live subtitle is the visible signal.
+            branch = (payload?["branch"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            branchDirtyCount = (payload?["dirtyCount"] as? Int) ?? 0
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

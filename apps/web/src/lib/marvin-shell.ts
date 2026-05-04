@@ -121,6 +121,24 @@ export function announceProject(
 }
 
 /**
+ * Mirrors the active git branch + dirty-count to the Swift side so
+ * the native NSWindow subtitle can include "project · branch" with
+ * a dirty indicator. Phase 1d.7 — fires from `<BranchBadge>` after
+ * every `/api/files/status` refresh. Pass nulls when there's no
+ * project, or when the workDir isn't a git repo.
+ */
+export function announceBranch(
+  branch: string | null,
+  dirtyCount: number,
+): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "branch-changed",
+    payload: { branch, dirtyCount },
+  });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

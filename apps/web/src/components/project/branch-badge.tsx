@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { announceBranch } from "@/lib/marvin-shell";
+
 interface StatusResponse {
   isGit: boolean;
   branch?: string | null;
@@ -45,6 +47,18 @@ export function BranchBadge({
       cancelled = true;
     };
   }, [cwd, refreshKey]);
+
+  // Phase 1d.7 — mirror branch + dirty-count to the SwiftUI native
+  // shell so the NSWindow subtitle can show "project · branch".
+  // No-op outside the Swift shell. Send nulls when not a git repo
+  // so the subtitle clears cleanly.
+  useEffect(() => {
+    if (!data?.isGit || !data.branch) {
+      announceBranch(null, 0);
+      return;
+    }
+    announceBranch(data.branch, Object.keys(data.status).length);
+  }, [data]);
 
   if (!data?.isGit || !data.branch) return null;
 

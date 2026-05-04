@@ -99,10 +99,12 @@ struct ContentView: View {
         // The web app's title includes the v1.2 `(N)` confirm-
         // pending badge, so this surfaces the badge natively too.
         .navigationTitle(bridge.webTitle ?? "MARVIN")
-        // Phase 1d.3 — active project name as the NSWindow subtitle.
-        // Fed by the bridge's `project-changed` message; empty
-        // string suppresses the subtitle when there's no project.
-        .navigationSubtitle(bridge.projectName ?? "")
+        // Phase 1d.3/1d.7 — active project + branch as the NSWindow
+        // subtitle. "$project · $branch●" when both present;
+        // "$project" when no git repo; empty when no project. The
+        // ● suffix marks an uncommitted-changes count, matching
+        // the web BranchBadge's dirty pip.
+        .navigationSubtitle(composeSubtitle())
         // Phase 1d.3 — mirror the `(N)` pending-confirm count into
         // the dock tile badge. Parsed from the same webTitle the
         // navigation title shows; no extra bridge message needed.
@@ -125,6 +127,16 @@ struct ContentView: View {
         } else {
             NSApp.dockTile.badgeLabel = ""
         }
+    }
+
+    /// Compose the NSWindow subtitle from the bridge state. Three
+    /// shapes: empty (no project), "$project" (no git), or
+    /// "$project · $branch" with an optional dirty pip suffix.
+    private func composeSubtitle() -> String {
+        guard let project = bridge.projectName else { return "" }
+        guard let branch = bridge.branch else { return project }
+        let dirty = bridge.branchDirtyCount > 0 ? " ●" : ""
+        return "\(project) · \(branch)\(dirty)"
     }
 
     // MARK: - States
@@ -211,9 +223,11 @@ private struct CostToolbarItem: View {
 
 /// Native counterpart to the web `<CostPill>` popover. Renders the
 /// same fields (today / 7d / lifetime / turns / tokens) plus a
-/// daily-history bar chart. Phase 1d.6.
+/// daily-history bar chart with day labels and immediate hover
+/// feedback (matching the web pill's group-hover overlay). Phase 1d.6.
 private struct CostHistoryPopover: View {
     let summary: CostSummary
+    @State private var hoveredDay: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -240,20 +254,33 @@ private struct CostHistoryPopover: View {
             }
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: 320)
     }
 
     @ViewBuilder
     private var dailyChart: some View {
         let maxCost = max(summary.daily.map(\.costUsd).max() ?? 0, 0.0001)
+        let hovered = summary.daily.first { $0.day == hoveredDay }
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("last \(summary.daily.count) active days")
                     .tracking(1.5)
                     .textCase(.uppercase)
                 Spacer()
-                Text("max \(fmtUsd(maxCost))")
-                    .foregroundStyle(.secondary)
+                // Right-side label switches to the hovered day's
+                // detail (cost · turns) when a bar is under the
+                // cursor; falls back to the chart-wide max otherwise.
+                // Matches the web pill's behaviour where the hovered
+                // day's cost overlays its bar — kept here as a single
+                // header line because in-place overlays clip against
+                // the chart's tight 50pt height.
+                if let h = hovered {
+                    Text("\(h.day) · \(fmtUsd(h.costUsd)) · \(h.turns) turns")
+                        .foregroundStyle(.primary)
+                } else {
+                    Text("max \(fmtUsd(maxCost))")
+                        .foregroundStyle(.secondary)
+                }
             }
             .font(.caption2.monospaced())
             .foregroundStyle(.tertiary)
@@ -261,13 +288,29 @@ private struct CostHistoryPopover: View {
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(summary.daily) { entry in
                     let h = max(3.0, (entry.costUsd / maxCost) * 48.0)
+                    let isHovered = entry.day == hoveredDay
                     RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.85))
+                        .fill(Color.accentColor.opacity(isHovered ? 1.0 : 0.75))
+                        .frame(maxWidth: .infinity)
                         .frame(height: h)
-                        .help("\(entry.day): \(fmtUsd(entry.costUsd)) · \(entry.turns) turns")
+                        .onHover { hovering in
+                            hoveredDay = hovering ? entry.day : nil
+                        }
                 }
             }
             .frame(height: 50, alignment: .bottom)
+
+            // Day labels — "04-27", matching the web pill's
+            // `day.slice(5)` truncation. Same column widths as the
+            // bars above so labels align under their bar.
+            HStack(spacing: 2) {
+                ForEach(summary.daily) { entry in
+                    Text(String(entry.day.suffix(5)))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.quaternary)
         }
     }
 

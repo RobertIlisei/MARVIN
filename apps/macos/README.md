@@ -79,24 +79,28 @@ for the full table. Short version:
 - **Phase 1d — NSToolbar (in flight)** — unified title bar now hosts:
   - **Connection status pip** + `connecting/online/offline` label,
     clickable to re-probe (no bridge — reads HealthMonitor directly).
-  - **Cost pill** mirroring today's spend from the web app's
-    `<CostPill>` via the bridge (`cost-changed`). Click opens a
-    native popover with the same fields the web pill shows
-    (today / 7d / lifetime / turns / tokens / daily bar chart) —
-    full functional parity, not a strict subset.
+  - **Cost pill** mirroring the web `<CostPill>` via the bridge
+    (`cost-changed`). Click opens a native popover with the same
+    fields the web pill shows — today / 7d / lifetime / turns /
+    tokens / daily bar chart with day labels and immediate hover
+    feedback. Web pill is hidden in the SwiftUI shell now that
+    parity is reached.
   - **NSWindow title** mirrors the web app's `document.title` so the
     v1.2 `(N)` pending-confirm badge surfaces in the title bar even
     when the WebView is scrolled or another app is focused.
-  - **NSWindow subtitle** shows the active project name via the
-    bridge (`project-changed`).
+  - **NSWindow subtitle** shows the active project + git branch +
+    dirty pip via two bridge messages (`project-changed`,
+    `branch-changed`). Format: `$project · $branch ●` when dirty,
+    `$project · $branch` when clean, `$project` when not a git repo,
+    empty when no project.
   - **Dock tile badge** parses the `(N)` count out of `webTitle` and
     sets `NSApp.dockTile.badgeLabel` so pending confirms are visible
     from any app, not just when MARVIN is focused.
 
-  **Hide rule for the web cost pill is currently OFF** — the web
-  pill stays visible inside the SwiftUI shell until daily use
-  confirms the native popover is at parity. Re-enabling is a
-  one-line edit to `globals.css`. See the comment in that file.
+  Hide rules in `globals.css` follow a strict gate: a web control
+  only gets hidden once its native replacement is at full feature
+  parity. Tagged with `data-marvin-*` attributes; the `.css`
+  comment block enumerates the current hides.
 
   Future 1d work: project picker + model picker. Both have rich
   popovers (recent sessions, presets) that don't trivially native-
