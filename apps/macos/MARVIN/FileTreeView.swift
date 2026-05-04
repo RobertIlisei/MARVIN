@@ -181,6 +181,12 @@ struct FileTreeView: View {
     private func selectRow(_ node: FileNode) {
         model.selectedPath = node.path
         guard !node.isDirectory else { return }
+        // Phase 5a — also publish the selection on the bridge so the
+        // native file viewer (FileViewerView, in a side preview window
+        // during 5a; promoted inline at 5c) sees the same source. The
+        // WebView's Monaco still consumes the dispatchWebCommand
+        // event; the native viewer reads from bridge.selectedFilePath.
+        bridge.setSelectedFile(node.path)
         WebViewCommands.shared.dispatchWebCommand(
             "select-file",
             detail: ["path": node.path]

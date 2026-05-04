@@ -42,6 +42,22 @@ private struct OpenAboutButton: View {
 // `side-chat` panel layout. Same retirement pattern as 2g.3 / 3d
 // — only the hosting Window scene + menu entry went away.
 
+/// Phase 5a — opens the standalone "File Viewer (preview)" window
+/// hosting the native NSTextView-backed file viewer. Same
+/// `@Environment(\.openWindow)` pattern as `OpenAboutButton`. The
+/// preview window is a development surface during 5a–5b iteration
+/// (read-only viewer → STTextView + tree-sitter syntax highlighting);
+/// 5c promotes it inline into the WebView's work-pane file slot and
+/// retires the standalone window (matching 2g.3 / 3d / 4g pattern).
+private struct OpenFileViewerPreviewButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("File Viewer (preview)") {
+            openWindow(id: "marvin-file-viewer-preview")
+        }
+    }
+}
+
 /// File → Open Recent submenu content. Reads the @Observable
 /// singleton directly — SwiftUI's command tree does NOT inherit
 /// the Window scene's environment, so an `@Environment(MarvinBridge
@@ -495,9 +511,16 @@ struct MARVINApp: App {
                 // (preview)" window. Phase 3d retired the standalone
                 // "Native Files (preview)" window. Phase 4g retired
                 // the standalone "Brain (preview)" window. All three
-                // surfaces now live inline as panes (or sub-panes)
-                // of the main window's HSplitView; nothing in this
-                // Window menu group hosts a child window today.
+                // surfaces live inline as panes (or sub-panes) of
+                // the main window's HSplitView.
+
+                // Phase 5a — File Viewer (preview) is the active dev
+                // surface for the Monaco port. 5c retires this entry
+                // once the native viewer promotes inline into the
+                // WebView work-pane file slot.
+                Divider()
+                OpenFileViewerPreviewButton()
+                    .keyboardShortcut("v", modifiers: [.command, .option])
             }
 
             // Help menu — quick links out to the project. macOS
@@ -537,6 +560,26 @@ struct MARVINApp: App {
         // scene — see retirement comment near OpenBrainPreviewButton
         // above. The native MTKView lives inline in BrainPaneView
         // at the top of the main window's right HSplitView pane.
+
+        // Phase 5a — File Viewer (preview) Window scene. Standalone
+        // window hosting the native NSTextView-backed file viewer
+        // so 5a–5b iteration (foundation → STTextView + tree-sitter)
+        // doesn't disturb the WebView's Monaco viewer in the main
+        // window. Retired in 5c when the native viewer promotes
+        // inline. Same retirement pattern as Phase 2g.3 / 3d / 4g.
+        //
+        // The bridge environment is forwarded so the preview's
+        // theme follows the main window's preferredColorScheme +
+        // the viewer reads bridge.selectedFilePath +
+        // bridge.projectWorkDir to know what to render.
+        // .commandsRemoved() avoids duplicate menu items when the
+        // preview window has focus.
+        Window("File Viewer (preview)", id: "marvin-file-viewer-preview") {
+            FileViewerPreviewView()
+                .environment(bridge)
+        }
+        .windowStyle(.titleBar)
+        .commandsRemoved()
 
         // Phase 1d.9 — native Settings scene (⌘,). SwiftUI's
         // `Settings` scene is special: it auto-installs the
