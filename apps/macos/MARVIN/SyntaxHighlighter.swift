@@ -31,6 +31,8 @@
 import AppKit
 import Foundation
 import SwiftTreeSitter
+import TreeSitterGo
+import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTypeScript
 
@@ -55,6 +57,8 @@ struct HighlightSpan {
 enum HighlightLanguage: String {
     case swift
     case typescript
+    case go
+    case rust
 
     /// Pick a language by lowercased file extension (no leading
     /// dot). Returns nil for unsupported extensions; the viewer
@@ -69,6 +73,10 @@ enum HighlightLanguage: String {
             // parser at this scope. Treating .js as TS gives us
             // the same keyword/type highlighting at no extra cost.
             return .typescript
+        case "go":
+            return .go
+        case "rs":
+            return .rust
         default:
             return nil
         }
@@ -82,6 +90,10 @@ enum HighlightLanguage: String {
             return Language(language: tree_sitter_swift())
         case .typescript:
             return Language(language: tree_sitter_typescript())
+        case .go:
+            return Language(language: tree_sitter_go())
+        case .rust:
+            return Language(language: tree_sitter_rust())
         }
     }
 
@@ -227,7 +239,13 @@ enum HighlightTheme {
             return isDark
                 ? NSColor(red: 0.74, green: 0.55, blue: 0.91, alpha: 1)
                 : NSColor(red: 0.50, green: 0.20, blue: 0.70, alpha: 1)
-        case "string", "string.escape", "string.regexp":
+        case "string", "string.escape", "string.regexp", "escape":
+            // `escape` is a tree-sitter capture used by Python /
+            // Go highlights to mark escape sequences inside string
+            // literals (`\n`, `\t`, `\xff`). Treat it as the same
+            // colour family as the surrounding string — the slight
+            // alpha shift reads as "this is part of the string but
+            // structurally distinct" without adding theme noise.
             return isDark
                 ? NSColor(red: 0.72, green: 0.83, blue: 0.55, alpha: 1)
                 : NSColor(red: 0.30, green: 0.55, blue: 0.20, alpha: 1)
@@ -249,7 +267,11 @@ enum HighlightTheme {
             return isDark
                 ? NSColor(red: 0.92, green: 0.78, blue: 0.55, alpha: 1)
                 : NSColor(red: 0.55, green: 0.35, blue: 0.10, alpha: 1)
-        case "variable.builtin", "variable.member":
+        case "variable.builtin", "variable.member", "property":
+            // `property` is what Python / Rust / Go highlights use
+            // for member-access right-hand sides (`obj.field`).
+            // Same colour family as `variable.member` — they're the
+            // same concept under different language conventions.
             return isDark
                 ? NSColor(red: 0.86, green: 0.68, blue: 0.95, alpha: 1)
                 : NSColor(red: 0.45, green: 0.25, blue: 0.55, alpha: 1)

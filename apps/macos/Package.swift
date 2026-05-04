@@ -87,6 +87,45 @@ let package = Package(
             url: "https://github.com/tree-sitter/tree-sitter-typescript.git",
             from: "0.23.0"
         ),
+
+        // Phase 5b.3 — Go + Rust language packages. Same SPM-
+        // friendly shape as tree-sitter-typescript: pre-generated
+        // parser.c (+ scanner.c when the language has an external
+        // scanner) + queries/highlights.scm shipped as resources,
+        // public C header exposes the `tree_sitter_<lang>()`
+        // factory.
+        //
+        // Two languages from the ADR-0020 5b list are deferred
+        // here — Python and Markdown:
+        //
+        // - Python: tree-sitter-python's Package.swift uses a
+        //   runtime `FileManager.fileExists("src/scanner.c")` to
+        //   conditionally add the external scanner source. The
+        //   relative path resolves against SPM's cwd, which is the
+        //   transitively-loading package (i.e. MARVIN), not the
+        //   tree-sitter-python checkout. The check fails and
+        //   scanner.c isn't compiled, so the linker fails with
+        //   undefined `_tree_sitter_python_external_scanner_*`
+        //   symbols. Standalone builds against tree-sitter-python
+        //   work fine. Workarounds (vendor + patch / fork pin /
+        //   wait for upstream fix) all need their own commit; Go
+        //   + Rust don't hit this and ship cleanly today.
+        //
+        // - Markdown: tree-sitter-markdown depends on
+        //   tree-sitter/swift-tree-sitter (a different Swift
+        //   binding than the ChimeHQ SwiftTreeSitter we already
+        //   pin) and ships a dual-grammar block + inline pair.
+        //   Both wrinkles are real but solvable; user-visible
+        //   upside is small (markdown is mostly prose) so it gets
+        //   pushed to a later iteration of 5b.
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-go.git",
+            from: "0.23.0"
+        ),
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-rust.git",
+            from: "0.23.0"
+        ),
     ],
     targets: [
         .executableTarget(
@@ -96,6 +135,8 @@ let package = Package(
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
+                .product(name: "TreeSitterGo", package: "tree-sitter-go"),
+                .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
             ],
             // SPM looks for Sources/MARVIN by default; we keep
             // sources at apps/macos/MARVIN to match the Xcode
