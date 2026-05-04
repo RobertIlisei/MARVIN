@@ -209,16 +209,38 @@ struct WebView: NSViewRepresentable {
         // fresh WKWebViewConfiguration anyway).
         MarvinBridge.shared.install(on: config)
 
-        // Enable the WebKit inspector in DEBUG builds — same affordance
-        // Tauri ships. Right-click → Inspect Element. KVC-set because
-        // it's not exposed publicly until macOS 13.3+ and we want a
-        // single code path that works on Sonoma 14.0.
-        #if DEBUG
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        #endif
+        // Web Inspector — explicitly OFF.
+        //
+        // Tauri shipped an Inspect Element / devtools right-click
+        // entry by default, which leaked the "this is just a wrapped
+        // browser tab" feeling we're migrating away from. We turn
+        // both signals off:
+        //
+        //   • `developerExtrasEnabled` (private KVC key, all macOS
+        //     versions) — controls whether "Inspect Element" appears
+        //     in the right-click menu and whether ⌘⌥I opens devtools.
+        //   • `isInspectable` (public API on macOS 13.3+) — controls
+        //     whether Safari's Develop menu can attach to this
+        //     WebView remotely.
+        //
+        // Both default to false on a fresh WKWebView, but we set
+        // them explicitly so a future preferences change can't flip
+        // the surface back on by accident. Re-enable only by editing
+        // this file — never via a menu toggle, never via DEBUG flag.
+        config.preferences.setValue(false, forKey: "developerExtrasEnabled")
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        // CuratedWebView (defined below) is a thin WKWebView subclass
+        // that overrides `willOpenMenu(_:with:)` to strip the
+        // browser-style entries (Reload, Back/Forward, Inspect
+        // Element, Save Image As, Search With…) from the right-click
+        // context menu before AppKit shows it. Using a subclass is
+        // the only public-API path on macOS — `WKUIDelegate` has no
+        // context-menu hook outside iOS.
+        let webView = CuratedWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = false
+        }
 
         // Don't paint a solid white during load — let the SwiftUI
         // background bleed through. Without this you get a flash of
@@ -338,6 +360,80 @@ struct WebView: NSViewRepresentable {
                 return
             }
             decisionHandler(.allow)
+        }
+
+    }
+}
+
+/// `WKWebView` subclass that curates the default right-click menu
+/// before AppKit shows it.
+///
+/// The default WebKit context menu is a stack of browser-style items —
+/// Reload, Back / Forward, Open Frame in New Window, Save Image As,
+/// Search With…, Inspect Element — that makes the app feel like a
+/// wrapped Chrome tab and duplicates the native menu bar's View →
+/// Reload entry. We strip those out so what remains is the IDE-style
+/// minimum: Cut / Copy / Paste / Select All on text selections,
+/// links rendered as plain links, and nothing else.
+///
+/// `willOpenMenu(_:with:)` is the AppKit-level hook called whenever
+/// any NSView is about to present a context menu — it runs after
+/// WebKit has populated the menu but before macOS shows it. Public
+/// API, no private SPI required, no `WKUIDelegate` extension needed.
+/// The macOS public WKUIDelegate has no equivalent of iOS's
+/// `contextMenuConfigurationForElement` — this is the supported path.
+///
+/// Identifiers come from the open-source WebKit headers
+/// (`WKMenuItemIdentifier*`). Items without a stable identifier
+/// (Cut / Copy / Paste added by NSText hosts) survive untouched.
+final class CuratedWebView: WKWebView {
+    private static let dropIdentifiers: Set<String> = [
+        "WKMenuItemIdentifierReload",
+        "WKMenuItemIdentifierGoBack",
+        "WKMenuItemIdentifierGoForward",
+        "WKMenuItemIdentifierInspectElement",
+        "WKMenuItemIdentifierShowHideMediaControls",
+        "WKMenuItemIdentifierToggleEnhancedFullScreen",
+        "WKMenuItemIdentifierToggleFullScreen",
+        "WKMenuItemIdentifierShareMenu",
+        "WKMenuItemIdentifierSpeechMenu",
+        "WKMenuItemIdentifierLookUp",
+        "WKMenuItemIdentifierTranslate",
+        "WKMenuItemIdentifierOpenFrameInNewWindow",
+        "WKMenuItemIdentifierOpenLinkInNewWindow",
+        "WKMenuItemIdentifierOpenImageInNewWindow",
+        "WKMenuItemIdentifierOpenMediaInNewWindow",
+        "WKMenuItemIdentifierDownloadLinkedFile",
+        "WKMenuItemIdentifierDownloadImage",
+        "WKMenuItemIdentifierDownloadMedia",
+        "WKMenuItemIdentifierSearchWeb",
+    ]
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        for item in menu.items.reversed() {
+            if let id = item.identifier?.rawValue,
+               Self.dropIdentifiers.contains(id) {
+                menu.removeItem(item)
+            }
+        }
+        Self.collapseSeparators(in: menu)
+    }
+
+    private static func collapseSeparators(in menu: NSMenu) {
+        while let first = menu.items.first, first.isSeparatorItem {
+            menu.removeItem(first)
+        }
+        while let last = menu.items.last, last.isSeparatorItem {
+            menu.removeItem(last)
+        }
+        var i = 0
+        while i < menu.items.count - 1 {
+            if menu.items[i].isSeparatorItem && menu.items[i + 1].isSeparatorItem {
+                menu.removeItem(at: i + 1)
+            } else {
+                i += 1
+            }
         }
     }
 }
