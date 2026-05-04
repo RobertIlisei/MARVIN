@@ -28,6 +28,37 @@ private struct OpenAboutButton: View {
     }
 }
 
+/// File → Open Recent submenu content. Reads the @Observable
+/// singleton directly — SwiftUI's command tree does NOT inherit
+/// the Window scene's environment, so an `@Environment(MarvinBridge
+/// .self)` lookup here crashes at runtime ("No Observable object of
+/// type MarvinBridge found"). Direct singleton read is the path the
+/// SwiftUI commands DSL actually supports for menu state.
+///
+/// Wrapping the menu items in a View (rather than building them
+/// inline inside `Menu("Open Recent") { … }`) is what gives the
+/// commands DSL a tracked re-render boundary — without the View
+/// wrapper, items capture a stale snapshot at command-tree creation
+/// time and the list never updates.
+private struct OpenRecentMenuContent: View {
+    var body: some View {
+        let projects = MarvinBridge.shared.projects
+        if projects.isEmpty {
+            Button("(no projects yet)") {}
+                .disabled(true)
+        } else {
+            ForEach(projects) { project in
+                Button(project.name) {
+                    WebViewCommands.shared.dispatchWebCommand(
+                        "select-project",
+                        detail: ["id": project.id]
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// Reveal a directory in Finder, with the directory itself
 /// selected (not its contents shown). `activateFileViewerSelecting`
 /// is the AppKit idiom — same as Finder's "Reveal in Finder" entry.
@@ -367,6 +398,14 @@ struct MARVINApp: App {
                     WebViewCommands.shared.dispatchWebCommand("open-project-picker")
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+
+                // Phase 1d.33 — File → Open Recent submenu populated
+                // from the bridge. Click on a project to make it
+                // active without going through the web picker.
+                Menu("Open Recent") {
+                    OpenRecentMenuContent()
+                }
                 .disabled(!health.state.isOnline)
 
                 Divider()

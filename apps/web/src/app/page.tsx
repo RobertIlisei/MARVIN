@@ -15,6 +15,7 @@ import {
   announceModels,
   announcePersonality,
   announceProject,
+  announceProjects,
 } from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
@@ -148,6 +149,17 @@ export default function Home() {
   useEffect(() => {
     announcePersonality(personality);
   }, [personality]);
+
+  // Phase 1d.33 — mirror the registered project list so the native
+  // File → Open Recent submenu can populate. We trim to the three
+  // fields the Swift side actually needs; the bridge wire format
+  // stays narrow so renaming a ProjectRecord field doesn't break
+  // the bridge contract.
+  useEffect(() => {
+    announceProjects(
+      projects.map((p) => ({ id: p.id, name: p.name, workDir: p.workDir })),
+    );
+  }, [projects]);
 
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();
@@ -371,19 +383,33 @@ export default function Home() {
       });
     };
 
+    // Phase 1d.33 — File → Open Recent → <project> in the native
+    // menu bar dispatches `marvin:select-project` with the project
+    // id. selectProject is the same call the web picker uses, so
+    // the resulting state transition is identical.
+    const onSelectProject = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { id?: string }
+        | undefined;
+      if (!detail?.id) return;
+      void selectProject(detail.id);
+    };
+
     window.addEventListener("marvin:new-session", onNewSession);
     window.addEventListener("marvin:open-project-picker", onOpenProjectPicker);
     window.addEventListener("marvin:show-shortcuts", onShowShortcuts);
     window.addEventListener("marvin:toggle-theme", onToggleTheme);
     window.addEventListener("marvin:dropped-folder", onDroppedFolder);
+    window.addEventListener("marvin:select-project", onSelectProject);
     return () => {
       window.removeEventListener("marvin:new-session", onNewSession);
       window.removeEventListener("marvin:open-project-picker", onOpenProjectPicker);
       window.removeEventListener("marvin:show-shortcuts", onShowShortcuts);
       window.removeEventListener("marvin:toggle-theme", onToggleTheme);
       window.removeEventListener("marvin:dropped-folder", onDroppedFolder);
+      window.removeEventListener("marvin:select-project", onSelectProject);
     };
-  }, [reset, addProject]);
+  }, [reset, addProject, selectProject]);
 
   const handleSend = useCallback(
     (text: string) => {

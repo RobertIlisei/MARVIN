@@ -157,6 +157,37 @@ export function announceModels(
 }
 
 /**
+ * Lightweight project shape the Swift side uses to populate the
+ * native File → Open Recent submenu. We don't ship the full
+ * `ProjectRecord` (createdAt / lastUsedAt are not needed there);
+ * keeping the wire payload narrow means a future ProjectRecord
+ * field rename doesn't ripple into the bridge.
+ */
+export interface BridgeProjectEntry {
+  id: string;
+  name: string;
+  workDir: string;
+}
+
+/**
+ * Mirrors the registered project list to the Swift side so the
+ * native File → Open Recent submenu can show "select project" entries
+ * without going through the web project picker. Phase 1d.33 — fires
+ * whenever `useProjects().projects` changes. Sort order matches the
+ * web picker (most-recently-used first); the native side just renders
+ * what it gets.
+ */
+export function announceProjects(
+  projects: ReadonlyArray<BridgeProjectEntry>,
+): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "projects-changed",
+    payload: { projects: [...projects] },
+  });
+}
+
+/**
  * Mirrors the active personality ("marvin" | "neutral") to the Swift
  * side so the About panel can show which mode MARVIN is in without
  * the user having to open the web Settings popover. Phase 1d.32 —

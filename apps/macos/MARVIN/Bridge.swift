@@ -65,6 +65,15 @@ struct BridgeMessage {
     let payload: [String: Any]?
 }
 
+/// One project entry from the registered list. Phase 1d.33 — drives
+/// the File → Open Recent submenu. Identifiable so SwiftUI's ForEach
+/// can key on `id` without an extra .id() modifier.
+struct BridgeProject: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let workDir: String
+}
+
 /// Cost snapshot mirrored from the web `<CostPill>` via the
 /// `cost-changed` message. Drives the native cost toolbar item +
 /// its history popover. Mirrors the web `CostSummary` shape so the
@@ -163,6 +172,12 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// row so the user can see which mode MARVIN is in without
     /// opening the web Settings popover. Phase 1d.32.
     private(set) var personality: String? = nil
+
+    /// Registered projects from the web side, in the same order the
+    /// web picker shows them (most-recently-used first). Drives the
+    /// native File → Open Recent submenu. Phase 1d.33. Empty until
+    /// the web side reports a list.
+    private(set) var projects: [BridgeProject] = []
 
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
     /// preserves the user's macOS system preference for the SwiftUI
@@ -379,6 +394,20 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             let value = payload?["value"] as? String
             personality = (value == "marvin" || value == "neutral") ? value : nil
             NSLog("[MarvinBridge] personality-changed value=\(personality ?? "nil")")
+        case "projects-changed":
+            // Registered project list. Drives File → Open Recent.
+            // Decoded loosely — drop entries missing required fields
+            // rather than failing the whole message; a malformed
+            // entry shouldn't blank out the menu.
+            let raw = payload?["projects"] as? [[String: Any]] ?? []
+            projects = raw.compactMap { row in
+                guard let id = row["id"] as? String, !id.isEmpty,
+                      let name = row["name"] as? String, !name.isEmpty,
+                      let workDir = row["workDir"] as? String else {
+                    return nil
+                }
+                return BridgeProject(id: id, name: name, workDir: workDir)
+            }
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).
