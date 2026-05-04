@@ -45,6 +45,30 @@ final class SourceControlModel {
 
     private var fetchTask: Task<Void, Never>?
 
+    /// Phase 3g — commit message input. Bound by ChatPreviewModel-
+    /// style Bindable in the view; reset to "" after a successful
+    /// commit. Persisted only in-memory; users can copy from here
+    /// to a notes file if they want to preserve a draft across
+    /// app restarts.
+    var commitMessage: String = ""
+
+    /// Phase 3g — row-level action in flight (stage / unstage /
+    /// discard / commit). Tracked by repo-relative path + verb so
+    /// the row can show a per-row spinner and the panel can disable
+    /// the global commit button while individual rows mutate.
+    private(set) var inFlightOps: Set<String> = []
+
+    /// Phase 3g — confirm dialog state. When non-nil, the SCM panel
+    /// presents `GitConfirmSheet`; the user's response triggers the
+    /// stored `onConfirm` callback (which mints a token + retries
+    /// the original mutation). Cleared on dismiss.
+    var pendingConfirm: PendingGitConfirm? = nil
+
+    /// Phase 3g — last terminal failure for a mutation. Surfaces as
+    /// a banner above the commit area. Cleared when the user
+    /// dismisses or starts a new mutation.
+    var lastMutationError: String? = nil
+
     /// Kick off a fetch for `cwd`. Idempotent: re-calls with the
     /// most-recently loaded cwd are no-ops unless `force: true`.
     func refresh(cwd: String, force: Bool = false) {
@@ -112,6 +136,225 @@ final class SourceControlModel {
     var untracked: [GitStatusFile] {
         response?.files?.filter { $0.entryType == "untracked" } ?? []
     }
+
+    // MARK: - Mutations (Phase 3g)
+
+    /// Stage one path — the repo-relative form. The button on the
+    /// row passes `relative` directly; SourceControlView strips the
+    /// cwd prefix before calling.
+    func stage(relative: String) {
+        runMutation(verb: "stage", path: relative) { cwd in
+            try await FilesService.shared.stage(cwd: cwd, paths: [relative])
+        }
+    }
+
+    /// Unstage one path. Symmetric with `stage`.
+    func unstage(relative: String) {
+        runMutation(verb: "unstage", path: relative) { cwd in
+            try await FilesService.shared.unstage(cwd: cwd, paths: [relative])
+        }
+    }
+
+    /// Discard one path. `mode: "staged"` is auto; `mode: "working"`
+    /// goes through the confirm gate (the user has to OK the sheet).
+    func discard(relative: String, mode: String) {
+        runMutation(verb: "discard", path: relative) { cwd in
+            try await FilesService.shared.discard(
+                cwd: cwd,
+                paths: [relative],
+                mode: mode
+            )
+        }
+    }
+
+    /// Commit the staged changes with the current `commitMessage`.
+    /// No-op when there are no staged files or the message is empty
+    /// — the button itself is disabled in those states; this is a
+    /// defensive double-check.
+    func commit() {
+        let trimmed = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !staged.isEmpty else { return }
+        runMutation(verb: "commit", path: "") { cwd in
+            try await FilesService.shared.commit(
+                cwd: cwd,
+                message: trimmed,
+                amend: false
+            )
+        } onSuccess: { [weak self] in
+            self?.commitMessage = ""
+        }
+    }
+
+    /// Shared mutation runner. Tracks in-flight state, surfaces
+    /// confirm-class results into `pendingConfirm`, refreshes the
+    /// status feed on success, and writes errors into
+    /// `lastMutationError`. Each public method above wires its
+    /// closure + verb here so the bookkeeping stays in one place.
+    private func runMutation(
+        verb: String,
+        path: String,
+        body: @escaping (_ cwd: String) async throws -> FilesService.GitMutationOutcome,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        let opKey = "\(verb):\(path)"
+        if inFlightOps.contains(opKey) { return }
+        inFlightOps.insert(opKey)
+        lastMutationError = nil
+        Task { @MainActor in
+            defer { inFlightOps.remove(opKey) }
+            do {
+                let outcome = try await body(cwd)
+                switch outcome {
+                case .ok:
+                    onSuccess?()
+                    refresh(cwd: cwd, force: true)
+                case .needsConfirm(let severity, let reason, let op):
+                    presentConfirm(
+                        verb: verb,
+                        severity: severity,
+                        reason: reason,
+                        op: op,
+                        retry: { [weak self] token in
+                            self?.runMutationWithToken(
+                                verb: verb,
+                                path: path,
+                                token: token,
+                                body: body,
+                                onSuccess: onSuccess
+                            )
+                        }
+                    )
+                }
+            } catch {
+                lastMutationError = "\(verb) failed: \(error)"
+            }
+        }
+    }
+
+    /// Retry the same mutation with the X-Marvin-Confirmed token.
+    /// Called by the GitConfirmSheet's confirm handler after a
+    /// successful mint round-trip. We re-issue the original closure
+    /// — but FilesService's per-method API takes the token directly
+    /// (the closure form here doesn't), so each verb gets a small
+    /// re-issue here. Less elegant than a single dispatcher but
+    /// keeps each method's request shape explicit.
+    private func runMutationWithToken(
+        verb: String,
+        path: String,
+        token: String,
+        body: @escaping (_ cwd: String) async throws -> FilesService.GitMutationOutcome,
+        onSuccess: (() -> Void)?
+    ) {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let outcome: FilesService.GitMutationOutcome
+                switch verb {
+                case "discard":
+                    // Path-keyed retries — the closure already
+                    // captures `relative` for discard; the only
+                    // mutation that needs a token retry today is
+                    // discard with mode=working. Re-call with token.
+                    outcome = try await FilesService.shared.discard(
+                        cwd: cwd,
+                        paths: [path],
+                        mode: "working",
+                        confirmToken: token
+                    )
+                case "commit":
+                    let msg = commitMessage.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+                    outcome = try await FilesService.shared.commit(
+                        cwd: cwd,
+                        message: msg,
+                        amend: false,
+                        confirmToken: token
+                    )
+                default:
+                    NSLog("[SourceControl] unexpected confirm retry verb=\(verb)")
+                    return
+                }
+                switch outcome {
+                case .ok:
+                    onSuccess?()
+                    refresh(cwd: cwd, force: true)
+                case .needsConfirm:
+                    // The token was supposed to satisfy the gate.
+                    // If we still get a needs-confirm, something
+                    // changed under us — surface the failure rather
+                    // than loop.
+                    lastMutationError =
+                        "\(verb) still needs confirmation after token mint"
+                }
+            } catch {
+                lastMutationError = "\(verb) (with token) failed: \(error)"
+            }
+        }
+    }
+
+    /// Mint a token from /api/git/confirm, then call `retry(token)`
+    /// once it lands. Errors surface inline via `lastMutationError`.
+    private func presentConfirm(
+        verb: String,
+        severity: String,
+        reason: String,
+        op: ChatJSON,
+        retry: @escaping (String) -> Void
+    ) {
+        guard let cwd = loadedCwd else { return }
+        // Pull a paths preview out of the op echo so the sheet can
+        // show what's about to happen. Safe-falls to empty list.
+        let pathsPreview: [String] = {
+            guard case let .object(dict) = op,
+                  let pathsField = dict["paths"],
+                  case let .array(items) = pathsField else { return [] }
+            return items.compactMap {
+                if case let .string(s) = $0 { return s } else { return nil }
+            }
+        }()
+        pendingConfirm = PendingGitConfirm(
+            actionVerb: verb.capitalized,
+            reason: reason,
+            severity: severity,
+            paths: pathsPreview,
+            confirm: { [weak self] in
+                guard let self else { return }
+                self.pendingConfirm = nil
+                Task { @MainActor in
+                    do {
+                        let minted = try await FilesService.shared
+                            .mintGitConfirmToken(cwd: cwd, op: op)
+                        retry(minted.token)
+                    } catch {
+                        self.lastMutationError =
+                            "Token mint failed: \(error)"
+                    }
+                }
+            },
+            cancel: { [weak self] in
+                self?.pendingConfirm = nil
+            }
+        )
+    }
+
+    func dismissError() {
+        lastMutationError = nil
+    }
+}
+
+/// Pending guarded mutation — drives the GitConfirmSheet. The
+/// closures bind to the model's retry/cancel paths so the sheet
+/// itself stays state-free.
+struct PendingGitConfirm: Identifiable {
+    let id = UUID()
+    let actionVerb: String
+    let reason: String
+    let severity: String
+    let paths: [String]
+    let confirm: () -> Void
+    let cancel: () -> Void
 }
 
 /// SCM panel view. Layout:
@@ -143,9 +386,20 @@ struct SourceControlView: View {
             header
             Divider()
             content
+            if let err = model.lastMutationError {
+                Divider()
+                mutationErrorBanner(err)
+            }
             if let err = model.lastError {
                 Divider()
                 errorBanner(err)
+            }
+            // Phase 3g — commit area at the bottom. Visible whenever
+            // the panel is in a usable state (project + git);
+            // disabled when there's nothing to commit.
+            if model.response?.enabled == true {
+                Divider()
+                commitArea
             }
         }
         .frame(minWidth: 200)
@@ -174,6 +428,20 @@ struct SourceControlView: View {
             set: { newValue in if newValue == nil { diffSheet = nil } }
         )) { item in
             DiffSheet(model: item.model, onDismiss: { diffSheet = nil })
+        }
+        // Phase 3g — guarded-mutation confirm sheet. Driven by
+        // model.pendingConfirm; the user's response (confirm /
+        // cancel) is carried via the closures stored on the
+        // PendingGitConfirm value.
+        .sheet(item: Bindable(model).pendingConfirm) { pending in
+            GitConfirmSheet(
+                actionVerb: pending.actionVerb,
+                reason: pending.reason,
+                severity: pending.severity,
+                paths: pending.paths,
+                onConfirm: pending.confirm,
+                onCancel: pending.cancel
+            )
         }
     }
 
@@ -301,12 +569,146 @@ struct SourceControlView: View {
                     SourceControlRow(
                         file: file,
                         cwd: bridge.projectWorkDir ?? "",
-                        onTap: { openDiff(for: file) }
+                        section: label,
+                        isInFlight: rowIsInFlight(file),
+                        onTap: { openDiff(for: file) },
+                        onStage: { mutate(.stage, file) },
+                        onUnstage: { mutate(.unstage, file) },
+                        onDiscard: { mutate(.discard, file) }
                     )
                     .padding(.horizontal, 8)
                 }
             }
         }
+    }
+
+    /// Phase 3g — true when any mutation is currently in flight
+    /// against this row. Drives the per-row spinner state.
+    private func rowIsInFlight(_ file: GitStatusFile) -> Bool {
+        let relative = repoRelative(file.path)
+        for verb in ["stage", "unstage", "discard"] {
+            if model.inFlightOps.contains("\(verb):\(relative)") { return true }
+        }
+        return false
+    }
+
+    /// Available row actions. Routed through one helper so the row
+    /// view doesn't have to plumb three closures separately.
+    private enum RowAction { case stage, unstage, discard }
+
+    private func mutate(_ action: RowAction, _ file: GitStatusFile) {
+        let relative = repoRelative(file.path)
+        switch action {
+        case .stage:
+            model.stage(relative: relative)
+        case .unstage:
+            model.unstage(relative: relative)
+        case .discard:
+            // Section determines mode: staged-only changes get
+            // mode=staged (auto, just unstages); everything else
+            // (working-tree changes, untracked) goes mode=working
+            // (confirm-class).
+            let mode = (file.workingStatus == "." && file.indexStatus != "."
+                ? "staged" : "working")
+            model.discard(relative: relative, mode: mode)
+        }
+    }
+
+    /// Strip the cwd prefix to produce a repo-relative path. Same
+    /// helper SourceControlRow uses internally; kept here so the
+    /// View → Model boundary speaks repo-relative paths.
+    private func repoRelative(_ path: String) -> String {
+        let cwd = bridge.projectWorkDir ?? ""
+        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
+        if path.hasPrefix(root) {
+            return String(path.dropFirst(root.count))
+        }
+        return path
+    }
+
+    /// Phase 3g — commit area pinned at the bottom. Two-line text
+    /// editor + Commit button. Disabled when there's nothing staged
+    /// (the button label flips to "(no staged changes)" so users
+    /// know why) or the message is whitespace-only.
+    private var commitArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextEditor(text: Bindable(model).commitMessage)
+                .font(.body)
+                .frame(minHeight: 56, maxHeight: 96)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        )
+                )
+                .overlay(alignment: .topLeading) {
+                    if model.commitMessage.isEmpty {
+                        Text("Commit message")
+                            .font(.body)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                }
+            HStack {
+                Text(commitFooterLabel)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Commit") { model.commit() }
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .disabled(!commitEnabled)
+                    .help("Commit staged changes. ⌘⏎")
+            }
+        }
+        .padding(10)
+    }
+
+    private var commitEnabled: Bool {
+        let trimmed = model.commitMessage.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return !trimmed.isEmpty
+            && !model.staged.isEmpty
+            && !model.inFlightOps.contains("commit:")
+    }
+
+    private var commitFooterLabel: String {
+        if model.inFlightOps.contains("commit:") {
+            return "committing…"
+        }
+        if model.staged.isEmpty {
+            return "no staged changes"
+        }
+        return "\(model.staged.count) staged"
+    }
+
+    private func mutationErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.octagon.fill")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Mutation failed")
+                    .font(.caption.weight(.semibold))
+                Text(message)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button {
+                model.dismissError()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.08))
     }
 
     /// Phase 3f — open a diff sheet for one SCM row. The repo-
@@ -375,14 +777,29 @@ struct DiffSheetItem: Identifiable {
 }
 
 /// One row in the SCM list. Phase 3f wires the row tap to open
-/// DiffSheet. 3g will add per-row stage / unstage actions.
+/// DiffSheet. Phase 3g adds per-row stage / unstage / discard
+/// actions — Stage on Changes/Untracked rows, Unstage on Staged
+/// rows, Discard on every row via context menu.
 private struct SourceControlRow: View {
     let file: GitStatusFile
     /// Active project's working directory. We strip it from the
     /// per-file absolute path to produce a repo-relative label —
     /// matches what the web SCM panel shows.
     let cwd: String
+    /// Section label this row belongs to ("Staged", "Changes",
+    /// "Untracked", "Conflicted") — drives which inline action
+    /// button shows up. Conflicted rows show no stage/unstage
+    /// affordance because the file needs resolving first.
+    let section: String
+    /// True while a mutation is in flight against this row. The
+    /// row dims its inline action button and shows a spinner.
+    let isInFlight: Bool
     let onTap: () -> Void
+    let onStage: () -> Void
+    let onUnstage: () -> Void
+    let onDiscard: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -402,12 +819,79 @@ private struct SourceControlRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
+            actionButton
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(hovering ? Color.accentColor.opacity(0.06) : .clear)
+        )
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
+        .contextMenu {
+            // Phase 3g — context menu surfaces all three actions
+            // for both discoverability and keyboard-light flow.
+            // Stage / Unstage land contextually in their own sections
+            // already, but having them in the menu means a user who
+            // missed the inline button doesn't have to scrub for it.
+            if section != "Conflicted" {
+                if section == "Staged" {
+                    Button("Unstage", action: onUnstage)
+                } else {
+                    Button("Stage", action: onStage)
+                }
+                Divider()
+            }
+            Button("View diff…", action: onTap)
+            Divider()
+            // Discard is destructive — labelled clearly and
+            // separated from the auto-class actions above. The
+            // confirm sheet (for working-tree mode) re-emphasises
+            // the consequence.
+            Button(role: .destructive,
+                   action: onDiscard) {
+                Text(section == "Untracked" ? "Delete file…" : "Discard changes…")
+            }
+        }
         .accessibilityIdentifier("scm-row:\(file.path)")
+    }
+
+    /// Inline action button — visible when the row is hovered, or
+    /// always when an op is in flight. Stage/Unstage are the
+    /// affordances; discard stays in the context menu only because
+    /// it's destructive and warrants a deliberate two-step.
+    @ViewBuilder
+    private var actionButton: some View {
+        if isInFlight {
+            ProgressView().controlSize(.small)
+        } else if section == "Conflicted" {
+            // Conflicted rows surface no inline action — resolve
+            // first, then stage. The diff sheet still opens via
+            // tap so the user can see what's in conflict.
+            EmptyView()
+        } else if section == "Staged" {
+            Button {
+                onUnstage()
+            } label: {
+                Image(systemName: "minus")
+                    .imageScale(.small)
+            }
+            .buttonStyle(.borderless)
+            .opacity(hovering ? 1 : 0.35)
+            .help("Unstage")
+        } else {
+            Button {
+                onStage()
+            } label: {
+                Image(systemName: "plus")
+                    .imageScale(.small)
+            }
+            .buttonStyle(.borderless)
+            .opacity(hovering ? 1 : 0.35)
+            .help("Stage")
+        }
     }
 
     /// Two-letter status display: index + working columns. Matches

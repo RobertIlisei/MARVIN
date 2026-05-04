@@ -183,3 +183,47 @@ struct GitDiffResponse: Codable, Equatable {
     let binary: Bool
     let truncated: Bool
 }
+
+// MARK: - Git mutations (Phase 3g)
+
+/// Generic "operation succeeded" body shape. The mutation routes
+/// emit slightly different keys (`staged`, `unstaged`, `discarded`)
+/// alongside the count, but the count itself is what the UI surfaces.
+/// Phase 3g treats the success path as opaque — the SCM panel
+/// re-fetches /api/git/status after every mutation, so we don't
+/// rely on the response body for state.
+struct GitMutationOk: Codable, Equatable {
+    let ok: Bool
+}
+
+/// 409 needs-confirm response body. Returned when the mutation hits
+/// a `confirm`-class policy decision (working-tree discard,
+/// commit --amend on pushed HEAD, etc.). The `op` echo is what the
+/// UI re-sends to /api/git/confirm to mint a token.
+///
+/// Modeled with the same struct that decodes other 4xx git error
+/// shapes — `severity` and `op` are nullable so a `policy-deny`
+/// (403) or `token-rejected` (409 from the confirm route) response
+/// also decodes cleanly with the optional fields nil.
+struct GitErrorResponse: Codable, Equatable {
+    let error: String
+    let severity: String?
+    let reason: String?
+    /// Op echo. Stored as raw ChatJSON so the confirm-token request
+    /// can re-send the exact same shape the server expects without
+    /// the Swift client needing a faithful Codable model of every
+    /// op variant.
+    let op: ChatJSON?
+}
+
+/// Response from POST /api/git/confirm — the minted token + its
+/// metadata. The token is consumed once via the X-Marvin-Confirmed
+/// header on a subsequent call to the original mutation route.
+/// `expiresIn` is a number of seconds; the registry's default
+/// today is 60s.
+struct GitConfirmTokenResponse: Codable, Equatable {
+    let token: String
+    let expiresIn: Int
+    let severity: String?
+    let reason: String?
+}

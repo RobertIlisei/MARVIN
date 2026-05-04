@@ -155,6 +155,169 @@ final class FilesService {
         return try await getJSON(url: comps.url!, as: GitDiffResponse.self)
     }
 
+    // MARK: - Git mutations (Phase 3g)
+
+    /// Result of a mutation attempt. Auto-class ops resolve to
+    /// `.ok`; confirm-class ops bounce back as `.needsConfirm` with
+    /// the policy reason + op echo so the caller can mint a token
+    /// and retry. Anything else (transport, deny, server error)
+    /// throws via `FilesServiceError`.
+    enum GitMutationOutcome {
+        case ok
+        case needsConfirm(severity: String, reason: String, op: ChatJSON)
+    }
+
+    /// POST /api/git/stage — body `{ cwd, paths }`. Auto-class for
+    /// every path the policy admits; staging is reversible via
+    /// /api/git/unstage so it never trips the confirm gate.
+    func stage(cwd: String, paths: [String]) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/git/stage",
+            body: ["cwd": cwd, "paths": paths]
+        )
+    }
+
+    /// POST /api/git/unstage — body `{ cwd, paths }`. Auto-class —
+    /// the working tree is unaffected; only the index moves.
+    func unstage(cwd: String, paths: [String]) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/git/unstage",
+            body: ["cwd": cwd, "paths": paths]
+        )
+    }
+
+    /// POST /api/git/discard — body `{ cwd, paths, mode }`.
+    /// `mode: "staged"` is auto (just unstages); `mode: "working"`
+    /// is confirm-class (overwrites uncommitted edits, irreversible).
+    /// Pass an `X-Marvin-Confirmed` token via `confirmToken` to
+    /// resolve the confirm-class flow.
+    func discard(
+        cwd: String,
+        paths: [String],
+        mode: String,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/git/discard",
+            body: ["cwd": cwd, "paths": paths, "mode": mode],
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/git/commit — body `{ cwd, message, amend? }`.
+    /// Normal commits are auto-class; `amend: true` on a pushed
+    /// HEAD trips the confirm gate. The route uses `git commit -F -`
+    /// internally so the message bytes never hit the argv — we just
+    /// pass them through.
+    func commit(
+        cwd: String,
+        message: String,
+        amend: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = ["cwd": cwd, "message": message]
+        if amend { body["amend"] = true }
+        return try await postMutation(
+            path: "api/git/commit",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/git/confirm — mint a one-shot token for a
+    /// confirm-class op. The token is passed back via the
+    /// `X-Marvin-Confirmed` header on a retry of the original
+    /// mutation. The op echo from the 409 response is what the
+    /// caller passes here — verbatim, so the registry's structural
+    /// match check passes.
+    func mintGitConfirmToken(
+        cwd: String,
+        op: ChatJSON
+    ) async throws -> GitConfirmTokenResponse {
+        let url = baseURL.appendingPathComponent("api/git/confirm")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        // Re-encode the op echo via JSONEncoder → JSONSerialization
+        // round-trip so the embedded ChatJSON keeps its full
+        // structure (object / array / number / etc.) without us
+        // having to walk the enum and rebuild it as `Any`.
+        let opData = try JSONEncoder().encode(op)
+        let opAny = try JSONSerialization.jsonObject(with: opData)
+        let body: [String: Any] = [
+            "cwd": cwd,
+            "op": opAny,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FilesServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        do {
+            return try JSONDecoder().decode(GitConfirmTokenResponse.self, from: data)
+        } catch {
+            throw FilesServiceError.decode(underlying: error)
+        }
+    }
+
+    /// Shared POST helper for the four git mutation routes. Handles
+    /// the JSON encode, CSRF + (optional) confirm-token headers,
+    /// and the auto/needs-confirm/error tri-state in the response.
+    /// All four routes share the same envelope shape, so a single
+    /// helper keeps the per-route methods declarative.
+    private func postMutation(
+        path: String,
+        body: [String: Any],
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        let url = baseURL.appendingPathComponent(path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        if let confirmToken {
+            req.setValue(confirmToken, forHTTPHeaderField: "X-Marvin-Confirmed")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+
+        // 409 + needs-confirm → caller's confirm path. Other 4xx /
+        // 5xx are real failures; surface the body for the UI.
+        if http.statusCode == 409,
+           let parsed = try? JSONDecoder().decode(GitErrorResponse.self, from: data),
+           parsed.error == "needs-confirm",
+           let op = parsed.op {
+            return .needsConfirm(
+                severity: parsed.severity ?? "warn",
+                reason: parsed.reason ?? "policy requires confirmation",
+                op: op
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FilesServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        return .ok
+    }
+
     // MARK: - Private helpers
 
     /// Single-shot JSON GET. Adds the CSRF header, decodes into the
