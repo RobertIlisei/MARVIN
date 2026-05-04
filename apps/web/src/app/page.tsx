@@ -16,6 +16,7 @@ import {
   announcePersonality,
   announceProject,
   announceProjects,
+  announceSession,
 } from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
@@ -207,6 +208,17 @@ export default function Home() {
       /* no storage */
     }
   }, [marvinSessionId, active?.id]);
+
+  // Phase 2h — mirror (projectId, marvinSessionId) to the SwiftUI
+  // shell. The native chat surface uses the pair to hit
+  // GET /api/sessions/:id?projectId=… for transcript hydrate and
+  // GET /api/chat/resume?marvinSessionId=… to tail a live turn,
+  // matching what this component does on mount above. Fires when
+  // either side changes; null on either field means "no session
+  // available right now" and the native side clears its list.
+  useEffect(() => {
+    announceSession(active?.id ?? null, marvinSessionId ?? null);
+  }, [active?.id, marvinSessionId]);
 
   // Re-attach to any turn still running on the server after refresh.
   // Runs once per project change: hydrate the transcript, then try to

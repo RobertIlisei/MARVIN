@@ -179,6 +179,22 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// the web side reports a list.
     private(set) var projects: [BridgeProject] = []
 
+    /// Active project id posted alongside the session so the native
+    /// chat can hit GET /api/sessions/:id?projectId=… without having
+    /// to re-derive the slug from workDir. Phase 2h. Nil when no
+    /// project is active.
+    private(set) var activeProjectId: String? = nil
+
+    /// In-flight marvinSessionId for the active project, posted via
+    /// `session-changed`. The native chat surface watches this to
+    /// hydrate transcripts on project switch and attach to live
+    /// turns. Phase 2h. Nil when there's no session yet (project
+    /// just got picked, or no prior session on disk). Drops the
+    /// previous value when the web side reports null — that signals
+    /// a project clear or fresh start, and the native list should
+    /// follow.
+    private(set) var activeMarvinSessionId: String? = nil
+
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
     /// preserves the user's macOS system preference for the SwiftUI
     /// surfaces (used when the bridge hasn't reported a theme yet).
@@ -394,6 +410,23 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             let value = payload?["value"] as? String
             personality = (value == "marvin" || value == "neutral") ? value : nil
             NSLog("[MarvinBridge] personality-changed value=\(personality ?? "nil")")
+        case "session-changed":
+            // Phase 2h — paired (projectId, marvinSessionId) update
+            // from the web side. Both can be null independently:
+            // null projectId = no project active; null marvinSessionId
+            // = project active but no turn started yet (or no prior
+            // session file for it). The native chat surface keys
+            // its hydrate / attach logic off these — see
+            // ChatPreviewView's onChange wiring.
+            //
+            // NSLog'd because session changes are infrequent (once
+            // per project switch / first turn) and the trail is
+            // useful when debugging hydrate failures.
+            let pid = (payload?["projectId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let sid = (payload?["marvinSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            activeProjectId = pid
+            activeMarvinSessionId = sid
+            NSLog("[MarvinBridge] session-changed projectId=\(pid ?? "nil") sid=\(sid ?? "nil")")
         case "projects-changed":
             // Registered project list. Drives File → Open Recent.
             // Decoded loosely — drop entries missing required fields

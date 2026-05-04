@@ -170,6 +170,131 @@ struct ChatRequest: Codable {
     }
 }
 
+// MARK: - Stored session transcript
+
+/// Wire shape returned by GET /api/sessions/[sessionId]?projectId=…
+/// — the on-disk JSONL transcript loaded back into memory. Phase 2h.
+///
+/// Mirrors `SessionRecord` from packages/runtime/src/session.ts. The
+/// turns array is heterogeneous (one per JSONL line), discriminated
+/// by `type`. We decode the discriminator + the per-type fields with
+/// a custom Decoder; unknown types decode as `.unknown` so a future
+/// runtime addition doesn't break the client.
+struct SessionRecord: Codable {
+    let sessionId: String
+    let projectId: String
+    let turns: [SessionTurn]
+}
+
+/// One stored turn from the on-disk JSONL transcript. The set
+/// matches the `SessionTurn` union in
+/// packages/runtime/src/session.ts. We only care about a subset of
+/// fields per turn for replay — the rest decode but aren't surfaced
+/// (e.g. token usage on `turn.completed` could drive a footer but
+/// hydrate doesn't currently need it).
+enum SessionTurn: Codable {
+    case turnUser(at: String, message: String)
+    case turnStarted(at: String, marvinSessionId: String, turnId: String)
+    /// Inner CLI event — preserved as ChatJSON so it can be re-encoded
+    /// to Data and fed straight through `ChatStreamReducer.apply`,
+    /// the same path the live SSE stream uses. Keeping the replay
+    /// pipeline single-source-of-truth means any reducer fix lands
+    /// for both surfaces at once.
+    case cliEvent(at: String, event: ChatJSON)
+    case confirmRequest(at: String, payload: ConfirmRequest)
+    case confirmDecision(at: String, turnId: String, toolUseId: String, decision: String)
+    case turnCompleted(at: String, durationMs: Int?, costUsd: Double?, sessionId: String?)
+    case turnError(at: String, error: String)
+    case unknown(type: String, at: String?)
+
+    private enum CodingKeys: String, CodingKey {
+        case type, at, message, marvinSessionId, turnId, event, payload,
+             toolUseId, decision, durationMs, costUsd, sessionId, error
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try c.decode(String.self, forKey: .type)
+        let at = try c.decodeIfPresent(String.self, forKey: .at)
+        switch type {
+        case "turn.user":
+            let msg = try c.decode(String.self, forKey: .message)
+            self = .turnUser(at: at ?? "", message: msg)
+        case "turn.started":
+            let sid = try c.decode(String.self, forKey: .marvinSessionId)
+            let tid = try c.decode(String.self, forKey: .turnId)
+            self = .turnStarted(at: at ?? "", marvinSessionId: sid, turnId: tid)
+        case "cli.event":
+            let ev = try c.decode(ChatJSON.self, forKey: .event)
+            self = .cliEvent(at: at ?? "", event: ev)
+        case "confirm.request":
+            let p = try c.decode(ConfirmRequest.self, forKey: .payload)
+            self = .confirmRequest(at: at ?? "", payload: p)
+        case "confirm.decision":
+            let tid = try c.decode(String.self, forKey: .turnId)
+            let tuid = try c.decode(String.self, forKey: .toolUseId)
+            let d = try c.decode(String.self, forKey: .decision)
+            self = .confirmDecision(at: at ?? "", turnId: tid, toolUseId: tuid, decision: d)
+        case "turn.completed":
+            let ms = try c.decodeIfPresent(Int.self, forKey: .durationMs)
+            let cost = try c.decodeIfPresent(Double.self, forKey: .costUsd)
+            let sid = try c.decodeIfPresent(String.self, forKey: .sessionId)
+            self = .turnCompleted(at: at ?? "", durationMs: ms, costUsd: cost, sessionId: sid)
+        case "turn.error":
+            let err = try c.decode(String.self, forKey: .error)
+            self = .turnError(at: at ?? "", error: err)
+        default:
+            self = .unknown(type: type, at: at)
+        }
+    }
+
+    /// Encode is implemented for completeness — Phase 2h only needs
+    /// decode (replay is one-way). The encoder is the inverse of the
+    /// decoder above and lets future writers serialize a transcript
+    /// without a separate type.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .turnUser(at, message):
+            try c.encode("turn.user", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(message, forKey: .message)
+        case let .turnStarted(at, sid, tid):
+            try c.encode("turn.started", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(sid, forKey: .marvinSessionId)
+            try c.encode(tid, forKey: .turnId)
+        case let .cliEvent(at, event):
+            try c.encode("cli.event", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(event, forKey: .event)
+        case let .confirmRequest(at, payload):
+            try c.encode("confirm.request", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(payload, forKey: .payload)
+        case let .confirmDecision(at, turnId, toolUseId, decision):
+            try c.encode("confirm.decision", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(turnId, forKey: .turnId)
+            try c.encode(toolUseId, forKey: .toolUseId)
+            try c.encode(decision, forKey: .decision)
+        case let .turnCompleted(at, ms, cost, sid):
+            try c.encode("turn.completed", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encodeIfPresent(ms, forKey: .durationMs)
+            try c.encodeIfPresent(cost, forKey: .costUsd)
+            try c.encodeIfPresent(sid, forKey: .sessionId)
+        case let .turnError(at, err):
+            try c.encode("turn.error", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(err, forKey: .error)
+        case let .unknown(type, at):
+            try c.encode(type, forKey: .type)
+            try c.encodeIfPresent(at, forKey: .at)
+        }
+    }
+}
+
 // MARK: - Loose JSON value
 
 /// A passthrough JSON value used for opaque sub-structures (tool

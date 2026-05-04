@@ -79,6 +79,27 @@ final class ChatPreviewModel {
     /// Cleared when the user resets.
     private(set) var marvinSessionId: String? = nil
 
+    /// Phase 2h — the (projectId, sessionId) pair that the current
+    /// in-memory message list reflects. Set when hydrate succeeds;
+    /// the view's bridge-change observer compares the bridge's
+    /// reported pair against this to decide whether to re-hydrate.
+    /// Without this, every redundant `session-changed` from the web
+    /// would re-fetch the same transcript and zap any in-progress
+    /// state.
+    private(set) var loadedProjectId: String? = nil
+    private(set) var loadedSessionId: String? = nil
+
+    /// Phase 2h — the live-tail Task. Distinct from `activeTask`
+    /// (which owns a POST-driven turn we initiated) because the
+    /// resume tail can run in parallel with no local turn — we're
+    /// just listening to whatever the sidecar's bus emits.
+    private var resumeTask: Task<Void, Never>?
+
+    /// Phase 2h — true while we're fetching the transcript JSON.
+    /// Surfaces a thin "loading" affordance so the user doesn't
+    /// see an empty list and assume the project has no history.
+    private(set) var isHydrating: Bool = false
+
     /// The last user-typed message, retained so the retry button
     /// can resubmit on stream errors without the user retyping.
     /// Cleared on successful completion (turn.completed) and on
@@ -130,9 +151,19 @@ final class ChatPreviewModel {
         let strategy = UserDefaults.standard.string(
             forKey: "marvin.permissionStrategy"
         ) ?? NativePermissionStrategy.auto.rawValue
+        // Phase 2h — pass the captured/hydrated marvinSessionId so
+        // the server appends to the same session the web has been
+        // writing to. Without this, every native send minted a fresh
+        // session and the project ended up with two parallel JSONLs
+        // (web-driven + native-driven) that never converged. Nil on
+        // the very first turn for a brand-new project — server mints
+        // one, we capture it via turn.started, future turns continue
+        // the same id.
         let request = ChatRequest(
             message: message,
             cwd: cwd,
+            projectId: loadedProjectId,
+            marvinSessionId: marvinSessionId,
             permissionStrategy: strategy
         )
         activeTask = Task { @MainActor in
@@ -170,12 +201,158 @@ final class ChatPreviewModel {
 
     func clear() {
         cancel()
+        resumeTask?.cancel()
+        resumeTask = nil
         messages.removeAll()
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
         lastError = nil
         marvinSessionId = nil
         lastSentMessage = nil
+        loadedProjectId = nil
+        loadedSessionId = nil
+        isHydrating = false
+    }
+
+    /// Phase 2h — fetch the transcript for `(projectId, sessionId)`,
+    /// replay it through the same `ChatStreamReducer` the live SSE
+    /// stream uses, then attach to any in-flight turn via
+    /// /api/chat/resume so we don't miss events emitted between
+    /// hydrate and attach.
+    ///
+    /// Idempotent: re-calling with a (projectId, sessionId) that
+    /// matches `(loadedProjectId, loadedSessionId)` is a no-op. The
+    /// caller (the bridge-change observer in ChatPreviewView) is
+    /// expected to gate this anyway, but the inner guard makes the
+    /// function safe to call from multiple sites without state
+    /// double-loading.
+    func hydrate(projectId: String, sessionId: String) {
+        // Skip when nothing changed — protects in-progress drafts /
+        // streams from a redundant session-changed echo.
+        if loadedProjectId == projectId, loadedSessionId == sessionId {
+            return
+        }
+
+        // Cancel any in-flight turn from the previous session so the
+        // user doesn't see foreign events landing into the freshly
+        // hydrated list.
+        cancel()
+        resumeTask?.cancel()
+        resumeTask = nil
+
+        loadedProjectId = projectId
+        loadedSessionId = sessionId
+        isHydrating = true
+        lastError = nil
+        // Wipe state before replay — replay rebuilds the list from
+        // scratch. We don't preserve `lastSentMessage` across
+        // hydrate because retry semantics belong to the in-memory
+        // turn, not the hydrated transcript.
+        messages.removeAll()
+        pendingConfirms.removeAll()
+        resolvedConfirms.removeAll()
+        marvinSessionId = sessionId
+        lastSentMessage = nil
+
+        Task { @MainActor in
+            defer { isHydrating = false }
+            do {
+                let record = try await ChatService.shared.fetchSession(
+                    projectId: projectId,
+                    sessionId: sessionId
+                )
+                // Drop the result if the session changed under us
+                // mid-fetch (user clicked another project). The
+                // observer will re-fire hydrate for the new pair.
+                guard loadedSessionId == sessionId else { return }
+                if let record {
+                    replay(record: record)
+                }
+                // Whether we hydrated or not, attempt to tail any
+                // live turn. 204 → harmless no-op.
+                attachLive(marvinSessionId: sessionId)
+            } catch {
+                lastError = "Hydrate failed: \(error)"
+            }
+        }
+    }
+
+    /// Replay a stored SessionRecord into the message list using
+    /// the same reducer the live stream uses. Phase 2h.
+    private func replay(record: SessionRecord) {
+        let encoder = JSONEncoder()
+        var rebuilt: [ChatMessage] = []
+
+        for turn in record.turns {
+            switch turn {
+            case let .turnUser(_, message):
+                // The optimistic-echo we mint locally on send isn't
+                // in the wire, so the JSONL is the only place a
+                // user-side row exists for replay. Reuse the same
+                // factory `send` uses for visual parity.
+                rebuilt.append(.userText(message))
+            case let .cliEvent(_, event):
+                // Re-encode the inner event to Data and feed the
+                // reducer the same bytes a live cli.event would
+                // carry — single source of truth for the rendering
+                // pipeline.
+                if let data = try? encoder.encode(event) {
+                    rebuilt = ChatStreamReducer.apply(rebuilt, cliEventData: data)
+                }
+            case let .turnError(_, err):
+                // Match the live path's surface: a banner on the
+                // most recent terminal failure. We don't replay a
+                // separate row because the row UI for errors is
+                // inline (and historical errors aren't actionable).
+                lastError = err
+            case .turnStarted, .turnCompleted, .confirmRequest,
+                 .confirmDecision, .unknown:
+                // turn.started — we already have marvinSessionId
+                // set from the hydrate args; no row needed.
+                // turn.completed — the cli.event `result` already
+                // appended a "completed in Nms" row via the reducer.
+                // confirm.* — historical confirms are settled by
+                // the time we replay, no sheet to raise.
+                // unknown — forward-compat skip.
+                break
+            }
+        }
+
+        // Tool calls whose tool_result never landed (interrupted
+        // turn) end up with `result: nil`. The reducer keeps them in
+        // place — the user sees the "running…" pip, which is wrong
+        // for replayed history. Force-clear streaming flags on every
+        // assistant message after replay; live streaming flags
+        // re-enable themselves when the resume tail lands a fresh
+        // assistant.
+        for i in rebuilt.indices where rebuilt[i].isStreaming {
+            rebuilt[i].isStreaming = false
+        }
+
+        messages = rebuilt
+    }
+
+    /// Phase 2h — attach to a live turn's event bus via
+    /// /api/chat/resume. 204 collapses to a clean finish; otherwise
+    /// events feed through the same `handle(event:)` path as a POST-
+    /// driven turn so the merge logic in the reducer stays consistent.
+    private func attachLive(marvinSessionId: String) {
+        resumeTask?.cancel()
+        resumeTask = Task { @MainActor in
+            do {
+                let stream = ChatService.shared.attachLive(
+                    marvinSessionId: marvinSessionId
+                )
+                for try await event in stream {
+                    // Drop late events for a session we've since
+                    // navigated away from.
+                    guard loadedSessionId == marvinSessionId else { break }
+                    handle(event: event)
+                }
+            } catch {
+                NSLog("[ChatPreview] attachLive failed: \(error)")
+            }
+        }
     }
 
     /// Respond to the head of the pending-confirms queue. Called
@@ -281,6 +458,27 @@ struct ChatPreviewView: View {
         }
         .frame(minWidth: 520, minHeight: 420)
         .preferredColorScheme(bridge.preferredColorScheme)
+        // Phase 2h — hydrate the message list when the bridge
+        // reports a (projectId, marvinSessionId) we haven't loaded
+        // yet. Three triggers funnel through the same code path:
+        //   1. .onAppear catches the initial mount when the bridge
+        //      already has a session id (web side raced ahead).
+        //   2. .onChange of activeMarvinSessionId catches the most
+        //      common case — web typed the first turn, captured the
+        //      sid, announced it.
+        //   3. .onChange of activeProjectId catches a project switch
+        //      when the new project's session is the same id (rare
+        //      but possible on a slug collision).
+        // The model's hydrate method is itself idempotent against
+        // the (loadedProjectId, loadedSessionId) it tracks — these
+        // observers can fire redundantly without re-fetching.
+        .onAppear { syncHydrateFromBridge() }
+        .onChange(of: bridge.activeMarvinSessionId) { _, _ in
+            syncHydrateFromBridge()
+        }
+        .onChange(of: bridge.activeProjectId) { _, _ in
+            syncHydrateFromBridge()
+        }
         // Phase 2e — present the head of the confirm queue as a
         // modal sheet. We use isPresented bound to "is there a
         // pending confirm" (set: false denies the head) so the user
@@ -301,6 +499,29 @@ struct ChatPreviewView: View {
                     }
                 )
             }
+        }
+    }
+
+    /// Phase 2h — react to a (projectId, sessionId) bridge change.
+    /// Three outcomes:
+    ///
+    ///   1. Both non-nil → hydrate. The model dedupes when the pair
+    ///      already matches, so this is safe to fire redundantly.
+    ///   2. sid nil, but model has a loaded session → web fired a
+    ///      "new session" reset (⌘⇧N). Clear the native list to
+    ///      match. Without this, a new-session in web leaves stale
+    ///      history sitting on the native side.
+    ///   3. Both nil from the start (no project active) → no-op;
+    ///      the empty initial state is already correct.
+    private func syncHydrateFromBridge() {
+        if let pid = bridge.activeProjectId,
+           let sid = bridge.activeMarvinSessionId {
+            model.hydrate(projectId: pid, sessionId: sid)
+            return
+        }
+        // sid went nil with state to clear → match the web reset.
+        if model.loadedSessionId != nil || !model.messages.isEmpty {
+            model.clear()
         }
     }
 

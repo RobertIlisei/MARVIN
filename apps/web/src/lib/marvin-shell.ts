@@ -188,6 +188,29 @@ export function announceProjects(
 }
 
 /**
+ * Mirrors the in-flight `marvinSessionId` (and its owning project id)
+ * to the Swift side so the native chat surface can hydrate the same
+ * transcript the web side is using and attach to live turns. Phase 2h
+ * — fires whenever `useChatStream`'s `marvinSessionId` or the active
+ * project changes. Either field can be null:
+ *   • projectId null → no project active; clears the native state.
+ *   • marvinSessionId null → project active but no turn yet; native
+ *     should clear its message list (project just got picked / no
+ *     prior session on disk).
+ * The two travel together because /api/sessions/:id requires both.
+ */
+export function announceSession(
+  projectId: string | null,
+  marvinSessionId: string | null,
+): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "session-changed",
+    payload: { projectId, marvinSessionId },
+  });
+}
+
+/**
  * Mirrors the active personality ("marvin" | "neutral") to the Swift
  * side so the About panel can show which mode MARVIN is in without
  * the user having to open the web Settings popover. Phase 1d.32 —

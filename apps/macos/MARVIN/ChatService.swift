@@ -155,6 +155,182 @@ final class ChatService {
         }
     }
 
+    /// GET /api/sessions/[sessionId]?projectId=…  — load a stored
+    /// transcript from the sidecar's on-disk JSONL log. Phase 2h. The
+    /// sidecar is the source of truth for past turns; this lets the
+    /// native chat surface hydrate its message list on project switch
+    /// or app launch without re-running anything.
+    ///
+    /// Returns nil for 404 (no session file for that id+project).
+    /// Throws on transport / decode failures so the caller can show
+    /// an inline error instead of a silently-empty list.
+    func fetchSession(
+        projectId: String,
+        sessionId: String
+    ) async throws -> SessionRecord? {
+        let url = baseURL
+            .appendingPathComponent("api/sessions")
+            .appendingPathComponent(sessionId)
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "projectId", value: projectId)]
+        guard let composed = comps.url else {
+            throw ChatServiceError.transport(underlying: URLError(.badURL))
+        }
+        var req = URLRequest(url: composed)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        if http.statusCode == 404 {
+            return nil
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ChatServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        return try JSONDecoder().decode(SessionRecord.self, from: data)
+    }
+
+    /// GET /api/chat/resume?marvinSessionId=…  — attach to a live
+    /// in-memory turn bus and stream further events. Same SSE wire
+    /// shape as POST /api/chat. Phase 2h.
+    ///
+    /// Returns an empty (already-finished) stream when the server
+    /// replies 204 — that means there's no live turn to attach to,
+    /// and the caller should treat the hydrated transcript as the
+    /// final state. Any other non-2xx throws as `httpStatus`.
+    ///
+    /// The stream terminates the same way `streamTurn` does — on
+    /// turn.completed / turn.error, on consumer cancel, or on server
+    /// close. The underlying agent run is NOT cancelled when the
+    /// consumer cancels; the resume route is read-only over a shared
+    /// event bus.
+    func attachLive(
+        marvinSessionId: String
+    ) -> AsyncThrowingStream<ChatTurnEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await runResume(
+                        marvinSessionId: marvinSessionId,
+                        continuation: continuation
+                    )
+                    continuation.finish()
+                } catch {
+                    if !(error is CancellationError) {
+                        continuation.finish(throwing: error)
+                    } else {
+                        continuation.finish()
+                    }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func runResume(
+        marvinSessionId: String,
+        continuation: AsyncThrowingStream<ChatTurnEvent, Error>.Continuation
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/chat/resume")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "marvinSessionId", value: marvinSessionId),
+        ]
+        guard let composed = comps.url else {
+            throw ChatServiceError.transport(underlying: URLError(.badURL))
+        }
+        var req = URLRequest(url: composed)
+        req.httpMethod = "GET"
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+
+        let (bytes, response) = try await session.bytes(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        if http.statusCode == 204 {
+            // No live turn — caller should rely on the transcript
+            // it already hydrated. Drain the (empty) body so URLSession
+            // doesn't leave the connection lingering, then return.
+            for try await _ in bytes { /* drain */ }
+            return
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var body = ""
+            var read = 0
+            for try await line in bytes.lines {
+                body += line + "\n"
+                read += line.utf8.count + 1
+                if read > 1024 { break }
+            }
+            throw ChatServiceError.httpStatus(http.statusCode, body: body)
+        }
+
+        // Same byte-level SSE parser as runTurn. Factor-shared via
+        // a private helper would be cleaner, but the parser is small
+        // (~30 lines) and inlining keeps each entry-point easy to
+        // audit independently.
+        var lineBuffer = Data()
+        var currentName: String? = nil
+        var currentData = ""
+
+        func emitLine(_ line: String) throws {
+            if line.isEmpty {
+                if let name = currentName {
+                    let event = ChatStreamEvent(
+                        name: name,
+                        data: Data(currentData.utf8)
+                    )
+                    let parsed = try Self.decode(event: event)
+                    continuation.yield(parsed)
+                    // resume.attached is a non-terminal native-only
+                    // event — surface as .unknown so the consumer can
+                    // log it but the stream stays open until a real
+                    // terminal event lands. The `decode` helper
+                    // already maps unknown names that way.
+                }
+                currentName = nil
+                currentData = ""
+                return
+            }
+            if line.hasPrefix(":") { return }
+            if let value = parseField(prefix: "event: ", line: line) {
+                currentName = value
+            } else if let value = parseField(prefix: "data: ", line: line) {
+                if currentData.isEmpty {
+                    currentData = value
+                } else {
+                    currentData += "\n" + value
+                }
+            }
+        }
+
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if byte == 0x0A {
+                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+                lineBuffer.removeAll(keepingCapacity: true)
+                try emitLine(line)
+            } else if byte != 0x0D {
+                lineBuffer.append(byte)
+            }
+        }
+        if !lineBuffer.isEmpty {
+            let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+            try? emitLine(line)
+        }
+    }
+
     /// POST /api/chat with `request`, then read the SSE response and
     /// yield each parsed event. The stream terminates when the
     /// server closes the connection (turn.completed / turn.error)
