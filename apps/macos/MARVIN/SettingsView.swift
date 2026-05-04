@@ -9,6 +9,7 @@
 // that only make sense at the SwiftUI shell layer.
 
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -20,6 +21,14 @@ struct SettingsView: View {
     /// open; users on shared machines / non-conventional clone paths
     /// can flip it off here.
     @AppStorage("marvin.autoStartSidecar") private var autoStartSidecar: Bool = true
+
+    /// Phase 1d.36 — Launch-at-login toggle. The actual registration
+    /// lives in SMAppService.mainApp; the @AppStorage value mirrors
+    /// it so the Toggle has reactive state. We resync on appear in
+    /// case the user disabled the login item via System Settings →
+    /// General → Login Items (which would leave our @AppStorage
+    /// value stale).
+    @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
     /// `~/.marvin/` — same default as the sidecar's MARVIN_DATA_DIR.
     /// Built fresh per access so the path resolves correctly on a
@@ -93,6 +102,23 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Launch") {
+                // Phase 1d.36 — Launch at Login. SMAppService.mainApp
+                // registers the .app bundle as a login item via
+                // launchd; macOS 13+ replaces the older LSSharedFile
+                // dance with a clean public API that doesn't need a
+                // privileged helper. Failures (e.g. ad-hoc build the
+                // user moved out of /Applications) surface as the
+                // Toggle reverting to its previous state — quiet,
+                // matches what System Settings does on a similar
+                // failure, and the help tooltip explains the fix.
+                Toggle("Launch MARVIN at login", isOn: $launchAtLogin)
+                    .help("Adds MARVIN-Swift.app to your macOS login items so it starts on boot. Move the .app to /Applications first — login items can't run from a Downloads folder.")
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        applyLaunchAtLogin(newValue)
+                    }
+            }
+
             Section("Window") {
                 // NSWindow's frameAutosaveName persists position +
                 // size to UserDefaults under "NSWindow Frame <name>".
@@ -121,10 +147,38 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 460)
+        .frame(width: 460, height: 540)
         // Phase 1d.17 — match the web theme so ⌘, doesn't pop a
         // light panel against a dark session. nil falls back to
         // system preference.
         .preferredColorScheme(bridge.preferredColorScheme)
+        // Phase 1d.36 — re-read launch-at-login state on appear.
+        // Catches the user toggling MARVIN off in System Settings →
+        // General → Login Items between Settings opens.
+        .onAppear {
+            launchAtLogin = (SMAppService.mainApp.status == .enabled)
+        }
+    }
+
+    /// Apply a launch-at-login toggle change. SMAppService throws
+    /// rather than returning a Bool, so we catch + revert the local
+    /// state on failure (most common cause: app is running outside
+    /// /Applications, where login items can't reach it).
+    private func applyLaunchAtLogin(_ enable: Bool) {
+        do {
+            if enable {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("[SettingsView] launchAtLogin \(enable) failed: \(error)")
+            // Revert UI to actual SMAppService state on the next
+            // runloop tick — gives the user immediate visual
+            // feedback that the toggle didn't take.
+            DispatchQueue.main.async {
+                launchAtLogin = (SMAppService.mainApp.status == .enabled)
+            }
+        }
     }
 }
