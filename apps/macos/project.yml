@@ -61,6 +61,14 @@ targets:
     platform: macOS
     sources:
       - path: MARVIN
+        # Resources/ holds AppIcon.icns + the source SVGs (idle /
+        # active for menu bar, app for the Dock gradient). Tell
+        # xcodegen to treat them as bundle resources, not sources.
+        excludes:
+          - "Resources/**"
+      - path: MARVIN/Resources
+        type: folder
+        buildPhase: resources
     info:
       path: MARVIN/Info.plist
     settings:

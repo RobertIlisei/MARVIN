@@ -30,9 +30,14 @@ let package = Package(
             path: "MARVIN",
             // Info.plist is consumed by Xcode via project.yml,
             // not by SPM. Exclude it so `swift build` doesn't
-            // try to pull it into the binary.
+            // try to pull it into the binary. Resources/ is also
+            // excluded — the SPM fallback path in `bin/marvin
+            // install-macos-app` copies AppIcon.icns + the SVGs
+            // directly into Contents/Resources/, so SPM doesn't
+            // need to bundle them itself.
             exclude: [
                 "Info.plist",
+                "Resources",
             ],
             resources: []
         ),

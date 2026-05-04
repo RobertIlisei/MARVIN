@@ -773,6 +773,17 @@ cmd_install_macos_app() {
       -e "s|\$(PRODUCT_BUNDLE_IDENTIFIER)|net.marvin.macos|g" \
       -e "s|\$(PRODUCT_NAME)|${MACOS_APP_NAME}|g" \
       "$macos_dir/MARVIN/Info.plist" > "$built_app/Contents/Info.plist"
+    # Bundle the Brain Circuit icon — SPM doesn't carry the .icns
+    # itself, so we copy it (and the source SVGs, for menu-bar
+    # template use down the line) directly into Contents/Resources.
+    if [ -f "$macos_dir/MARVIN/Resources/AppIcon.icns" ]; then
+      cp "$macos_dir/MARVIN/Resources/AppIcon.icns" "$built_app/Contents/Resources/"
+    else
+      warn "AppIcon.icns missing — run scripts/build-app-icon.sh to regenerate"
+    fi
+    for svg in "$macos_dir/MARVIN/Resources"/*.svg; do
+      [ -f "$svg" ] && cp "$svg" "$built_app/Contents/Resources/"
+    done
     info "ad-hoc signing"
     codesign --force --deep --sign - "$built_app" >/dev/null 2>&1 || {
       fail "codesign failed"
