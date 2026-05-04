@@ -28,8 +28,33 @@ private struct OpenAboutButton: View {
     }
 }
 
+/// SwiftUI lifecycle hook for app-scope AppKit state. We use this
+/// only for things that genuinely don't fit in a SwiftUI scene —
+/// currently the menu-bar `NSStatusItem` (Phase 1d.19), which has
+/// to live on the global `NSStatusBar` and outlive any window.
+///
+/// Marked `@MainActor` because the `NSApplicationDelegate` callbacks
+/// already run on the main thread, and our state
+/// (`StatusBarController`) is itself main-actor-isolated. Without
+/// the annotation, Swift 6 complains about calling
+/// `StatusBarController()` from a "nonisolated" init context.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let statusBar = StatusBarController()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Install the status item once on launch. The controller
+        // retains the NSStatusItem itself; we just hold the
+        // controller so it doesn't deallocate.
+        statusBar.install()
+    }
+}
+
 @main
 struct MARVINApp: App {
+    /// Bridge AppKit-only app-scope state (menu-bar item) into
+    /// SwiftUI's lifecycle. Nothing else uses the delegate today.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     /// Health monitor lives at app scope so the connection state
     /// survives window opens/closes (Phase 1+ may add multi-window).
     @State private var health = HealthMonitor()
