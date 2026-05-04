@@ -1,7 +1,9 @@
 # MARVIN — project instructions
 
-This is MARVIN, the pair-programming AI assistant. See [PLAN.md](./PLAN.md) for
-the authoritative delivery plan. Update it as you ship things.
+This is MARVIN, the pair-programming AI assistant. For the current state of
+the project (in flight / shipped / deferred / not planned) see
+[`docs/roadmap.md`](./docs/roadmap.md). For chronological history with the
+diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md).
 
 ## Golden rules for working in this repo
 
@@ -16,9 +18,12 @@ the authoritative delivery plan. Update it as you ship things.
    and the **scout** (breadth-first read-only research — [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md)).
    Any new subagent type requires a new ADR; the orchestrator-with-scouts
    shape is a carve-out, not a precedent.
-2. **Plan-first, execute-second, verify-third.** Every feature has an entry in
-   PLAN.md before code lands. Mark entries as `[done]` and add a brief "what
-   shipped" note when complete.
+2. **Plan-first, execute-second, verify-third.** For non-trivial work,
+   sketch the approach before writing code, then verify it after. This is a
+   practice, not an artifact rule — write things down where they help (chat,
+   a `Plan`, a roadmap entry, an ADR), not because a doc requires it.
+   The repo's roadmap lives at [`docs/roadmap.md`](./docs/roadmap.md);
+   keep its `## In flight` section current as work moves through.
 3. **Auto-mode by default — full bypass.** MARVIN runs every tool without a
    confirm prompt, matching `claude --dangerously-skip-permissions`. The
    header `perms` toggle flips to `gated` when you want the pre-flight
@@ -170,22 +175,29 @@ Env knobs (all optional):
 
 ## Adding a new feature
 
-1. Open `PLAN.md`, find the phase it belongs to. Add a bullet under the phase
-   if it isn't already scoped.
+1. Sketch the approach. For anything non-trivial, add a one-line entry under
+   `## In flight` in [`docs/roadmap.md`](./docs/roadmap.md) so the work is
+   visible. Material design decisions get an ADR under
+   [`docs/decisions/`](./docs/decisions/) — see "Deterministic ADR triggers"
+   in `personality.ts` for when one is required.
 2. Implement.
-3. Update the bullet with a `[done YYYY-MM-DD]` marker and a one-line summary.
-4. If you discover a follow-up while building, add it to the same phase (or
-   the appropriate later phase) — don't let it live only in your head.
+3. When it lands, move the roadmap entry from `## In flight` to the
+   appropriate `## Shipped` block (date-stamped) with a one-line summary.
+   For meaningful releases, also add a long-form entry to
+   [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md) with the
+   diagnostic / decision / verification trail.
+4. If you discover a follow-up while building, capture it — as a roadmap
+   entry, an ADR, or a GitHub issue — don't let it live only in your head.
 
-**Definition of Done.** Audit, PLAN, and task DoD live at
+**Definition of Done.** Audit and task DoD live at
 [`docs/reviews/DEFINITION_OF_DONE.md`](./docs/reviews/DEFINITION_OF_DONE.md).
-Apply it before marking anything `[done]`.
+Apply it before claiming anything is shipped.
 
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(873 nodes · 1006 edges · 154 communities as of 2026-04-21, post the
-v1.1.0 install-app flow + scout subagents pass).
+(823 nodes · 1010 edges · 162 communities as of 2026-05-04, post the
+PLAN.md retirement + roadmap/changelog split).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
@@ -210,16 +222,15 @@ answer. Never synthesize a structural explanation from imagination.
 ### After changes
 
 - Code-only changes: `/graphify . --update` (AST-only, no LLM cost).
-- Docs / PLAN / personality.ts changes: `/graphify . --update` (triggers
+- Docs / `personality.ts` changes: `/graphify . --update` (triggers
   semantic re-extraction — minimal cost at this corpus size).
 
 ### God nodes (most-connected abstractions)
 
-`POST()` (60 edges), `GET()` (58 edges), `ADR-0008 — User-initiated
-write channel`, `ADR-0009 — File uploads from OS`, `HTTP API reference
-(docs/reference/api.md)`, `apps/desktop/README.md — Tauri wrapper
-docs`, `ADR-0010 — Desktop wrapper via Tauri`, `ADR-0014 — Read-only
-scout subagents`, `ADR-0011 — .app via bundled Node sidecar (deprecated)`,
-`ADR index (docs/decisions/README.md)`.
+`GET()` (61 edges), `POST()` (58), `trim()` (29), `ADR-0015 — Auto-mode
+policy floor + audit log` (17), `/api/git/* third mutation channel` (17),
+`Changelog (docs/history/CHANGELOG.md)` (16), `ADR index` (15), `8-phase
+senior-engineer workflow` (15), `Roadmap (docs/roadmap.md)` (14),
+`projects.ts` (13).
 
 _Refresh this list with `/graphify . --update` when it drifts._

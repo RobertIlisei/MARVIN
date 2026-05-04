@@ -19,7 +19,6 @@ MARVIN is a pnpm monorepo with 1 app and 6 packages.
 │   └── install-skills.sh
 ├── docs/                               (this directory)
 ├── graphify-out/                       MARVIN-on-MARVIN knowledge graph
-├── PLAN.md                             delivery plan + changelog
 ├── README.md
 ├── CLAUDE.md                           project instructions for nested sessions
 ├── turbo.json                          turbo pipeline config

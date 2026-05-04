@@ -1,11 +1,11 @@
-# Definition of Done — audit, plan, tasks
+# Definition of Done — audit, changelog entry, tasks
 
 **Purpose.** Three concentric checklists. The audit is the macro
-artifact (a snapshot of MARVIN's state on a given date), the PLAN
-changelog is what we write when a slice ships, the task list is the
-unit of execution. "Done" means something different at each layer; if
-we leave the criteria implicit, work piles up that's been "mostly
-done" for weeks.
+artifact (a snapshot of MARVIN's state on a given date), the
+[changelog](../history/CHANGELOG.md) entry is what we write when a
+slice ships, the task list is the unit of execution. "Done" means
+something different at each layer; if we leave the criteria implicit,
+work piles up that's been "mostly done" for weeks.
 
 This document is forward-looking. Apply it to the 2026-04-26 audit
 and any future audit MARVIN runs against itself.
@@ -18,11 +18,12 @@ An audit is "shipped" when **every** of the following is true:
 
 1. **All 🔴 findings have a resolution.** Each Important finding ends
    in one of three terminal states:
-   - **Landed** — code merged, with a PLAN.md entry citing the
-     finding number.
-   - **Deferred with rationale** — a PLAN.md entry explaining *why*
-     it's deferred and *what would unblock it*. "We'll get to it"
-     is not a rationale.
+   - **Landed** — code merged, with a [changelog](../history/CHANGELOG.md)
+     entry citing the finding number.
+   - **Deferred with rationale** — a roadmap entry under
+     `## Deferred` in [`docs/roadmap.md`](../roadmap.md) explaining
+     *why* it's deferred and *what would unblock it*. "We'll get to
+     it" is not a rationale.
    - **Reclassified** — moved to 🟠 / 🟡 with a one-line note in the
      audit doc itself explaining the downgrade (e.g. discovered the
      issue is mitigated by another mechanism). The downgrade requires
@@ -38,7 +39,7 @@ An audit is "shipped" when **every** of the following is true:
 
 3. **The audit doc itself reflects current state.** When a finding's
    resolution lands, edit the audit's status column to mark it done
-   and link the PLAN entry. The audit becomes a historical record
+   and link the changelog entry. The audit becomes a historical record
    that's still trustworthy six months later.
 
 4. **Mockups are matched or retired.** If a mockup represents
@@ -51,10 +52,10 @@ An audit is "shipped" when **every** of the following is true:
    (the to-do list this DoD also covers). The audit doc lists each
    spin-off with its task ID.
 
-6. **A `[done YYYY-MM-DD]` line exists in PLAN.md** at the bottom of
-   the changelog block referencing the audit, plus a one-line
-   summary: "Audit X shipped — N important findings resolved, K
-   deferred (see PLAN entry / task IDs)."
+6. **A dated entry exists in [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md)**
+   referencing the audit, plus a one-line summary: "Audit X shipped —
+   N important findings resolved, K deferred (see changelog entry /
+   task IDs)."
 
 The 2026-04-26 audit is currently in progress. Tracking against this
 DoD means: 4 of 7 🔴 findings landed by 2026-04-26 (#3, #5, #7, #21).
@@ -63,9 +64,9 @@ save). 1 split (#2 — regex tightened, audit log + banner deferred).
 
 ---
 
-## PLAN.md changelog entry · Definition of Done
+## Changelog entry · Definition of Done
 
-A changelog line in PLAN.md is "complete" when:
+A [changelog](../history/CHANGELOG.md) entry is "complete" when:
 
 1. **Date stamped** in `YYYY-MM-DD` form (or with a parenthetical
    like `(afternoon)` for the same-day second slice). Convert
@@ -74,7 +75,7 @@ A changelog line in PLAN.md is "complete" when:
 
 2. **Cites the finding(s)** the change addresses. Audit-driven work
    should cite by number ("audit finding #3"); product work should
-   cite the PLAN section it advances.
+   cite the roadmap section it advances.
 
 3. **Includes a verification claim** — what the author actually ran
    to know it worked. "`pnpm -r typecheck` clean" or "Vitest pin in
@@ -99,8 +100,8 @@ A single line in the to-do list (TaskList) is "done" when:
 
 1. **Code matches the audit-finding "Fix" section** (or, when the
    task is product-driven, the original spec). Deviations are
-   documented inline in the diff or in PLAN.md — not left for the
-   reviewer to discover.
+   documented inline in the diff or in the changelog entry — not
+   left for the reviewer to discover.
 
 2. **Touched files are exactly the ones the finding cited** — or
    the deviation has a one-line note. Drift here is the most common
@@ -123,8 +124,10 @@ A single line in the to-do list (TaskList) is "done" when:
    visibility changes (TopBar, hero, chat layout); for low-visibility
    ones (a button colour) a single before/after pair is fine.
 
-6. **PLAN.md changelog updated.** A new line, or an extension to the
-   active "round" entry, with the four DoD items above.
+6. **Roadmap or changelog updated.** Move the work out of `## In flight`
+   in [`docs/roadmap.md`](../roadmap.md). For meaningful slices, add a
+   long-form entry to [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md)
+   meeting the four "Changelog entry · DoD" criteria above.
 
 7. **TaskUpdate marks the task `completed`.** No silent done-ness;
    the to-do list is the single source of truth for "what's next."
@@ -149,7 +152,7 @@ status drift.
   the original triage was wrong, write down what changed.
 - **Mockups outliving the design they depicted** — a mockup that
   shows a control the codebase no longer has misleads future readers.
-- **PLAN.md entries that don't say what the author ran** — "shipped
+- **Changelog entries that don't say what the author ran** — "shipped
   the X feature" without a verification line means the next person
   can't tell whether the claim has teeth.
 - **Tasks marked done because TypeScript compiled** — typecheck is a
@@ -164,6 +167,6 @@ Add the following line to `CLAUDE.md` under the "Adding a new
 feature" section so future sessions pick up these rules without
 having to re-derive them:
 
-> **Definition of Done.** Audit, PLAN, and task DoD live at
+> **Definition of Done.** Audit, changelog-entry, and task DoD live at
 > [`docs/reviews/DEFINITION_OF_DONE.md`](./docs/reviews/DEFINITION_OF_DONE.md).
-> Apply it before marking anything `[done]`.
+> Apply it before claiming anything is shipped.

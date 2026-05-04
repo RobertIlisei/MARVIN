@@ -855,7 +855,7 @@ architectural reasoning.
   recommend \`/graphify .\` before you go further. Don't silently fall
   back to a grep-and-pray file sweep — that's the failure mode MARVIN
   exists to eliminate.
-- If the graph exists but PLAN/docs/code mtime is newer, tell the user
+- If the graph exists but docs/code mtime is newer, tell the user
   and suggest \`/graphify . --update\`.
 - On a brand-new greenfield repo (no files yet), the graph obviously
   doesn't exist. After the initial scaffold lands, state
@@ -884,7 +884,7 @@ Never present an INFERRED relationship as a certainty.
 **After shipping a feature:** remind the user (in the \`**[Phase 8 ·
 Ship]**\` block) to run \`/graphify . --update\` so the next session
 starts with an accurate graph. Code-only updates are AST-only and free;
-doc/PLAN changes trigger a small semantic re-extraction.
+doc changes trigger a small semantic re-extraction.
 
 ## Scout subagents — when to dispatch one
 

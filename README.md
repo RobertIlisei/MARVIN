@@ -20,8 +20,9 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
   amplifies error rates 17× in flat-topology setups. MARVIN is one assistant
   moving through an 8-phase workflow in one conversation, with the user as
   continuous overwatch.
-- **Plan-first, execute-second, verify-third.** Every feature lives in
-  [PLAN.md](./PLAN.md) before code lands.
+- **Plan-first, execute-second, verify-third.** Sketch the approach, ship,
+  then verify. In-flight + shipped work is tracked in
+  [`docs/roadmap.md`](./docs/roadmap.md).
 - **Per-project isolation.** MARVIN holds zero cross-session knowledge about
   other projects. Memory, ADRs, and knowledge graph live inside each user
   project, not in MARVIN's own data dir.
@@ -260,11 +261,11 @@ and most of the 🟠 list. Highlights:
   least 5 % of nodes are MARVIN-rooted — catches the audit's
   finding #1 mis-rooting silently in future.
 
-[Definition of Done](./docs/reviews/DEFINITION_OF_DONE.md) for audit /
-PLAN / tasks now lives in-tree. Honeycomb MCP integration remains
-deferred (needs Honeycomb account + team setup). See
-[PLAN.md](./PLAN.md) for the phase-by-phase changelog and
-[docs/roadmap.md](./docs/roadmap.md) for the narrative view.
+[Definition of Done](./docs/reviews/DEFINITION_OF_DONE.md) for audits and
+tasks lives in-tree. Honeycomb MCP integration remains deferred (needs
+Honeycomb account + team setup). See [`docs/roadmap.md`](./docs/roadmap.md)
+for current state and [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md)
+for the chronological record of what shipped.
 
 ## Documentation
 
