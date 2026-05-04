@@ -557,7 +557,11 @@ export default function Home() {
                   audit (finding #10) found drowned the brain in
                   decoration. */}
               <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
-                <BrainLiquid state={marvinState} size={340} />
+                {/* Landing hero: cycle through every state on its
+                    own so the brain has presence even when there's
+                    no real session driving it. The project-page
+                    BrainLiquid below stays prop-driven. */}
+                <BrainLiquid state={marvinState} size={340} autoCycle />
                 <AdvisorOrb
                   active={advisorActive}
                   model={advisorModel}

@@ -63,12 +63,23 @@ interface Profile {
 // standalone is the source of truth — when these drift from the lab, the
 // lab wins.
 const PROFILES: Record<MarvinUiState, Profile> = {
+  // `idle` deliberately deviates from the lab's idle preset (which
+  // still carries an active-brainstorm energy: flowMag=180, swirl=0.6,
+  // turb=0.3, rot=0.0015). User feedback was that MARVIN's idle
+  // shouldn't read as "thinking quietly" — it should read as actually
+  // resting. So motion knobs are slowed; visual knobs (N, chroma,
+  // dotR, dotA, halo, palette, trail) are kept lab-faithful so the
+  // brain still LOOKS the same, just calmer.
+  //
+  // If you re-extract the lab via Playwright, do NOT overwrite this
+  // block — the slowdown is intentional. Only the four other states
+  // (thinking, tool, writing, error) are mirror-aligned.
   idle: {
-    N: 8000, flowMag: 180, damp: 0.95, swirl: 0.6, shellPull: 1.2,
-    nfreq: 0.3, neps: 1.4, lmin: 4.0, lrange: 6.0, dotR: 1.0, dotA: 0.55,
-    chroma: 2.0, trail: 0.82, turb: 0.3, coh: 0.16, leaders: 0.18, dim: 0.18,
-    attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.6,
-    redMix: 0.05, rot: 0.0015, jitter: 0,
+    N: 8000, flowMag: 70, damp: 0.97, swirl: 0.22, shellPull: 1.2,
+    nfreq: 0.16, neps: 1.4, lmin: 5.5, lrange: 7.0, dotR: 1.0, dotA: 0.55,
+    chroma: 2.0, trail: 0.86, turb: 0.10, coh: 0.16, leaders: 0.18, dim: 0.18,
+    attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.4,
+    redMix: 0.05, rot: 0.0007, jitter: 0,
   },
   thinking: {
     N: 12000, flowMag: 370, damp: 0.93, swirl: 1.75, shellPull: 1.4,
@@ -100,6 +111,55 @@ const PROFILES: Record<MarvinUiState, Profile> = {
   },
 };
 
+// Smoothstep cubic — used to ease parameter transitions when the
+// state changes. 0→1 with zero derivative at both ends, so the
+// transition starts gently, accelerates through the middle, and
+// settles softly into the new profile rather than snapping.
+function easeInOutCubic(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
+
+// Lerp every numeric field of a Profile. N is rounded so per-frame
+// loops can use it as an integer index. Every other field is a
+// plain float lerp.
+const PROFILE_KEYS = [
+  "N", "flowMag", "damp", "swirl", "shellPull",
+  "nfreq", "neps", "lmin", "lrange", "dotR", "dotA",
+  "chroma", "trail", "turb", "coh", "leaders", "dim",
+  "attractors", "synapse", "pulse", "dens", "pulseRate",
+  "redMix", "rot", "jitter",
+] as const satisfies readonly (keyof Profile)[];
+
+function lerpProfile(a: Profile, b: Profile, t: number): Profile {
+  const out = {} as Profile;
+  for (const k of PROFILE_KEYS) {
+    const va = a[k];
+    const vb = b[k];
+    const lerped = va + (vb - va) * t;
+    out[k] = (k === "N" || k === "attractors" ? Math.round(lerped) : lerped);
+  }
+  return out;
+}
+
+// How long state→state transitions take. ~700 ms feels naturally
+// soft without dragging — long enough that flow / chroma / trail
+// shifts are visible, short enough that a stalled "thinking" state
+// settles before the user notices.
+const TRANSITION_MS = 700;
+
+// Default cycle for `autoCycle`. `error` is included so the landing
+// hero shows the brain's full vocabulary; it's brief so it doesn't
+// read as a real failure to a user passing through.
+const CYCLE: ReadonlyArray<{ state: MarvinUiState; holdMs: number }> = [
+  { state: "idle",     holdMs: 6000 },
+  { state: "thinking", holdMs: 4500 },
+  { state: "tool",     holdMs: 3500 },
+  { state: "writing",  holdMs: 4500 },
+  { state: "error",    holdMs: 1800 },
+];
+
 // How much larger the canvas is than the layout `size` prop. The
 // perspective projection can push particles to ~1.33×R from center;
 // at R = size * 0.5 that's ~0.67×size on the diagonal — beyond the
@@ -125,17 +185,80 @@ const NEBULA: Array<[number, number, number]> = [
 export function BrainLiquid({
   size = 280,
   state = "idle",
+  autoCycle = false,
 }: {
   size?: number;
   state?: MarvinUiState;
+  /**
+   * If true, the brain ignores the `state` prop and rotates through
+   * the `CYCLE` table on its own — used by the landing-page hero so
+   * the brain has presence even when there's no real MARVIN session
+   * driving it. Each state still uses the standalone-derived
+   * profile; transitions between them are smoothed via the lerp
+   * machinery below.
+   */
+  autoCycle?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The state we are TARGETING (most recently set, by prop or cycle).
+  // `stateRef.current` always matches; the rendered profile lerps
+  // toward `PROFILES[targetStateRef.current]`.
+  const targetStateRef = useRef<MarvinUiState>(state);
   const stateRef = useRef<MarvinUiState>(state);
+  // Snapshots used to interpolate between the previous fully-settled
+  // (or in-flight) profile and the new target. `transitionStartRef`
+  // stores the timestamp when the most recent target change kicked
+  // off — `easeInOutCubic((now - start) / TRANSITION_MS)` is the
+  // mix factor each frame.
+  const fromProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const toProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const currentProfileRef = useRef<Profile>(PROFILES[state] ?? PROFILES.idle);
+  const transitionStartRef = useRef<number>(0);
   const themeRef = useRef<"dark" | "light">("light");
 
+  // Internal helper: kick off a transition from whatever the brain
+  // is rendering RIGHT NOW (currentProfileRef) toward the new state.
+  // Snapshotting the in-flight profile (not the previous target)
+  // means rapid state changes blend smoothly instead of snapping
+  // back to whatever the previous "from" was.
+  const beginTransition = (next: MarvinUiState) => {
+    if (next === stateRef.current && next === targetStateRef.current) return;
+    fromProfileRef.current = { ...currentProfileRef.current };
+    toProfileRef.current = PROFILES[next] ?? PROFILES.idle;
+    transitionStartRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    targetStateRef.current = next;
+    stateRef.current = next;
+  };
+
+  // Prop-driven state changes (skipped when autoCycle owns the brain).
   useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+    if (autoCycle) return;
+    beginTransition(state);
+    // beginTransition is referentially stable enough — only refs are touched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, autoCycle]);
+
+  // Auto-cycle the state through `CYCLE` for the landing hero. Skips
+  // the interval entirely when `autoCycle` is false, so MARVIN's
+  // real-state brain (project page) is unaffected. Hold times come
+  // from CYCLE; the lerp smooths the actual visual change.
+  useEffect(() => {
+    if (!autoCycle) return;
+    let i = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const advance = () => {
+      const step = CYCLE[i] ?? CYCLE[0];
+      if (step) beginTransition(step.state);
+      i = (i + 1) % CYCLE.length;
+      timer = setTimeout(advance, step?.holdMs ?? 4000);
+    };
+    advance();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCycle]);
 
   useEffect(() => {
     const update = () => {
@@ -176,8 +299,34 @@ export function BrainLiquid({
     if (!ctx) return;
     ctx.scale(dpr, dpr);
 
-    const profile = (): Profile =>
-      PROFILES[stateRef.current] ?? PROFILES.idle;
+    // Lerped profile getter. Each frame asks for the *interpolated*
+    // current profile rather than snapping to the new state immediately.
+    // beginTransition() (above) sets fromProfileRef + toProfileRef +
+    // transitionStartRef when state changes; here we mix between them
+    // by `easeInOutCubic((now - start) / TRANSITION_MS)`. Once t
+    // reaches 1 the function returns the target verbatim.
+    const profile = (): Profile => {
+      const start = transitionStartRef.current;
+      if (start === 0) {
+        // No transition has ever fired — render the seed target.
+        currentProfileRef.current = toProfileRef.current;
+        return currentProfileRef.current;
+      }
+      const now =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+      const raw = (now - start) / TRANSITION_MS;
+      if (raw >= 1) {
+        currentProfileRef.current = toProfileRef.current;
+        return currentProfileRef.current;
+      }
+      const t = easeInOutCubic(Math.max(0, raw));
+      currentProfileRef.current = lerpProfile(
+        fromProfileRef.current,
+        toProfileRef.current,
+        t,
+      );
+      return currentProfileRef.current;
+    };
 
     // Allocate for max N across any state so we never reallocate. Must be
     // >= max(PROFILES[*].N) — `thinking` is currently the ceiling at
@@ -319,6 +468,11 @@ export function BrainLiquid({
     let last = performance.now();
     let t = 0;
     let raf = 0;
+    // Tracks the previous frame's particle count so we can respawn
+    // newly-active indices when N grows mid-transition. Without this,
+    // particles 8000–11999 would pop in from stale positions when
+    // idle (N=8000) lerps up to thinking (N=12000).
+    let prevN = 0;
     // A3 perf: when MARVIN is idle, render at ~30 fps instead of the
     // native ~60 fps. The 4,500-particle idle profile costs real CPU
     // on a MacBook battery; halving the frame rate roughly halves
@@ -396,6 +550,14 @@ export function BrainLiquid({
 
       const p = profile();
       const N = p.N;
+      // Respawn freshly-active particles so transitions that GROW N
+      // (idle→thinking: 8000→12000) bring particles in from valid
+      // sphere positions instead of the stale coords left over from
+      // the last time those indices were active.
+      if (N > prevN) {
+        for (let i = prevN; i < N; i++) respawn(i, p);
+      }
+      prevN = N;
 
       rotY += p.rot * dt * 60;
       rotX = -0.18 + Math.sin(t * 0.25) * 0.06;
