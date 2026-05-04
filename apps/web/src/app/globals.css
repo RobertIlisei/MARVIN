@@ -1029,7 +1029,17 @@ body[data-marvin="error"] .status-rail::after {
 [data-host-shell="swift"] [data-marvin-cost-pill],
 [data-host-shell="swift"] [data-marvin-wordmark],
 [data-host-shell="swift"] [data-marvin-version-pip],
-[data-host-shell="swift"] [data-marvin-wordmark-divider] {
+[data-host-shell="swift"] [data-marvin-wordmark-divider],
+/* Phase 1d.26 — these four are now reachable via the native menu
+ * bar: new session ⌘⇧N (File menu), settings ⌘, (App menu),
+ * shortcuts ⌘/ (Window menu), theme toggle ⌘⇧T (Window menu).
+ * Hiding the in-WebView duplicates makes the chrome feel native
+ * (less to look at inside the page) without removing functionality
+ * — every action is still one keystroke away. */
+[data-host-shell="swift"] [data-marvin-new-session],
+[data-host-shell="swift"] [data-marvin-settings-button],
+[data-host-shell="swift"] [data-marvin-shortcuts-button],
+[data-host-shell="swift"] [data-marvin-theme-toggle] {
   display: none;
 }
 

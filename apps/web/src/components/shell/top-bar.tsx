@@ -214,12 +214,15 @@ export function TopBar({
             personality={personality}
             onPersonalityChange={onPersonalityChange}
           />
-          <ThemeToggle />
+          <span data-marvin-theme-toggle>
+            <ThemeToggle />
+          </span>
           <button
             type="button"
             onClick={onReset}
             disabled={isEmpty}
             title="start a new MARVIN session (⌘⇧N)"
+            data-marvin-new-session
             className="rounded-md border border-[color:var(--color-border)] px-2.5 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-30"
           >
             new session
@@ -229,6 +232,7 @@ export function TopBar({
             onClick={onOpenSettings}
             title="Settings — models, observability, appearance, permissions"
             aria-label="open settings"
+            data-marvin-settings-button
             className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
           >
             ⚙
@@ -237,6 +241,7 @@ export function TopBar({
             type="button"
             onClick={onOpenShortcuts}
             title="keyboard shortcuts (?)"
+            data-marvin-shortcuts-button
             className="rounded-md border border-[color:var(--color-border)] px-2 py-1 font-mono text-[11px] text-[color:var(--color-fg-dim)] transition hover:border-[color:var(--color-border-strong)] hover:text-[color:var(--color-fg)]"
           >
             ?
