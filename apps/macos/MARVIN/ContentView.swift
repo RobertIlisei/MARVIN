@@ -210,7 +210,16 @@ struct ContentView: View {
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
+            HStack(spacing: 8) {
+                Button("Open Terminal") {
+                    openTerminal()
+                }
+                if marvinBinaryPath != nil {
+                    Button("Start Sidecar") {
+                        startSidecar()
+                    }
+                    .help("Spawns bin/marvin start in the background via a login shell")
+                }
                 Spacer()
                 Button("Reconnect") {
                     Task { await health.refreshNow() }
@@ -220,6 +229,56 @@ struct ContentView: View {
         }
         .padding(28)
         .frame(maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// First MARVIN binary found in the conventional clone
+    /// locations. `nil` if none — in that case the offline view
+    /// hides the "Start Sidecar" button and the user falls back to
+    /// "Open Terminal" + manual run. Phase 1d.16.
+    private var marvinBinaryPath: String? {
+        let home = NSHomeDirectory()
+        let candidates = [
+            "\(home)/marvin/bin/marvin",
+            "\(home)/code/marvin/bin/marvin",
+            "\(home)/dev/marvin/bin/marvin",
+            "\(home)/Documents/marvin/bin/marvin",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Open Terminal.app — pure NSWorkspace, no shell spawn.
+    /// Always available, no permission concerns.
+    private func openTerminal() {
+        let url = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Spawn `bin/marvin start` from the MARVIN repo root via
+    /// `/bin/zsh -l -c …`. The login shell (`-l`) picks up the
+    /// user's `.zshrc` PATH so pnpm / node / claude etc. resolve —
+    /// without that, GUI-spawned processes have a minimal PATH
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`) and `bin/marvin` immediately
+    /// fails its preflight checks. The script is designed to fork
+    /// the dev server and exit, so we don't have to keep the
+    /// Process alive past launch.
+    private func startSidecar() {
+        guard let binPath = marvinBinaryPath else { return }
+        // binPath is "<repoRoot>/bin/marvin"; strip both segments
+        // via two NSString.deletingLastPathComponent. Avoids the
+        // hazard of `replacingOccurrences("/bin", "")` over-matching
+        // when the user's home itself contains "/bin" (rare but
+        // possible — `/Users/sbin/marvin/...` etc.).
+        let binDir = (binPath as NSString).deletingLastPathComponent
+        let repoRoot = (binDir as NSString).deletingLastPathComponent
+        let task = Process()
+        task.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-l", "-c", "./bin/marvin start"]
+        do {
+            try task.run()
+        } catch {
+            NSLog("[MARVIN-Swift] Failed to spawn sidecar: \(error)")
+        }
     }
 
 }
