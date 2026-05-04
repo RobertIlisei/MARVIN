@@ -9,7 +9,7 @@ MARVIN is a small solo project at `github.com/RobertIlisei/MARVIN`. Contribution
    - Plan-first, execute-second, verify-third.
    - No hardcoded project knowledge.
    - ADRs for material decisions.
-2. Scan [PLAN.md](../../PLAN.md) for the current phase state + recent changelog entries.
+2. Scan [`docs/roadmap.md`](../roadmap.md) for current state and [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md) for recent shipped work.
 3. Skim [docs/decisions/](../decisions/) to understand why things are the way they are.
 
 ## The 8-phase workflow applies to contributions too
@@ -68,7 +68,7 @@ Write it as `docs/decisions/NNNN-<kebab>.md` using the format in [ADR-0001](../d
 - **Typecheck passes** (`pnpm -r typecheck`).
 - **Build passes** (`pnpm -r build`).
 - **If you touched graphify-visible code**, run `/graphify . --update` and commit the refreshed `graph.json` + `GRAPH_REPORT.md` with the PR.
-- **If you touched PLAN.md phase entries**, ensure they're still coherent.
+- **If your change moves work in or out of `## In flight`**, update [`docs/roadmap.md`](../roadmap.md) accordingly. For meaningful releases, add a long-form entry to [`docs/history/CHANGELOG.md`](../history/CHANGELOG.md).
 - **Screenshots** for visible UI changes (helps review; not mandatory).
 
 ## No-goes

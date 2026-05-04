@@ -159,9 +159,9 @@ assertions) always → ASK. Don't silently fill them in.
 
 ## Cross-reference project state
 
-- If the project has a TODOs or backlog file (MARVIN: `PLAN.md`),
-  cross-reference findings. Flag items the PR should have closed
-  but didn't, and new items that should be added.
+- If the project has a TODOs or backlog file (MARVIN: `docs/roadmap.md`'s
+  `## In flight` section), cross-reference findings. Flag items the PR
+  should have closed but didn't, and new items that should be added.
 - If the project has an ADR directory (MARVIN: `docs/decisions/`),
   check whether any finding would be easier to resolve as a new ADR
   rather than an inline fix. Surface the suggestion; don't write
