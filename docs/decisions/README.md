@@ -29,6 +29,9 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0013](./0013-git-remote-ops-and-credentials.md) | Git remote ops and credentials | Accepted | 2026-04-21 |
 | [0014](./0014-scout-subagents-read-only.md) | Read-only scout subagents for parallel research | Accepted | 2026-04-21 |
 | [0015](./0015-auto-mode-policy-floor-and-audit-log.md) | Auto-mode policy floor + audit log | Accepted | 2026-04-26 |
+| [0016](./0016-swift-migration.md) | SwiftUI macOS migration (phased) | Accepted | 2026-05-04 |
+| [0017](./0017-phase-2-chat-native.md) | Phase 2 native chat surface: shape and sub-phases | Accepted | 2026-05-04 |
+| [0018](./0018-phase-3-files-source-control-native.md) | Phase 3 native files + source control: shape and sub-phases | Accepted | 2026-05-04 |
 
 ## Template
 
