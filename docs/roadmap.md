@@ -8,7 +8,7 @@ For the chronological history with diagnostic trails per entry, see [`docs/histo
 
 _Active work. Add a one-line entry when a piece of work starts; move it to `## Shipped` (with the date) when it lands. Keep entries terse — link out to a PR, ADR, or roadmap note for detail._
 
-- **SwiftUI macOS migration** ([ADR-0016](./decisions/0016-swift-migration.md)) — proposed phased migration from the Tauri WebView shell ([ADR-0010](./decisions/0010-desktop-wrapper-tauri.md)) to a native SwiftUI/AppKit app at `apps/macos/`. Node sidecar (`apps/web`) stays unchanged. Branch: `feat/swift-migration`. Awaiting sign-off on five open questions in the ADR before Phase 0 (scaffolding) starts.
+- **SwiftUI macOS migration** ([ADR-0016](./decisions/0016-swift-migration.md)) — phased migration from the Tauri WebView shell ([ADR-0010](./decisions/0010-desktop-wrapper-tauri.md)) to a native SwiftUI/AppKit app at `apps/macos/`. Node sidecar (`apps/web`) stays unchanged. ADR `Accepted`; **Phase 0 (scaffolding) shipped** — window opens, polls `/api/health`, surfaces connecting/online/offline. Phase 1 (WKWebView island) gated on a week of real use against PR #52's production-build perf wins. Branch: `feat/swift-migration`.
 
 ## Shipped
 

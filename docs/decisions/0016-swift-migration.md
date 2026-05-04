@@ -1,6 +1,6 @@
 # ADR-0016 — Native macOS app via SwiftUI (incremental migration)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-04
 **Deciders:** @robertilisei, MARVIN
 
@@ -75,13 +75,55 @@ Phases are independent enough that we can stop after any of them and still have 
 - **Theme.** OKLCH tokens stay in `apps/web/src/app/globals.css` as long as WKWebView islands exist; the Swift app reads NSAppearance and maps to the same palette via a tiny shared JSON.
 - **Cross-platform.** SwiftUI is macOS-only. Tauri continues to be the answer on Windows / Linux for as long as those targets matter. ADR-0010's Tauri build stays in the repo until Phase 6.
 
-### Open questions (decisions blocked behind these)
+### Resolved decisions
 
-1. **Xcode project vs Swift Package Manager.** Xcode project is the path of least resistance for AppKit + SwiftUI macOS apps and gives us the entitlements / signing / notarization plumbing for free. SPM gives a cleaner CI story and version-control-friendly project files but needs a separate Xcode-shim for app bundles. **Default:** Xcode project under `apps/macos/MARVIN.xcodeproj`. Override only if SPM materially helps.
-2. **Minimum macOS version.** macOS 14 Sonoma (released Sep 2023) gives us the new SwiftUI windowing APIs (`Settings`, `Window`, `WindowGroup` improvements) and `NSSplitViewController` modernizations. macOS 13 Ventura is the older floor and would skip some niceties. **Default:** macOS 14. **User input wanted.**
-3. **Code signing / notarization.** Right now the Tauri build signs with the user's apple-id by way of `tauri build`. Swift will need its own signing config (`DEVELOPER_TEAM_ID`, certificate, notarization). **User input wanted** — this is a real-world cred I won't guess at.
-4. **SwiftUI vs AppKit ratio.** SwiftUI is fast to build but still has rough edges around `NSOutlineView`-class density (file tree) and `NSCollectionView`-class virtualization (chat list). The plan above uses AppKit where SwiftUI is weak (file tree, chat list) and SwiftUI everywhere else. **Default:** hybrid as described.
-5. **Sidecar packaging.** Eventually we'd want the Node sidecar bundled inside the `.app` so users don't need a separate `bin/marvin start`. That's [ADR-0011](./0011-sidecar-node-bundling.md) territory and is deliberately out of scope for this ADR.
+These were the open questions in the `Proposed` draft of this ADR. All five
+locked in 2026-05-04 with the user's approval (see PR / commit history).
+
+1. **Xcode project (manifested via `xcodegen`).** The `.xcodeproj` is
+   *not* checked into git — its `project.pbxproj` is diff-hostile and
+   regenerated cleanly from `apps/macos/project.yml` (declarative
+   YAML, version-control friendly). Contributors run
+   `xcodegen generate` once after clone. SPM `Package.swift` is also
+   shipped so `swift build` smoke-checks the sources without needing
+   full Xcode — useful for CI and headless verification. The actual
+   `.app` bundle is built via `xcodebuild`, wrapped by
+   `bin/marvin install-macos-app`.
+2. **macOS 14 Sonoma minimum.** Buys us mature `NavigationSplitView`,
+   the `@Observable` macro, modern toolbar APIs, MetalFX (matters for
+   Phase 4). Excludes pre-2020 Macs that wouldn't run the brain
+   smoothly anyway. macOS 15 Sequoia is too recent.
+3. **Code signing — ad-hoc for Phase 0.** Local dev builds use ad-hoc
+   sign; Gatekeeper warns on first open but the app runs. Real
+   signing wired when we ship a beta build at the end of Phase 1,
+   using **Developer ID Application** cert (not "Apple Development",
+   which Gatekeeper rejects for distribution) + **`notarytool`**
+   (modern path; `altool` is deprecated). Credentials stashed via
+   `xcrun notarytool store-credentials` so CI/local don't re-enter
+   them. Bundle ID: `net.marvin.macos` (parallels existing
+   `net.marvin.desktop` so they don't conflict). The user supplies
+   Team ID + cert + App Store Connect API key when ready.
+4. **SwiftUI shell + AppKit for dense surfaces.** Standard hybrid
+   pattern (Xcode itself ships this way). SwiftUI for app entry,
+   menu bar, toolbar, dialogs, settings, simple views. AppKit
+   (wrapped in `NSViewRepresentable`) for: 3-pane split
+   (`NSSplitViewController` — proportional dividers SwiftUI's
+   `NavigationSplitView` can't do), file tree (`NSOutlineView` —
+   SwiftUI lags past ~500 rows), chat list (`NSCollectionView` with
+   diffable data source — SwiftUI's `LazyVStack` doesn't virtualize
+   variable-height cells well at high counts), chat input
+   (`NSTextView` — SwiftUI `TextEditor`'s IME / smart-quote
+   behaviour bites for code).
+5. **Re-evaluation moment after PR #52.** Phase 0 is cheap (~½ day)
+   and reversible — it builds regardless of how the perf-eval lands.
+   Phase 1+ is gated on a week of real use against the production
+   build from PR #52. Three plausible outcomes captured: (a) feels
+   native-grade, park migration after Phase 1; (b) brain stutters
+   under load, do Phase 0 → 1 → 4 (skip 2–3); (c) still laggy, full
+   plan. Decision deferred until the data is in.
+
+**Sidecar packaging** (Node bundled inside the `.app`) was
+intentionally out of scope; see [ADR-0011](./0011-sidecar-node-bundling.md).
 
 ## Alternatives considered
 
@@ -112,10 +154,10 @@ Phases are independent enough that we can stop after any of them and still have 
 
 For this ADR specifically (the **decision**, not the implementation):
 
-- [ ] User has reviewed the phased plan and signed off on phases 0 and 1 as the immediate next work.
-- [ ] User has answered the five open questions above (or explicitly deferred them).
-- [ ] Status flips from `Proposed` → `Accepted`.
-- [ ] Roadmap entry under `## In flight` referencing this ADR.
-- [ ] Branch `feat/swift-migration` created with this ADR + the `apps/macos/` placeholder. _(this commit)_
+- [x] User reviewed the phased plan and signed off on Phase 0 as the immediate next work (Phase 1+ gated on the post-#52 perf re-eval).
+- [x] User answered the five open questions; resolutions captured in the **Resolved decisions** section above.
+- [x] Status flipped from `Proposed` → `Accepted`.
+- [x] Roadmap entry under `## In flight` referencing this ADR.
+- [x] Branch `feat/swift-migration` created with this ADR + the `apps/macos/` scaffolding.
 
 The Phase 0 implementation is its own scope, captured in the table above.

@@ -676,6 +676,79 @@ PLIST
   return 0
 }
 
+cmd_install_macos_app() {
+  # Builds the SwiftUI native target at apps/macos/ and installs the
+  # resulting .app bundle to /Applications/. Phase 0 uses ad-hoc
+  # signing — Gatekeeper warns on first open (right-click → Open).
+  # Real Developer ID + notarization gets wired at the end of Phase 1
+  # once a signing identity is plumbed in. See ADR-0016.
+  #
+  # Coexists with `install-app` (the Tauri wrapper) — both targets
+  # are valid until the migration completes.
+  info "installing ${APP_NAME} (SwiftUI / Phase 0)"
+
+  if ! command -v xcodebuild >/dev/null 2>&1; then
+    fail "xcodebuild not found — install Xcode (App Store) first"
+    dim "  Command Line Tools alone aren't enough; the .app target needs full Xcode."
+    return 2
+  fi
+  # Check that xcode-select points at a real Xcode, not just CLT.
+  if ! xcodebuild -version >/dev/null 2>&1; then
+    fail "xcodebuild present but xcode-select points at Command Line Tools"
+    dim "  fix:  sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer"
+    return 2
+  fi
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    fail "xcodegen not found — required to materialise MARVIN.xcodeproj from project.yml"
+    dim "  install:  brew install xcodegen"
+    return 2
+  fi
+
+  local macos_dir="$REPO_ROOT/apps/macos"
+  if [ ! -f "$macos_dir/project.yml" ]; then
+    fail "$macos_dir/project.yml missing — Phase 0 not scaffolded?"
+    return 1
+  fi
+
+  info "regenerating MARVIN.xcodeproj from project.yml"
+  ( cd "$macos_dir" && xcodegen generate ) || {
+    fail "xcodegen failed"
+    return 1
+  }
+
+  info "running xcodebuild (Release)"
+  local derived="$macos_dir/build"
+  ( cd "$macos_dir" && xcodebuild \
+      -project MARVIN.xcodeproj \
+      -scheme MARVIN \
+      -configuration Release \
+      -derivedDataPath "$derived" \
+      -quiet \
+      build ) || {
+    fail "xcodebuild failed"
+    dim "  re-run without -quiet to see the full output"
+    return 1
+  }
+
+  local built_app="$derived/Build/Products/Release/${APP_NAME}.app"
+  if [ ! -d "$built_app" ]; then
+    fail "build succeeded but ${APP_NAME}.app is missing at $built_app"
+    return 1
+  fi
+  ok "built $built_app"
+
+  info "copying to /Applications"
+  rm -rf "$APP_BUNDLE_DIR"
+  cp -R "$built_app" "$APP_BUNDLE_DIR"
+  ok "installed at $APP_BUNDLE_DIR"
+
+  echo
+  dim "  open with:  open '$APP_BUNDLE_DIR'"
+  dim "  Phase 0 polls /api/health on port $PORT — start the sidecar first:"
+  dim "    $0 start"
+  dim "  Gatekeeper note: ad-hoc signed; right-click → Open on first launch."
+}
+
 cmd_uninstall_app() {
   info "uninstalling ${APP_NAME}"
 
@@ -714,10 +787,15 @@ marvin — lifecycle script for the MARVIN dev server
 
 macOS .app (double-click-to-launch install flow):
 
-  marvin install-app    build .app, copy to /Applications,
-                        install launchd agent so the server
-                        auto-starts in the background on login
-  marvin uninstall-app  remove the .app + launchd agent
+  marvin install-app        build Tauri .app (ADR-0010), copy to
+                            /Applications, install launchd agent so
+                            the sidecar auto-starts on login
+  marvin install-macos-app  build SwiftUI .app (ADR-0016, Phase 0),
+                            copy to /Applications. No launchd agent —
+                            Phase 0 expects you to run `marvin start`
+                            separately. Coexists with install-app
+                            during the migration.
+  marvin uninstall-app      remove the .app + launchd agent
 
   marvin help           this message
 
@@ -744,8 +822,9 @@ case "${1:-start}" in
   status)   cmd_status  ;;
   logs)     cmd_logs    ;;
   doctor)   cmd_doctor  ;;
-  install-app)    cmd_install_app   ;;
-  uninstall-app)  cmd_uninstall_app ;;
+  install-app)        cmd_install_app       ;;
+  install-macos-app)  cmd_install_macos_app ;;
+  uninstall-app)      cmd_uninstall_app     ;;
   help|-h|--help)  cmd_help ;;
   *)
     fail "unknown subcommand: $1"

@@ -1,0 +1,99 @@
+# xcodegen project manifest — generates MARVIN.xcodeproj on demand.
+#
+# Why xcodegen instead of checking in the .xcodeproj: project.pbxproj
+# is diff-hostile, drifts on every Xcode-side touch, and is the cause
+# of most "merge conflict in the Xcode project" pain. xcodegen
+# regenerates a clean project from this YAML in <1s. The generated
+# .xcodeproj is gitignored.
+#
+# Bootstrap on a fresh clone:
+#   brew install xcodegen
+#   cd apps/macos && xcodegen generate
+#   open MARVIN.xcodeproj
+#
+# All locked-in choices come from ADR-0016.
+
+name: MARVIN
+
+# Top-level options — Apple-shop defaults plus explicit minima.
+options:
+  bundleIdPrefix: net.marvin
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "14.0"
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+  xcodeVersion: "16.0"
+
+# Two settings groups (debug / release) plus shared base. The base
+# carries the team-agnostic flags; debug/release tweak optimisation,
+# stripping, and signing identity.
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
+    CLANG_ENABLE_MODULES: YES
+    # Ad-hoc signing for Phase 0 — Gatekeeper warns on first open
+    # but the .app runs locally. Real Developer ID + notarization
+    # gets wired at the end of Phase 1 once a signing identity is
+    # plumbed in (see ADR-0016 §3 — Resolved decisions).
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: YES
+    CODE_SIGNING_ALLOWED: YES
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+
+targets:
+  MARVIN:
+    type: application
+    platform: macOS
+    sources:
+      - path: MARVIN
+    info:
+      path: MARVIN/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.marvin.macos
+        PRODUCT_NAME: MARVIN
+        # We DON'T point at MARVIN/Info.plist here even though it's
+        # the source — xcodegen wires `info.path` and Xcode auto-
+        # generates the GENERATE_INFOPLIST_FILE wiring. Setting both
+        # would conflict.
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: MARVIN/Info.plist
+        # Sandbox is intentionally OFF for Phase 0 — the app talks
+        # to the local Node sidecar on loopback (which sandbox would
+        # block without entitlements) and Phase 0 isn't App-Store-
+        # bound. Re-evaluate at distribution.
+        ENABLE_APP_SANDBOX: NO
+
+# A single shared scheme so the project opens cleanly in Xcode and
+# has a default Build/Run target. xcodegen generates this if asked.
+schemes:
+  MARVIN:
+    build:
+      targets:
+        MARVIN: all
+    run:
+      config: Debug
+      askForAppToLaunch: false
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

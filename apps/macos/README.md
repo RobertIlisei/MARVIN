@@ -1,55 +1,74 @@
-# apps/macos — SwiftUI native macOS target (in progress)
+# apps/macos — SwiftUI native macOS target
 
-This directory will hold the native SwiftUI/AppKit macOS app, built incrementally per [ADR-0016](../../docs/decisions/0016-swift-migration.md). It currently contains **only this README** — actual Swift code lands once the open questions in the ADR are answered.
+Native SwiftUI/AppKit macOS app, built incrementally per
+[ADR-0016](../../docs/decisions/0016-swift-migration.md). The Node
+sidecar at `apps/web` (Next.js + Agent SDK + all `/api/*` routes)
+stays unchanged and is accessed via HTTP/SSE on `localhost:3030`.
+This is the "shell migrates, brain stays" shape.
+
+**Status:** Phase 0 (scaffolding) shipped. Window opens, polls
+`/api/health`, surfaces connecting / online / offline. Phase 1
+(WKWebView island) is next, gated on a week of real use against
+PR #52's production-build perf wins.
+
+For the dev loop, prerequisites, and `bin/marvin install-macos-app`,
+see [BUILD.md](./BUILD.md).
 
 ## What this is
 
-A real `.app` written in Swift, replacing the Tauri webview shell ([ADR-0010](../../docs/decisions/0010-desktop-wrapper-tauri.md)) for the macOS target. The Node sidecar at `apps/web` (Next.js + Agent SDK + all `/api/*` routes) is kept as-is and accessed via HTTP/SSE on `localhost:3030`. This is the "shell migrates, brain stays" shape.
+A real `.app` written in Swift, replacing the Tauri webview shell
+([ADR-0010](../../docs/decisions/0010-desktop-wrapper-tauri.md)) for
+the macOS target. The Node sidecar is the trust boundary —
+credentials, the Claude CLI spawn, session transcripts, the confirm
+gate, all stay in Node. The Swift process is just a window.
 
 ## What this is NOT
 
 - **Not a fork of `apps/web`.** Both targets run the same backend.
-- **Not a Tauri replacement on Windows / Linux.** SwiftUI is macOS-only; `apps/desktop/` (Tauri) continues to be the cross-platform answer.
-- **Not a from-scratch rewrite of the Anthropic agent loop.** That stays in `packages/runtime`.
+- **Not a Tauri replacement on Windows / Linux.** SwiftUI is
+  macOS-only; `apps/desktop/` (Tauri) continues to be the
+  cross-platform answer.
+- **Not a from-scratch rewrite of the Anthropic agent loop.** That
+  stays in `packages/runtime`.
 
-## Status
+## File layout
 
-Phase 0 (scaffolding) is queued. Before it starts, [ADR-0016](../../docs/decisions/0016-swift-migration.md) needs sign-off on:
+```
+apps/macos/
+├── README.md             # this file
+├── BUILD.md              # dev loop + prereqs + xcodebuild commands
+├── Package.swift         # SPM manifest — `swift build` smoke check
+├── project.yml           # xcodegen — source of truth for .xcodeproj
+├── .gitignore            # ignores generated .xcodeproj + build dirs
+└── MARVIN/
+    ├── MARVINApp.swift       # @main, Window scene, ⌘R Reconnect
+    ├── ContentView.swift     # Phase 0 placeholder (3 states)
+    ├── HealthMonitor.swift   # /api/health poller, state machine
+    └── Info.plist            # bundle metadata, ATS, deployment target
+```
 
-1. Xcode project vs Swift Package Manager
-2. Minimum macOS version (proposed: macOS 14 Sonoma)
-3. Code signing / notarization config (Team ID, certificate, notarization profile)
-4. SwiftUI vs AppKit boundary for dense surfaces (file tree, chat list)
-5. Whether to revisit after PR #52's perf wins land in production — the migration may be unnecessary if Tier 1 + 2 close the gap
-
-Once those are answered, this directory will gain (in order):
-
-- `MARVIN.xcodeproj/` (or `Package.swift` if SPM wins)
-- `MARVIN/` — SwiftUI app source
-- `MARVINTests/` — XCTest target
-- `Resources/` — assets, icons, plist
-- A `BUILD.md` documenting `xcodebuild` / `bin/marvin install-macos-app` flow
+`MARVIN.xcodeproj/` is `.gitignore`-d — regenerated cleanly from
+`project.yml` via `xcodegen generate` (run once after clone). See
+BUILD.md for the rationale.
 
 ## Migration phases (overview)
 
-See [ADR-0016 — Migration phases](../../docs/decisions/0016-swift-migration.md#migration-phases) for the full table. Short version:
+See [ADR-0016 — Migration phases](../../docs/decisions/0016-swift-migration.md#migration-phases)
+for the full table. Short version:
 
-0. Scaffolding — empty SwiftUI app, builds, opens a window
-1. Frame — native `NSSplitView` + toolbar + menu bar; web app loads inside a single WKWebView island
-2. Chat surface — native chat list + ChatInput; tool-use cards keep WKWebView for Monaco
-3. File tree + Source Control — native `NSOutlineView` + diff viewer
-4. Brain — port to MetalKit, off the main thread
-5. Embedded surfaces — Monaco + xterm + graph go native
-6. Tauri retire — single `.app` artefact, Tauri target removed
+- **Phase 0 — Scaffolding** ✅ (this commit)
+- **Phase 1 — Frame:** native NSSplitView + toolbar + menu bar; web
+  app loads inside a single WKWebView island.
+- **Phase 2 — Chat surface:** native chat list + ChatInput.
+- **Phase 3 — File tree + Source Control:** native NSOutlineView +
+  diff viewer.
+- **Phase 4 — Brain:** port BrainLiquid to MetalKit, off the main
+  thread.
+- **Phase 5 — Embedded surfaces:** Monaco + xterm + graph go native.
+- **Phase 6 — Tauri retire:** single `.app` artefact, ADR-0010
+  superseded.
 
-Each phase is independently shippable.
-
-## Sidecar contract
-
-The Node process at `apps/web` (port 3030) is the public contract. The Swift app:
-
-- Pings `/api/health` on launch, surfaces a coherent error if it's not up
-- Launches the sidecar via `bin/marvin start` if missing (or relies on the launchd agent installed by `bin/marvin install-app`)
-- Connects to `/api/chat` (SSE), `/api/sessions/*`, `/api/projects/*`, `/api/git/*`, `/api/files/*`, `/api/graph/*`, `/api/terminal/run` for everything else
-
-Credentials stay where they are (`~/.claude/.credentials.json` / Keychain). The Swift process never reads them — the Node sidecar is the only thing that calls Anthropic.
+Each phase is independently shippable. The honest expected value of
+Phase 1 alone is large — most felt-laggy moments are at the shell
+layer (drag / resize / menu bar). Phase 1+ is gated on the
+post-PR-#52 perf re-evaluation.
