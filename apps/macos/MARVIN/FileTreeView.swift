@@ -135,7 +135,11 @@ struct FileTreeView: View {
                 errorBanner(err)
             }
         }
-        .frame(minWidth: 320, minHeight: 420)
+        // Sizing is owned by the parent (LeftPane / HSplitView in
+        // ContentView) — this view fills whatever it's given. We
+        // used to set minWidth: 320 / minHeight: 420 here for the
+        // standalone preview window in 3b; that window retired in
+        // 3d so the floor goes away.
         .preferredColorScheme(bridge.preferredColorScheme)
         .onAppear { syncFetchFromBridge() }
         .onChange(of: bridge.projectWorkDir) { _, _ in
@@ -181,28 +185,29 @@ struct FileTreeView: View {
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Files preview — Phase 3b")
-                    .font(.callout.weight(.semibold))
-                Text(bridge.projectName ?? "no project active")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-            }
+            Text(bridge.projectName ?? "no project active")
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer()
             if model.isLoading {
                 ProgressView()
                     .controlSize(.small)
             }
-            Button("Refresh") {
+            Button {
                 if let cwd = bridge.projectWorkDir {
                     model.refresh(cwd: cwd, force: true)
                 }
+            } label: {
+                Image(systemName: "arrow.clockwise")
             }
+            .buttonStyle(.borderless)
             .controlSize(.small)
             .disabled(bridge.projectWorkDir == nil)
             .help("Re-fetch /api/files/tree for the active project.")
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     @ViewBuilder

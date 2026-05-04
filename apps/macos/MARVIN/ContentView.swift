@@ -52,21 +52,22 @@ struct ContentView: View {
             case .connecting:
                 connectingView
             case .online:
-                // Phase 3d — main window now splits 3-pane:
-                // native file tree (3b/3c) | native chat (2c-f) |
-                // WebView (file viewer / brain / preview pane). The
-                // web file tree + SCM panel are hidden via the
+                // Phase 3d/e — main window splits 3-pane:
+                // LeftPane (file tree | SCM, picker-switched) |
+                // native chat (2c-f) | WebView (file viewer /
+                // brain / preview pane). The web file tree + SCM
+                // panel are hidden via the
                 // [data-host-shell="swift"] [data-marvin-file-tree]
                 // CSS rule alongside the chat hide rule from 2g.2.
                 //
                 // HSplitView is the macOS-native draggable splitter.
-                // Default fractions: tree narrow, chat medium, web
-                // takes the remainder. The tree's idealWidth (240)
-                // matches the web app's 17% Panel default for the
-                // same column at common window widths.
+                // Default fractions: left narrow, chat medium, web
+                // takes the remainder. The left pane's idealWidth
+                // (240) matches the web app's 17% Panel default
+                // for the same column at common window widths.
                 HSplitView {
-                    FileTreeView()
-                        .frame(minWidth: 200, idealWidth: 240)
+                    LeftPane()
+                        .frame(minWidth: 220, idealWidth: 260)
                     ChatPreviewView()
                         .frame(minWidth: 320, idealWidth: 520)
                     webIsland

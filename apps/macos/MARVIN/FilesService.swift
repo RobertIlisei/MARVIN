@@ -108,6 +108,24 @@ final class FilesService {
         return try await getJSON(url: comps.url!, as: FileStatusResponse.self)
     }
 
+    // MARK: - Git status (porcelain v2)
+
+    /// GET /api/git/status?cwd=…
+    ///
+    /// Richer working-tree status than /api/files/status — porcelain
+    /// v2 with branch metadata, per-file index/working codes, rename
+    /// sources, and entry-type discriminator. Phase 3e drives the
+    /// native SourceControlView from this response. The web side
+    /// uses ETag for poll efficiency; the native client doesn't poll
+    /// today (manual + project-switch refresh) so we don't bother
+    /// threading If-None-Match yet.
+    func fetchGitStatus(cwd: String) async throws -> GitStatusResponse {
+        let url = baseURL.appendingPathComponent("api/git/status")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "cwd", value: cwd)]
+        return try await getJSON(url: comps.url!, as: GitStatusResponse.self)
+    }
+
     // MARK: - Private helpers
 
     /// Single-shot JSON GET. Adds the CSRF header, decodes into the

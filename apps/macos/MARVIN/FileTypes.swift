@@ -105,3 +105,60 @@ struct FileStatusResponse: Codable, Equatable {
     let branch: String?
     let status: [String: String]
 }
+
+// MARK: - Git status (porcelain v2 + branch)
+
+/// Wire response for GET /api/git/status. Mirrors the
+/// `StatusResult` shape from packages/git/src/parse-porcelain-v2.ts.
+/// Returned when the cwd is inside a git work tree; the alternate
+/// `{ enabled: false, reason: ... }` shape comes back for non-git
+/// directories (modeled with the same struct via optional fields).
+///
+/// Phase 3e — drives the native SourceControlView header (branch +
+/// ahead/behind) and per-file row sections. Forward-compatible with
+/// `decodeIfPresent` on every non-required field, matching the
+/// pattern used elsewhere in this file.
+struct GitStatusResponse: Codable, Equatable {
+    let enabled: Bool
+    /// Set when `enabled: false` — reason the panel renders the
+    /// disabled state ("not-a-git-repo" today; future runtimes may
+    /// add others). Nil when enabled.
+    let reason: String?
+    /// Set when the wrapped `git status` invocation failed. The
+    /// route returns 502 in that case but we model it so the caller
+    /// can render an inline error instead of a hard throw.
+    let error: String?
+    let branch: GitStatusBranch?
+    let files: [GitStatusFile]?
+}
+
+/// Branch + upstream metadata. Every field is nullable per the
+/// porcelain shape — `oid` is null on a fresh repo with no commits,
+/// `name` is null in detached HEAD, `upstream` is null when no
+/// remote tracking, and `ahead`/`behind` are null when no upstream.
+struct GitStatusBranch: Codable, Equatable {
+    let oid: String?
+    let name: String?
+    let upstream: String?
+    let ahead: Int?
+    let behind: Int?
+}
+
+/// Per-file entry from the porcelain v2 stream. `indexStatus` and
+/// `workingStatus` are the two single-character codes git emits:
+/// "." (no change), "M" (modified), "A" (added), "D" (deleted),
+/// "R" (renamed), "C" (copied), "U" (unmerged), "T" (type-changed),
+/// "?" (untracked/ignored).
+///
+/// `entryType` is the renderer-friendly disambiguator the parser
+/// adds: `ordinary | rename-copy | unmerged | untracked | ignored`.
+/// Phase 3e routes rows into sections by this field, not by the
+/// raw status codes.
+struct GitStatusFile: Codable, Equatable {
+    let path: String
+    let indexStatus: String
+    let workingStatus: String
+    let renamedFrom: String?
+    let ordinary: Bool
+    let entryType: String
+}
