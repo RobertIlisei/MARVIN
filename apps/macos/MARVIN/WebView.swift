@@ -93,6 +93,21 @@ final class WebViewCommands {
         webView?.evaluateJavaScript(js)
     }
 
+    /// Dispatch a custom DOM event with a typed JSON detail payload.
+    /// Used by Phase 1d.29's drag-drop folder → add project flow,
+    /// where the web side needs the dropped path. Detail is encoded
+    /// via JSONSerialization so a malicious workDir string can't
+    /// inject JS — the JSON parse on the web side is the only way
+    /// the value enters DOM context.
+    func dispatchWebCommand(_ name: String, detail: [String: Any]) {
+        let safe = name.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        guard !safe.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else { return }
+        let js = "window.dispatchEvent(new CustomEvent('marvin:\(safe)', { detail: \(json) }))"
+        webView?.evaluateJavaScript(js)
+    }
+
     /// Bump zoom by 10%. Hits the [0.5, 3.0] clamp at the edges.
     /// Maps to ⌘= in the View menu (macOS displays as ⌘+).
     func zoomIn() {

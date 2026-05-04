@@ -344,17 +344,38 @@ export default function Home() {
       }
     };
 
+    // Phase 1d.29 — drag a folder from Finder onto the WebView and
+    // it becomes a MARVIN project. The native side validates the
+    // path is a directory before dispatching; we just hand it to
+    // the existing addProject handler, which runs the manifest /
+    // CLAUDE.md sniff and persists. setActive: true so the user
+    // sees the project become active on drop without an extra
+    // click.
+    const onDroppedFolder = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { path?: string; name?: string }
+        | undefined;
+      if (!detail?.path) return;
+      void addProject({
+        workDir: detail.path,
+        name: detail.name,
+        setActive: true,
+      });
+    };
+
     window.addEventListener("marvin:new-session", onNewSession);
     window.addEventListener("marvin:open-project-picker", onOpenProjectPicker);
     window.addEventListener("marvin:show-shortcuts", onShowShortcuts);
     window.addEventListener("marvin:toggle-theme", onToggleTheme);
+    window.addEventListener("marvin:dropped-folder", onDroppedFolder);
     return () => {
       window.removeEventListener("marvin:new-session", onNewSession);
       window.removeEventListener("marvin:open-project-picker", onOpenProjectPicker);
       window.removeEventListener("marvin:show-shortcuts", onShowShortcuts);
       window.removeEventListener("marvin:toggle-theme", onToggleTheme);
+      window.removeEventListener("marvin:dropped-folder", onDroppedFolder);
     };
-  }, [reset]);
+  }, [reset, addProject]);
 
   const handleSend = useCallback(
     (text: string) => {

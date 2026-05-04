@@ -54,6 +54,20 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     WebView(url: sidecarURL)
                         .ignoresSafeArea()
+                        // Phase 1d.29 — drag a folder from Finder
+                        // anywhere onto the WebView to add it as a
+                        // MARVIN project. The drop is forwarded to
+                        // the web side via a typed CustomEvent
+                        // (`marvin:dropped-folder`); the web's
+                        // useProjects().addProject handler is the
+                        // canonical place to validate the path
+                        // (manifest sniff, CLAUDE.md detection, etc.)
+                        // and prompt for a display name. Native
+                        // doesn't try to short-circuit any of that
+                        // — it just hands the path over.
+                        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                            handleFolderDrop(providers: providers)
+                        }
                         // Phase 1d.10 — Safari-style thin progress bar
                         // pinned to the top edge of the WebView while
                         // it's loading. Fades out at 100% so the bar
@@ -184,6 +198,37 @@ struct ContentView: View {
     /// Set the macOS Dock badge to a non-empty count, or clear it.
     private func updateDockBadge(count: Int) {
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : ""
+    }
+
+    /// Resolve dropped NSItemProviders to file URLs, take the first
+    /// directory, and forward it to the web side as a `marvin:
+    /// dropped-folder` CustomEvent. Skips files (not directories) so
+    /// the user can't accidentally add a stray .txt as a "project".
+    /// Returns true to tell SwiftUI we've consumed the drop —
+    /// otherwise the WebView's default file-drop handler kicks in
+    /// and would try to navigate to file:// (which navigationDelegate
+    /// already blocks but the visual feedback would be wrong).
+    private func handleFolderDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        // Resolve asynchronously — loadObject(ofClass: URL.self,
+        // completionHandler:) hops to a background queue. We bounce
+        // back to MainActor before touching webCommands.
+        provider.loadObject(ofClass: URL.self) { url, _ in
+            guard let url else { return }
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(
+                atPath: url.path,
+                isDirectory: &isDir
+            )
+            guard exists, isDir.boolValue else { return }
+            Task { @MainActor in
+                WebViewCommands.shared.dispatchWebCommand(
+                    "dropped-folder",
+                    detail: ["path": url.path, "name": url.lastPathComponent]
+                )
+            }
+        }
+        return true
     }
 
     /// Set NSWindow.representedURL on the main window so the title
