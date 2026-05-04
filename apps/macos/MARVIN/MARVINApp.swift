@@ -59,6 +59,46 @@ private struct OpenRecentMenuContent: View {
     }
 }
 
+/// Phase 2a — fire one hello-world turn through ChatService and log
+/// each event to stderr. Bound to a DEBUG-only menu item so we have
+/// a one-click verify path before the chat UI exists. The actual
+/// rendering happens in Phase 2c; this confirms the SSE plumbing
+/// works against a live sidecar end-to-end.
+@MainActor
+private func runChatSmokeTest(bridge: MarvinBridge) {
+    let cwd = bridge.projectWorkDir ?? NSHomeDirectory()
+    NSLog("[ChatSmoke] starting — cwd=\(cwd)")
+    let request = ChatRequest(
+        message: "Reply with the single word 'pong' and nothing else.",
+        cwd: cwd
+    )
+    Task { @MainActor in
+        let stream = ChatService.shared.streamTurn(request: request)
+        do {
+            for try await event in stream {
+                switch event {
+                case .turnStarted(let s):
+                    NSLog("[ChatSmoke] turn.started turnId=\(s.turnId) marvinSessionId=\(s.marvinSessionId)")
+                case .cliEvent(let data):
+                    let raw = String(data: data, encoding: .utf8) ?? "<bytes>"
+                    NSLog("[ChatSmoke] cli.event \(raw.prefix(200))")
+                case .confirmRequest(let c):
+                    NSLog("[ChatSmoke] confirm.request tool=\(c.tool)")
+                case .turnCompleted(let c):
+                    NSLog("[ChatSmoke] turn.completed cost=\(c.costUsd ?? 0) duration=\(c.durationMs ?? 0)ms")
+                case .turnError(let e):
+                    NSLog("[ChatSmoke] turn.error: \(e.error)")
+                case .unknown(let name, _):
+                    NSLog("[ChatSmoke] unknown event: \(name)")
+                }
+            }
+            NSLog("[ChatSmoke] stream ended cleanly")
+        } catch {
+            NSLog("[ChatSmoke] FAILED: \(error)")
+        }
+    }
+}
+
 /// Reveal a directory in Finder, with the directory itself
 /// selected (not its contents shown). `activateFileViewerSelecting`
 /// is the AppKit idiom — same as Finder's "Reveal in Finder" entry.
@@ -475,6 +515,17 @@ struct MARVINApp: App {
                     WebViewCommands.shared.dispatchWebCommand("show-shortcuts")
                 }
                 .keyboardShortcut("/", modifiers: [.command])
+                .disabled(!health.state.isOnline)
+
+                // Phase 2a — chat smoke test. Sends a hello-world
+                // turn through the native ChatService and logs each
+                // event to stderr. Temporary scaffolding — removed
+                // once Phase 2c lands a real chat surface. Disabled
+                // when offline so the menu doesn't fire into nothing.
+                Divider()
+                Button("Phase 2 — Chat smoke test") {
+                    runChatSmokeTest(bridge: bridge)
+                }
                 .disabled(!health.state.isOnline)
             }
 
