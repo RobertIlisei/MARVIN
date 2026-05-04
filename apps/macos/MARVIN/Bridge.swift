@@ -64,6 +64,28 @@ struct BridgeMessage {
     let payload: [String: Any]?
 }
 
+/// Cost snapshot mirrored from the web `<CostPill>` via the
+/// `cost-changed` message. Drives the native cost toolbar item +
+/// its history popover. Mirrors the web `CostSummary` shape so the
+/// same fields render in both places without translation.
+struct CostSummary: Equatable {
+    let today: Double
+    let week: Double
+    let lifetime: Double
+    let turns: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let daily: [DailyEntry]
+
+    struct DailyEntry: Equatable, Identifiable {
+        let day: String          // "YYYY-MM-DD"
+        let costUsd: Double
+        let turns: Int
+
+        var id: String { day }
+    }
+}
+
 /// Receives JS-side messages on the `marvin` channel.
 ///
 /// Lives at app scope — single-window app, one bridge instance, no
@@ -83,12 +105,17 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// native NSWindow title bar.
     private(set) var webTitle: String? = nil
 
-    /// Today's cost (USD) posted by the web side via `cost-changed`.
+    /// Full cost snapshot posted by the web side via `cost-changed`.
     /// `nil` until the web side has a project selected and a cost
     /// summary loaded — the toolbar pill hides in that case.
-    /// Phase 1d.2 — mirrors what `<CostPill>` shows in the web top
-    /// bar so the native toolbar pip doesn't go stale.
-    private(set) var costToday: Double? = nil
+    /// Phase 1d.6 — drives both the at-a-glance toolbar text
+    /// (today $X.YY) AND the click-to-open popover with history.
+    private(set) var costSummary: CostSummary? = nil
+
+    /// Convenience for views that only need today's number — keeps
+    /// the call site terse without pulling the whole summary into
+    /// the dependency.
+    var costToday: Double? { costSummary?.today }
 
     /// Active project name posted by the web side via
     /// `project-changed`. Drives the native NSWindow subtitle so
@@ -226,19 +253,37 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
                 NSLog("[MarvinBridge] title \(value)")
             }
         case "cost-changed":
-            // Today's cost (USD) — drives the native cost pill.
-            // `today` is nullable on the wire: a null payload from
-            // the web side (no project, no summary) clears the
-            // native pill rather than leaving it stale.
+            // Full cost snapshot — drives the native cost pill +
+            // popover. The web side sends either a complete summary
+            // or `{ today: null }` to clear (no project / no
+            // summary). Decoded manually rather than through Codable
+            // because the inbound shape is `[String: Any]`; the
+            // round-trip-through-JSONSerialization dance isn't
+            // worth the cost for ~6 fields + a small array.
             //
             // Not NSLog'd because cost-changed fires on every
             // /api/cost summary refresh — a chatty turn would flood
             // the log. The toolbar item's visibility is the live
             // signal that messages are flowing.
-            if let value = payload?["today"] as? Double {
-                costToday = value
+            if let payload, let today = payload["today"] as? Double {
+                let dailyRaw = payload["daily"] as? [[String: Any]] ?? []
+                let daily: [CostSummary.DailyEntry] = dailyRaw.compactMap { row in
+                    guard let day = row["day"] as? String,
+                          let cost = row["costUsd"] as? Double,
+                          let turns = row["turns"] as? Int else { return nil }
+                    return CostSummary.DailyEntry(day: day, costUsd: cost, turns: turns)
+                }
+                costSummary = CostSummary(
+                    today: today,
+                    week: payload["week"] as? Double ?? 0,
+                    lifetime: payload["lifetime"] as? Double ?? 0,
+                    turns: payload["turns"] as? Int ?? 0,
+                    inputTokens: payload["inputTokens"] as? Int ?? 0,
+                    outputTokens: payload["outputTokens"] as? Int ?? 0,
+                    daily: daily
+                )
             } else {
-                costToday = nil
+                costSummary = nil
             }
         case "project-changed":
             // Active project name + workDir — drives the NSWindow

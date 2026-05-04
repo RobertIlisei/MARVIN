@@ -1018,7 +1018,16 @@ body[data-marvin="error"] .status-rail::after {
  * tag the web one with a data-marvin-* attribute and add a rule
  * here.
  * ────────────────────────────────────────────────────────────── */
-[data-host-shell="swift"] [data-marvin-cost-pill],
+/* IMPORTANT: web controls only get hidden here once their native
+ * SwiftUI replacement is at full feature parity. data-marvin-cost-pill
+ * was hidden in 1d.4 prematurely — the web pill has a popover with
+ * today/7d/lifetime/turns/tokens/daily bar chart, the native pill only
+ * showed `today`. That removed real functionality. The hide is now
+ * gated on the native popover (1d.6); only re-add data-marvin-cost-pill
+ * to this list once the native cost popover is verified at parity.
+ *
+ * Wordmark trio is fine to hide — its only function (return to home)
+ * is reachable via ⌘⇧N. */
 [data-host-shell="swift"] [data-marvin-wordmark],
 [data-host-shell="swift"] [data-marvin-version-pip],
 [data-host-shell="swift"] [data-marvin-wordmark-divider] {

@@ -70,16 +70,36 @@ export function announceTitle(value: string): void {
 }
 
 /**
- * Mirrors today's cost (USD) to the Swift side so the native
- * toolbar can render a cost pill. Phase 1d.2 — fires from CostPill
- * whenever its `/api/cost` summary refreshes. Sending `null` clears
- * the native pill (e.g. when no project is active).
+ * Snapshot mirrored to the Swift side via `cost-changed`. Matches
+ * the shape of the web `<CostPill>`'s `/api/cost` response so the
+ * native toolbar popover can render the same fields the web one
+ * does (today/7d/lifetime/turns/tokens + daily history). All fields
+ * are USD and integer-token unless suffixed otherwise.
  */
-export function announceCost(todayUsd: number | null): void {
+export interface BridgeCostSummary {
+  today: number;
+  week: number;
+  lifetime: number;
+  turns: number;
+  inputTokens: number;
+  outputTokens: number;
+  daily: Array<{ day: string; costUsd: number; turns: number }>;
+}
+
+/**
+ * Mirrors the active project's cost summary to the Swift side.
+ * Phase 1d.6 — fires from CostPill whenever its `/api/cost` summary
+ * refreshes. Pass `null` to clear (no project, no summary). The
+ * Swift native popover uses every field; older Swift builds that
+ * only consumed `today` keep working because they ignore extras.
+ */
+export function announceCost(summary: BridgeCostSummary | null): void {
   if (!isSwiftShell()) return;
   postToShell({
     type: "cost-changed",
-    payload: { today: todayUsd, currency: "USD" },
+    payload: summary === null
+      ? { today: null }
+      : { ...summary, currency: "USD" },
   });
 }
 

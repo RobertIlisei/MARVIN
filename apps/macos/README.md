@@ -80,8 +80,10 @@ for the full table. Short version:
   - **Connection status pip** + `connecting/online/offline` label,
     clickable to re-probe (no bridge — reads HealthMonitor directly).
   - **Cost pill** mirroring today's spend from the web app's
-    `<CostPill>` via the bridge (`cost-changed`). Hides when no
-    project is active.
+    `<CostPill>` via the bridge (`cost-changed`). Click opens a
+    native popover with the same fields the web pill shows
+    (today / 7d / lifetime / turns / tokens / daily bar chart) —
+    full functional parity, not a strict subset.
   - **NSWindow title** mirrors the web app's `document.title` so the
     v1.2 `(N)` pending-confirm badge surfaces in the title bar even
     when the WebView is scrolled or another app is focused.
@@ -90,6 +92,11 @@ for the full table. Short version:
   - **Dock tile badge** parses the `(N)` count out of `webTitle` and
     sets `NSApp.dockTile.badgeLabel` so pending confirms are visible
     from any app, not just when MARVIN is focused.
+
+  **Hide rule for the web cost pill is currently OFF** — the web
+  pill stays visible inside the SwiftUI shell until daily use
+  confirms the native popover is at parity. Re-enabling is a
+  one-line edit to `globals.css`. See the comment in that file.
 
   Future 1d work: project picker + model picker. Both have rich
   popovers (recent sessions, presets) that don't trivially native-

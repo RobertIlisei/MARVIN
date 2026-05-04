@@ -82,8 +82,8 @@ struct ContentView: View {
             // the pill's vertical padding.
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 14) {
-                    if let cost = bridge.costToday {
-                        CostToolbarItem(todayUsd: cost)
+                    if let summary = bridge.costSummary {
+                        CostToolbarItem(summary: summary)
                     }
                     ConnectionStatusToolbarItem(state: health.state) {
                         Task { await health.refreshNow() }
@@ -177,37 +177,130 @@ struct ContentView: View {
 
 }
 
-/// Cost pill for the unified title bar (Phase 1d.2). Mirrors
-/// today's spend from the web app's `<CostPill>` via the bridge.
-/// Pure label — clicking the *web* CostPill is what opens the
-/// detail popover; making the native one a button would route
-/// click intent through the bridge, which this phase doesn't wire.
+/// Cost pill for the unified title bar (Phase 1d.6). Mirrors the
+/// full cost summary from the web app's `<CostPill>` via the
+/// bridge. The label is at-a-glance "today $X.YY"; clicking opens
+/// a native popover with the same fields the web pill's popover
+/// has — today / 7 days / lifetime / turns / tokens / daily bar
+/// chart — so hiding the web pill in the SwiftUI shell wouldn't
+/// regress functionality (still gated; see globals.css).
 private struct CostToolbarItem: View {
-    let todayUsd: Double
+    let summary: CostSummary
+    @State private var showPopover = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text("today")
-                .foregroundStyle(.tertiary)
-            Text(fmtUsd(todayUsd))
-                .foregroundStyle(.secondary)
+        Button {
+            showPopover.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text("today")
+                    .foregroundStyle(.tertiary)
+                Text(fmtUsd(summary.today))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.body.monospaced())
+            .padding(.horizontal, 4)
         }
-        // Slightly bigger than the previous .callout — the toolbar
-        // pill scales to its content, and .callout was crowding the
-        // pill borders. .body gives the text room to breathe.
-        .font(.body.monospaced())
-        .padding(.horizontal, 4)
-        .help("Today's Claude cost for the active project")
+        .buttonStyle(.borderless)
+        .help("Cost for the active project · click for history")
+        .popover(isPresented: $showPopover, arrowEdge: .top) {
+            CostHistoryPopover(summary: summary)
+        }
+    }
+}
+
+/// Native counterpart to the web `<CostPill>` popover. Renders the
+/// same fields (today / 7d / lifetime / turns / tokens) plus a
+/// daily-history bar chart. Phase 1d.6.
+private struct CostHistoryPopover: View {
+    let summary: CostSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("cost for this project")
+                .font(.caption.monospaced())
+                .tracking(2)
+                .textCase(.uppercase)
+                .foregroundStyle(.tertiary)
+
+            VStack(spacing: 4) {
+                row("today", currency: summary.today)
+                row("7 days", currency: summary.week)
+                row("lifetime", currency: summary.lifetime)
+                Divider()
+                    .padding(.vertical, 2)
+                row("turns", text: summary.turns.formatted())
+                row("in / out tokens",
+                    text: "\(summary.inputTokens.formatted()) / \(summary.outputTokens.formatted())")
+            }
+            .font(.callout.monospaced())
+
+            if !summary.daily.isEmpty {
+                dailyChart
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
     }
 
-    /// Mirror of the web side's `fmtUsd` so a value like $0.0042
-    /// renders identically in both places. NumberFormatter would be
-    /// overkill — we want the bespoke micro-cent rendering.
-    private func fmtUsd(_ v: Double) -> String {
-        if v == 0 { return "$0.00" }
-        if v < 0.01 { return String(format: "$%.4f", v) }
-        return String(format: "$%.2f", v)
+    @ViewBuilder
+    private var dailyChart: some View {
+        let maxCost = max(summary.daily.map(\.costUsd).max() ?? 0, 0.0001)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("last \(summary.daily.count) active days")
+                    .tracking(1.5)
+                    .textCase(.uppercase)
+                Spacer()
+                Text("max \(fmtUsd(maxCost))")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(summary.daily) { entry in
+                    let h = max(3.0, (entry.costUsd / maxCost) * 48.0)
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.85))
+                        .frame(height: h)
+                        .help("\(entry.day): \(fmtUsd(entry.costUsd)) · \(entry.turns) turns")
+                }
+            }
+            .frame(height: 50, alignment: .bottom)
+        }
     }
+
+    private func row(_ label: String, currency value: Double) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(fmtUsd(value))
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private func row(_ label: String, text value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.primary)
+        }
+    }
+}
+
+/// Mirror of the web side's `fmtUsd` so a value like $0.0042
+/// renders identically in both places. NumberFormatter would be
+/// overkill — we want the bespoke micro-cent rendering. Lives at
+/// file scope so both CostToolbarItem and CostHistoryPopover share
+/// the same formatter.
+private func fmtUsd(_ v: Double) -> String {
+    if v == 0 { return "$0.00" }
+    if v < 0.01 { return String(format: "$%.4f", v) }
+    return String(format: "$%.2f", v)
 }
 
 /// Connection status pip + label for the unified title bar (Phase 1d).
