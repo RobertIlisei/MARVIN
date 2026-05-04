@@ -73,18 +73,18 @@ struct ContentView: View {
         // NSWindowDelegate) keeps the items as SwiftUI Views so
         // theme + accent colors track macOS automatically.
         .toolbar {
-            // Cost pill — bridge-fed from the web app's <CostPill>
-            // (Phase 1d.2). Hides until the web side has a project +
-            // summary loaded; placement-trailing keeps it adjacent
-            // to the connection status indicator.
-            if let cost = bridge.costToday {
-                ToolbarItem(placement: .primaryAction) {
-                    CostToolbarItem(todayUsd: cost)
-                }
-            }
+            // Single ToolbarItem so the cost pill + connection
+            // status get explicit spacing; two separate items in
+            // the same .primaryAction slot pack flush with no
+            // gap (visual collision reported in 1d.3 review).
             ToolbarItem(placement: .primaryAction) {
-                ConnectionStatusToolbarItem(state: health.state) {
-                    Task { await health.refreshNow() }
+                HStack(spacing: 14) {
+                    if let cost = bridge.costToday {
+                        CostToolbarItem(todayUsd: cost)
+                    }
+                    ConnectionStatusToolbarItem(state: health.state) {
+                        Task { await health.refreshNow() }
+                    }
                 }
             }
         }

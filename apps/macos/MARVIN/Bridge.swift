@@ -119,9 +119,20 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     ///
     /// Frozen object so the page can't replace `postMessage` with
     /// something malicious mid-session.
+    ///
+    /// Also stamps `<html data-host-shell="swift">` here, before
+    /// React paints, so CSS rules that hide web-side controls with
+    /// native equivalents (cost pill, future toolbar items) take
+    /// effect on first paint without a flicker. The web-side
+    /// `announceShell()` re-stamps the same attribute as a fallback.
     static let injectedScript: String = """
     (function () {
       if (window.marvinShell) return;
+      try {
+        if (document.documentElement) {
+          document.documentElement.setAttribute("data-host-shell", "swift");
+        }
+      } catch (_) {}
       var channel = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(channelName)) || null;
       var shell = {
         isSwift: true,

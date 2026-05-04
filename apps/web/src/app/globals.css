@@ -1005,3 +1005,19 @@ body[data-marvin="error"] .status-rail::after {
     transparent
   );
 }
+
+/* ──────────────────────────────────────────────────────────────────
+ * MARVIN-Swift host shell — hide web-rendered controls that the
+ * SwiftUI toolbar already shows natively. The attribute is set at
+ * document-start by the WKUserScript injected in
+ * apps/macos/MARVIN/Bridge.swift, so these rules apply on first
+ * paint with no flicker. Plain web / Tauri builds don't have the
+ * attribute and render normally.
+ *
+ * If you add a new native toolbar item that mirrors a web control,
+ * tag the web one with a data-marvin-* attribute and add a rule
+ * here.
+ * ────────────────────────────────────────────────────────────── */
+[data-host-shell="swift"] [data-marvin-cost-pill] {
+  display: none;
+}

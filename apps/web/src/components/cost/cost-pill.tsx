@@ -54,7 +54,11 @@ export function CostPill({
   const week = summary?.week.costUsd ?? 0;
 
   return (
-    <div className="relative">
+    // data-marvin-cost-pill is the hook globals.css uses to hide
+    // this when running inside the SwiftUI shell (the native
+    // toolbar shows the same value). Plain web/Tauri builds ignore
+    // the attribute and render normally.
+    <div className="relative" data-marvin-cost-pill>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
