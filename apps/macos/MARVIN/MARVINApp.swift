@@ -83,6 +83,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar.install()
     }
 
+    /// Phase 1d.30 — accept folder drops on the Dock icon AND
+    /// `open MARVIN-Swift.app /some/folder` from the command line.
+    /// Both go through the same path: validate the URL is a real
+    /// directory, then forward to the web side as the same
+    /// `marvin:dropped-folder` CustomEvent the in-window drag-drop
+    /// uses (Phase 1d.29). The web's addProject handler is the
+    /// single authoritative place that decides what to do with a
+    /// path — manifest sniff, CLAUDE.md detection, dedup against
+    /// the existing registry, etc.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        // We may be invoked before the WebView has even mounted
+        // (cold-start with a folder argument). Retry on a timer so
+        // the dispatch lands once the page is up — bounded so a
+        // sidecar that never starts doesn't leak retries forever.
+        for url in urls {
+            forwardFolder(url, retriesRemaining: 30)
+        }
+    }
+
+    private func forwardFolder(_ url: URL, retriesRemaining: Int) {
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(
+            atPath: url.path,
+            isDirectory: &isDir
+        )
+        guard exists, isDir.boolValue else { return }
+
+        // dispatchWebCommand evaluates JS in the WebView. If the
+        // page hasn't loaded yet, evaluateJavaScript silently
+        // discards the call — retry every 0.5s for ~15s. Far more
+        // than enough for a cold start; gives up gracefully if the
+        // sidecar simply never came up.
+        if WebViewCommands.shared.webView != nil {
+            WebViewCommands.shared.dispatchWebCommand(
+                "dropped-folder",
+                detail: ["path": url.path, "name": url.lastPathComponent]
+            )
+            return
+        }
+        guard retriesRemaining > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.forwardFolder(url, retriesRemaining: retriesRemaining - 1)
+        }
+    }
+
     /// Phase 1d.28 — guard ⌘Q when MARVIN is mid-turn.
     ///
     /// Without this, an accidental ⌘Q during streaming kills the

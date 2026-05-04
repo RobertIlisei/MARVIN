@@ -42,5 +42,30 @@
     </dict>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
+    <!-- Phase 1d.30 — declare MARVIN as a viewer for folders so
+         macOS routes Dock-icon drops AND `open MARVIN-Swift.app
+         /some/path` invocations to application(_:open:). Without
+         this, dropping a folder on the .app icon bounces it back
+         (Finder doesn't know the app accepts directories), and
+         the `open` command opens the folder in Finder instead.
+         "Viewer" + "None" as the role / package mean we don't
+         claim ownership of folders globally — we just say "we
+         can be passed one". -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Folder</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>None</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+                <string>public.directory</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
