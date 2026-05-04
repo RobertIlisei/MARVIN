@@ -58,6 +58,14 @@ final class FileTreeModel {
     /// the loser overwrites the winner.
     private var fetchTask: Task<Void, Never>?
 
+    /// Phase 3c — currently-selected file path. nil means nothing
+    /// selected (the empty initial state, or the most-recently-
+    /// selected file's project was just closed). The view diffs
+    /// rows on this to draw the highlighted selection background;
+    /// the dispatch to the web side is performed in the row tap
+    /// handler, not here, so the model stays bridge-agnostic.
+    var selectedPath: String? = nil
+
     /// Kick off a tree fetch for `cwd`. Idempotent: re-calling with
     /// a cwd that matches the most-recently loaded one is a no-op
     /// when we already have a response (caller can pass `force:
@@ -97,6 +105,7 @@ final class FileTreeModel {
         loadedCwd = nil
         lastError = nil
         isLoading = false
+        selectedPath = nil
     }
 }
 
@@ -132,6 +141,27 @@ struct FileTreeView: View {
         .onChange(of: bridge.projectWorkDir) { _, _ in
             syncFetchFromBridge()
         }
+    }
+
+    /// Phase 3c — handle a tap on a row. Files dispatch through the
+    /// bridge so the existing web FileViewer (Monaco) opens them in
+    /// the main window. Directories don't dispatch — taps on a
+    /// directory row should expand/collapse via the disclosure
+    /// triangle, which OutlineGroup handles itself; we just
+    /// suppress the no-op dispatch here. Selection state still
+    /// updates so the user sees the row highlight regardless.
+    ///
+    /// Reverse direction (web tree click → native highlight) is
+    /// deferred to Phase 3d per ADR-0018 §3 — once the native tree
+    /// is the main left pane, only one source of truth exists for
+    /// selection and the round-trip becomes redundant.
+    private func selectRow(_ node: FileNode) {
+        model.selectedPath = node.path
+        guard !node.isDirectory else { return }
+        WebViewCommands.shared.dispatchWebCommand(
+            "select-file",
+            detail: ["path": node.path]
+        )
     }
 
     /// Phase 3b — drive the model from bridge.projectWorkDir.
@@ -194,7 +224,11 @@ struct FileTreeView: View {
                             response.tree,
                             children: \.outlineChildren
                         ) { node in
-                            FileTreeRow(node: node)
+                            FileTreeRow(
+                                node: node,
+                                isSelected: model.selectedPath == node.path,
+                                onTap: { selectRow(node) }
+                            )
                         }
                         .padding(.horizontal, 8)
                     }
@@ -261,13 +295,18 @@ struct FileTreeView: View {
     }
 }
 
-/// One row in the tree. Phase 3b: read-only — clicking does
-/// nothing yet. The folder/file icon is an SF Symbol so we get
-/// the user's accent colour for free; the row is tagged with the
-/// node's absolute path so tests / future drag-source code can
-/// pick rows up by path.
+/// One row in the tree. Phase 3c: clicking a file fires `onTap`
+/// which the parent uses to dispatch a `marvin:select-file` event
+/// to the web side. Selected rows render with the macOS standard
+/// accent-color highlight; unselected rows are transparent.
+///
+/// The folder/file icon is an SF Symbol so we get the user's accent
+/// colour for free; the row is tagged with the node's absolute path
+/// so tests / future drag-source code can pick rows up by path.
 private struct FileTreeRow: View {
     let node: FileNode
+    let isSelected: Bool
+    let onTap: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -278,9 +317,17 @@ private struct FileTreeRow: View {
                 .font(.system(size: 13))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .foregroundStyle(isSelected ? Color.white : .primary)
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isSelected ? Color.accentColor : .clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
         .accessibilityIdentifier("file-tree-row:\(node.path)")
     }
 }

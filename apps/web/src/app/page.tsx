@@ -407,12 +407,29 @@ export default function Home() {
       void selectProject(detail.id);
     };
 
+    // Phase 3c — clicking a row in the native file tree dispatches
+    // `marvin:select-file` with the absolute path. The web side
+    // reuses its existing setSelectedPath state, which the existing
+    // FileViewer (Monaco) already consumes — so the file opens in
+    // the same surface a web tree click would have opened it in.
+    // No path validation here because the native side gets paths
+    // straight from /api/files/tree, which the sandbox already
+    // checked.
+    const onSelectFile = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { path?: string }
+        | undefined;
+      if (!detail?.path) return;
+      setSelectedPath(detail.path);
+    };
+
     window.addEventListener("marvin:new-session", onNewSession);
     window.addEventListener("marvin:open-project-picker", onOpenProjectPicker);
     window.addEventListener("marvin:show-shortcuts", onShowShortcuts);
     window.addEventListener("marvin:toggle-theme", onToggleTheme);
     window.addEventListener("marvin:dropped-folder", onDroppedFolder);
     window.addEventListener("marvin:select-project", onSelectProject);
+    window.addEventListener("marvin:select-file", onSelectFile);
     return () => {
       window.removeEventListener("marvin:new-session", onNewSession);
       window.removeEventListener("marvin:open-project-picker", onOpenProjectPicker);
@@ -420,6 +437,7 @@ export default function Home() {
       window.removeEventListener("marvin:toggle-theme", onToggleTheme);
       window.removeEventListener("marvin:dropped-folder", onDroppedFolder);
       window.removeEventListener("marvin:select-project", onSelectProject);
+      window.removeEventListener("marvin:select-file", onSelectFile);
     };
   }, [reset, addProject, selectProject]);
 
