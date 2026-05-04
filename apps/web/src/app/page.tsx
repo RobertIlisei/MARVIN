@@ -990,7 +990,10 @@ export default function Home() {
           </section>
         </Panel>
 
-        <PanelResizeHandle className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 md:block" />
+        <PanelResizeHandle
+          className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 md:block"
+          data-marvin-side-pane
+        />
         <Panel
           id="side"
           order={3}
@@ -998,6 +1001,7 @@ export default function Home() {
           minSize={24}
           maxSize={55}
           className="hidden md:block"
+          data-marvin-side-pane
         >
           <aside className="flex h-full min-h-0 flex-col border-l border-[color:var(--color-border)] bg-[color:var(--material-sidebar)]">
             <PanelGroup

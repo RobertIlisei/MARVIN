@@ -1091,13 +1091,38 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
-/* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
- * traffic-light buttons (titleBarStyle="Overlay"); inside the
- * SwiftUI shell the native title bar is separate from the content,
- * so reclaim that left padding. Same story for `pt-[var(--titlebar-h)]`
- * which accounts for the overlapping title bar. !important beats
- * the inline Tailwind utilities without rewriting them. */
+/* Phase 4 follow-up — the web's right `<aside>` (side-top brain +
+ * side-chat) is fully reproduced in the SwiftUI shell's third
+ * HSplitView pane (BrainPaneView + ChatPreviewView). Hide the
+ * entire web `Panel id="side"` AND its preceding PanelResizeHandle
+ * so react-resizable-panels redistributes the freed width to the
+ * (file tree | center) panes. Without this, the web aside still
+ * occupied 37% width even with its inner brain + chat-pane
+ * children individually `display: none`'d.
+ *
+ * Web + Tauri builds keep the side aside as before. */
+[data-host-shell="swift"] [data-marvin-side-pane] {
+  display: none;
+}
+
+/* Phase 4 follow-up — hide the web `<header>` top bar in
+ * MARVIN-Swift. Every actionable item it carries is reproduced
+ * via the native macOS menus:
+ *   - wordmark / version-pip → NSWindow title bar
+ *   - ProjectPicker → File → Open / File → Open Recent (⌘O)
+ *   - CostPill → planned native NSToolbar item (Phase 5+)
+ *   - LayoutPopover → ⌘P / ⌘G / ⌘J pane shortcuts
+ *   - SetupPopover → Settings… (⌘,)
+ *   - ThemeToggle → Window → Toggle Theme (⌘⇧T)
+ *   - new session → File → New Session (⌘⇧N)
+ *   - settings ⚙ / ? → Settings… / Help menu
+ *   - BranchBadge → currently has no native peer; revisit if the
+ *     repo-state visibility gap matters in practice
+ *
+ * The earlier rule that just reset `pl-[82px]` + `pt-titlebar`
+ * padding is obsoleted — `display: none` skips both. Web + Tauri
+ * builds still need that padding reset, but neither carries the
+ * SwiftUI host-shell flag so this rule is scoped correctly. */
 [data-host-shell="swift"] [data-marvin-top-bar] {
-  padding-left: 1rem !important;
-  padding-top: 0.5rem !important;
+  display: none !important;
 }
