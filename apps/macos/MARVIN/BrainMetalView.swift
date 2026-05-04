@@ -491,25 +491,66 @@ struct BrainMetalView: NSViewRepresentable {
 
 // MARK: - Preview window
 
-/// Phase 4e dev surface. Inherits the 4d state picker and adds an
-/// inline FPS + CPU-frame readout in the header so the 60 fps DoD
-/// (ADR-0019 §3 4e) is observable without launching Instruments.
+/// Phase 4f dev surface. Inherits 4d's state picker + 4e's FPS HUD,
+/// and adds a "Follow MARVIN" toggle that drives the brain state
+/// from `bridge.isBusy` via `BrainState.defaultFor(busy:)`. With
+/// the toggle on (the default), the picker shows the bridge-driven
+/// state read-only — flipping the toggle off promotes the picker
+/// back to a manual override for verifying individual profiles.
+///
+/// The 700 ms eased transition between profiles already lives in
+/// the renderer (`BrainTransition.transition(to:nowMs:)`); both
+/// bridge-driven and manual-picker paths feed through the same
+/// state-setter so the easing applies uniformly.
+///
+/// Theme: `bridge.preferredColorScheme` flows into BrainMetalView's
+/// `colorScheme` argument, then to the renderer (which sets
+/// `needsClear = true` so the next frame doesn't bleed the previous
+/// palette through the trail-accumulation texture). A dark→light
+/// flip looks instant in the preview window because the next draw
+/// renders against a fresh black accumulation.
+///
+/// Resize: MTKView's auto-resize path fires
+/// `mtkView(_:drawableSizeWillChange:)` once per drawable size
+/// change. The renderer rebuilds the accumulation texture and
+/// flags `needsClear`. On macOS, layout-driven resize coalesces
+/// inside MTKView before reaching the delegate — there's no
+/// per-cursor-pixel callback to debounce. 4g revisits this when
+/// the MTKView promotes into the HSplitView (where rapid splitter
+/// drags are the realistic worst case); the preview window's own
+/// border drag is already smooth without a manual throttle.
+///
 /// Retired in 4g once the native renderer reaches parity with the
 /// WebView's <BrainLiquid>.
 struct BrainPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
-    @State private var state: BrainState = .thinking
+    /// Manual-override state — only consulted when "Follow MARVIN"
+    /// is off. Default `.thinking` to match the bridge-driven
+    /// initial value most users will see (busy → thinking).
+    @State private var manualState: BrainState = .thinking
+    /// Whether to take state from `bridge.isBusy` (true) or the
+    /// manual picker (false). Default true so the preview reflects
+    /// real session activity by default.
+    @State private var followBridge: Bool = true
     /// Owned by the view so the metrics outlive the renderer's
     /// init/deinit churn (NSViewRepresentable can rebuild the
     /// MTKView's coordinator across SwiftUI updates).
     @State private var metrics = BrainPerfMetrics()
+
+    /// The state actually fed to the renderer. The picker reads
+    /// from this both in follow + manual modes — so even in
+    /// follow mode the segmented control highlights what the
+    /// brain is currently rendering.
+    private var effectiveState: BrainState {
+        followBridge ? BrainState.defaultFor(busy: bridge.isBusy) : manualState
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             BrainMetalView(
-                state: state,
+                state: effectiveState,
                 colorScheme: bridge.preferredColorScheme,
                 metrics: metrics
             )
@@ -526,13 +567,21 @@ struct BrainPreviewView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Brain — Phase 4 preview")
                     .font(.callout.weight(.semibold))
-                Text("compute kernel (4e)")
+                Text(followBridge ? "follows MARVIN (4f)" : "manual override (4f)")
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
             }
             Spacer()
             perfHUD
-            Picker("State", selection: $state) {
+            Toggle(isOn: $followBridge) {
+                Text("Follow")
+                    .font(.caption2)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+            .help("Drive state from bridge.isBusy. Off = manual picker.")
+            Picker("State", selection: pickerBinding) {
                 ForEach(BrainState.allCases, id: \.self) { s in
                     Text(s.rawValue).tag(s)
                 }
@@ -540,9 +589,26 @@ struct BrainPreviewView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(maxWidth: 280)
+            .disabled(followBridge)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// Picker selection binding. In follow mode it reads
+    /// `effectiveState` (so the highlighted segment tracks the
+    /// bridge-driven value) and discards writes — the picker is
+    /// disabled anyway. In manual mode it routes through
+    /// `manualState`.
+    private var pickerBinding: Binding<BrainState> {
+        Binding(
+            get: { effectiveState },
+            set: { newValue in
+                if !followBridge {
+                    manualState = newValue
+                }
+            }
+        )
     }
 
     /// Inline FPS / frame-time readout. The colour signals at-a-
