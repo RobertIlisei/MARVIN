@@ -25,6 +25,17 @@ import SwiftUI
 /// state surface for stream errors. Phase 2c — replaces 2b's
 /// String-based event log with a structured ChatMessage list driven
 /// by ChatStreamReducer.
+/// Permission strategy values the sidecar accepts. Mirrors the
+/// PermissionStrategy union in apps/web/src/app/api/chat/route.ts.
+/// Phase 2g.1 — used by the native chat's send path; user picks
+/// in Settings (defaults to .auto, the same as the web app's
+/// out-of-the-box behaviour).
+enum NativePermissionStrategy: String, CaseIterable, Identifiable {
+    case auto
+    case gated
+    var id: String { rawValue }
+}
+
 @MainActor
 @Observable
 final class ChatPreviewModel {
@@ -108,17 +119,21 @@ final class ChatPreviewModel {
         // ourselves before the assistant starts streaming.
         messages.append(.userText(message))
 
-        // Phase 2e — the preview always submits with
-        // permissionStrategy: "gated" so confirm.request flows fire
-        // and the new confirm sheet path is exercisable. The web
-        // chat in the main window keeps using the user's pref
-        // (sent on its own POST bodies). Phase 2f wires a Settings
-        // toggle to surface this here so the dev surface and the
-        // user's daily mode can match again.
+        // Phase 2g.1 — read permission strategy from UserDefaults
+        // instead of hardcoding gated. The user picks via the
+        // Settings panel (default: auto). Phase 2e hardcoded gated
+        // so the confirm sheet path was exercisable while the
+        // native chat lived in a side preview window; now that
+        // Phase 2g.3 promotes it to the main chat surface, gated-
+        // by-default would mean every tool call hit a confirm
+        // prompt for users running in auto-mode — frustrating UX.
+        let strategy = UserDefaults.standard.string(
+            forKey: "marvin.permissionStrategy"
+        ) ?? NativePermissionStrategy.auto.rawValue
         let request = ChatRequest(
             message: message,
             cwd: cwd,
-            permissionStrategy: "gated"
+            permissionStrategy: strategy
         )
         activeTask = Task { @MainActor in
             defer { isSending = false }

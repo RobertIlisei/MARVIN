@@ -22,6 +22,13 @@ struct SettingsView: View {
     /// can flip it off here.
     @AppStorage("marvin.autoStartSidecar") private var autoStartSidecar: Bool = true
 
+    /// Phase 2g.1 — permission strategy the native chat sends with
+    /// each /api/chat POST. Default `auto` matches the web app's
+    /// daily-driver mode (no confirm prompts; full bypass). Flipping
+    /// to `gated` makes every dangerous tool call (Edit / Write /
+    /// unsafe Bash) raise the confirm sheet from Phase 2e.
+    @AppStorage("marvin.permissionStrategy") private var permissionStrategy: String = "auto"
+
     /// Phase 1d.36 — Launch-at-login toggle. The actual registration
     /// lives in SMAppService.mainApp; the @AppStorage value mirrors
     /// it so the Toggle has reactive state. We resync on appear in
@@ -59,6 +66,23 @@ struct SettingsView: View {
                         Task { await health.refreshNow() }
                     }
                 }
+            }
+
+            // Phase 2g.1 — permission strategy. Lives in its own
+            // section because it's the highest-stakes setting the
+            // native chat surfaces (auto = full bypass; gated =
+            // confirm dangerous tools per call). Defaulting to auto
+            // matches the web app's daily-driver behaviour from
+            // ADR-0015.
+            Section("Permissions") {
+                Picker("Strategy", selection: $permissionStrategy) {
+                    Text("Auto (full bypass)").tag("auto")
+                    Text("Gated (confirm dangerous tools)").tag("gated")
+                }
+                .pickerStyle(.inline)
+                Text("Gated mode raises a confirm sheet on Edit / Write / unsafe Bash. Auto mode bypasses with an audit log entry per ADR-0015.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Data") {
