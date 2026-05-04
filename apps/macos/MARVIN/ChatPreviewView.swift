@@ -62,9 +62,22 @@ final class ChatPreviewModel {
     /// without re-rendering the sheet on a duplicate event.
     var resolvedConfirms: [String: ChatService.ConfirmDecision] = [:]
 
+    /// The active marvinSessionId, captured from the most-recent
+    /// turn.started event. Cancel uses this to address /api/chat/
+    /// cancel — that endpoint keys on marvinSessionId, not turnId.
+    /// Cleared when the user resets.
+    private(set) var marvinSessionId: String? = nil
+
+    /// The last user-typed message, retained so the retry button
+    /// can resubmit on stream errors without the user retyping.
+    /// Cleared on successful completion (turn.completed) and on
+    /// reset.
+    private(set) var lastSentMessage: String? = nil
+
     /// The active stream's task, retained so we can cancel on
-    /// teardown / second submit. Phase 2f surfaces this as a
-    /// proper "Stop turn" button.
+    /// teardown / second submit. Phase 2f wires the explicit
+    /// /api/chat/cancel call alongside; the local task cancel
+    /// alone only stops receiving events.
     private var activeTask: Task<Void, Never>?
 
     /// Send the current draft as a turn. No-op when already
@@ -73,13 +86,27 @@ final class ChatPreviewModel {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else { return }
         draft = ""
+        sendInternal(message: trimmed, cwd: cwd)
+    }
+
+    /// Phase 2f — re-submit the last user message after an error.
+    /// No-op if there's no last message, or if a turn is already
+    /// in flight (defensive — the retry button is hidden when
+    /// isSending, but state can race).
+    func retry(cwd: String?) {
+        guard let lastSentMessage, !isSending else { return }
+        sendInternal(message: lastSentMessage, cwd: cwd)
+    }
+
+    private func sendInternal(message: String, cwd: String?) {
         isSending = true
         lastError = nil
+        lastSentMessage = message
         // Optimistic user echo. The wire never sends a `user` event
         // for what we just typed (the SDK's `user` cli.events carry
         // tool_results, not user inputs), so we have to add it
         // ourselves before the assistant starts streaming.
-        messages.append(.userText(trimmed))
+        messages.append(.userText(message))
 
         // Phase 2e — the preview always submits with
         // permissionStrategy: "gated" so confirm.request flows fire
@@ -89,7 +116,7 @@ final class ChatPreviewModel {
         // toggle to surface this here so the dev surface and the
         // user's daily mode can match again.
         let request = ChatRequest(
-            message: trimmed,
+            message: message,
             cwd: cwd,
             permissionStrategy: "gated"
         )
@@ -106,15 +133,24 @@ final class ChatPreviewModel {
         }
     }
 
-    /// Stop the in-flight turn locally. Tears down the SSE
-    /// subscription but does NOT cancel the underlying agent run on
-    /// the sidecar — Phase 2f wires the explicit /api/chat/cancel
-    /// path. For 2c this is enough to recover the UI when a stream
-    /// hangs, which is rare against a healthy local sidecar.
+    /// Phase 2f — explicit user cancel. Tears down the local SSE
+    /// subscription AND POSTs /api/chat/cancel so the agent on the
+    /// sidecar actually stops (not just our consumer). The /cancel
+    /// is fire-and-forget — failure is logged but doesn't block
+    /// the local teardown; a refreshed window can always re-issue.
     func cancel() {
         activeTask?.cancel()
         activeTask = nil
         isSending = false
+        if let id = marvinSessionId {
+            Task { @MainActor in
+                do {
+                    _ = try await ChatService.shared.cancelTurn(marvinSessionId: id)
+                } catch {
+                    NSLog("[ChatPreview] cancelTurn failed: \(error)")
+                }
+            }
+        }
     }
 
     func clear() {
@@ -123,6 +159,8 @@ final class ChatPreviewModel {
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
         lastError = nil
+        marvinSessionId = nil
+        lastSentMessage = nil
     }
 
     /// Respond to the head of the pending-confirms queue. Called
@@ -153,10 +191,10 @@ final class ChatPreviewModel {
 
     private func handle(event: ChatTurnEvent) {
         switch event {
-        case .turnStarted:
-            // Nothing to do for the list — Phase 2f might surface
-            // turnId for retry.
-            break
+        case .turnStarted(let s):
+            // Phase 2f — capture the marvinSessionId so cancel can
+            // address /api/chat/cancel (which keys on it, not turnId).
+            marvinSessionId = s.marvinSessionId
         case .cliEvent(let data):
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
         case .confirmRequest(let c):
@@ -175,9 +213,12 @@ final class ChatPreviewModel {
             }
         case .turnCompleted:
             // The reducer-side `result` cli.event already mutated
-            // isStreaming to false on the assistant message. No
-            // additional list mutation needed here.
-            break
+            // isStreaming to false on the assistant message. Clear
+            // lastSentMessage on a clean completion so the retry
+            // button doesn't offer to resubmit a turn that already
+            // succeeded. (Errors keep lastSentMessage so retry
+            // works on transient failures.)
+            lastSentMessage = nil
         case .turnError(let e):
             lastError = e.error
         case .unknown:
@@ -276,17 +317,30 @@ struct ChatPreviewView: View {
             }
             Spacer()
             if model.isSending {
+                // Phase 2f — Stop also POSTs /api/chat/cancel so
+                // the agent actually halts on the sidecar, not just
+                // our local SSE consumer. ⌘. is the macOS-conventional
+                // shortcut for "cancel running operation".
                 Button("Stop") {
                     model.cancel()
                 }
+                .keyboardShortcut(".", modifiers: [.command])
                 .controlSize(.small)
-                .help("Stops receiving events locally. Phase 2f wires explicit /api/chat/cancel.")
+                .help("Cancel the in-flight turn. ⌘.")
             }
-            Button("Clear") {
+            // Phase 2f — Clear (⌘⇧N) wipes the list, cancels any
+            // in-flight turn, and resets the bridge state captured
+            // from the last turn.started. Mirrors ⌘⇧N's "new session"
+            // intent on the main window (Phase 1d.25 dispatches that
+            // shortcut to the web chat); this one handles the native
+            // preview's state when the preview window has focus.
+            Button("New") {
                 model.clear()
             }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             .controlSize(.small)
             .disabled(model.messages.isEmpty && !model.isSending)
+            .help("Reset preview state. ⌘⇧N")
         }
         .padding(12)
     }
@@ -344,6 +398,20 @@ struct ChatPreviewView: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            // Phase 2f — Retry resubmits the last user message
+            // through the same path send() uses. Disabled when
+            // there's nothing to retry (e.g. the error came from
+            // an empty draft) and while a turn is somehow still
+            // in flight (defensive — shouldn't happen because we
+            // only set lastError after the catch).
+            if model.lastSentMessage != nil {
+                Button("Retry") {
+                    model.retry(cwd: bridge.projectWorkDir)
+                }
+                .controlSize(.small)
+                .disabled(model.isSending)
+                .help("Resubmit the last message through /api/chat.")
+            }
             Button("dismiss") { model.lastError = nil }
                 .controlSize(.small)
                 .buttonStyle(.borderless)

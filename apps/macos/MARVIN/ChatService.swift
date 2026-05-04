@@ -70,6 +70,45 @@ final class ChatService {
         self.session = URLSession(configuration: config)
     }
 
+    /// POST /api/chat/cancel — abort an in-flight turn on the
+    /// sidecar. Separate from the SSE body close so closing the
+    /// stream subscriber locally doesn't kill the agent by
+    /// accident; this is the explicit "user hit ⌘." path.
+    /// Phase 2f. The sidecar keys on marvinSessionId; cancelling
+    /// returns whether a turn was actually live to cancel.
+    @discardableResult
+    func cancelTurn(marvinSessionId: String) async throws -> Bool {
+        let url = baseURL.appendingPathComponent("api/chat/cancel")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONSerialization.data(
+            withJSONObject: ["marvinSessionId": marvinSessionId]
+        )
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ChatServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        // The body shape is { cancelled: bool } — false means there
+        // was no live turn for that id (already finished). Surface
+        // it so callers can decide whether to log "already done"
+        // vs treat as success.
+        struct CancelResponse: Codable { let cancelled: Bool }
+        if let parsed = try? JSONDecoder().decode(CancelResponse.self, from: data) {
+            return parsed.cancelled
+        }
+        return true
+    }
+
     /// POST /api/confirm — respond to a `confirm.request` event with
     /// allow / deny. Phase 2e. The sidecar's resolver is keyed by
     /// (turnId, toolUseId); failing to call this hangs the agent
