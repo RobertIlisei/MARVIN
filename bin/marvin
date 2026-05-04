@@ -103,6 +103,35 @@ check_skills() {
   fi
 }
 
+check_claude_cli() {
+  # MARVIN's Agent SDK spawns the `claude` binary under the hood — when
+  # it's missing or unreachable, every turn fails with an opaque API
+  # error forwarded from the spawned process. Surface the gap up front
+  # instead of letting users hit it at runtime.
+  #
+  # Honours `MARVIN_CLAUDE_BIN` if set; otherwise looks on PATH. Advisory
+  # only (warn, don't fail) — a user who exports the env var before
+  # `bin/marvin` runs but after this check would still be fine, and
+  # `/api/health` reports `binaryError` at runtime as a backstop.
+  local bin="${MARVIN_CLAUDE_BIN:-claude}"
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    warn "Claude Code CLI ('$bin') not found on PATH"
+    dim "  install:  npm install -g @anthropic-ai/claude-code"
+    dim "  or set MARVIN_CLAUDE_BIN=/path/to/claude before running marvin"
+    dim "  MARVIN will start, but every turn will fail until this is fixed."
+    return 0
+  fi
+  # A short --version probe also catches half-installed binaries (PATH
+  # entry that segfaults, npm-link without the actual package, etc.).
+  local version
+  if ! version="$("$bin" --version 2>/dev/null | head -1)"; then
+    warn "Claude Code CLI on PATH but '--version' failed — install may be broken"
+    dim "  reinstall:  npm install -g @anthropic-ai/claude-code@latest"
+    return 0
+  fi
+  ok "claude $version"
+}
+
 check_port() {
   if lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | grep -q .; then
     local pid; pid="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
@@ -139,14 +168,51 @@ check_credentials() {
   return 0
 }
 
+prefs_has_skip() {
+  # Honour `.marvin/install-prefs.json` written by `scripts/setup.sh`
+  # so deps the user explicitly marked "never" don't keep nagging on
+  # every doctor / start. Returns 0 when the dep slug is in the
+  # skipped list, 1 otherwise.
+  local name="$1"
+  local prefs="$STATE_DIR/install-prefs.json"
+  [ -f "$prefs" ] || return 1
+  node -e "
+    const fs = require('fs');
+    try {
+      const p = JSON.parse(fs.readFileSync('$prefs','utf8'));
+      const s = Array.isArray(p.skipped) ? p.skipped : [];
+      process.exit(s.includes('$name') ? 0 : 1);
+    } catch { process.exit(1); }
+  " 2>/dev/null
+}
+
 check_chromium() {
   # Purely advisory — Playwright works without it, but marvin-playwright
   # MCP needs Chromium to drive localhost. Not a gate.
-  if [ -d "$HOME/Library/Caches/ms-playwright" ]; then
+  if [ -d "$HOME/Library/Caches/ms-playwright" ] || [ -d "$HOME/.cache/ms-playwright" ]; then
     ok "Playwright Chromium installed (marvin-playwright MCP ready)"
+  elif prefs_has_skip chromium; then
+    dim "  Chromium skipped by user (delete $STATE_DIR/install-prefs.json to re-prompt)"
   else
     dim "  Chromium not installed — marvin-playwright MCP will be unavailable"
-    dim "  install:  npx playwright install chromium"
+    dim "  install:  npx playwright install chromium  (or run scripts/setup.sh)"
+  fi
+  return 0
+}
+
+check_graphify() {
+  # Advisory — graphify is the Python CLI users run to BUILD
+  # graphify-out/graph.json. MARVIN reads the JSON directly (see
+  # packages/graphify-bridge), so a missing graphify CLI is fine for
+  # day-to-day code work; it just means the user can't refresh the
+  # graph. `check_graph` separately validates the JSON itself.
+  if command -v graphify >/dev/null 2>&1; then
+    ok "graphify on PATH"
+  elif prefs_has_skip graphify; then
+    dim "  graphify skipped by user (delete $STATE_DIR/install-prefs.json to re-prompt)"
+  else
+    dim "  graphify (Python CLI) not on PATH — graph rebuilds will fail"
+    dim "  install:  pipx install graphifyy  (or run scripts/setup.sh)"
   fi
   return 0
 }
@@ -165,10 +231,10 @@ check_graph() {
   #
   # Advisory only (no `return 1`). The CLI still starts; users who
   # know what they're doing can dismiss.
-  local graph="$ROOT/graphify-out/graph.json"
+  local graph="$REPO_ROOT/graphify-out/graph.json"
   if [ ! -f "$graph" ]; then
     warn "graphify-out/graph.json missing — Golden Rule 7 graph queries will fail"
-    dim "  rebuild: graphify . --rebuild   (from ${ROOT})"
+    dim "  rebuild: graphify . --rebuild   (from ${REPO_ROOT})"
     return 0
   fi
 
@@ -207,10 +273,10 @@ check_graph() {
     case "$code" in
       2) warn "graphify-out/graph.json is unreadable JSON — rebuild required" ;;
       3) warn "graphify-out/graph.json has zero nodes — rebuild required" ;;
-      4) warn "graphify-out/graph.json is mis-rooted — <5% of nodes are MARVIN's. Rebuild from ${ROOT}." ;;
+      4) warn "graphify-out/graph.json is mis-rooted — <5% of nodes are MARVIN's. Rebuild from ${REPO_ROOT}." ;;
       *) warn "graph smoke check failed (exit $code)" ;;
     esac
-    dim "  rebuild: graphify . --rebuild   (from ${ROOT})"
+    dim "  rebuild: graphify . --rebuild   (from ${REPO_ROOT})"
     rm -f /tmp/marvin-graph-check.log
     return 0
   fi
@@ -225,8 +291,10 @@ preflight() {
   check_pnpm || return $?
   check_deps || return $?
   check_skills || return $?
+  check_claude_cli || return $?
   check_credentials || return $?
   check_chromium || return $?
+  check_graphify || return $?
   check_graph || return $?
   check_port
   local port_status=$?
