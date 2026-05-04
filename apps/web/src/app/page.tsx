@@ -556,7 +556,12 @@ export default function Home() {
                   capability chips, status chip, blockquote — that the
                   audit (finding #10) found drowned the brain in
                   decoration. */}
-              <div className="hero-orbit hero-brain-intro relative flex h-[420px] w-[420px] items-center justify-center md:h-[460px] md:w-[460px]">
+              {/* Hero orbit container is sized to fit BrainLiquid's full
+                  layout block, which is `size * RENDER_SCALE` (1.5×).
+                  At size=340 the wrapper is 510, so the orbit needs
+                  ≥520 to leave a few px of breathing room for the
+                  AdvisorOrb/ScoutOrb satellite offsets. */}
+              <div className="hero-orbit hero-brain-intro relative flex h-[540px] w-[540px] items-center justify-center md:h-[560px] md:w-[560px]">
                 {/* Landing hero: cycle through every state on its
                     own so the brain has presence even when there's
                     no real session driving it. The project-page
@@ -601,26 +606,33 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="hero-stage-4 grid w-full grid-cols-1 gap-3 md:grid-cols-3">
-              <ExamplePrompt
-                title="explain the architecture"
-                body="walk me through the structure of this repo and how the major pieces connect"
-                onUse={fillDraft}
-                disabled={!cwd}
-              />
-              <ExamplePrompt
-                title="find the hot paths"
-                body="show me where the main turn loop could race or drop events, and propose tests that would catch it"
-                onUse={fillDraft}
-                disabled={!cwd}
-              />
-              <ExamplePrompt
-                title="ship a feature"
-                body="add a command palette (⌘K) that surfaces recent sessions, shortcuts, and panes"
-                onUse={fillDraft}
-                disabled={!cwd}
-              />
-            </div>
+          </div>
+        </div>
+
+        {/* Example prompts moved out of the brain row and into the
+            chat-input column so they visually pair with the chat
+            box rather than competing with the brain for vertical
+            space. Same `max-w-3xl` width as ChatInput to align. */}
+        <div className="mx-auto w-full max-w-3xl px-6 pb-3">
+          <div className="hero-stage-4 grid w-full grid-cols-1 gap-3 md:grid-cols-3">
+            <ExamplePrompt
+              title="explain the architecture"
+              body="walk me through the structure of this repo and how the major pieces connect"
+              onUse={fillDraft}
+              disabled={!cwd}
+            />
+            <ExamplePrompt
+              title="find the hot paths"
+              body="show me where the main turn loop could race or drop events, and propose tests that would catch it"
+              onUse={fillDraft}
+              disabled={!cwd}
+            />
+            <ExamplePrompt
+              title="ship a feature"
+              body="add a command palette (⌘K) that surfaces recent sessions, shortcuts, and panes"
+              onUse={fillDraft}
+              disabled={!cwd}
+            />
           </div>
         </div>
 

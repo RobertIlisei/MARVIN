@@ -794,39 +794,42 @@ export function BrainLiquid({
     };
   }, [size]);
 
-  // Canvas overflows the layout wrapper symmetrically — the wrapper
-  // measures `size` for grid/flex layout, but the canvas paints
-  // `size * RENDER_SCALE` so projected particles have room before
-  // hitting the rectangular boundary. Negative offset re-centers.
+  // The wrapper takes `renderSize` for layout — that's the actual
+  // visible footprint of the canvas, including the projection
+  // overflow band. Earlier this wrapper measured `size` and the
+  // canvas overflowed via negative offsets, which caused siblings
+  // (like the project-side state label) to render INSIDE the
+  // overflow zone and overlap the brain. Wrapper = renderSize means
+  // siblings position correctly with no overlap.
+  //
+  // Caller contract: `size` is the visible-sphere diameter; the
+  // layout block is `size * RENDER_SCALE` (= renderSize) on each
+  // side. Halo is sized to the visible sphere (centered inset
+  // matching `size`, not the wrapper).
   const renderSize = size * RENDER_SCALE;
-  const overflow = (renderSize - size) / 2;
+  const haloInset = (renderSize - size) / 2;
 
   return (
     <div
       style={{
         position: "relative",
-        width: size,
-        height: size,
-        display: "grid",
-        placeItems: "center",
-        // Let the oversized canvas paint past the wrapper edges.
-        // Without this, any ancestor with `overflow: hidden` would
-        // re-introduce the rectangular clip we're trying to avoid.
-        overflow: "visible",
+        width: renderSize,
+        height: renderSize,
       }}
     >
       {/* Halo — global iridescent CSS glow behind the canvas. Mirror of
           the standalone's `halo` div: conic-gradient (purple → cyan →
           mauve → gold), 32px blur, opacity 0.15, scaled to 0.9 of the
-          container so it sits inside the sphere edge. Pure CSS so it
-          never costs a frame. Stays sized to the layout `size`, not
-          `renderSize` — the halo lives just inside the visible sphere,
-          not in the projection-overflow band. */}
+          visible sphere. Sized to `size` (the sphere area), centered
+          inside the larger wrapper via inset. */}
       <div
         aria-hidden
         style={{
           position: "absolute",
-          inset: 0,
+          top: haloInset,
+          left: haloInset,
+          width: size,
+          height: size,
           borderRadius: "50%",
           pointerEvents: "none",
           background:
@@ -848,8 +851,7 @@ export function BrainLiquid({
           height: renderSize,
           display: "block",
           position: "absolute",
-          top: -overflow,
-          left: -overflow,
+          inset: 0,
           // Soft radial mask sized to the OVERSIZE canvas. Geometry:
           //   - sphere is at canvas center, radius = size * 0.5
           //     (= 0.5 / RENDER_SCALE of renderSize ≈ 0.333)
