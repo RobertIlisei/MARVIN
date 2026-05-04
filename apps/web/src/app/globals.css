@@ -1071,6 +1071,26 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
+/* Phase 4g (ADR-0019) — hide BrainLiquid in MARVIN-Swift.
+ *
+ * The native shell promotes a MetalKit MTKView into the right pane
+ * of the main window's HSplitView (above the native chat), mirroring
+ * the web's `side-top` panel placement. Hiding the in-WebView
+ * <BrainLiquid> avoids two brains rendering at once.
+ *
+ * The selector targets every <BrainLiquid> wrapper — the project-
+ * page side-top instance AND the landing-page hero. The native
+ * MTKView only renders in the project-page main-window layout
+ * (post-project-selection), so the landing-page hero looks empty
+ * in MARVIN-Swift, but the user only sees that screen for the few
+ * frames between launch and first project select; we don't promote
+ * a native landing-hero brain just for that transition.
+ *
+ * Web + Tauri builds keep the BrainLiquid untouched. */
+[data-host-shell="swift"] [data-marvin-brain] {
+  display: none;
+}
+
 /* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
  * traffic-light buttons (titleBarStyle="Overlay"); inside the
  * SwiftUI shell the native title bar is separate from the content,

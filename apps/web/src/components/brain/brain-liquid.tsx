@@ -823,6 +823,7 @@ function BrainLiquidImpl({
 
   return (
     <div
+      data-marvin-brain
       style={{
         position: "relative",
         width: renderSize,

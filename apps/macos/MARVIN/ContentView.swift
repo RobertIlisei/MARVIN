@@ -56,25 +56,37 @@ struct ContentView: View {
                 // the web app's column order:
                 //   LeftPane (file tree | SCM, picker-switched) |
                 //   WebView (work pane: file viewer / terminal /
-                //   preview / graph / brain) |
-                //   native chat (2c-f).
-                // The web file tree + SCM panel + chat pane are
-                // hidden via the [data-host-shell="swift"] CSS
+                //   preview / graph) |
+                //   right pane: native brain (4g) on top of native
+                //   chat (2c-f), VSplit'd.
+                // The web file tree + SCM panel + chat pane + brain
+                // are hidden via the [data-host-shell="swift"] CSS
                 // rules so the WebView only renders the work-pane
-                // surfaces and brain visualizer here.
+                // surfaces here.
                 //
                 // HSplitView is the macOS-native draggable splitter.
                 // Default fractions: left narrow, work pane takes
-                // the remainder, chat fixed-ish on the right —
-                // matches the web's `tree | center | side-chat`
+                // the remainder, brain+chat on the right — matches
+                // the web's `tree | center | side-top + side-chat`
                 // panel ordering in apps/web/src/app/page.tsx.
                 HSplitView {
                     LeftPane()
                         .frame(minWidth: 220, idealWidth: 260)
                     webIsland
                         .frame(minWidth: 320)
-                    ChatPreviewView()
-                        .frame(minWidth: 320, idealWidth: 480)
+                    // Right pane mirrors the web `side` aside —
+                    // brain on top of chat. VSplitView lets the
+                    // user resize the brain/chat split; default
+                    // fractions match the web's
+                    // defaultSize={38} / minSize={18} /
+                    // maxSize={65} for the brain panel.
+                    VSplitView {
+                        BrainPaneView()
+                            .frame(minHeight: 160, idealHeight: 280, maxHeight: 480)
+                        ChatPreviewView()
+                            .frame(minHeight: 240)
+                    }
+                    .frame(minWidth: 320, idealWidth: 480)
                 }
                 .animation(.easeOut(duration: 0.18), value: webCommands.isFindVisible)
             case .offline(let reason):
