@@ -162,3 +162,24 @@ struct GitStatusFile: Codable, Equatable {
     let ordinary: Bool
     let entryType: String
 }
+
+// MARK: - Git diff (unified)
+
+/// Wire response for GET /api/git/diff. The `mode` echoes back what
+/// the caller asked for (`working` / `staged` / `head`); `diff` is
+/// the raw unified diff text from `git diff`. Phase 3f renders this
+/// in a native sheet with monospace font + per-line tinting; the
+/// Monaco-quality side-by-side renderer is deferred to Phase 5.
+///
+/// `binary` is true when git's numstat reports a binary file —
+/// `diff` is empty in that case, and the viewer should render a
+/// "binary file" placeholder rather than attempting to display
+/// nothing. `truncated` is true when the diff exceeded the route's
+/// 2 MB cap; same handling as binary (placeholder + read-only).
+struct GitDiffResponse: Codable, Equatable {
+    let path: String
+    let mode: String
+    let diff: String
+    let binary: Bool
+    let truncated: Bool
+}

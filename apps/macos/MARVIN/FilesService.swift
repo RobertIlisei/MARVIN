@@ -126,6 +126,35 @@ final class FilesService {
         return try await getJSON(url: comps.url!, as: GitStatusResponse.self)
     }
 
+    // MARK: - Git diff
+
+    /// GET /api/git/diff?cwd=&path=&mode=working|staged|head
+    ///
+    /// Unified diff text for one repo-relative path. Phase 3f drives
+    /// the native DiffSheet from this. The route defaults to
+    /// `working` (working tree vs index); SCM rows for staged-only
+    /// changes should pass `staged` (index vs HEAD); a "Combined"
+    /// affordance maps to `head` (working tree vs HEAD).
+    ///
+    /// Path MUST be repo-relative (the route's `isSafePathspec`
+    /// gate rejects absolute paths). Caller is responsible for
+    /// stripping the cwd prefix; SourceControlRow already has a
+    /// helper for that.
+    func fetchDiff(
+        cwd: String,
+        path: String,
+        mode: String = "working"
+    ) async throws -> GitDiffResponse {
+        let url = baseURL.appendingPathComponent("api/git/diff")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "cwd", value: cwd),
+            URLQueryItem(name: "path", value: path),
+            URLQueryItem(name: "mode", value: mode),
+        ]
+        return try await getJSON(url: comps.url!, as: GitDiffResponse.self)
+    }
+
     // MARK: - Private helpers
 
     /// Single-shot JSON GET. Adds the CSRF header, decodes into the

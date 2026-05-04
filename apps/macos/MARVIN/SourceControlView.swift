@@ -134,6 +134,9 @@ final class SourceControlModel {
 struct SourceControlView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = SourceControlModel()
+    /// Phase 3f — diff-sheet model. Set via row tap; the .sheet
+    /// modifier presents it and clears via Binding when dismissed.
+    @State private var diffSheet: DiffSheetModel? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -160,6 +163,17 @@ struct SourceControlView: View {
             if wasBusy, !isBusy, let cwd = bridge.projectWorkDir {
                 model.refresh(cwd: cwd, force: true)
             }
+        }
+        // Phase 3f — present the diff sheet when a row is tapped.
+        // Bound via a custom Binding so dismissal (Esc / Done /
+        // backdrop click) clears the model. .sheet(item:) requires
+        // an Identifiable item but DiffSheetModel is a class; wrap
+        // in a thin id'd container instead.
+        .sheet(item: Binding(
+            get: { diffSheet.map(DiffSheetItem.init) },
+            set: { newValue in if newValue == nil { diffSheet = nil } }
+        )) { item in
+            DiffSheet(model: item.model, onDismiss: { diffSheet = nil })
         }
     }
 
@@ -284,11 +298,34 @@ struct SourceControlView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
                 ForEach(files, id: \.path) { file in
-                    SourceControlRow(file: file, cwd: bridge.projectWorkDir ?? "")
-                        .padding(.horizontal, 8)
+                    SourceControlRow(
+                        file: file,
+                        cwd: bridge.projectWorkDir ?? "",
+                        onTap: { openDiff(for: file) }
+                    )
+                    .padding(.horizontal, 8)
                 }
             }
         }
+    }
+
+    /// Phase 3f — open a diff sheet for one SCM row. The repo-
+    /// relative path is computed inside the row helper; the route's
+    /// isSafePathspec gate rejects absolute paths so we MUST strip
+    /// the cwd prefix here. `initialMode` picks Staged for staged-
+    /// only changes, Working for everything else.
+    private func openDiff(for file: GitStatusFile) {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
+        let relative = file.path.hasPrefix(root)
+            ? String(file.path.dropFirst(root.count))
+            : file.path
+        let initial = DiffMode(rawValue: DiffSheet.initialMode(for: file)) ?? .working
+        diffSheet = DiffSheetModel(
+            cwd: cwd,
+            relativePath: relative,
+            initialMode: initial
+        )
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -321,16 +358,31 @@ struct SourceControlView: View {
     }
 }
 
-/// One row in the SCM list. Phase 3e renders the per-file status
-/// codes + the trimmed path; clicking does nothing (per ADR-0018
-/// §3). 3f wires the diff viewer; 3g adds the per-row stage /
-/// unstage actions.
+/// Identifiable wrapper for the diff-sheet model. SwiftUI's
+/// .sheet(item:) needs the item to be Identifiable; the model
+/// itself is a @MainActor class so we can't read its fields from
+/// the nonisolated `id` accessor. Capture the (cwd, path) at
+/// construction — those are immutable on the model anyway, and
+/// they're enough to identify a sheet for re-mount avoidance.
+struct DiffSheetItem: Identifiable {
+    let model: DiffSheetModel
+    let id: String
+
+    init(model: DiffSheetModel) {
+        self.model = model
+        self.id = "\(model.cwd):\(model.relativePath)"
+    }
+}
+
+/// One row in the SCM list. Phase 3f wires the row tap to open
+/// DiffSheet. 3g will add per-row stage / unstage actions.
 private struct SourceControlRow: View {
     let file: GitStatusFile
     /// Active project's working directory. We strip it from the
     /// per-file absolute path to produce a repo-relative label —
     /// matches what the web SCM panel shows.
     let cwd: String
+    let onTap: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -351,8 +403,10 @@ private struct SourceControlRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 1)
+        .padding(.vertical, 2)
         .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
         .accessibilityIdentifier("scm-row:\(file.path)")
     }
 
