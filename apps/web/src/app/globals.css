@@ -1039,7 +1039,18 @@ body[data-marvin="error"] .status-rail::after {
 [data-host-shell="swift"] [data-marvin-new-session],
 [data-host-shell="swift"] [data-marvin-settings-button],
 [data-host-shell="swift"] [data-marvin-shortcuts-button],
-[data-host-shell="swift"] [data-marvin-theme-toggle] {
+[data-host-shell="swift"] [data-marvin-theme-toggle],
+/* Phase 2g.2 — chat surface. Native chat (Phase 2c-f) renders
+ * outside the WebView in the SwiftUI shell, so the in-page chat
+ * pane is a duplicate. Tagging is per layout: the active-session
+ * `<Panel id="side-chat">` and the empty-state ChatInput +
+ * example-prompts wrappers all carry data-marvin-chat-pane.
+ * BrainLiquid in the empty state stays visible because the brain
+ * is its own island (Phase 4 ports it to MetalKit; until then
+ * the WebView shows it). The 3-pane PanelGroup will resize the
+ * remaining (file tree / work area) panes to fill the freed
+ * space because the side-chat Panel collapses to display:none. */
+[data-host-shell="swift"] [data-marvin-chat-pane] {
   display: none;
 }
 

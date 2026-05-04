@@ -736,7 +736,7 @@ export default function Home() {
             chat-input column so they visually pair with the chat
             box rather than competing with the brain for vertical
             space. Same `max-w-3xl` width as ChatInput to align. */}
-        <div className="mx-auto w-full max-w-3xl px-6 pb-3">
+        <div data-marvin-chat-pane className="mx-auto w-full max-w-3xl px-6 pb-3">
           <div className="hero-stage-4 grid w-full grid-cols-1 gap-3 md:grid-cols-3">
             <ExamplePrompt
               title="explain the architecture"
@@ -759,7 +759,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="mx-auto w-full max-w-3xl px-6 pb-8">
+        <div data-marvin-chat-pane className="mx-auto w-full max-w-3xl px-6 pb-8">
           <ChatInput
             onSend={handleSend}
             onCancel={cancel}
@@ -1016,7 +1016,7 @@ export default function Home() {
                 </>
               )}
               <Panel id="side-chat" order={2} minSize={20}>
-                <div className="flex h-full min-h-0 flex-col">
+                <div data-marvin-chat-pane className="flex h-full min-h-0 flex-col">
                   <div className="px-4 pt-3">
                     <StatusBar
                       state={marvinState}
