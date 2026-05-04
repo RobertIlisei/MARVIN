@@ -68,7 +68,7 @@ Surface surprises as they come up. Never paper over a red result.
 
 ### 7. Verify
 
-Run every verification gate end-to-end. Replay the blast radius: every entry is handled or explicitly deferred with a follow-up noted in PLAN.md.
+Run every verification gate end-to-end. Replay the blast radius: every entry is handled or explicitly deferred with a follow-up captured (a roadmap entry, ADR, or GitHub issue).
 
 **Blockers:** type errors, failing tests, red infra probes. No "let's ship it and fix later."
 
