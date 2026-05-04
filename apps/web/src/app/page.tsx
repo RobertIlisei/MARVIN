@@ -10,7 +10,11 @@ import { taskRoleOf } from "@/components/brain/task-role";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
 import { VirtualMessageList } from "@/components/chat/virtual-message-list";
-import { announceModels, announceProject } from "@/lib/marvin-shell";
+import {
+  announceBusy,
+  announceModels,
+  announceProject,
+} from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
@@ -306,6 +310,15 @@ export default function Home() {
     marvinState !== "idle" &&
     marvinState !== "error" &&
     marvinState !== "cancelling";
+
+  // Phase 1d.20 — mirror busy → SwiftUI menu-bar status item, which
+  // swaps between the idle (outlined nodes) and active (filled nodes)
+  // Brain Circuit variants. No-op outside the Swift shell. Treat
+  // "cancelling" as still busy: the user expects the active state
+  // to persist until the stop actually lands.
+  useEffect(() => {
+    announceBusy(marvinState !== "idle" && marvinState !== "error");
+  }, [marvinState]);
 
   const handleSend = useCallback(
     (text: string) => {

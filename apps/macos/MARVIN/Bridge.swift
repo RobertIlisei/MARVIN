@@ -151,6 +151,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// Phase 1d.17.
     private(set) var themeName: String? = nil
 
+    /// Coarse "MARVIN is busy / idle" flag posted via `busy-changed`.
+    /// The menu-bar status item swaps between the idle (outlined
+    /// nodes) and active (filled nodes) Brain Circuit SVGs based on
+    /// this. Phase 1d.20. False until the web side reports a turn
+    /// in flight.
+    private(set) var isBusy: Bool = false
+
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
     /// preserves the user's macOS system preference for the SwiftUI
     /// surfaces (used when the bridge hasn't reported a theme yet).
@@ -351,6 +358,14 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             let value = payload?["value"] as? String
             themeName = (value == "light" || value == "dark") ? value : nil
             NSLog("[MarvinBridge] theme-changed value=\(themeName ?? "nil")")
+        case "busy-changed":
+            // Web side's coarse busy flag — flips on at the start of
+            // a turn and off when MARVIN goes back to idle. Drives
+            // the menu-bar status item's idle/active icon swap. Not
+            // NSLog'd because busy-changed fires on every state
+            // transition (including tool / writing) — chatty.
+            let busy = (payload?["busy"] as? Bool) ?? false
+            isBusy = busy
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

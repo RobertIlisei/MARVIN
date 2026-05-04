@@ -79,16 +79,20 @@ final class StatusBarController {
             activeImage = active
         }
 
-        // Refresh the tooltip whenever the cost snapshot changes. We
-        // do this from a Task that observes the @Observable bridge —
-        // there's no AppKit-style notification here. Cheap to read
-        // on every tick because @Observable only fires when a tracked
-        // field changes.
+        // Refresh the tooltip + busy-state icon on a 1s tick. Lower
+        // than the cost-only refresh used to be (5s) because the
+        // busy flag flips frequently inside a turn — a 5s lag would
+        // mean the active icon shows up half a turn late.
+        //
+        // We poll @Observable rather than wiring full Observation
+        // tracking because the surface is throwaway. Reads are O(1).
         Task { @MainActor in
-            for await snapshot in bridgeCostStream() {
-                let today = snapshot.map { String(format: "$%.2f today", $0.today) } ?? ""
-                let project = MarvinBridge.shared.projectName.map { " · \($0)" } ?? ""
+            for await _ in bridgeTick(seconds: 1.0) {
+                let bridge = MarvinBridge.shared
+                let today = bridge.costSummary.map { String(format: "$%.2f today", $0.today) } ?? ""
+                let project = bridge.projectName.map { " · \($0)" } ?? ""
                 button?.toolTip = "MARVIN" + (today.isEmpty ? "" : " — \(today)") + project
+                setActive(bridge.isBusy)
             }
         }
     }
@@ -162,24 +166,20 @@ final class StatusBarController {
         return img
     }
 
-    /// Async sequence of cost snapshots from the @Observable bridge.
-    /// Drives the tooltip refresh in `install()`.
-    private func bridgeCostStream() -> AsyncStream<CostSummary?> {
+    /// Plain timer stream — yields a tick every `seconds`, plus an
+    /// immediate first tick so the consumer doesn't wait for the
+    /// first poll cycle before refreshing. Used to drive the
+    /// tooltip + busy-state icon refresh without wiring full
+    /// Observation tracking on @Observable bridge fields (the
+    /// surface is throwaway, polling is O(1)).
+    private func bridgeTick(seconds: TimeInterval) -> AsyncStream<Void> {
         AsyncStream { continuation in
-            // Initial value so subscribers don't wait for the first
-            // change — the bridge typically reports a snapshot ~1s
-            // after the WebView mounts.
-            continuation.yield(MarvinBridge.shared.costSummary)
-
-            // Poll on a timer rather than wiring full Observation
-            // tracking — the tooltip text is throwaway and a 5s tick
-            // is far more than fine for at-a-glance spend. Avoids
-            // the ceremony of wrapping @Observable in a publisher
-            // for a non-critical surface.
+            continuation.yield(())
+            let nanos = UInt64(seconds * 1_000_000_000)
             let task = Task { @MainActor in
                 while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    continuation.yield(MarvinBridge.shared.costSummary)
+                    try? await Task.sleep(nanoseconds: nanos)
+                    continuation.yield(())
                 }
             }
             continuation.onTermination = { _ in task.cancel() }

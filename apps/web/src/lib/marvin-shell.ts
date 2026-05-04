@@ -157,6 +157,23 @@ export function announceModels(
 }
 
 /**
+ * Mirrors a coarse "MARVIN is busy / idle" signal to the Swift side
+ * so the menu-bar status item can swap between the idle (outlined
+ * nodes) and active (filled nodes) Brain Circuit variants while a
+ * turn is in flight. Phase 1d.20 — derived from `useChatStream`'s
+ * `marvinState` (anything that isn't "idle" or "error" counts as
+ * busy). Cheap to call on every state change; the Swift side
+ * dedupes redundant updates.
+ */
+export function announceBusy(busy: boolean): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "busy-changed",
+    payload: { busy },
+  });
+}
+
+/**
  * Mirrors the active theme ("light" | "dark") to the Swift side so
  * the SwiftUI chrome (title bar, About panel, Settings) follows
  * the user's web-side theme pick. Phase 1d.17 — fires from a
