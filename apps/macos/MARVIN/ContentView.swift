@@ -52,21 +52,23 @@ struct ContentView: View {
             case .connecting:
                 connectingView
             case .online:
-                // Phase 2g.3 — main window splits horizontally:
-                // native chat on the left (Phase 2c-f surface),
-                // WebView on the right (file tree / brain / work
-                // area, with the in-page chat hidden via the
-                // [data-host-shell="swift"] [data-marvin-chat-pane]
-                // CSS rule from Phase 2g.2). The native chat is
-                // now the primary chat surface in MARVIN-Swift.
+                // Phase 3d — main window now splits 3-pane:
+                // native file tree (3b/3c) | native chat (2c-f) |
+                // WebView (file viewer / brain / preview pane). The
+                // web file tree + SCM panel are hidden via the
+                // [data-host-shell="swift"] [data-marvin-file-tree]
+                // CSS rule alongside the chat hide rule from 2g.2.
                 //
                 // HSplitView is the macOS-native draggable splitter.
-                // Default fractions roughly mirror the web app's
-                // 60/40 main:chat ratio — chat-side first because
-                // it's where the user types most.
+                // Default fractions: tree narrow, chat medium, web
+                // takes the remainder. The tree's idealWidth (240)
+                // matches the web app's 17% Panel default for the
+                // same column at common window widths.
                 HSplitView {
+                    FileTreeView()
+                        .frame(minWidth: 200, idealWidth: 240)
                     ChatPreviewView()
-                        .frame(minWidth: 320, idealWidth: 540)
+                        .frame(minWidth: 320, idealWidth: 520)
                     webIsland
                         .frame(minWidth: 320)
                 }

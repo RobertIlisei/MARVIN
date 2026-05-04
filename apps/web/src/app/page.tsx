@@ -833,6 +833,7 @@ export default function Home() {
               minSize={10}
               maxSize={28}
               className="hidden lg:block"
+              data-marvin-file-tree
             >
               <aside className="flex h-full flex-col border-r border-[color:var(--color-border)] bg-[color:var(--material-sidebar)]">
                 <LeftColumnTabs
@@ -871,7 +872,10 @@ export default function Home() {
                 />
               </aside>
             </Panel>
-            <PanelResizeHandle className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 lg:block" />
+            <PanelResizeHandle
+              className="hidden w-px bg-[color:var(--color-border)] transition hover:w-[3px] hover:bg-[color:var(--color-accent-deep)]/40 lg:block"
+              data-marvin-file-tree
+            />
           </>
         )}
 

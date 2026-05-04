@@ -1054,6 +1054,23 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
+/* Phase 3d — file tree pane. Native NSOutlineView-style tree
+ * (FileTreeView.swift) is the leftmost pane of the main window's
+ * HSplitView in the SwiftUI shell, so the in-page Panel id="tree"
+ * + LeftColumnTabs + FileTree + SourceControlPanel are duplicates.
+ * Tagging the whole Panel + its resize handle hides both columns
+ * cleanly; react-resizable-panels redistributes the freed width to
+ * the remaining (center / chat) panes.
+ *
+ * Trade-off: ADR-0018 §3 sub-phase 3d hides the Files tab AND the
+ * Source Control tab (they share the column). 3e ships a native
+ * SourceControlPanel that replaces the web one; the user is
+ * temporarily without an SCM surface in the Swift shell during the
+ * 3d→3e gap. Web / Tauri builds keep the tabbed sidebar untouched. */
+[data-host-shell="swift"] [data-marvin-file-tree] {
+  display: none;
+}
+
 /* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
  * traffic-light buttons (titleBarStyle="Overlay"); inside the
  * SwiftUI shell the native title bar is separate from the content,
