@@ -645,18 +645,34 @@ export function BrainLiquid({
           position: "relative",
           // Soft radial mask, NOT a hard `border-radius: 50%` clip.
           // A hard clip turns the boundary into an "invisible wall" —
-          // particles that should organically escape the sphere
-          // (jitter, leaders, the wispy outflow at high turb) get
+          // particles that should organically escape the sphere get
           // cut off in a perfect circle and the brain stops looking
-          // alive. Soft mask: opaque through the natural sphere
-          // (R = size * 0.5 → 50% radius), fade band 55–75%, fully
-          // transparent past 75% so the canvas corners (~70.7%) and
-          // the trail-dim residue stay invisible against the page
-          // background.
+          // alive.
+          //
+          // Coordinate note: `radial-gradient(circle at center, …)`
+          // defaults to `farthest-corner` sizing, so 100% = the
+          // distance from center to the canvas corner (≈ √2/2 of the
+          // canvas side). The sphere edge at R = size * 0.5 lives at
+          // ≈ 70.7% of that gradient. So:
+          //   0–70%   solid: the sphere body renders at full intensity.
+          //   70–100% fade band: escapees that wisp past the sphere
+          //           edge stay visible but soften with distance —
+          //           organic, irregular, plenty of room before they
+          //           vanish.
+          //   past 100%: transparent (this is just the empty rim
+          //           outside the gradient — nothing to paint there
+          //           anyway).
+          //
+          // Trade-off vs the previous 55/75: the old band ended deep
+          // inside the canvas (~180 px from center on a 340-px canvas)
+          // so escapees were clipped well short of the canvas edge,
+          // making it look boxed. With 70/100 the fade reaches the
+          // actual corners and escapees have the full canvas radius
+          // to fade through.
           maskImage:
-            "radial-gradient(circle at center, black 55%, transparent 75%)",
+            "radial-gradient(circle at center, black 70%, transparent 100%)",
           WebkitMaskImage:
-            "radial-gradient(circle at center, black 55%, transparent 75%)",
+            "radial-gradient(circle at center, black 70%, transparent 100%)",
         }}
       />
     </div>
