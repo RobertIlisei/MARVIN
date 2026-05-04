@@ -1105,24 +1105,21 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
-/* Phase 4 follow-up — hide the web `<header>` top bar in
- * MARVIN-Swift. Every actionable item it carries is reproduced
- * via the native macOS menus:
- *   - wordmark / version-pip → NSWindow title bar
- *   - ProjectPicker → File → Open / File → Open Recent (⌘O)
- *   - CostPill → planned native NSToolbar item (Phase 5+)
- *   - LayoutPopover → ⌘P / ⌘G / ⌘J pane shortcuts
- *   - SetupPopover → Settings… (⌘,)
- *   - ThemeToggle → Window → Toggle Theme (⌘⇧T)
- *   - new session → File → New Session (⌘⇧N)
- *   - settings ⚙ / ? → Settings… / Help menu
- *   - BranchBadge → currently has no native peer; revisit if the
- *     repo-state visibility gap matters in practice
+/* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
+ * traffic-light buttons (titleBarStyle="Overlay"); inside the
+ * SwiftUI shell the native title bar is separate from the content,
+ * so reclaim that left padding. Same story for `pt-[var(--titlebar-h)]`
+ * which accounts for the overlapping title bar. !important beats
+ * the inline Tailwind utilities without rewriting them.
  *
- * The earlier rule that just reset `pl-[82px]` + `pt-titlebar`
- * padding is obsoleted — `display: none` skips both. Web + Tauri
- * builds still need that padding reset, but neither carries the
- * SwiftUI host-shell flag so this rule is scoped correctly. */
+ * Earlier rev of this file briefly set `display: none` on the top
+ * bar to dedupe it against native menus, but that hid the
+ * SetupPopover (executor/advisor/personality/permissions) and
+ * the in-line ProjectPicker — neither has a complete native peer
+ * yet. Until those affordances exist natively, the top bar stays
+ * visible and only its mirror-of-native items are individually
+ * hidden via the data-marvin-{wordmark,cost-pill,…} rules above. */
 [data-host-shell="swift"] [data-marvin-top-bar] {
-  display: none !important;
+  padding-left: 1rem !important;
+  padding-top: 0.5rem !important;
 }
