@@ -254,7 +254,7 @@ private struct CostHistoryPopover: View {
             }
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(width: 340)
     }
 
     @ViewBuilder
@@ -262,25 +262,17 @@ private struct CostHistoryPopover: View {
         let maxCost = max(summary.daily.map(\.costUsd).max() ?? 0, 0.0001)
         let hovered = summary.daily.first { $0.day == hoveredDay }
         VStack(alignment: .leading, spacing: 4) {
+            // Header — always "last N days · max $X.YY". Earlier
+            // versions swapped the right side to the hovered detail
+            // and got clipped at any readable font. The hover
+            // detail now lives on its own row below.
             HStack {
                 Text("last \(summary.daily.count) active days")
                     .tracking(1.5)
                     .textCase(.uppercase)
                 Spacer()
-                // Right-side label switches to the hovered day's
-                // detail (cost · turns) when a bar is under the
-                // cursor; falls back to the chart-wide max otherwise.
-                // Matches the web pill's behaviour where the hovered
-                // day's cost overlays its bar — kept here as a single
-                // header line because in-place overlays clip against
-                // the chart's tight 50pt height.
-                if let h = hovered {
-                    Text("\(h.day) · \(fmtUsd(h.costUsd)) · \(h.turns) turns")
-                        .foregroundStyle(.primary)
-                } else {
-                    Text("max \(fmtUsd(maxCost))")
-                        .foregroundStyle(.secondary)
-                }
+                Text("max \(fmtUsd(maxCost))")
+                    .foregroundStyle(.secondary)
             }
             .font(.caption2.monospaced())
             .foregroundStyle(.tertiary)
@@ -301,16 +293,39 @@ private struct CostHistoryPopover: View {
             .frame(height: 50, alignment: .bottom)
 
             // Day labels — "04-27", matching the web pill's
-            // `day.slice(5)` truncation. Same column widths as the
-            // bars above so labels align under their bar.
+            // `day.slice(5)` truncation. Slightly bigger than the
+            // pre-1d.8 `.caption2 + .quaternary` (which was hard to
+            // read at native popover sizes); now `.caption + .tertiary`.
             HStack(spacing: 2) {
                 ForEach(summary.daily) { entry in
                     Text(String(entry.day.suffix(5)))
                         .frame(maxWidth: .infinity)
                 }
             }
-            .font(.caption2.monospaced())
-            .foregroundStyle(.quaternary)
+            .font(.caption.monospaced())
+            .foregroundStyle(.tertiary)
+
+            // Dedicated hover-detail row. Reserves the height even
+            // when nothing is hovered so the popover doesn't reflow
+            // mid-hover — a fixed-height row keeps the chart bars
+            // exactly where the cursor expects them.
+            HStack(spacing: 8) {
+                if let h = hovered {
+                    Text(String(h.day.suffix(5)))
+                        .foregroundStyle(.secondary)
+                    Text(fmtUsd(h.costUsd))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text("\(h.turns.formatted()) turns")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("hover a bar for daily detail")
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            }
+            .font(.callout.monospaced())
+            .frame(height: 18)
         }
     }
 

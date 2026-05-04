@@ -13,6 +13,7 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(HealthMonitor.self) private var health
+    @Environment(MarvinBridge.self) private var bridge
 
     /// Pulled from the bundle's Info.plist so the About panel stays
     /// in sync with the actual installed build — no hardcoded
@@ -55,6 +56,21 @@ struct AboutView: View {
                 sidecarBlock
             }
 
+            // Phase 1d.8 — show the active project + branch the
+            // bridge knows about. Hidden when no project is active
+            // so the About panel collapses cleanly. workDir is the
+            // most useful field here — surfaces the absolute path
+            // that's only otherwise visible in the BranchBadge
+            // tooltip in the web TopBar.
+            if bridge.projectName != nil {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Active project")
+                        .font(.callout.weight(.semibold))
+                    projectBlock
+                }
+            }
+
             Divider()
 
             HStack(spacing: 4) {
@@ -67,7 +83,26 @@ struct AboutView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460, height: 380)
+        .frame(width: 460, height: 460)
+    }
+
+    @ViewBuilder
+    private var projectBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let name = bridge.projectName {
+                aboutRow("name", name)
+            }
+            if let dir = bridge.projectWorkDir {
+                aboutRow("workDir", dir)
+            }
+            if let branch = bridge.branch {
+                let suffix = bridge.branchDirtyCount > 0
+                    ? " (\(bridge.branchDirtyCount) uncommitted)"
+                    : ""
+                aboutRow("branch", "\(branch)\(suffix)")
+            }
+        }
+        .font(.body.monospaced())
     }
 
     @ViewBuilder
