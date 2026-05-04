@@ -138,6 +138,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Phase 1d.34 — keep the app alive when the user closes the
+    /// main window with ⌘W. Standard macOS behaviour for any app
+    /// that has a status item (Mail, Messages, Music, Things,
+    /// 1Password — none of them quit on last-window-closed). Re-open
+    /// happens from the menu-bar status item's "Show MARVIN" entry
+    /// or its left-click action; `applicationShouldHandleReopen` (by
+    /// default true on macOS) also re-opens the window when the user
+    /// clicks the Dock icon.
+    ///
+    /// Without this, ⌘W on the main window terminates the whole
+    /// process — so the bridge state, the App-Nap activity, the
+    /// status-item icon swap, and the WebView all tear down. The
+    /// next launch is a 1-2s cold start instead of an instant
+    /// re-show.
+    func applicationShouldTerminateAfterLastWindowClosed(
+        _ sender: NSApplication
+    ) -> Bool {
+        false
+    }
+
+    /// Phase 1d.34 — ensure clicking the Dock icon re-opens the main
+    /// window after the user closed it. macOS calls this when the
+    /// app is reactivated and `flag` is false (no visible windows);
+    /// returning true tells the framework to fall through to
+    /// `applicationDidFinishLaunching`-like reopen behaviour. Our
+    /// SwiftUI Window scene re-creates the window on this signal.
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        true
+    }
+
     /// Phase 1d.30 — accept folder drops on the Dock icon AND
     /// `open MARVIN-Swift.app /some/folder` from the command line.
     /// Both go through the same path: validate the URL is a real
