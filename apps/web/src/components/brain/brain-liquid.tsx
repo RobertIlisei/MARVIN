@@ -11,15 +11,19 @@ import { useEffect, useRef } from "react";
 import type { MarvinUiState } from "../chat/types";
 
 /**
- * BrainLiquid — canvas particle-field brain ported verbatim from the
- * Claude Design handoff (`MARVIN Light.html` / `BrainLiquid`). Curl-noise
- * flow, roaming attractors with synapse pulses, density boost, per-state
- * behaviour profiles, and theme-aware painting (nebula iridescent on
- * dark, desaturated slate-ink on light).
+ * BrainLiquid — canvas particle-field brain. Curl-noise flow, roaming
+ * attractors with synapse pulses, density boost, per-state behaviour
+ * profiles, and theme-aware painting (nebula iridescent on dark,
+ * desaturated slate-ink on light).
  *
  * Drop-in replacement for the old SVG-based MarvinBrain: same `state` +
  * `size` props, no other wiring needed. Self-observes `<html data-theme>`
  * so the paint loop picks up theme changes without a remount.
+ *
+ * Source of truth: the `Brain Lab` standalone HTML the design team ships.
+ * To re-sync after a lab update, drive the standalone via Playwright,
+ * cycle the state pills, and read every `input[type="range"]` value into
+ * the PROFILES table below. Standalone wins on every conflict.
  */
 interface Profile {
   N: number;
@@ -49,37 +53,46 @@ interface Profile {
   jitter: number;
 }
 
+// Per-state tuning extracted from the Brain Lab standalone (the upstream
+// design source). Every value is mirror-aligned to the standalone's
+// sliders; pulseRate / redMix / rot / jitter are MARVIN-specific knobs
+// the standalone doesn't expose, so they keep their pre-existing values.
+//
+// Refresh procedure: drive `Brain Lab _standalone_.html` via Playwright,
+// click each state pill, read all `input[type="range"]` values. The
+// standalone is the source of truth — when these drift from the lab, the
+// lab wins.
 const PROFILES: Record<MarvinUiState, Profile> = {
   idle: {
-    N: 4500, flowMag: 180, damp: 0.95, swirl: 0.6, shellPull: 1.2,
+    N: 8000, flowMag: 180, damp: 0.95, swirl: 0.6, shellPull: 1.2,
     nfreq: 0.3, neps: 1.4, lmin: 4.0, lrange: 6.0, dotR: 1.0, dotA: 0.55,
     chroma: 2.0, trail: 0.82, turb: 0.3, coh: 0.16, leaders: 0.18, dim: 0.18,
     attractors: 2, synapse: 0.8, pulse: 0.6, dens: 0.7, pulseRate: 0.6,
     redMix: 0.05, rot: 0.0015, jitter: 0,
   },
   thinking: {
-    N: 7000, flowMag: 370, damp: 0.93, swirl: 1.75, shellPull: 1.4,
-    nfreq: 0.41, neps: 1.95, lmin: 3.7, lrange: 3.0, dotR: 0.95, dotA: 0.22,
+    N: 12000, flowMag: 370, damp: 0.93, swirl: 1.75, shellPull: 1.4,
+    nfreq: 0.41, neps: 1.95, lmin: 3.7, lrange: 3.0, dotR: 0.95, dotA: 0.20,
     chroma: 5.0, trail: 0.55, turb: 0.3, coh: 0.14, leaders: 0.7, dim: 0.46,
     attractors: 8, synapse: 1.2, pulse: 2.0, dens: 2.0, pulseRate: 0.9,
     redMix: 0.25, rot: 0.0025, jitter: 0,
   },
   tool: {
-    N: 6000, flowMag: 20, damp: 0.5, swirl: 0.4, shellPull: 0.0,
+    N: 10000, flowMag: 20, damp: 0.5, swirl: 0.4, shellPull: 0.0,
     nfreq: 0.6, neps: 1.65, lmin: 2.5, lrange: 4.0, dotR: 1.0, dotA: 0.6,
-    chroma: 3.5, trail: 0.72, turb: 0.45, coh: 0.18, leaders: 0.32, dim: 0.22,
+    chroma: 3.5, trail: 0.72, turb: 0.46, coh: 0.18, leaders: 0.32, dim: 0.22,
     attractors: 8, synapse: 3.0, pulse: 1.4, dens: 1.0, pulseRate: 1.2,
     redMix: 0.3, rot: 0.0035, jitter: 0,
   },
   writing: {
-    N: 6000, flowMag: 430, damp: 0.63, swirl: 1.5, shellPull: 1.3,
-    nfreq: 0.38, neps: 1.8, lmin: 4.5, lrange: 5.0, dotR: 1.05, dotA: 0.32,
+    N: 10000, flowMag: 430, damp: 0.63, swirl: 1.5, shellPull: 1.3,
+    nfreq: 0.38, neps: 1.8, lmin: 4.5, lrange: 5.0, dotR: 1.05, dotA: 0.30,
     chroma: 5.0, trail: 0.76, turb: 0.22, coh: 0.11, leaders: 0.3, dim: 0.48,
     attractors: 5, synapse: 3.0, pulse: 2.0, dens: 2.0, pulseRate: 1.7,
     redMix: 0.45, rot: 0.008, jitter: 0,
   },
   error: {
-    N: 5000, flowMag: 370, damp: 0.94, swirl: 1.75, shellPull: 0.65,
+    N: 8000, flowMag: 370, damp: 0.94, swirl: 1.75, shellPull: 0.65,
     nfreq: 0.41, neps: 1.4, lmin: 0.5, lrange: 10.0, dotR: 1.05, dotA: 0.9,
     chroma: 5.0, trail: 0.69, turb: 0.3, coh: 0.25, leaders: 0.12, dim: 0.26,
     attractors: 3, synapse: 3.0, pulse: 2.0, dens: 1.0, pulseRate: 2.2,
@@ -143,8 +156,12 @@ export function BrainLiquid({
     const profile = (): Profile =>
       PROFILES[stateRef.current] ?? PROFILES.idle;
 
-    // Allocate for max N across any state so we never reallocate.
-    const MAX_N = 7000;
+    // Allocate for max N across any state so we never reallocate. Must be
+    // >= max(PROFILES[*].N) — `thinking` is currently the ceiling at
+    // 12000. Bumping this is cheap (≈14 typed-array allocations of
+    // MAX_N × 4 bytes = ~672 KB at 12000); the per-frame cost scales
+    // linearly with the *active* profile's N, not MAX_N.
+    const MAX_N = 12000;
     const px = new Float32Array(MAX_N);
     const py = new Float32Array(MAX_N);
     const pz = new Float32Array(MAX_N);
@@ -162,7 +179,10 @@ export function BrainLiquid({
 
     const cx = size / 2;
     const cy = size / 2;
-    const R = size * 0.42;
+    // Standalone's `radius %` slider defaults to 0.5 across every state;
+    // 0.42 was the legacy under-fill that left the sphere visibly small
+    // inside the canvas. Match the design.
+    const R = size * 0.5;
 
     function respawn(i: number, p: Profile) {
       const u = Math.random();
@@ -592,9 +612,33 @@ export function BrainLiquid({
         placeItems: "center",
       }}
     >
+      {/* Halo — global iridescent CSS glow behind the canvas. Mirror of
+          the standalone's `halo` div: conic-gradient (purple → cyan →
+          mauve → gold), 32px blur, opacity 0.15, scaled to 0.9 of the
+          container so it sits inside the sphere edge. Pure CSS so it
+          never costs a frame. */}
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          borderRadius: "50%",
+          pointerEvents: "none",
+          background:
+            "conic-gradient(from 0deg, " +
+            "oklch(0.86 0.11 280 / 0.25), " +
+            "oklch(0.87 0.10 200 / 0.25), " +
+            "oklch(0.86 0.10 340 / 0.25), " +
+            "oklch(0.88 0.09 60 / 0.25), " +
+            "oklch(0.86 0.11 280 / 0.25))",
+          filter: "blur(32px)",
+          opacity: 0.15,
+          transform: "scale(0.9)",
+        }}
+      />
       <canvas
         ref={canvasRef}
-        style={{ width: size, height: size, display: "block" }}
+        style={{ width: size, height: size, display: "block", position: "relative" }}
       />
     </div>
   );
