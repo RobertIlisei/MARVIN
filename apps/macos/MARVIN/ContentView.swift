@@ -136,28 +136,32 @@ struct ContentView: View {
         // ● suffix marks an uncommitted-changes count, matching
         // the web BranchBadge's dirty pip.
         .navigationSubtitle(composeSubtitle())
-        // Phase 1d.3 — mirror the `(N)` pending-confirm count into
-        // the dock tile badge. Parsed from the same webTitle the
-        // navigation title shows; no extra bridge message needed.
-        // Visible from any app, not just when MARVIN is focused —
-        // exactly the affordance the dock badge is designed for.
+        // Phase 1d.3/1d.14 — pending-confirm count drives both the
+        // dock tile badge AND a system notification on 0 → N
+        // transitions. Parsed once out of webTitle so both surfaces
+        // stay in sync without two regex passes.
         .onChange(of: bridge.webTitle ?? "") { _, newTitle in
-            updateDockBadge(from: newTitle)
+            let count = parseConfirmCount(newTitle)
+            updateDockBadge(count: count)
+            NotificationManager.shared.updateConfirmCount(count)
         }
     }
 
-    /// Parse `(N) ...` out of a document.title and set the macOS
-    /// Dock badge accordingly. Empty badge label clears the badge.
-    private func updateDockBadge(from title: String) {
-        // Anchored prefix match to avoid false positives like
-        // "(deferred) MARVIN".
+    /// Parse the leading `(N)` pending-confirm count out of a
+    /// document.title. Anchored prefix match to avoid false
+    /// positives like "(deferred) MARVIN". Returns 0 when no match.
+    private func parseConfirmCount(_ title: String) -> Int {
         let pattern = #"^\((\d+)\)"#
-        if let range = title.range(of: pattern, options: .regularExpression) {
-            let inner = title[range].dropFirst().dropLast() // strip "(" and ")"
-            NSApp.dockTile.badgeLabel = String(inner)
-        } else {
-            NSApp.dockTile.badgeLabel = ""
+        guard let range = title.range(of: pattern, options: .regularExpression) else {
+            return 0
         }
+        let inner = title[range].dropFirst().dropLast() // strip "(" and ")"
+        return Int(inner) ?? 0
+    }
+
+    /// Set the macOS Dock badge to a non-empty count, or clear it.
+    private func updateDockBadge(count: Int) {
+        NSApp.dockTile.badgeLabel = count > 0 ? String(count) : ""
     }
 
     /// Compose the NSWindow subtitle from the bridge state. Three

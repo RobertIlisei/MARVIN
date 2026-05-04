@@ -46,14 +46,15 @@ apps/macos/
 ├── project.yml           # xcodegen — source of truth for .xcodeproj
 ├── .gitignore            # ignores generated .xcodeproj + build dirs
 └── MARVIN/
-    ├── MARVINApp.swift       # @main, scenes, menu bar commands
-    ├── ContentView.swift     # connecting / online (WebView) / offline
-    ├── AboutView.swift       # About panel — app + live sidecar info
-    ├── SettingsView.swift    # ⌘, native preferences (open dirs, reset window)
-    ├── HealthMonitor.swift   # /api/health poller, state machine
-    ├── WebView.swift         # NSViewRepresentable wrapping WKWebView
-    ├── Bridge.swift          # JS↔Swift message channel (window.marvinShell)
-    └── Info.plist            # bundle metadata, ATS, deployment target
+    ├── MARVINApp.swift          # @main, scenes, menu bar commands
+    ├── ContentView.swift        # connecting / online (WebView) / offline
+    ├── AboutView.swift          # About panel — app + live sidecar info
+    ├── SettingsView.swift       # ⌘, native preferences (open dirs, reset window)
+    ├── NotificationManager.swift  # macOS notifications for pending confirms
+    ├── HealthMonitor.swift      # /api/health poller, state machine
+    ├── WebView.swift            # NSViewRepresentable wrapping WKWebView
+    ├── Bridge.swift             # JS↔Swift message channel (window.marvinShell)
+    └── Info.plist               # bundle metadata, ATS, deployment target
 ```
 
 `MARVIN.xcodeproj/` is `.gitignore`-d — regenerated cleanly from
