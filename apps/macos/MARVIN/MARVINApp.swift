@@ -76,11 +76,35 @@ private func openTerminalAt(workDir: String?) {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusBar = StatusBarController()
 
+    /// Phase 1d.31 — App-Nap-disabling activity token. macOS throttles
+    /// background apps' Tasks / Timers after ~5s of inactivity, which
+    /// stretches HealthMonitor's 5s poll interval into 30s+ chunks.
+    /// The user-visible symptom: bring MARVIN back to the foreground
+    /// after working in another app, see "offline" flash for a
+    /// second before the next probe lands. Holding a
+    /// `.userInitiatedAllowingIdleSystemSleep` activity tells the
+    /// scheduler to keep our Tasks running normally even in the
+    /// background, while still letting the system sleep on its own
+    /// idle timer (we don't want to keep the Mac awake).
+    private var appNapToken: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Install the status item once on launch. The controller
         // retains the NSStatusItem itself; we just hold the
         // controller so it doesn't deallocate.
         statusBar.install()
+
+        appNapToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "MARVIN polls the local sidecar every 5s — App Nap throttling causes spurious offline flashes on foreground."
+        )
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let token = appNapToken {
+            ProcessInfo.processInfo.endActivity(token)
+            appNapToken = nil
+        }
     }
 
     /// Phase 1d.30 — accept folder drops on the Dock icon AND
