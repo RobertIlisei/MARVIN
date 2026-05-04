@@ -59,43 +59,16 @@ private struct OpenRecentMenuContent: View {
     }
 }
 
-/// Phase 2a — fire one hello-world turn through ChatService and log
-/// each event to stderr. Bound to a DEBUG-only menu item so we have
-/// a one-click verify path before the chat UI exists. The actual
-/// rendering happens in Phase 2c; this confirms the SSE plumbing
-/// works against a live sidecar end-to-end.
-@MainActor
-private func runChatSmokeTest(bridge: MarvinBridge) {
-    let cwd = bridge.projectWorkDir ?? NSHomeDirectory()
-    NSLog("[ChatSmoke] starting — cwd=\(cwd)")
-    let request = ChatRequest(
-        message: "Reply with the single word 'pong' and nothing else.",
-        cwd: cwd
-    )
-    Task { @MainActor in
-        let stream = ChatService.shared.streamTurn(request: request)
-        do {
-            for try await event in stream {
-                switch event {
-                case .turnStarted(let s):
-                    NSLog("[ChatSmoke] turn.started turnId=\(s.turnId) marvinSessionId=\(s.marvinSessionId)")
-                case .cliEvent(let data):
-                    let raw = String(data: data, encoding: .utf8) ?? "<bytes>"
-                    NSLog("[ChatSmoke] cli.event \(raw.prefix(200))")
-                case .confirmRequest(let c):
-                    NSLog("[ChatSmoke] confirm.request tool=\(c.tool)")
-                case .turnCompleted(let c):
-                    NSLog("[ChatSmoke] turn.completed cost=\(c.costUsd ?? 0) duration=\(c.durationMs ?? 0)ms")
-                case .turnError(let e):
-                    NSLog("[ChatSmoke] turn.error: \(e.error)")
-                case .unknown(let name, _):
-                    NSLog("[ChatSmoke] unknown event: \(name)")
-                }
-            }
-            NSLog("[ChatSmoke] stream ended cleanly")
-        } catch {
-            NSLog("[ChatSmoke] FAILED: \(error)")
+/// Phase 2b — Window menu item that opens the native chat preview.
+/// Wrapped in a View so `@Environment(\.openWindow)` resolves; the
+/// pattern matches OpenAboutButton.
+private struct OpenChatPreviewButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Native Chat (preview)") {
+            openWindow(id: "marvin-chat-preview")
         }
+        .keyboardShortcut("c", modifiers: [.command, .option])
     }
 }
 
@@ -517,16 +490,16 @@ struct MARVINApp: App {
                 .keyboardShortcut("/", modifiers: [.command])
                 .disabled(!health.state.isOnline)
 
-                // Phase 2a — chat smoke test. Sends a hello-world
-                // turn through the native ChatService and logs each
-                // event to stderr. Temporary scaffolding — removed
-                // once Phase 2c lands a real chat surface. Disabled
-                // when offline so the menu doesn't fire into nothing.
+                // Phase 2b — opens the native chat preview window.
+                // Dev surface for iterating on the SwiftUI chat
+                // island while the WebView keeps rendering the real
+                // chat in the main window. Goes away once Phase 2g
+                // promotes the native island into the main window.
+                // Disabled when offline so submitting can't fire
+                // into a dead sidecar.
                 Divider()
-                Button("Phase 2 — Chat smoke test") {
-                    runChatSmokeTest(bridge: bridge)
-                }
-                .disabled(!health.state.isOnline)
+                OpenChatPreviewButton()
+                    .disabled(!health.state.isOnline)
             }
 
             // Help menu — quick links out to the project. macOS
@@ -575,5 +548,21 @@ struct MARVINApp: App {
                 .environment(health)
                 .environment(bridge)
         }
+
+        // Phase 2b — native chat preview Window. Dev surface for
+        // iterating on the SwiftUI chat island. Send-only today;
+        // Phase 2c populates a structured message list above the
+        // input. Phase 2g eventually promotes this content into
+        // the main window and the standalone preview goes away.
+        Window("Native Chat (preview)", id: "marvin-chat-preview") {
+            ChatPreviewView()
+                .environment(bridge)
+        }
+        .windowResizability(.contentSize)
+        // .commandsRemoved keeps the preview window from re-emitting
+        // the menu items the main window provides — e.g. we don't
+        // want a second "Reload" / "Open Project…" menu when the
+        // preview is focused.
+        .commandsRemoved()
     }
 }
