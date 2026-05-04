@@ -52,12 +52,50 @@ let package = Package(
             url: "https://github.com/krzyzanowskim/STTextView.git",
             from: "1.0.0"
         ),
+
+        // Phase 5b.2 — tree-sitter Swift binding from ChimeHQ. The
+        // SwiftTreeSitter wrapper exposes the C tree-sitter library
+        // as Swift (Parser / Language / Tree / Query / QueryCursor)
+        // and is the foundation used by Neon, Chime, and most other
+        // Swift editor projects. MIT licensed; ChimeHQ is also the
+        // maintainer of TextStory + Neon + several other Apple-
+        // platform editor frameworks.
+        .package(
+            url: "https://github.com/ChimeHQ/SwiftTreeSitter.git",
+            from: "0.9.0"
+        ),
+
+        // Phase 5b.2 — per-language tree-sitter packages. Each one
+        // bundles the C parser source + a `queries/highlights.scm`
+        // file via SPM's resource pipeline. Adding a new language
+        // is: SPM dep + one entry in SyntaxHighlighter.languageFor.
+        //
+        // - tree-sitter-swift uses alex-pinkus's `with-generated-files`
+        //   branch — the upstream repo only ships generator inputs,
+        //   not the generated parser.c, so the pre-generated branch
+        //   is the SPM-friendly path.
+        // - tree-sitter-typescript covers both .ts and .tsx via two
+        //   library products (TreeSitterTypeScript + TreeSitterTSX).
+        //
+        // Phase 5b.3 will add tree-sitter-python / -go / -rust /
+        // -markdown alongside the same SyntaxHighlighter switch.
+        .package(
+            url: "https://github.com/alex-pinkus/tree-sitter-swift.git",
+            branch: "with-generated-files"
+        ),
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-typescript.git",
+            from: "0.23.0"
+        ),
     ],
     targets: [
         .executableTarget(
             name: "MARVIN",
             dependencies: [
                 .product(name: "STTextView", package: "STTextView"),
+                .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
+                .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
+                .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
             ],
             // SPM looks for Sources/MARVIN by default; we keep
             // sources at apps/macos/MARVIN to match the Xcode

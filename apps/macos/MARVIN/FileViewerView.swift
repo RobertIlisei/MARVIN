@@ -118,21 +118,25 @@ final class FileViewerModel {
 // MARK: - STTextView wrapper
 
 /// Read-only STTextView in an NSScrollView with a line-number ruler,
-/// displaying `content` in a monospaced system font. STTextView is
-/// the TextKit 2-backed text view from krzyzanowskim/STTextView —
-/// drop-in API-compatible with NSTextView for the surface area we
-/// use (string / isEditable / font / scrollableTextView), with
-/// editor-friendly extras (line numbers, soft wrap, future tree-
-/// sitter highlight bindings) baked in.
+/// displaying `content` in a monospaced system font with optional
+/// tree-sitter syntax highlighting layered via `addAttributes`.
+/// STTextView is the TextKit 2-backed text view from
+/// krzyzanowskim/STTextView — drop-in API-compatible with NSTextView
+/// for the surface area we use, with editor-friendly extras (line
+/// numbers, soft wrap, attribute APIs) baked in.
 ///
-/// 5b.2 onward layers tree-sitter syntax highlighting on top via
-/// `addAttributes(_:range:)`; the read-only viewer surface itself
-/// stays unchanged.
-///
-/// updateNSView only writes when `string` differs to avoid resetting
-/// scroll position + cursor on every SwiftUI re-render.
+/// updateNSView only writes when `string` differs (or when the
+/// extension changes) to avoid resetting scroll position + cursor
+/// on every SwiftUI re-render.
 struct FileViewerNSView: NSViewRepresentable {
     let content: String
+    /// File extension (no leading dot, e.g. "swift", "ts"). Drives
+    /// the syntax-highlighting language pick. Empty / unknown
+    /// extensions render as plain monospace.
+    let fileExtension: String
+    /// Whether to colour with the dark-theme palette. Light theme
+    /// uses a different colour set tuned for white backgrounds.
+    let isDark: Bool
 
     func makeNSView(context: Context) -> NSScrollView {
         // STTextView ships its own scrollableTextView() factory that
@@ -183,12 +187,81 @@ struct FileViewerNSView: NSViewRepresentable {
         guard let textView = scroll.documentView as? STTextView else {
             return
         }
-        if textView.string != content {
+        let contentChanged = textView.string != content
+        let highlightInputsChanged = context.coordinator.lastExtension != fileExtension
+            || context.coordinator.lastIsDark != isDark
+        if contentChanged {
             textView.string = content
             // Move scroll back to origin on a fresh content load so
             // the user starts reading from the top, not from where
             // the last file's scroll was.
             textView.scroll(.zero)
+        }
+        if contentChanged || highlightInputsChanged {
+            applyHighlights(to: textView)
+            context.coordinator.lastExtension = fileExtension
+            context.coordinator.lastIsDark = isDark
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator {
+        /// Track the last (extension, theme) pair we coloured with
+        /// so a SwiftUI re-render that didn't actually change them
+        /// skips the re-highlight pass.
+        var lastExtension: String = ""
+        var lastIsDark: Bool = false
+    }
+
+    /// Run the syntax highlighter over the current text and apply
+    /// foreground-colour attributes. Captures with no theme entry
+    /// fall through with no attribute (default text colour wins).
+    /// Captures with overlapping ranges resolve via "later capture
+    /// wins" — tree-sitter convention, and the shape `nextCapture`
+    /// already produces for us in iteration order.
+    @MainActor
+    private func applyHighlights(to textView: STTextView) {
+        // Reset any previous foreground tinting. STTextView's
+        // `removeAttribute(_:range:)` takes an NSRange overload —
+        // we span the full document.
+        let fullRange = NSRange(location: 0, length: (content as NSString).length)
+        textView.removeAttribute(.foregroundColor, range: fullRange)
+        // Re-apply the default foreground so the whole document is
+        // legible before we layer captures on top. Use the system
+        // label colour so light/dark mode automatic adjustment
+        // still applies for any byte the highlighter doesn't cover.
+        textView.addAttributes(
+            [.foregroundColor: NSColor.labelColor],
+            range: fullRange
+        )
+
+        guard !fileExtension.isEmpty else { return }
+        guard let spans = SyntaxHighlighter.highlight(
+            content: content,
+            fileExtension: fileExtension
+        ) else {
+            return
+        }
+        for span in spans {
+            guard let color = HighlightTheme.color(
+                forCapture: span.captureName,
+                isDark: isDark
+            ) else { continue }
+            // Guard against captures whose range slips past the
+            // string's UTF-16 length — pathological with multi-
+            // byte content + a query that uses byte ranges where
+            // characters don't align cleanly.
+            guard span.range.location >= 0,
+                  span.range.location + span.range.length <= fullRange.length
+            else { continue }
+            textView.addAttributes(
+                [.foregroundColor: color],
+                range: span.range
+            )
         }
     }
 }
@@ -266,9 +339,13 @@ struct FileViewerPreviewView: View {
             )
         case .failed(let msg, _):
             placeholder("Failed to load: \(msg)")
-        case .loaded(let content, _, _):
-            FileViewerNSView(content: content)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loaded(let content, let path, _):
+            FileViewerNSView(
+                content: content,
+                fileExtension: (path as NSString).pathExtension,
+                isDark: bridge.preferredColorScheme != .light
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

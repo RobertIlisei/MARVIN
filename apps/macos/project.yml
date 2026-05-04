@@ -24,6 +24,15 @@ packages:
   STTextView:
     url: https://github.com/krzyzanowskim/STTextView.git
     from: 1.0.0
+  SwiftTreeSitter:
+    url: https://github.com/ChimeHQ/SwiftTreeSitter.git
+    from: 0.9.0
+  tree-sitter-swift:
+    url: https://github.com/alex-pinkus/tree-sitter-swift.git
+    branch: with-generated-files
+  tree-sitter-typescript:
+    url: https://github.com/tree-sitter/tree-sitter-typescript.git
+    from: 0.23.0
 
 # Top-level options — Apple-shop defaults plus explicit minima.
 options:
@@ -72,6 +81,12 @@ targets:
     dependencies:
       - package: STTextView
         product: STTextView
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: tree-sitter-swift
+        product: TreeSitterSwift
+      - package: tree-sitter-typescript
+        product: TreeSitterTypeScript
     sources:
       - path: MARVIN
         # Resources/ holds AppIcon.icns + the source SVGs (idle /

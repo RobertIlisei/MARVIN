@@ -784,6 +784,15 @@ cmd_install_macos_app() {
     for svg in "$macos_dir/MARVIN/Resources"/*.svg; do
       [ -f "$svg" ] && cp "$svg" "$built_app/Contents/Resources/"
     done
+    # Phase 5b — tree-sitter highlight queries. Loaded at runtime by
+    # SyntaxHighlighter.swift via Bundle.main from this subdirectory;
+    # SPM's resource pipeline puts a per-language bundle elsewhere
+    # in .build, but the SPM-mirror install path here doesn't extract
+    # those, so we vendor the .scm files into MARVIN/Resources and
+    # ship them recursively.
+    if [ -d "$macos_dir/MARVIN/Resources/Queries" ]; then
+      cp -R "$macos_dir/MARVIN/Resources/Queries" "$built_app/Contents/Resources/"
+    fi
     info "ad-hoc signing"
     codesign --force --deep --sign - "$built_app" >/dev/null 2>&1 || {
       fail "codesign failed"
