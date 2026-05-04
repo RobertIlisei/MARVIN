@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { MarvinPrefsProvider } from "@/lib/use-prefs";
+import { MarvinShellBridge } from "@/components/shell/marvin-shell-bridge";
 
 // Body UI — **system stack first** (see globals.css `--font-sans`). On
 // macOS this resolves to SF Pro / `-apple-system`, which is what makes
@@ -77,6 +78,12 @@ export default function RootLayout({
             findings #16 + #18. The provider hydrates lazily on the
             client; SSR uses DEFAULT_PREFS. */}
         <MarvinPrefsProvider>{children}</MarvinPrefsProvider>
+        {/* MarvinShellBridge — one-time host-shell detection on
+            mount. Renders nothing; posts a hello message on the
+            JS↔Swift bridge when running inside MARVIN-Swift.app
+            and stamps <html data-host-shell="swift"> so CSS can
+            adapt. No-op outside the Swift shell. */}
+        <MarvinShellBridge />
       </body>
     </html>
   );

@@ -60,6 +60,14 @@ struct WebView: NSViewRepresentable {
         pagePrefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = pagePrefs
 
+        // Phase 1d/2+ groundwork — JS↔Swift bridge. Adds the
+        // `marvin` message channel + injects `window.marvinShell`
+        // at document start. See Bridge.swift for the wire format
+        // and security boundary. Idempotent within a config; safe
+        // to call once per WebView mount (each WebView gets a
+        // fresh WKWebViewConfiguration anyway).
+        MarvinBridge.shared.install(on: config)
+
         // Enable the WebKit inspector in DEBUG builds — same affordance
         // Tauri ships. Right-click → Inspect Element. KVC-set because
         // it's not exposed publicly until macOS 13.3+ and we want a

@@ -51,6 +51,7 @@ apps/macos/
     ├── AboutView.swift       # About panel — app + live sidecar info
     ├── HealthMonitor.swift   # /api/health poller, state machine
     ├── WebView.swift         # NSViewRepresentable wrapping WKWebView
+    ├── Bridge.swift          # JS↔Swift message channel (window.marvinShell)
     └── Info.plist            # bundle metadata, ATS, deployment target
 ```
 
@@ -75,10 +76,24 @@ for the full table. Short version:
   custom About panel that surfaces live sidecar info from
   `HealthMonitor` (auth mode, model, data dir) so the migration
   evaluation makes "which build am I in" obvious at a glance.
-- **Phase 1d — NSToolbar:** replaces the web-rendered top bar.
-  Requires an `apps/web` change to detect the SwiftUI shell (via the
-  `MARVIN-Swift/0.1` user-agent suffix) and hide the web top bar.
-  Held until the daily-use evaluation says it's worth the bridge.
+- **Phase 1d — NSToolbar:** replaces the web-rendered top bar with
+  native toolbar items mirroring web-app state. The JS↔Swift bridge
+  groundwork (see below) is now in place; the remaining 1d work is
+  picking which controls graduate to native vs stay web-rendered,
+  and wiring the message types for each. Held until the daily-use
+  evaluation argues for it.
+
+### Bridge groundwork (shipped alongside Phase 1c)
+
+`MarvinBridge` (Swift) + `apps/web/src/lib/marvin-shell.ts` (TS) are
+the JS↔Swift message channel that everything from Phase 1d on
+needs. Single channel named `marvin`; messages are
+`{ type: string, payload?: object }`. The Swift side logs unknown
+types and routes known ones in `Bridge.swift`'s `handle(_:)`. The
+web side calls `postToShell({ type, payload })` and reads
+`isSwiftShell()` for branching. Today it carries one message
+(`hello` on mount, for end-to-end verification); future phases
+extend the dispatch table.
 - **Phase 2 — Chat surface:** native chat list + ChatInput.
 - **Phase 3 — File tree + Source Control:** native NSOutlineView +
   diff viewer.
