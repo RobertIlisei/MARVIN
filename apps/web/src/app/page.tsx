@@ -10,7 +10,7 @@ import { taskRoleOf } from "@/components/brain/task-role";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
 import { VirtualMessageList } from "@/components/chat/virtual-message-list";
-import { announceProject } from "@/lib/marvin-shell";
+import { announceModels, announceProject } from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
@@ -128,6 +128,14 @@ export default function Home() {
     panes,
     showAutoModeBanner,
   } = prefs;
+
+  // Phase 1d.15 — mirror the active model selection to the SwiftUI
+  // shell. The About panel reads bridge.executorModel / advisorModel
+  // and shows them under "Active models". No-op outside the Swift
+  // shell. Both nullable to mean "fall back to sidecar default".
+  useEffect(() => {
+    announceModels(executorModel, advisorModel);
+  }, [executorModel, advisorModel]);
 
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();

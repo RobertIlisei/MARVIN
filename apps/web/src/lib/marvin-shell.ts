@@ -139,6 +139,24 @@ export function announceBranch(
 }
 
 /**
+ * Mirrors the user's currently-selected models to the Swift side
+ * so the native About panel can show "executor: claude-X" instead
+ * of just the sidecar's default model. Phase 1d.15 — fires on
+ * model-picker changes from `useMarvinPrefs().setModels`. Both
+ * fields nullable; null means "fall back to sidecar default".
+ */
+export function announceModels(
+  executor: string | null,
+  advisor: string | null,
+): void {
+  if (!isSwiftShell()) return;
+  postToShell({
+    type: "models-changed",
+    payload: { executor, advisor },
+  });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

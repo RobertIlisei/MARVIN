@@ -71,6 +71,22 @@ struct AboutView: View {
                 }
             }
 
+            // Phase 1d.15 — show the user-selected models when set.
+            // Sidecar's defaultModel still appears in the Sidecar
+            // section above; this section reflects the user's pick
+            // (which the web app's model picker writes to
+            // localStorage and the bridge mirrors). Hidden when
+            // nothing's been selected — Sidecar default is the
+            // implicit answer in that case.
+            if bridge.executorModel != nil || bridge.advisorModel != nil {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Active models")
+                        .font(.callout.weight(.semibold))
+                    modelsBlock
+                }
+            }
+
             Divider()
 
             HStack(spacing: 4) {
@@ -83,7 +99,20 @@ struct AboutView: View {
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 460, height: 460)
+        .frame(width: 460, height: 540)
+    }
+
+    @ViewBuilder
+    private var modelsBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let executor = bridge.executorModel {
+                aboutRow("executor", executor)
+            }
+            if let advisor = bridge.advisorModel {
+                aboutRow("advisor", advisor)
+            }
+        }
+        .font(.body.monospaced())
     }
 
     @ViewBuilder

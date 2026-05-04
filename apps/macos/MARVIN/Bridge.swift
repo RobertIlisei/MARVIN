@@ -135,6 +135,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     private(set) var branch: String? = nil
     private(set) var branchDirtyCount: Int = 0
 
+    /// User-selected executor + advisor model names, posted by the
+    /// web side via `models-changed`. `nil` means "use sidecar
+    /// default" (the user hasn't picked one yet). Phase 1d.15 —
+    /// drives the About panel's "Active models" section.
+    private(set) var executorModel: String? = nil
+    private(set) var advisorModel: String? = nil
+
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
     /// One name keeps the WebKit configuration simple; routing
@@ -307,6 +314,13 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             // the live subtitle is the visible signal.
             branch = (payload?["branch"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             branchDirtyCount = (payload?["dirtyCount"] as? Int) ?? 0
+        case "models-changed":
+            // User-selected executor / advisor models. Both nullable
+            // — null means "fall back to whatever the sidecar's
+            // /api/health reports as defaultModel". Drives the About
+            // panel's Active models section.
+            executorModel = (payload?["executor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            advisorModel = (payload?["advisor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).
