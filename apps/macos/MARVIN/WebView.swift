@@ -105,11 +105,23 @@ final class WebViewCommands {
     /// the user types — matches Safari/Mail's find-bar behavior.
     var findText: String = "" {
         didSet {
-            if isFindVisible && !findText.isEmpty && oldValue != findText {
+            guard isFindVisible, oldValue != findText else { return }
+            if findText.isEmpty {
+                findCount = 0
+            } else {
                 findNext()
+                updateFindCount()
             }
         }
     }
+
+    /// Total occurrences of `findText` in the live document body.
+    /// Updated after every successful search via a JS occurrence
+    /// counter — `WKFindResult` only returns `matchFound: Bool`,
+    /// not a count, so we compute it ourselves. 0 when empty query
+    /// or no matches; the find bar renders "no matches" in that
+    /// case. Phase 1d.13.
+    var findCount: Int = 0
 
     /// Open the find bar and focus its TextField.
     func showFind() {
@@ -121,11 +133,12 @@ final class WebViewCommands {
     func hideFind() {
         isFindVisible = false
         findText = ""
+        findCount = 0
     }
 
     /// Forward search. WKFindConfiguration handles the highlight
-    /// automatically; result.matchFound is ignored here because
-    /// our minimal find bar doesn't show a match count yet.
+    /// automatically; we kick the JS occurrence counter alongside
+    /// so the find bar can show "X matches".
     func findNext() {
         guard let webView, !findText.isEmpty else { return }
         let config = WKFindConfiguration()
@@ -141,6 +154,39 @@ final class WebViewCommands {
         config.backwards = true
         config.wraps = true
         webView.find(findText, configuration: config) { _ in }
+    }
+
+    /// Refresh `findCount` by counting case-insensitive occurrences
+    /// of `findText` in the document's text content. Uses an
+    /// `indexOf` loop in JS — avoids the regex-escape dance you'd
+    /// need with `String.match(/.../gi)`. Result is bounced through
+    /// `Task { @MainActor }` because `evaluateJavaScript`'s callback
+    /// fires on an unspecified queue.
+    private func updateFindCount() {
+        guard let webView else { return }
+        if findText.isEmpty {
+            findCount = 0
+            return
+        }
+        let safe = findText
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let js = """
+        (function() {
+            var n = "\(safe)".toLowerCase();
+            if (!n) return 0;
+            var h = (document.body.innerText || '').toLowerCase();
+            var c = 0, i = 0;
+            while ((i = h.indexOf(n, i)) !== -1) { c++; i += n.length; }
+            return c;
+        })()
+        """
+        webView.evaluateJavaScript(js) { [weak self] result, _ in
+            let count = (result as? Int) ?? 0
+            Task { @MainActor in
+                self?.findCount = count
+            }
+        }
     }
 }
 

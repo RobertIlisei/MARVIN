@@ -463,13 +463,22 @@ private struct FindBarView: View {
                 .onSubmit {
                     webCommands.findNext()
                 }
+            // Match count — "12 matches" when results, "no matches"
+            // in red-ish when query is set but unmatched, hidden when
+            // the query is empty. Phase 1d.13.
+            if !webCommands.findText.isEmpty {
+                Text(matchLabel(for: webCommands.findCount))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(webCommands.findCount > 0 ? .secondary : Color.orange.opacity(0.85))
+                    .frame(minWidth: 70, alignment: .trailing)
+            }
             Button {
                 webCommands.findPrevious()
             } label: {
                 Image(systemName: "chevron.up")
             }
             .buttonStyle(.borderless)
-            .disabled(webCommands.findText.isEmpty)
+            .disabled(webCommands.findText.isEmpty || webCommands.findCount == 0)
             .help("Previous match · ⇧⌘G")
             Button {
                 webCommands.findNext()
@@ -477,7 +486,7 @@ private struct FindBarView: View {
                 Image(systemName: "chevron.down")
             }
             .buttonStyle(.borderless)
-            .disabled(webCommands.findText.isEmpty)
+            .disabled(webCommands.findText.isEmpty || webCommands.findCount == 0)
             .help("Next match · ⌘G")
             Button("Done") {
                 webCommands.hideFind()
@@ -492,13 +501,21 @@ private struct FindBarView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         )
-        .frame(maxWidth: 360)
+        .frame(maxWidth: 420)
         // Force focus to the field whenever the bar appears OR when
         // it's already visible and ⌘F is pressed again (re-focus
         // pattern matches Safari's "tap ⌘F to refocus").
         .onAppear { fieldFocused = true }
         .onChange(of: webCommands.isFindVisible) { _, visible in
             if visible { fieldFocused = true }
+        }
+    }
+
+    private func matchLabel(for count: Int) -> String {
+        switch count {
+        case 0: "no matches"
+        case 1: "1 match"
+        default: "\(count) matches"
         }
     }
 }
