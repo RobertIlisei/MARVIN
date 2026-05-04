@@ -101,12 +101,39 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             if brainState != oldValue {
                 let nowMs = CACurrentMediaTime() * 1000
                 transition.transition(to: brainState, nowMs: nowMs)
+                applyFrameRate()
             }
         }
     }
+    /// Phase 4h — Reduce Motion accommodation. When true, the
+    /// MTKView display link is gated to ~10 fps (matches the TS
+    /// version's `prefers-reduced-motion` cadence). Reading
+    /// `accessibilityReduceMotion` from SwiftUI's environment is
+    /// the source; `BrainMetalView`'s `updateNSView` pushes it in.
+    var reduceMotion: Bool = false {
+        didSet {
+            if reduceMotion != oldValue { applyFrameRate() }
+        }
+    }
+    /// Phase 4h — visibility gate. When true (window minimised /
+    /// fully occluded by another window), `MTKView.isPaused` is
+    /// set so the display link stops firing — kernel + render
+    /// passes go to zero work. dt-on-resume is clamped by the
+    /// simulation's existing `min(0.05, …)` so the integrator
+    /// doesn't fast-forward by minutes.
+    var isOccluded: Bool = false {
+        didSet {
+            if isOccluded != oldValue { applyVisibility() }
+        }
+    }
+
     // MARK: Internal flags
 
     private var needsClear = true
+    /// Held weakly so the perf-control setters can mutate the
+    /// view's `preferredFramesPerSecond` / `isPaused` without a
+    /// retain cycle (MTKView retains the renderer as its delegate).
+    private weak var weakView: MTKView?
 
     // MARK: Init
 
@@ -171,6 +198,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
 
         super.init()
         view.delegate = self
+        self.weakView = view
         view.preferredFramesPerSecond = 60
         if let layer = view.layer as? CAMetalLayer {
             // Opaque so the composite pass doesn't mix with window
@@ -179,6 +207,44 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             layer.isOpaque = true
         }
         view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+    }
+
+    // MARK: Perf controls (Phase 4h)
+
+    /// Reset MTKView's display-link cadence based on the three
+    /// signals: reduce-motion (10 fps cap, hard accessibility
+    /// requirement), idle state (30 fps to save battery — matches
+    /// the TS `prefers-reduced-motion`-adjacent throttle), or the
+    /// default 60 fps. Call from setters of `reduceMotion` /
+    /// `brainState` so the cadence tracks input changes.
+    ///
+    /// Priority: reduce-motion wins over idle (the user's setting
+    /// is more important than the brain's mood). Both are below
+    /// 60 fps so a busy state at reduce-motion still reads "calm
+    /// motion", not "frozen".
+    private func applyFrameRate() {
+        guard let view = weakView else { return }
+        let target: Int
+        if reduceMotion {
+            target = 10
+        } else if brainState == .idle {
+            target = 30
+        } else {
+            target = 60
+        }
+        if view.preferredFramesPerSecond != target {
+            view.preferredFramesPerSecond = target
+        }
+    }
+
+    /// Pause / resume the display link based on window visibility.
+    /// `MTKView.isPaused = true` stops the underlying CADisplayLink
+    /// — `draw(in:)` doesn't fire, the kernel doesn't run, the
+    /// simulation freezes. Resume is instant (one frame of catch-
+    /// up; physics doesn't fast-forward thanks to the dt clamp).
+    private func applyVisibility() {
+        guard let view = weakView else { return }
+        view.isPaused = isOccluded
     }
 
     private static func makeParticlePipeline(
@@ -392,11 +458,15 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
 // MARK: - SwiftUI bridge
 
 /// SwiftUI bridge to MTKView. Holds the renderer alive across
-/// updates so its device/queue/library don't churn. State + scheme
-/// flow in via `updateNSView`.
+/// updates so its device/queue/library don't churn. State, scheme,
+/// reduce-motion, and the occlusion flag flow in via `updateNSView`.
+/// The Coordinator owns the NSWindow occlusion observer so the
+/// listener tracks the actual hosting window rather than a global
+/// app-wide proxy.
 struct BrainMetalView: NSViewRepresentable {
     let state: BrainState
     let colorScheme: ColorScheme?
+    let reduceMotion: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -410,18 +480,77 @@ struct BrainMetalView: NSViewRepresentable {
             initialState: state,
             colorScheme: colorScheme
         )
+        renderer?.reduceMotion = reduceMotion
         context.coordinator.renderer = renderer
+        // Window isn't attached yet at makeNSView time — bind the
+        // occlusion observer in updateNSView (or asynchronously,
+        // whichever fires first after layout). See Coordinator.
         return view
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.renderer?.brainState = state
         context.coordinator.renderer?.preferredColorScheme = colorScheme
+        context.coordinator.renderer?.reduceMotion = reduceMotion
+        // Late-binding for the window observer. SwiftUI calls
+        // updateNSView after the view is in its hierarchy on at
+        // least some passes; by the second call `view.window` is
+        // populated. Coordinator.bind dedupes — calling it on
+        // every update is a no-op once the right window is bound.
+        context.coordinator.bind(window: view.window)
     }
 
     @MainActor
     final class Coordinator {
         var renderer: BrainMetalRenderer?
+        /// The window we're observing for occlusion changes. Held
+        /// weakly so closing the window deallocs without us having
+        /// to nullify here too.
+        private weak var observedWindow: NSWindow?
+        /// NotificationCenter token for the occlusion observer. We
+        /// hold it so we can `removeObserver` on rebind / deinit;
+        /// without explicit removal, the observer survives until
+        /// process exit (NotificationCenter retains it).
+        private var occlusionToken: NSObjectProtocol?
+
+        func bind(window: NSWindow?) {
+            guard let window = window else { return }
+            if observedWindow === window { return }
+            // New window — drop the old observer (if any) before
+            // attaching the new one.
+            if let token = occlusionToken {
+                NotificationCenter.default.removeObserver(token)
+                occlusionToken = nil
+            }
+            observedWindow = window
+            occlusionToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] notif in
+                guard let win = notif.object as? NSWindow else { return }
+                let occluded = !win.occlusionState.contains(.visible)
+                // The observer block hops from .main queue back to
+                // the main actor. The main actor IS the main queue
+                // on macOS, but Swift 6 strict-concurrency wants an
+                // explicit hop to silence the isolation warning.
+                Task { @MainActor [weak self] in
+                    self?.renderer?.isOccluded = occluded
+                }
+            }
+            // Seed the initial state — a window that's already
+            // occluded at bind-time would otherwise wait for the
+            // next change to update.
+            renderer?.isOccluded = !window.occlusionState.contains(.visible)
+        }
+
+        deinit {
+            // Tokens are removed safely from any thread —
+            // NotificationCenter is internally thread-safe.
+            if let token = occlusionToken {
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
     }
 }
 
@@ -448,6 +577,11 @@ struct BrainMetalView: NSViewRepresentable {
 /// state caption.
 struct BrainPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
+    /// Phase 4h — System Settings → Accessibility → Display →
+    /// Reduce Motion. SwiftUI tracks the current value and re-
+    /// invalidates body when the user toggles the system setting,
+    /// so the renderer's frame-rate cap updates without a relaunch.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var state: BrainState {
         BrainState.defaultFor(busy: bridge.isBusy)
@@ -457,7 +591,8 @@ struct BrainPaneView: View {
         VStack(spacing: 8) {
             BrainMetalView(
                 state: state,
-                colorScheme: bridge.preferredColorScheme
+                colorScheme: bridge.preferredColorScheme,
+                reduceMotion: reduceMotion
             )
             // Square aspect — keeps the visible sphere circular
             // when the pane is taller than wide (or vice-versa).
