@@ -33,6 +33,7 @@ private let sidecarURL = URL(string: "http://localhost:3030")!
 
 struct ContentView: View {
     @Environment(HealthMonitor.self) private var health
+    @Environment(MarvinBridge.self) private var bridge
 
     var body: some View {
         ZStack {
@@ -64,6 +65,27 @@ struct ContentView: View {
             // doesn't surface @SceneStorage, so we reach into AppKit.
             window.setFrameAutosaveName("MARVINMainWindow")
         })
+        // Phase 1d — native NSToolbar in the unified title bar.
+        // Today this hosts only a connection-status indicator that
+        // pulls from HealthMonitor; future phases bridge in
+        // web-app state (project name, cost) as new ToolbarItems.
+        // Doing it as a .toolbar modifier (vs raw NSToolbar via an
+        // NSWindowDelegate) keeps the items as SwiftUI Views so
+        // theme + accent colors track macOS automatically.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                ConnectionStatusToolbarItem(state: health.state) {
+                    Task { await health.refreshNow() }
+                }
+            }
+        }
+        // Phase 1d — mirror the web app's `document.title` into the
+        // native NSWindow title bar via the bridge. Falls back to
+        // "MARVIN" until the web side posts its first title (cold
+        // start, offline, or running outside the SwiftUI shell).
+        // The web app's title includes the v1.2 `(N)` confirm-
+        // pending badge, so this surfaces the badge natively too.
+        .navigationTitle(bridge.webTitle ?? "MARVIN")
     }
 
     // MARK: - States
@@ -114,6 +136,56 @@ struct ContentView: View {
         .frame(maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
     }
 
+}
+
+/// Connection status pip + label for the unified title bar (Phase 1d).
+/// Click to manually re-probe the sidecar. State drives both the pip
+/// fill and the foreground label, so a glance at the title bar
+/// answers "is the sidecar reachable?" without leaving the window.
+private struct ConnectionStatusToolbarItem: View {
+    let state: SidecarState
+    let onRefresh: () -> Void
+
+    var body: some View {
+        Button(action: onRefresh) {
+            HStack(spacing: 6) {
+                pip
+                Text(state.shortLabel)
+                    .font(.callout.monospaced())
+            }
+            .foregroundStyle(labelColor)
+        }
+        .buttonStyle(.borderless)
+        // Tooltip is the discoverability layer — `connecting` /
+        // `online` / `offline` is terse on purpose; the tooltip
+        // explains the click affordance.
+        .help("Re-probe http://localhost:3030/api/health")
+    }
+
+    private var pip: some View {
+        Circle()
+            .fill(pipColor)
+            .frame(width: 8, height: 8)
+            .overlay(
+                Circle()
+                    .stroke(Color.black.opacity(0.15), lineWidth: 0.5)
+            )
+    }
+
+    private var pipColor: Color {
+        switch state {
+        case .connecting: .secondary
+        case .online: .green
+        case .offline: .orange
+        }
+    }
+
+    private var labelColor: Color {
+        switch state {
+        case .connecting, .offline: .secondary
+        case .online: .primary
+        }
+    }
 }
 
 /// Bridge to the underlying `NSWindow` for things SwiftUI's `Window`

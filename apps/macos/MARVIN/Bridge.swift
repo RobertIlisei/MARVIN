@@ -71,8 +71,17 @@ struct BridgeMessage {
 /// becomes per-WebView (and the WKUserContentController is created
 /// fresh per-window, so duplication isn't a concern).
 @MainActor
+@Observable
 final class MarvinBridge: NSObject, WKScriptMessageHandler {
     static let shared = MarvinBridge()
+
+    /// Latest `document.title` posted by the web side via the
+    /// `title` message. `nil` until the web side posts its first
+    /// title — ContentView falls back to "MARVIN" in that case.
+    /// Phase 1d uses this to mirror the React-managed title (which
+    /// includes the v1.2 `(N)` pending-confirm badge) into the
+    /// native NSWindow title bar.
+    private(set) var webTitle: String? = nil
 
     /// Channel name — must match the JS-side
     /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
@@ -178,6 +187,15 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             // channel works end-to-end without manually wiring a
             // dev-tools breakpoint.
             NSLog("[MarvinBridge] hello \(payload ?? [:])")
+        case "title":
+            // document.title mirror — drives the native NSWindow
+            // title via @Observable. The web side posts the initial
+            // title on mount and re-posts on every change (e.g.
+            // confirm-pending badge transitions).
+            if let value = payload?["value"] as? String, !value.isEmpty {
+                webTitle = value
+                NSLog("[MarvinBridge] title \(value)")
+            }
         default:
             // Unknown type — log + ignore. Future phases add cases
             // here (cost-update, project-changed, etc.).

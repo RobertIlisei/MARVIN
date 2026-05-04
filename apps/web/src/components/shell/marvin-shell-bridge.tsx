@@ -1,8 +1,14 @@
 "use client";
 
-// MarvinShellBridge — runs once on mount, detects the SwiftUI host
-// shell, and posts a hello message on the bridge so the Swift side
-// can confirm the channel works end-to-end.
+// MarvinShellBridge — runs on mount, detects the SwiftUI host shell,
+// and wires the JS↔Swift bridge:
+//   • Posts a hello message + stamps <html data-host-shell="swift">
+//     so CSS can adapt and the Swift side knows the channel works.
+//   • Mirrors document.title to the native NSWindow title (Phase 1d)
+//     by posting the initial value and a fresh message every time
+//     <title> changes. Watches via MutationObserver — the React
+//     side already mutates document.title for the (N) confirm-
+//     pending badge, so no React-side coordination is needed.
 //
 // Renders nothing. Mounted at the root layout level so it runs on
 // every page without needing per-page wiring. Costs one no-op
@@ -13,11 +19,31 @@
 // and `apps/macos/MARVIN/Bridge.swift` for the Swift counterpart.
 
 import { useEffect } from "react";
-import { announceShell } from "@/lib/marvin-shell";
+import { announceShell, announceTitle, isSwiftShell } from "@/lib/marvin-shell";
 
 export function MarvinShellBridge() {
   useEffect(() => {
     announceShell();
+    if (!isSwiftShell()) return;
+
+    // Initial title — fires before any subsequent change so the
+    // native title bar isn't briefly stuck on "MARVIN" while the
+    // React app boots and first sets document.title.
+    announceTitle(document.title);
+
+    const titleEl = document.querySelector("title");
+    if (!titleEl) return;
+    const observer = new MutationObserver(() => {
+      announceTitle(document.title);
+    });
+    // childList catches text-node replacements; characterData on the
+    // child catches text-content edits. Subtree covers both cases.
+    observer.observe(titleEl, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    return () => observer.disconnect();
   }, []);
   return null;
 }

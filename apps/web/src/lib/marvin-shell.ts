@@ -59,6 +59,17 @@ export function postToShell<T extends string>(
 }
 
 /**
+ * Posts the current `document.title` to the Swift side so the
+ * native NSWindow title can mirror the React-managed value
+ * (including the v1.2 `(N)` pending-confirm badge). No-op outside
+ * the Swift shell. Empty strings are dropped on the Swift side.
+ */
+export function announceTitle(value: string): void {
+  if (!isSwiftShell()) return;
+  postToShell({ type: "title", payload: { value } });
+}
+
+/**
  * One-shot hello on mount. Confirms the channel works end-to-end
  * and gives the Swift side a build identifier it can log alongside
  * its own. Safe to call repeatedly — Swift just logs each one.

@@ -34,10 +34,17 @@ struct MARVINApp: App {
     /// survives window opens/closes (Phase 1+ may add multi-window).
     @State private var health = HealthMonitor()
 
+    /// JS↔Swift bridge — singleton, but threaded through the
+    /// environment so SwiftUI observation tracks `webTitle` and
+    /// future @Observable fields (project, cost, etc. as the
+    /// migration phases land).
+    private let bridge = MarvinBridge.shared
+
     var body: some Scene {
         Window("MARVIN", id: "marvin-main") {
             ContentView()
                 .environment(health)
+                .environment(bridge)
                 // 1440×900 default + 960×600 floor — matches the
                 // existing Tauri config (tauri.conf.json) so users
                 // don't see a different window geometry across the
@@ -143,6 +150,7 @@ struct MARVINApp: App {
         Window("About MARVIN", id: "marvin-about") {
             AboutView()
                 .environment(health)
+                .environment(bridge)
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)

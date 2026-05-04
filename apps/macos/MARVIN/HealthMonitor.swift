@@ -24,6 +24,17 @@ enum SidecarState: Equatable {
         if case .online = self { return true }
         return false
     }
+
+    /// Tiny label shown next to the toolbar indicator. Phase 1d uses
+    /// these — kept terse so they fit the unified title bar without
+    /// truncation across realistic window widths.
+    var shortLabel: String {
+        switch self {
+        case .connecting: "connecting"
+        case .online: "online"
+        case .offline: "offline"
+        }
+    }
 }
 
 /// Subset of /api/health we care about in Phase 0. The sidecar may
