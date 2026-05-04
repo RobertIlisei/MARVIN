@@ -70,7 +70,7 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
   - Host credentials from a `claude auth login` (auto-detected)
 - For browser automation: `npx playwright install chromium`
 
-## Quickstart
+## Installation
 
 ```bash
 pnpm install                   # one-time — pulls deps across 7 packages
@@ -139,6 +139,39 @@ MARVIN uses the Agent SDK's auth detection in priority order: direct
 activity). See [docs/security/credentials.md](./docs/security/credentials.md)
 for the full detection rules and how to pick between API-key and
 host-credentials modes.
+
+## Troubleshooting
+
+Quick reference for the issues that hit most often. Full guide at [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md).
+
+**First diagnostic — always:**
+
+```bash
+curl -s http://localhost:3030/api/health | jq .
+```
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `auth.mode: "none"` in `/api/health` | No credentials detected | Set `ANTHROPIC_API_KEY` in your shell, or run `claude auth login`. See [Credentials](./docs/security/credentials.md) |
+| `binaryError: "..."` in `/api/health` | Claude CLI binary missing from PATH | `which claude` — if empty, install Claude Code or set `MARVIN_CLAUDE_BIN` |
+| `EADDRINUSE: address already in use :::3030` | Another MARVIN instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it or point your browser at the existing one |
+| Models dropdown shows "fallback list" | `claude auth login` stored the token in the macOS Keychain (Node can't read) | Set `ANTHROPIC_API_KEY` directly for live `/v1/models` listing |
+| MARVIN asks for `marvin-playwright` and SDK errors | Chromium binaries missing | `npx playwright install chromium` (one-time) |
+| Graph pane shows "no graph found" | graphify hasn't been run on the active project | `cd <workDir> && /graphify .` — or ask MARVIN to build the graph |
+| Terminal exits with `[exit 0 · 0.00s]` immediately | No project selected (invalid `cwd`) | Pick a project in the picker (`⌘K`) |
+| File tree empty / "Permission denied" | `workDir` not readable by the user running `pnpm dev` | Fix perms (`chmod` / `chown`), or pick a different `workDir` |
+| Preview pane blank | Target site sends `X-Frame-Options: DENY` or CSP `frame-ancestors` | Click ↗ to open in a new tab — browsers enforce this for third-party sites |
+| Turn costs surprisingly high | Cache-misses on long sessions | Start a new session (`⌘⇧N`), or try advisor mode for ~30-40% savings |
+
+**Lifecycle helpers** for diagnosing without opening a browser:
+
+```bash
+bin/marvin status   # auth + model + data dir
+bin/marvin doctor   # preflight only
+bin/marvin logs     # tail .marvin/dev.log
+```
+
+**Still stuck?** Open an issue at [github.com/RobertIlisei/MARVIN/issues](https://github.com/RobertIlisei/MARVIN/issues) with `/api/health` output, browser console errors, the last few lines of the `pnpm dev` terminal, and the last 20 lines of the relevant `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
 
 ## Stack
 
