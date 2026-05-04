@@ -66,22 +66,40 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 
 - Node.js **>= 22**
 - pnpm **10.33** (declared in `packageManager`)
+- **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code`. The
+  Agent SDK spawns the `claude` binary under the hood, so it has to be
+  on PATH (or pointed at via `MARVIN_CLAUDE_BIN`). `bin/marvin doctor`
+  will warn if it's missing.
 - Claude credentials — one of:
   - `ANTHROPIC_API_KEY` in env
-  - Host credentials from a `claude auth login` (auto-detected)
+  - Host credentials from `claude auth login` (auto-detected). After
+    install, also visit https://claude.ai once with the same email to
+    accept the latest Consumer Terms — the CLI returns a 400 until you do.
 - For browser automation: `npx playwright install chromium`
+- For the knowledge graph (Golden Rule 7): `pip install graphifyy` —
+  optional, but the brain pane and graph-aware chat are unavailable
+  without it.
 
 ## Installation
 
 ```bash
 pnpm install                   # one-time — pulls deps across 7 packages
+bash scripts/setup.sh          # one-time — interactive prompts for optional deps
 bash scripts/install-skills.sh # one-time — mirror skills bundle to ~/.claude/skills/
 bin/marvin                     # start MARVIN on http://localhost:3030
 ```
 
-`bin/marvin` runs every preflight check (Node ≥22, pnpm, skills, port
-availability, credentials), backgrounds the dev server, polls
-`/api/health`, and prints the URL + auth mode + model once it's up.
+`scripts/setup.sh` prompts for the optional / recommended dependencies
+(Claude Code CLI, graphify, Playwright Chromium) with Y/n/never. Pick
+`never` and the choice is saved to `.marvin/install-prefs.json` so
+future `bin/marvin doctor` runs stop nagging. Use `--yes` to install
+every missing dep without prompting, or `--skip-all` to record skips
+without installing.
+
+`bin/marvin` runs every preflight check (Node ≥22, pnpm, skills, Claude
+CLI, port availability, credentials, graphify CLI, graph rooting),
+backgrounds the dev server, polls `/api/health`, and prints the URL +
+auth mode + model once it's up.
 
 ### Install as a real macOS app _(recommended)_
 
@@ -154,7 +172,9 @@ curl -s http://localhost:3030/api/health | jq .
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `auth.mode: "none"` in `/api/health` | No credentials detected | Set `ANTHROPIC_API_KEY` in your shell, or run `claude auth login`. See [Credentials](./docs/security/credentials.md) |
-| `binaryError: "..."` in `/api/health` | Claude CLI binary missing from PATH | `which claude` — if empty, install Claude Code or set `MARVIN_CLAUDE_BIN` |
+| `binaryError: "..."` in `/api/health` | Claude CLI binary missing from PATH | `which claude` — if empty, `npm install -g @anthropic-ai/claude-code` or set `MARVIN_CLAUDE_BIN` |
+| Every turn fails with `API Error: 400 ...Consumer Terms...` | Anthropic account hasn't accepted the latest Terms | Open https://claude.ai with the email shown in `claude /status`, accept the banner, retry |
+| Graph pane works but `/graphify` says `command not found` | graphify Python package not installed | `pip install graphifyy` (or `pipx install graphifyy`) |
 | `EADDRINUSE: address already in use :::3030` | Another MARVIN instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it or point your browser at the existing one |
 | Models dropdown shows "fallback list" | `claude auth login` stored the token in the macOS Keychain (Node can't read) | Set `ANTHROPIC_API_KEY` directly for live `/v1/models` listing |
 | MARVIN asks for `marvin-playwright` and SDK errors | Chromium binaries missing | `npx playwright install chromium` (one-time) |

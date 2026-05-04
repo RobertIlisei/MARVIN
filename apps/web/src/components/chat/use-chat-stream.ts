@@ -41,7 +41,21 @@ interface SessionRecord {
  *   - writing    → assistant is emitting text
  *   - error      → last turn ended in `turn.error`
  */
-export function useChatStream() {
+/** Tool names whose results imply a filesystem mutation in the project's
+ *  workDir. When one of these completes, the file tree should refetch.
+ *  Bash is included unconditionally — `ls`/`cat`/etc. produce a free
+ *  refresh; the alternative (parsing the command for fs verbs) is
+ *  fragile and the tree fetch is cheap. */
+const FS_MUTATING_TOOL_NAMES = new Set(["Edit", "Write", "NotebookEdit", "Bash"]);
+
+export interface UseChatStreamOptions {
+  /** Fired when a tool_result lands for an FS-mutating tool. The page
+   *  uses this to bump a counter the FileTree subscribes to, so the user
+   *  doesn't have to click refresh after every MARVIN edit. */
+  onFsMutation?: () => void;
+}
+
+export function useChatStream(options: UseChatStreamOptions = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [marvinState, setMarvinState] = useState<MarvinUiState>("idle");
   const [stats, setStats] = useState<TurnStats | null>(null);
@@ -50,6 +64,15 @@ export function useChatStream() {
 
   const abortRef = useRef<AbortController | null>(null);
   const turnIdRef = useRef<string | null>(null);
+  /** Map tool_use_id → tool name. Populated when the assistant emits a
+   *  `tool_use` block; consulted when a `tool_result` lands so we can
+   *  decide whether the result implies an FS mutation. Cleared per
+   *  entry on lookup to keep the map small over a long session. */
+  const toolNamesRef = useRef<Map<string, string>>(new Map());
+  /** Latest onFsMutation in a ref so the closure inside applyEvent
+   *  doesn't capture a stale callback across renders. */
+  const onFsMutationRef = useRef(options.onFsMutation);
+  onFsMutationRef.current = options.onFsMutation;
   /**
    * Last user message + send options. Held so the structured `error`
    * block can offer a Retry that reuses the same arguments — closes
@@ -217,6 +240,8 @@ export function useChatStream() {
                 setTurnId: (v) => {
                   turnIdRef.current = v;
                 },
+                toolNames: toolNamesRef.current,
+                onFsMutation: onFsMutationRef.current,
               });
             }
           }
@@ -454,6 +479,8 @@ export function useChatStream() {
                 setTurnId: (v) => {
                   turnIdRef.current = v;
                 },
+                toolNames: toolNamesRef.current,
+                onFsMutation: onFsMutationRef.current,
               });
             }
           }
@@ -693,6 +720,8 @@ function handleSseEvent(
     setStats: (v: TurnStats) => void;
     applyAssistantBlocks: (mutator: (blocks: Block[]) => Block[]) => void;
     setTurnId: (v: string) => void;
+    toolNames: Map<string, string>;
+    onFsMutation?: () => void;
   },
 ): void {
   if (eventName === "turn.started") {
@@ -811,6 +840,14 @@ function handleSseEvent(
   };
 
   if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
+    // Register tool_use_id → tool name so the matching tool_result can
+    // be classified later for FS-mutation purposes.
+    for (const b of ev.message!.content ?? []) {
+      const block = b as { type?: string; id?: string; name?: string };
+      if (block.type === "tool_use" && block.id && block.name) {
+        ctx.toolNames.set(block.id, block.name);
+      }
+    }
     ctx.applyAssistantBlocks((prev) =>
       mergeAssistantContent(prev, ev.message!.content ?? []),
     );
@@ -828,6 +865,15 @@ function handleSseEvent(
         const content = (b as { content?: string }).content ?? "";
         const isError = (b as { is_error?: boolean }).is_error === true;
         if (toolUseId) {
+          // Look up the tool name registered when its tool_use block
+          // arrived. If it's an FS-mutating tool, signal the file tree
+          // to refetch. Successful AND failed calls trigger refresh —
+          // a failed Bash command may still have left side effects.
+          const toolName = ctx.toolNames.get(toolUseId);
+          if (toolName && FS_MUTATING_TOOL_NAMES.has(toolName)) {
+            ctx.onFsMutation?.();
+          }
+          ctx.toolNames.delete(toolUseId);
           ctx.applyAssistantBlocks((prev) =>
             prev.map((block) =>
               block.type === "tool_use" && block.id === toolUseId
