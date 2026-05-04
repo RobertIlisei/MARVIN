@@ -24,6 +24,7 @@
 // implements with extra editor-shaped behaviour on top.
 
 import AppKit
+import STTextView
 import SwiftUI
 
 // MARK: - View-model
@@ -114,11 +115,19 @@ final class FileViewerModel {
     }
 }
 
-// MARK: - NSTextView wrapper
+// MARK: - STTextView wrapper
 
-/// Read-only NSTextView in an NSScrollView, displaying `content` in
-/// a monospaced system font. Horizontal scrolling enabled (long lines
-/// don't wrap by default — code-editor convention).
+/// Read-only STTextView in an NSScrollView with a line-number ruler,
+/// displaying `content` in a monospaced system font. STTextView is
+/// the TextKit 2-backed text view from krzyzanowskim/STTextView —
+/// drop-in API-compatible with NSTextView for the surface area we
+/// use (string / isEditable / font / scrollableTextView), with
+/// editor-friendly extras (line numbers, soft wrap, future tree-
+/// sitter highlight bindings) baked in.
+///
+/// 5b.2 onward layers tree-sitter syntax highlighting on top via
+/// `addAttributes(_:range:)`; the read-only viewer surface itself
+/// stays unchanged.
 ///
 /// updateNSView only writes when `string` differs to avoid resetting
 /// scroll position + cursor on every SwiftUI re-render.
@@ -126,40 +135,52 @@ struct FileViewerNSView: NSViewRepresentable {
     let content: String
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        guard let textView = scroll.documentView as? NSTextView else {
+        // STTextView ships its own scrollableTextView() factory that
+        // returns an NSScrollView wrapping an STTextView. Same shape
+        // as NSTextView's factory; the wrapped view is an STTextView
+        // instance so we cast to that.
+        let scroll = STTextView.scrollableTextView()
+        guard let textView = scroll.documentView as? STTextView else {
             return scroll
         }
         textView.isEditable = false
         textView.isSelectable = true
-        textView.isRichText = false
-        textView.allowsUndo = false
         textView.font = NSFont.monospacedSystemFont(
             ofSize: 12,
             weight: .regular
         )
-        textView.textContainerInset = NSSize(width: 8, height: 8)
         // Disable line wrap — code wants horizontal scroll for long
-        // lines, not soft wrap. The text container's width is set
-        // huge so AppKit doesn't wrap; the scroll view shows a
-        // horizontal scroller when content overflows.
-        textView.isHorizontallyResizable = true
-        textView.autoresizingMask = [.width]
-        if let container = textView.textContainer {
-            container.widthTracksTextView = false
-            container.containerSize = NSSize(
-                width: 1_000_000,
-                height: CGFloat.greatestFiniteMagnitude
-            )
-        }
+        // lines, not soft wrap. STTextView surfaces a top-level
+        // `widthTracksTextView` flag (1.0.0 doesn't expose
+        // `textContainerInset` yet — it's annotated as a TODO in the
+        // upstream source). The container's own size is huge so
+        // AppKit doesn't wrap; the scroll view shows a horizontal
+        // scroller when content overflows.
+        textView.widthTracksTextView = false
+        textView.textContainer.containerSize = NSSize(
+            width: 1_000_000,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         scroll.hasHorizontalScroller = true
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
+
+        // Line-number gutter. STLineNumberRulerView is the NSRulerView
+        // subclass STTextView ships for this. Attaching follows the
+        // standard Cocoa idiom: install on the scroll view as the
+        // vertical ruler, flip rulersVisible.
+        let ruler = STLineNumberRulerView(textView: textView)
+        ruler.drawSeparator = true
+        ruler.highlightSelectedLine = false
+        scroll.verticalRulerView = ruler
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let textView = scroll.documentView as? NSTextView else {
+        guard let textView = scroll.documentView as? STTextView else {
             return
         }
         if textView.string != content {

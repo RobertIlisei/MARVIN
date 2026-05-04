@@ -15,6 +15,16 @@
 
 name: MARVIN
 
+# Phase 5b — external Swift packages used by the embedded surfaces.
+# Mirror of `dependencies:` in Package.swift; xcodegen and SPM each
+# resolve these through their own paths but the wire (URL + version
+# constraints) is the same. Drift between the two manifests IS the
+# bug — bump versions in both.
+packages:
+  STTextView:
+    url: https://github.com/krzyzanowskim/STTextView.git
+    from: 1.0.0
+
 # Top-level options — Apple-shop defaults plus explicit minima.
 options:
   bundleIdPrefix: net.marvin
@@ -59,6 +69,9 @@ targets:
   MARVIN:
     type: application
     platform: macOS
+    dependencies:
+      - package: STTextView
+        product: STTextView
     sources:
       - path: MARVIN
         # Resources/ holds AppIcon.icns + the source SVGs (idle /
