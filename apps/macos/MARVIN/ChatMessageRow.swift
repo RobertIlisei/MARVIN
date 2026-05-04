@@ -76,10 +76,10 @@ struct ChatMessageRow: View {
         switch block {
         case .text(_, let text):
             TextBlockView(text: text, role: message.role)
-        case .toolUse(_, let name, let input):
-            ToolUseBlockView(name: name, input: input)
-        case .toolResult(_, _, let output, let isError):
-            ToolResultBlockView(output: output, isError: isError)
+        case .toolCall(_, let name, let input, let result):
+            ToolCallBlockView(name: name, input: input, result: result)
+        case .orphanToolResult(_, let toolUseId, let output, let isError):
+            OrphanToolResultBlockView(toolUseId: toolUseId, output: output, isError: isError)
         case .unknown(_, let kind, let raw):
             UnknownBlockView(kind: kind, raw: raw)
         }
@@ -102,62 +102,147 @@ private struct TextBlockView: View {
     }
 }
 
-/// Tool-call card. Phase 2c keeps this terse — name + collapsible
-/// input dump. Phase 2d adds tool-specific renderers (Bash command,
-/// Edit diff preview, Read snippet, etc.).
-private struct ToolUseBlockView: View {
+// MARK: - Tool-call card (Phase 2d)
+
+/// Visual style for one tool's name pill. Each tool gets a distinct
+/// tint so a turn that runs Bash + Edit + Read is scannable at a
+/// glance — matches the colour grouping the web side uses.
+private enum ToolStyle {
+    case execute    // Bash, Task, AskUserQuestion — actions that run
+    case read       // Read, Grep, Glob — read-only inspection
+    case write      // Edit, Write, NotebookEdit — file mutations
+    case web        // WebFetch, WebSearch — external IO
+    case other      // anything we haven't mapped yet
+
+    var tint: Color {
+        switch self {
+        case .execute: .orange
+        case .read: .blue
+        case .write: .green
+        case .web: .purple
+        case .other: .secondary
+        }
+    }
+
+    static func forName(_ name: String) -> ToolStyle {
+        switch name {
+        case "Bash", "Task", "AskUserQuestion": .execute
+        case "Read", "Grep", "Glob", "ListMcpResourcesTool": .read
+        case "Edit", "Write", "NotebookEdit": .write
+        case "WebFetch", "WebSearch": .web
+        default: .other
+        }
+    }
+}
+
+/// Unified call+result card. Header shows the tool name pill, a
+/// one-line summary of the input, a status pip (running / done /
+/// errored), and a chevron. Expanded body shows the full input
+/// dump and (when arrived) the full output.
+private struct ToolCallBlockView: View {
     let name: String
     let input: ChatJSON?
+    let result: ChatToolResult?
 
     @State private var expanded = false
 
+    private var style: ToolStyle { ToolStyle.forName(name) }
+    private var isPending: Bool { result == nil }
+    private var isErrored: Bool { result?.isError == true }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(name)
-                    .font(.caption.monospaced().weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.accentColor.opacity(0.15))
-                    )
-                Text(inputSummary)
+            header
+            if expanded {
+                expandedBody
+            } else if isErrored, let result {
+                // Errors get a one-line preview even when collapsed —
+                // a red toolCall is surprising enough to warrant
+                // visibility without forcing the user to expand.
+                Text(result.output)
                     .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .foregroundStyle(Color.red.opacity(0.85))
+                    .lineLimit(2)
                     .truncationMode(.tail)
-                Spacer()
-                Button(expanded ? "▾" : "▸") {
-                    withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
-                }
-                .buttonStyle(.borderless)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-            }
-            if expanded, let input {
-                Text(prettyJSON(input))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color(nsColor: .textBackgroundColor).opacity(0.5))
-                    )
                     .textSelection(.enabled)
             }
         }
-        .padding(.vertical, 2)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(style.tint.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(style.tint.opacity(0.25), lineWidth: 1)
+        )
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(name)
+                .font(.caption.monospaced().weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(style.tint.opacity(0.18))
+                )
+                .foregroundStyle(style.tint.opacity(0.9))
+            Text(inputSummary)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+            statusPip
+            Button(expanded ? "▾" : "▸") {
+                withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+            }
+            .buttonStyle(.borderless)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Tiny status indicator: spinner while pending, dot once done.
+    @ViewBuilder
+    private var statusPip: some View {
+        if isPending {
+            ProgressView()
+                .controlSize(.mini)
+        } else if isErrored {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .font(.caption)
+        } else {
+            Image(systemName: "checkmark")
+                .foregroundStyle(.green)
+                .font(.caption.weight(.semibold))
+        }
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let input {
+                ToolInputView(name: name, input: input)
+            }
+            if let result {
+                ToolOutputView(output: result.output, isError: result.isError)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// One-line preview for the collapsed header. Picks the most
+    /// useful field per tool — `command` for Bash, `file_path` for
+    /// file tools, `pattern` for Grep, `url` for web. Falls back to
+    /// the first-line of the full JSON.
     private var inputSummary: String {
         guard let input else { return "" }
-        // Pull a one-line summary out — e.g. `command:` for Bash,
-        // `file_path:` for Edit / Read / Write. Falls back to a short
-        // serialisation of the whole input.
         if case let .object(dict) = input {
-            for key in ["command", "file_path", "path", "pattern", "url"] {
+            for key in ["command", "file_path", "path", "pattern", "url", "query"] {
                 if case let .string(s) = dict[key] ?? .null {
                     return s
                 }
@@ -167,12 +252,118 @@ private struct ToolUseBlockView: View {
     }
 }
 
-private struct ToolResultBlockView: View {
+/// Tool-aware input renderer. Bash gets a `$ command` shell prompt
+/// style; Edit / Write / Read show the file path on its own line
+/// followed by the rest of the input fields; everything else gets
+/// the pretty JSON dump.
+private struct ToolInputView: View {
+    let name: String
+    let input: ChatJSON
+
+    var body: some View {
+        switch name {
+        case "Bash":
+            bashView
+        case "Edit", "Write":
+            fileMutationView
+        case "Read", "Glob":
+            fileReadView
+        case "Grep":
+            grepView
+        default:
+            jsonDumpView
+        }
+    }
+
+    private var bashView: some View {
+        let cmd = stringField("command") ?? prettyJSON(input)
+        return HStack(alignment: .top, spacing: 6) {
+            Text("$")
+                .font(.caption.monospaced().weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(cmd)
+                .font(.caption.monospaced())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var fileMutationView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let path = stringField("file_path") ?? stringField("path") {
+                Label(path, systemImage: "doc.text")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            // For Edit, show old_string → new_string lengths only —
+            // the full strings are usually big and the user has to
+            // expand the result to see effect anyway.
+            if name == "Edit" {
+                let oldLen = stringField("old_string")?.count ?? 0
+                let newLen = stringField("new_string")?.count ?? 0
+                Text("Edit: \(oldLen) → \(newLen) chars")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+            if name == "Write", let content = stringField("content") {
+                Text("Write: \(content.count) chars")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var fileReadView: some View {
+        let path = stringField("file_path") ?? stringField("path") ?? stringField("pattern") ?? "?"
+        return Label(path, systemImage: name == "Glob" ? "doc.on.doc" : "doc.text.magnifyingglass")
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+    }
+
+    private var grepView: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let pattern = stringField("pattern") {
+                Text("/\(pattern)/")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+            if let path = stringField("path") {
+                Text("in \(path)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var jsonDumpView: some View {
+        Text(prettyJSON(input))
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+    }
+
+    /// Pull a single string field out of an object input. Used by
+    /// the per-tool views; nil when the field isn't present or the
+    /// input isn't an object.
+    private func stringField(_ key: String) -> String? {
+        guard case let .object(dict) = input,
+              case let .string(s) = dict[key] ?? .null else {
+            return nil
+        }
+        return s
+    }
+}
+
+/// Tool output renderer. Truncates long outputs with a show-all
+/// toggle; renders errors red.
+private struct ToolOutputView: View {
     let output: String
     let isError: Bool
 
     @State private var expanded = false
-    private let inlineLimit = 500
+    private let inlineLimit = 800
 
     var body: some View {
         let truncated = output.count > inlineLimit && !expanded
@@ -198,6 +389,25 @@ private struct ToolResultBlockView: View {
                 .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Defensive renderer for a tool_result that arrived without a
+/// matching tool_use. Surfaces the output so we don't lose data on
+/// out-of-order delivery.
+private struct OrphanToolResultBlockView: View {
+    let toolUseId: String
+    let output: String
+    let isError: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("orphan tool_result · use_id=\(toolUseId.prefix(8))…")
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+            ToolOutputView(output: output, isError: isError)
+        }
+        .padding(.vertical, 2)
     }
 }
 

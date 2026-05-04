@@ -46,13 +46,38 @@ enum ChatRole: String, Equatable {
     case result
 }
 
+/// Result data attached to a toolCall block once its tool_result
+/// arrives on the wire. Phase 2d pairs tool_use + tool_result by
+/// tool_use_id so they render as a single collapsible card.
+struct ChatToolResult: Equatable {
+    let output: String
+    let isError: Bool
+}
+
 /// One block inside a Message. Discriminated union; SwiftUI cells
 /// branch on the case to pick a renderer. Identifiable so List can
 /// diff blocks within a message without re-rendering the whole row.
+///
+/// `toolCall` carries both the call (input) and the eventual result
+/// (`result` is `nil` until the matching tool_result arrives). This
+/// is the Phase 2d shape — Phase 2c had separate `toolUse` and
+/// `toolResult` cases that produced 1-call = 2-rows; pairing here
+/// matches the web layout (one card per tool invocation).
+///
+/// `orphanToolResult` is the rare defensive case: a tool_result
+/// arrived but no preceding tool_use with that id was seen (server
+/// glitch / out-of-order delivery). Phase 2c rendered every result
+/// as its own row; we keep that path as `orphanToolResult` so a
+/// dropped tool_use doesn't lose the result content entirely.
 enum ChatBlock: Identifiable, Equatable {
     case text(id: String, text: String)
-    case toolUse(id: String, name: String, input: ChatJSON?)
-    case toolResult(id: String, toolUseId: String, output: String, isError: Bool)
+    case toolCall(
+        id: String,                // = tool_use_id
+        name: String,
+        input: ChatJSON?,
+        result: ChatToolResult?
+    )
+    case orphanToolResult(id: String, toolUseId: String, output: String, isError: Bool)
     /// Anything we don't yet recognise in the wire — surfaced as a
     /// monospace dump so we can see what's flowing without forcing
     /// every future block type to ship a renderer first.
@@ -61,8 +86,8 @@ enum ChatBlock: Identifiable, Equatable {
     var id: String {
         switch self {
         case .text(let id, _): return "text-\(id)"
-        case .toolUse(let id, _, _): return "use-\(id)"
-        case .toolResult(let id, _, _, _): return "result-\(id)"
+        case .toolCall(let id, _, _, _): return "tool-\(id)"
+        case .orphanToolResult(let id, _, _, _): return "orphan-\(id)"
         case .unknown(let id, _, _): return "unk-\(id)"
         }
     }
@@ -201,10 +226,14 @@ enum ChatStreamReducer {
                     text: block.text ?? ""
                 )
             case "tool_use":
-                return .toolUse(
+                // Phase 2d — toolCall blocks ship with no result;
+                // the matching tool_result event lands later and
+                // mutates this block in place via reduceUser.
+                return .toolCall(
                     id: block.id ?? UUID().uuidString,
                     name: block.name ?? "tool",
-                    input: block.input
+                    input: block.input,
+                    result: nil
                 )
             default:
                 return .unknown(
@@ -216,11 +245,17 @@ enum ChatStreamReducer {
         }
         // Replace-or-append: each Claude assistant message has a
         // stable id (msg_…). If we already have a row with that id,
-        // overwrite its blocks (handles streaming-style updates the
-        // SDK may emit later); otherwise append.
+        // we PRESERVE existing tool results — the SDK occasionally
+        // re-emits an assistant message after its tool_result has
+        // landed; without this guard we'd zap the result back to
+        // nil and the card would lose the output.
         var out = messages
         if let idx = out.firstIndex(where: { $0.id == env.message.id }) {
-            out[idx].blocks = blocks
+            let merged = mergePreservingResults(
+                old: out[idx].blocks,
+                new: blocks
+            )
+            out[idx].blocks = merged
             out[idx].isStreaming = (env.message.stop_reason == nil)
         } else {
             out.append(ChatMessage(
@@ -234,36 +269,94 @@ enum ChatStreamReducer {
         return out
     }
 
+    /// Merge a fresh assistant block array into an existing one,
+    /// preserving any toolCall results we'd already attached. The
+    /// new array is authoritative for everything except `result`
+    /// on toolCall blocks; that lives in the old array if set.
+    private static func mergePreservingResults(
+        old: [ChatBlock],
+        new: [ChatBlock]
+    ) -> [ChatBlock] {
+        var resultsById: [String: ChatToolResult] = [:]
+        for block in old {
+            if case let .toolCall(id, _, _, .some(result)) = block {
+                resultsById[id] = result
+            }
+        }
+        return new.map { block in
+            if case let .toolCall(id, name, input, _) = block,
+               let preserved = resultsById[id] {
+                return .toolCall(id: id, name: name, input: input, result: preserved)
+            }
+            return block
+        }
+    }
+
     private static func reduceUser(_ messages: [ChatMessage], data: Data) -> [ChatMessage] {
         // `user` cli.events from the SDK carry tool_result blocks —
-        // not the user's input. We attach them to existing assistant
-        // messages by tool_use_id so a tool call and its result render
-        // as one collapsible card (Phase 2d). For 2c we just append a
-        // synthetic message that holds the result blocks; row view
-        // looks them up by id.
+        // not the user's typed input. Phase 2d: pair each result
+        // back to its toolCall by tool_use_id so the call + result
+        // render as one card. Defensive fallback: if no matching
+        // toolCall is found, append the result as an orphan row so
+        // the output isn't lost.
         guard let env = try? JSONDecoder().decode(UserEnvelope.self, from: data) else {
             return messages
         }
-        let resultBlocks = env.message.content.compactMap { block -> ChatBlock? in
-            guard block.type == "tool_result" else { return nil }
-            let outputText = stringify(block.content)
-            return .toolResult(
-                id: block.tool_use_id ?? UUID().uuidString,
-                toolUseId: block.tool_use_id ?? "",
-                output: outputText,
+        var out = messages
+        var orphans: [ChatBlock] = []
+
+        for block in env.message.content where block.type == "tool_result" {
+            let toolUseId = block.tool_use_id ?? ""
+            let result = ChatToolResult(
+                output: stringify(block.content),
                 isError: block.is_error ?? false
             )
+            if !attachResult(in: &out, toolUseId: toolUseId, result: result) {
+                orphans.append(.orphanToolResult(
+                    id: toolUseId.isEmpty ? UUID().uuidString : toolUseId,
+                    toolUseId: toolUseId,
+                    output: result.output,
+                    isError: result.isError
+                ))
+            }
         }
-        guard !resultBlocks.isEmpty else { return messages }
-        var out = messages
-        out.append(ChatMessage(
-            id: "user-tools-\(UUID().uuidString)",
-            role: .user,
-            blocks: resultBlocks,
-            isStreaming: false,
-            createdAt: Date()
-        ))
+
+        if !orphans.isEmpty {
+            out.append(ChatMessage(
+                id: "orphan-tools-\(UUID().uuidString)",
+                role: .system,
+                blocks: orphans,
+                isStreaming: false,
+                createdAt: Date()
+            ))
+        }
         return out
+    }
+
+    /// Find the toolCall with a matching `toolUseId` (scanning
+    /// newest-first, since results come right after their calls)
+    /// and attach its result. Returns true on success.
+    private static func attachResult(
+        in messages: inout [ChatMessage],
+        toolUseId: String,
+        result: ChatToolResult
+    ) -> Bool {
+        guard !toolUseId.isEmpty else { return false }
+        for mIdx in messages.indices.reversed() {
+            for bIdx in messages[mIdx].blocks.indices {
+                if case let .toolCall(id, name, input, _) = messages[mIdx].blocks[bIdx],
+                   id == toolUseId {
+                    messages[mIdx].blocks[bIdx] = .toolCall(
+                        id: id,
+                        name: name,
+                        input: input,
+                        result: result
+                    )
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func reduceSystem(_ messages: [ChatMessage], data: Data) -> [ChatMessage] {
