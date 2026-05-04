@@ -1,0 +1,301 @@
+// FileTreeView — Phase 3b dev surface for the native file tree.
+//
+// A separate Window scene hosting a SwiftUI `OutlineGroup` rendering
+// of the active project's `/api/files/tree` response. The main
+// MARVIN window's WebView keeps rendering the existing web file tree
+// independently; Phase 3d promotes this content into the main left
+// pane once 3c (selection wiring) reaches parity.
+//
+// ## Why a separate window during 3b
+//
+//   1. Decoupled iteration. The main window's left pane currently
+//      hosts the web file tree the user actively works in. We don't
+//      want a half-built native tree replacing it while we're still
+//      figuring out renderer perf and selection semantics.
+//   2. Independent observation. The dev window can run alongside
+//      the web tree in the main window, so we can A/B parity
+//      between them — open the same project, watch the same file
+//      list populate in both surfaces.
+//
+// ## Why OutlineGroup before NSOutlineView
+//
+// ADR-0018 §5 defers the OutlineGroup-vs-NSOutlineView call until
+// we have a measurement on a real ~5k-file repo. SwiftUI's
+// OutlineGroup ships in 2 lines of code and exposes the `children`
+// keyPath natively — perfect for our `FileNode.children?` shape.
+// If frame drops show up at scale we drop down to NSOutlineView via
+// `NSViewRepresentable`; the model layer (FileTreeModel) stays
+// unchanged either way.
+
+import SwiftUI
+
+/// View-model for the file tree preview. Owns the fetch state, the
+/// rendered tree, and a terminal-state surface for fetch errors.
+/// Phase 3b: read-only — selection / expand-state / refresh are
+/// stubbed for 3c.
+@MainActor
+@Observable
+final class FileTreeModel {
+    /// Last successful tree response. Nil until first fetch
+    /// completes (or after a failed initial fetch).
+    private(set) var response: FileTreeResponse? = nil
+
+    /// True while a fetch is in flight. Drives the spinner shown
+    /// next to the project name in the header.
+    private(set) var isLoading: Bool = false
+
+    /// Last error surfaced as a banner. Cleared on next refresh.
+    private(set) var lastError: String? = nil
+
+    /// The cwd the response in `response` was fetched against —
+    /// guards against rendering a stale tree after a project switch
+    /// races a slow fetch. The fetch task drops its result if cwd
+    /// has changed under it.
+    private(set) var loadedCwd: String? = nil
+
+    /// In-flight fetch task. Retained so we can cancel on a rapid
+    /// project switch — otherwise two concurrent fetches race and
+    /// the loser overwrites the winner.
+    private var fetchTask: Task<Void, Never>?
+
+    /// Kick off a tree fetch for `cwd`. Idempotent: re-calling with
+    /// a cwd that matches the most-recently loaded one is a no-op
+    /// when we already have a response (caller can pass `force:
+    /// true` after a known mutation to bypass the dedupe).
+    func refresh(cwd: String, force: Bool = false) {
+        if !force, response != nil, loadedCwd == cwd, !isLoading {
+            return
+        }
+        fetchTask?.cancel()
+        isLoading = true
+        lastError = nil
+        fetchTask = Task { @MainActor in
+            defer { isLoading = false }
+            do {
+                let res = try await FilesService.shared.fetchTree(cwd: cwd)
+                // Drop late results from a previous project — the
+                // caller has since asked for a different cwd, and
+                // rendering this would flash old content.
+                guard !Task.isCancelled else { return }
+                response = res
+                loadedCwd = cwd
+            } catch is CancellationError {
+                // Quiet — racing with a project switch.
+            } catch {
+                lastError = "\(error)"
+            }
+        }
+    }
+
+    /// Clear all state. Called when the bridge reports no active
+    /// project, so the user doesn't see a stale tree from a project
+    /// they just closed.
+    func clear() {
+        fetchTask?.cancel()
+        fetchTask = nil
+        response = nil
+        loadedCwd = nil
+        lastError = nil
+        isLoading = false
+    }
+}
+
+/// The preview window itself. Layout:
+///
+///   ┌──────────────────────────────────┐
+///   │ Files preview · projectName      │
+///   ├──────────────────────────────────┤
+///   │ ▾ src                            │
+///   │   ▸ components                   │
+///   │   ▾ lib                          │
+///   │     ▫ csrf.ts                    │
+///   ├──────────────────────────────────┤
+///   │ ⚠ error banner (if any)          │
+///   └──────────────────────────────────┘
+struct FileTreeView: View {
+    @Environment(MarvinBridge.self) private var bridge
+    @State private var model = FileTreeModel()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+            if let err = model.lastError {
+                Divider()
+                errorBanner(err)
+            }
+        }
+        .frame(minWidth: 320, minHeight: 420)
+        .preferredColorScheme(bridge.preferredColorScheme)
+        .onAppear { syncFetchFromBridge() }
+        .onChange(of: bridge.projectWorkDir) { _, _ in
+            syncFetchFromBridge()
+        }
+    }
+
+    /// Phase 3b — drive the model from bridge.projectWorkDir.
+    /// Mirrors the pattern ChatPreviewView uses for sessionId in
+    /// Phase 2h: an .onAppear + .onChange pair funnel through one
+    /// helper that's idempotent at the model layer. Centralising
+    /// the trigger logic here means the model itself doesn't need
+    /// to know the bridge exists — keeps the view-model testable
+    /// without a bridge mock.
+    private func syncFetchFromBridge() {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else {
+            model.clear()
+            return
+        }
+        model.refresh(cwd: cwd)
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Files preview — Phase 3b")
+                    .font(.callout.weight(.semibold))
+                Text(bridge.projectName ?? "no project active")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Button("Refresh") {
+                if let cwd = bridge.projectWorkDir {
+                    model.refresh(cwd: cwd, force: true)
+                }
+            }
+            .controlSize(.small)
+            .disabled(bridge.projectWorkDir == nil)
+            .help("Re-fetch /api/files/tree for the active project.")
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if bridge.projectWorkDir == nil {
+            placeholder("(no project active)")
+        } else if let response = model.response {
+            if response.tree.isEmpty {
+                placeholder("(empty tree)")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        // OutlineGroup binds disclosure state to the
+                        // recursive `children` keyPath — directories
+                        // open / close on the disclosure triangle
+                        // automatically. SwiftUI handles the diff,
+                        // so we don't need a parent-id map ourselves.
+                        OutlineGroup(
+                            response.tree,
+                            children: \.outlineChildren
+                        ) { node in
+                            FileTreeRow(node: node)
+                        }
+                        .padding(.horizontal, 8)
+                    }
+                    .padding(.vertical, 6)
+                }
+                if response.truncated {
+                    truncatedBanner(count: response.count)
+                }
+            }
+        } else if model.isLoading {
+            placeholder("Loading…")
+        } else {
+            // No response yet, no fetch in flight, no error — the
+            // model hasn't been kicked yet. Hits on the very first
+            // .onAppear before the .task fires; transient.
+            placeholder("(initialising)")
+        }
+    }
+
+    private func placeholder(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(.body.monospaced())
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func truncatedBanner(count: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tree truncated")
+                    .font(.caption.weight(.semibold))
+                Text("\(count) entries shown — increase MARVIN_TREE_MAX_ENTRIES on the sidecar to see more.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Fetch error")
+                    .font(.caption.weight(.semibold))
+                Text(message)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08))
+    }
+}
+
+/// One row in the tree. Phase 3b: read-only — clicking does
+/// nothing yet. The folder/file icon is an SF Symbol so we get
+/// the user's accent colour for free; the row is tagged with the
+/// node's absolute path so tests / future drag-source code can
+/// pick rows up by path.
+private struct FileTreeRow: View {
+    let node: FileNode
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: node.isDirectory ? "folder.fill" : "doc")
+                .foregroundStyle(node.isDirectory ? .blue : .secondary)
+                .frame(width: 16)
+            Text(node.name)
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 1)
+        .accessibilityIdentifier("file-tree-row:\(node.path)")
+    }
+}
+
+/// SwiftUI's OutlineGroup needs a recursive `children` keyPath that
+/// returns nil for leaves and the (possibly empty) child array for
+/// branches. FileNode's wire shape uses `nil` for leaf files; an
+/// empty children array on a directory means "empty folder, still
+/// expandable". We keep both shapes intact and surface them through
+/// this computed accessor — wraps a `nil → nil`, `[] → []`, `[…] →
+/// […]` mapping in one place so the view doesn't reach into the
+/// model's optional handling repeatedly.
+private extension FileNode {
+    var outlineChildren: [FileNode]? {
+        guard isDirectory else { return nil }
+        return children ?? []
+    }
+}

@@ -28,6 +28,21 @@ private struct OpenAboutButton: View {
     }
 }
 
+/// Phase 3b — opens the side preview window hosting the native
+/// file tree. Same `openWindow`-bridge pattern as the About button:
+/// `@Environment(\.openWindow)` is reliable inside a View but unstable
+/// when read directly on an `App`, so we wrap it in a small View.
+/// Retired alongside the Window scene once Phase 3d promotes the
+/// native tree into the main window's left pane.
+private struct OpenFilesPreviewButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Native Files (preview)") {
+            openWindow(id: "marvin-files-preview")
+        }
+    }
+}
+
 /// File → Open Recent submenu content. Reads the @Observable
 /// singleton directly — SwiftUI's command tree does NOT inherit
 /// the Window scene's environment, so an `@Environment(MarvinBridge
@@ -483,6 +498,17 @@ struct MARVINApp: App {
                 // HSplitView. ChatPreviewView is reused there
                 // unchanged — only the hosting Window scene + menu
                 // entry went away.
+
+                // Phase 3b — Native Files (preview) opens the
+                // standalone file-tree window. Disabled offline
+                // because the WebView (and therefore the bridge
+                // posting projectWorkDir) won't be mounted, so the
+                // preview would render the "no project active"
+                // placeholder regardless. Retired with the Window
+                // scene in 3d.
+                Divider()
+                OpenFilesPreviewButton()
+                    .disabled(!health.state.isOnline)
             }
 
             // Help menu — quick links out to the project. macOS
@@ -531,6 +557,20 @@ struct MARVINApp: App {
                 .environment(health)
                 .environment(bridge)
         }
+
+        // Phase 3b — Native Files (preview). A standalone Window
+        // scene hosting FileTreeView, opened from Window → "Native
+        // Files (preview)". The main window keeps the existing web
+        // file tree in the left pane; this is purely for parity
+        // observation while we're still figuring out renderer perf
+        // on real repos. Retired in Phase 3d when the native tree
+        // promotes into the main window. See ADR-0018 §3.
+        Window("Native Files (preview)", id: "marvin-files-preview") {
+            FileTreeView()
+                .environment(bridge)
+        }
+        .windowStyle(.titleBar)
+        .commandsRemoved()
 
     }
 }
