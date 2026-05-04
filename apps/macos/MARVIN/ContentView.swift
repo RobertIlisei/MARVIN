@@ -52,26 +52,29 @@ struct ContentView: View {
             case .connecting:
                 connectingView
             case .online:
-                // Phase 3d/e — main window splits 3-pane:
-                // LeftPane (file tree | SCM, picker-switched) |
-                // native chat (2c-f) | WebView (file viewer /
-                // brain / preview pane). The web file tree + SCM
-                // panel are hidden via the
-                // [data-host-shell="swift"] [data-marvin-file-tree]
-                // CSS rule alongside the chat hide rule from 2g.2.
+                // Phase 3d/e — main window splits 3-pane, matching
+                // the web app's column order:
+                //   LeftPane (file tree | SCM, picker-switched) |
+                //   WebView (work pane: file viewer / terminal /
+                //   preview / graph / brain) |
+                //   native chat (2c-f).
+                // The web file tree + SCM panel + chat pane are
+                // hidden via the [data-host-shell="swift"] CSS
+                // rules so the WebView only renders the work-pane
+                // surfaces and brain visualizer here.
                 //
                 // HSplitView is the macOS-native draggable splitter.
-                // Default fractions: left narrow, chat medium, web
-                // takes the remainder. The left pane's idealWidth
-                // (240) matches the web app's 17% Panel default
-                // for the same column at common window widths.
+                // Default fractions: left narrow, work pane takes
+                // the remainder, chat fixed-ish on the right —
+                // matches the web's `tree | center | side-chat`
+                // panel ordering in apps/web/src/app/page.tsx.
                 HSplitView {
                     LeftPane()
                         .frame(minWidth: 220, idealWidth: 260)
-                    ChatPreviewView()
-                        .frame(minWidth: 320, idealWidth: 520)
                     webIsland
                         .frame(minWidth: 320)
+                    ChatPreviewView()
+                        .frame(minWidth: 320, idealWidth: 480)
                 }
                 .animation(.easeOut(duration: 0.18), value: webCommands.isFindVisible)
             case .offline(let reason):
