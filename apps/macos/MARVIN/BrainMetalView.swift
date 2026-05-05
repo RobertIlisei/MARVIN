@@ -100,7 +100,20 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         didSet {
             if brainState != oldValue {
                 let nowMs = CACurrentMediaTime() * 1000
-                transition.transition(to: brainState, nowMs: nowMs)
+                // Phase 5f — the launch animation runs longer than
+                // the default 700 ms transition so the lerp on `n`
+                // (boot.n=60 → idle.n=8000) reads as dots gradually
+                // appearing. Every other transition stays at 700 ms
+                // — that's the cadence the lab tuned.
+                let isBootSettle = oldValue == .boot
+                let duration: Double = isBootSettle
+                    ? 1800
+                    : BrainTransition.defaultDurationMs
+                transition.transition(
+                    to: brainState,
+                    nowMs: nowMs,
+                    durationMs: duration
+                )
                 applyFrameRate()
             }
         }
@@ -182,7 +195,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             options: [.storageModeShared]
         ) else { return nil }
         guard let fb = device.makeBuffer(
-            length: MemoryLayout<Float>.stride,
+            length: MemoryLayout<SIMD4<Float>>.stride,
             options: [.storageModeShared]
         ) else { return nil }
         self.uniformBuffer = ub
@@ -206,7 +219,25 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             // — CAMetalLayer's flag is the toggle Metal honours.
             layer.isOpaque = true
         }
-        view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        view.clearColor = backgroundClearColor()
+    }
+
+    /// Phase 5e — match the brain's clear color to the system
+    /// window background so the brain pane blends with the rest of
+    /// the chrome instead of reading as a punched-out black hole.
+    /// Reads NSColor.windowBackgroundColor in the current
+    /// appearance and converts to its sRGB components for the
+    /// MTLClearColor (Metal works in linear / sRGB only).
+    private func backgroundClearColor() -> MTLClearColor {
+        // Resolve NSColor.windowBackgroundColor in the view's effective
+        // appearance so per-window light/dark overrides are honoured.
+        let appearance = weakView?.effectiveAppearance ?? NSApp.effectiveAppearance
+        var r: CGFloat = 0.95, g: CGFloat = 0.95, b: CGFloat = 0.95, a: CGFloat = 1
+        appearance.performAsCurrentDrawingAppearance {
+            let ns = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? .white
+            ns.getRed(&r, green: &g, blue: &b, alpha: &a)
+        }
+        return MTLClearColor(red: Double(r), green: Double(g), blue: Double(b), alpha: Double(a))
     }
 
     // MARK: Perf controls (Phase 4h)
@@ -319,7 +350,14 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         if !seeded {
             simulation.seedAllParticles(
                 profile: BrainProfile.profile(for: brainState),
-                sphereRadius: sphereRadius
+                sphereRadius: sphereRadius,
+                // Phase 5f — when the renderer's initial state is
+                // .boot, seed the active head at the centre with
+                // outward velocity so the very first frame reads as
+                // a literal spark. Any other initial state (offline →
+                // online with the brain already past launch) seeds
+                // onto the sphere shell as before.
+                spark: brainState == .boot
             )
             seeded = true
         }
@@ -365,19 +403,33 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         accDesc.colorAttachments[0].texture = accumulation
         accDesc.colorAttachments[0].loadAction = needsClear ? .clear : .load
         accDesc.colorAttachments[0].storeAction = .store
-        accDesc.colorAttachments[0].clearColor = MTLClearColor(
-            red: 0, green: 0, blue: 0, alpha: 1
-        )
+        // Phase 5e — blend the trail "fade-to" colour with the
+        // system window background so the brain pane reads as part
+        // of the chrome instead of a black hole. The fade pass
+        // alpha-blends towards this colour each frame; the system
+        // colour is already correct in light + dark mode.
+        accDesc.colorAttachments[0].clearColor = backgroundClearColor()
         if let acc = buffer.makeRenderCommandEncoder(descriptor: accDesc) {
             // Fade: rgba(0, 0, 0, 1 - profile.trail). Higher trail
             // → smaller fade alpha → longer trails. Clamp at 0.99
             // (matches `effTrail = Math.min(0.99, p.trail)` in TS)
             // so a 1.0 slider doesn't freeze the trail forever.
             let effTrail = min(0.99, max(0, profile.trail))
-            var fadeAlpha = Float(1.0 - effTrail)
+            let fadeAlpha = Float(1.0 - effTrail)
+            // Fade toward the window background (not black). The shader
+            // reads this as float4(bgR*a, bgG*a, bgB*a, a) in pre-
+            // multiplied source-over, so accumulation converges to the
+            // window background color rather than to a black hole.
+            let bg = backgroundClearColor()
+            var fadeParams = SIMD4<Float>(
+                Float(bg.red)   * fadeAlpha,
+                Float(bg.green) * fadeAlpha,
+                Float(bg.blue)  * fadeAlpha,
+                fadeAlpha
+            )
             memcpy(
-                fadeAlphaBuffer.contents(), &fadeAlpha,
-                MemoryLayout<Float>.stride
+                fadeAlphaBuffer.contents(), &fadeParams,
+                MemoryLayout<SIMD4<Float>>.stride
             )
             acc.setRenderPipelineState(fadePipeline)
             acc.setFragmentBuffer(fadeAlphaBuffer, offset: 0, index: 0)
@@ -583,8 +635,46 @@ struct BrainPaneView: View {
     /// so the renderer's frame-rate cap updates without a relaunch.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Phase 5f — launch animation gate. The brain mounts in
+    /// `.boot` (a small bright cluster at the centre); after a
+    /// brief hold it transitions to the derived state (initially
+    /// idle), and the longer 1.8 s boot-settle duration lets the
+    /// lerp on `n` (60 → 8000) read as dots populating around the
+    /// spark. Once the spark has fired, this flag stays true for
+    /// the lifetime of the view — re-firing on every state change
+    /// would be a flicker, not a launch.
+    @State private var bootSettled = false
+
+    /// Read the bridge's full marvinState mirror. The web side
+    /// announces every transition (idle / thinking / tool /
+    /// writing / error / cancelling); the brain picks a profile
+    /// per state. Falls back to busy-derived state when the web
+    /// hasn't reported yet (cold boot before first turn). Phase 5f
+    /// gates this behind the `bootSettled` flag so the very first
+    /// state the renderer sees is `.boot`.
     private var state: BrainState {
-        BrainState.defaultFor(busy: bridge.isBusy)
+        if !bootSettled { return .boot }
+        switch bridge.marvinState {
+        case "thinking": return .thinking
+        case "tool":     return .tool
+        case "writing":  return .writing
+        case "error":    return .error
+        case "idle", "cancelling":
+            // "cancelling" doesn't have its own profile; treat as
+            // busy until it lands. After a cancel completes the web
+            // side announces "idle" and we land there normally.
+            return BrainState.defaultFor(busy: bridge.marvinState == "cancelling")
+        default:
+            return BrainState.defaultFor(busy: bridge.isBusy)
+        }
+    }
+
+    /// Caption text below the brain. While booting, show "boot"
+    /// rather than the derived state so the label tracks what the
+    /// renderer is actually drawing. After the spark settles, it
+    /// reads the rawValue of the active state same as before.
+    private var captionLabel: String {
+        bootSettled ? state.rawValue : "boot"
     }
 
     var body: some View {
@@ -605,13 +695,15 @@ struct BrainPaneView: View {
             // State caption — mirror of the web app's "STATE /
             // <label>" indicator under the brain. The state name
             // comes verbatim from the enum's rawValue
-            // (idle/thinking/tool/writing/error).
+            // (idle/thinking/tool/writing/error). During the launch
+            // animation it reads "boot" until the spark settles,
+            // then tracks the derived state.
             VStack(spacing: 1) {
                 Text("STATE")
                     .font(.system(size: 9, weight: .regular, design: .monospaced))
                     .tracking(2.5)
                     .foregroundStyle(.tertiary)
-                Text(state.rawValue)
+                Text(captionLabel)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -620,5 +712,16 @@ struct BrainPaneView: View {
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            // Phase 5f — hold the spark for ~350 ms, then flip
+            // bootSettled so the SwiftUI body re-renders with the
+            // derived state. The renderer sees the state change in
+            // updateNSView and triggers the longer 1.8 s boot →
+            // idle transition (durationMs override in BrainMetalRenderer
+            // .brainState's didSet). Net effect: spark holds, then
+            // dots fade in over the next ~2 s.
+            try? await Task.sleep(for: .milliseconds(350))
+            bootSettled = true
+        }
     }
 }

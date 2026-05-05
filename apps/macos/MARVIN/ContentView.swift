@@ -113,23 +113,14 @@ struct ContentView: View {
             case .connecting:
                 connectingView
             case .online:
-                // Phase 3d/e — main window splits 3-pane, matching
-                // the web app's column order:
-                //   LeftPane (file tree | SCM, picker-switched) |
-                //   WebView (work pane: file viewer / terminal /
-                //   preview / graph) |
-                //   right pane: native brain (4g) on top of native
-                //   chat (2c-f), VSplit'd.
-                // The web file tree + SCM panel + chat pane + brain
-                // are hidden via the [data-host-shell="swift"] CSS
-                // rules so the WebView only renders the work-pane
-                // surfaces here.
-                //
-                // HSplitView is the macOS-native draggable splitter.
-                // Default fractions: left narrow, work pane takes
-                // the remainder, brain+chat on the right — matches
-                // the web's `tree | center | side-top + side-chat`
-                // panel ordering in apps/web/src/app/page.tsx.
+                if bridge.projectWorkDir == nil {
+                    // No active project — show the welcome / startup screen
+                    // so the user can open or create a project, matching the
+                    // Xcode / VS Code welcome window pattern.
+                    WelcomeView()
+                        .environment(bridge)
+                        .transition(.opacity)
+                } else {
                 // IDE-style 3-pane split — every divider is a
                 // draggable NSSplitView handle. The ideal sizes are
                 // hints for first launch; idealWidth / idealHeight
@@ -156,6 +147,7 @@ struct ContentView: View {
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
+                } // end else (project active)
             case .offline(let reason):
                 offlineView(reason: reason)
             }
@@ -261,21 +253,24 @@ struct ContentView: View {
     }
 
     /// Vertical split between the editor (top) and the bottom panes
-    /// (preview / terminal). Uses VSplitView so the divider is a
-    /// real macOS draggable resize handle — same UX as Xcode.
-    @ViewBuilder
+    /// (preview / terminal). The VSplitView stays in the hierarchy at
+    /// all times so the divider position survives pane toggles — a
+    /// conditional if/else would recreate the NSSplitView each time,
+    /// resetting the saved position. When no bottom pane is active the
+    /// bottom child collapses to zero height; the system hides the
+    /// divider automatically when a subview is collapsed.
     private var workPaneSplit: some View {
         let hasBottomPane = bridge.panes.preview || bridge.panes.terminal
-        if hasBottomPane {
-            VSplitView {
-                editorArea
-                    .frame(minHeight: 120)
-                    .background(SplitViewAutosave(name: "marvin.work"))
-                bottomPanesArea
-                    .frame(minHeight: 120, idealHeight: 280)
-            }
-        } else {
+        return VSplitView {
             editorArea
+                .frame(minHeight: 120)
+                .background(SplitViewAutosave(name: "marvin.work"))
+            bottomPanesArea
+                .frame(
+                    minHeight: hasBottomPane ? 120 : 0,
+                    idealHeight: hasBottomPane ? 280 : 0,
+                    maxHeight: hasBottomPane ? .infinity : 0
+                )
         }
     }
 

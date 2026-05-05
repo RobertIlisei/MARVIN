@@ -429,16 +429,18 @@ vertex FullVOut brain_full_vs(uint vid [[vertex_id]]) {
     return o;
 }
 
-// Fade pass — writes black with the supplied alpha. With pre-
-// multiplied source-over blending, this dims existing colour by
-// (1 - fadeAlpha). Drives the trail decay each frame: profile.trail
-// near 1.0 → tiny fade per frame → long trails. trail near 0 →
-// near-full fade → no trails.
+// Fade pass — blends the accumulation toward the window background
+// (not black). fadeParams = float4(bgR*a, bgG*a, bgB*a, a) where a
+// is (1 - trail). With pre-multiplied source-over blending the
+// accumulation converges to the background colour each frame:
+//   dstRGB = bgRGB*a + dstRGB*(1-a)  →  bgRGB after many frames.
+// Drives the trail decay each frame: profile.trail near 1.0 → small
+// a → long trails; trail near 0 → a ≈ 1 → instant fade to bg.
 fragment float4 brain_fade_fs(
     FullVOut in [[stage_in]],
-    constant float& fadeAlpha [[buffer(0)]]
+    constant float4& fadeParams [[buffer(0)]]
 ) {
-    return float4(0.0, 0.0, 0.0, fadeAlpha);
+    return fadeParams;
 }
 
 // Composite pass — sample the accumulation texture into the
