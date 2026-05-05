@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 
 import type { CostSummary } from "@/components/project/types";
-import { announceCost } from "@/lib/marvin-shell";
 
 function fmtUsd(v: number): string {
   if (v === 0) return "$0.00";
@@ -41,29 +40,6 @@ export function CostPill({
     };
   }, [projectId, refreshKey]);
 
-  // Phase 1d.2/1d.6 — mirror the full cost summary into the SwiftUI
-  // native toolbar popover via the bridge. No-op outside the Swift
-  // shell. Posting null when there's no summary clears the native
-  // pill so it doesn't show stale data after a project switch.
-  useEffect(() => {
-    if (!summary) {
-      announceCost(null);
-      return;
-    }
-    announceCost({
-      today: summary.today.costUsd,
-      week: summary.week.costUsd,
-      lifetime: summary.lifetime.costUsd,
-      turns: summary.lifetime.turns,
-      inputTokens: summary.lifetime.inputTokens,
-      outputTokens: summary.lifetime.outputTokens,
-      daily: summary.daily.map((d) => ({
-        day: d.day,
-        costUsd: d.costUsd,
-        turns: d.turns,
-      })),
-    });
-  }, [summary]);
 
   if (!projectId) return null;
   const today = summary?.today.costUsd ?? 0;

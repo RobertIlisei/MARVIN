@@ -25,16 +25,10 @@
 
 import SwiftUI
 
-/// Hardcoded for Phase 1a — single MARVIN install per machine,
-/// `bin/marvin` always uses port 3030. Phase 2+ may move this into
-/// a Settings surface so multi-port dev setups work, but that's
-/// premature today.
-private let sidecarURL = URL(string: "http://localhost:3030")!
 
 struct ContentView: View {
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
-    @Environment(WebViewCommands.self) private var webCommands
 
     /// Phase 1d.35 — gate the auto-start-sidecar attempt so it
     /// fires at most once per launch. Without this flag, every
@@ -162,7 +156,6 @@ struct ContentView: View {
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
-                .animation(.easeOut(duration: 0.18), value: webCommands.isFindVisible)
             case .offline(let reason):
                 offlineView(reason: reason)
             }
@@ -257,64 +250,14 @@ struct ContentView: View {
         NSApp.dockTile.badgeLabel = count > 0 ? String(count) : ""
     }
 
-    /// The WebView side of Phase 2g.3's HSplitView — the same
-    /// content the Phase 1a full-bleed island used to render, just
-    /// scoped to the middle pane. Drag-drop, find bar, and the
-    /// loading progress bar all stay attached here because they
-    /// belong to the WebView, not the chat.
-    ///
-    /// Phase 5c overlays the native FileViewerView on top when a
-    /// file is selected — Monaco is CSS-hidden inside the WebView
-    /// (`[data-host-shell="swift"] [data-marvin-monaco]`) so the
-    /// native overlay is the sole code surface. When nothing is
-    /// selected, a native empty-state hint sits over the otherwise-
-    /// quiet WebView middle area (the web's "work pane" stub is
-    /// also CSS-hidden via `[data-marvin-work-empty]`).
+    /// ADR-0021 M5: WebView removed. The middle pane is now purely native —
+    /// workPaneSplit directly, with folder-drop forwarded to ProjectsService.
     private var webIsland: some View {
-        ZStack(alignment: .top) {
-            // Opaque native backplate. Covers the WebView entirely so
-            // no web chrome (top-bar / status-rail / chat-pane stubs)
-            // ever reads through as a faint ghost. The WebView is
-            // still mounted (chat session, project state, graph pane
-            // when toggled — Phase 5g hasn't ported the graph yet),
-            // but visually invisible behind the native overlays.
-            Color(nsColor: .textBackgroundColor)
-                .ignoresSafeArea()
-
-            WebView(url: sidecarURL)
-                .ignoresSafeArea()
-                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                    handleFolderDrop(providers: providers)
-                }
-                .opacity(0.0)
-                .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
-                .task {
-                    // ADR-0021 M1: one-shot localStorage → UserDefaults
-                    // migration. The WebView must be mounted (and the
-                    // sidecar page loaded) before evaluateJavaScript can
-                    // reach localStorage, so a 2s grace period ensures
-                    // the page is fully hydrated. No-ops after the first
-                    // successful run (gated by marvin.migrated_prefs_v1).
-                    try? await Task.sleep(for: .seconds(2))
-                    await NativePrefs.shared.runMigrationIfNeeded()
-                }
-
-            // Phase 5e — work pane composition. VSplitView lets the
-            // user drag the boundary IDE-style. The top half is the
-            // editor (file viewer or empty hint); the bottom half is
-            // the panes container (preview / terminal). When neither
-            // bottom pane is open, the editor takes 100% (no empty
-            // bottom panel hanging around).
-            workPaneSplit
-
-            if webCommands.isFindVisible {
-                FindBarView()
-                    .padding(.top, 8)
-                    .padding(.horizontal, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        workPaneSplit
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                handleFolderDrop(providers: providers)
             }
-        }
-        .animation(.easeOut(duration: 0.18), value: bridge.selectedFilePath)
+            .animation(.easeOut(duration: 0.18), value: bridge.selectedFilePath)
     }
 
     /// Vertical split between the editor (top) and the bottom panes
@@ -725,83 +668,6 @@ private func fmtUsd(_ v: Double) -> String {
 // ConnectionStatusToolbarItem retired in Phase 5f — see the comment
 // next to the CostToolbarItem retirement above. The pip + clickable
 // re-probe live in AppStatusBar's connectionPip now.
-
-/// Find-in-page bar overlay (Phase 1d.12). Sits at the top of the
-/// WebView region; live-searches as the user types, advances on
-/// Enter, dismisses with Esc or the Done button. Uses
-/// WKWebView.find under the hood — match highlight is handled by
-/// WebKit, no DOM manipulation needed.
-private struct FindBarView: View {
-    @Environment(WebViewCommands.self) private var webCommands
-    @FocusState private var fieldFocused: Bool
-
-    var body: some View {
-        @Bindable var webCommands = webCommands
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Find in page", text: $webCommands.findText)
-                .textFieldStyle(.plain)
-                .focused($fieldFocused)
-                .onSubmit {
-                    webCommands.findNext()
-                }
-            // Match count — "12 matches" when results, "no matches"
-            // in red-ish when query is set but unmatched, hidden when
-            // the query is empty. Phase 1d.13.
-            if !webCommands.findText.isEmpty {
-                Text(matchLabel(for: webCommands.findCount))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(webCommands.findCount > 0 ? .secondary : Color.orange.opacity(0.85))
-                    .frame(minWidth: 70, alignment: .trailing)
-            }
-            Button {
-                webCommands.findPrevious()
-            } label: {
-                Image(systemName: "chevron.up")
-            }
-            .buttonStyle(.borderless)
-            .disabled(webCommands.findText.isEmpty || webCommands.findCount == 0)
-            .help("Previous match · ⇧⌘G")
-            Button {
-                webCommands.findNext()
-            } label: {
-                Image(systemName: "chevron.down")
-            }
-            .buttonStyle(.borderless)
-            .disabled(webCommands.findText.isEmpty || webCommands.findCount == 0)
-            .help("Next match · ⌘G")
-            Button("Done") {
-                webCommands.hideFind()
-            }
-            .buttonStyle(.borderless)
-            .keyboardShortcut(.cancelAction)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .frame(maxWidth: 420)
-        // Force focus to the field whenever the bar appears OR when
-        // it's already visible and ⌘F is pressed again (re-focus
-        // pattern matches Safari's "tap ⌘F to refocus").
-        .onAppear { fieldFocused = true }
-        .onChange(of: webCommands.isFindVisible) { _, visible in
-            if visible { fieldFocused = true }
-        }
-    }
-
-    private func matchLabel(for count: Int) -> String {
-        switch count {
-        case 0: "no matches"
-        case 1: "1 match"
-        default: "\(count) matches"
-        }
-    }
-}
 
 /// Bridge to the underlying `NSWindow` for things SwiftUI's `Window`
 /// scene doesn't expose (Phase 1c: `frameAutosaveName`). Phase 1+

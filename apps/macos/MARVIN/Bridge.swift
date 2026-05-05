@@ -1,69 +1,11 @@
-// Bridge — JS↔Swift message channel between the WKWebView and the
-// SwiftUI shell. Phase 1d/2+ groundwork.
-//
-// ## Why a bridge at all
-//
-// Phase 1a hands the entire content area to a `WKWebView`. That's
-// fine when the SwiftUI shell only owns the window chrome (title
-// bar, menu bar, About panel). Once we want NSToolbar buttons that
-// reflect web-app state (current project, cost, model), or native
-// chat that hands input back to the agent loop, the two halves
-// have to talk. There are three plausible channels:
-//
-//   1. **`evaluateJavaScript` polling.** Swift periodically asks
-//      the page for state. Cheap to wire, but laggy and wastes
-//      cycles when nothing changed.
-//   2. **URL hash / custom scheme navigation.** Swift sets the URL,
-//      web side reads `location.hash`. Coarse and ergonomically bad
-//      for anything beyond toggle commands.
-//   3. **`WKScriptMessageHandler` + injected `window.marvinShell`.**
-//      First-class WebKit API. Push-based, structured payloads,
-//      one channel per name. This is what Apple's own apps do
-//      (e.g. the Mail composer in macOS).
-//
-// We pick (3). The Swift side registers a single message handler
-// named `marvin`. A `WKUserScript` injected at document start
-// defines `window.marvinShell` so the web app sees a stable global
-// regardless of when its own JS runs.
-//
-// ## Wire format
-//
-// All messages are JSON objects with a required `type` discriminator:
-//
-//     window.marvinShell.postMessage({ type: "hello", payload: {...} })
-//
-// `payload` is opaque to the bridge — each `type` defines its own
-// shape. Adding a new message type is: pick a name, document it on
-// the web side, add a `case` in `handle(_:)` here. No protobuf, no
-// JSON Schema, no codegen — kept minimal so additions are cheap.
-//
-// ## Security boundary
-//
-// The bridge is a privileged surface: any JS running in the WebView
-// can post messages. The Node sidecar's trust boundary is unchanged
-// (creds, agent loop, etc. all stay there). The bridge MUST NOT:
-//   • Forward shell commands.
-//   • Touch the filesystem.
-//   • Spawn subprocesses.
-//   • Read keychain / Anthropic credentials.
-// Reasonable bridge work: state mirroring (cost, project, model),
-// UI intent forwarding (open-this-window, focus-toolbar-search),
-// telemetry passthrough.
+// Bridge — ADR-0021 M5: WebView removed. MarvinBridge is now a pure
+// @Observable state bucket read by SwiftUI views. All state is written
+// by the native services (NativePrefs, ProjectsService, CostService,
+// BranchService, ChatPreviewModel). No WKScriptMessageHandler,
+// no injected JS, no WebView dependency.
 
 import Foundation
 import SwiftUI
-import WebKit
-
-/// Single inbound message from the web side.
-///
-/// The shape is intentionally permissive — `payload` is `Any?` so
-/// each type's handler decodes its own slice. If/when we have more
-/// than ~5 types this should grow into typed `Codable` enums; for
-/// now the cost of doing that early outweighs the value.
-struct BridgeMessage {
-    let type: String
-    let payload: [String: Any]?
-}
 
 /// One project entry from the registered list. Phase 1d.33 — drives
 /// the File → Open Recent submenu. Identifiable so SwiftUI's ForEach
@@ -96,15 +38,9 @@ struct CostSummary: Equatable {
     }
 }
 
-/// Receives JS-side messages on the `marvin` channel.
-///
-/// Lives at app scope — single-window app, one bridge instance, no
-/// per-message-handler weakness. If we ever go multi-window, this
-/// becomes per-WebView (and the WKUserContentController is created
-/// fresh per-window, so duplication isn't a concern).
 @MainActor
 @Observable
-final class MarvinBridge: NSObject, WKScriptMessageHandler {
+final class MarvinBridge {
     static let shared = MarvinBridge()
 
     /// Latest `document.title` posted by the web side via the
@@ -115,12 +51,10 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// native NSWindow title bar.
     private(set) var webTitle: String? = nil
 
-    /// Full cost snapshot posted by the web side via `cost-changed`.
-    /// `nil` until the web side has a project selected and a cost
-    /// summary loaded — the toolbar pill hides in that case.
-    /// Phase 1d.6 — drives both the at-a-glance toolbar text
-    /// (today $X.YY) AND the click-to-open popover with history.
-    private(set) var costSummary: CostSummary? = nil
+    /// Full cost snapshot — drives the at-a-glance toolbar text
+    /// (today $X.YY) AND the click-to-open history popover.
+    /// Phase 1d.6. ADR-0021 M3: written by CostService directly.
+    var costSummary: CostSummary? = nil
 
     /// Convenience for views that only need today's number — keeps
     /// the call site terse without pulling the whole summary into
@@ -138,12 +72,11 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// consumed by any view.
     private(set) var projectWorkDir: String? = nil
 
-    /// Active git branch + dirty-count, posted by the web side via
-    /// `branch-changed`. `nil` branch when not a git repo (or no
-    /// project). Phase 1d.7 — drives the NSWindow subtitle alongside
-    /// projectName.
-    private(set) var branch: String? = nil
-    private(set) var branchDirtyCount: Int = 0
+    /// Active git branch + dirty-count. Phase 1d.7 — drives the
+    /// NSWindow subtitle alongside projectName.
+    /// ADR-0021 M3: written by BranchService directly.
+    var branch: String? = nil
+    var branchDirtyCount: Int = 0
 
     /// User-selected executor + advisor model names, posted by the
     /// web side via `models-changed`. `nil` means "use sidecar
@@ -170,20 +103,17 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// via bridge messages during M1–M4.
     var nativePrefsTakeover: Bool = false
 
-    /// Coarse "MARVIN is busy / idle" flag posted via `busy-changed`.
-    /// The menu-bar status item swaps between the idle (outlined
-    /// nodes) and active (filled nodes) Brain Circuit SVGs based on
-    /// this. Phase 1d.20. False until the web side reports a turn
-    /// in flight.
-    private(set) var isBusy: Bool = false
+    /// Coarse "MARVIN is busy / idle" flag. The menu-bar status item
+    /// swaps between the idle and active Brain Circuit SVGs based on
+    /// this. Phase 1d.20. ADR-0021 M4: written by ChatPreviewModel
+    /// directly from the SSE stream.
+    var isBusy: Bool = false
 
-    /// Phase 5e — fine-grained marvinState mirror. The web side
-    /// posts every transition through `marvin-state-changed`. The
-    /// brain reads this to pick the right particle profile (calm
-    /// thinking vs energetic tool-use vs writing pulse vs error
-    /// flash). Coarse `isBusy` stays for the menu-bar icon swap.
-    /// One of: idle | thinking | tool | writing | error | cancelling.
-    private(set) var marvinState: String = "idle"
+    /// Fine-grained marvinState mirror. The brain reads this to pick
+    /// the right particle profile. One of: idle | thinking | tool |
+    /// writing | error | cancelling. ADR-0021 M4: written by
+    /// ChatPreviewModel directly from the SSE stream.
+    var marvinState: String = "idle"
 
     /// Active personality ("marvin" or "neutral") posted via
     /// `personality-changed`. Drives the About panel's Personality
@@ -408,291 +338,4 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// Channel name — must match the JS-side
-    /// `webkit.messageHandlers.<name>.postMessage(...)` call site.
-    /// One name keeps the WebKit configuration simple; routing
-    /// happens by `type` discriminator inside the payload.
-    static let channelName = "marvin"
-
-    /// Bridge protocol version. Bumped when we make a breaking
-    /// change to the wire format. The web side reads this off
-    /// `window.marvinShell.version` and can fall back gracefully.
-    static let bridgeVersion = "0.1"
-
-    /// Source for the `WKUserScript` injected at document start.
-    /// Defines a stable `window.marvinShell` global before any of
-    /// the web app's code runs. The web side checks for it via
-    /// `apps/web/src/lib/marvin-shell.ts`.
-    ///
-    /// Frozen object so the page can't replace `postMessage` with
-    /// something malicious mid-session.
-    ///
-    /// Also stamps `<html data-host-shell="swift">` here, before
-    /// React paints, so CSS rules that hide web-side controls with
-    /// native equivalents (cost pill, future toolbar items) take
-    /// effect on first paint without a flicker. The web-side
-    /// `announceShell()` re-stamps the same attribute as a fallback.
-    static let injectedScript: String = """
-    (function () {
-      if (window.marvinShell) return;
-      try {
-        if (document.documentElement) {
-          document.documentElement.setAttribute("data-host-shell", "swift");
-        }
-      } catch (_) {}
-      var channel = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.\(channelName)) || null;
-      var shell = {
-        isSwift: true,
-        version: "\(bridgeVersion)",
-        build: "MARVIN-Swift/0.1",
-        postMessage: function (payload) {
-          if (!channel) return false;
-          try {
-            channel.postMessage(payload);
-            return true;
-          } catch (_) {
-            return false;
-          }
-        }
-      };
-      Object.freeze(shell);
-      Object.defineProperty(window, "marvinShell", {
-        value: shell,
-        writable: false,
-        configurable: false,
-        enumerable: true
-      });
-    })();
-    """
-
-    /// Mount the bridge onto a fresh `WKWebViewConfiguration`.
-    ///
-    /// Call this from `WebView.makeNSView` BEFORE constructing the
-    /// `WKWebView`. The `WKUserContentController` it lives on is
-    /// owned by the configuration, which is in turn owned by the
-    /// WebView, so lifetime tracks the WebView automatically.
-    func install(on config: WKWebViewConfiguration) {
-        let controller = config.userContentController
-        // Inbound channel for web → Swift messages.
-        controller.add(self, name: Self.channelName)
-        // Outbound bootstrap — defines window.marvinShell at
-        // document start so it's available to all web-side JS.
-        let userScript = WKUserScript(
-            source: Self.injectedScript,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        )
-        controller.addUserScript(userScript)
-    }
-
-    // MARK: - WKScriptMessageHandler
-
-    nonisolated func userContentController(
-        _ userContentController: WKUserContentController,
-        didReceive message: WKScriptMessage
-    ) {
-        // The protocol delivers on the main thread (per WebKit
-        // docs), but the type system doesn't know that — bounce
-        // through MainActor.
-        let body = message.body
-        Task { @MainActor in
-            self.handle(body)
-        }
-    }
-
-    /// Decode + dispatch a single inbound message.
-    ///
-    /// Errors are deliberately swallowed (logged, not raised) — the
-    /// bridge sits between two processes and a malformed message
-    /// from the web side should never crash the shell.
-    private func handle(_ raw: Any) {
-        guard let dict = raw as? [String: Any] else {
-            NSLog("[MarvinBridge] dropped non-object payload: \(raw)")
-            return
-        }
-        guard let type = dict["type"] as? String else {
-            NSLog("[MarvinBridge] dropped payload without type: \(dict)")
-            return
-        }
-        let payload = dict["payload"] as? [String: Any]
-        let msg = BridgeMessage(type: type, payload: payload)
-        switch msg.type {
-        case "hello":
-            // First message from the web side after detection.
-            // Logged so the migration evaluation can confirm the
-            // channel works end-to-end without manually wiring a
-            // dev-tools breakpoint.
-            NSLog("[MarvinBridge] hello \(payload ?? [:])")
-        case "title":
-            // document.title mirror — drives the native NSWindow
-            // title via @Observable. The web side posts the initial
-            // title on mount and re-posts on every change (e.g.
-            // confirm-pending badge transitions).
-            if let value = payload?["value"] as? String, !value.isEmpty {
-                webTitle = value
-                NSLog("[MarvinBridge] title \(value)")
-            }
-        case "cost-changed":
-            // Full cost snapshot — drives the native cost pill +
-            // popover. The web side sends either a complete summary
-            // or `{ today: null }` to clear (no project / no
-            // summary). Decoded manually rather than through Codable
-            // because the inbound shape is `[String: Any]`; the
-            // round-trip-through-JSONSerialization dance isn't
-            // worth the cost for ~6 fields + a small array.
-            //
-            // Not NSLog'd because cost-changed fires on every
-            // /api/cost summary refresh — a chatty turn would flood
-            // the log. The toolbar item's visibility is the live
-            // signal that messages are flowing.
-            if let payload, let today = payload["today"] as? Double {
-                let dailyRaw = payload["daily"] as? [[String: Any]] ?? []
-                let daily: [CostSummary.DailyEntry] = dailyRaw.compactMap { row in
-                    guard let day = row["day"] as? String,
-                          let cost = row["costUsd"] as? Double,
-                          let turns = row["turns"] as? Int else { return nil }
-                    return CostSummary.DailyEntry(day: day, costUsd: cost, turns: turns)
-                }
-                costSummary = CostSummary(
-                    today: today,
-                    week: payload["week"] as? Double ?? 0,
-                    lifetime: payload["lifetime"] as? Double ?? 0,
-                    turns: payload["turns"] as? Int ?? 0,
-                    inputTokens: payload["inputTokens"] as? Int ?? 0,
-                    outputTokens: payload["outputTokens"] as? Int ?? 0,
-                    daily: daily
-                )
-            } else {
-                costSummary = nil
-            }
-        case "project-changed":
-            // Active project name + workDir — drives the NSWindow
-            // subtitle. Both fields nullable; null clears them.
-            projectName = (payload?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            projectWorkDir = (payload?["workDir"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            NSLog("[MarvinBridge] project-changed name=\(projectName ?? "nil")")
-        case "branch-changed":
-            // Active git branch + dirty-count — appended to the
-            // NSWindow subtitle. Empty/nil branch means not a git
-            // repo; subtitle falls back to just projectName.
-            // Not NSLog'd because branch-changed fires on every
-            // /api/files/status refresh (after every completed turn);
-            // the live subtitle is the visible signal.
-            branch = (payload?["branch"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            branchDirtyCount = (payload?["dirtyCount"] as? Int) ?? 0
-        case "models-changed":
-            // ADR-0021 M1: silenced once NativePrefs takes over.
-            guard !nativePrefsTakeover else { break }
-            // User-selected executor / advisor models. Both nullable
-            // — null means "fall back to whatever the sidecar's
-            // /api/health reports as defaultModel". Drives the About
-            // panel's Active models section.
-            executorModel = (payload?["executor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            advisorModel = (payload?["advisor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        case "theme-changed":
-            // ADR-0021 M1: silenced once NativePrefs takes over.
-            guard !nativePrefsTakeover else { break }
-            // Active theme name from the web side. Drives the
-            // SwiftUI chrome's color scheme via `preferredColorScheme`.
-            // Anything other than "light"/"dark" falls back to
-            // system preference. Logged because theme-changed is
-            // infrequent (only on initial mount + manual toggle) so
-            // the log stays useful telemetry without flooding.
-            let value = payload?["value"] as? String
-            themeName = (value == "light" || value == "dark") ? value : nil
-            NSLog("[MarvinBridge] theme-changed value=\(themeName ?? "nil")")
-        case "busy-changed":
-            // Web side's coarse busy flag — flips on at the start of
-            // a turn and off when MARVIN goes back to idle. Drives
-            // the menu-bar status item's idle/active icon swap. Not
-            // NSLog'd because busy-changed fires on every state
-            // transition (including tool / writing) — chatty.
-            let busy = (payload?["busy"] as? Bool) ?? false
-            isBusy = busy
-        case "marvin-state-changed":
-            // Phase 5e — full state mirror for the native brain. One
-            // of idle | thinking | tool | writing | error |
-            // cancelling. Anything else falls back to "idle".
-            let v = (payload?["value"] as? String) ?? "idle"
-            switch v {
-            case "idle", "thinking", "tool", "writing", "error", "cancelling":
-                if marvinState != v {
-                    NSLog("[MarvinBridge] marvin-state-changed \(marvinState) → \(v)")
-                }
-                marvinState = v
-            default:
-                marvinState = "idle"
-            }
-        case "personality-changed":
-            // ADR-0021 M1: silenced once NativePrefs takes over.
-            guard !nativePrefsTakeover else { break }
-            // Active personality from the web Settings popover.
-            // "marvin" | "neutral"; anything else falls back to nil.
-            // Drives the About panel's Personality row.
-            let value = payload?["value"] as? String
-            personality = (value == "marvin" || value == "neutral") ? value : nil
-            NSLog("[MarvinBridge] personality-changed value=\(personality ?? "nil")")
-        case "permission-changed":
-            // ADR-0021 M1: silenced once NativePrefs takes over.
-            guard !nativePrefsTakeover else { break }
-            // Phase 5d — auto / gated. Echoed by the prefs context on
-            // every change + once on hydrate; the native Setup popover
-            // reads from here to render the toggle's current state.
-            let value = payload?["value"] as? String
-            if value == "auto" || value == "gated" {
-                permissionStrategy = value!
-            }
-        case "panes-changed":
-            // ADR-0021 M1: silenced once NativePrefs takes over.
-            guard !nativePrefsTakeover else { break }
-            // Phase 5d — pane visibility map (files / brain / graph /
-            // preview / terminal). Decoded loosely; missing keys keep
-            // their previous value so a partial payload doesn't
-            // collapse the layout.
-            if let p = payload {
-                var next = panes
-                if let v = p["files"] as? Bool { next.files = v }
-                if let v = p["brain"] as? Bool { next.brain = v }
-                if let v = p["graph"] as? Bool { next.graph = v }
-                if let v = p["preview"] as? Bool { next.preview = v }
-                if let v = p["terminal"] as? Bool { next.terminal = v }
-                panes = next
-            }
-        case "session-changed":
-            // Phase 2h — paired (projectId, marvinSessionId) update
-            // from the web side. Both can be null independently:
-            // null projectId = no project active; null marvinSessionId
-            // = project active but no turn started yet (or no prior
-            // session file for it). The native chat surface keys
-            // its hydrate / attach logic off these — see
-            // ChatPreviewView's onChange wiring.
-            //
-            // NSLog'd because session changes are infrequent (once
-            // per project switch / first turn) and the trail is
-            // useful when debugging hydrate failures.
-            let pid = (payload?["projectId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let sid = (payload?["marvinSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            activeProjectId = pid
-            activeMarvinSessionId = sid
-            NSLog("[MarvinBridge] session-changed projectId=\(pid ?? "nil") sid=\(sid ?? "nil")")
-        case "projects-changed":
-            // Registered project list. Drives File → Open Recent.
-            // Decoded loosely — drop entries missing required fields
-            // rather than failing the whole message; a malformed
-            // entry shouldn't blank out the menu.
-            let raw = payload?["projects"] as? [[String: Any]] ?? []
-            projects = raw.compactMap { row in
-                guard let id = row["id"] as? String, !id.isEmpty,
-                      let name = row["name"] as? String, !name.isEmpty,
-                      let workDir = row["workDir"] as? String else {
-                    return nil
-                }
-                return BridgeProject(id: id, name: name, workDir: workDir)
-            }
-        default:
-            // Unknown type — log + ignore. Future phases add cases
-            // here (cost-update, project-changed, etc.).
-            NSLog("[MarvinBridge] received \(type) \(payload ?? [:])")
-        }
-    }
 }

@@ -16,7 +16,6 @@
 
 import Foundation
 import SwiftUI
-import WebKit
 
 @MainActor
 @Observable
@@ -112,52 +111,10 @@ final class NativePrefs {
         UserDefaults.standard.bool(forKey: Self.migrationFlagKey)
     }
 
-    /// One-shot migration: read five pref keys from the WebView's
-    /// localStorage and write to UserDefaults. Runs while the WebView
-    /// is still mounted (M1–M4). No-ops if the migration flag is set
-    /// or if the WebView isn't available. On failure (JS error, page
-    /// not loaded) skips gracefully — next launch retries.
+    /// ADR-0021 M5: WebView removed. Migration no longer possible or needed —
+    /// all users reached M5 with the flag set, or default prefs are acceptable.
     func runMigrationIfNeeded() async {
-        guard !migrationComplete else { return }
-        guard let webView = WebViewCommands.shared.webView else {
-            NSLog("[NativePrefs] migration skipped — WebView not mounted yet")
-            return
-        }
-        let js = """
-        (function(){
-          return JSON.stringify({
-            personality: localStorage.getItem('marvin.personality'),
-            executor:    localStorage.getItem('marvin.model.executor'),
-            advisor:     localStorage.getItem('marvin.model.advisor'),
-            permission:  localStorage.getItem('marvin.permissionStrategy'),
-            panes:       localStorage.getItem('marvin.panes')
-          });
-        })()
-        """
-        do {
-            let result = try await webView.evaluateJavaScript(js)
-            guard let jsonStr = result as? String,
-                  let data = jsonStr.data(using: .utf8),
-                  let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            else {
-                NSLog("[NativePrefs] migration: couldn't parse localStorage JSON")
-                UserDefaults.standard.set(true, forKey: Self.migrationFlagKey)
-                return
-            }
-            if let p = dict["personality"] as? String { setPersonality(p) }
-            if let e = dict["executor"] as? String, !e.isEmpty { setExecutorModel(e) }
-            if let a = dict["advisor"] as? String, !a.isEmpty { setAdvisorModel(a) }
-            if let perm = dict["permission"] as? String { setPermissionStrategy(perm) }
-            if let panesStr = dict["panes"] as? String,
-               let pd = panesStr.data(using: .utf8),
-               let pc = try? JSONDecoder().decode(PanesCodable.self, from: pd) {
-                setPanes(pc.toState())
-            }
-            UserDefaults.standard.set(true, forKey: Self.migrationFlagKey)
-            NSLog("[NativePrefs] localStorage → UserDefaults migration complete — permissionStrategy=\(permissionStrategy)")
-        } catch {
-            NSLog("[NativePrefs] migration evaluateJavaScript failed: \(error) — will retry next launch")
-        }
+        UserDefaults.standard.set(true, forKey: Self.migrationFlagKey)
     }
 
     // MARK: - Private

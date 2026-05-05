@@ -98,6 +98,7 @@ private func revealProjectInFinder(workDir: String?) {
 /// (which AppleScript would prompt for on first use).
 @MainActor
 private func openTerminalAt(workDir: String?) {
+
     guard let workDir, !workDir.isEmpty else { return }
     let dirURL = URL(fileURLWithPath: workDir)
     let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
@@ -109,6 +110,27 @@ private func openTerminalAt(workDir: String?) {
     ) { _, error in
         if let error {
             NSLog("[openTerminalAt] failed to launch Terminal: \(error)")
+        }
+    }
+}
+
+/// Open an NSOpenPanel so the user can pick a folder to add as a project.
+/// Replaces the WebView's `open-project-picker` dispatch (ADR-0021 M5).
+@MainActor
+func openProjectWithPanel() {
+    let panel = NSOpenPanel()
+    panel.title = "Open Project Folder"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.begin { response in
+        guard response == .OK, let url = panel.url else { return }
+        Task {
+            try? await ProjectsService.shared.addProject(
+                workDir: url.path,
+                name: url.lastPathComponent
+            )
         }
     }
 }
@@ -282,17 +304,11 @@ struct MARVINApp: App {
     /// migration phases land).
     private let bridge = MarvinBridge.shared
 
-    /// WebView command bridge — singleton, threaded through the
-    /// environment so SwiftUI observation tracks load progress
-    /// (Phase 1d.10).
-    private let webCommands = WebViewCommands.shared
-
     var body: some Scene {
         Window("MARVIN", id: "marvin-main") {
             ContentView()
                 .environment(health)
                 .environment(bridge)
-                .environment(webCommands)
                 // 1440×900 default + 960×600 floor — matches the
                 // existing Tauri config (tauri.conf.json) so users
                 // don't see a different window geometry across the
@@ -340,95 +356,18 @@ struct MARVINApp: App {
                 OpenAboutButton()
             }
 
-            // View → Reload (⌘R) / Force Reload (⇧⌘R).
-            //
-            // Reload uses the cache; Force Reload bypasses it
-            // (`reloadFromOrigin()`) — useful after a sidecar rebuild
-            // when the page is showing stale Next.js assets. Both
-            // are guarded by health.state — Reload makes no sense
-            // when the WebView isn't even mounted.
-            CommandGroup(after: .toolbar) {
-                Divider()
-                Button("Reload") {
-                    if health.state.isOnline {
-                        WebViewCommands.shared.reload()
-                    } else {
-                        // When offline, ⌘R kicks the health probe —
-                        // matches the explicit "Reconnect" button in
-                        // the offline view.
-                        Task { await health.refreshNow() }
-                    }
-                }
-                .keyboardShortcut("r", modifiers: [.command])
+            // ADR-0021 M5: Reload/Zoom/Find were WebView-only — removed.
+            // ⌘R reconnects the sidecar health probe from the offline view's
+            // "Reconnect" button. Native NSTextFinder for ⌘F is a follow-up.
 
-                Button("Force Reload") {
-                    if health.state.isOnline {
-                        WebViewCommands.shared.forceReload()
-                    } else {
-                        Task { await health.refreshNow() }
-                    }
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-
-                // Phase 1d.11 — page zoom controls. Standard macOS
-                // shortcuts: ⌘0 reset, ⌘= zoom in (macOS displays
-                // as ⌘+ since the same key is shifted), ⌘- zoom
-                // out. Persisted to UserDefaults so the size
-                // survives launches. Disabled offline because the
-                // WebView isn't mounted then.
-                Divider()
-                Button("Actual Size") {
-                    WebViewCommands.shared.resetZoom()
-                }
-                .keyboardShortcut("0", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-                Button("Zoom In") {
-                    WebViewCommands.shared.zoomIn()
-                }
-                .keyboardShortcut("=", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-                Button("Zoom Out") {
-                    WebViewCommands.shared.zoomOut()
-                }
-                .keyboardShortcut("-", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-            }
-
-            // Phase 1d.12 — Find in page. Conventionally lives in
-            // the Edit menu; placed after .textEditing so the
-            // standard Find / Find Next / Find Previous slot is
-            // taken by ours. Disabled offline (no WebView mounted).
-            CommandGroup(after: .textEditing) {
-                Divider()
-                Button("Find…") {
-                    WebViewCommands.shared.showFind()
-                }
-                .keyboardShortcut("f", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-                Button("Find Next") {
-                    WebViewCommands.shared.findNext()
-                }
-                .keyboardShortcut("g", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-                Button("Find Previous") {
-                    WebViewCommands.shared.findPrevious()
-                }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(!health.state.isOnline)
-            }
-
-            // Phase 1d.25 — File → New Session (⌘⇧N) replaces
-            // SwiftUI's default "New" item which would otherwise be
-            // a no-op (we have no document model). Bridges into the
-            // web app's existing reset() handler via a dispatched
-            // CustomEvent — no need to duplicate React state into
-            // Swift just to trigger a reset.
+            // Phase 1d.25 — File → New Session (⌘⇧N). ADR-0021 M5:
+            // WebView removed; the native ChatPreviewView manages sessions.
+            // Kept as a placeholder that will wire to ChatPreviewModel.reset()
+            // once the native session-reset path is formalised.
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    WebViewCommands.shared.dispatchWebCommand("new-session")
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(!health.state.isOnline)
+                Button("New Session") {}
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(true)
             }
 
             // Phase 1d.23 — File menu items that act on the active
@@ -441,16 +380,11 @@ struct MARVINApp: App {
             CommandGroup(after: .saveItem) {
                 Divider()
 
-                // Phase 1d.25 — bridges to the web app's project
-                // picker. The web button in the top bar still works;
-                // this just makes the action discoverable from the
-                // menu bar (and via ⌘O, the macOS-conventional
-                // shortcut for "open").
+                // ADR-0021 M5: native NSOpenPanel replaces the WebView dispatch.
                 Button("Open Project…") {
-                    WebViewCommands.shared.dispatchWebCommand("open-project-picker")
+                    openProjectWithPanel()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
-                .disabled(!health.state.isOnline)
 
                 // Phase 1d.33 — File → Open Recent submenu populated
                 // from the bridge. Click on a project to make it
@@ -485,10 +419,10 @@ struct MARVINApp: App {
             CommandGroup(after: .windowList) {
                 Divider()
                 Button("Toggle Theme") {
-                    WebViewCommands.shared.dispatchWebCommand("toggle-theme")
+                    let next = NativePrefs.shared.themeName == "dark" ? "light" : "dark"
+                    NativePrefs.shared.setTheme(next)
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-                .disabled(!health.state.isOnline)
 
                 Button("Keyboard Shortcuts…") {
                     // Phase 5d — fire native shortcuts sheet via the

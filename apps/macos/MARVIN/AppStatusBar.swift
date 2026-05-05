@@ -118,7 +118,7 @@ struct AppStatusBar: View {
             }
             Divider()
             Button("Open Project…") {
-                WebViewCommands.shared.dispatchWebCommand("open-project-picker")
+                openProjectWithPanel()
             }
             if let workDir = bridge.projectWorkDir {
                 Divider()

@@ -1,75 +1,9 @@
 "use client";
 
-// MarvinShellBridge — runs on mount, detects the SwiftUI host shell,
-// and wires the JS↔Swift bridge:
-//   • Posts a hello message + stamps <html data-host-shell="swift">
-//     so CSS can adapt and the Swift side knows the channel works.
-//   • Mirrors document.title to the native NSWindow title (Phase 1d)
-//     by posting the initial value and a fresh message every time
-//     <title> changes. Watches via MutationObserver — the React
-//     side already mutates document.title for the (N) confirm-
-//     pending badge, so no React-side coordination is needed.
-//
-// Renders nothing. Mounted at the root layout level so it runs on
-// every page without needing per-page wiring. Costs one no-op
-// effect when running outside the Swift shell (the standard Tauri
-// build, the web-only dev loop), so always-mounted is fine.
-//
-// See `apps/web/src/lib/marvin-shell.ts` for the bridge contract
-// and `apps/macos/MARVIN/Bridge.swift` for the Swift counterpart.
-
-import { useEffect } from "react";
-import {
-  announceShell,
-  announceTheme,
-  announceTitle,
-  isSwiftShell,
-} from "@/lib/marvin-shell";
+// ADR-0021 M5: WebView removed. MarvinShellBridge was the JS↔Swift
+// WKScriptMessageHandler wiring — no longer needed. Kept as a no-op
+// stub so import sites don't need to be hunted down.
 
 export function MarvinShellBridge() {
-  useEffect(() => {
-    announceShell();
-    if (!isSwiftShell()) return;
-
-    // Initial title — fires before any subsequent change so the
-    // native title bar isn't briefly stuck on "MARVIN" while the
-    // React app boots and first sets document.title.
-    announceTitle(document.title);
-
-    // Initial theme — same rationale. data-theme is set by the
-    // pre-hydration bootstrap script in layout.tsx, so by the time
-    // this useEffect runs, the attribute is already present.
-    const readTheme = (): "light" | "dark" =>
-      document.documentElement.getAttribute("data-theme") === "dark"
-        ? "dark"
-        : "light";
-    announceTheme(readTheme());
-
-    // Watch <title> AND <html data-theme>. One MutationObserver per
-    // target — different `observe` configurations.
-    const titleEl = document.querySelector("title");
-    const observers: MutationObserver[] = [];
-
-    if (titleEl) {
-      const o = new MutationObserver(() => announceTitle(document.title));
-      // childList catches text-node replacements; characterData on
-      // the child catches text-content edits. Subtree covers both.
-      o.observe(titleEl, {
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
-      observers.push(o);
-    }
-
-    const themeObserver = new MutationObserver(() => announceTheme(readTheme()));
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
-    observers.push(themeObserver);
-
-    return () => observers.forEach((o) => o.disconnect());
-  }, []);
   return null;
 }

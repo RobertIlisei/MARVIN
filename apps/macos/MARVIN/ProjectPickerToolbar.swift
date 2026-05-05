@@ -37,7 +37,7 @@ struct ProjectPickerToolbarItem: View {
             }
             Divider()
             Button("Open Project…") {
-                WebViewCommands.shared.dispatchWebCommand("open-project-picker")
+                openProjectWithPanel()
             }
             .keyboardShortcut("o", modifiers: [.command])
             if let workDir = bridge.projectWorkDir {

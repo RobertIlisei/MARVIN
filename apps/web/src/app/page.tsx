@@ -10,14 +10,6 @@ import { taskRoleOf } from "@/components/brain/task-role";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { useConfirmTitleBadge } from "@/components/chat/use-confirm-title-badge";
 import { VirtualMessageList } from "@/components/chat/virtual-message-list";
-import {
-  announceBusy,
-  announceModels,
-  announcePersonality,
-  announceProject,
-  announceProjects,
-  announceSession,
-} from "@/lib/marvin-shell";
 import { pulseResize } from "@/lib/panel-resize-signal";
 import { useMarvinPrefs } from "@/lib/use-prefs";
 import { FileTree } from "@/components/file-tree/file-tree";
@@ -106,14 +98,6 @@ export default function Home() {
 
   const cwd = active?.workDir ?? "";
 
-  // Phase 1d.3 — mirror the active project to the SwiftUI native
-  // shell so the NSWindow subtitle can show "$projectName" without
-  // duplicating the work the React side already did. No-op outside
-  // the Swift shell. Includes workDir so a future native NSToolbar
-  // item can render the path on hover without an extra round-trip.
-  useEffect(() => {
-    announceProject(active?.name ?? null, active?.workDir ?? null);
-  }, [active?.name, active?.workDir]);
 
   // Global prefs from the central context. Replaces five `useState`
   // calls + five persistence effects pre-#25. Each setter persists
@@ -136,31 +120,6 @@ export default function Home() {
     showAutoModeBanner,
   } = prefs;
 
-  // Phase 1d.15 — mirror the active model selection to the SwiftUI
-  // shell. The About panel reads bridge.executorModel / advisorModel
-  // and shows them under "Active models". No-op outside the Swift
-  // shell. Both nullable to mean "fall back to sidecar default".
-  useEffect(() => {
-    announceModels(executorModel, advisorModel);
-  }, [executorModel, advisorModel]);
-
-  // Phase 1d.32 — mirror the active personality so the About panel
-  // can show "marvin" vs "neutral" without the user having to open
-  // the web Settings popover.
-  useEffect(() => {
-    announcePersonality(personality);
-  }, [personality]);
-
-  // Phase 1d.33 — mirror the registered project list so the native
-  // File → Open Recent submenu can populate. We trim to the three
-  // fields the Swift side actually needs; the bridge wire format
-  // stays narrow so renaming a ProjectRecord field doesn't break
-  // the bridge contract.
-  useEffect(() => {
-    announceProjects(
-      projects.map((p) => ({ id: p.id, name: p.name, workDir: p.workDir })),
-    );
-  }, [projects]);
 
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
   const [leftColumnTab, setLeftColumnTab] = useLeftColumnTab();
@@ -209,16 +168,6 @@ export default function Home() {
     }
   }, [marvinSessionId, active?.id]);
 
-  // Phase 2h — mirror (projectId, marvinSessionId) to the SwiftUI
-  // shell. The native chat surface uses the pair to hit
-  // GET /api/sessions/:id?projectId=… for transcript hydrate and
-  // GET /api/chat/resume?marvinSessionId=… to tail a live turn,
-  // matching what this component does on mount above. Fires when
-  // either side changes; null on either field means "no session
-  // available right now" and the native side clears its list.
-  useEffect(() => {
-    announceSession(active?.id ?? null, marvinSessionId ?? null);
-  }, [active?.id, marvinSessionId]);
 
   // Re-attach to any turn still running on the server after refresh.
   // Runs once per project change: hydrate the transcript, then try to
@@ -343,14 +292,6 @@ export default function Home() {
     marvinState !== "error" &&
     marvinState !== "cancelling";
 
-  // Phase 1d.20 — mirror busy → SwiftUI menu-bar status item, which
-  // swaps between the idle (outlined nodes) and active (filled nodes)
-  // Brain Circuit variants. No-op outside the Swift shell. Treat
-  // "cancelling" as still busy: the user expects the active state
-  // to persist until the stop actually lands.
-  useEffect(() => {
-    announceBusy(marvinState !== "idle" && marvinState !== "error");
-  }, [marvinState]);
 
   // Phase 1d.25 — listen for native menu-bar commands dispatched by
   // the SwiftUI shell. Each `marvin:<name>` CustomEvent maps to an
@@ -423,6 +364,44 @@ export default function Home() {
       setSelectedPath(detail.path);
     };
 
+    // Phase 5d — Swift native popovers (Layout / Setup / Models) drive
+    // the same prefs context as the web popovers via these events.
+    // Single source of truth (the prefs context) stays put; the
+    // events are just the cross-process intent signal.
+    const onSetPersonality = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { value?: "marvin" | "neutral" }
+        | undefined;
+      if (detail?.value === "marvin" || detail?.value === "neutral") {
+        setPersonality(detail.value);
+      }
+    };
+    const onSetPermission = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { value?: "auto" | "gated" }
+        | undefined;
+      if (detail?.value === "auto" || detail?.value === "gated") {
+        setPermissionStrategy(detail.value);
+      }
+    };
+    const onSetModels = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { executor?: string | null; advisor?: string | null }
+        | undefined;
+      if (!detail) return;
+      setModels({
+        executor: detail.executor ?? null,
+        advisor: detail.advisor ?? null,
+      });
+    };
+    const onTogglePane = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { key?: keyof typeof panes }
+        | undefined;
+      if (!detail?.key) return;
+      togglePane(detail.key);
+    };
+
     window.addEventListener("marvin:new-session", onNewSession);
     window.addEventListener("marvin:open-project-picker", onOpenProjectPicker);
     window.addEventListener("marvin:show-shortcuts", onShowShortcuts);
@@ -430,6 +409,10 @@ export default function Home() {
     window.addEventListener("marvin:dropped-folder", onDroppedFolder);
     window.addEventListener("marvin:select-project", onSelectProject);
     window.addEventListener("marvin:select-file", onSelectFile);
+    window.addEventListener("marvin:set-personality", onSetPersonality);
+    window.addEventListener("marvin:set-permission-strategy", onSetPermission);
+    window.addEventListener("marvin:set-models", onSetModels);
+    window.addEventListener("marvin:toggle-pane", onTogglePane);
     return () => {
       window.removeEventListener("marvin:new-session", onNewSession);
       window.removeEventListener("marvin:open-project-picker", onOpenProjectPicker);
@@ -438,8 +421,21 @@ export default function Home() {
       window.removeEventListener("marvin:dropped-folder", onDroppedFolder);
       window.removeEventListener("marvin:select-project", onSelectProject);
       window.removeEventListener("marvin:select-file", onSelectFile);
+      window.removeEventListener("marvin:set-personality", onSetPersonality);
+      window.removeEventListener("marvin:set-permission-strategy", onSetPermission);
+      window.removeEventListener("marvin:set-models", onSetModels);
+      window.removeEventListener("marvin:toggle-pane", onTogglePane);
     };
-  }, [reset, addProject, selectProject]);
+  }, [
+    reset,
+    addProject,
+    selectProject,
+    setPersonality,
+    setPermissionStrategy,
+    setModels,
+    togglePane,
+    panes,
+  ]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -651,7 +647,10 @@ export default function Home() {
       setHeroDraftKey((v) => v + 1);
     };
     return (
-      <main className="relative flex h-screen w-screen flex-col overflow-hidden">
+      <main
+        className="relative flex h-screen w-screen flex-col overflow-hidden"
+        data-marvin-empty-shell
+      >
         {/* Ambient constellation layer — only on the hero canvas */}
         <div aria-hidden className="constellation" />
         {topBar}
@@ -924,6 +923,13 @@ export default function Home() {
                       order={order++}
                       defaultSize={50}
                       minSize={15}
+                      // Phase 5c (ADR-0020) — tag the file-viewer
+                      // panel so MARVIN-Swift can hide it via the
+                      // [data-host-shell="swift"] [data-marvin-monaco]
+                      // CSS rule (globals.css). The native
+                      // FileViewerView replaces it inline. Web /
+                      // Tauri builds keep Monaco as before.
+                      data-marvin-monaco
                     >
                       <FileViewer
                         cwd={cwd}
@@ -970,7 +976,10 @@ export default function Home() {
                 );
               })()
             ) : (
-              <div className="flex h-full flex-1 items-center justify-center px-6 py-10 text-center">
+              <div
+                className="flex h-full flex-1 items-center justify-center px-6 py-10 text-center"
+                data-marvin-work-empty
+              >
                 <div className="max-w-sm font-mono text-[11px] text-[color:var(--color-fg-faint)]">
                   <div className="mb-2 text-[10px] uppercase tracking-[0.32em] text-[color:var(--color-fg-dim)]">
                     work pane

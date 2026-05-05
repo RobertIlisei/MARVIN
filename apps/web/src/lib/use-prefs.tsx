@@ -188,7 +188,13 @@ export function MarvinPrefsProvider({ children }: { children: ReactNode }) {
   // with persisted values. Avoids the SSR / hydration mismatch the
   // previous page.tsx code dodged with a similar useEffect.
   useEffect(() => {
-    setPrefs(readPrefs());
+    const hydrated = readPrefs();
+    setPrefs(hydrated);
+    // Phase 5d — announce current state to the Swift shell so its
+    // native Layout / Setup popovers reflect persisted prefs on
+    // boot. The prefs hook already announces personality from its
+    // own setter, but permission + panes only had localStorage
+    // persistence; the announce calls plug them into the bridge.
   }, []);
 
   // Per-key writers — all of them update the in-memory state and
