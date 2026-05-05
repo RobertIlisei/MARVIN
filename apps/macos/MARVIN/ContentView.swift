@@ -44,7 +44,74 @@ struct ContentView: View {
     /// processes and confuses tail-the-launchd-log workflows.
     @State private var autoStartAttempted = false
 
+    /// Phase 5d — toolbar popover open state. Each popover is bound
+    /// to a discrete bool so opening one auto-dismisses the other
+    /// (SwiftUI `.popover(isPresented:)` only allows one at a time
+    /// per anchor). Phase 5e dropped the Setup popover (its controls
+    /// moved under the chat input as a Cursor-style agents footer);
+    /// modelsDialogOpen now opens from the ChatAgentsFooter scope,
+    /// not the toolbar.
+    @State private var layoutPopoverOpen = false
+    @State private var quickOpenOpen = false
+    @State private var shortcutsOpen = false
+
     var body: some View {
+        // Phase 5f — outermost VStack so the global bottom status bar
+        // (AppStatusBar) spans the full window width below every pane.
+        // Cursor / VS Code / IntelliJ all do this — the bottom strip is
+        // app-scoped chrome, not a per-pane affordance. Sits flush
+        // against the window's bottom edge so the transition from
+        // content to chrome is one visual surface.
+        VStack(spacing: 0) {
+            mainContent
+            AppStatusBar()
+                .environment(bridge)
+                .environment(health)
+        }
+        .frame(minWidth: 480, minHeight: 320)
+        .preferredColorScheme(bridge.preferredColorScheme)
+        .background(WindowAccessor { window in
+            window.setFrameAutosaveName("MARVINMainWindow")
+        })
+        .toolbar { toolbarContent }
+        .sheet(isPresented: $quickOpenOpen) {
+            QuickOpenSheet()
+                .environment(bridge)
+        }
+        .sheet(isPresented: $shortcutsOpen) {
+            ShortcutsHelpSheet()
+        }
+        .onChange(of: bridge.shortcutsTriggerCount) { _, _ in
+            shortcutsOpen = true
+        }
+        .onChange(of: bridge.quickOpenTriggerCount) { _, _ in
+            if bridge.projectWorkDir != nil {
+                quickOpenOpen = true
+            }
+        }
+        .navigationTitle(bridge.webTitle ?? "MARVIN")
+        .navigationSubtitle(composeSubtitle())
+        .onChange(of: bridge.webTitle ?? "") { _, newTitle in
+            let count = parseConfirmCount(newTitle)
+            updateDockBadge(count: count)
+            NotificationManager.shared.updateConfirmCount(count)
+        }
+        .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
+            updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
+        }
+        .onChange(of: health.state.isOffline) { _, isOffline in
+            maybeAutoStartSidecar(isOffline: isOffline)
+        }
+        .task {
+            maybeAutoStartSidecar(isOffline: health.state.isOffline)
+        }
+    }
+
+    /// The pre-status-bar app body. Three connection states (connecting
+    /// / online / offline). Pre-Phase-5f this was the entire body;
+    /// 5f wraps it under a VStack so AppStatusBar sits below.
+    @ViewBuilder
+    private var mainContent: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
@@ -69,22 +136,29 @@ struct ContentView: View {
                 // the remainder, brain+chat on the right — matches
                 // the web's `tree | center | side-top + side-chat`
                 // panel ordering in apps/web/src/app/page.tsx.
+                // IDE-style 3-pane split — every divider is a
+                // draggable NSSplitView handle. The ideal sizes are
+                // hints for first launch; idealWidth / idealHeight
+                // pre-position the dividers but the user can drag
+                // freely within [minWidth … available].
                 HSplitView {
                     LeftPane()
-                        .frame(minWidth: 220, idealWidth: 260)
+                        .frame(minWidth: 200, idealWidth: 260)
+                        .background(SplitViewAutosave(name: "marvin.main"))
                     webIsland
                         .frame(minWidth: 320)
                     // Right pane mirrors the web `side` aside —
                     // brain on top of chat. VSplitView lets the
-                    // user resize the brain/chat split; default
-                    // fractions match the web's
-                    // defaultSize={38} / minSize={18} /
-                    // maxSize={65} for the brain panel.
+                    // user drag the brain/chat split anywhere
+                    // between the two children's minimums (no
+                    // maxHeight cap — the user might want all
+                    // brain or all chat).
                     VSplitView {
                         BrainPaneView()
-                            .frame(minHeight: 160, idealHeight: 280, maxHeight: 480)
+                            .frame(minHeight: 120, idealHeight: 280)
+                            .background(SplitViewAutosave(name: "marvin.right"))
                         ChatPreviewView()
-                            .frame(minHeight: 240)
+                            .frame(minHeight: 200)
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
@@ -93,108 +167,44 @@ struct ContentView: View {
                 offlineView(reason: reason)
             }
         }
-        .frame(minWidth: 480, minHeight: 320)
-        // Phase 1d.17 — follow the web app's theme so the SwiftUI
-        // title bar / offline view / connecting view don't read as
-        // mismatched against a dark WebView. nil means "follow
-        // macOS system" (used until the web side posts its first
-        // theme).
-        .preferredColorScheme(bridge.preferredColorScheme)
-        .background(WindowAccessor { window in
-            // Phase 1c — window-state restoration. NSWindow's built-in
-            // frameAutosaveName persists position + size to
-            // NSUserDefaults under this key and restores on relaunch,
-            // for free. SwiftUI's `Window` scene (vs `WindowGroup`)
-            // doesn't surface @SceneStorage, so we reach into AppKit.
-            window.setFrameAutosaveName("MARVINMainWindow")
-        })
-        // Phase 1d — native NSToolbar in the unified title bar.
-        // Today this hosts only a connection-status indicator that
-        // pulls from HealthMonitor; future phases bridge in
-        // web-app state (project name, cost) as new ToolbarItems.
-        // Doing it as a .toolbar modifier (vs raw NSToolbar via an
-        // NSWindowDelegate) keeps the items as SwiftUI Views so
-        // theme + accent colors track macOS automatically.
-        .toolbar {
-            // Single ToolbarItem so the cost pill + connection
-            // status get explicit spacing; two separate items in
-            // the same .primaryAction slot pack flush with no
-            // gap (visual collision reported in 1d.3 review).
-            // .controlSize(.large) makes the auto-wrapped pill
-            // taller; without it the .callout-sized text crowded
-            // the pill's vertical padding.
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 14) {
-                    if let summary = bridge.costSummary {
-                        CostToolbarItem(summary: summary)
-                    }
-                    ConnectionStatusToolbarItem(state: health.state) {
-                        Task { await health.refreshNow() }
-                    }
-                }
-                .controlSize(.large)
+    }
+
+    /// Native NSToolbar contents — extracted so the outer body can
+    /// stay focused on the VStack composition (mainContent +
+    /// AppStatusBar).
+    ///
+    /// Phase 5f de-duplicated chrome: project picker, connection
+    /// status, and the cost pill all moved to the `AppStatusBar`
+    /// at the bottom of the window so they only render once. The
+    /// toolbar keeps only ACTIONS — Layout, Quick Open. Cursor /
+    /// VS Code use the same split (status at the bottom, actions at
+    /// the top) so the user's eye learns one rule.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                layoutPopoverOpen.toggle()
+            } label: {
+                Label("Layout", systemImage: "rectangle.3.group")
+            }
+            .help("Toggle panes — files, graph, brain, preview, terminal")
+            .popover(
+                isPresented: $layoutPopoverOpen,
+                arrowEdge: .bottom
+            ) {
+                LayoutPopoverContent()
+                    .environment(bridge)
             }
         }
-        // Phase 1d — mirror the web app's `document.title` into the
-        // native NSWindow title bar via the bridge. Falls back to
-        // "MARVIN" until the web side posts its first title (cold
-        // start, offline, or running outside the SwiftUI shell).
-        // The web app's title includes the v1.2 `(N)` confirm-
-        // pending badge, so this surfaces the badge natively too.
-        .navigationTitle(bridge.webTitle ?? "MARVIN")
-        // Phase 1d.3/1d.7 — active project + branch as the NSWindow
-        // subtitle. "$project · $branch●" when both present;
-        // "$project" when no git repo; empty when no project. The
-        // ● suffix marks an uncommitted-changes count, matching
-        // the web BranchBadge's dirty pip.
-        .navigationSubtitle(composeSubtitle())
-        // Phase 1d.3/1d.14 — pending-confirm count drives both the
-        // dock tile badge AND a system notification on 0 → N
-        // transitions. Parsed once out of webTitle so both surfaces
-        // stay in sync without two regex passes.
-        .onChange(of: bridge.webTitle ?? "") { _, newTitle in
-            let count = parseConfirmCount(newTitle)
-            updateDockBadge(count: count)
-            NotificationManager.shared.updateConfirmCount(count)
-        }
-        // Phase 1d.27 — represented URL. NSWindow.representedURL +
-        // .representedFilename make the title bar show the project
-        // folder's Finder icon next to the window title. ⌘-click on
-        // that icon opens the path-hierarchy popup macOS users
-        // expect from any document-window app (Xcode, BBEdit, even
-        // Pages); drag-out copies the path. With this set, the
-        // window stops looking generic and starts behaving like a
-        // window onto a specific filesystem location, which is the
-        // truth of what MARVIN-with-a-project-loaded is.
-        //
-        // Drives the icon proxy, the ⌘-click path popup, AND
-        // window-list grouping in macOS Sonoma's Window menu —
-        // three native affordances for one bridge field.
-        .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
-            updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
-        }
-        // Phase 1d.35 — auto-start the sidecar on first cold launch
-        // if it isn't already running. Removes the friction of
-        // having to keep a Terminal open with `bin/marvin start`;
-        // for users who installed via launchd (`bin/marvin start`
-        // is idempotent and forks the dev server), this is a one-
-        // line follow-up. Only fires when:
-        //   • the health monitor is already in `.offline` (sidecar
-        //     genuinely down, not just still booting),
-        //   • a `bin/marvin` script exists somewhere we can find it,
-        //   • the user hasn't disabled auto-start in Settings,
-        //   • we haven't already tried this session.
-        // After the attempt, normal health-probe cycling takes
-        // over — if the sidecar comes up, the next probe flips us
-        // to .online and the WebView mounts.
-        .onChange(of: health.state.isOffline) { _, isOffline in
-            maybeAutoStartSidecar(isOffline: isOffline)
-        }
-        .task {
-            // Run the same check on first appearance so launches
-            // that go straight to .offline (no .connecting transit)
-            // still get the auto-start attempt.
-            maybeAutoStartSidecar(isOffline: health.state.isOffline)
+        ToolbarItem(placement: .navigation) {
+            Button {
+                quickOpenOpen = true
+            } label: {
+                Label("Quick Open", systemImage: "magnifyingglass")
+            }
+            .keyboardShortcut("p", modifiers: [.command])
+            .disabled(bridge.projectWorkDir == nil)
+            .help("Quick Open file (⌘P)")
         }
     }
 
@@ -249,26 +259,53 @@ struct ContentView: View {
 
     /// The WebView side of Phase 2g.3's HSplitView — the same
     /// content the Phase 1a full-bleed island used to render, just
-    /// scoped to the right-hand pane. Drag-drop, find bar, and the
+    /// scoped to the middle pane. Drag-drop, find bar, and the
     /// loading progress bar all stay attached here because they
     /// belong to the WebView, not the chat.
+    ///
+    /// Phase 5c overlays the native FileViewerView on top when a
+    /// file is selected — Monaco is CSS-hidden inside the WebView
+    /// (`[data-host-shell="swift"] [data-marvin-monaco]`) so the
+    /// native overlay is the sole code surface. When nothing is
+    /// selected, a native empty-state hint sits over the otherwise-
+    /// quiet WebView middle area (the web's "work pane" stub is
+    /// also CSS-hidden via `[data-marvin-work-empty]`).
     private var webIsland: some View {
         ZStack(alignment: .top) {
+            // Opaque native backplate. Covers the WebView entirely so
+            // no web chrome (top-bar / status-rail / chat-pane stubs)
+            // ever reads through as a faint ghost. The WebView is
+            // still mounted (chat session, project state, graph pane
+            // when toggled — Phase 5g hasn't ported the graph yet),
+            // but visually invisible behind the native overlays.
+            Color(nsColor: .textBackgroundColor)
+                .ignoresSafeArea()
+
             WebView(url: sidecarURL)
                 .ignoresSafeArea()
                 .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                     handleFolderDrop(providers: providers)
                 }
-                .overlay(alignment: .top) {
-                    if webCommands.isLoading && webCommands.loadProgress < 1.0 {
-                        ProgressView(value: webCommands.loadProgress)
-                            .progressViewStyle(.linear)
-                            .tint(.accentColor)
-                            .frame(height: 2)
-                            .transition(.opacity)
-                    }
-                }
+                .opacity(0.0)
                 .animation(.easeOut(duration: 0.15), value: webCommands.isLoading)
+                .task {
+                    // ADR-0021 M1: one-shot localStorage → UserDefaults
+                    // migration. The WebView must be mounted (and the
+                    // sidecar page loaded) before evaluateJavaScript can
+                    // reach localStorage, so a 2s grace period ensures
+                    // the page is fully hydrated. No-ops after the first
+                    // successful run (gated by marvin.migrated_prefs_v1).
+                    try? await Task.sleep(for: .seconds(2))
+                    await NativePrefs.shared.runMigrationIfNeeded()
+                }
+
+            // Phase 5e — work pane composition. VSplitView lets the
+            // user drag the boundary IDE-style. The top half is the
+            // editor (file viewer or empty hint); the bottom half is
+            // the panes container (preview / terminal). When neither
+            // bottom pane is open, the editor takes 100% (no empty
+            // bottom panel hanging around).
+            workPaneSplit
 
             if webCommands.isFindVisible {
                 FindBarView()
@@ -277,6 +314,93 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .animation(.easeOut(duration: 0.18), value: bridge.selectedFilePath)
+    }
+
+    /// Vertical split between the editor (top) and the bottom panes
+    /// (preview / terminal). Uses VSplitView so the divider is a
+    /// real macOS draggable resize handle — same UX as Xcode.
+    @ViewBuilder
+    private var workPaneSplit: some View {
+        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal
+        if hasBottomPane {
+            VSplitView {
+                editorArea
+                    .frame(minHeight: 120)
+                    .background(SplitViewAutosave(name: "marvin.work"))
+                bottomPanesArea
+                    .frame(minHeight: 120, idealHeight: 280)
+            }
+        } else {
+            editorArea
+        }
+    }
+
+    /// Editor surface — file viewer when there's an active tab,
+    /// native empty-state hint otherwise.
+    @ViewBuilder
+    private var editorArea: some View {
+        if let path = bridge.selectedFilePath, !path.isEmpty {
+            FileViewerView()
+                .transition(.opacity)
+        } else {
+            workPaneEmptyHint
+                .transition(.opacity)
+        }
+    }
+
+    /// Bottom panes container — preview + terminal stacked
+    /// horizontally, each visible only when its pane toggle is on.
+    /// HSplitView so the user can drag the boundary between preview
+    /// and terminal when both are open.
+    @ViewBuilder
+    private var bottomPanesArea: some View {
+        let showPreview = bridge.panes.preview
+        let showTerminal = bridge.panes.terminal
+        if showPreview && showTerminal {
+            HSplitView {
+                PreviewPaneView()
+                    .environment(bridge)
+                    .frame(minWidth: 280)
+                    .background(SplitViewAutosave(name: "marvin.bottom"))
+                TerminalPaneView()
+                    .environment(bridge)
+                    .frame(minWidth: 280)
+            }
+        } else if showPreview {
+            PreviewPaneView()
+                .environment(bridge)
+        } else if showTerminal {
+            TerminalPaneView()
+                .environment(bridge)
+        }
+    }
+
+    /// Native empty-state hint shown over the middle pane when no
+    /// file is open. Mirrors the IDE feel users expect (VS Code's
+    /// welcome surface, Xcode's "No Editor"). Pure SwiftUI; reads
+    /// no bridge state beyond presence detection so it stays cheap.
+    private var workPaneEmptyHint: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("No file open")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("Select a file from the tree on the left, or right-click a row to create / rename / delete.")
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Fully opaque — anything translucent here shows the WebView's
+        // chrome (project picker stripe, status-rail, brand marks) as
+        // a faint ghost layer behind the native shell. The native
+        // chrome IS the chrome.
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     /// Resolve dropped NSItemProviders to file URLs, take the first
@@ -287,11 +411,11 @@ struct ContentView: View {
     /// otherwise the WebView's default file-drop handler kicks in
     /// and would try to navigate to file:// (which navigationDelegate
     /// already blocks but the visual feedback would be wrong).
+    // ADR-0021 M2 — ProjectsService.addProject replaces the web-side
+    // `dropped-folder` dispatch. No confirmation dialog: the drop is
+    // intentional, immediate project switch is the feedback.
     private func handleFolderDrop(providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
-        // Resolve asynchronously — loadObject(ofClass: URL.self,
-        // completionHandler:) hops to a background queue. We bounce
-        // back to MainActor before touching webCommands.
         provider.loadObject(ofClass: URL.self) { url, _ in
             guard let url else { return }
             var isDir: ObjCBool = false
@@ -301,9 +425,9 @@ struct ContentView: View {
             )
             guard exists, isDir.boolValue else { return }
             Task { @MainActor in
-                WebViewCommands.shared.dispatchWebCommand(
-                    "dropped-folder",
-                    detail: ["path": url.path, "name": url.lastPathComponent]
+                try? await ProjectsService.shared.addProject(
+                    workDir: url.path,
+                    name: url.lastPathComponent
                 )
             }
         }
@@ -446,43 +570,23 @@ struct ContentView: View {
 
 }
 
-/// Cost pill for the unified title bar (Phase 1d.6). Mirrors the
-/// full cost summary from the web app's `<CostPill>` via the
-/// bridge. The label is at-a-glance "today $X.YY"; clicking opens
-/// a native popover with the same fields the web pill's popover
-/// has — today / 7 days / lifetime / turns / tokens / daily bar
-/// chart — so hiding the web pill in the SwiftUI shell wouldn't
-/// regress functionality (still gated; see globals.css).
-private struct CostToolbarItem: View {
-    let summary: CostSummary
-    @State private var showPopover = false
-
-    var body: some View {
-        Button {
-            showPopover.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Text("today")
-                    .foregroundStyle(.tertiary)
-                Text(fmtUsd(summary.today))
-                    .foregroundStyle(.secondary)
-            }
-            .font(.body.monospaced())
-            .padding(.horizontal, 4)
-        }
-        .buttonStyle(.borderless)
-        .help("Cost for the active project · click for history")
-        .popover(isPresented: $showPopover, arrowEdge: .top) {
-            CostHistoryPopover(summary: summary)
-        }
-    }
-}
+// Phase 5f retired CostToolbarItem and ConnectionStatusToolbarItem.
+// Both used to live in the toolbar's primary-action slot; the global
+// AppStatusBar now hosts the cost segment (with the same daily-
+// history popover) and the connection pip (clickable to re-probe),
+// so the toolbar stays focused on actions and the bottom bar owns
+// status — Cursor / VS Code split.
 
 /// Native counterpart to the web `<CostPill>` popover. Renders the
 /// same fields (today / 7d / lifetime / turns / tokens) plus a
 /// daily-history bar chart with day labels and immediate hover
 /// feedback (matching the web pill's group-hover overlay). Phase 1d.6.
-private struct CostHistoryPopover: View {
+///
+/// Lifted to file scope in Phase 5f so `AppStatusBar` (the new
+/// global bottom strip) can reuse it from its own cost segment —
+/// the toolbar pill it used to anchor was retired in the same
+/// phase as part of de-duplicating top + bottom chrome.
+struct CostHistoryPopover: View {
     let summary: CostSummary
     @State private var hoveredDay: String? = nil
 
@@ -618,56 +722,9 @@ private func fmtUsd(_ v: Double) -> String {
     return String(format: "$%.2f", v)
 }
 
-/// Connection status pip + label for the unified title bar (Phase 1d).
-/// Click to manually re-probe the sidecar. State drives both the pip
-/// fill and the foreground label, so a glance at the title bar
-/// answers "is the sidecar reachable?" without leaving the window.
-private struct ConnectionStatusToolbarItem: View {
-    let state: SidecarState
-    let onRefresh: () -> Void
-
-    var body: some View {
-        Button(action: onRefresh) {
-            HStack(spacing: 6) {
-                pip
-                Text(state.shortLabel)
-                    .font(.body.monospaced())
-            }
-            .padding(.horizontal, 4)
-            .foregroundStyle(labelColor)
-        }
-        .buttonStyle(.borderless)
-        // Tooltip is the discoverability layer — `connecting` /
-        // `online` / `offline` is terse on purpose; the tooltip
-        // explains the click affordance.
-        .help("Re-probe http://localhost:3030/api/health")
-    }
-
-    private var pip: some View {
-        Circle()
-            .fill(pipColor)
-            .frame(width: 8, height: 8)
-            .overlay(
-                Circle()
-                    .stroke(Color.black.opacity(0.15), lineWidth: 0.5)
-            )
-    }
-
-    private var pipColor: Color {
-        switch state {
-        case .connecting: .secondary
-        case .online: .green
-        case .offline: .orange
-        }
-    }
-
-    private var labelColor: Color {
-        switch state {
-        case .connecting, .offline: .secondary
-        case .online: .primary
-        }
-    }
-}
+// ConnectionStatusToolbarItem retired in Phase 5f — see the comment
+// next to the CostToolbarItem retirement above. The pip + clickable
+// re-probe live in AppStatusBar's connectionPip now.
 
 /// Find-in-page bar overlay (Phase 1d.12). Sits at the top of the
 /// WebView region; live-searches as the user types, advances on

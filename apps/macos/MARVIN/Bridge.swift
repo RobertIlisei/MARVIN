@@ -149,8 +149,9 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// web side via `models-changed`. `nil` means "use sidecar
     /// default" (the user hasn't picked one yet). Phase 1d.15 —
     /// drives the About panel's "Active models" section.
-    private(set) var executorModel: String? = nil
-    private(set) var advisorModel: String? = nil
+    /// ADR-0021 M1: writable by NativePrefs directly.
+    var executorModel: String? = nil
+    var advisorModel: String? = nil
 
     /// Active theme name posted by the web side via `theme-changed`.
     /// "light" or "dark" — anything else falls back to system. The
@@ -158,7 +159,16 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// `preferredColorScheme` to follow the web theme so a dark
     /// WebView under a light title bar doesn't look mismatched.
     /// Phase 1d.17.
-    private(set) var themeName: String? = nil
+    /// ADR-0021 M1: writable by NativePrefs directly.
+    var themeName: String? = nil
+
+    /// ADR-0021 M1 — when true, the bridge silences pref-related
+    /// message handlers (personality-changed, permission-changed,
+    /// panes-changed, models-changed, theme-changed). Set by
+    /// NativePrefs.init() once UserDefaults is the authoritative
+    /// source. Prevents the web side from overwriting native prefs
+    /// via bridge messages during M1–M4.
+    var nativePrefsTakeover: Bool = false
 
     /// Coarse "MARVIN is busy / idle" flag posted via `busy-changed`.
     /// The menu-bar status item swaps between the idle (outlined
@@ -167,11 +177,132 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// in flight.
     private(set) var isBusy: Bool = false
 
+    /// Phase 5e — fine-grained marvinState mirror. The web side
+    /// posts every transition through `marvin-state-changed`. The
+    /// brain reads this to pick the right particle profile (calm
+    /// thinking vs energetic tool-use vs writing pulse vs error
+    /// flash). Coarse `isBusy` stays for the menu-bar icon swap.
+    /// One of: idle | thinking | tool | writing | error | cancelling.
+    private(set) var marvinState: String = "idle"
+
     /// Active personality ("marvin" or "neutral") posted via
     /// `personality-changed`. Drives the About panel's Personality
     /// row so the user can see which mode MARVIN is in without
     /// opening the web Settings popover. Phase 1d.32.
-    private(set) var personality: String? = nil
+    /// ADR-0021 M1: writable by NativePrefs directly.
+    var personality: String? = nil
+
+    /// Phase 5d — active permission strategy ("auto" or "gated")
+    /// posted via `permission-changed`. Drives the native Setup
+    /// popover so the toolbar reflects the same value as the
+    /// localStorage-persisted pref.
+    /// ADR-0021 M1: writable by NativePrefs directly.
+    var permissionStrategy: String = "auto"
+
+    /// Phase 5d — pane visibility map posted via `panes-changed`.
+    /// Drives the native Layout popover. Defaults match
+    /// DEFAULT_PREFS in apps/web/src/lib/use-prefs.tsx (files +
+    /// brain on; everything else off) so the popover shows the
+    /// right initial state before the web side hydrates.
+    struct PaneState: Equatable {
+        var files: Bool = true
+        var brain: Bool = true
+        var graph: Bool = false
+        var preview: Bool = false
+        var terminal: Bool = false
+    }
+    /// ADR-0021 M1: writable by NativePrefs directly.
+    var panes: PaneState = PaneState()
+
+    /// Phase 5d — UI signals. Increments fire one-shot triggers
+    /// (open the shortcuts sheet, open Quick Open, etc.) from app-
+    /// scope menu commands into ContentView's @State without sharing
+    /// SwiftUI state across scenes. ContentView observes the value
+    /// change and reacts; the value itself is meaningless.
+    private(set) var shortcutsTriggerCount: Int = 0
+    private(set) var quickOpenTriggerCount: Int = 0
+
+    /// Phase 5f — editor cursor state lifted onto the bridge so the
+    /// app-wide bottom status bar can read it without coupling to the
+    /// FileViewerView's @State. 1-indexed row/col matches every IDE
+    /// (VS Code, Xcode, Cursor). FileViewerView's Coordinator pushes
+    /// updates via setCursor(row:col:selectionLength:); the global
+    /// AppStatusBar reads them directly.
+    private(set) var cursorRow: Int = 1
+    private(set) var cursorCol: Int = 1
+    private(set) var cursorSelectionLength: Int = 0
+    private(set) var cursorTotalLines: Int = 1
+    func setCursor(row: Int, col: Int, selectionLength: Int) {
+        cursorRow = row
+        cursorCol = col
+        cursorSelectionLength = selectionLength
+    }
+    func setCursorTotalLines(_ lines: Int) {
+        if cursorTotalLines != lines { cursorTotalLines = lines }
+    }
+
+    func triggerShortcutsHelp() { shortcutsTriggerCount &+= 1 }
+    func triggerQuickOpen()     { quickOpenTriggerCount &+= 1 }
+
+    /// ADR-0021 M2 — apply a full project-list load from ProjectsService.
+    /// Writes `projects`, `activeProjectId`, `projectName`, and
+    /// `projectWorkDir` in one update so observers see a consistent
+    /// snapshot. Called once on launch and after every mutation.
+    func applyProjectsLoad(projects: [BridgeProject], activeId: String?) {
+        self.projects = projects
+        let activeProj = activeId.flatMap { id in projects.first { $0.id == id } }
+        self.activeProjectId = activeId
+        self.projectName    = activeProj?.name
+        self.projectWorkDir = activeProj?.workDir
+    }
+
+    /// Phase 5f — apply a project selection locally without waiting
+    /// for the WebView's React re-render to come back through
+    /// `project-changed`. The native surfaces (file tree, editor,
+    /// chat hydrate, file viewer) all observe `projectWorkDir` /
+    /// `projectName` / `activeProjectId`, so updating them
+    /// synchronously kicks the Swift-side fetches in parallel with
+    /// the WebView's heavier re-render pipeline. The web side
+    /// eventually echoes the same values via its own announcement;
+    /// because they match, the second update is a no-op.
+    ///
+    /// Returns false (and no-ops) when the id isn't in the known
+    /// project list — the WebView still owns project bookkeeping
+    /// for new projects we haven't seen yet, so we don't bypass
+    /// it for unknowns.
+    @discardableResult
+    func applyLocalProjectSelection(id: String) -> Bool {
+        guard let proj = projects.first(where: { $0.id == id }) else {
+            return false
+        }
+        if activeProjectId != id {
+            activeProjectId = id
+        }
+        if projectName != proj.name {
+            projectName = proj.name
+        }
+        if projectWorkDir != proj.workDir {
+            projectWorkDir = proj.workDir
+        }
+        return true
+    }
+
+    /// Phase 5e — request the preview pane to load a URL. Used by
+    /// the "Open in Browser" affordance on HTML files in the tree
+    /// + editor. The preview pane observes `previewLoadCommand` and
+    /// applies the URL when it changes; the counter forces a fresh
+    /// signal even when the user re-requests the same URL (refresh).
+    private(set) var previewLoadURL: String? = nil
+    private(set) var previewLoadCommand: Int = 0
+    func openInPreview(url: String) {
+        previewLoadURL = url
+        previewLoadCommand &+= 1
+        // Ensure the preview pane is actually visible — otherwise
+        // "Open in Browser" silently does nothing the first time.
+        if !panes.preview {
+            NativePrefs.shared.togglePane("preview")
+        }
+    }
 
     /// Registered projects from the web side, in the same order the
     /// web picker shows them (most-recently-used first). Drives the
@@ -205,16 +336,65 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
     /// `select-file` event; the native viewer reads from here).
     private(set) var selectedFilePath: String? = nil
 
-    /// Phase 5a write hook for the native file tree. Called from
-    /// FileTreeView.selectRow alongside the existing
-    /// dispatchWebCommand("select-file", …) so both the WebView's
-    /// Monaco AND the native preview viewer see the same source.
-    /// Setter is kept distinct from the postMessage update path so
-    /// `private(set)` continues to mean "the bridge owns writes
-    /// from the wire" — native-driven mutations get explicit
-    /// methods.
+    /// Phase 5c — ordered list of open file tabs. `setSelectedFile`
+    /// promotes a path into this list (appending if not already
+    /// present), and `closeFile` removes it. The tab bar at the top
+    /// of FileViewerView renders directly off this. Empty list +
+    /// `selectedFilePath == nil` is the IDE "no editor" state.
+    ///
+    /// Kept ordered (insertion order) so the tab bar reads naturally
+    /// — most-recently-opened on the right is the IDE convention
+    /// (VS Code, Xcode). Closing the active tab falls back to the
+    /// previous tab in the list (right-then-left), matching VS
+    /// Code's behaviour.
+    private(set) var openFiles: [String] = []
+
+    /// Phase 5c — open the file in a tab and make it active. If the
+    /// path is already in `openFiles` we just refocus; otherwise we
+    /// append it. Pass nil to clear (no active tab; openFiles is
+    /// untouched so the user can re-pick from the bar).
     func setSelectedFile(_ path: String?) {
+        guard let path, !path.isEmpty else {
+            selectedFilePath = nil
+            return
+        }
+        if !openFiles.contains(path) {
+            openFiles.append(path)
+        }
         selectedFilePath = path
+    }
+
+    /// Phase 5c — close one open-file tab. Removing the active tab
+    /// promotes a neighbour: prefer the tab to the right (the one
+    /// that "shifts left" into the closed slot), then fall back to
+    /// the tab to the left, then nil if the list is empty. Matches
+    /// VS Code's tab-close behaviour.
+    func closeFile(_ path: String) {
+        guard let idx = openFiles.firstIndex(of: path) else {
+            return
+        }
+        openFiles.remove(at: idx)
+        if selectedFilePath == path {
+            if idx < openFiles.count {
+                selectedFilePath = openFiles[idx]
+            } else if idx > 0 {
+                selectedFilePath = openFiles[idx - 1]
+            } else {
+                selectedFilePath = nil
+            }
+        }
+    }
+
+    /// Phase 5c — drop a file's tab in response to a path-level
+    /// event the user didn't trigger directly (rename, delete). The
+    /// caller is responsible for any path remapping (rename hands
+    /// off via `renameOpenFile(from:to:)` which preserves position).
+    func renameOpenFile(from oldPath: String, to newPath: String) {
+        guard let idx = openFiles.firstIndex(of: oldPath) else { return }
+        openFiles[idx] = newPath
+        if selectedFilePath == oldPath {
+            selectedFilePath = newPath
+        }
     }
 
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`
@@ -401,6 +581,8 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             branch = (payload?["branch"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             branchDirtyCount = (payload?["dirtyCount"] as? Int) ?? 0
         case "models-changed":
+            // ADR-0021 M1: silenced once NativePrefs takes over.
+            guard !nativePrefsTakeover else { break }
             // User-selected executor / advisor models. Both nullable
             // — null means "fall back to whatever the sidecar's
             // /api/health reports as defaultModel". Drives the About
@@ -408,6 +590,8 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             executorModel = (payload?["executor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             advisorModel = (payload?["advisor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         case "theme-changed":
+            // ADR-0021 M1: silenced once NativePrefs takes over.
+            guard !nativePrefsTakeover else { break }
             // Active theme name from the web side. Drives the
             // SwiftUI chrome's color scheme via `preferredColorScheme`.
             // Anything other than "light"/"dark" falls back to
@@ -425,13 +609,55 @@ final class MarvinBridge: NSObject, WKScriptMessageHandler {
             // transition (including tool / writing) — chatty.
             let busy = (payload?["busy"] as? Bool) ?? false
             isBusy = busy
+        case "marvin-state-changed":
+            // Phase 5e — full state mirror for the native brain. One
+            // of idle | thinking | tool | writing | error |
+            // cancelling. Anything else falls back to "idle".
+            let v = (payload?["value"] as? String) ?? "idle"
+            switch v {
+            case "idle", "thinking", "tool", "writing", "error", "cancelling":
+                if marvinState != v {
+                    NSLog("[MarvinBridge] marvin-state-changed \(marvinState) → \(v)")
+                }
+                marvinState = v
+            default:
+                marvinState = "idle"
+            }
         case "personality-changed":
+            // ADR-0021 M1: silenced once NativePrefs takes over.
+            guard !nativePrefsTakeover else { break }
             // Active personality from the web Settings popover.
             // "marvin" | "neutral"; anything else falls back to nil.
             // Drives the About panel's Personality row.
             let value = payload?["value"] as? String
             personality = (value == "marvin" || value == "neutral") ? value : nil
             NSLog("[MarvinBridge] personality-changed value=\(personality ?? "nil")")
+        case "permission-changed":
+            // ADR-0021 M1: silenced once NativePrefs takes over.
+            guard !nativePrefsTakeover else { break }
+            // Phase 5d — auto / gated. Echoed by the prefs context on
+            // every change + once on hydrate; the native Setup popover
+            // reads from here to render the toggle's current state.
+            let value = payload?["value"] as? String
+            if value == "auto" || value == "gated" {
+                permissionStrategy = value!
+            }
+        case "panes-changed":
+            // ADR-0021 M1: silenced once NativePrefs takes over.
+            guard !nativePrefsTakeover else { break }
+            // Phase 5d — pane visibility map (files / brain / graph /
+            // preview / terminal). Decoded loosely; missing keys keep
+            // their previous value so a partial payload doesn't
+            // collapse the layout.
+            if let p = payload {
+                var next = panes
+                if let v = p["files"] as? Bool { next.files = v }
+                if let v = p["brain"] as? Bool { next.brain = v }
+                if let v = p["graph"] as? Bool { next.graph = v }
+                if let v = p["preview"] as? Bool { next.preview = v }
+                if let v = p["terminal"] as? Bool { next.terminal = v }
+                panes = next
+            }
         case "session-changed":
             // Phase 2h — paired (projectId, marvinSessionId) update
             // from the web side. Both can be null independently:

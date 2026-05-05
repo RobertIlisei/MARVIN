@@ -41,22 +41,11 @@ private struct OpenAboutButton: View {
 // (above ChatPreviewView), mirroring the web app's `side-top` +
 // `side-chat` panel layout. Same retirement pattern as 2g.3 / 3d
 // — only the hosting Window scene + menu entry went away.
-
-/// Phase 5a — opens the standalone "File Viewer (preview)" window
-/// hosting the native NSTextView-backed file viewer. Same
-/// `@Environment(\.openWindow)` pattern as `OpenAboutButton`. The
-/// preview window is a development surface during 5a–5b iteration
-/// (read-only viewer → STTextView + tree-sitter syntax highlighting);
-/// 5c promotes it inline into the WebView's work-pane file slot and
-/// retires the standalone window (matching 2g.3 / 3d / 4g pattern).
-private struct OpenFileViewerPreviewButton: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Button("File Viewer (preview)") {
-            openWindow(id: "marvin-file-viewer-preview")
-        }
-    }
-}
+//
+// Phase 5c retired the `OpenFileViewerPreviewButton` + the standalone
+// "File Viewer (preview)" Window scene. The native STTextView-backed
+// FileViewerView now overlays the middle webIsland in ContentView
+// when a file is selected. Same retirement pattern as 2g.3 / 3d / 4g.
 
 /// File → Open Recent submenu content. Reads the @Observable
 /// singleton directly — SwiftUI's command tree does NOT inherit
@@ -72,17 +61,18 @@ private struct OpenFileViewerPreviewButton: View {
 /// time and the list never updates.
 private struct OpenRecentMenuContent: View {
     var body: some View {
-        let projects = MarvinBridge.shared.projects
+        // ADR-0021 M2: ProjectsService is the authority; MarvinBridge
+        // mirrors the same list but ProjectsService is the write origin.
+        let projects = ProjectsService.shared.projects
         if projects.isEmpty {
             Button("(no projects yet)") {}
                 .disabled(true)
         } else {
             ForEach(projects) { project in
                 Button(project.name) {
-                    WebViewCommands.shared.dispatchWebCommand(
-                        "select-project",
-                        detail: ["id": project.id]
-                    )
+                    // ADR-0021 M2 — ProjectsService owns project state;
+                    // no WebView dispatch needed.
+                    Task { try? await ProjectsService.shared.setActive(id: project.id) }
                 }
             }
         }
@@ -220,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // ADR-0021 M2 — ProjectsService.addProject replaces the web-side
+    // `dropped-folder` dispatch. Retry on failure (sidecar may still
+    // be starting on a cold-launch open-with scenario).
     private func forwardFolder(_ url: URL, retriesRemaining: Int) {
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(
@@ -227,22 +220,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isDirectory: &isDir
         )
         guard exists, isDir.boolValue else { return }
-
-        // dispatchWebCommand evaluates JS in the WebView. If the
-        // page hasn't loaded yet, evaluateJavaScript silently
-        // discards the call — retry every 0.5s for ~15s. Far more
-        // than enough for a cold start; gives up gracefully if the
-        // sidecar simply never came up.
-        if WebViewCommands.shared.webView != nil {
-            WebViewCommands.shared.dispatchWebCommand(
-                "dropped-folder",
-                detail: ["path": url.path, "name": url.lastPathComponent]
-            )
-            return
-        }
-        guard retriesRemaining > 0 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.forwardFolder(url, retriesRemaining: retriesRemaining - 1)
+        Task {
+            do {
+                try await ProjectsService.shared.addProject(
+                    workDir: url.path,
+                    name: url.lastPathComponent
+                )
+            } catch {
+                guard retriesRemaining > 0 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.forwardFolder(url, retriesRemaining: retriesRemaining - 1)
+                }
+            }
         }
     }
 
@@ -502,25 +491,29 @@ struct MARVINApp: App {
                 .disabled(!health.state.isOnline)
 
                 Button("Keyboard Shortcuts…") {
-                    WebViewCommands.shared.dispatchWebCommand("show-shortcuts")
+                    // Phase 5d — fire native shortcuts sheet via the
+                    // bridge's one-shot trigger. ContentView observes
+                    // and flips its local sheet state. The web peer
+                    // is no longer needed because the swift shell
+                    // owns its own keymap surface.
+                    MarvinBridge.shared.triggerShortcutsHelp()
                 }
                 .keyboardShortcut("/", modifiers: [.command])
+
+                Button("Quick Open File…") {
+                    MarvinBridge.shared.triggerQuickOpen()
+                }
+                .keyboardShortcut("p", modifiers: [.command])
                 .disabled(!health.state.isOnline)
 
                 // Phase 2g.3 retired the standalone "Native Chat
                 // (preview)" window. Phase 3d retired the standalone
                 // "Native Files (preview)" window. Phase 4g retired
-                // the standalone "Brain (preview)" window. All three
-                // surfaces live inline as panes (or sub-panes) of
-                // the main window's HSplitView.
-
-                // Phase 5a — File Viewer (preview) is the active dev
-                // surface for the Monaco port. 5c retires this entry
-                // once the native viewer promotes inline into the
-                // WebView work-pane file slot.
-                Divider()
-                OpenFileViewerPreviewButton()
-                    .keyboardShortcut("v", modifiers: [.command, .option])
+                // the standalone "Brain (preview)" window. Phase 5c
+                // retired the "File Viewer (preview)" window — the
+                // native viewer now overlays the middle pane inline.
+                // All four surfaces live inline as panes (or sub-
+                // panes / overlays) of the main window's HSplitView.
             }
 
             // Help menu — quick links out to the project. macOS
@@ -560,26 +553,12 @@ struct MARVINApp: App {
         // scene — see retirement comment near OpenBrainPreviewButton
         // above. The native MTKView lives inline in BrainPaneView
         // at the top of the main window's right HSplitView pane.
-
-        // Phase 5a — File Viewer (preview) Window scene. Standalone
-        // window hosting the native NSTextView-backed file viewer
-        // so 5a–5b iteration (foundation → STTextView + tree-sitter)
-        // doesn't disturb the WebView's Monaco viewer in the main
-        // window. Retired in 5c when the native viewer promotes
-        // inline. Same retirement pattern as Phase 2g.3 / 3d / 4g.
         //
-        // The bridge environment is forwarded so the preview's
-        // theme follows the main window's preferredColorScheme +
-        // the viewer reads bridge.selectedFilePath +
-        // bridge.projectWorkDir to know what to render.
-        // .commandsRemoved() avoids duplicate menu items when the
-        // preview window has focus.
-        Window("File Viewer (preview)", id: "marvin-file-viewer-preview") {
-            FileViewerPreviewView()
-                .environment(bridge)
-        }
-        .windowStyle(.titleBar)
-        .commandsRemoved()
+        // Phase 5c retired the standalone "File Viewer (preview)"
+        // Window scene. The native STTextView-backed FileViewerView
+        // overlays the middle webIsland in ContentView when a file
+        // is selected (read from bridge.selectedFilePath). Same
+        // retirement pattern as 2g.3 / 3d / 4g.
 
         // Phase 1d.9 — native Settings scene (⌘,). SwiftUI's
         // `Settings` scene is special: it auto-installs the
