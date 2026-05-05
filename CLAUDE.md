@@ -93,14 +93,19 @@ and a fallback judgement test for cases the lists don't cover.
 ## Repo layout
 
 ```
-apps/web/                    # Next.js 16, port 3030
-packages/
-  runtime/                   # Claude CLI wrapper + auth + session + personality
-  tools/                     # Bash, Edit, Write, Read, Grep, Glob, WebFetch, WebSearch
-  project-context/           # spec + infra-probes injection
-  graphify-bridge/           # knowledge-graph read + refresh
-  git-watch/                 # commit stream
-  ui/                        # shadcn primitives + MARVIN chat bubble, diff, file tree
+macos/                       # SwiftUI macOS app (Xcode / SPM)
+  MARVIN/                    # Swift sources
+  project.yml                # xcodegen manifest
+  Package.swift              # SPM manifest (swift build fallback)
+sidecar/                     # Next.js 16 sidecar, port 3030
+  src/                       # Next.js app (API routes + React UI)
+  packages/
+    runtime/                 # Claude CLI wrapper + auth + session + personality
+    tools/                   # Tool policy — auto / confirm / deny
+    project-context/         # spec + infra-probes injection
+    graphify-bridge/         # knowledge-graph read + refresh
+    git-watch/               # commit stream
+    ui/                      # shadcn primitives
 data/.marvin/                # transcripts, cost tracker, graph cache (gitignored)
 ```
 
@@ -108,13 +113,13 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 
 | Path | Responsibility |
 |---|---|
-| `apps/web/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
-| `packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
-| `packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
-| `packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
-| `packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
-| `packages/git-watch/` | Commit detector — surfaces new commits inline, per `workDir`. |
-| `packages/ui/` | shadcn primitives shared by the web app. |
+| `sidecar/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
+| `sidecar/packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
+| `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
+| `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
+| `sidecar/packages/git-watch/` | Commit detector — surfaces new commits inline, per `workDir`. |
+| `sidecar/packages/ui/` | shadcn primitives shared by the sidecar. |
 
 ## Data directory
 

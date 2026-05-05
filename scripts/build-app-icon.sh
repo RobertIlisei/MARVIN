@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Renders apps/macos/MARVIN/Resources/marvin-app.svg into a macOS
+# Renders macos/MARVIN/Resources/marvin-app.svg into a macOS
 # .icns (AppIcon) using a tiny Swift program that drives NSImage's
 # native SVG support (macOS 12+). Output is written to:
 #
-#   apps/macos/MARVIN/Resources/AppIcon.icns
+#   macos/MARVIN/Resources/AppIcon.icns
 #
 # Run after touching marvin-app.svg. The .icns is checked in so a
 # fresh clone doesn't need to re-render on every build.
@@ -11,8 +11,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SVG="$REPO_ROOT/apps/macos/MARVIN/Resources/marvin-app.svg"
-OUT_ICNS="$REPO_ROOT/apps/macos/MARVIN/Resources/AppIcon.icns"
+SVG="$REPO_ROOT/macos/MARVIN/Resources/marvin-app.svg"
+OUT_ICNS="$REPO_ROOT/macos/MARVIN/Resources/AppIcon.icns"
 TMP="$(mktemp -d -t marvin-icon)"
 ICONSET="$TMP/AppIcon.iconset"
 

@@ -19,8 +19,8 @@ MARVIN has two components that work together:
 
 | Component | Location | Role |
 |---|---|---|
-| **macOS app** | `apps/macos/` | Native SwiftUI app — IDE shell, chat, file tree, source control, terminal, diff viewer |
-| **Web sidecar** | `apps/web/` | Next.js 16 server on `:3030` — Claude Agent SDK runner, tool policy, git API, file API, session storage |
+| **macOS app** | `macos/` | Native SwiftUI app — IDE shell, chat, file tree, source control, terminal, diff viewer |
+| **Sidecar** | `sidecar/` | Next.js 16 server on `:3030` — Claude Agent SDK runner, tool policy, git API, file API, session storage |
 
 The Swift app talks to the sidecar over `localhost:3030`. The sidecar starts automatically on login via a launchd user agent installed by `bin/marvin install-macos-app`.
 
@@ -72,7 +72,7 @@ If xcodegen is missing, `swift build` is used automatically as a fallback — no
 
 ## Prerequisites
 
-### macOS app (`apps/macos/`)
+### macOS app (`macos/`)
 
 | Requirement | How to get it |
 |---|---|
@@ -80,7 +80,7 @@ If xcodegen is missing, `swift build` is used automatically as a fallback — no
 | Xcode ≥ 15 **or** Swift CLT | `xcode-select --install` |
 | xcodegen *(optional, preferred)* | `brew install xcodegen` |
 
-### Web sidecar (`apps/web/`)
+### Sidecar (`sidecar/`)
 
 | Requirement | How to get it |
 |---|---|
@@ -125,7 +125,7 @@ pnpm build && pnpm start
 ### Build the macOS app
 
 ```bash
-cd apps/macos
+cd macos
 xcodegen generate               # regenerate MARVIN.xcodeproj from project.yml
 open MARVIN.xcodeproj           # then build + run in Xcode
 ```
@@ -133,7 +133,7 @@ open MARVIN.xcodeproj           # then build + run in Xcode
 Or with swift build (Command Line Tools only, no Xcode IDE):
 
 ```bash
-cd apps/macos
+cd macos
 swift build -c release
 # The install script assembles the .app bundle from the SPM output automatically.
 bin/marvin install-macos-app    # build + install + launchd
@@ -148,7 +148,7 @@ bin/marvin start
 # Terminal 2 — open the built app
 open /Applications/MARVIN.app
 # or for a faster edit-rebuild-run loop while working on the Swift side:
-cd apps/macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/...
+cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/...
 ```
 
 ---
@@ -201,22 +201,20 @@ cd apps/macos && xcodebuild -scheme MARVIN -configuration Debug build && open bu
 ## Repo layout
 
 ```
-apps/
-  macos/                     # SwiftUI macOS app (Xcode / SPM)
-    MARVIN/                  # Swift sources
-    project.yml              # xcodegen manifest
-    Package.swift            # SPM manifest (swift build fallback)
-  web/                       # Next.js 16 sidecar, port 3030
-    src/
-      app/api/               # REST endpoints (chat, git, files, sessions, health)
-      components/            # React UI (web-only surfaces)
-packages/
-  runtime/                   # Agent SDK runner, auth, session, cost, models, confirm gate
-  tools/                     # Tool policy — auto / confirm / deny
-  project-context/           # Spec + ADR + memory + graph-header injection
-  graphify-bridge/           # Knowledge-graph read + in-process MCP server
-  git-watch/                 # Per-workDir commit stream watcher
-  ui/                        # shadcn primitives shared by the web app
+macos/                         # SwiftUI macOS app (Xcode / SPM)
+  MARVIN/                      # Swift sources
+  project.yml                  # xcodegen manifest
+  Package.swift                # SPM manifest (swift build fallback)
+sidecar/                       # Next.js 16 sidecar, port 3030
+  src/
+    app/api/                   # REST endpoints (chat, git, files, sessions, health)
+  packages/
+    runtime/                   # Agent SDK runner, auth, session, cost, models, confirm gate
+    tools/                     # Tool policy — auto / confirm / deny
+    project-context/           # Spec + ADR + memory + graph-header injection
+    graphify-bridge/           # Knowledge-graph read + in-process MCP server
+    git-watch/                 # Per-workDir commit stream watcher
+    ui/                        # shadcn primitives
 bin/
   marvin                     # Lifecycle CLI (start/stop/status/logs/doctor/install/uninstall)
 scripts/
@@ -287,7 +285,7 @@ curl -s http://localhost:3030/api/health | jq .
 | MARVIN.app won't open | Gatekeeper ad-hoc signing warning | Right-click → Open, or System Settings → Privacy & Security → Open Anyway |
 | Graph pane → "no graph found" | graphify not run on the project | `cd <workDir> && /graphify .` |
 | Sidecar not starting on login | launchd agent not loaded | `launchctl load ~/Library/LaunchAgents/net.marvin.desktop.server.plist` |
-| Build fails: `No module 'STTextView'` | SPM not resolved | `cd apps/macos && swift package resolve` |
+| Build fails: `No module 'STTextView'` | SPM not resolved | `cd macos && swift package resolve` |
 | Models dropdown → "fallback list" | Node can't read macOS Keychain token | Set `ANTHROPIC_API_KEY` directly |
 | Chat sessions not loading | First launch post-install | Open the sessions menu (clock icon) and click a session |
 

@@ -8,7 +8,7 @@
 #
 # Bootstrap on a fresh clone:
 #   brew install xcodegen
-#   cd apps/macos && xcodegen generate
+#   cd macos && xcodegen generate
 #   open MARVIN.xcodeproj
 #
 # All locked-in choices come from ADR-0016.

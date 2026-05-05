@@ -225,7 +225,7 @@ check_graph() {
   # makes returns answers about a different codebase.
   #
   # Smoke check: read graph.json, look for at least one node whose
-  # source_file starts with `apps/` or `packages/` (MARVIN's own
+  # source_file starts with `macos/` or `sidecar/` (MARVIN's own
   # workspace dirs). If the graph is missing, advise on rebuild. If
   # it's present but mis-rooted, warn — the user runs the rebuild
   # locally because `graphify` itself isn't shipped here.
@@ -248,7 +248,7 @@ check_graph() {
     catch (e) { process.exit(2); }
     const nodes = g.nodes || [];
     const total = nodes.length;
-    // Accept either relative MARVIN paths (apps/ packages/ docs/ bin/
+    // Accept either relative MARVIN paths (macos/ sidecar/ docs/ bin/
     // scripts/) OR absolute paths that contain '/marvin/' — graphify
     // emits both shapes depending on extraction mode. Root-level config
     // files (vitest.config.ts, biome.json) are unrooted by this rule
@@ -311,17 +311,15 @@ cmd_doctor() {
   info "doctor pass complete"
 }
 
-# Decide whether `apps/web/.next` (the production build artefact) is
+# Decide whether `sidecar/.next` (the production build artefact) is
 # present and not stale relative to source. "Stale" = source files
-# under apps/web/src or packages/* are newer than the build manifest.
+# under sidecar/src or sidecar/packages/*/src are newer than the build manifest.
 # Returns 0 when a usable build exists, 1 when a (re)build is needed.
 build_is_fresh() {
-  local manifest="apps/web/.next/build-manifest.json"
+  local manifest="sidecar/.next/build-manifest.json"
   [ -f "$manifest" ] || return 1
-  # If anything under tracked source dirs is newer than the manifest, rebuild.
-  # `find -newer` does the comparison; `-print -quit` exits at the first hit.
   local newer
-  newer="$(find apps/web/src apps/web/next.config.ts packages/*/src \
+  newer="$(find sidecar/src sidecar/next.config.ts sidecar/packages/*/src \
     -type f -newer "$manifest" -print -quit 2>/dev/null || true)"
   [ -z "$newer" ]
 }
@@ -496,7 +494,7 @@ readonly APP_NAME="MARVIN"
 readonly APP_BUNDLE_DIR="/Applications/${APP_NAME}.app"
 readonly AGENT_LABEL="net.marvin.desktop.server"
 readonly AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
-readonly BUILT_APP_PATH="apps/desktop/src-tauri/target/release/bundle/macos/${APP_NAME}.app"
+readonly BUILT_APP_PATH="sidecar/src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 
 cmd_install_app() {
   info "installing ${APP_NAME} as a macOS app"
@@ -677,7 +675,7 @@ readonly MACOS_APP_NAME="MARVIN"
 readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
 
 cmd_install_macos_app() {
-  # Builds the SwiftUI native target at apps/macos/ and installs the
+  # Builds the SwiftUI native target at macos/ and installs the
   # resulting MARVIN.app bundle to /Applications/, then wires a launchd
   # user agent that starts the Next.js sidecar on login so the app works
   # on double-click without needing a terminal. Ad-hoc signed — no Apple
@@ -695,7 +693,7 @@ cmd_install_macos_app() {
   #     binary semantics, simpler dev loop, no signing identity.
   info "installing ${MACOS_APP_NAME} (SwiftUI / Phase 1a)"
 
-  local macos_dir="$REPO_ROOT/apps/macos"
+  local macos_dir="$REPO_ROOT/macos"
   if [ ! -f "$macos_dir/project.yml" ]; then
     fail "$macos_dir/project.yml missing — Phase 0 not scaffolded?"
     return 1
