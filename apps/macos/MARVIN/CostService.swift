@@ -51,8 +51,9 @@ final class CostService {
 
     private func poll() async {
         guard NSApp.isActive else { return }
-        guard let pid = currentProjectId else { return }
-        guard let url = URL(string: "http://localhost:3030/api/cost?projectId=\(pid)") else { return }
+        guard let pid = currentProjectId,
+              let encoded = pid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "http://localhost:3030/api/cost?projectId=\(encoded)") else { return }
 
         do {
             var req = URLRequest(url: url)
