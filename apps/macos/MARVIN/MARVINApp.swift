@@ -440,6 +440,18 @@ struct MARVINApp: App {
                 .keyboardShortcut("p", modifiers: [.command])
                 .disabled(!health.state.isOnline)
 
+                Button("Go to Symbol…") {
+                    MarvinBridge.shared.triggerSymbolSearch()
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
+                Button("Run Build Task…") {
+                    MarvinBridge.shared.triggerBuildTask()
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
                 // Phase 2g.3 retired the standalone "Native Chat
                 // (preview)" window. Phase 3d retired the standalone
                 // "Native Files (preview)" window. Phase 4g retired

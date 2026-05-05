@@ -91,6 +91,30 @@ struct FileContentResponse: Codable, Equatable {
     let content: String?
 }
 
+// MARK: - File save (Phase 5c)
+
+/// Wire response for POST /api/files/write/save. Returned on a
+/// successful write so the client can refresh its mtime tracking
+/// without a re-read round-trip. The route also returns the new
+/// `size` after the write — useful for size-aware UI (truncation
+/// warning, dirty-indicator with byte delta).
+///
+/// 409 stale responses come back as a different shape
+/// `{ error: "stale", currentMtime, size }` and are decoded on the
+/// error path; this struct only models the 2xx success body.
+struct FileSaveResponse: Codable, Equatable {
+    /// Echo of the absolute path the sidecar wrote to.
+    let path: String
+    /// New modification timestamp in milliseconds since the unix
+    /// epoch — what the client should store as the next save's
+    /// `expectedMtime`.
+    let mtime: Double
+    /// Bytes written. The viewer doesn't surface this directly today
+    /// but it's useful for the "truncated" badge re-evaluation: if
+    /// the new size still exceeds maxSize the badge stays.
+    let size: Int
+}
+
 // MARK: - File status (working-tree)
 
 /// Wire response for GET /api/files/status. The `status` map is

@@ -464,12 +464,18 @@ enum ClipboardImage {
 
         // 2. Raw image data — try the formats most likely to carry
         //    the real bytes first (PNG/HEIC), then JPEG, then TIFF.
+        //    `com.apple.screenshot.png` is the type macOS 14+ puts on
+        //    the clipboard for ⌘⇧4-to-clipboard captures (in addition
+        //    to `public.png`, which is also there but arrives second).
         let rawTypes: [NSPasteboard.PasteboardType] = [
+            NSPasteboard.PasteboardType("com.apple.screenshot.png"),
             .png,
+            NSPasteboard.PasteboardType("public.png"),
             NSPasteboard.PasteboardType("public.heic"),
             NSPasteboard.PasteboardType("public.heif"),
             NSPasteboard.PasteboardType("public.jpeg"),
             .tiff,
+            NSPasteboard.PasteboardType("public.tiff"),
         ]
         for type in rawTypes {
             if let data = pb.data(forType: type),
@@ -479,9 +485,14 @@ enum ClipboardImage {
             }
         }
 
-        // 3. Last resort — pasteboard-init NSImage. Can grab an
-        //    icon thumbnail; only use when we have nothing else.
-        return NSImage(pasteboard: pb)
+        // 3. Last resort — pasteboard-init NSImage. Filter out tiny
+        //    images (≤48 pt) which are almost certainly file-type icons,
+        //    not real content the user wants to attach.
+        if let img = NSImage(pasteboard: pb),
+           img.size.width > 48 && img.size.height > 48 {
+            return img
+        }
+        return nil
     }
 
     /// Save `image` as PNG and return its file URL. Fails silently

@@ -8,9 +8,23 @@ For the chronological history with diagnostic trails per entry, see [`docs/histo
 
 _Active work. Add a one-line entry when a piece of work starts; move it to `## Shipped` (with the date) when it lands. Keep entries terse — link out to a PR, ADR, or roadmap note for detail._
 
-- **SwiftUI macOS migration M5** ([ADR-0021](./decisions/0021-webview-removal-fully-native-swift.md)) — WebView fully removed. WKScriptMessageHandler bridge, injected JS, WebView.swift, and marvin-shell.ts all deleted. All state (prefs, projects, cost, branch, marvinState) written by native Swift services. NSOpenPanel replaces web project picker. Two pre-existing regressions pending follow-up: native ⌘F (NSTextFinder), native "New Session" menu wired to ChatPreviewModel. Ready to squash-merge to main.
+_(nothing in flight — all feature work landed in v1.3 below)_
 
 ## Shipped
+
+### v1.3 — Fully-native IDE surface · shipped 2026-05-05
+
+WebView removed end-to-end (ADR-0021); native SwiftUI replaces every web-rendered panel. IDE feature set shipped across 8 milestones on `feat/swift-migration`:
+
+- **WebView removal (M5)** — WKScriptMessageHandler bridge, injected JS, WebView.swift, and marvin-shell.ts deleted. NativePrefs + ProjectsService own all pref/project state. NSOpenPanel replaces the web picker.
+- **MRU file picker (M1)** — QuickOpenSheet tracks recently-opened files per project; shows RECENT / ALL FILES sections. Persisted via UserDefaults.
+- **Find in Files (M2)** — Ripgrep-backed `/api/files/search` route + FindInFilesView sidebar tab. Debounced search, case/word/regex toggles, match highlighting, collapsible file groups, include glob filter, Replace field.
+- **Symbol Search (M3)** — ⌘T Go to Symbol sheet reads `graphify-out/graph.json` from disk; fuzzy-filters by label + file path.
+- **Diff gutter (M4)** — `git diff HEAD --unified=0` parsed into `[Int: DiffLineStatus]`; `DiffGutterBar` NSView overlaid on the STLineNumberRulerView right edge. Green/orange/red pip per line.
+- **File history (M5)** — `git log --follow` in `GitHistoryService`; click-to-copy SHA popover in the editor header.
+- **Build task palette (M6)** — ⌘⇧B discovers tasks from `package.json`, `Makefile`, `Package.swift`, `Cargo.toml`; injects selected command into the terminal pane.
+- **Diagnostics panel (M7/M8)** — `DiagnosticsService` auto-detects tsc/eslint/swift build; `DiagnosticsPanelView` Problems tab in the bottom panel; clickable ⊗N/⚠N badge in `AppStatusBar`.
+- **Source control push/pull/fetch** — `FilesService` + `SourceControlView` header buttons; calls `/api/git/push`, `/api/git/pull`, `/api/git/fetch`.
 
 ### Phase 1 — Foundations · shipped 2026-04-17
 

@@ -68,10 +68,7 @@ struct SidecarHealth: Equatable, Codable {
 final class HealthMonitor {
     private(set) var state: SidecarState = .connecting
 
-    /// Sidecar URL. Hardcoded for Phase 0 — there's only one MARVIN
-    /// install per machine and `bin/marvin` always uses port 3030.
-    /// Phase 2+ may surface this in Settings.
-    private let url = URL(string: "http://localhost:3030/api/health")!
+    private let url = ServerConfig.baseURL.appendingPathComponent("api/health")
 
     private var pollTask: Task<Void, Never>?
 

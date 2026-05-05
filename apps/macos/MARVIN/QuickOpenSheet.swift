@@ -18,6 +18,7 @@ struct QuickOpenSheet: View {
 
     @State private var query: String = ""
     @State private var allFiles: [String] = []
+    @State private var recentPaths: [String] = []
     @State private var loadError: String? = nil
     @State private var selection: String? = nil
     @FocusState private var queryFocused: Bool
@@ -60,10 +61,24 @@ struct QuickOpenSheet: View {
                     .foregroundStyle(.red)
                     .padding()
             } else {
+                let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                let showSections = q.isEmpty && !validRecents.isEmpty
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(filtered.prefix(150), id: \.self) { path in
-                            row(path: path)
+                        if showSections {
+                            sectionLabel("RECENT")
+                            ForEach(validRecents, id: \.self) { path in
+                                row(path: path)
+                            }
+                            sectionLabel("ALL FILES")
+                            let recentSet = Set(validRecents)
+                            ForEach(allFiles.filter { !recentSet.contains($0) }.prefix(140), id: \.self) { path in
+                                row(path: path)
+                            }
+                        } else {
+                            ForEach(filtered.prefix(150), id: \.self) { path in
+                                row(path: path)
+                            }
                         }
                     }
                 }
@@ -71,9 +86,16 @@ struct QuickOpenSheet: View {
             }
 
             HStack {
-                Text("\(filtered.count) match\(filtered.count == 1 ? "" : "es")")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
+                let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if q.isEmpty {
+                    Text("\(allFiles.count) file\(allFiles.count == 1 ? "" : "s")")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("\(filtered.count) match\(filtered.count == 1 ? "" : "es")")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Text("↩ open · esc dismiss")
                     .font(.caption2.monospaced())
@@ -86,6 +108,9 @@ struct QuickOpenSheet: View {
         .frame(width: 600)
         .onAppear {
             queryFocused = true
+            if let pid = bridge.activeProjectId {
+                recentPaths = NativePrefs.shared.recentFiles(forProject: pid)
+            }
             Task { await loadTree() }
         }
         .onKeyPress(.escape) {
@@ -100,6 +125,25 @@ struct QuickOpenSheet: View {
             moveSelection(1)
             return .handled
         }
+    }
+
+    private var validRecents: [String] {
+        guard !recentPaths.isEmpty else { return [] }
+        let available = Set(allFiles)
+        return recentPaths.filter { available.contains($0) }
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .tracking(1)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     private func row(path: String) -> some View {
@@ -144,7 +188,12 @@ struct QuickOpenSheet: View {
 
     private var filtered: [String] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty { return allFiles }
+        if q.isEmpty {
+            // Recents first, then remaining files — drives moveSelection.
+            let recent = validRecents
+            let recentSet = Set(recent)
+            return recent + allFiles.filter { !recentSet.contains($0) }
+        }
         // Score: filename contains > path contains. Two passes so
         // matches in the basename rank above matches deep in the
         // path. Stable sort within each group preserves tree order.
@@ -173,6 +222,9 @@ struct QuickOpenSheet: View {
     }
 
     private func open(_ path: String) {
+        if let pid = bridge.activeProjectId {
+            NativePrefs.shared.recordOpenedFile(path, forProject: pid)
+        }
         bridge.setSelectedFile(path)
         dismiss()
     }

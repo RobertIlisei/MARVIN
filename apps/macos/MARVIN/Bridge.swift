@@ -140,6 +140,7 @@ final class MarvinBridge {
         var graph: Bool = false
         var preview: Bool = false
         var terminal: Bool = false
+        var problems: Bool = false
     }
     /// ADR-0021 M1: writable by NativePrefs directly.
     var panes: PaneState = PaneState()
@@ -171,8 +172,67 @@ final class MarvinBridge {
         if cursorTotalLines != lines { cursorTotalLines = lines }
     }
 
-    func triggerShortcutsHelp() { shortcutsTriggerCount &+= 1 }
-    func triggerQuickOpen()     { quickOpenTriggerCount &+= 1 }
+    private(set) var symbolSearchTriggerCount: Int = 0
+    private(set) var buildTaskTriggerCount: Int = 0
+    /// M7 — command string to inject into the terminal pane.
+    private(set) var pendingTerminalCommand: String? = nil
+
+    func triggerShortcutsHelp()  { shortcutsTriggerCount   &+= 1 }
+    func triggerQuickOpen()      { quickOpenTriggerCount    &+= 1 }
+    func triggerSymbolSearch()   { symbolSearchTriggerCount &+= 1 }
+    func triggerBuildTask()      { buildTaskTriggerCount    &+= 1 }
+    func triggerTerminalCommand(_ cmd: String) {
+        pendingTerminalCommand = cmd
+    }
+
+    func consumePendingTerminalCommand() {
+        pendingTerminalCommand = nil
+    }
+
+    // MARK: - Indent style (M1)
+
+    /// Editor indent size preference. 0 = use tab character; any
+    /// positive value = that many spaces. Stored in NativePrefs /
+    /// UserDefaults; read here by AppStatusBar and FileViewerView.
+    var indentSize: Int = 4
+
+    // MARK: - Notifications (M1)
+
+    struct NotificationEntry: Identifiable {
+        let id = UUID()
+        let message: String
+        let timestamp: Date
+        var isRead: Bool = false
+    }
+
+    private(set) var notifications: [NotificationEntry] = []
+    private(set) var unreadNotificationCount: Int = 0
+
+    func appendNotification(_ message: String) {
+        notifications.append(NotificationEntry(message: message, timestamp: Date()))
+        unreadNotificationCount = notifications.filter { !$0.isRead }.count
+    }
+
+    func markAllNotificationsRead() {
+        for i in notifications.indices { notifications[i].isRead = true }
+        unreadNotificationCount = 0
+    }
+
+    // MARK: - Diagnostics (M8 infrastructure)
+
+    /// Diagnostic counters. Written by DiagnosticsService (M8).
+    /// Rendered as ⊗N ⚠N in the left status bar cluster.
+    var errorCount: Int = 0
+    var warningCount: Int = 0
+
+    /// M8: structured diagnostic items for the Problems panel.
+    var diagnosticItems: [DiagnosticItem] = []
+
+    func applyDiagnostics(_ items: [DiagnosticItem]) {
+        diagnosticItems = items
+        errorCount   = items.filter { $0.severity == .error }.count
+        warningCount = items.filter { $0.severity == .warning }.count
+    }
 
     /// ADR-0021 M2 — apply a full project-list load from ProjectsService.
     /// Writes `projects`, `activeProjectId`, `projectName`, and

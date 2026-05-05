@@ -33,11 +33,8 @@ struct AppStatusBar: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(HealthMonitor.self) private var health
 
-    /// Cost popover state — clicking the cost segment opens the
-    /// same daily-history popover that used to live behind the
-    /// toolbar pill. Local @State because the popover is anchored
-    /// to a single segment, not the whole bar.
     @State private var costPopoverOpen = false
+    @State private var bellPopoverOpen = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -70,7 +67,36 @@ struct AppStatusBar: View {
             }
             Divider().frame(height: 10)
             projectSegment
+            if bridge.errorCount > 0 || bridge.warningCount > 0 {
+                Divider().frame(height: 10)
+                diagnosticCounters
+            }
         }
+    }
+
+    private var diagnosticCounters: some View {
+        Button {
+            NativePrefs.shared.togglePane("problems")
+        } label: {
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(bridge.errorCount > 0 ? Color.red : Color.secondary)
+                    Text("\(bridge.errorCount)")
+                        .foregroundStyle(bridge.errorCount > 0 ? Color.red : Color.secondary)
+                }
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(bridge.warningCount > 0 ? Color.orange : Color.secondary)
+                    Text("\(bridge.warningCount)")
+                        .foregroundStyle(bridge.warningCount > 0 ? Color.orange : Color.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help("\(bridge.errorCount) error\(bridge.errorCount == 1 ? "" : "s"), \(bridge.warningCount) warning\(bridge.warningCount == 1 ? "" : "s") · click to toggle Problems panel")
     }
 
     /// Connection status — clicking re-probes /api/health (replaces
@@ -87,7 +113,7 @@ struct AppStatusBar: View {
             }
         }
         .buttonStyle(.plain)
-        .help("Sidecar — http://localhost:3030 · click to re-probe")
+        .help("Sidecar — \(ServerConfig.baseURLString) · click to re-probe")
     }
 
     /// Project switcher — clicking opens a Menu with project list,
@@ -181,7 +207,7 @@ struct AppStatusBar: View {
             if bridge.selectedFilePath != nil {
                 cursorSegment
                 Divider().frame(height: 10)
-                segment(icon: "arrow.right.to.line", text: "Spaces: 4")
+                indentSegment
                 Divider().frame(height: 10)
                 segment(icon: "doc.plaintext", text: "UTF-8")
                 Divider().frame(height: 10)
@@ -193,6 +219,27 @@ struct AppStatusBar: View {
             costSegment
             bellSegment
         }
+    }
+
+    /// Indent picker — clicking cycles through 2 / 4 / 8 spaces / Tab.
+    /// Persisted via NativePrefs → UserDefaults.
+    private var indentSegment: some View {
+        Menu {
+            Button("2 Spaces")  { NativePrefs.shared.setIndentSize(2) }
+            Button("4 Spaces")  { NativePrefs.shared.setIndentSize(4) }
+            Button("8 Spaces")  { NativePrefs.shared.setIndentSize(8) }
+            Divider()
+            Button("Tab")       { NativePrefs.shared.setIndentSize(0) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.right.to.line")
+                    .font(.system(size: 10))
+                Text(bridge.indentSize == 0 ? "Tab" : "Spaces: \(bridge.indentSize)")
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Indent style — click to change")
     }
 
     private var cursorSegment: some View {
@@ -248,13 +295,21 @@ struct AppStatusBar: View {
     }
 
     private var bellSegment: some View {
-        // Placeholder — no notification system wired yet. Renders as
-        // a passive icon so the visual mass of the bar matches Cursor's
-        // layout (where the bell sits flush against the right edge).
-        Image(systemName: "bell")
-            .font(.system(size: 11))
-            .foregroundStyle(.tertiary)
-            .help("Notifications")
+        Button {
+            bridge.markAllNotificationsRead()
+            bellPopoverOpen.toggle()
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: bridge.unreadNotificationCount > 0 ? "bell.badge" : "bell")
+                    .font(.system(size: 11))
+                    .foregroundStyle(bridge.unreadNotificationCount > 0 ? Color.blue : Color.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Notifications (\(bridge.unreadNotificationCount) unread)")
+        .popover(isPresented: $bellPopoverOpen, arrowEdge: .top) {
+            NotificationLogPopover(notifications: bridge.notifications)
+        }
     }
 
     // MARK: - Generic segment
@@ -323,5 +378,64 @@ struct AppStatusBar: View {
         case .directory:    return "Folder"
         case .unknown:      return "Plain Text"
         }
+    }
+}
+
+// MARK: - Notification log popover
+
+struct NotificationLogPopover: View {
+    let notifications: [MarvinBridge.NotificationEntry]
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Notifications")
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+            Divider()
+
+            if notifications.isEmpty {
+                Text("No notifications yet.")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .padding(16)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(notifications.reversed().enumerated()), id: \.element.id) { _, entry in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.system(size: 12))
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.message)
+                                        .font(.callout)
+                                        .lineLimit(2)
+                                    Text(Self.timeFormatter.string(from: entry.timestamp))
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            Divider()
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
+        }
+        .frame(width: 300)
     }
 }

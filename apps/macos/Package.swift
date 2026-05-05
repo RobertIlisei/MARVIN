@@ -126,6 +126,46 @@ let package = Package(
             url: "https://github.com/tree-sitter/tree-sitter-rust.git",
             from: "0.23.0"
         ),
+
+        // Phase 5e — broad file-type recognition. Each upstream ships
+        // pre-generated parser.c + queries/highlights.scm + a
+        // SPM-shaped Package.swift exposing a TreeSitter<Lang>
+        // product. Extending the highlighter to a new language is:
+        //   1. add the SPM dep here + in project.yml
+        //   2. add the C factory binding + enum case in SyntaxHighlighter
+        //   3. drop highlights.scm into Resources/Queries
+        //
+        // Languages added in this batch — focused on what shows up
+        // in real-world projects (config / docs / web / native):
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-json.git",
+            from: "0.24.0"
+        ),
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-html.git",
+            from: "0.23.0"
+        ),
+        // tree-sitter-css is deferred — its Package.swift uses the
+        // same `FileManager.fileExists("src/scanner.c")` runtime
+        // probe that defeats the SPM transitive-load case (the path
+        // resolves against MARVIN's cwd, not the package's), so the
+        // external scanner symbols come back undefined at link
+        // time. Same fix needed as tree-sitter-python: vendor +
+        // patch, fork pin, or wait for upstream. CSS files fall
+        // back to the html parser today, which gives "tag-like"
+        // highlighting — degraded but not blank.
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-c.git",
+            from: "0.23.0"
+        ),
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-cpp.git",
+            from: "0.23.0"
+        ),
+        .package(
+            url: "https://github.com/tree-sitter/tree-sitter-bash.git",
+            from: "0.23.0"
+        ),
     ],
     targets: [
         .executableTarget(
@@ -137,6 +177,11 @@ let package = Package(
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
                 .product(name: "TreeSitterGo", package: "tree-sitter-go"),
                 .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
+                .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
+                .product(name: "TreeSitterHTML", package: "tree-sitter-html"),
+                .product(name: "TreeSitterC", package: "tree-sitter-c"),
+                .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
+                .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
             ],
             // SPM looks for Sources/MARVIN by default; we keep
             // sources at apps/macos/MARVIN to match the Xcode

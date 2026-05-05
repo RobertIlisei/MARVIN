@@ -31,7 +31,12 @@
 import AppKit
 import Foundation
 import SwiftTreeSitter
+import TreeSitterBash
+import TreeSitterC
+import TreeSitterCPP
 import TreeSitterGo
+import TreeSitterHTML
+import TreeSitterJSON
 import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTypeScript
@@ -59,25 +64,66 @@ enum HighlightLanguage: String {
     case typescript
     case go
     case rust
+    case json
+    case html
+    case c
+    case cpp
+    case bash
 
     /// Pick a language by lowercased file extension (no leading
-    /// dot). Returns nil for unsupported extensions; the viewer
-    /// falls back to plain text rendering when nil.
-    static func forExtension(_ ext: String) -> HighlightLanguage? {
+    /// dot) or by well-known filename. Returns nil for unsupported
+    /// types; the viewer falls back to plain text rendering when
+    /// nil.
+    static func forExtension(_ ext: String, filename: String? = nil) -> HighlightLanguage? {
+        // Phase 5f — return a HighlightLanguage value ONLY when we
+        // have a true tree-sitter parser for the language. Earlier
+        // iterations fell back to tree-sitter-bash for Dockerfile /
+        // Makefile / yaml / sql / toml so something tinted, but
+        // bash's grammar doesn't know FROM, RUN, recipes, table
+        // keys, etc. — it only painted strings + comments + numbers
+        // and looked the same for every config file. Returning nil
+        // here lets the regex highlighter take over (Path 2 in
+        // `SyntaxHighlighter.highlight`), and the regex layer has
+        // proper per-language patterns for those long-tail formats.
+        //
+        // Filename-first match for extension-less files. Returning
+        // nil is the correct answer for Dockerfile / Makefile /
+        // dotfiles — the regex layer's `languageId(forExtension:
+        // filename:)` recognises them and runs the dedicated
+        // pattern set.
+        if filename != nil {
+            // Intentionally falls through — let the regex layer
+            // handle filename-keyed files like Dockerfile, Makefile,
+            // .gitignore, .env, etc. via its own filename detection.
+        }
         switch ext.lowercased() {
         case "swift":
             return .swift
         case "ts", "tsx", "js", "jsx", "mjs", "cjs":
             // tree-sitter-typescript's grammar is a superset of
-            // JavaScript and accepts both. tsx inherits the same
-            // parser at this scope. Treating .js as TS gives us
-            // the same keyword/type highlighting at no extra cost.
+            // JavaScript. Treating .js as TS gives us the same
+            // keyword/type highlighting at no extra cost.
             return .typescript
         case "go":
             return .go
         case "rs":
             return .rust
+        case "json", "json5", "jsonc":
+            return .json
+        case "html", "htm":
+            return .html
+        case "c", "h":
+            return .c
+        case "cpp", "cc", "cxx", "hpp", "hh", "hxx", "mm":
+            return .cpp
+        case "sh", "bash", "zsh", "fish", "ksh":
+            return .bash
         default:
+            // Everything else (Dockerfile / Makefile / yaml / sql /
+            // toml / css / xml / svg / plist / python / ruby / java
+            // / markdown / lua / ini / properties …) — the regex
+            // highlighter handles them with proper per-language
+            // patterns, no fallback to a wrong grammar.
             return nil
         }
     }
@@ -94,6 +140,16 @@ enum HighlightLanguage: String {
             return Language(language: tree_sitter_go())
         case .rust:
             return Language(language: tree_sitter_rust())
+        case .json:
+            return Language(language: tree_sitter_json())
+        case .html:
+            return Language(language: tree_sitter_html())
+        case .c:
+            return Language(language: tree_sitter_c())
+        case .cpp:
+            return Language(language: tree_sitter_cpp())
+        case .bash:
+            return Language(language: tree_sitter_bash())
         }
     }
 
@@ -125,32 +181,50 @@ enum SyntaxHighlighter {
     /// plain text — broken highlighting must never block the read.
     static func highlight(
         content: String,
-        fileExtension ext: String
+        fileExtension ext: String,
+        filename: String? = nil
     ) -> [HighlightSpan]? {
-        guard let language = HighlightLanguage.forExtension(ext) else {
-            return nil
+        // ── Path 1: tree-sitter (preferred) ──
+        // Walks the AST + query for grammar-aware spans. Returns
+        // nil/empty when the language isn't compiled in or the
+        // query fails — we fall through to regex below.
+        var tsSpans: [HighlightSpan] = []
+        if let language = HighlightLanguage.forExtension(ext, filename: filename),
+           let (parser, query) = parserAndQuery(for: language),
+           let tree = parser.parse(content),
+           let root = tree.rootNode {
+            let cursor = query.execute(node: root, in: tree)
+            tsSpans.reserveCapacity(256)
+            while let capture = cursor.nextCapture() {
+                guard let name = capture.name else { continue }
+                tsSpans.append(HighlightSpan(range: capture.range, captureName: name))
+            }
         }
-        guard let (parser, query) = parserAndQuery(for: language) else {
-            return nil
-        }
-        guard let tree = parser.parse(content),
-              let root = tree.rootNode else {
-            return nil
+        if !tsSpans.isEmpty {
+            return tsSpans
         }
 
-        // QueryCursor walks the matches; we collect captures into a
-        // flat array. tree-sitter-style "later capture wins" is
-        // already implicit in the array's order — the caller
-        // applies attributes in iteration order, so a later
-        // colour overrides an earlier one for the same byte.
-        let cursor = query.execute(node: root, in: tree)
-        var spans: [HighlightSpan] = []
-        spans.reserveCapacity(256)
-        while let capture = cursor.nextCapture() {
-            guard let name = capture.name else { continue }
-            spans.append(HighlightSpan(range: capture.range, captureName: name))
+        // ── Path 2: regex fallback ──
+        // Tree-sitter didn't run or returned nothing. The regex
+        // highlighter knows about a much broader language set
+        // (yaml / sql / dockerfile / python / ruby / java …) and
+        // catches the long tail. The result isn't grammar-aware
+        // but it's far better than monochrome — strings, numbers,
+        // comments, and keywords all tint distinctly.
+        if let langId = RegexHighlighter.languageId(
+            forExtension: ext,
+            filename: filename
+        ) {
+            let spans = RegexHighlighter.highlight(
+                content: content,
+                languageId: langId
+            )
+            if !spans.isEmpty {
+                return spans
+            }
         }
-        return spans
+
+        return nil
     }
 
     /// Lazily build (and cache) the parser + query for `language`.
@@ -288,6 +362,55 @@ enum HighlightTheme {
             return isDark
                 ? NSColor(red: 0.55, green: 0.65, blue: 0.55, alpha: 1)
                 : NSColor(red: 0.30, green: 0.45, blue: 0.30, alpha: 1)
+
+        // Phase 5e — captures used by the new tree-sitter grammars
+        // (json / html / c / cpp / bash) that didn't yet have a
+        // theme entry. Without these, the new languages parsed but
+        // emitted captures the theme didn't recognise → text
+        // rendered as undifferentiated monospace. Each tone is
+        // chosen to fit the existing palette family.
+        case "tag":
+            // HTML / XML element name. Sister to a keyword; same
+            // family of "structural marker".
+            return isDark
+                ? NSColor(red: 0.95, green: 0.55, blue: 0.45, alpha: 1)
+                : NSColor(red: 0.65, green: 0.20, blue: 0.15, alpha: 1)
+        case "tag.error", "error":
+            return isDark
+                ? NSColor(red: 0.98, green: 0.45, blue: 0.45, alpha: 1)
+                : NSColor(red: 0.78, green: 0.18, blue: 0.18, alpha: 1)
+        case "attribute_name":
+            // bash / html attribute-ish. Tinted like attribute.
+            return isDark
+                ? NSColor(red: 0.92, green: 0.78, blue: 0.55, alpha: 1)
+                : NSColor(red: 0.55, green: 0.35, blue: 0.10, alpha: 1)
+        case "variable":
+            // c / bash / many other grammars use bare `@variable`
+            // for identifiers. Subtle off-foreground so the eye
+            // can still pick out keywords + types as the structural
+            // landmarks while every other identifier reads as
+            // "code, not noise".
+            return isDark
+                ? NSColor(red: 0.85, green: 0.86, blue: 0.92, alpha: 1)
+                : NSColor(red: 0.18, green: 0.20, blue: 0.28, alpha: 1)
+        case "string.special.key":
+            // JSON object keys. Distinguish from regular @string
+            // values so the eye can scan a deeply-nested object
+            // and immediately see the structure.
+            return isDark
+                ? NSColor(red: 0.78, green: 0.95, blue: 0.78, alpha: 1)
+                : NSColor(red: 0.10, green: 0.45, blue: 0.10, alpha: 1)
+        case "embedded":
+            // Bash / HTML / etc. for "this is embedded
+            // language inside another" — render dim so the host
+            // language reads as the primary content.
+            return isDark
+                ? NSColor(red: 0.65, green: 0.68, blue: 0.72, alpha: 1)
+                : NSColor(red: 0.40, green: 0.42, blue: 0.45, alpha: 1)
+        case "namespace":
+            return isDark
+                ? NSColor(red: 0.78, green: 0.90, blue: 0.95, alpha: 1)
+                : NSColor(red: 0.20, green: 0.45, blue: 0.55, alpha: 1)
         default:
             return nil
         }

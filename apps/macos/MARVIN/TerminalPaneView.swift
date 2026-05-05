@@ -53,6 +53,14 @@ struct TerminalPaneView: View {
             history = Self.loadHistory()
             inputFocused = true
         }
+        // M7: BuildTaskSheet injects a command via bridge.pendingTerminalCommand.
+        // We observe it here and execute it so the task runner can drive the terminal.
+        .onChange(of: bridge.pendingTerminalCommand) { _, cmd in
+            guard let cmd, !cmd.isEmpty else { return }
+            bridge.consumePendingTerminalCommand()
+            input = cmd
+            submit()
+        }
     }
 
     private var header: some View {
@@ -323,7 +331,7 @@ final class TerminalRunner {
         cmd: String,
         emit: @escaping @MainActor (Event) -> Void
     ) async {
-        let url = URL(string: "http://localhost:3030/api/terminal/run")!
+        let url = ServerConfig.baseURL.appendingPathComponent("api/terminal/run")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

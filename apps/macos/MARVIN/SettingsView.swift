@@ -49,7 +49,7 @@ struct SettingsView: View {
         Form {
             Section("Sidecar") {
                 LabeledContent("URL") {
-                    Text("http://localhost:3030")
+                    Text(ServerConfig.baseURLString)
                         .font(.body.monospaced())
                         .textSelection(.enabled)
                 }

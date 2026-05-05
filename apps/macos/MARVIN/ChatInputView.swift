@@ -14,11 +14,12 @@
 //
 // ## Submit semantics
 //
-//   ⌘⏎  — submit. Same convention as Slack / Linear / iMessage —
-//          the web app's <ChatInput> uses the same key. Implemented
-//          via a CustomNSTextView subclass that intercepts keyDown
-//          before the regular text-editing pipeline sees it.
-//   ⏎    — newline (default NSTextView behaviour).
+//   ⏎    — submit. Default IDE chat shape (Slack / Discord / Cursor)
+//          — single line of muscle memory, no modifier required.
+//   ⌘⏎   — also submits (preserves the older convention without
+//          getting in the way of the new Enter-to-send default).
+//   ⇧⏎   — newline. Hold shift when you actually want a multi-line
+//          message; falls through to default insertNewline:.
 //   ⌥⏎   — newline (alt convention some users have muscle-memory
 //          for; falls through to default insertNewline:).
 //
@@ -43,12 +44,31 @@ struct ChatTextEditor: NSViewRepresentable {
     /// Disable the editor (e.g. while a turn is in flight). The
     /// NSTextView still draws but stops accepting keyDown events.
     var isDisabled: Bool = false
+    /// Phase 5e — callback for clipboard images pasted into the
+    /// editor. The ChatNSTextView intercepts paste and routes any
+    /// image content here; the parent saves it to disk + adds it
+    /// to the attachments list. Plain text paste falls through to
+    /// the default NSTextView behaviour.
+    var onImagePaste: (NSImage) -> Bool = { _ in false }
+    /// Phase 5f — callback for file URLs pasted from Finder (or any
+    /// app that puts file paths on the pasteboard). Return true to
+    /// consume — the parent typically promotes each URL to an
+    /// attachment chip and skips the default text-paste path.
+    var onFilePaste: ([URL]) -> Bool = { _ in false }
+    /// Phase 5f — callback for typing `@` at a word boundary. Return
+    /// true to consume the `@` keypress (the parent typically opens
+    /// the FileMentionPicker; the `@` itself doesn't get inserted
+    /// because picking a file becomes a chip, not literal text).
+    var onAtTrigger: () -> Bool = { false }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ChatNSTextView.scrollableTextView()
         let textView = scrollView.documentView as! ChatNSTextView
         textView.delegate = context.coordinator
         textView.onSubmit = { onSubmit() }
+        textView.onImagePaste = { image in onImagePaste(image) }
+        textView.onFilePaste = { urls in onFilePaste(urls) }
+        textView.onAtTrigger = { onAtTrigger() }
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.isRichText = false
         textView.allowsUndo = true
@@ -76,6 +96,9 @@ struct ChatTextEditor: NSViewRepresentable {
             textView.string = text
         }
         textView.onSubmit = { onSubmit() }
+        textView.onImagePaste = { image in onImagePaste(image) }
+        textView.onFilePaste = { urls in onFilePaste(urls) }
+        textView.onAtTrigger = { onAtTrigger() }
         textView.isEditable = !isDisabled
         textView.isSelectable = true
     }
@@ -96,53 +119,213 @@ struct ChatTextEditor: NSViewRepresentable {
     }
 }
 
-/// NSTextView subclass that intercepts ⌘⏎ before the text-editing
-/// pipeline sees it. Everything else is stock NSTextView.
+/// NSTextView subclass that intercepts Enter and ⌘V before the
+/// text-editing pipeline sees them. Everything else is stock
+/// NSTextView.
 final class ChatNSTextView: NSTextView {
-    /// Set by the wrapper. Closure to fire on ⌘⏎.
+    /// Set by the wrapper. Closure to fire on ⏎ / ⌘⏎.
     var onSubmit: (() -> Void)?
+    /// Set by the wrapper. Called when ⌘V finds an image on the
+    /// pasteboard. Return true to consume the paste; false to let
+    /// the default text-paste path run as well.
+    var onImagePaste: ((NSImage) -> Bool)?
+    /// Phase 5f — file URLs on the pasteboard (Finder copy of a
+    /// file, "Copy as Pathname", drag-source apps that promote to
+    /// file URLs). Return true to consume.
+    var onFilePaste: (([URL]) -> Bool)?
+    /// Phase 5f — `@` typed at a word boundary. Return true to
+    /// consume the keypress so the literal `@` doesn't end up in
+    /// the message text — the picker the parent opens replaces
+    /// the would-be `@<query>` with an attachment chip.
+    var onAtTrigger: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         // 36 is the keyCode for the main Return key. (NSEvent doesn't
         // expose a typed constant for this; the value is stable across
-        // macOS releases — used by every "send on Cmd-Enter" app.)
+        // macOS releases.) IDE chat convention: Enter alone submits;
+        // Shift+Enter / Option+Enter inserts a literal newline. ⌘⏎
+        // also submits — preserves muscle memory from earlier MARVIN
+        // versions and from Slack/Linear/iMessage.
         let isReturn = event.keyCode == 36
-        let hasCommand = event.modifierFlags.contains(.command)
-        if isReturn && hasCommand {
+        let mods = event.modifierFlags
+        let isShift = mods.contains(.shift)
+        let isOption = mods.contains(.option)
+        let isCommand = mods.contains(.command)
+        if isReturn && !isShift && !isOption {
+            // Enter alone (or ⌘⏎) → submit.
             onSubmit?()
             return
         }
+        // Phase 5f — `@` at a word boundary fires the inline mention
+        // picker. Word-boundary check (start-of-text / preceding
+        // whitespace) keeps an email address or "user@host" string
+        // from triggering the picker mid-token. ⇧2 ("@") on US
+        // layouts, but `charactersIgnoringModifiers` normalises
+        // across keyboard layouts so the ' character on AZERTY
+        // layouts still resolves to the right symbol.
+        if let chars = event.charactersIgnoringModifiers,
+           chars == "@",
+           !isCommand && !isOption {
+            let selRange = selectedRange()
+            let str = string as NSString
+            let priorIsBoundary: Bool = {
+                if selRange.location == 0 { return true }
+                let prior = str.character(at: selRange.location - 1)
+                return prior == 32 || prior == 10 || prior == 9
+            }()
+            if priorIsBoundary, onAtTrigger?() == true {
+                return
+            }
+        }
+        // Otherwise (Shift/Option held, or any other key) → fall
+        // through to NSTextView's default — Shift/Option+Enter
+        // inserts a newline; non-Return keys are normal input.
+        _ = isCommand // referenced for clarity; explicit no-op
         super.keyDown(with: event)
+    }
+
+    /// Override the default paste so a screenshot / Finder image
+    /// drag becomes an attachment chip instead of a base64-ish
+    /// blob in the message text. Phase 5f resolution order:
+    ///
+    /// 1. **File URL(s)** — Finder copy of a file lands here.
+    ///    Forwarded as-is to onFilePaste; no re-encode through
+    ///    NSImage so the original PNG/JPEG/HEIC bytes are preserved.
+    ///    The parent classifier (FileTypeIcon.kind) decides whether
+    ///    each URL becomes an image or generic file attachment.
+    /// 2. **Raw image data** — `⌘⇧4` screenshots, Universal
+    ///    Clipboard from iPhone, copy-from-Photos. Resolved by
+    ///    ClipboardImage.fromPasteboard which prefers raw `.png` /
+    ///    HEIC / TIFF data over `NSImage(pasteboard:)` to avoid
+    ///    grabbing a 1024×1024 generic file-icon thumbnail.
+    /// 3. Default text paste.
+    override func paste(_ sender: Any?) {
+        let pb = NSPasteboard.general
+        #if DEBUG
+        NSLog("[ChatNSTextView.paste] types=\(pb.types ?? [])")
+        #endif
+        // 1. File URL(s) — bypass the NSImage round-trip entirely
+        //    when the source is already a file on disk.
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
+            let fileUrls = urls.filter { $0.isFileURL }
+            if !fileUrls.isEmpty, onFilePaste?(fileUrls) == true {
+                return
+            }
+        }
+        // 2. Raw image data on the pasteboard. Common for screenshots
+        //    and Universal Clipboard pastes that don't include a file
+        //    URL (the source app didn't expose one).
+        if let image = ClipboardImage.fromPasteboard(pb),
+           onImagePaste?(image) == true {
+            return
+        }
+        super.paste(sender)
     }
 }
 
 // MARK: - The preview window's chat input bar
 
 /// Compact input bar — text editor with a placeholder + Send button.
-/// Sits at the bottom of the Phase 2b/2c preview window. The Send
-/// button is redundant with ⌘⏎ but useful for discoverability while
-/// we iterate.
+/// Sits at the bottom of the chat pane. Phase 5e adds the
+/// attachments bar on top (file mentions / pasted images) and an
+/// onAttachImage callback so paste lands a chip instead of a blob.
 struct ChatInputBar: View {
     @Binding var text: String
     let onSubmit: () -> Void
     let isSending: Bool
+    /// Phase 5e — pre-send attachment chips (file mentions, image
+    /// paste, snippets). Owned by the parent so they survive the
+    /// editor's render cycle. The bar renders the chips + hosts
+    /// the `+` picker; the parent decides what to do on submit
+    /// (typically: prepend `att.messageFragment` to text + clear).
+    @Binding var attachments: [ChatAttachment]
+    /// Phase 5f — inline @ trigger state. When the user types `@`
+    /// at a word boundary the editor consumes the keypress and we
+    /// flip this flag so the FileMentionPicker sheet pops over the
+    /// chat. Selecting a file appends an attachment; the literal
+    /// `@` never makes it into the message text.
+    @State private var atPickerOpen = false
+
+    /// Phase 5f — user-resizable editor height. Persisted via
+    /// AppStorage so the chat input remembers how much space the
+    /// user gave it across launches. The handle above the editor
+    /// drives this; clamping happens in the drag gesture.
+    @AppStorage("marvin.chat.editorHeight") private var editorHeight: Double = 120
+    /// Captured at drag start so the gesture's accumulated
+    /// translation lands on a stable baseline (DragGesture's
+    /// `translation` is total-since-start, not per-frame delta).
+    @State private var dragStartHeight: Double? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 4) {
+            ChatAttachmentsBar(attachments: $attachments)
+            // Phase 5f — drag handle above the editor. IDE-style
+            // chat surfaces (Cursor, Continue, Slack, iMessage on
+            // iPad) all let the user resize the input by dragging
+            // a thin grabber along its top edge. AppStorage
+            // persists the height across launches.
+            resizeHandle
             ZStack(alignment: .topLeading) {
                 ChatTextEditor(
                     text: $text,
                     onSubmit: onSubmit,
-                    isDisabled: isSending
+                    isDisabled: isSending,
+                    onImagePaste: { image in
+                        guard let url = ClipboardImage.savePNG(image) else {
+                            return false
+                        }
+                        attachments.append(
+                            ChatAttachment(kind: .image(absPath: url.path))
+                        )
+                        return true
+                    },
+                    onFilePaste: { urls in
+                        // Promote each file URL on the pasteboard to
+                        // an attachment chip. Image files become
+                        // image attachments (so the chip renders the
+                        // photo icon); other files become file
+                        // attachments. Both serialise as `@<absPath>`
+                        // in the message text.
+                        for url in urls {
+                            let kind = FileTypeIcon.kind(for: url.path)
+                            let att: ChatAttachment
+                            if kind == .image {
+                                att = ChatAttachment(
+                                    kind: .image(absPath: url.path)
+                                )
+                            } else {
+                                att = ChatAttachment(
+                                    kind: .file(absPath: url.path)
+                                )
+                            }
+                            attachments.append(att)
+                        }
+                        return true
+                    },
+                    onAtTrigger: {
+                        atPickerOpen = true
+                        return true
+                    }
                 )
-                .frame(minHeight: 80, maxHeight: 200)
+                .frame(height: editorHeight)
 
-                if text.isEmpty {
-                    Text("Type a message — ⌘⏎ to send")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
+                if text.isEmpty && attachments.isEmpty {
+                    Text("Message MARVIN — ⏎ send · ⇧⏎ newline · @ mention · paste image / file")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
                         .allowsHitTesting(false)
+                }
+            }
+            .sheet(isPresented: $atPickerOpen) {
+                FileMentionPicker { picked in
+                    if let picked {
+                        attachments.append(
+                            ChatAttachment(kind: .file(absPath: picked))
+                        )
+                    }
+                    atPickerOpen = false
                 }
             }
             .background(Color(nsColor: .textBackgroundColor))
@@ -163,10 +346,53 @@ struct ChatInputBar: View {
                 Button("Send") {
                     onSubmit()
                 }
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled((text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                           && attachments.isEmpty)
+                          || isSending)
             }
-            .padding(.top, 8)
         }
+    }
+
+    /// Drag handle above the editor — three pixels of grabber over
+    /// six pixels of hit area, vertical-resize cursor on hover.
+    /// Drag UP grows the editor (text area gets taller); drag DOWN
+    /// shrinks it. Clamped between 60 and 600 pt so a slip of the
+    /// mouse can't completely collapse the input or cover the whole
+    /// chat.
+    private var resizeHandle: some View {
+        Color.clear
+            .frame(height: 6)
+            .contentShape(Rectangle())
+            .overlay {
+                Capsule()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 32, height: 3)
+                    .opacity(0.6)
+            }
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.resizeUpDown.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dragStartHeight == nil {
+                            dragStartHeight = editorHeight
+                        }
+                        // SwiftUI's translation.height is positive
+                        // when dragging DOWN — invert so dragging
+                        // UP grows the editor.
+                        let next = (dragStartHeight ?? editorHeight)
+                            - Double(value.translation.height)
+                        editorHeight = max(60, min(600, next))
+                    }
+                    .onEnded { _ in
+                        dragStartHeight = nil
+                    }
+            )
     }
 }

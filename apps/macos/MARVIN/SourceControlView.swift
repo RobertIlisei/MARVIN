@@ -185,6 +185,93 @@ final class SourceControlModel {
         }
     }
 
+    // MARK: - Remote ops (fetch / pull / push)
+
+    private(set) var remoteOp: String? = nil   // "fetch" | "pull" | "push" — drives header spinner
+    var remoteNote: String? = nil              // last success note ("To github.com/…")
+    var remoteError: String? = nil             // last remote failure message
+
+    func fetch() {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        runRemoteOp(verb: "fetch") {
+            try await FilesService.shared.fetch(cwd: cwd)
+        }
+    }
+
+    func pull(strategy: String = "ff-only", confirmToken: String? = nil) {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        runRemoteOp(verb: "pull") {
+            try await FilesService.shared.pull(cwd: cwd, strategy: strategy, confirmToken: confirmToken)
+        }
+    }
+
+    func push(confirmToken: String? = nil) {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        runRemoteOp(verb: "push") {
+            try await FilesService.shared.push(cwd: cwd, confirmToken: confirmToken)
+        }
+    }
+
+    private func runRemoteOp(
+        verb: String,
+        body: @escaping () async throws -> FilesService.GitRemoteOutcome
+    ) {
+        guard remoteOp == nil else { return }
+        remoteOp = verb
+        remoteNote = nil
+        remoteError = nil
+        Task { @MainActor in
+            defer { remoteOp = nil }
+            do {
+                let outcome = try await body()
+                switch outcome {
+                case .ok(let note):
+                    remoteNote = note
+                    if let cwd = loadedCwd { refresh(cwd: cwd, force: true) }
+                case .needsConfirm(let severity, let reason, let op):
+                    presentConfirm(
+                        verb: verb,
+                        severity: severity,
+                        reason: reason,
+                        op: op,
+                        retry: { [weak self] token in
+                            self?.runRemoteWithToken(verb: verb, token: token)
+                        }
+                    )
+                }
+            } catch {
+                remoteError = "\(verb) failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func runRemoteWithToken(verb: String, token: String) {
+        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let outcome: FilesService.GitRemoteOutcome
+                switch verb {
+                case "pull":
+                    outcome = try await FilesService.shared.pull(
+                        cwd: cwd, strategy: "rebase", confirmToken: token
+                    )
+                case "push":
+                    outcome = try await FilesService.shared.push(cwd: cwd, confirmToken: token)
+                default:
+                    return
+                }
+                if case .ok(let note) = outcome {
+                    remoteNote = note
+                    refresh(cwd: cwd, force: true)
+                }
+            } catch {
+                remoteError = "\(verb) (confirmed) failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func dismissRemoteError() { remoteError = nil }
+
     /// Shared mutation runner. Tracks in-flight state, surfaces
     /// confirm-class results into `pendingConfirm`, refreshes the
     /// status feed on success, and writes errors into
@@ -390,13 +477,17 @@ struct SourceControlView: View {
                 Divider()
                 mutationErrorBanner(err)
             }
+            if let err = model.remoteError {
+                Divider()
+                remoteBanner(text: err, isError: true)
+            } else if let note = model.remoteNote, !note.isEmpty {
+                Divider()
+                remoteBanner(text: note, isError: false)
+            }
             if let err = model.lastError {
                 Divider()
                 errorBanner(err)
             }
-            // Phase 3g — commit area at the bottom. Visible whenever
-            // the panel is in a usable state (project + git);
-            // disabled when there's nothing to commit.
             if model.response?.enabled == true {
                 Divider()
                 commitArea
@@ -407,6 +498,12 @@ struct SourceControlView: View {
         .onAppear { syncFetchFromBridge() }
         .onChange(of: bridge.projectWorkDir) { _, _ in
             syncFetchFromBridge()
+        }
+        .onChange(of: model.remoteError) { _, err in
+            if err != nil {
+                // Auto-dismiss after 6 s so the banner doesn't stick forever.
+                Task { try? await Task.sleep(nanoseconds: 6_000_000_000); model.dismissRemoteError() }
+            }
         }
         // Refresh whenever the bridge reports a turn finished —
         // tool-driven file mutations land in working-tree status the
@@ -461,10 +558,41 @@ struct SourceControlView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                if model.isLoading {
+                if model.isLoading || model.remoteOp != nil {
                     ProgressView()
                         .controlSize(.small)
                 }
+                // Fetch
+                Button {
+                    model.fetch()
+                } label: {
+                    Image(systemName: "arrow.down.to.line")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
+                .help("Fetch from origin")
+                // Pull
+                Button {
+                    model.pull()
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
+                .help("Pull (fast-forward only)")
+                // Push
+                Button {
+                    model.push()
+                } label: {
+                    Image(systemName: "arrow.up.circle")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
+                .help("Push to origin")
+                // Refresh
                 Button {
                     if let cwd = bridge.projectWorkDir {
                         model.refresh(cwd: cwd, force: true)
@@ -475,7 +603,7 @@ struct SourceControlView: View {
                 .buttonStyle(.borderless)
                 .controlSize(.small)
                 .disabled(bridge.projectWorkDir == nil)
-                .help("Refresh git status.")
+                .help("Refresh git status")
             }
             branchLine
         }
@@ -739,6 +867,30 @@ struct SourceControlView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func remoteBanner(text: String, isError: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isError
+                ? "exclamationmark.triangle.fill"
+                : "checkmark.circle.fill")
+                .foregroundStyle(isError ? Color.orange : Color.green)
+            Text(text)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(4)
+            Spacer()
+            Button {
+                model.remoteNote = nil
+                model.dismissRemoteError()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .background((isError ? Color.orange : Color.green).opacity(0.08))
     }
 
     private func errorBanner(_ message: String) -> some View {

@@ -47,6 +47,8 @@ struct ContentView: View {
     /// not the toolbar.
     @State private var layoutPopoverOpen = false
     @State private var quickOpenOpen = false
+    @State private var symbolSearchOpen = false
+    @State private var buildTaskOpen = false
     @State private var shortcutsOpen = false
 
     var body: some View {
@@ -72,6 +74,14 @@ struct ContentView: View {
             QuickOpenSheet()
                 .environment(bridge)
         }
+        .sheet(isPresented: $symbolSearchOpen) {
+            SymbolSearchSheet()
+                .environment(bridge)
+        }
+        .sheet(isPresented: $buildTaskOpen) {
+            BuildTaskSheet()
+                .environment(bridge)
+        }
         .sheet(isPresented: $shortcutsOpen) {
             ShortcutsHelpSheet()
         }
@@ -83,6 +93,16 @@ struct ContentView: View {
                 quickOpenOpen = true
             }
         }
+        .onChange(of: bridge.symbolSearchTriggerCount) { _, _ in
+            if bridge.projectWorkDir != nil {
+                symbolSearchOpen = true
+            }
+        }
+        .onChange(of: bridge.buildTaskTriggerCount) { _, _ in
+            if bridge.projectWorkDir != nil {
+                buildTaskOpen = true
+            }
+        }
         .navigationTitle(bridge.webTitle ?? "MARVIN")
         .navigationSubtitle(composeSubtitle())
         .onChange(of: bridge.webTitle ?? "") { _, newTitle in
@@ -92,6 +112,9 @@ struct ContentView: View {
         }
         .onChange(of: bridge.projectWorkDir ?? "") { _, newWorkDir in
             updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
+            if !newWorkDir.isEmpty {
+                Task { await DiagnosticsService.shared.refresh(workDir: newWorkDir) }
+            }
         }
         .onChange(of: health.state.isOffline) { _, isOffline in
             maybeAutoStartSidecar(isOffline: isOffline)
@@ -260,7 +283,7 @@ struct ContentView: View {
     /// bottom child collapses to zero height; the system hides the
     /// divider automatically when a subview is collapsed.
     private var workPaneSplit: some View {
-        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal
+        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal || bridge.panes.problems
         return VSplitView {
             editorArea
                 .frame(minHeight: 120)
@@ -293,23 +316,40 @@ struct ContentView: View {
     /// and terminal when both are open.
     @ViewBuilder
     private var bottomPanesArea: some View {
-        let showPreview = bridge.panes.preview
+        let showPreview  = bridge.panes.preview
         let showTerminal = bridge.panes.terminal
-        if showPreview && showTerminal {
+        let showProblems = bridge.panes.problems
+        // Collect visible panes; HSplitView splits them side-by-side.
+        // Single pane: no split. Two+: HSplitView with autosave.
+        let count = (showPreview ? 1 : 0) + (showTerminal ? 1 : 0) + (showProblems ? 1 : 0)
+        if count >= 2 {
             HSplitView {
-                PreviewPaneView()
-                    .environment(bridge)
-                    .frame(minWidth: 280)
-                    .background(SplitViewAutosave(name: "marvin.bottom"))
-                TerminalPaneView()
-                    .environment(bridge)
-                    .frame(minWidth: 280)
+                if showProblems {
+                    DiagnosticsPanelView()
+                        .environment(bridge)
+                        .frame(minWidth: 220)
+                        .background(SplitViewAutosave(name: "marvin.bottom.problems"))
+                }
+                if showPreview {
+                    PreviewPaneView()
+                        .environment(bridge)
+                        .frame(minWidth: 280)
+                        .background(SplitViewAutosave(name: "marvin.bottom"))
+                }
+                if showTerminal {
+                    TerminalPaneView()
+                        .environment(bridge)
+                        .frame(minWidth: 280)
+                }
             }
         } else if showPreview {
             PreviewPaneView()
                 .environment(bridge)
         } else if showTerminal {
             TerminalPaneView()
+                .environment(bridge)
+        } else if showProblems {
+            DiagnosticsPanelView()
                 .environment(bridge)
         }
     }

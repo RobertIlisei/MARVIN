@@ -45,15 +45,14 @@ enum ChatServiceError: Error {
     case transport(underlying: Error)
 }
 
-/// Singleton service. The sidecar URL is hardcoded to localhost:3030
-/// to match the rest of the SwiftUI app — Phase 2 inherits Phase 1's
-/// "the sidecar is the trust boundary, accessed via loopback" choice
-/// from ADR-0016.
+/// Singleton service. Sidecar URL comes from ServerConfig (MARVIN_PORT env var,
+/// default 3030) — Phase 2 inherits Phase 1's "the sidecar is the trust
+/// boundary, accessed via loopback" choice from ADR-0016.
 @MainActor
 final class ChatService {
     static let shared = ChatService()
 
-    private let baseURL = URL(string: "http://localhost:3030")!
+    private let baseURL = ServerConfig.baseURL
     private let session: URLSession
 
     private init() {

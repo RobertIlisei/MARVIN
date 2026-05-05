@@ -154,13 +154,13 @@ struct AboutView: View {
         case .connecting:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("connecting to http://localhost:3030…")
+                Text("connecting to \(ServerConfig.baseURLString)…")
                     .font(.body.monospaced())
                     .foregroundStyle(.secondary)
             }
         case .online(let s):
             VStack(alignment: .leading, spacing: 4) {
-                aboutRow("URL", "http://localhost:3030")
+                aboutRow("URL", ServerConfig.baseURLString)
                 aboutRow("auth", s.auth?.mode ?? "unknown")
                 aboutRow("model", s.model ?? "unknown")
                 aboutRow("data dir", s.dataDir ?? "unknown")

@@ -32,7 +32,7 @@ final class ProjectsService {
         var body: [String: Any] = ["workDir": workDir, "setActive": true]
         if let name { body["name"] = name }
         let data = try JSONSerialization.data(withJSONObject: body)
-        var req = request("http://localhost:3030/api/projects", method: "POST")
+        var req = request("\(ServerConfig.baseURLString)/api/projects", method: "POST")
         req.httpBody = data
         let (_, resp) = try await URLSession.shared.data(for: req)
         try checkHTTP(resp)
@@ -42,7 +42,7 @@ final class ProjectsService {
     /// Remove a registered project by id. Does NOT delete the directory.
     func removeProject(id: String) async throws {
         let req = request(
-            "http://localhost:3030/api/projects?id=\(id)",
+            "\(ServerConfig.baseURLString)/api/projects?id=\(id)",
             method: "DELETE"
         )
         let (_, resp) = try await URLSession.shared.data(for: req)
@@ -56,7 +56,7 @@ final class ProjectsService {
         // Instant local feedback — ChatPreviewView's onChange fires here.
         applyLocalSelection(id: id)
         let body = try JSONSerialization.data(withJSONObject: ["id": id])
-        var req = request("http://localhost:3030/api/projects/active", method: "PUT")
+        var req = request("\(ServerConfig.baseURLString)/api/projects/active", method: "PUT")
         req.httpBody = body
         let (_, resp) = try await URLSession.shared.data(for: req)
         try checkHTTP(resp)
@@ -73,7 +73,7 @@ final class ProjectsService {
             try? await Task.sleep(for: .seconds(delaySecs))
         }
         do {
-            let req = request("http://localhost:3030/api/projects")
+            let req = request("\(ServerConfig.baseURLString)/api/projects")
             let (data, resp) = try await URLSession.shared.data(for: req)
             try checkHTTP(resp)
 
@@ -91,6 +91,12 @@ final class ProjectsService {
             activeProjectId = parsed.active
             MarvinBridge.shared.applyProjectsLoad(projects: loaded, activeId: parsed.active)
             NSLog("[ProjectsService] loaded \(loaded.count) projects, active=\(parsed.active ?? "none")")
+            // ADR-0021 M3: start/restart pollers for the active project.
+            if let activeId = parsed.active,
+               let activeProj = loaded.first(where: { $0.id == activeId }) {
+                CostService.shared.onProjectChanged(to: activeId)
+                BranchService.shared.onProjectChanged(to: activeProj.workDir)
+            }
         } catch {
             guard attempt < 3 else {
                 NSLog("[ProjectsService] load failed after 3 retries: \(error)")
@@ -104,6 +110,11 @@ final class ProjectsService {
     private func applyLocalSelection(id: String) {
         activeProjectId = id
         MarvinBridge.shared.applyLocalProjectSelection(id: id)
+        // ADR-0021 M3: restart pollers immediately on switch.
+        if let proj = projects.first(where: { $0.id == id }) {
+            CostService.shared.onProjectChanged(to: id)
+            BranchService.shared.onProjectChanged(to: proj.workDir)
+        }
     }
 
     // MARK: - URL helpers

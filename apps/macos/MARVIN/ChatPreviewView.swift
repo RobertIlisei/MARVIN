@@ -42,6 +42,11 @@ final class ChatPreviewModel {
     /// Editor text. Bound to ChatInputBar.
     var draft: String = ""
 
+    /// Phase 5e — pre-send attachment chips (file mentions, image
+    /// paste, selected snippets). Serialised into the message text
+    /// on submit; the chip strip clears alongside the draft.
+    var attachments: [ChatAttachment] = []
+
     /// True while a turn is in flight. Disables the editor + Send
     /// button so the user can't queue a second turn (the sidecar
     /// allows it, but the dev panel scope is one turn at a time;
@@ -107,6 +112,25 @@ final class ChatPreviewModel {
     private(set) var sessions: [SessionSummary] = []
     private var sessionsFetchTask: Task<Void, Never>?
 
+    /// Auto-hydrate: fetch sessions and load the latest one. Called
+    /// when no session is set (post-WebView-removal M5, activeMarvinSessionId
+    /// is always nil, so this is the primary path for recovering history).
+    /// Awaitable — callers don't need to sleep and poll.
+    func autoHydrate(projectId: String) async {
+        guard loadedSessionId == nil else { return }
+        do {
+            let res = try await ChatService.shared.fetchSessions(projectId: projectId)
+            sessions = res.sessions
+            guard loadedSessionId == nil,
+                  let latest = sessions.first else { return }
+            // Call hydrate directly — selectSession guards on loadedProjectId
+            // which is nil until hydrate sets it, causing the first load to no-op.
+            hydrate(projectId: projectId, sessionId: latest.sessionId)
+        } catch {
+            NSLog("[ChatPreview] auto-hydrate failed: \(error)")
+        }
+    }
+
     /// Refresh the sessions list for `projectId`. Idempotent: a
     /// fetch in flight isn't re-started; subsequent calls await
     /// the existing task. Called on menu-open + after a turn
@@ -130,15 +154,11 @@ final class ChatPreviewModel {
     }
 
     /// Pick a past session — re-route hydrate to that sessionId.
-    /// Forces hydrate (loadedSessionId comparison would match if the
-    /// user picks the currently-loaded one — ignore that case as a
-    /// no-op). Called from the Sessions menu in the header.
-    func selectSession(_ sessionId: String) {
-        guard let projectId = loadedProjectId else { return }
+    /// `fallbackProjectId` is passed by the view (from the bridge)
+    /// so this works even before the first hydrate has set loadedProjectId.
+    func selectSession(_ sessionId: String, fallbackProjectId: String? = nil) {
+        guard let projectId = loadedProjectId ?? fallbackProjectId else { return }
         if loadedSessionId == sessionId { return }
-        // Drive hydrate manually so the dedupe in `hydrate` doesn't
-        // skip — even though loadedSessionId differs we want a clean
-        // forced replay regardless of any in-flight state.
         loadedSessionId = nil
         hydrate(projectId: projectId, sessionId: sessionId)
     }
@@ -156,12 +176,28 @@ final class ChatPreviewModel {
     private var activeTask: Task<Void, Never>?
 
     /// Send the current draft as a turn. No-op when already
-    /// sending or the draft is whitespace-only.
+    /// sending or both the draft AND attachments are empty.
+    /// Phase 5e — attachments serialise into the message text
+    /// (each chip becomes a `@/abs/path` token or a fenced
+    /// snippet) so the agent loop sees them as part of the
+    /// prompt, no /api/chat schema change required.
     func send(cwd: String?) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSending else { return }
+        let attachmentText = attachments
+            .map { $0.messageFragment }
+            .joined(separator: "\n")
+        let composed: String
+        if attachmentText.isEmpty {
+            composed = trimmed
+        } else if trimmed.isEmpty {
+            composed = attachmentText
+        } else {
+            composed = "\(attachmentText)\n\n\(trimmed)"
+        }
+        guard !composed.isEmpty, !isSending else { return }
         draft = ""
-        sendInternal(message: trimmed, cwd: cwd)
+        attachments = []
+        sendInternal(message: composed, cwd: cwd)
     }
 
     /// Phase 2f — re-submit the last user message after an error.
@@ -231,6 +267,13 @@ final class ChatPreviewModel {
         activeTask?.cancel()
         activeTask = nil
         isSending = false
+        // ADR-0021 M4: brief cancelling state → idle.
+        MarvinBridge.shared.marvinState = "cancelling"
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            MarvinBridge.shared.marvinState = "idle"
+            MarvinBridge.shared.isBusy = false
+        }
         if let id = marvinSessionId {
             Task { @MainActor in
                 do {
@@ -424,14 +467,40 @@ final class ChatPreviewModel {
         }
     }
 
+    /// ADR-0021 M4 — peek at a cliEvent payload to derive marvinState.
+    /// Returns "tool" when the assistant message has a tool_use block,
+    /// "writing" for a text block, nil for all other event types.
+    private func marvinStateForCLIEvent(_ data: Data) -> String? {
+        struct Peek: Codable {
+            let type: String
+            struct Msg: Codable {
+                struct Block: Codable { let type: String }
+                let content: [Block]?
+            }
+            let message: Msg?
+        }
+        guard let env = try? JSONDecoder().decode(Peek.self, from: data),
+              env.type == "assistant",
+              let blocks = env.message?.content else { return nil }
+        if blocks.contains(where: { $0.type == "tool_use" }) { return "tool" }
+        if blocks.contains(where: { $0.type == "text" }) { return "writing" }
+        return nil
+    }
+
     private func handle(event: ChatTurnEvent) {
+        let b = MarvinBridge.shared
         switch event {
         case .turnStarted(let s):
             // Phase 2f — capture the marvinSessionId so cancel can
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId
+            // ADR-0021 M4: drive brain profile natively from SSE.
+            b.marvinState = "thinking"
+            b.isBusy = true
         case .cliEvent(let data):
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
+            // ADR-0021 M4: detect tool vs writing from cliEvent shape.
+            if let s = marvinStateForCLIEvent(data) { b.marvinState = s }
         case .confirmRequest(let c):
             // Phase 2e — queue the confirm; the view's sheet
             // modifier reacts to pendingConfirms.first and presents
@@ -447,15 +516,22 @@ final class ChatPreviewModel {
                 pendingConfirms.append(c)
             }
         case .turnCompleted:
-            // The reducer-side `result` cli.event already mutated
-            // isStreaming to false on the assistant message. Clear
-            // lastSentMessage on a clean completion so the retry
-            // button doesn't offer to resubmit a turn that already
-            // succeeded. (Errors keep lastSentMessage so retry
-            // works on transient failures.)
+            // Post a notification entry for the bell log.
+            let prompt = lastSentMessage.flatMap { s in
+                s.count > 60 ? String(s.prefix(60)) + "…" : s
+            } ?? "Turn completed"
+            b.appendNotification(prompt)
             lastSentMessage = nil
+            // ADR-0021 M4: reset brain to idle natively.
+            b.marvinState = "idle"
+            b.isBusy = false
+            // ADR-0021 M3: kick BranchService for dirty-count refresh.
+            NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
         case .turnError(let e):
             lastError = e.error
+            // ADR-0021 M4: signal error state natively.
+            b.marvinState = "error"
+            b.isBusy = false
         case .unknown:
             break
         }
@@ -495,11 +571,24 @@ struct ChatPreviewView: View {
             ChatInputBar(
                 text: Bindable(model).draft,
                 onSubmit: { model.send(cwd: bridge.projectWorkDir) },
-                isSending: model.isSending
+                isSending: model.isSending,
+                attachments: Bindable(model).attachments
             )
-            .padding(12)
+            .environment(bridge)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+            // Phase 5e — agents footer below the chat input. Mirrors
+            // Cursor / Continue / Aider: the model picker lives in
+            // the chat surface, not the global toolbar, because
+            // switching executor / advisor is a per-turn decision
+            // and that's where the user's attention already is.
+            ChatAgentsFooter()
+                .environment(bridge)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
         }
-        .frame(minWidth: 520, minHeight: 420)
+        .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
         // Phase 2h — hydrate the message list when the bridge
         // reports a (projectId, marvinSessionId) we haven't loaded
@@ -566,32 +655,13 @@ struct ChatPreviewView: View {
         if model.loadedSessionId != nil || !model.messages.isEmpty {
             model.clear()
         }
-        // Phase 2h follow-up — when the bridge has a project but
-        // hasn't announced a marvinSessionId (web localStorage was
-        // empty for this WKWebView store; e.g. fresh native install
-        // on a machine with prior web sessions), look for a most-
-        // recent session on disk and auto-hydrate that. Without
-        // this the user sees a blank chat for projects they've
-        // worked in before, with no obvious way to recover history.
-        // The Sessions menu in the header is the manual escape
-        // hatch; this is the auto path.
+        // Post-M5: activeMarvinSessionId is always nil (set only by the
+        // now-removed WebView). Fetch sessions directly and pick the
+        // latest — await the result instead of sleeping + polling.
         if let pid = bridge.activeProjectId,
            bridge.activeMarvinSessionId == nil,
            model.loadedSessionId == nil {
-            Task { @MainActor in
-                model.refreshSessions(projectId: pid)
-                // Wait one runloop turn for refreshSessions to land.
-                // The fetch task is fire-and-forget; we poll its
-                // settled-via-non-empty-sessions result.
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard model.loadedSessionId == nil,
-                      bridge.activeMarvinSessionId == nil,
-                      bridge.activeProjectId == pid,
-                      let latest = model.sessions.first else {
-                    return
-                }
-                model.selectSession(latest.sessionId)
-            }
+            Task { await model.autoHydrate(projectId: pid) }
         }
     }
 
@@ -614,7 +684,10 @@ struct ChatPreviewView: View {
             } else {
                 ForEach(model.sessions) { summary in
                     Button {
-                        model.selectSession(summary.sessionId)
+                        model.selectSession(
+                            summary.sessionId,
+                            fallbackProjectId: bridge.activeProjectId
+                        )
                     } label: {
                         sessionLabel(for: summary)
                     }

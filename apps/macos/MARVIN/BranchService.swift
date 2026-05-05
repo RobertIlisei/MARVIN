@@ -68,7 +68,7 @@ final class BranchService {
         guard NSApp.isActive else { return }
         guard let cwd = currentWorkDir,
               let encoded = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "http://localhost:3030/api/files/status?cwd=\(encoded)")
+              let url = URL(string: "\(ServerConfig.baseURLString)/api/files/status?cwd=\(encoded)")
         else { return }
 
         do {

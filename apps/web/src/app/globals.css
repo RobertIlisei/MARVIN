@@ -1091,6 +1091,28 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
+/* Phase 5c (ADR-0020) — hide the WebView's Monaco file viewer in
+ * MARVIN-Swift. The native shell promotes a STTextView-backed viewer
+ * (with tree-sitter highlighting from 5b) into the work-pane file
+ * slot. Hiding the in-WebView <FileViewer> Panel avoids two viewers
+ * stacking; the work-pane's other sub-panes (preview, graph,
+ * terminal) keep rendering in the WebView until 5d–5f port them.
+ *
+ * Web + Tauri builds keep Monaco. */
+[data-host-shell="swift"] [data-marvin-monaco] {
+  display: none;
+}
+
+/* Phase 5c (ADR-0020) — hide the web work-pane's empty-state hint
+ * ("work pane / open a file from the tree…") in the SwiftUI shell.
+ * MARVIN-Swift owns the middle pane through ContentView's webIsland
+ * + a native FileViewerView overlay; the web hint reads as a leaked
+ * placeholder when our native shell already fills that area. Web +
+ * Tauri builds keep the empty-state hint as before. */
+[data-host-shell="swift"] [data-marvin-work-empty] {
+  display: none;
+}
+
 /* Phase 4 follow-up — the web's right `<aside>` (side-top brain +
  * side-chat) is fully reproduced in the SwiftUI shell's third
  * HSplitView pane (BrainPaneView + ChatPreviewView). Hide the
@@ -1105,21 +1127,39 @@ body[data-marvin="error"] .status-rail::after {
   display: none;
 }
 
-/* The web TopBar's `pl-[82px]` reserves space for Tauri's overlay
- * traffic-light buttons (titleBarStyle="Overlay"); inside the
- * SwiftUI shell the native title bar is separate from the content,
- * so reclaim that left padding. Same story for `pt-[var(--titlebar-h)]`
- * which accounts for the overlapping title bar. !important beats
- * the inline Tailwind utilities without rewriting them.
+/* Phase 5d (ADR-0020) — the web top bar is now a duplicate stripe
+ * inside the SwiftUI shell. Native NSToolbar (Layout + Setup
+ * popovers + Models dialog) is the source of truth for permissions,
+ * model selection, personality, and pane toggles. The web project
+ * picker / branch badge are mirrored as the NSWindow title +
+ * subtitle. Hiding the web top bar entirely now gives the user one
+ * chrome layer instead of two, matching IDE conventions (VS Code,
+ * Xcode, IntelliJ — toolbar above the work area, no second stripe).
  *
- * Earlier rev of this file briefly set `display: none` on the top
- * bar to dedupe it against native menus, but that hid the
- * SetupPopover (executor/advisor/personality/permissions) and
- * the in-line ProjectPicker — neither has a complete native peer
- * yet. Until those affordances exist natively, the top bar stays
- * visible and only its mirror-of-native items are individually
- * hidden via the data-marvin-{wordmark,cost-pill,…} rules above. */
+ * Web + Tauri builds keep the top bar as before. */
 [data-host-shell="swift"] [data-marvin-top-bar] {
-  padding-left: 1rem !important;
-  padding-top: 0.5rem !important;
+  display: none !important;
+}
+
+/* Phase 5d follow-up — the web `.status-rail` is the 2-px activity
+ * gradient that sits directly under the top bar. Without the top
+ * bar (hidden above) the rail reads as a stray hairline at the
+ * very top of the work pane. Hide it in the SwiftUI shell — the
+ * native NSToolbar's busy/idle state is already conveyed via the
+ * connection-status pip + the menu-bar StatusItem icon swap, so
+ * the rail is redundant here. */
+[data-host-shell="swift"] .status-rail {
+  display: none !important;
+}
+
+/* Phase 5d follow-up — kill the empty-shell hero (BrainLiquid +
+ * example prompts) when running inside MARVIN-Swift. The native
+ * shell brings its own brain (MetalKit MTKView in the right pane)
+ * + native chat input, so the web's empty-shell view reads as a
+ * duplicate brand surface bleeding through behind the native
+ * NSToolbar / file viewer when the user lands on the page with no
+ * project active. Web + Tauri builds keep the empty-shell as the
+ * landing surface. */
+[data-host-shell="swift"] [data-marvin-empty-shell] {
+  display: none !important;
 }

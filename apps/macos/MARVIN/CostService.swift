@@ -53,7 +53,7 @@ final class CostService {
         guard NSApp.isActive else { return }
         guard let pid = currentProjectId,
               let encoded = pid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "http://localhost:3030/api/cost?projectId=\(encoded)") else { return }
+              let url = URL(string: "\(ServerConfig.baseURLString)/api/cost?projectId=\(encoded)") else { return }
 
         do {
             var req = URLRequest(url: url)

@@ -1,7 +1,5 @@
 # MARVIN
 
-![MARVIN](./hero.png)
-
 **M**oderately **A**dvanced **R**obotic **V**irtual **I**ntelligence **N**etwork.
 
 A pair-programming AI assistant. You drive vision and business decisions. MARVIN
@@ -13,6 +11,148 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 > "Here I am, brain the size of a planet, and they ask me to build a login page."
 > — MARVIN, probably
 
+---
+
+## Architecture overview
+
+MARVIN has two components that work together:
+
+| Component | Location | Role |
+|---|---|---|
+| **macOS app** | `apps/macos/` | Native SwiftUI app — IDE shell, chat, file tree, source control, terminal, diff viewer |
+| **Web sidecar** | `apps/web/` | Next.js 16 server on `:3030` — Claude Agent SDK runner, tool policy, git API, file API, session storage |
+
+The Swift app talks to the sidecar over `localhost:3030`. The sidecar starts automatically on login via a launchd user agent installed by `bin/marvin install-macos-app`.
+
+---
+
+## Install (one-liner)
+
+No Apple Developer account required. Builds from source — ad-hoc signed.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/scripts/install.sh | bash
+```
+
+**What it does:**
+1. Checks prerequisites (git, Node ≥ 22, pnpm, Xcode / Swift CLT)
+2. Clones the repo to `~/.marvin-app`
+3. Installs Node dependencies (`pnpm install`)
+4. Builds `MARVIN.app` and installs it to `/Applications`
+5. Installs a launchd agent so the sidecar starts automatically on login
+6. Symlinks `bin/marvin` → `/usr/local/bin/marvin`
+
+**First launch note:** macOS Gatekeeper will warn on the first open because the
+app is ad-hoc signed. Right-click → Open, or go to System Settings → Privacy &
+Security → "Open Anyway".
+
+**To uninstall:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/scripts/uninstall.sh | bash
+# or, if marvin is already on PATH:
+marvin uninstall-macos-app
+```
+
+---
+
+## Install from source (existing clone)
+
+If you already have the repo:
+
+```bash
+bin/marvin install-macos-app   # build → /Applications/MARVIN.app + launchd agent
+bin/marvin uninstall-macos-app # remove app + agent (source tree untouched)
+```
+
+Requires `xcodegen` + Xcode, **or** just the Swift Command Line Tools (`xcode-select --install`).
+If xcodegen is missing, `swift build` is used automatically as a fallback — no Developer account needed in either path.
+
+---
+
+## Prerequisites
+
+### macOS app (`apps/macos/`)
+
+| Requirement | How to get it |
+|---|---|
+| macOS 14+ | System update |
+| Xcode ≥ 15 **or** Swift CLT | `xcode-select --install` |
+| xcodegen *(optional, preferred)* | `brew install xcodegen` |
+
+### Web sidecar (`apps/web/`)
+
+| Requirement | How to get it |
+|---|---|
+| Node.js **≥ 22** | [nodejs.org](https://nodejs.org) or `brew install node@22` |
+| pnpm | `npm install -g pnpm` |
+| Claude Code CLI | `npm install -g @anthropic-ai/claude-code` |
+| Claude credentials | `claude auth login` — or set `ANTHROPIC_API_KEY` in env |
+
+**Optional:**
+
+- `npx playwright install chromium` — needed for `marvin-playwright` MCP (browser automation)
+- `pip install graphifyy` — needed for the knowledge graph (`/graphify`, graph-aware chat)
+
+After `claude auth login`, also visit [claude.ai](https://claude.ai) once with the same email to accept the latest Consumer Terms — the CLI returns 400 until you do.
+
+---
+
+## Development setup
+
+### Run the sidecar
+
+```bash
+pnpm install                    # once — installs deps across all packages
+bash scripts/setup.sh           # once — prompts for optional deps (Playwright, graphify)
+bash scripts/install-skills.sh  # once — mirrors skills bundle to ~/.claude/skills/
+
+bin/marvin start                # production mode (builds if stale, then starts)
+bin/marvin stop
+bin/marvin restart
+bin/marvin status               # auth + model + data dir
+bin/marvin logs                 # tail .marvin/dev.log
+bin/marvin doctor               # preflight checks only, no start
+bin/marvin help
+```
+
+For raw Next.js (no pid tracking, skips preflight):
+
+```bash
+pnpm build && pnpm start
+```
+
+### Build the macOS app
+
+```bash
+cd apps/macos
+xcodegen generate               # regenerate MARVIN.xcodeproj from project.yml
+open MARVIN.xcodeproj           # then build + run in Xcode
+```
+
+Or with swift build (Command Line Tools only, no Xcode IDE):
+
+```bash
+cd apps/macos
+swift build -c release
+# The install script assembles the .app bundle from the SPM output automatically.
+bin/marvin install-macos-app    # build + install + launchd
+```
+
+### Dev loop (sidecar + app together)
+
+```bash
+# Terminal 1 — sidecar in the foreground
+bin/marvin start
+
+# Terminal 2 — open the built app
+open /Applications/MARVIN.app
+# or for a faster edit-rebuild-run loop while working on the Swift side:
+cd apps/macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/...
+```
+
+---
+
 ## What makes MARVIN different
 
 - **Single assistant, not an agent team.** Published research on sequential
@@ -21,147 +161,116 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
   moving through an 8-phase workflow in one conversation, with the user as
   continuous overwatch.
 - **Plan-first, execute-second, verify-third.** Sketch the approach, ship,
-  then verify. In-flight + shipped work is tracked in
-  [`docs/roadmap.md`](./docs/roadmap.md).
+  then verify. In-flight + shipped work tracked in [`docs/roadmap.md`](./docs/roadmap.md).
 - **Per-project isolation.** MARVIN holds zero cross-session knowledge about
   other projects. Memory, ADRs, and knowledge graph live inside each user
   project, not in MARVIN's own data dir.
 - **Built on a knowledge graph.** Queries [graphify](https://github.com/safishamsi/graphify)
-  first on architecture/impact questions — ~36× cheaper than reading raw
-  files.
+  first on architecture/impact questions — ~36× cheaper than reading raw files.
+
+---
 
 ## Features
 
-- 🍎 **Installable macOS app** — `bin/marvin install-app` ships a real
-  `/Applications/MARVIN.app` plus a launchd user agent that auto-starts
-  the server on login. Double-click from Spotlight / Launchpad / Dock.
-- 🧠 **MARVIN brain** — live animated state indicator (idle / thinking / tool /
-  writing / error)
-- 📁 **IDE-style 3-pane shell** — file tree with icons · chat · brain/graph,
-  with collapsible embedded terminal, Monaco file editor, and browser preview
-- 🌿 **Source control panel** — VSCode-style status tree, stage/unstage,
-  commit, branch switcher (local + remote), diff viewer; structural confirm
-  gate is enforced across every mutation channel
-- 🏷️ **Workspace status bar** — persistent footer under the left column
-  shows workspace name + current branch + ahead/behind badges; click to
-  jump straight into Source Control
-- 🌓 **Light + dark themes** — OKLCH-based token cascade, paper-cream light
-  / neutral-dark dark, theme-aware Monaco + xterm + git status colours
-- 🔀 **Monaco editor + diff** — see exactly what MARVIN is about to do
-  before allowing it; structural confirm-before-act gate on Edit/Write/Bash
-- 🧰 **Model picker** — executor + advisor slots, live Anthropic model list
-  when credentials are readable, fallback when not
-- 💸 **Cost tracker** — daily/weekly/lifetime spend per project
-- 🔍 **Graph-aware chat** — in-process MCP server exposes the graphify graph
-  (`graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`) so MARVIN
-  orients before the first tool call
-- ⌨️  **Keyboard shortcuts** — `⌘K` picker · `⌘B/G/J/P` pane toggles · `⌘.`
-  cancel · `?` help · `Esc` close
-- 🌐 **Own Playwright MCP** — MARVIN drives real browsers against
-  `localhost` / LAN URLs (host Playwright MCP often sandboxes loopback)
-- 🔄 **Refresh-safe turns** — closing the tab no longer kills a running turn;
-  reopen and resume
+**macOS app**
+- 🍎 Native SwiftUI IDE shell — 3-pane layout (file tree · chat · brain/graph)
+- 📁 File tree with icons, click-to-open, context menu (create / rename / delete / move)
+- 🗒️ Syntax-highlighted file viewer (Swift, TS, JS, Go, Rust, JSON, YAML, Markdown, images)
+- 🌿 Source control — stage/unstage, commit, push, pull, fetch, diff viewer, branch line
+- 🔍 Project-wide search — ripgrep-backed, include glob filter, replace all
+- 🔣 Symbol search and file history
+- 🏗️ Build task panel — run build tasks, see diagnostics inline
+- 🧩 Diagnostics panel — compiler errors and warnings from build output
+- ⌨️ Embedded terminal (PTY-backed)
+- 🕐 Session history — click any past session in the header to restore it
+- 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
+- 📎 Image paste in chat (⌘V, screenshots, dragged images)
+- 🌓 Light / dark theme — respects system preference
 
-## Prerequisites
+**Web sidecar**
+- 🔒 Structural confirm gate — every Edit/Write/Bash pre-flight, auto-mode audit log
+- 💸 Cost tracker — daily/weekly/lifetime spend per project
+- 🔀 Monaco diff viewer — see exactly what MARVIN is about to do before allowing
+- 🧰 Model picker — executor + advisor slots, live model list from Anthropic
+- 🌐 Playwright MCP — MARVIN drives real browsers against `localhost` / LAN URLs
+- 🔄 Resume across reloads — closing the window doesn't kill a running turn
+- 📊 Graph-aware chat — in-process MCP exposes `graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`
 
-- Node.js **>= 22**
-- pnpm **10.33** (declared in `packageManager`)
-- **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code`. The
-  Agent SDK spawns the `claude` binary under the hood, so it has to be
-  on PATH (or pointed at via `MARVIN_CLAUDE_BIN`). `bin/marvin doctor`
-  will warn if it's missing.
-- Claude credentials — one of:
-  - `ANTHROPIC_API_KEY` in env
-  - Host credentials from `claude auth login` (auto-detected). After
-    install, also visit https://claude.ai once with the same email to
-    accept the latest Consumer Terms — the CLI returns a 400 until you do.
-- For browser automation: `npx playwright install chromium`
-- For the knowledge graph (Golden Rule 7): `pip install graphifyy` —
-  optional, but the brain pane and graph-aware chat are unavailable
-  without it.
+---
 
-## Installation
-
-```bash
-pnpm install                   # one-time — pulls deps across 7 packages
-bash scripts/setup.sh          # one-time — interactive prompts for optional deps
-bash scripts/install-skills.sh # one-time — mirror skills bundle to ~/.claude/skills/
-bin/marvin                     # start MARVIN on http://localhost:3030
-```
-
-`scripts/setup.sh` prompts for the optional / recommended dependencies
-(Claude Code CLI, graphify, Playwright Chromium) with Y/n/never. Pick
-`never` and the choice is saved to `.marvin/install-prefs.json` so
-future `bin/marvin doctor` runs stop nagging. Use `--yes` to install
-every missing dep without prompting, or `--skip-all` to record skips
-without installing.
-
-`bin/marvin` runs every preflight check (Node ≥22, pnpm, skills, Claude
-CLI, port availability, credentials, graphify CLI, graph rooting),
-backgrounds the dev server, polls `/api/health`, and prints the URL +
-auth mode + model once it's up.
-
-### Install as a real macOS app _(recommended)_
-
-One command builds `MARVIN.app`, drops it in `/Applications/`, and
-installs a launchd user agent so the server auto-starts on every login.
-After that, MARVIN behaves like any native app — double-click from
-Spotlight, Launchpad, or the Dock and the window opens into the UI:
-
-```bash
-bin/marvin install-app         # build → /Applications → launchd agent → health-check
-bin/marvin uninstall-app       # unload agent + remove app (source tree untouched)
-```
-
-Needs Rust once (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`).
-See [`apps/desktop/README.md`](./apps/desktop/README.md) for the full
-install contract and [ADR-0010](./docs/decisions/0010-desktop-wrapper-tauri.md)
-for the architecture rationale.
-
-### Lifecycle
+## Repo layout
 
 ```
-bin/marvin              # alias for start
-bin/marvin status       # is it up? auth + model + data dir
-bin/marvin logs         # tail .marvin/dev.log
-bin/marvin stop         # kill the process group cleanly
-bin/marvin restart
-bin/marvin doctor       # preflight only — no start
-bin/marvin install-app  # build + install native macOS app (see above)
-bin/marvin uninstall-app
-bin/marvin help
+apps/
+  macos/                     # SwiftUI macOS app (Xcode / SPM)
+    MARVIN/                  # Swift sources
+    project.yml              # xcodegen manifest
+    Package.swift            # SPM manifest (swift build fallback)
+  web/                       # Next.js 16 sidecar, port 3030
+    src/
+      app/api/               # REST endpoints (chat, git, files, sessions, health)
+      components/            # React UI (web-only surfaces)
+packages/
+  runtime/                   # Agent SDK runner, auth, session, cost, models, confirm gate
+  tools/                     # Tool policy — auto / confirm / deny
+  project-context/           # Spec + ADR + memory + graph-header injection
+  graphify-bridge/           # Knowledge-graph read + in-process MCP server
+  git-watch/                 # Per-workDir commit stream watcher
+  ui/                        # shadcn primitives shared by the web app
+bin/
+  marvin                     # Lifecycle CLI (start/stop/status/logs/doctor/install/uninstall)
+scripts/
+  install.sh                 # Remote one-liner installer (curl | bash)
+  uninstall.sh               # Remote one-liner uninstaller
+  setup.sh                   # Interactive optional-dep prompts
+  install-skills.sh          # Mirror skills bundle to ~/.claude/skills/
+docs/
+  decisions/                 # ADRs
+  roadmap.md                 # In-flight + shipped features
+  history/CHANGELOG.md       # Chronological record
 ```
 
-### Raw fallback
+---
 
-If you want to drive `pnpm dev` directly (skipping `bin/marvin`'s
-preflight + pid tracking):
+## Stack
 
-```bash
-pnpm dev          # foreground, Ctrl-C to stop
-```
+**macOS app**
+- Swift 5.10 · SwiftUI · Observation framework
+- STTextView (code editor) · SwiftTreeSitter (syntax highlighting)
+- URLSession (loopback HTTP to sidecar)
 
-### Skills bundle
+**Web sidecar**
+- Next.js 16 · TypeScript · Tailwind 4 · shadcn/ui
+- `@anthropic-ai/claude-agent-sdk`
+- pnpm workspaces · Turbo
+- In-process MCP servers: `marvin-graph` + `marvin-playwright` (`@playwright/mcp`)
 
-The `install-skills.sh` step mirrors the pinned Anthropic skills
-(`frontend-design`, `canvas-design`, `claude-api`, `mcp-builder`,
-`webapp-testing`, `skill-creator`, etc.) plus MARVIN's own adopted skills
-(`test-driven-development`, `systematic-debugging`, `pr-review`,
-`security-audit`) into `~/.claude/skills/` so MARVIN's SDK sessions can
-invoke them. Idempotent — re-running is safe.
+---
 
-### Credentials
+## Status
 
-MARVIN uses the Agent SDK's auth detection in priority order: direct
-`ANTHROPIC_API_KEY` env var → `~/.claude/.credentials.json` /
-`~/.claude/auth.json` (Linux / Windows) → macOS Keychain (state dir
-activity). See [docs/security/credentials.md](./docs/security/credentials.md)
-for the full detection rules and how to pick between API-key and
-host-credentials modes.
+**v1.3 — Fully native IDE surface (shipped 2026-05-05).**
+
+The WebView is gone. The macOS app is a pure SwiftUI IDE shell backed by the
+Next.js sidecar over loopback. Full feature parity with the web-era UI plus
+IDE features the browser couldn't provide:
+
+- **WebView removed** — all UI surfaces are native Swift; no Tauri, no WKWebView
+- **Syntax highlighting** — tree-sitter grammars for Swift, TS/TSX, JS/JSX, Go, Rust
+- **Image preview** — binary image files (PNG, JPEG, GIF, WebP, HEIC) open inline
+- **Image paste** — ⌘V in chat accepts screenshots and dragged images
+- **Find in files** — ripgrep-backed with glob filter and replace-all
+- **Push / pull / fetch** — full remote ops in the source control panel
+- **Session history** — clock menu in chat header restores any past session
+- **Right-pane resize** — min-width fixed so brain + chat never overlap other panes
+- **App renamed** — `MARVIN-Swift.app` → `MARVIN.app`
+- **Install & uninstall** — `bin/marvin install-macos-app` / `uninstall-macos-app` + remote one-liner
+
+See [`docs/roadmap.md`](./docs/roadmap.md) and [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md).
+
+---
 
 ## Troubleshooting
-
-Quick reference for the issues that hit most often. Full guide at [docs/guides/troubleshooting.md](./docs/guides/troubleshooting.md).
 
 **First diagnostic — always:**
 
@@ -171,134 +280,39 @@ curl -s http://localhost:3030/api/health | jq .
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `auth.mode: "none"` in `/api/health` | No credentials detected | Set `ANTHROPIC_API_KEY` in your shell, or run `claude auth login`. See [Credentials](./docs/security/credentials.md) |
-| `binaryError: "..."` in `/api/health` | Claude CLI binary missing from PATH | `which claude` — if empty, `npm install -g @anthropic-ai/claude-code` or set `MARVIN_CLAUDE_BIN` |
-| Every turn fails with `API Error: 400 ...Consumer Terms...` | Anthropic account hasn't accepted the latest Terms | Open https://claude.ai with the email shown in `claude /status`, accept the banner, retry |
-| Graph pane works but `/graphify` says `command not found` | graphify Python package not installed | `pip install graphifyy` (or `pipx install graphifyy`) |
-| `EADDRINUSE: address already in use :::3030` | Another MARVIN instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it or point your browser at the existing one |
-| Models dropdown shows "fallback list" | `claude auth login` stored the token in the macOS Keychain (Node can't read) | Set `ANTHROPIC_API_KEY` directly for live `/v1/models` listing |
-| MARVIN asks for `marvin-playwright` and SDK errors | Chromium binaries missing | `npx playwright install chromium` (one-time) |
-| Graph pane shows "no graph found" | graphify hasn't been run on the active project | `cd <workDir> && /graphify .` — or ask MARVIN to build the graph |
-| Terminal exits with `[exit 0 · 0.00s]` immediately | No project selected (invalid `cwd`) | Pick a project in the picker (`⌘K`) |
-| File tree empty / "Permission denied" | `workDir` not readable by the user running `pnpm dev` | Fix perms (`chmod` / `chown`), or pick a different `workDir` |
-| Preview pane blank | Target site sends `X-Frame-Options: DENY` or CSP `frame-ancestors` | Click ↗ to open in a new tab — browsers enforce this for third-party sites |
-| Turn costs surprisingly high | Cache-misses on long sessions | Start a new session (`⌘⇧N`), or try advisor mode for ~30-40% savings |
+| `auth.mode: "none"` | No credentials detected | `ANTHROPIC_API_KEY` in env, or `claude auth login` |
+| `binaryError` in `/api/health` | Claude CLI not on PATH | `npm install -g @anthropic-ai/claude-code` or set `MARVIN_CLAUDE_BIN` |
+| Every turn → `400 Consumer Terms` | Anthropic account hasn't accepted latest Terms | Open [claude.ai](https://claude.ai) with the same email, accept banner |
+| `EADDRINUSE :::3030` | Another instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it |
+| MARVIN.app won't open | Gatekeeper ad-hoc signing warning | Right-click → Open, or System Settings → Privacy & Security → Open Anyway |
+| Graph pane → "no graph found" | graphify not run on the project | `cd <workDir> && /graphify .` |
+| Sidecar not starting on login | launchd agent not loaded | `launchctl load ~/Library/LaunchAgents/net.marvin.desktop.server.plist` |
+| Build fails: `No module 'STTextView'` | SPM not resolved | `cd apps/macos && swift package resolve` |
+| Models dropdown → "fallback list" | Node can't read macOS Keychain token | Set `ANTHROPIC_API_KEY` directly |
+| Chat sessions not loading | First launch post-install | Open the sessions menu (clock icon) and click a session |
 
-**Lifecycle helpers** for diagnosing without opening a browser:
+**Lifecycle helpers:**
 
 ```bash
 bin/marvin status   # auth + model + data dir
-bin/marvin doctor   # preflight only
+bin/marvin doctor   # preflight checks
 bin/marvin logs     # tail .marvin/dev.log
 ```
 
-**Still stuck?** Open an issue at [github.com/RobertIlisei/MARVIN/issues](https://github.com/RobertIlisei/MARVIN/issues) with `/api/health` output, browser console errors, the last few lines of the `pnpm dev` terminal, and the last 20 lines of the relevant `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
+**Still stuck?** Open an issue at [github.com/RobertIlisei/MARVIN/issues](https://github.com/RobertIlisei/MARVIN/issues) with `/api/health` output, the last 20 lines of `~/.marvin-app/.marvin/launchd-stderr.log`, and your macOS version.
 
-## Stack
-
-- Next.js 16 · TypeScript · Tailwind 4 · shadcn/ui
-- pnpm workspaces · Turbo
-- `@anthropic-ai/claude-agent-sdk` runtime with a `canUseTool` pre-flight gate
-- xterm.js terminal · monaco-editor diff viewer · react-resizable-panels
-- In-process MCP servers: `marvin-graph` (graphify) + `marvin-playwright`
-  (`@playwright/mcp`)
-
-## Repo layout
-
-```
-apps/
-  web/                       # Next.js 16 app, port 3030
-  desktop/                   # Tauri 2 macOS wrapper (ADR-0010)
-packages/
-  runtime/                   # Agent SDK runner, auth, session, cost, models, turn registry
-  tools/                     # tool policy (auto / confirm / deny)
-  project-context/           # spec + ADR + memory + graph-header injection
-  graphify-bridge/           # knowledge-graph read + MCP server
-  git-watch/                 # per-workDir commit stream
-  ui/                        # shadcn primitives + MARVIN brain
-data/.marvin/                # session transcripts, cost tracker, graph cache (gitignored)
-```
-
-### Desktop dev loop
-
-For hot-reloading the native shell against the live dev server:
-
-```bash
-bin/marvin                # terminal 1 — start the web server
-pnpm desktop:dev          # terminal 2 — opens the Tauri window
-```
-
-This is the right loop when you're changing MARVIN's own UI. For
-day-to-day use, `bin/marvin install-app` (above) is the pragmatic path —
-no terminals, auto-start on login.
-
-See [`apps/desktop/README.md`](./apps/desktop/README.md) + [ADR-0010](./docs/decisions/0010-desktop-wrapper-tauri.md) for the details and what v1 deliberately leaves out.
-
-## Status
-
-**v1.2 shipped.** Audit-driven hardening pass: closed every 🔴 finding
-in the [2026-04-26 full audit](./docs/reviews/2026-04-26-full-audit.md)
-and most of the 🟠 list. Highlights:
-
-- **Permission gate is now load-bearing in `auto` mode too.** Bare
-  `Task` calls and unknown subagent types require a confirm; sanctioned
-  types (`scout`, `general-purpose`) auto-allow. `BASH_HARD_DENY` no
-  longer leaks `rm -rf $HOME/...`, `rm -rf ~`, `rm -rf ../`, `rm -rf *`,
-  `git push -f`, `chmod -R 777`, `curl … | sh`. 26-case Vitest pin at
-  `packages/tools/tests/policy.test.ts`.
-- **Auto-mode audit log.** Every auto-allowed Edit/Write/Bash now
-  appends one JSONL line to `<workDir>/.marvin/auto-audit.jsonl`. New
-  `/api/audit/auto` route; first-run banner explaining `auto` =
-  bypass.
-- **Confirm prompts.** Severity classifier (warn / danger), filled
-  accent allow button, blast-radius hint, soft 3-pulse, `(N)`
-  `document.title` badge while pending, 5-minute auto-deny via the
-  registry timer. Closing the tab no longer hangs the SDK loop.
-- **Honeycomb env race fixed.** New pure
-  `computeHoneycombTelemetryEnv()` returns the env-diff to merge;
-  `runAgent` passes it via `Options.env` per-turn so concurrent turns
-  for two projects don't clobber each other.
-- **`/api/chat` cwd validation.** Returns 400 + `code: "invalid-cwd"`
-  when cwd is missing, non-absolute, or equals MARVIN's own install
-  root — closes the self-modification fallback.
-- **TopBar collapsed.** 17 controls → 7. Layout + Setup popovers via
-  Radix `DropdownMenu`. Models has its own dialog (the picker is too
-  tall for a popover). Theme stays a single icon-toggle.
-- **Empty-state hero trimmed.** Brain unchanged at `size={340}` per
-  user preference; coordinate marks, capability chips, blockquote,
-  long tagline moved to a wordmark tooltip. 12 visual elements → 6.
-- **Chat surface improvements.** Sticky-bottom scroll with 80 px
-  threshold + "↓ jump to latest" pill. Stream-end errors are now
-  structured with a Retry button. New `cancelling` state holds the
-  UI inert until `/api/chat/cancel` resolves. BrainLiquid pauses on
-  `document.hidden` + honours `prefers-reduced-motion` (particle count
-  unchanged).
-- **`page.tsx` decomposed.** Seven scattered localStorage effects
-  collapsed into a single `useMarvinPrefs()` Context with a
-  "Reset MARVIN preferences" action. Chat scroller windowed at 200
-  messages with a "show earlier" button.
-- **`bin/marvin doctor`** gained a graph smoke check that asserts at
-  least 5 % of nodes are MARVIN-rooted — catches the audit's
-  finding #1 mis-rooting silently in future.
-
-[Definition of Done](./docs/reviews/DEFINITION_OF_DONE.md) for audits and
-tasks lives in-tree. Honeycomb MCP integration remains deferred (needs
-Honeycomb account + team setup). See [`docs/roadmap.md`](./docs/roadmap.md)
-for current state and [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md)
-for the chronological record of what shipped.
+---
 
 ## Documentation
 
-Full documentation at [docs/](./docs/). Modeled on Claude Code's docs site.
-
-**Entry points:**
 - [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
-- [Architecture at a glance](./docs/getting-started/architecture.md)
-- [Core concepts](./docs/README.md#core-concepts) — single-assistant, 8-phase workflow, isolation, confirm gate, advisor, graphify, ADRs
-- [HTTP API reference](./docs/reference/api.md) — every endpoint
-- [Architecture decisions](./docs/decisions/) — ADRs covering the design choices
+- [Architecture](./docs/getting-started/architecture.md)
+- [HTTP API reference](./docs/reference/api.md)
+- [ADRs](./docs/decisions/) — design decisions
+
+---
 
 ## License
 
-[MIT](./LICENSE) · © 2026 Robert Ilisei · See [docs/business/licensing.md](./docs/business/licensing.md) for the rationale vs Apache 2.0 / MPL / GPL.
+[MIT](./LICENSE) · © 2026 Robert Ilisei

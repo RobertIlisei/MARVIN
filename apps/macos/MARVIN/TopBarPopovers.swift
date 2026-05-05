@@ -425,7 +425,7 @@ struct ModelsDialog: View {
     /// Fetch /api/models and parse into a small in-process model list.
     private func loadModels() async {
         defer { isLoading = false }
-        let url = URL(string: "http://localhost:3030/api/models")!
+        let url = ServerConfig.baseURL.appendingPathComponent("api/models")
         var req = URLRequest(url: url)
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         do {

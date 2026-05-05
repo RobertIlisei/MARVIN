@@ -13,25 +13,22 @@ import SwiftUI
 
 private enum LeftPaneTab: String, CaseIterable, Identifiable {
     case files
+    case search
     case sourceControl
     var id: String { rawValue }
 
-    /// Shown in the segmented control. Capitalised words match the
-    /// web's "Files" / "Source Control" wording so the affordance
-    /// is identical visually.
     var label: String {
         switch self {
         case .files: return "Files"
+        case .search: return "Search"
         case .sourceControl: return "Source Control"
         }
     }
 
-    /// SF Symbol used in the picker. doc.text for files (matches
-    /// macOS Finder), arrow.triangle.branch for SCM (matches Xcode
-    /// + Apple's Source Control dock icon).
     var systemImage: String {
         switch self {
         case .files: return "doc.text"
+        case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
         }
     }
@@ -60,6 +57,9 @@ struct LeftPane: View {
                 FileTreeView()
                     .opacity(tab == .files ? 1 : 0)
                     .allowsHitTesting(tab == .files)
+                FindInFilesView()
+                    .opacity(tab == .search ? 1 : 0)
+                    .allowsHitTesting(tab == .search)
                 SourceControlView()
                     .opacity(tab == .sourceControl ? 1 : 0)
                     .allowsHitTesting(tab == .sourceControl)

@@ -1,5 +1,5 @@
 // FilesService — HTTP client for /api/files/* + /api/git/* against
-// the Node sidecar at localhost:3030. Phase 3a foundation per
+// the Node sidecar (URL from ServerConfig / MARVIN_PORT). Phase 3a foundation per
 // ADR-0018 §1.
 //
 // The shape mirrors ChatService (Phase 2) deliberately — same
@@ -38,7 +38,7 @@ enum FilesServiceError: Error {
 final class FilesService {
     static let shared = FilesService()
 
-    private let baseURL = URL(string: "http://localhost:3030")!
+    private let baseURL = ServerConfig.baseURL
     private let session: URLSession
 
     private init() {
@@ -155,6 +155,194 @@ final class FilesService {
         return try await getJSON(url: comps.url!, as: GitDiffResponse.self)
     }
 
+    // MARK: - File save (Phase 5c)
+
+    /// Errors specific to /api/files/write/save. The save route's 409
+    /// has two flavours: `error: "stale"` (mtime mismatch — caller
+    /// shows reload-or-overwrite UI) and `error: "needs-confirm"`
+    /// (auto-mode policy — confirm-token retry). Decoding the body
+    /// disambiguates so the caller doesn't have to substring-match.
+    enum FileSaveOutcome {
+        case ok(FileSaveResponse)
+        case stale(currentMtime: Double, size: Int)
+        case needsConfirm(severity: String, reason: String, op: ChatJSON)
+    }
+
+    /// POST /api/files/write/save — body
+    /// `{ cwd, path, content, expectedMtime? }`.
+    /// `path` is cwd-relative. `expectedMtime` is the mtime we
+    /// observed on the most recent read; the route compares against
+    /// disk and 409s if out of sync (another client / external editor
+    /// rewrote the file since we read it).
+    ///
+    /// Returns FileSaveOutcome — caller distinguishes the two 409
+    /// shapes (stale vs needs-confirm) without parsing strings.
+    func saveFile(
+        cwd: String,
+        path: String,
+        content: String,
+        expectedMtime: Double? = nil,
+        confirmToken: String? = nil
+    ) async throws -> FileSaveOutcome {
+        var body: [String: Any] = [
+            "cwd": cwd,
+            "path": path,
+            "content": content,
+        ]
+        if let expectedMtime { body["expectedMtime"] = expectedMtime }
+
+        let url = baseURL.appendingPathComponent("api/files/write/save")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        if let confirmToken {
+            req.setValue(confirmToken, forHTTPHeaderField: "X-Marvin-Confirmed")
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+
+        if http.statusCode == 409 {
+            // Two 409 shapes — disambiguate by `error` field.
+            if let parsed = try? JSONDecoder().decode(SaveStaleBody.self, from: data),
+               parsed.error == "stale" {
+                return .stale(currentMtime: parsed.currentMtime, size: parsed.size)
+            }
+            if let parsed = try? JSONDecoder().decode(GitErrorResponse.self, from: data),
+               parsed.error == "needs-confirm",
+               let op = parsed.op {
+                return .needsConfirm(
+                    severity: parsed.severity ?? "warn",
+                    reason: parsed.reason ?? "policy requires confirmation",
+                    op: op
+                )
+            }
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FilesServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        do {
+            let parsed = try JSONDecoder().decode(FileSaveResponse.self, from: data)
+            return .ok(parsed)
+        } catch {
+            throw FilesServiceError.decode(underlying: error)
+        }
+    }
+
+    /// Inner shape for the 409 stale envelope. Kept private because
+    /// callers consume the typed FileSaveOutcome instead.
+    private struct SaveStaleBody: Codable {
+        let error: String
+        let currentMtime: Double
+        let size: Int
+    }
+
+    // MARK: - File mutations (Phase 5c)
+    //
+    // Wraps /api/files/write/{create,delete,rename,move}. The native
+    // FileTreeView's context menu wires straight into these. All four
+    // share the same auto/needs-confirm/error envelope as the git
+    // mutation routes — the existing `postMutation` helper handles
+    // both shapes, so we reuse it for the file routes too. Rename
+    // confirm-class trips when overwriting; delete confirm-class
+    // trips on `mode: "permanent"` and on protected paths.
+
+    /// POST /api/files/write/create — body
+    /// `{ cwd, path, kind: "file"|"dir", content?, overwrite? }`.
+    /// `path` must be cwd-relative.
+    func createFile(
+        cwd: String,
+        path: String,
+        kind: String,
+        content: String? = nil,
+        overwrite: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = [
+            "cwd": cwd,
+            "path": path,
+            "kind": kind,
+        ]
+        if let content { body["content"] = content }
+        if overwrite { body["overwrite"] = true }
+        return try await postMutation(
+            path: "api/files/write/create",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/files/write/delete — body
+    /// `{ cwd, paths: string[], mode: "trash"|"permanent" }`. `paths`
+    /// are absolute (the route checkFsPaths them against the sandbox).
+    /// "trash" is auto-class; "permanent" is confirm-class.
+    func deleteFiles(
+        cwd: String,
+        paths: [String],
+        mode: String,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/files/write/delete",
+            body: [
+                "cwd": cwd,
+                "paths": paths,
+                "mode": mode,
+            ],
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/files/write/rename — body `{ cwd, from, to }`. Both
+    /// are cwd-relative. `to` must not exist (overwrite path goes
+    /// through the confirm gate; resolve via `confirmToken`).
+    func renameFile(
+        cwd: String,
+        from: String,
+        to: String,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/files/write/rename",
+            body: [
+                "cwd": cwd,
+                "from": from,
+                "to": to,
+            ],
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/files/write/move — body `{ cwd, from: string[], to }`.
+    /// `from` is absolute paths; `to` is the destination directory
+    /// (cwd-relative). Batched so a multi-select drag-move is one
+    /// request.
+    func moveFiles(
+        cwd: String,
+        from: [String],
+        to: String,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        try await postMutation(
+            path: "api/files/write/move",
+            body: [
+                "cwd": cwd,
+                "from": from,
+                "to": to,
+            ],
+            confirmToken: confirmToken
+        )
+    }
+
     // MARK: - Git mutations (Phase 3g)
 
     /// Result of a mutation attempt. Auto-class ops resolve to
@@ -222,6 +410,113 @@ final class FilesService {
             body: body,
             confirmToken: confirmToken
         )
+    }
+
+    // MARK: - Git remote ops (push / pull / fetch)
+
+    /// Result of a remote operation. Distinct from GitMutationOutcome
+    /// because remote ops return a human-readable `note` (e.g. git's
+    /// progress / summary stderr) that local mutations don't produce.
+    enum GitRemoteOutcome {
+        case ok(note: String?)
+        case needsConfirm(severity: String, reason: String, op: ChatJSON)
+    }
+
+    /// POST /api/git/fetch — body `{ cwd, remote? }`.
+    /// Auto-class — fetch is read-only on local refs. Defaults to "origin".
+    func fetch(cwd: String, remote: String = "origin") async throws -> GitRemoteOutcome {
+        try await postRemote(
+            path: "api/git/fetch",
+            body: ["cwd": cwd, "remote": remote]
+        )
+    }
+
+    /// POST /api/git/pull — body `{ cwd, strategy }`.
+    /// `strategy`: "ff-only" (auto) | "rebase" (confirm-warn) | "merge" (confirm-warn).
+    func pull(
+        cwd: String,
+        strategy: String = "ff-only",
+        confirmToken: String? = nil
+    ) async throws -> GitRemoteOutcome {
+        try await postRemote(
+            path: "api/git/pull",
+            body: ["cwd": cwd, "strategy": strategy],
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/git/push — body `{ cwd, remote?, branch?, forceWithLease? }`.
+    /// Plain --force is hard-denied by the route. `forceWithLease` is
+    /// confirm-class; normal push is auto.
+    func push(
+        cwd: String,
+        remote: String = "origin",
+        branch: String? = nil,
+        forceWithLease: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitRemoteOutcome {
+        var body: [String: Any] = ["cwd": cwd, "remote": remote]
+        if let branch { body["branch"] = branch }
+        if forceWithLease { body["forceWithLease"] = true }
+        return try await postRemote(
+            path: "api/git/push",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// Shared POST helper for remote ops (fetch / pull / push). Handles
+    /// the needs-confirm envelope and surfaces the `note` field from
+    /// successful responses. Remote ops time out generously (90 s);
+    /// the session config's 30 s request timeout would cut them short
+    /// so we build a dedicated URLSession per call instead of relying
+    /// on the shared one. The 409/needs-confirm shape is identical to
+    /// postMutation so we reuse the same decode logic.
+    private func postRemote(
+        path: String,
+        body: [String: Any],
+        confirmToken: String? = nil
+    ) async throws -> GitRemoteOutcome {
+        let url = baseURL.appendingPathComponent(path)
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        if let confirmToken {
+            req.setValue(confirmToken, forHTTPHeaderField: "X-Marvin-Confirmed")
+        }
+        req.timeoutInterval = 100
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 100
+        config.timeoutIntervalForResource = 120
+        let longSession = URLSession(configuration: config)
+        let (data, response) = try await longSession.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(underlying: URLError(.badServerResponse))
+        }
+        if http.statusCode == 409,
+           let parsed = try? JSONDecoder().decode(GitErrorResponse.self, from: data),
+           parsed.error == "needs-confirm",
+           let op = parsed.op {
+            return .needsConfirm(
+                severity: parsed.severity ?? "warn",
+                reason: parsed.reason ?? "policy requires confirmation",
+                op: op
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FilesServiceError.httpStatus(
+                http.statusCode,
+                body: String(data: data, encoding: .utf8)
+            )
+        }
+        // Extract optional `note` field from the success body.
+        let note = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+            .flatMap { $0["note"] as? String }
+        return .ok(note: note)
     }
 
     /// POST /api/git/confirm — mint a one-shot token for a

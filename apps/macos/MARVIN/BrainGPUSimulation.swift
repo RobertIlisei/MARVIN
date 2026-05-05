@@ -212,7 +212,20 @@ final class BrainGPUSimulation {
     /// Must run after the drawable size is known (sphereRadius
     /// depends on it). The renderer calls this lazily on the first
     /// `draw(in:)` from a non-zero drawable.
-    func seedAllParticles(profile: BrainProfile, sphereRadius: Float) {
+    ///
+    /// Phase 5f — when `spark` is true, the active head of the SoA
+    /// (the first `profile.n` slots) is reseeded clustered tightly
+    /// at the centre with outward radial velocity, so the launch
+    /// animation reads as a literal spark rather than "60 dots
+    /// already distributed on a sphere shell". The remaining slots
+    /// (i ≥ profile.n) still seed onto the shell so the kernel's
+    /// n-growth respawn path has valid neighbours to interpolate
+    /// from when the boot → idle lerp ramps n upward.
+    func seedAllParticles(
+        profile: BrainProfile,
+        sphereRadius: Float,
+        spark: Bool = false
+    ) {
         let posX = positionsXBuf.contents().bindMemory(to: Float.self, capacity: BrainGPUSimulation.maxN)
         let posY = positionsYBuf.contents().bindMemory(to: Float.self, capacity: BrainGPUSimulation.maxN)
         let posZ = positionsZBuf.contents().bindMemory(to: Float.self, capacity: BrainGPUSimulation.maxN)
@@ -225,18 +238,42 @@ final class BrainGPUSimulation {
         let lead = leadersBuf.contents().bindMemory(to: Float.self, capacity: BrainGPUSimulation.maxN)
         let pulse = pulseBoostsBuf.contents().bindMemory(to: Float.self, capacity: BrainGPUSimulation.maxN)
 
+        let activeN = max(0, min(BrainGPUSimulation.maxN, profile.n))
+        // Burst speed: enough to clear ~80% of the sphere radius
+        // inside the boot → idle transition window (~1.8 s) so the
+        // spark is visibly expanding while the rest of the dots
+        // fade in around it.
+        let burstSpeed = sphereRadius * 0.45
+
         for i in 0..<BrainGPUSimulation.maxN {
             let u = Float.random(in: 0..<1)
             let v = Float.random(in: 0..<1)
             let theta = 2 * Float.pi * u
             let phi = acos(2 * v - 1)
-            let r = sphereRadius * (0.55 + Float.random(in: 0..<0.45))
-            posX[i] = r * sin(phi) * cos(theta)
-            posY[i] = r * sin(phi) * sin(theta)
-            posZ[i] = r * cos(phi)
-            velX[i] = 0
-            velY[i] = 0
-            velZ[i] = 0
+            let dirX = sin(phi) * cos(theta)
+            let dirY = sin(phi) * sin(theta)
+            let dirZ = cos(phi)
+
+            if spark && i < activeN {
+                // Tight central cluster — radius ≤ 6% of sphere.
+                let r = sphereRadius * Float.random(in: 0..<0.06)
+                posX[i] = r * dirX
+                posY[i] = r * dirY
+                posZ[i] = r * dirZ
+                velX[i] = dirX * burstSpeed
+                velY[i] = dirY * burstSpeed
+                velZ[i] = dirZ * burstSpeed
+            } else {
+                // Default sphere-shell distribution for the inactive
+                // tail (and for non-spark seeds).
+                let r = sphereRadius * (0.55 + Float.random(in: 0..<0.45))
+                posX[i] = r * dirX
+                posY[i] = r * dirY
+                posZ[i] = r * dirZ
+                velX[i] = 0
+                velY[i] = 0
+                velZ[i] = 0
+            }
             age[i] = 0
             life[i] = profile.lmin + Float.random(in: 0..<profile.lrange)
             hue[i] = Float.random(in: 0..<1)

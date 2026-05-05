@@ -37,6 +37,7 @@ import Foundation
 /// `idle` (matching the TS `PROFILES[state] ?? PROFILES.idle`
 /// lookup).
 enum BrainState: String, CaseIterable {
+    case boot
     case idle
     case thinking
     case tool
@@ -89,7 +90,23 @@ extension BrainProfile {
     /// `PROFILES` dict. Field order also matches so a side-by-side
     /// diff between this file and brain-liquid.tsx is line-for-line
     /// when the lab refresh runs.
+    ///
+    /// Phase 5f adds one extra MARVIN-only profile — `boot` — which
+    /// has no TS counterpart (the web brain doesn't run a launch
+    /// animation). A small cluster of bright, fast particles that
+    /// reads as a "spark" before the brain settles into idle: ~50
+    /// large luminous dots with strong outward velocity + heavy
+    /// trail blur. The transition `boot → idle` runs 1.8 s instead
+    /// of the default 700 ms so the lerp on `n` (50 → 8000) reads
+    /// as dots gradually populating around the spark.
     static let table: [BrainState: BrainProfile] = [
+        .boot: BrainProfile(
+            n: 60, flowMag: 480, damp: 0.88, swirl: 1.6, shellPull: 0.0,
+            nfreq: 0.45, neps: 1.8, lmin: 1.5, lrange: 2.5, dotR: 3.6, dotA: 1.0,
+            chroma: 8.0, trail: 0.94, turb: 0.45, coh: 0.05, leaders: 0.85, dim: 0.05,
+            attractors: 1, synapse: 0.0, pulse: 2.5, dens: 0.4, pulseRate: 1.6,
+            redMix: 0.10, rot: 0.0015, jitter: 0.20
+        ),
         // `idle` deliberately deviates from the lab's idle preset
         // (which still carries an active-brainstorm energy:
         // flowMag=180, swirl=0.6, turb=0.3, rot=0.0015). User
@@ -217,7 +234,7 @@ func lerpProfile(_ a: BrainProfile, _ b: BrainProfile, t: Float) -> BrainProfile
 /// struct so the call site is testable without a SwiftUI view.
 struct BrainTransition {
     /// Default 700 ms transition. Matches `TRANSITION_MS` in the TS.
-    static let durationMs: Double = 700
+    static let defaultDurationMs: Double = 700
 
     var current: BrainState
     var from: BrainProfile
@@ -226,6 +243,12 @@ struct BrainTransition {
     /// started. `0` means "no transition has fired yet" — the
     /// renderer should snap to `to` and return.
     var startedAtMs: Double
+    /// Phase 5f — per-transition duration override. Most transitions
+    /// run at 700 ms (matches the TS). The launch animation
+    /// (`boot → idle`) runs longer (~1.8 s) so the lerp on `n` reads
+    /// as dots gradually populating; a 700 ms ramp from 60 to 8000
+    /// particles looks like a teleport, not a fade-in.
+    var durationMs: Double
 
     init(initialState: BrainState) {
         let p = BrainProfile.profile(for: initialState)
@@ -233,13 +256,19 @@ struct BrainTransition {
         self.from = p
         self.to = p
         self.startedAtMs = 0
+        self.durationMs = Self.defaultDurationMs
     }
 
     /// Begin a transition into `next`. No-op when `next` matches
     /// the current state — saves a redundant re-lerp on a flicker
     /// that ends where it started. Otherwise the renderer's
-    /// `currentProfile` smooths the next 700 ms.
-    mutating func transition(to next: BrainState, nowMs: Double) {
+    /// `currentProfile` smooths the next `durationMs` (700 ms by
+    /// default; longer on launch when boot → idle).
+    mutating func transition(
+        to next: BrainState,
+        nowMs: Double,
+        durationMs: Double = BrainTransition.defaultDurationMs
+    ) {
         if next == current { return }
         // Capture the in-flight profile so a transition that fires
         // mid-lerp continues from where the brain is on screen,
@@ -249,6 +278,7 @@ struct BrainTransition {
         from = inflight
         to = BrainProfile.profile(for: next)
         startedAtMs = nowMs
+        self.durationMs = durationMs
         current = next
     }
 
@@ -257,7 +287,7 @@ struct BrainTransition {
     /// the call is a no-op until the next `transition`).
     func currentProfile(nowMs: Double) -> BrainProfile {
         if startedAtMs == 0 { return to }
-        let raw = Float((nowMs - startedAtMs) / Self.durationMs)
+        let raw = Float((nowMs - startedAtMs) / durationMs)
         if raw >= 1 { return to }
         let eased = easeInOutCubic(max(0, raw))
         return lerpProfile(from, to, t: eased)

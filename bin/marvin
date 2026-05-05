@@ -20,8 +20,9 @@
 #   3  port conflict with a non-MARVIN process
 #
 # The script keeps a PID file at .marvin/pid and a log at .marvin/dev.log
-# (both gitignored by MARVIN's own .gitignore). `pnpm dev` is what actually
-# runs; this script is the professional wrapper with checks and lifecycle.
+# (both gitignored by MARVIN's own .gitignore). `pnpm start` (production
+# Next.js) is what actually runs; this script is the professional wrapper
+# with checks, build-when-stale, and lifecycle.
 
 set -euo pipefail
 
@@ -326,8 +327,7 @@ build_is_fresh() {
 }
 
 cmd_start() {
-  local mode="${MARVIN_MODE:-prod}"
-  info "starting MARVIN on port $PORT (mode: $mode)"
+  info "starting MARVIN on port $PORT (production)"
 
   preflight
   local pf=$?
@@ -341,25 +341,22 @@ cmd_start() {
     return $pf
   fi
 
-  # In prod mode, ensure a fresh build exists before starting.
-  # Audit finding: `next dev` is 5–10× slower than `next start`; the
-  # default launch should serve production. Use `marvin dev` for
-  # explicit dev mode (HMR, source maps, slower).
+  # Production-only as of 2026-05-05. `next dev` was the default for
+  # daily-driver use during the migration; profiling showed it 5–10×
+  # slower than `next start` and the WebView's "stuck on launch /
+  # project-switch" feeling traced directly to dev-mode bundling.
+  # We rebuild on every start when the build is stale; that's the
+  # supported workflow for hacking on the web side now.
   local run_cmd="pnpm start"
-  if [ "$mode" = "dev" ]; then
-    run_cmd="pnpm dev"
+  if build_is_fresh; then
+    ok "build is fresh — skipping rebuild"
   else
-    if build_is_fresh; then
-      ok "build is fresh — skipping rebuild"
+    info "production build is stale or missing — running 'pnpm build'"
+    if pnpm build >>"$LOG_FILE" 2>&1; then
+      ok "build complete"
     else
-      info "production build is stale or missing — running 'pnpm build'"
-      if pnpm build >>"$LOG_FILE" 2>&1; then
-        ok "build complete"
-      else
-        fail "build failed — see $LOG_FILE for details"
-        dim "  workaround: run with dev mode → MARVIN_MODE=dev $0 start  (or)  $0 dev"
-        return 1
-      fi
+      fail "build failed — see $LOG_FILE for details"
+      return 1
     fi
   fi
 
@@ -486,8 +483,9 @@ cmd_logs() {
 # The window itself doesn't start the Next.js server — ADR-0011 tried to
 # bundle a Node sidecar and got rolled back (binary size, code-signing
 # churn, runtime drift). The pragmatic compromise: install a launchd
-# user agent that keeps `pnpm dev` running in the background. The
-# `.app` then works as a double-click launcher, no terminal needed.
+# user agent that keeps `pnpm start` (production Next.js) running in the
+# background. The `.app` then works as a double-click launcher, no
+# terminal needed.
 #
 # `install-app` builds the `.app`, copies it to /Applications/, and
 # installs the launchd plist. `uninstall-app` reverses both. The plist
@@ -614,15 +612,14 @@ cmd_install_app() {
   <string>${AGENT_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${pnpm_abs}</string>
+    <string>/bin/bash</string>
+    <string>${REPO_ROOT}/scripts/sidecar-launcher.sh</string>
     <string>dev</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${REPO_ROOT}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key>
-    <string>${PATH}</string>
     <key>HOME</key>
     <string>${HOME}</string>
     <key>MARVIN_PORT</key>
@@ -676,19 +673,17 @@ PLIST
   return 0
 }
 
-readonly MACOS_APP_NAME="MARVIN-Swift"
+readonly MACOS_APP_NAME="MARVIN"
 readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
 
 cmd_install_macos_app() {
   # Builds the SwiftUI native target at apps/macos/ and installs the
-  # resulting `.app` bundle to /Applications/. Phase 1a uses ad-hoc
-  # signing — Gatekeeper warns on first open (right-click → Open).
-  # Real Developer ID + notarization gets wired at the end of Phase 1
-  # once a signing identity is plumbed in. See ADR-0016.
-  #
-  # Installs as MARVIN-Swift.app — distinct from the Tauri MARVIN.app
-  # at /Applications/MARVIN.app, so both coexist during the migration
-  # evaluation period. Phase 6 (Tauri retire) renames to MARVIN.app.
+  # resulting MARVIN.app bundle to /Applications/, then wires a launchd
+  # user agent that starts the Next.js sidecar on login so the app works
+  # on double-click without needing a terminal. Ad-hoc signed — no Apple
+  # Developer account required; Gatekeeper warns on first open
+  # (right-click → Open to bypass, or System Settings → Privacy &
+  # Security → "Open Anyway"). See ADR-0016.
   #
   # Two build paths, picked by what's installed:
   #   • xcodebuild + xcodegen (preferred) — produces a real Xcode
@@ -808,15 +803,100 @@ cmd_install_macos_app() {
   cp -R "$built_app" "$MACOS_APP_BUNDLE_DIR"
   ok "installed at $MACOS_APP_BUNDLE_DIR"
 
+  # ── Sidecar: ensure a production Next.js build exists ─────────────────
+  # The launchd agent runs `pnpm start` (production mode). That requires
+  # .next/ to exist. Build now if stale — the user just installed, so
+  # paying the build cost once here is the right trade-off.
+  if build_is_fresh; then
+    ok "Next.js build is fresh"
+  else
+    info "building Next.js sidecar (first run — this takes ~60s)"
+    if pnpm build >>"$LOG_FILE" 2>&1; then
+      ok "sidecar build complete"
+    else
+      warn "sidecar build failed — MARVIN.app will launch but can't connect"
+      dim "  fix then run:  pnpm build && $0 install-macos-app"
+    fi
+  fi
+
+  # ── Sidecar: launchd user agent ────────────────────────────────────────
+  # Runs `pnpm start` (Next.js production) via scripts/sidecar-launcher.sh,
+  # which enriches PATH at runtime so nvm/Homebrew pnpm is always found —
+  # no baked absolute pnpm path that breaks after Node/pnpm upgrades.
+  info "installing launchd sidecar agent → $AGENT_PLIST"
+  mkdir -p "$(dirname "$AGENT_PLIST")"
+  cat >"$AGENT_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>${REPO_ROOT}/scripts/sidecar-launcher.sh</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${REPO_ROOT}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>${HOME}</string>
+    <key>MARVIN_PORT</key>
+    <string>${PORT}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>NetworkState</key>
+    <true/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${REPO_ROOT}/${STATE_DIR}/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log</string>
+</dict>
+</plist>
+PLIST
+  ok "wrote agent plist"
+
+  launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+  if launchctl load "$AGENT_PLIST" 2>/dev/null; then
+    ok "launchd agent loaded — sidecar will start on login"
+  else
+    warn "launchctl load failed — try:  launchctl load $AGENT_PLIST"
+  fi
+
+  # Wait up to 20s for /api/health to confirm the sidecar is up.
+  info "waiting for sidecar on :$PORT"
+  local n=0
+  while [ $n -lt 20 ]; do
+    if curl -sf "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+      echo
+      ok "MARVIN is ready"
+      printf '  %-14s %s\n' "app:"    "$MACOS_APP_BUNDLE_DIR"
+      printf '  %-14s %s\n' "server:" "http://localhost:$PORT"
+      printf '  %-14s %s\n' "agent:"  "$AGENT_PLIST"
+      printf '  %-14s %s\n' "logs:"   "${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log"
+      echo
+      dim "  Double-click MARVIN in /Applications — or:  open '$MACOS_APP_BUNDLE_DIR'"
+      dim "  Gatekeeper: right-click → Open on first launch."
+      dim "  Uninstall:  $0 uninstall-macos-app"
+      return 0
+    fi
+    printf '.' ; n=$((n + 1)) ; sleep 1
+  done
   echo
-  dim "  open with:  open '$MACOS_APP_BUNDLE_DIR'"
-  dim "  Phase 1a polls /api/health on port $PORT — start the sidecar first:"
-  dim "    $0 start"
-  dim "  Gatekeeper note: ad-hoc signed; right-click → Open on first launch."
+  warn "sidecar didn't respond within 20s (may still be booting)"
+  dim "  tail logs:  tail -f ${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log"
+  dim "  open app:   open '$MACOS_APP_BUNDLE_DIR'"
 }
 
 cmd_uninstall_app() {
-  info "uninstalling ${APP_NAME}"
+  info "uninstalling ${APP_NAME} (Tauri build)"
 
   if [ -f "$AGENT_PLIST" ]; then
     launchctl unload "$AGENT_PLIST" 2>/dev/null || true
@@ -837,34 +917,68 @@ cmd_uninstall_app() {
   dim "  source tree + ~/.marvin/ left alone; rm them by hand if you want"
 }
 
+cmd_uninstall_macos_app() {
+  info "uninstalling MARVIN (SwiftUI build)"
+
+  # Stop the sidecar and remove the launchd agent.
+  if [ -f "$AGENT_PLIST" ]; then
+    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+    rm -f "$AGENT_PLIST"
+    ok "removed launchd agent"
+  else
+    dim "  no launchd agent at $AGENT_PLIST"
+  fi
+
+  # Remove the .app bundle.
+  if [ -d "$MACOS_APP_BUNDLE_DIR" ]; then
+    rm -rf "$MACOS_APP_BUNDLE_DIR"
+    ok "removed $MACOS_APP_BUNDLE_DIR"
+  else
+    dim "  no MARVIN.app at $MACOS_APP_BUNDLE_DIR"
+  fi
+
+  # Remove the /usr/local/bin/marvin symlink if it points into this repo.
+  local cli_link="/usr/local/bin/marvin"
+  if [ -L "$cli_link" ]; then
+    local target; target="$(readlink "$cli_link")"
+    if [[ "$target" == *"$REPO_ROOT"* ]] || [[ "$target" == *"marvin-app"* ]]; then
+      rm -f "$cli_link"
+      ok "removed $cli_link"
+    else
+      dim "  $cli_link points elsewhere ($target) — leaving alone"
+    fi
+  fi
+
+  ok "MARVIN uninstalled"
+  dim "  ~/.marvin/ (sessions + cost data) left intact — rm -rf ~/.marvin/ to purge"
+  dim "  source tree at $REPO_ROOT left intact — rm -rf $REPO_ROOT to purge"
+}
+
 cmd_help() {
   cat <<'EOF'
 marvin — lifecycle script for the MARVIN dev server
 
   marvin              (alias for start)
   marvin start        preflight + production build (if stale) + 'next start'
-  marvin dev          preflight + 'next dev' — HMR, source maps, ~5–10× slower
-                      (use this when iterating on MARVIN's own UI)
+                      (production-only as of 2026-05-05 — see start())
   marvin stop         stop the running instance
-  marvin restart      stop + start (production mode)
+  marvin restart      stop + start
   marvin status       is it running? show auth + model + data dir
   marvin logs         tail the dev server log
   marvin doctor       run every preflight check, don't start anything
 
-macOS .app (double-click-to-launch install flow):
+macOS .app (double-click-to-launch):
 
-  marvin install-app        build Tauri .app (ADR-0010), copy to
+  marvin install-macos-app  build MARVIN.app from source, copy to
                             /Applications, install launchd agent so
-                            the sidecar auto-starts on login
-  marvin install-macos-app  build SwiftUI .app (ADR-0016, Phase 1a),
-                            copy to /Applications/MARVIN-Swift.app
-                            (distinct from the Tauri MARVIN.app). Uses
-                            xcodebuild + xcodegen if Xcode is
-                            installed, otherwise falls back to
-                            `swift build` + manual bundle assembly.
-                            No launchd agent — start the sidecar with
-                            `marvin start` separately.
-  marvin uninstall-app      remove the .app + launchd agent
+                            the Next.js sidecar auto-starts on login.
+                            Uses xcodebuild+xcodegen if Xcode is
+                            installed; falls back to swift build +
+                            manual bundle assembly (Command Line Tools
+                            only, no Developer account required).
+  marvin uninstall-macos-app  remove MARVIN.app + launchd agent
+  marvin install-app        (legacy) Tauri build + launchd agent
+  marvin uninstall-app      (legacy) remove Tauri .app + agent
 
   marvin help           this message
 
@@ -885,15 +999,15 @@ EOF
 
 case "${1:-start}" in
   start)    cmd_start   ;;
-  dev)      MARVIN_MODE=dev cmd_start ;;
   stop)     cmd_stop    ;;
   restart)  cmd_restart ;;
   status)   cmd_status  ;;
   logs)     cmd_logs    ;;
   doctor)   cmd_doctor  ;;
-  install-app)        cmd_install_app       ;;
-  install-macos-app)  cmd_install_macos_app ;;
-  uninstall-app)      cmd_uninstall_app     ;;
+  install-app)          cmd_install_app          ;;
+  install-macos-app)    cmd_install_macos_app    ;;
+  uninstall-app)        cmd_uninstall_app        ;;
+  uninstall-macos-app)  cmd_uninstall_macos_app  ;;
   help|-h|--help)  cmd_help ;;
   *)
     fail "unknown subcommand: $1"

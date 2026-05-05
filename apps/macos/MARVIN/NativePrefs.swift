@@ -30,6 +30,8 @@ final class NativePrefs {
     private(set) var permissionStrategy: String = "auto"
     private(set) var panes: MarvinBridge.PaneState = .init()
     private(set) var themeName: String? = nil
+    /// 0 = tab; positive = that many spaces. Default 4 matches VS Code / Cursor.
+    private(set) var indentSize: Int = 4
 
     private init() {
         loadFromDefaults()
@@ -83,6 +85,7 @@ final class NativePrefs {
         case "graph":    next.graph    = !next.graph
         case "preview":  next.preview  = !next.preview
         case "terminal": next.terminal = !next.terminal
+        case "problems": next.problems = !next.problems
         default: return
         }
         setPanes(next)
@@ -94,6 +97,39 @@ final class NativePrefs {
             UserDefaults.standard.set(str, forKey: "marvin.panes")
         }
         MarvinBridge.shared.panes = next
+    }
+
+    func setIndentSize(_ v: Int) {
+        let clamped = v <= 0 ? 0 : min(v, 8)
+        indentSize = clamped
+        UserDefaults.standard.set(clamped, forKey: "marvin.indentSize")
+        MarvinBridge.shared.indentSize = clamped
+    }
+
+    // MARK: - Recent files (MRU per project)
+
+    private static func recentFilesKey(_ projectId: String) -> String {
+        "marvin.recentFiles.\(projectId)"
+    }
+
+    func recentFiles(forProject projectId: String) -> [String] {
+        guard !projectId.isEmpty else { return [] }
+        guard let data = UserDefaults.standard.data(forKey: Self.recentFilesKey(projectId)),
+              let arr = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return arr
+    }
+
+    func recordOpenedFile(_ path: String, forProject projectId: String) {
+        guard !projectId.isEmpty, !path.isEmpty else { return }
+        var current = recentFiles(forProject: projectId)
+        current.removeAll { $0 == path }
+        current.insert(path, at: 0)
+        if current.count > 12 { current = Array(current.prefix(12)) }
+        if let data = try? JSONEncoder().encode(current) {
+            UserDefaults.standard.set(data, forKey: Self.recentFilesKey(projectId))
+        }
     }
 
     func setTheme(_ v: String?) {
@@ -137,6 +173,10 @@ final class NativePrefs {
         if let t = d.string(forKey: "marvin.theme"), t == "light" || t == "dark" {
             themeName = t
         }
+        let saved = d.integer(forKey: "marvin.indentSize")
+        if saved > 0 || d.object(forKey: "marvin.indentSize") != nil {
+            indentSize = max(0, min(saved, 8))
+        }
     }
 
     /// Push initial values to MarvinBridge so views still reading
@@ -150,6 +190,7 @@ final class NativePrefs {
         b.permissionStrategy  = permissionStrategy
         b.panes               = panes
         b.themeName           = themeName
+        b.indentSize          = indentSize
     }
 }
 
@@ -158,16 +199,17 @@ final class NativePrefs {
 private struct PanesCodable: Codable {
     var files: Bool; var brain: Bool; var graph: Bool
     var preview: Bool; var terminal: Bool
+    var problems: Bool?  // optional for backward-compat with old UserDefaults payloads
 
     init(from s: MarvinBridge.PaneState) {
         files = s.files; brain = s.brain; graph = s.graph
-        preview = s.preview; terminal = s.terminal
+        preview = s.preview; terminal = s.terminal; problems = s.problems
     }
 
     func toState() -> MarvinBridge.PaneState {
         var s = MarvinBridge.PaneState()
         s.files = files; s.brain = brain; s.graph = graph
-        s.preview = preview; s.terminal = terminal
+        s.preview = preview; s.terminal = terminal; s.problems = problems ?? false
         return s
     }
 
