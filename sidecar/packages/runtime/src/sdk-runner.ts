@@ -33,6 +33,14 @@ import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
+import {
+  clearTurnDesignContext,
+  createTurnDesignContext,
+  type DesignTurnContext,
+  readDesignHooksMode,
+  recordAllowedTool,
+  runDesignHooks,
+} from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createPlaywrightMcpConfig } from "./playwright-mcp";
 
@@ -235,6 +243,19 @@ export function friendlyError(raw: string): string {
       "Then restart MARVIN.",
     ].join(" ");
   }
+  // Exit code 143 = SIGTERM. The Claude Code subprocess (and any Task
+  // subagents it spawned) was killed externally — almost always because
+  // the user hit Stop / ⌘. mid-turn. Less common: macOS sleep/App Nap,
+  // sidecar restart while a turn was in flight, or OOM kill on a heavy
+  // run. Either way, it's not a crash — say so plainly so the chat
+  // doesn't read as if MARVIN died.
+  if (/exited with code 143\b/.test(raw)) {
+    return "Turn cancelled (subprocess received SIGTERM — usually Stop / ⌘.).";
+  }
+  // Exit code 137 = SIGKILL (commonly OOM kill on macOS / Linux).
+  if (/exited with code 137\b/.test(raw)) {
+    return "Turn killed (subprocess received SIGKILL — likely out-of-memory).";
+  }
   return raw;
 }
 
@@ -282,10 +303,33 @@ function normaliseInput(toolInput: unknown): Record<string, unknown> {
 export function makeAutoModeLogger(args: {
   cwd: string;
   turnId: string;
+  designCtx?: DesignTurnContext;
 }): CanUseTool {
-  const { cwd, turnId } = args;
+  const { cwd, turnId, designCtx } = args;
+  const designMode = readDesignHooksMode();
   return async (toolName, toolInput, { toolUseID }) => {
     const safeInput = normaliseInput(toolInput);
+    // Design hooks run BEFORE the safety classifier — a workflow violation
+    // (graphify-first / advisor-on-ADR) is its own deny class with a
+    // structured hint that steers the model to the right tool next.
+    if (designCtx) {
+      const designDeny = runDesignHooks({
+        ctx: designCtx,
+        toolName,
+        toolInput: safeInput,
+        mode: designMode,
+      });
+      if (designDeny) {
+        appendAutoAuditEntry(cwd, {
+          tool: toolName as AutoAuditEntryKind,
+          reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
+          input: safeInput,
+          turnId,
+          toolUseId: toolUseID,
+        });
+        return designDeny;
+      }
+    }
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
     if (cls.decision === "deny") {
       return {
@@ -301,6 +345,9 @@ export function makeAutoModeLogger(args: {
       turnId,
       toolUseId: toolUseID,
     });
+    if (designCtx) {
+      recordAllowedTool(designCtx, toolName, safeInput);
+    }
     return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
   };
 }
@@ -317,11 +364,32 @@ export function makeGatedCanUseTool(args: {
   cwd: string;
   turnId: string;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
+  designCtx?: DesignTurnContext;
 }): CanUseTool {
-  const { cwd, turnId, onConfirmRequest } = args;
+  const { cwd, turnId, onConfirmRequest, designCtx } = args;
+  const designMode = readDesignHooksMode();
   return async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
     const safeInput = normaliseInput(toolInput);
+    // Design hooks BEFORE classifier — workflow rules deny first.
+    if (designCtx) {
+      const designDeny = runDesignHooks({
+        ctx: designCtx,
+        toolName,
+        toolInput: safeInput,
+        mode: designMode,
+      });
+      if (designDeny) {
+        appendAutoAuditEntry(cwd, {
+          tool: toolName as AutoAuditEntryKind,
+          reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
+          input: safeInput,
+          turnId,
+          toolUseId: toolUseID,
+        });
+        return designDeny;
+      }
+    }
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
 
     if (cls.decision === "allow") {
       // Audit-log mutators that auto-allow under `gated` too. Read /
@@ -335,6 +403,9 @@ export function makeGatedCanUseTool(args: {
         turnId,
         toolUseId: toolUseID,
       });
+      if (designCtx) {
+        recordAllowedTool(designCtx, toolName, safeInput);
+      }
       return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
     }
     if (cls.decision === "deny") {
@@ -395,10 +466,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     else signal.addEventListener("abort", () => abortController.abort(), { once: true });
   }
 
+  // Per-turn design context — drives the graphify-first and
+  // advisor-on-ADR-trigger hooks. Created here so both canUseTool
+  // variants share the same state, and torn down in the `finally`
+  // block alongside `clearTurnConfirms`.
+  const designCtx = createTurnDesignContext(turnId, cwd);
+
   // Both factories live at module scope so tests can pin the dispatch
   // (ADR-0015 §1) without spinning up a full `runAgent` loop.
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest });
-  const autoModeLogger = makeAutoModeLogger({ cwd, turnId });
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, designCtx });
+  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, designCtx });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -505,6 +582,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   } finally {
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
+    clearTurnDesignContext(turnId);
   }
 
   if (resultError) {
