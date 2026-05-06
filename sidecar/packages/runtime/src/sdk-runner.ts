@@ -37,9 +37,7 @@ import {
   clearTurnDesignContext,
   createTurnDesignContext,
   type DesignTurnContext,
-  readDesignHooksMode,
-  recordAllowedTool,
-  runDesignHooks,
+  makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createPlaywrightMcpConfig } from "./playwright-mcp";
@@ -303,33 +301,10 @@ function normaliseInput(toolInput: unknown): Record<string, unknown> {
 export function makeAutoModeLogger(args: {
   cwd: string;
   turnId: string;
-  designCtx?: DesignTurnContext;
 }): CanUseTool {
-  const { cwd, turnId, designCtx } = args;
-  const designMode = readDesignHooksMode();
+  const { cwd, turnId } = args;
   return async (toolName, toolInput, { toolUseID }) => {
     const safeInput = normaliseInput(toolInput);
-    // Design hooks run BEFORE the safety classifier — a workflow violation
-    // (graphify-first / advisor-on-ADR) is its own deny class with a
-    // structured hint that steers the model to the right tool next.
-    if (designCtx) {
-      const designDeny = runDesignHooks({
-        ctx: designCtx,
-        toolName,
-        toolInput: safeInput,
-        mode: designMode,
-      });
-      if (designDeny) {
-        appendAutoAuditEntry(cwd, {
-          tool: toolName as AutoAuditEntryKind,
-          reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
-          input: safeInput,
-          turnId,
-          toolUseId: toolUseID,
-        });
-        return designDeny;
-      }
-    }
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
     if (cls.decision === "deny") {
       return {
@@ -345,9 +320,6 @@ export function makeAutoModeLogger(args: {
       turnId,
       toolUseId: toolUseID,
     });
-    if (designCtx) {
-      recordAllowedTool(designCtx, toolName, safeInput);
-    }
     return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
   };
 }
@@ -364,31 +336,10 @@ export function makeGatedCanUseTool(args: {
   cwd: string;
   turnId: string;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
-  designCtx?: DesignTurnContext;
 }): CanUseTool {
-  const { cwd, turnId, onConfirmRequest, designCtx } = args;
-  const designMode = readDesignHooksMode();
+  const { cwd, turnId, onConfirmRequest } = args;
   return async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
     const safeInput = normaliseInput(toolInput);
-    // Design hooks BEFORE classifier — workflow rules deny first.
-    if (designCtx) {
-      const designDeny = runDesignHooks({
-        ctx: designCtx,
-        toolName,
-        toolInput: safeInput,
-        mode: designMode,
-      });
-      if (designDeny) {
-        appendAutoAuditEntry(cwd, {
-          tool: toolName as AutoAuditEntryKind,
-          reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
-          input: safeInput,
-          turnId,
-          toolUseId: toolUseID,
-        });
-        return designDeny;
-      }
-    }
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
 
     if (cls.decision === "allow") {
@@ -403,9 +354,6 @@ export function makeGatedCanUseTool(args: {
         turnId,
         toolUseId: toolUseID,
       });
-      if (designCtx) {
-        recordAllowedTool(designCtx, toolName, safeInput);
-      }
       return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
     }
     if (cls.decision === "deny") {
@@ -467,15 +415,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   }
 
   // Per-turn design context — drives the graphify-first and
-  // advisor-on-ADR-trigger hooks. Created here so both canUseTool
-  // variants share the same state, and torn down in the `finally`
+  // advisor-on-ADR-trigger hooks (PreToolUse). Cleared in the `finally`
   // block alongside `clearTurnConfirms`.
   const designCtx = createTurnDesignContext(turnId, cwd);
+  const designPreToolUseHook = makeDesignHooksPreToolUse({
+    cwd,
+    turnId,
+    designCtx,
+  });
 
   // Both factories live at module scope so tests can pin the dispatch
   // (ADR-0015 §1) without spinning up a full `runAgent` loop.
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, designCtx });
-  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, designCtx });
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest });
+  const autoModeLogger = makeAutoModeLogger({ cwd, turnId });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -507,6 +459,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     env: turnEnv,
     permissionMode: "default",
     canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
+    // PreToolUse fires on EVERY tool call BEFORE the SDK's permission
+    // pipeline. canUseTool only gets called for tools the SDK considers
+    // gate-worthy (Edit / Write / Bash) — Read / Grep / Glob auto-allow
+    // without consulting it. The design hooks need to gate the read /
+    // search side too (graphify-first), so they live here as PreToolUse.
+    hooks: {
+      PreToolUse: [{ hooks: [designPreToolUseHook] }],
+    },
     systemPrompt: {
       type: "preset",
       preset: "claude_code",

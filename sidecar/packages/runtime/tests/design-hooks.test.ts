@@ -228,6 +228,88 @@ describe("design-hooks · graphify-first", () => {
     });
     expect(result).toBeNull();
   });
+
+  it("denies first Grep on a path inside cwd when no graph_search has fired", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const result = runDesignHooks({
+      ctx,
+      toolName: "Grep",
+      toolInput: { pattern: "AuthenticationPrincipal", path: cwd },
+      mode: "enforce",
+    });
+    expect(result?.behavior).toBe("deny");
+    expect(result?.message).toContain("graphify-first");
+    expect(result?.message).toContain("Grep");
+  });
+
+  it("denies first Glob on a path inside cwd", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const result = runDesignHooks({
+      ctx,
+      toolName: "Glob",
+      toolInput: { pattern: `${cwd}/apps/api/**/*.java` },
+      mode: "enforce",
+    });
+    expect(result?.behavior).toBe("deny");
+    expect(result?.message).toContain("graphify-first");
+    expect(result?.message).toContain("Glob");
+  });
+
+  it("allows Grep / Glob after graph_search has fired", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "auth" });
+    expect(ctx.graphCallCount).toBe(1);
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Grep",
+        toolInput: { pattern: "foo", path: cwd },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Glob",
+        toolInput: { pattern: `${cwd}/**/*.ts` },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  it("Grep counts toward sourceFilesRead — once any structural search lands, hook stays satisfied", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    // First Grep is denied (graphifyHookFired flips true).
+    runDesignHooks({
+      ctx,
+      toolName: "Grep",
+      toolInput: { pattern: "foo", path: cwd },
+      mode: "enforce",
+    });
+    expect(ctx.graphifyHookFired).toBe(true);
+    // Subsequent Read should not double-deny — hook state is one-shot.
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Read",
+        toolInput: { file_path: join(cwd, "src", "x.ts") },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  it("recordAllowedTool bumps sourceFilesRead for Grep / Glob", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Grep", { pattern: "foo", path: cwd });
+    expect(ctx.sourceFilesRead).toBe(1);
+    recordAllowedTool(ctx, "Glob", { pattern: `${cwd}/**/*.ts` });
+    expect(ctx.sourceFilesRead).toBe(2);
+  });
 });
 
 describe("design-hooks · advisor-on-ADR-trigger", () => {

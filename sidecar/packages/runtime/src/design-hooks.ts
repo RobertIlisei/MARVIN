@@ -30,7 +30,14 @@
 import { existsSync } from "node:fs";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 
-import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallback,
+  HookJSONOutput,
+  PermissionResult,
+  PreToolUseHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
+
+import { appendAutoAuditEntry, type AutoAuditEntryKind } from "./auto-audit";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -201,7 +208,82 @@ export function recordAllowedTool(
     if (target && isSourceFile(target) && isInsideCwd(ctx.cwd, target)) {
       ctx.sourceFilesRead += 1;
     }
+    return;
   }
+  // Grep / Glob count toward the same "first structural search" tally so
+  // the hook stays one-shot per turn whichever tool the model reaches for.
+  if (toolName === "Grep" || toolName === "Glob") {
+    const path =
+      pickPath(toolInput, ["path"]) ??
+      (typeof toolInput.pattern === "string" ? toolInput.pattern : null) ??
+      ctx.cwd;
+    if (isInsideCwd(ctx.cwd, path)) {
+      ctx.sourceFilesRead += 1;
+    }
+  }
+}
+
+/**
+ * Build a PreToolUse hook callback for the SDK's `Options.hooks` config.
+ *
+ * Why a PreToolUse hook instead of `canUseTool`: with `permissionMode:
+ * "default"`, the SDK auto-allows tools it considers safe (Read / Grep /
+ * Glob) WITHOUT consulting `canUseTool`. The earlier wiring put design
+ * hooks inside the canUseTool wrapper, so they only fired on Edit /
+ * Write / Bash — Read / Grep / Glob slipped through. PreToolUse fires on
+ * EVERY tool call regardless of permission classification, which is what
+ * graphify-first needs.
+ *
+ * Returns `permissionDecision: "deny"` when a rule fires, otherwise an
+ * empty output (the SDK falls through to its normal allow path or
+ * canUseTool for gated tools).
+ */
+export function makeDesignHooksPreToolUse(args: {
+  cwd: string;
+  turnId: string;
+  designCtx: DesignTurnContext;
+}): HookCallback {
+  const { cwd, turnId, designCtx } = args;
+  const mode = readDesignHooksMode();
+  return async (input, toolUseId) => {
+    if (input.hook_event_name !== "PreToolUse") return {} as HookJSONOutput;
+    const evt = input as PreToolUseHookInput;
+    const safeInput =
+      evt.tool_input && typeof evt.tool_input === "object" && !Array.isArray(evt.tool_input)
+        ? (evt.tool_input as Record<string, unknown>)
+        : {};
+    const designDeny = runDesignHooks({
+      ctx: designCtx,
+      toolName: evt.tool_name,
+      toolInput: safeInput,
+      mode,
+    });
+    if (designDeny) {
+      // Audit-log the deny so post-hoc inspection can see what fired.
+      // The audit log filter drops non-Edit/Write/Bash entries silently —
+      // safe to call regardless of the tool name.
+      appendAutoAuditEntry(cwd, {
+        tool: evt.tool_name as AutoAuditEntryKind,
+        reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
+        input: safeInput,
+        turnId,
+        toolUseId: toolUseId ?? evt.tool_use_id ?? "unknown",
+      });
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: designDeny.message ?? "design-hook deny",
+        },
+      } as HookJSONOutput;
+    }
+    // No design-hook deny — record the tool as allowed-from-our-POV so
+    // state advances. (canUseTool may still deny for safety reasons; if
+    // it does, recordAllowedTool was a slight over-count, but that only
+    // delays — never silences — a future hook firing.)
+    recordAllowedTool(designCtx, evt.tool_name, safeInput);
+    return {} as HookJSONOutput;
+  };
 }
 
 /**
@@ -248,7 +330,13 @@ export function runDesignHooks(args: {
 }
 
 /** Returns the deny PermissionResult when the graphify-first rule should
- *  fire, otherwise null. Pure — does not mutate ctx. */
+ *  fire, otherwise null. Pure — does not mutate ctx.
+ *
+ *  Covers Read / Grep / Glob — the personality's rule applies to all three
+ *  ("Read / Grep / Glob on any source file for a structural question").
+ *  Earlier this hook only intercepted Read, so the model could slip through
+ *  by calling Grep first — the exact "grep and pray" failure mode the rule
+ *  exists to eliminate. */
 function checkGraphifyFirst(
   ctx: DesignTurnContext,
   toolName: string,
@@ -258,25 +346,59 @@ function checkGraphifyFirst(
   if (ctx.graphifyHookFired) return null;
   if (ctx.graphCallCount > 0) return null;
   if (ctx.sourceFilesRead > 0) return null;
-  if (toolName !== "Read") return null;
-  const target = pickPath(toolInput, ["file_path", "path"]);
-  if (!target) return null;
-  if (!isInsideCwd(ctx.cwd, target)) return null;
-  if (!isSourceFile(target)) return null;
+
+  let triggered: { kind: "Read" | "Grep" | "Glob"; target: string } | null = null;
+  if (toolName === "Read") {
+    const target = pickPath(toolInput, ["file_path", "path"]);
+    if (target && isInsideCwd(ctx.cwd, target) && isSourceFile(target)) {
+      triggered = { kind: "Read", target };
+    }
+  } else if (toolName === "Grep") {
+    // Grep input: { pattern, path?, glob?, output_mode?, ... }. Default
+    // path = cwd when omitted. Apply the rule when the search root is in
+    // cwd — structural exploration of the project tree.
+    const path =
+      pickPath(toolInput, ["path"]) ??
+      (typeof toolInput.glob === "string" ? toolInput.glob : null) ??
+      ctx.cwd;
+    if (isInsideCwd(ctx.cwd, path)) {
+      triggered = { kind: "Grep", target: path };
+    }
+  } else if (toolName === "Glob") {
+    // Glob input: { pattern, path? }. The pattern is often a path glob
+    // ("**/*.ts"). When the path is omitted, the search root defaults
+    // to cwd. Fire if the search lands inside cwd.
+    const path = pickPath(toolInput, ["path"]) ?? ctx.cwd;
+    const pattern = typeof toolInput.pattern === "string" ? toolInput.pattern : "";
+    // Treat a Glob *anywhere* inside cwd as structural — the model
+    // should orient via the graph first regardless of the glob shape.
+    if (isInsideCwd(ctx.cwd, path) || isInsideCwd(ctx.cwd, pattern)) {
+      triggered = { kind: "Glob", target: pattern || path };
+    }
+  }
+
+  if (!triggered) return null;
   return {
     behavior: "deny",
     message:
-      "graphify-first: this is the first source-file read of the turn and " +
-      "the graph hasn't been queried yet. Call " +
-      "`mcp__marvin-graph__graph_search` with a relevant query first, then " +
-      "re-Read the file the graph points at. Graph queries before source " +
-      "reads is a non-negotiable rule (personality §Graphify protocol). " +
-      "If the graph genuinely doesn't cover what you need, call " +
+      `graphify-first: ${triggered.kind} on \`${truncate(triggered.target, 80)}\` ` +
+      "would be the first structural search of this turn, and the graph " +
+      "hasn't been queried yet. Call " +
+      "`mcp__marvin-graph__graph_search` (or `graph_summary` to orient) " +
+      "FIRST, then come back with the file the graph points at. The " +
+      "personality's Graphify protocol is non-negotiable for any " +
+      "structural exploration: graph before Read / Grep / Glob. " +
+      "If the graph genuinely doesn't cover what you need, run " +
       "`graph_search` with a near-miss query so the rule is satisfied, " +
-      "then proceed with grep / glob. (To bypass these hooks for an " +
-      "approved exception, the user can set MARVIN_DESIGN_HOOKS=measure.)",
+      "then fall back to grep / glob. (Set MARVIN_DESIGN_HOOKS=measure " +
+      "to bypass for an approved exception.)",
     interrupt: false,
   };
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1)}…`;
 }
 
 /** Returns the deny PermissionResult when the advisor-on-ADR-trigger rule
