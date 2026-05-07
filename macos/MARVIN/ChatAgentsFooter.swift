@@ -39,6 +39,7 @@ struct ChatAgentsFooter: View {
             )
             Spacer(minLength: 8)
             personalityPill
+            thinkingModePicker
             modeBadge
         }
         .sheet(isPresented: $modelsDialogOpen) {
@@ -110,6 +111,94 @@ struct ChatAgentsFooter: View {
         }
         .buttonStyle(.plain)
         .help("Voice — click to switch between MARVIN and neutral")
+    }
+
+    /// Thinking-mode picker (Fast / Thinking / Max). Maps to the
+    /// SDK's `effort` field server-side via `effortForThinkingMode`.
+    /// Disables the Max chip when the executor is Sonnet (advisor
+    /// runtimeMode) — Sonnet doesn't support the `max` rung. The
+    /// runtime would silently downgrade anyway, but graying out the
+    /// chip keeps the UI honest.
+    private var thinkingModePicker: some View {
+        let active = bridge.thinkingMode
+        let executorIsOpus: Bool = {
+            guard let e = bridge.executorModel else { return true }
+            return e.range(of: "opus", options: .caseInsensitive) != nil
+        }()
+        return Menu {
+            Button {
+                NativePrefs.shared.setThinkingMode("fast")
+            } label: {
+                Label("Fast", systemImage: "hare")
+            }
+            Button {
+                NativePrefs.shared.setThinkingMode("thinking")
+            } label: {
+                Label("Thinking", systemImage: "brain")
+            }
+            Button {
+                NativePrefs.shared.setThinkingMode("max")
+            } label: {
+                Label("Max", systemImage: "bolt.fill")
+            }
+            .disabled(!executorIsOpus)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: thinkingModeIcon(active))
+                    .font(.system(size: 9))
+                Text(active)
+                    .font(.system(size: 11, design: .monospaced))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(thinkingModeColour(active))
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(thinkingModeHelp(active, executorIsOpus: executorIsOpus))
+    }
+
+    private func thinkingModeIcon(_ mode: String) -> String {
+        switch mode {
+        case "fast": return "hare"
+        case "max": return "bolt.fill"
+        default: return "brain"
+        }
+    }
+
+    private func thinkingModeColour(_ mode: String) -> Color {
+        switch mode {
+        case "fast": return .secondary
+        case "max": return .accentColor
+        default: return .primary
+        }
+    }
+
+    private func thinkingModeHelp(_ mode: String, executorIsOpus: Bool) -> String {
+        switch mode {
+        case "fast":
+            return "Thinking: Fast (effort low) — minimal extended reasoning, quickest responses."
+        case "max":
+            return executorIsOpus
+                ? "Thinking: Max (effort max) — maximum reasoning. Opus only."
+                : "Thinking: Max — falls back to Thinking on non-Opus executor."
+        default:
+            return executorIsOpus
+                ? "Thinking: Thinking (effort high) — deep reasoning when needed. Default."
+                : "Thinking: Thinking (effort high) — Max requires Opus."
+        }
     }
 
     /// Permission-strategy badge. Auto = green; Gated = amber. Tap

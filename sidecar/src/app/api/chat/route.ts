@@ -9,10 +9,15 @@ import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
 import {
   type PermissionStrategy,
   type RuntimeMode,
+  type ThinkingMode,
   resolveRuntimeMode,
   runAgent,
 } from "@marvin/runtime/sdk-runner";
-import { appendSessionTurn } from "@marvin/runtime/session";
+import {
+  appendSessionTurn,
+  lastSdkSessionId,
+  rememberSdkSessionId,
+} from "@marvin/runtime/session";
 import {
   emitTurnEvent,
   endLiveTurn,
@@ -46,8 +51,20 @@ interface ChatRequestBody {
   /** Permission strategy. `auto` (default) = full bypass, no confirm gate.
    *  `gated` = Edit/Write/unsafe Bash render a confirm card. */
   permissionStrategy?: PermissionStrategy;
+  /** Thinking mode (Fast / Thinking / Max). Maps to SDK `effort`. */
+  thinkingMode?: ThinkingMode;
   /** When true, skip the PROJECT_STATUS/BUSINESS_OVERVIEW/probe injection. */
   skipProjectContext?: boolean;
+  /**
+   * When true, ignore the auto-resume lookup and start the next SDK
+   * turn with a fresh server-side session — i.e. drop the cumulative
+   * cache that's making decisions slow — while preserving the
+   * `marvinSessionId` (transcript identity) so the chat history stays
+   * intact in the UI. The client surfaces this as a "Reset context"
+   * affordance on the AppStatusBar context indicator. ADR-0022 §3
+   * follow-up.
+   */
+  resetSdkSession?: boolean;
 }
 
 /**
@@ -102,6 +119,7 @@ export async function POST(req: NextRequest) {
   const personality: PersonalityMode = body.personality ?? "marvin";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
+  const thinkingMode: ThinkingMode = body.thinkingMode ?? "thinking";
 
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
@@ -115,6 +133,32 @@ export async function POST(req: NextRequest) {
     ? ""
     : await buildProjectContext({ workDir: cwd, firstMessage }).catch(() => "");
   const appendSystemPrompt = projectContext ? `${systemPrompt}\n\n${projectContext}` : systemPrompt;
+
+  // Resolve the SDK resume id BEFORE we append turn.user (and before
+  // `runAgentDetached` is dispatched below). Two distinct ids exist:
+  //   - `marvinSessionId` (JSONL filename, transcript identity)
+  //   - SDK `sessionId`  (Claude Agent SDK's internal session, what
+  //     `resume` needs to keep agent context across turns)
+  // The native client only tracks `marvinSessionId`. If the client sent
+  // an explicit SDK sessionId, honour it; otherwise look up the most
+  // recent completed turn's SDK id from this transcript. Without this
+  // resolution every turn looks like a fresh conversation to the model.
+  // Must be declared before `void runAgentDetached()` — async function
+  // bodies execute synchronously up to the first await, and the closure
+  // access here would hit TDZ if defined later in the same scope.
+  // ADR-0022 §3 follow-up: when the client asks for a fresh SDK
+  // session, skip the auto-resume lookup entirely. The visible chat
+  // and the marvinSessionId are unchanged — only the *server-side*
+  // SDK session restarts, dropping the cache that's driving latency.
+  // An explicit body.sessionId still wins (in case the user wants to
+  // resume a *different* SDK session for some advanced flow).
+  const sdkResumeId = body.resetSdkSession
+    ? body.sessionId?.trim() || undefined
+    : body.sessionId?.trim() ||
+      (body.marvinSessionId
+        ? lastSdkSessionId(projectId, marvinSessionId)
+        : null) ||
+      undefined;
 
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.user",
@@ -134,6 +178,8 @@ export async function POST(req: NextRequest) {
     runtimeMode,
     personality,
     permissionStrategy,
+    thinkingMode,
+    sdkSessionFresh: !sdkResumeId,
     turnId,
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
@@ -206,8 +252,9 @@ export async function POST(req: NextRequest) {
       model,
       ...(advisorModel ? { advisorModel } : {}),
       permissionStrategy,
+      thinkingMode,
       turnId,
-      sessionId: body.sessionId,
+      sessionId: sdkResumeId,
       appendSystemPrompt,
       onEvent: (event) => {
         appendSessionTurn(projectId, marvinSessionId, {
@@ -248,6 +295,11 @@ export async function POST(req: NextRequest) {
       tokenUsage: result.tokenUsage ?? null,
       sessionId: result.sessionId ?? null,
     });
+    if (result.sessionId) {
+      // Prime the in-process cache so the *next* /api/chat for this
+      // marvinSessionId skips the JSONL re-scan in `lastSdkSessionId`.
+      rememberSdkSessionId(projectId, marvinSessionId, result.sessionId);
+    }
     recordTurnCost({
       projectId,
       costUsd: result.costUsd ?? null,

@@ -40,7 +40,6 @@ import {
   makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
-import { createPlaywrightMcpConfig } from "./playwright-mcp";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -81,6 +80,48 @@ export function resolveRuntimeMode(mode: RuntimeMode): {
  */
 export type PermissionStrategy = "auto" | "gated";
 
+/**
+ * User-facing thinking-mode picker. Three coarse modes that map to
+ * the SDK's 5-level `effort` field — chosen for UX parity with
+ * claude.ai / Claude Code, which expose the same shape.
+ *
+ *   - `fast`     → SDK `effort: "low"`. Minimal extended thinking,
+ *                  fastest responses. Good for chat-style follow-ups
+ *                  and edits where the answer is mostly mechanical.
+ *   - `thinking` → SDK `effort: "high"`. The previous-default
+ *                  behaviour — deep reasoning when needed, MARVIN's
+ *                  baseline.
+ *   - `max`      → SDK `effort: "max"`. Maximum effort, longest
+ *                  thinking budget. Opus-only — falls back to
+ *                  `"high"` when the executor model is Sonnet
+ *                  (advisor mode), since Sonnet doesn't support the
+ *                  `max` rung. The fallback is silent at the SDK
+ *                  layer; the UI disables the Max chip when the
+ *                  executor is Sonnet so the user is never surprised.
+ *
+ * The advisor model (when invoked as a server-side subagent on hard
+ * decisions) is left at the SDK default — its job is the hard call,
+ * which it should think through regardless of the executor's mode.
+ */
+export type ThinkingMode = "fast" | "thinking" | "max";
+
+/**
+ * Map a user-facing thinking mode to the SDK's `effort` value, with
+ * the Opus-only `max` rung downgraded to `high` on non-Opus models.
+ *
+ * Pure dispatcher — exported so tests can pin the mapping (and the
+ * model-aware fallback) without spinning up a turn.
+ */
+export function effortForThinkingMode(
+  mode: ThinkingMode,
+  model: string,
+): "low" | "high" | "max" {
+  if (mode === "fast") return "low";
+  if (mode === "thinking") return "high";
+  // max — only valid on Opus 4.6 / 4.7 per SDK docs.
+  return /opus/i.test(model) ? "max" : "high";
+}
+
 export interface RunAgentInput {
   message: string;
   cwd: string;
@@ -93,6 +134,13 @@ export interface RunAgentInput {
   sessionId?: string | undefined;
   /** Permission strategy. Defaults to `auto` when omitted. */
   permissionStrategy?: PermissionStrategy;
+  /**
+   * User-facing thinking mode (Fast / Thinking / Max). Maps to the
+   * SDK's `effort` field via `effortForThinkingMode`. Defaults to
+   * `thinking` when omitted, matching the SDK's `effort: high`
+   * default. See `ThinkingMode` for the mapping.
+   */
+  thinkingMode?: ThinkingMode;
   appendSystemPrompt: string;
   onEvent: (event: SDKMessage) => void;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
@@ -142,8 +190,9 @@ export interface RunAgentResult {
 //
 // `mcpServers: ["marvin-graph"]` is the reference-by-name form — the
 // scout inherits the parent session's marvin-graph registration so
-// golden rule 7 (graph-first) extends to scouts. `marvin-playwright`
-// is deliberately NOT inherited; scouts are research, not drivers.
+// golden rule 7 (graph-first) extends to scouts. Browser automation
+// is left to plain `npx playwright` via Bash on the parent's side;
+// scouts are research, not drivers.
 //
 // `model: "inherit"` keeps scout cost at the parent turn's model tier.
 // Opus-escalation is the advisor's job (ADR-0007), not the scout's.
@@ -291,6 +340,29 @@ function normaliseInput(toolInput: unknown): Record<string, unknown> {
 }
 
 /**
+ * Extract the resident-context token count from an SDK assistant
+ * cli.event. "Resident" = tokens the model walks every turn (drives
+ * latency), which is `cache_read_input_tokens + input_tokens`. We
+ * deliberately do NOT add `cache_creation_input_tokens` — those are
+ * tokens being *written* to cache for the next turn, not bytes the
+ * model walked this turn, so adding them double-counts on re-cache
+ * turns. ADR-0022 §2.
+ *
+ * Returns `null` for non-assistant events or events without `usage`.
+ * Exported so tests can pin the helper independently of the SDK.
+ */
+export function residentContextTokens(event: SDKMessage): number | null {
+  if (event.type !== "assistant") return null;
+  const message = (event as unknown as { message?: { usage?: Record<string, unknown> } }).message;
+  const usage = message?.usage;
+  if (!usage || typeof usage !== "object") return null;
+  const cacheRead = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
+  const input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
+  if (cacheRead === 0 && input === 0) return null;
+  return cacheRead + input;
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -435,12 +507,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // that instead of failing the turn.
   const graphMcp = createGraphMcpServer(cwd);
 
-  // Playwright MCP — a real browser MARVIN controls, for screenshotting /
-  // interacting with / verifying localhost sites. Registered only if
-  // `@playwright/mcp` resolves on disk AND `MARVIN_PLAYWRIGHT != "0"`. The
-  // stdio process is spawned by the SDK per turn.
-  const playwrightMcp = createPlaywrightMcpConfig();
-
   // Permission wiring. Both modes install a `canUseTool` callback so the
   // hard-deny floor (rm -rf /, force-push to main, etc.) and the auto-
   // audit log keep firing in either path. In `auto` mode the logger
@@ -474,7 +540,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     },
     mcpServers: {
       "marvin-graph": graphMcp,
-      ...(playwrightMcp ? { "marvin-playwright": playwrightMcp } : {}),
     },
     // ADR-0014: register the read-only `scout` subagent so MARVIN can
     // dispatch parallel research (graph-first, read-only, synthesis-
@@ -485,6 +550,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       scout: SCOUT_AGENT,
     },
     includePartialMessages: false,
+    // Thinking mode → SDK effort. The user-facing modes (fast /
+    // thinking / max) map to a subset of the SDK's 5-level effort
+    // ladder; `max` falls back to `high` on non-Opus executors per
+    // `effortForThinkingMode`. Defaults to `"thinking"` (= effort
+    // "high") which matches the SDK default and MARVIN's prior
+    // behaviour, so existing sessions keep their current responsiveness.
+    effort: effortForThinkingMode(input.thinkingMode ?? "thinking", model),
     ...(advisorModel ? { advisorModel } : {}),
     ...(sessionId ? { resume: sessionId } : {}),
   } as Options;
@@ -495,6 +567,24 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let tokenUsage: RunAgentResult["tokenUsage"];
   let permissionDenials = 0;
   let resultError: string | undefined;
+  // True once a non-error `result` envelope has been observed. Drives
+  // the watchdog: if the SDK iterator hasn't terminated within
+  // WATCHDOG_MS of seeing `result`, we force-abort the subprocess
+  // and treat the resulting AbortError as a clean exit (the turn
+  // already succeeded — we just couldn't get the SDK process to
+  // close its stdio). Observed in v0.2.113 when stdio MCP children
+  // (e.g. Playwright) hold the parent open after `result`.
+  let seenSuccessfulResult = false;
+  let watchdogTimer: NodeJS.Timeout | null = null;
+  // Watchdog window. Tunable via env in case a future SDK version
+  // needs longer post-`result` cleanup; the default is generous
+  // enough that any honest cleanup completes naturally.
+  const WATCHDOG_MS = (() => {
+    const raw = process.env.MARVIN_RESULT_WATCHDOG_MS;
+    if (!raw) return 5_000;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : 5_000;
+  })();
 
   try {
     const q = query({ prompt: message, options });
@@ -534,12 +624,55 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               ? ev.result
               : ev.subtype;
           resultError = detail;
+        } else {
+          // Successful result. Arm the watchdog: if the iterator
+          // doesn't terminate naturally within WATCHDOG_MS, force-
+          // close the subprocess. The for-await loop will then
+          // throw, but the catch block treats the abort as benign
+          // (we already captured the result + token usage above).
+          seenSuccessfulResult = true;
+          if (watchdogTimer) clearTimeout(watchdogTimer);
+          watchdogTimer = setTimeout(() => {
+            try {
+              abortController.abort();
+            } catch {
+              /* nothing meaningful to do — subprocess is wedged */
+            }
+          }, WATCHDOG_MS);
         }
       }
     }
   } catch (err) {
-    resultError = err instanceof Error ? err.message : String(err);
+    // If the watchdog fired after a successful `result`, the SDK
+    // throws an AbortError as the iterator unwinds. That's the
+    // benign case we built the watchdog FOR — the turn already
+    // succeeded; we just couldn't get the subprocess to close
+    // cleanly. Swallow it so the caller sees ok:true.
+    if (seenSuccessfulResult) {
+      // Optional: leave a breadcrumb so this is visible in logs
+      // when it does kick in. No telemetry library here yet — the
+      // structured `[marvin.telemetry]` line keeps with the rest.
+      try {
+        console.info(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "runagent.watchdog",
+              turnId,
+              note: "subprocess did not exit within WATCHDOG_MS of result; force-aborted",
+              at: new Date().toISOString(),
+            }),
+        );
+      } catch {
+        /* never break the turn on serialisation */
+      }
+    } else {
+      resultError = err instanceof Error ? err.message : String(err);
+    }
   } finally {
+    if (watchdogTimer) {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = null;
+    }
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
     clearTurnDesignContext(turnId);

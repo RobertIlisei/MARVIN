@@ -202,13 +202,16 @@ final class ChatService {
     /// an inline error instead of a silently-empty list.
     func fetchSession(
         projectId: String,
-        sessionId: String
+        sessionId: String,
+        tail: Int? = nil
     ) async throws -> SessionRecord? {
         let url = baseURL
             .appendingPathComponent("api/sessions")
             .appendingPathComponent(sessionId)
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "projectId", value: projectId)]
+        var items: [URLQueryItem] = [URLQueryItem(name: "projectId", value: projectId)]
+        if let tail { items.append(URLQueryItem(name: "tail", value: String(tail))) }
+        comps.queryItems = items
         guard let composed = comps.url else {
             throw ChatServiceError.transport(underlying: URLError(.badURL))
         }
@@ -231,7 +234,16 @@ final class ChatService {
                 body: String(data: data, encoding: .utf8)
             )
         }
-        return try JSONDecoder().decode(SessionRecord.self, from: data)
+        // Decode off the main actor. SessionRecord can be 100+ MB for
+        // long-running sessions (314 turns × tool I/O = ~120 MB seen in
+        // the field). Decoding that on @MainActor freezes the UI for
+        // multiple seconds during launch / project switch — Task.detached
+        // moves it to the userInitiated cooperative pool. `tail`-capped
+        // hydrates are fast either way; this matters for the manual
+        // history-pick path that intentionally pulls the full transcript.
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(SessionRecord.self, from: data)
+        }.value
     }
 
     /// GET /api/chat/resume?marvinSessionId=…  — attach to a live

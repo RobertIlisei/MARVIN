@@ -90,9 +90,16 @@ final class BranchService {
             if w.isGit {
                 b.branch = w.branch.flatMap { $0.isEmpty ? nil : $0 }
                 b.branchDirtyCount = w.status?.count ?? 0
+                // Push the per-file porcelain map so the FileTreeView
+                // badges can render. Empty dictionary when nothing is
+                // dirty — keeps the bridge field a single source of
+                // truth instead of an Optional the renderer would
+                // have to guard.
+                b.dirtyStatus = w.status ?? [:]
             } else {
                 b.branch = nil
                 b.branchDirtyCount = 0
+                b.dirtyStatus = [:]
             }
             consecutiveFailures = 0
         } catch {
@@ -100,6 +107,7 @@ final class BranchService {
             if consecutiveFailures >= 3 {
                 MarvinBridge.shared.branch = nil
                 MarvinBridge.shared.branchDirtyCount = 0
+                MarvinBridge.shared.dirtyStatus = [:]
                 NSLog("[BranchService] 3 consecutive failures, cleared branch: \(error)")
             }
         }

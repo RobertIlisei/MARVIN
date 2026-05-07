@@ -233,8 +233,15 @@ func lerpProfile(_ a: BrainProfile, _ b: BrainProfile, t: Float) -> BrainProfile
 /// + `profile()` getter inside `BrainLiquidImpl` — packaged as a
 /// struct so the call site is testable without a SwiftUI view.
 struct BrainTransition {
-    /// Default 700 ms transition. Matches `TRANSITION_MS` in the TS.
-    static let defaultDurationMs: Double = 700
+    /// Default 1200 ms transition. Deliberately longer than the TS
+    /// `TRANSITION_MS` (700 ms) — user feedback was that the native
+    /// brain "snaps" between states. Combined with the linear
+    /// (un-eased) ramp below, the result is a steady, perceptually-
+    /// smooth fade rather than a back-loaded burst. The TS still
+    /// runs 700 ms with `easeInOutCubic`; if you re-sync from the
+    /// lab don't overwrite either of these — the divergence is
+    /// intentional. ADR-0022-adjacent.
+    static let defaultDurationMs: Double = 1200
 
     var current: BrainState
     var from: BrainProfile
@@ -285,11 +292,20 @@ struct BrainTransition {
     /// The interpolated profile to render right now. Once the
     /// transition has fully elapsed, returns `to` verbatim (and
     /// the call is a no-op until the next `transition`).
+    ///
+    /// Linear ramp — no easing curve. The TS counterpart uses
+    /// `easeInOutCubic` which front-loads change into the middle of
+    /// the window; user feedback was that this reads as snappy on
+    /// the native brain (the cubic's mid-burst is most of the
+    /// visible change, with the ends feeling like a hold). Linear
+    /// over the longer 1200 ms window above gives a steady,
+    /// smoothly-paced transition. The TS retains its cubic ease for
+    /// parity with the lab.
     func currentProfile(nowMs: Double) -> BrainProfile {
         if startedAtMs == 0 { return to }
         let raw = Float((nowMs - startedAtMs) / durationMs)
         if raw >= 1 { return to }
-        let eased = easeInOutCubic(max(0, raw))
-        return lerpProfile(from, to, t: eased)
+        let t = max(0, min(1, raw))
+        return lerpProfile(from, to, t: t)
     }
 }

@@ -19,6 +19,7 @@
 //      same response stream into both surfaces.
 
 import SwiftUI
+import MARVINLogic
 
 /// View-model for the preview window. Owns the text input, the
 /// in-flight turn task, the rendered message list, and a terminal-
@@ -63,6 +64,29 @@ final class ChatPreviewModel {
     /// a banner in the view. Cleared on next submit.
     var lastError: String? = nil
 
+    /// Human-readable label for whatever MARVIN is doing right now.
+    /// Driven from cli.event peeks: "Thinking…" while we wait for the
+    /// model's first response, "Using Bash" / "Using Read" / etc. as
+    /// each tool call arrives, "Writing reply…" when a plain text
+    /// block lands. Replaces the static "Sending…" indicator so the
+    /// user can see whether the agent is making progress instead of
+    /// staring at an opaque spinner. Nil when idle.
+    var currentActivity: String? = nil
+
+    /// Messages the user typed while a turn was already in flight.
+    /// Dispatched in order on `turn.completed` so the user can keep
+    /// loading work onto the loop without waiting for each response —
+    /// matches the queue affordance in the claude CLI. Each entry
+    /// captures the cwd at queue time so a project switch in between
+    /// doesn't redirect the queued message to the wrong workdir.
+    var queuedMessages: [QueuedMessage] = []
+
+    struct QueuedMessage: Identifiable, Equatable {
+        let id = UUID()
+        let text: String
+        let cwd: String?
+    }
+
     /// Pending confirm requests, oldest first. The view renders a
     /// sheet for the head of the queue; once the user decides, we
     /// remove it and the next one (if any) automatically presents.
@@ -77,6 +101,27 @@ final class ChatPreviewModel {
     /// inline tool card can reflect "approved" / "denied" status
     /// without re-rendering the sheet on a duplicate event.
     var resolvedConfirms: [String: ChatService.ConfirmDecision] = [:]
+
+    /// One-shot flag — when true, the next `send()` will pass
+    /// `resetSdkSession: true` to the sidecar so the next turn starts
+    /// with a fresh server-side SDK cache. The visible chat and the
+    /// `marvinSessionId` are preserved. Cleared after the request is
+    /// dispatched so the user has to opt in again per reset.
+    /// ADR-0022 §3 follow-up.
+    var resetSdkOnNextSend: Bool = false
+
+    /// toolUseIds whose `respond(...)` Task is in flight. The confirm
+    /// sheet's button handlers call `dismiss()` synchronously after
+    /// kicking the async POST — that fires the parent's `isPresented`
+    /// binding setter, which historically auto-denied the head of
+    /// `pendingConfirms`. Net effect: every Allow click also POSTed a
+    /// deny, and the deny usually landed at /api/confirm first → the
+    /// SDK saw the call as denied. This set lets the setter skip the
+    /// auto-deny when an explicit response is already racing for the
+    /// same toolUseId. Esc / drag-dismiss without buttons still
+    /// auto-denies (intended fallback for "user closed the sheet
+    /// without choosing").
+    var respondingToolUseIds: Set<String> = []
 
     /// The active marvinSessionId, captured from the most-recent
     /// turn.started event. Cancel uses this to address /api/chat/
@@ -112,20 +157,32 @@ final class ChatPreviewModel {
     private(set) var sessions: [SessionSummary] = []
     private var sessionsFetchTask: Task<Void, Never>?
 
-    /// Auto-hydrate: fetch sessions and load the latest one. Called
+    /// Auto-hydrate: fetch sessions and load the right one. Called
     /// when no session is set (post-WebView-removal M5, activeMarvinSessionId
     /// is always nil, so this is the primary path for recovering history).
     /// Awaitable — callers don't need to sleep and poll.
+    ///
+    /// Prefers `NativePrefs.lastSessionId(forProject:)` so the user lands
+    /// back on the conversation they actually had open, falling back to
+    /// the most-recently-updated session when no preference is stored
+    /// (fresh install) or the saved id no longer exists on disk.
     func autoHydrate(projectId: String) async {
         guard loadedSessionId == nil else { return }
         do {
             let res = try await ChatService.shared.fetchSessions(projectId: projectId)
             sessions = res.sessions
-            guard loadedSessionId == nil,
-                  let latest = sessions.first else { return }
-            // Call hydrate directly — selectSession guards on loadedProjectId
-            // which is nil until hydrate sets it, causing the first load to no-op.
-            hydrate(projectId: projectId, sessionId: latest.sessionId)
+            guard loadedSessionId == nil else { return }
+            let saved = NativePrefs.shared.lastSessionId(forProject: projectId)
+            let target = saved.flatMap { id in sessions.first(where: { $0.sessionId == id }) }
+                ?? sessions.first
+            guard let target else { return }
+            // Cold-start hydrate is bounded to the last 200 turns. A
+            // session with 314 turns / 120 MB JSONL was freezing launch
+            // for multiple seconds even before SwiftUI tried to render
+            // it. Manual selectSession from the history menu still pulls
+            // the full transcript — that's user-initiated and the wait
+            // is expected.
+            hydrate(projectId: projectId, sessionId: target.sessionId, tail: 200)
         } catch {
             NSLog("[ChatPreview] auto-hydrate failed: \(error)")
         }
@@ -194,10 +251,24 @@ final class ChatPreviewModel {
         } else {
             composed = "\(attachmentText)\n\n\(trimmed)"
         }
-        guard !composed.isEmpty, !isSending else { return }
+        guard !composed.isEmpty else { return }
         draft = ""
         attachments = []
+        if isSending {
+            // Turn already running — queue for after it completes.
+            // turn.completed pops the head of this list and dispatches
+            // it via the same sendInternal path so the user can keep
+            // typing without blocking on each response.
+            queuedMessages.append(QueuedMessage(text: composed, cwd: cwd))
+            return
+        }
         sendInternal(message: composed, cwd: cwd)
+    }
+
+    /// Drop a queued message before it dispatches. Called by the
+    /// queued-chip strip's per-row remove button.
+    func removeQueued(_ id: UUID) {
+        queuedMessages.removeAll { $0.id == id }
     }
 
     /// Phase 2f — re-submit the last user message after an error.
@@ -211,6 +282,7 @@ final class ChatPreviewModel {
 
     private func sendInternal(message: String, cwd: String?) {
         isSending = true
+        currentActivity = "Thinking…"
         lastError = nil
         lastSentMessage = message
         // Optimistic user echo. The wire never sends a `user` event
@@ -230,6 +302,12 @@ final class ChatPreviewModel {
         let strategy = UserDefaults.standard.string(
             forKey: "marvin.permissionStrategy"
         ) ?? NativePermissionStrategy.auto.rawValue
+        // Pull executor / advisor / personality from NativePrefs.
+        // These are configured via the agents bar (the pills above
+        // the messages) and must be sent in the request body — the
+        // server otherwise falls through to `runtimeMode` and ends
+        // up using opus regardless of what the user picked.
+        let prefs = NativePrefs.shared
         // Phase 2h — pass the captured/hydrated marvinSessionId so
         // the server appends to the same session the web has been
         // writing to. Without this, every native send minted a fresh
@@ -238,15 +316,29 @@ final class ChatPreviewModel {
         // the very first turn for a brand-new project — server mints
         // one, we capture it via turn.started, future turns continue
         // the same id.
+        // ADR-0022 §3 follow-up: consume the one-shot reset flag.
+        // We capture-then-clear so a duplicate dispatch (e.g. from a
+        // queued message draining after the reset turn started)
+        // doesn't double-reset.
+        let resetThisTurn = resetSdkOnNextSend
+        if resetThisTurn { resetSdkOnNextSend = false }
         let request = ChatRequest(
             message: message,
             cwd: cwd,
             projectId: loadedProjectId,
             marvinSessionId: marvinSessionId,
-            permissionStrategy: strategy
+            personality: prefs.personality,
+            model: prefs.executorModel,
+            advisorModel: prefs.advisorModel,
+            permissionStrategy: strategy,
+            thinkingMode: prefs.thinkingMode,
+            resetSdkSession: resetThisTurn ? true : nil
         )
         activeTask = Task { @MainActor in
-            defer { isSending = false }
+            defer {
+                isSending = false
+                currentActivity = nil
+            }
             do {
                 let stream = ChatService.shared.streamTurn(request: request)
                 for try await event in stream {
@@ -254,6 +346,17 @@ final class ChatPreviewModel {
                 }
             } catch {
                 lastError = "\(error)"
+                // Transport-level failure (sidecar restart, network
+                // drop, etc.) — no turn.error event will land. Mirror
+                // the cleanup that case does so the UI doesn't sit
+                // with a stale confirm sheet open or a streaming
+                // pip on the latest assistant row.
+                pendingConfirms.removeAll()
+                for i in messages.indices where messages[i].isStreaming {
+                    messages[i].isStreaming = false
+                }
+                MarvinBridge.shared.marvinState = "error"
+                MarvinBridge.shared.isBusy = false
             }
         }
     }
@@ -267,6 +370,23 @@ final class ChatPreviewModel {
         activeTask?.cancel()
         activeTask = nil
         isSending = false
+        currentActivity = nil
+        // Cancel is a hard reset — drop any pending queued messages
+        // alongside the in-flight turn. Without this the user hits
+        // Stop, sees the brain idle, then a stale queued message fires
+        // half a second later and confuses them.
+        queuedMessages.removeAll()
+        // Seal any still-streaming rows so the chat doesn't sit there
+        // showing "streaming…" forever on the row that was mid-write
+        // when the user hit Stop.
+        for i in messages.indices where messages[i].isStreaming {
+            messages[i].isStreaming = false
+        }
+        // Drop any open confirm sheet — the SDK is being torn down
+        // and its registry will be cleared, so Allow/Deny clicks
+        // would 404. Auto-closing is the user-visible signal that
+        // the cancel actually took effect.
+        pendingConfirms.removeAll()
         // ADR-0021 M4: brief cancelling state → idle.
         MarvinBridge.shared.marvinState = "cancelling"
         Task { @MainActor in
@@ -312,7 +432,7 @@ final class ChatPreviewModel {
     /// expected to gate this anyway, but the inner guard makes the
     /// function safe to call from multiple sites without state
     /// double-loading.
-    func hydrate(projectId: String, sessionId: String) {
+    func hydrate(projectId: String, sessionId: String, tail: Int? = nil) {
         // Skip when nothing changed — protects in-progress drafts /
         // streams from a redundant session-changed echo.
         if loadedProjectId == projectId, loadedSessionId == sessionId {
@@ -339,13 +459,16 @@ final class ChatPreviewModel {
         resolvedConfirms.removeAll()
         marvinSessionId = sessionId
         lastSentMessage = nil
+        // Persist the choice so a relaunch returns here.
+        NativePrefs.shared.setLastSessionId(sessionId, forProject: projectId)
 
         Task { @MainActor in
             defer { isHydrating = false }
             do {
                 let record = try await ChatService.shared.fetchSession(
                     projectId: projectId,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    tail: tail
                 )
                 // Drop the result if the session changed under us
                 // mid-fetch (user clicked another project). The
@@ -451,7 +574,14 @@ final class ChatPreviewModel {
         decision: ChatService.ConfirmDecision,
         denyMessage: String? = nil
     ) {
+        // Mark in-flight before the Task starts so the sheet's
+        // dismiss-driven binding setter sees us and skips its
+        // auto-deny safety net for this toolUseId. Without this guard
+        // every Allow click double-POSTed (allow + deny) and the deny
+        // usually won the race at /api/confirm.
+        respondingToolUseIds.insert(request.toolUseId)
         Task { @MainActor in
+            defer { respondingToolUseIds.remove(request.toolUseId) }
             do {
                 try await ChatService.shared.respondToConfirm(
                     turnId: request.turnId,
@@ -461,30 +591,60 @@ final class ChatPreviewModel {
                 )
                 resolvedConfirms[request.toolUseId] = decision
                 pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
+            } catch ChatServiceError.httpStatus(404, _) {
+                // Registry doesn't have this confirm anymore — the turn
+                // ended (timeout, cancel, sidecar restart) between the
+                // sheet opening and the user clicking. Drop the stale
+                // sheet and surface a softer note so the user doesn't
+                // see a HTTP stack trace; it's not a real error from
+                // their POV, just expired UI state.
+                pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
+                lastError = "Confirm window expired — the turn already ended. Try again."
             } catch {
                 lastError = "Confirm response failed: \(error)"
             }
         }
     }
 
-    /// ADR-0021 M4 — peek at a cliEvent payload to derive marvinState.
-    /// Returns "tool" when the assistant message has a tool_use block,
-    /// "writing" for a text block, nil for all other event types.
-    private func marvinStateForCLIEvent(_ data: Data) -> String? {
-        struct Peek: Codable {
+    /// ADR-0021 M4 — peek at a cliEvent payload to derive both the
+    /// brain-profile state ("tool" / "writing") AND a human-readable
+    /// activity label for the input-bar progress line. Single decode
+    /// pass over the assistant message's content blocks.
+    ///
+    /// Returns:
+    ///   - state: "tool" if any tool_use block exists, "writing" if a
+    ///     plain text block does, nil otherwise.
+    ///   - activity: "Using <ToolName>" for tools (first match wins),
+    ///     "Writing reply…" for text-only assistant messages.
+    private struct CLIEventPeek {
+        let state: String?
+        let activity: String?
+    }
+
+    private func peekCLIEvent(_ data: Data) -> CLIEventPeek {
+        struct Wire: Codable {
             let type: String
             struct Msg: Codable {
-                struct Block: Codable { let type: String }
+                struct Block: Codable {
+                    let type: String
+                    let name: String?
+                }
                 let content: [Block]?
             }
             let message: Msg?
         }
-        guard let env = try? JSONDecoder().decode(Peek.self, from: data),
+        guard let env = try? JSONDecoder().decode(Wire.self, from: data),
               env.type == "assistant",
-              let blocks = env.message?.content else { return nil }
-        if blocks.contains(where: { $0.type == "tool_use" }) { return "tool" }
-        if blocks.contains(where: { $0.type == "text" }) { return "writing" }
-        return nil
+              let blocks = env.message?.content
+        else { return CLIEventPeek(state: nil, activity: nil) }
+        if let toolBlock = blocks.first(where: { $0.type == "tool_use" }) {
+            let label = toolBlock.name.map { "Using \($0)" } ?? "Using a tool"
+            return CLIEventPeek(state: "tool", activity: label)
+        }
+        if blocks.contains(where: { $0.type == "text" }) {
+            return CLIEventPeek(state: "writing", activity: "Writing reply…")
+        }
+        return CLIEventPeek(state: nil, activity: nil)
     }
 
     private func handle(event: ChatTurnEvent) {
@@ -494,13 +654,50 @@ final class ChatPreviewModel {
             // Phase 2f — capture the marvinSessionId so cancel can
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId
+            // First turn on a new session has no loadedSessionId yet —
+            // adopt the server-minted id so relaunch can autoHydrate
+            // back into this conversation.
+            if loadedSessionId == nil, let pid = loadedProjectId ?? b.activeProjectId {
+                loadedSessionId = s.marvinSessionId
+                if loadedProjectId == nil { loadedProjectId = pid }
+                NativePrefs.shared.setLastSessionId(s.marvinSessionId, forProject: pid)
+            }
             // ADR-0021 M4: drive brain profile natively from SSE.
             b.marvinState = "thinking"
             b.isBusy = true
+            // ADR-0022 §3 follow-up: when the sidecar started this
+            // turn with a fresh SDK session (either a brand-new
+            // transcript or because we asked it to reset), clear the
+            // resident-context counter so the AppStatusBar segment
+            // visibly drops to "—" until the first assistant event
+            // of the new turn lands. Without this the user would see
+            // the old `ctx 147K` figure linger for the whole first
+            // decision step, which makes the reset feel unconfirmed.
+            if s.sdkSessionFresh == true {
+                b.residentContextTokens = nil
+                b.billableThisTurn = nil
+            }
         case .cliEvent(let data):
+            // The reducer mutation must stay synchronous — the chat
+            // list IS the rendered surface, so the SwiftUI commit
+            // that follows is what the user actually sees on screen.
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
-            // ADR-0021 M4: detect tool vs writing from cliEvent shape.
-            if let s = marvinStateForCLIEvent(data) { b.marvinState = s }
+            // Bridge mutations get hopped to the next runloop tick.
+            // Without this, fast cli.event streams stack synchronous
+            // @Observable writes inside a SwiftUI layout commit and
+            // tip macOS 26's tighter constraint-cycle detector,
+            // crashing with EXC_BREAKPOINT on
+            // -[NSWindow _postWindowNeedsUpdateConstraints].
+            // Letting the writes land on the NEXT main-actor tick
+            // means each mutation lands AFTER the in-flight layout
+            // commits, so the constraint engine never re-enters
+            // itself. See crash report MARVIN-2026-05-07-014721.ips.
+            let peek = peekCLIEvent(data)
+            Task { @MainActor in
+                if let s = peek.state { b.marvinState = s }
+                if let label = peek.activity { currentActivity = label }
+                ContextUsageReader.applyTo(bridge: b, cliEventData: data)
+            }
         case .confirmRequest(let c):
             // Phase 2e — queue the confirm; the view's sheet
             // modifier reacts to pendingConfirms.first and presents
@@ -522,16 +719,52 @@ final class ChatPreviewModel {
             } ?? "Turn completed"
             b.appendNotification(prompt)
             lastSentMessage = nil
+            currentActivity = nil
+            // The SDK's finally block auto-denies and clears any
+            // unresolved confirms before turn.completed fires; if any
+            // sheet is still open client-side it's now stale (clicking
+            // Allow would 404 against an empty registry). Drop them so
+            // the sheet auto-closes.
+            pendingConfirms.removeAll()
             // ADR-0021 M4: reset brain to idle natively.
             b.marvinState = "idle"
             b.isBusy = false
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
+            // Drain one queued message into the next turn. The activeTask
+            // chain set isSending=false in its `defer` before this event
+            // fires, so sendInternal() will start a fresh stream cleanly.
+            // We dispatch on the next runloop tick to give the UI a frame
+            // to render the just-completed turn before another starts.
+            if let next = queuedMessages.first {
+                queuedMessages.removeFirst()
+                Task { @MainActor in
+                    sendInternal(message: next.text, cwd: next.cwd)
+                }
+            }
         case .turnError(let e):
             lastError = e.error
+            currentActivity = nil
+            // Seal every still-streaming row — without this a turn
+            // that errors before the SDK emits its final `result`
+            // event leaves the latest assistant message stuck on a
+            // "streaming…" pip with no way for the user to know it's
+            // done.
+            for i in messages.indices where messages[i].isStreaming {
+                messages[i].isStreaming = false
+            }
+            // The SDK auto-denies all pending confirms in its finally
+            // block before this event fires. Drop the local sheet
+            // queue so an Allow/Deny click after the error doesn't
+            // hit /api/confirm with an empty registry.
+            pendingConfirms.removeAll()
             // ADR-0021 M4: signal error state natively.
             b.marvinState = "error"
             b.isBusy = false
+            // Don't dispatch queued messages after an error — the user
+            // may want to read the error and decide whether the queue
+            // is still relevant. Cancel-from-bar drops the queue
+            // explicitly when they want a clean reset.
         case .unknown:
             break
         }
@@ -562,31 +795,46 @@ struct ChatPreviewView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            // Agents bar — model pills, personality, perms (auto/gated).
+            // Was previously below the input bar, sandwiched against
+            // Send/Queue, which made the layout feel cramped: two rows
+            // of small interactive pills competing for the eye next to
+            // the primary submit button. Moving it above the messages
+            // matches the convention in ChatGPT / Claude desktop and
+            // keeps the input footer focused on Send / Queue / Stop.
+            ChatAgentsFooter()
+                .environment(bridge)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            Divider()
             messagesPane
                 .frame(minHeight: 240)
             if let err = model.lastError {
                 errorBanner(err)
             }
             Divider()
+            if scopeMetVisible {
+                scopeMetChipStrip
+            }
+            if model.resetSdkOnNextSend {
+                resetArmedChip
+            }
+            if !model.queuedMessages.isEmpty {
+                queuedStrip
+            }
             ChatInputBar(
                 text: Bindable(model).draft,
                 onSubmit: { model.send(cwd: bridge.projectWorkDir) },
+                onStop: { model.cancel() },
                 isSending: model.isSending,
+                activityLabel: model.currentActivity,
+                queuedCount: model.queuedMessages.count,
                 attachments: Bindable(model).attachments
             )
             .environment(bridge)
             .padding(.horizontal, 12)
             .padding(.top, 12)
-            .padding(.bottom, 4)
-            // Phase 5e — agents footer below the chat input. Mirrors
-            // Cursor / Continue / Aider: the model picker lives in
-            // the chat surface, not the global toolbar, because
-            // switching executor / advisor is a per-turn decision
-            // and that's where the user's attention already is.
-            ChatAgentsFooter()
-                .environment(bridge)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
+            .padding(.bottom, 8)
         }
         .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
@@ -604,7 +852,23 @@ struct ChatPreviewView: View {
         // The model's hydrate method is itself idempotent against
         // the (loadedProjectId, loadedSessionId) it tracks — these
         // observers can fire redundantly without re-fetching.
-        .onAppear { syncHydrateFromBridge() }
+        .onAppear {
+            syncHydrateFromBridge()
+            // ADR-0022 §3 follow-up: listen for the AppStatusBar
+            // context segment's "Reset context for next message"
+            // click. Arms the model's one-shot flag so the very next
+            // send carries `resetSdkSession: true`. We post a small
+            // chip-style hint so the user can see the intent took.
+            NotificationCenter.default.addObserver(
+                forName: .marvinRequestSdkReset,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    model.resetSdkOnNextSend = true
+                }
+            }
+        }
         .onChange(of: bridge.activeMarvinSessionId) { _, _ in
             syncHydrateFromBridge()
         }
@@ -753,7 +1017,14 @@ struct ChatPreviewView: View {
             get: { !model.pendingConfirms.isEmpty },
             set: { isPresenting in
                 guard !isPresenting,
-                      let head = model.pendingConfirms.first else { return }
+                      let head = model.pendingConfirms.first,
+                      // Skip auto-deny if the user already clicked
+                      // Allow/Deny — `dismiss()` fires the setter
+                      // synchronously while the explicit response is
+                      // still POSTing, and a second deny would race
+                      // (and usually beat) the in-flight allow.
+                      !model.respondingToolUseIds.contains(head.toolUseId)
+                else { return }
                 model.respond(to: head, decision: .deny)
             }
         )
@@ -774,24 +1045,13 @@ struct ChatPreviewView: View {
             }
             Spacer()
             sessionsMenu
-            if model.isSending {
-                // Phase 2f — Stop also POSTs /api/chat/cancel so
-                // the agent actually halts on the sidecar, not just
-                // our local SSE consumer. ⌘. is the macOS-conventional
-                // shortcut for "cancel running operation".
-                Button("Stop") {
-                    model.cancel()
-                }
-                .keyboardShortcut(".", modifiers: [.command])
-                .controlSize(.small)
-                .help("Cancel the in-flight turn. ⌘.")
-            }
+            // Stop moved to ChatInputBar so it sits next to Send / Queue
+            // (where the eye is during a turn). ⌘. shortcut is wired
+            // there too.
+            //
             // Phase 2f — Clear (⌘⇧N) wipes the list, cancels any
             // in-flight turn, and resets the bridge state captured
-            // from the last turn.started. Mirrors ⌘⇧N's "new session"
-            // intent on the main window (Phase 1d.25 dispatches that
-            // shortcut to the web chat); this one handles the native
-            // preview's state when the preview window has focus.
+            // from the last turn.started.
             Button("New") {
                 model.clear()
             }
@@ -804,33 +1064,181 @@ struct ChatPreviewView: View {
     }
 
     private var messagesPane: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if model.messages.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(model.messages) { msg in
-                            ChatMessageRow(message: msg)
-                                .padding(.horizontal, 12)
-                                .id(msg.id)
-                            Divider()
-                                .opacity(0.4)
-                        }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if model.messages.isEmpty {
+                    emptyState
+                } else {
+                    ForEach(model.messages) { msg in
+                        ChatMessageRow(message: msg)
+                            .padding(.horizontal, 12)
+                            .id(msg.id)
+                        Divider()
+                            .opacity(0.4)
                     }
-                    Color.clear.frame(height: 1).id("listEnd")
                 }
-                .padding(.vertical, 8)
             }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
-            .onChange(of: model.messages.count) { _, _ in
-                // Auto-scroll to the latest message on append. We
-                // don't animate the scroll because streaming
-                // updates are frequent enough that animation thrash
-                // would be worse than an instant jump.
-                proxy.scrollTo("listEnd", anchor: .bottom)
+            .padding(.vertical, 8)
+        }
+        // Bottom-anchored scroll. macOS 14+ semantics:
+        //   - First render lands at the bottom (latest message visible).
+        //   - New content appended at the bottom keeps the bottom in
+        //     view automatically — no manual scrollTo on count change.
+        //   - User scrolling up detaches from the auto-stick; scrolling
+        //     back to the bottom re-attaches.
+        //   - Pane resize preserves relative position coherently.
+        // The previous `.scrollPosition(id:)` approach caused chaotic
+        // jumps with streaming-mutated row heights; this modifier
+        // handles the dynamic-content case natively.
+        .defaultScrollAnchor(.bottom)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
+    }
+
+    /// Pending-queue strip — renders one chip per message the user
+    /// typed while a turn was in flight. Each chip shows a truncated
+    /// preview and an X button to drop that entry before it dispatches.
+    /// Sits between the messages pane and the input bar so it's visible
+    /// while typing the next follow-up.
+    /// ADR-0022 §3 — visible when the latest assistant message
+    /// contains the `<!-- marvin:scope-met -->` sentinel. Only shows
+    /// when the turn has actually completed (idle bridge state) so it
+    /// doesn't flash mid-stream during a partial render.
+    private var scopeMetVisible: Bool {
+        guard !model.isSending else { return false }
+        let text = latestAssistantText(in: model.messages)
+        guard let text else { return false }
+        return ScopeMetDetector.isPresent(in: text)
+    }
+
+    /// Concatenated text of the last assistant message in `messages`,
+    /// or nil if there isn't one. Used by both the Scope-met
+    /// detection check and the memory.md summary extractor so they
+    /// agree on which text "the latest assistant" refers to.
+    private func latestAssistantText(in messages: [ChatMessage]) -> String? {
+        guard let latest = messages.last(where: { $0.role == .assistant }) else {
+            return nil
+        }
+        let parts = latest.blocks.compactMap { block -> String? in
+            if case let .text(_, t) = block { return t }
+            return nil
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    /// Two-button affordance below the chat: save a one-line scope
+    /// summary to memory.md, or clear the SDK session for the next
+    /// logical task. Both are opt-in — neither auto-fires on Scope-met.
+    private var scopeMetChipStrip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text("Scope met")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                if let cwd = bridge.projectWorkDir, !cwd.isEmpty {
+                    let text = latestAssistantText(in: model.messages)
+                    let summary = ScopeMetSummary.extract(from: text)
+                    MemoryLog.append(workDir: cwd, line: summary)
+                }
+            } label: {
+                Label("Save to memory.md", systemImage: "tray.and.arrow.down")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Append a one-line summary of the just-completed scope to .marvin/memory.md")
+            Button {
+                model.clear()
+            } label: {
+                Label("Start fresh next turn", systemImage: "arrow.uturn.left")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .help("Clear the SDK session before the next message (⌘⇧N). memory.md auto-loads on the new session.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Color.secondary.opacity(0.05)
+        )
+    }
+
+    /// ADR-0022 §3 follow-up — visible when the user has clicked
+    /// "Reset context for next message" on the AppStatusBar context
+    /// segment but hasn't sent the message yet. Communicates that the
+    /// reset is armed and lets them un-arm it before sending. The
+    /// chip clears automatically after the next send dispatches.
+    private var resetArmedChip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Text("Next message starts a fresh SDK session — chat stays, cache resets")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                model.resetSdkOnNextSend = false
+            } label: {
+                Text("Undo")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private var queuedStrip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(model.queuedMessages) { item in
+                HStack(spacing: 6) {
+                    Image(systemName: "hourglass")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(queuedPreview(item.text))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer()
+                    Button {
+                        model.removeQueued(item.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove from queue")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.08))
+                )
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
+    }
+
+    /// Single-line preview of a queued message, capped at ~80 chars
+    /// so very long pastes don't blow out the strip width.
+    private func queuedPreview(_ text: String) -> String {
+        let collapsed = text.replacingOccurrences(of: "\n", with: " ")
+        if collapsed.count > 80 {
+            return String(collapsed.prefix(77)) + "…"
+        }
+        return collapsed
     }
 
     private var emptyState: some View {

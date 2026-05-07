@@ -66,6 +66,13 @@ struct TurnStarted: Codable {
     let advisorModel: String?
     let permissionStrategy: String?
     let personality: String?
+    let thinkingMode: String?
+    /// ADR-0022 §3 follow-up: true when the sidecar started this turn
+    /// without resuming a prior SDK session (either a brand-new
+    /// transcript or an explicit `resetSdkSession: true`). The
+    /// AppStatusBar uses this to clear the resident-context counter
+    /// optimistically so the user sees the reset took effect.
+    let sdkSessionFresh: Bool?
 }
 
 /// A tool call awaiting user decision. Sidecar emits this when
@@ -144,6 +151,16 @@ struct ChatRequest: Codable {
     let advisorModel: String?
     let runtimeMode: String?
     let permissionStrategy: String?
+    /// Thinking mode (Fast / Thinking / Max). Optional — sidecar
+    /// defaults to "thinking" (= SDK effort high) when absent, which
+    /// matches MARVIN's prior behaviour, so old clients keep working.
+    let thinkingMode: String?
+    /// ADR-0022 §3 follow-up: when true, the sidecar starts the next
+    /// SDK turn with a fresh server-side session — drops the
+    /// cumulative cache that drives latency without losing the
+    /// visible chat. Set by clicking the "Reset context" chip on the
+    /// AppStatusBar context segment.
+    let resetSdkSession: Bool?
 
     init(
         message: String,
@@ -155,7 +172,9 @@ struct ChatRequest: Codable {
         model: String? = nil,
         advisorModel: String? = nil,
         runtimeMode: String? = nil,
-        permissionStrategy: String? = nil
+        permissionStrategy: String? = nil,
+        thinkingMode: String? = nil,
+        resetSdkSession: Bool? = nil
     ) {
         self.message = message
         self.cwd = cwd
@@ -167,6 +186,8 @@ struct ChatRequest: Codable {
         self.advisorModel = advisorModel
         self.runtimeMode = runtimeMode
         self.permissionStrategy = permissionStrategy
+        self.thinkingMode = thinkingMode
+        self.resetSdkSession = resetSdkSession
     }
 }
 

@@ -115,6 +115,20 @@ final class MarvinBridge {
     /// ChatPreviewModel directly from the SSE stream.
     var marvinState: String = "idle"
 
+    /// Resident-context tokens (ADR-0022 §2). The bytes the model
+    /// walks every turn — drives latency. `cache_read + input` from
+    /// the latest assistant cli.event's `usage`. The bottom status
+    /// bar reads this to render the `ctx N K` segment with a
+    /// 4-band colour ramp (40K / 80K / 140K). Nil when no assistant
+    /// turn has yet emitted usage on this session.
+    var residentContextTokens: Int? = nil
+
+    /// Cache-creation tokens billed *this turn* (ADR-0022 §2). Shown
+    /// only in the hover tooltip so the user can see the cost
+    /// breakdown. Not added to `residentContextTokens` — those are
+    /// orthogonal axes. Nil when no assistant turn has emitted usage.
+    var billableThisTurn: Int? = nil
+
     /// Active personality ("marvin" or "neutral") posted via
     /// `personality-changed`. Drives the About panel's Personality
     /// row so the user can see which mode MARVIN is in without
@@ -128,6 +142,24 @@ final class MarvinBridge {
     /// localStorage-persisted pref.
     /// ADR-0021 M1: writable by NativePrefs directly.
     var permissionStrategy: String = "auto"
+
+    /// User-facing thinking mode: "fast" | "thinking" | "max".
+    /// Maps to the SDK's `effort` field in the runtime layer (see
+    /// `effortForThinkingMode`). The toolbar picker writes here via
+    /// NativePrefs; ChatPreviewView reads it when minting a turn so
+    /// the chosen mode reaches the sidecar in the same request.
+    var thinkingMode: String = "thinking"
+
+    /// Per-file porcelain status from `git status --porcelain=v1`.
+    /// Keyed by absolute path; value is the trimmed two-char code
+    /// (e.g. "M" for modified, "A" for added, "??" for untracked,
+    /// "D" for deleted, "MM" for staged-and-modified). Empty when
+    /// the project isn't a git repo or the poll hasn't completed
+    /// yet. Drives the badges in FileTreeView so the user can see
+    /// at a glance which files MARVIN (or anything else) touched.
+    /// Populated by BranchService on its 15s poll + on every
+    /// turn.completed kick.
+    var dirtyStatus: [String: String] = [:]
 
     /// Phase 5d — pane visibility map posted via `panes-changed`.
     /// Drives the native Layout popover. Defaults match
@@ -346,12 +378,14 @@ final class MarvinBridge {
     func setSelectedFile(_ path: String?) {
         guard let path, !path.isEmpty else {
             selectedFilePath = nil
+            persistFileState()
             return
         }
         if !openFiles.contains(path) {
             openFiles.append(path)
         }
         selectedFilePath = path
+        persistFileState()
     }
 
     /// Phase 5c — close one open-file tab. Removing the active tab
@@ -373,6 +407,7 @@ final class MarvinBridge {
                 selectedFilePath = nil
             }
         }
+        persistFileState()
     }
 
     /// Phase 5c — drop a file's tab in response to a path-level
@@ -385,6 +420,34 @@ final class MarvinBridge {
         if selectedFilePath == oldPath {
             selectedFilePath = newPath
         }
+        persistFileState()
+    }
+
+    /// Restore the persisted tab set + selected file for a project.
+    /// Called after `applyProjectsLoad` / `applyLocalProjectSelection`
+    /// so the editor reopens to the same state on relaunch / project
+    /// switch. Bypasses `setSelectedFile` so the writes are silent
+    /// (no ping-pong with NativePrefs during restore).
+    func restoreFileState(forProject projectId: String) {
+        let prefs = NativePrefs.shared
+        let tabs = prefs.openTabs(forProject: projectId)
+        let selected = prefs.selectedFile(forProject: projectId)
+        openFiles = tabs
+        if let selected, tabs.contains(selected) {
+            selectedFilePath = selected
+        } else {
+            selectedFilePath = tabs.first
+        }
+    }
+
+    /// Push the current file state to NativePrefs under the active
+    /// project. No-op when there's no active project (defensive — can
+    /// happen briefly during launch before ProjectsService.load completes).
+    private func persistFileState() {
+        guard let pid = activeProjectId, !pid.isEmpty else { return }
+        let prefs = NativePrefs.shared
+        prefs.setOpenTabs(openFiles, forProject: pid)
+        prefs.setSelectedFile(selectedFilePath, forProject: pid)
     }
 
     /// SwiftUI ColorScheme equivalent of the web theme. `nil`

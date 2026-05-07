@@ -28,6 +28,7 @@
 // are clickable shortcuts to settings, a few are read-only labels.
 
 import SwiftUI
+import MARVINLogic
 
 struct AppStatusBar: View {
     @Environment(MarvinBridge.self) private var bridge
@@ -216,9 +217,81 @@ struct AppStatusBar: View {
                 fileTypeSegment
                 Divider().frame(height: 10)
             }
+            contextSegment
             costSegment
             bellSegment
         }
+    }
+
+    /// ADR-0022 §2 — context-pressure segment. Shows the current
+    /// resident-context-token count with a 4-band colour ramp tuned
+    /// for Sonnet 4.x's 200K window. The number is informational —
+    /// the user reads the colour to decide whether to start a fresh
+    /// session for the next logical task. Clicking the segment opens
+    /// a menu with the reset affordance (§3 follow-up). Hidden until
+    /// at least one assistant turn has reported usage.
+    @ViewBuilder
+    private var contextSegment: some View {
+        if let resident = bridge.residentContextTokens {
+            let band = ContextUsageReader.band(forTokens: resident)
+            let kCtx = (Double(resident) / 1000.0).rounded()
+            let billable = bridge.billableThisTurn
+            Menu {
+                Section("Context — \(Int(kCtx))K resident") {
+                    Text(band.hint)
+                    if let b = billable {
+                        Text("\(Int((Double(b) / 1000.0).rounded()))K new this turn (billable)")
+                    }
+                    Text("memory.md auto-loads on every fresh session")
+                }
+                Divider()
+                Button {
+                    NotificationCenter.default.post(
+                        name: .marvinRequestSdkReset,
+                        object: nil
+                    )
+                } label: {
+                    Label("Reset context for next message", systemImage: "arrow.counterclockwise")
+                }
+                .help("Drops the SDK cache that's making decisions slow. The visible chat stays intact; only the next turn starts fresh.")
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                        .font(.system(size: 10))
+                    Text("ctx \(Int(kCtx))K")
+                }
+                .foregroundStyle(colour(for: band))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(hoverText(resident: resident, billable: billable, band: band))
+            Divider().frame(height: 10)
+        }
+    }
+
+    /// Map a context band to a foreground SwiftUI colour role. Healthy
+    /// and climbing stay in the secondary/tertiary palette so the
+    /// segment fades into the bar; high and critical break out into
+    /// orange / red so the user notices.
+    private func colour(for band: ContextBand) -> AnyShapeStyle {
+        switch band {
+        case .healthy:  return AnyShapeStyle(.tertiary)
+        case .climbing: return AnyShapeStyle(.secondary)
+        case .high:     return AnyShapeStyle(Color.orange)
+        case .critical: return AnyShapeStyle(Color.red)
+        }
+    }
+
+    private func hoverText(resident: Int, billable: Int?, band: ContextBand) -> String {
+        let kCtx = Int((Double(resident) / 1000.0).rounded())
+        var text = "\(band.hint)\nctx \(kCtx)K (driving latency)"
+        if let b = billable {
+            let kB = Int((Double(b) / 1000.0).rounded())
+            text += " · \(kB)K new this turn (billable)"
+        }
+        text += "\nmemory.md auto-loaded · click chat ⌘⇧N to start fresh"
+        return text
     }
 
     /// Indent picker — clicking cycles through 2 / 4 / 8 spaces / Tab.

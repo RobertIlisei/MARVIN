@@ -107,6 +107,10 @@ Closed every 🔴 finding in the [2026-04-26 full audit](./reviews/2026-04-26-fu
 
 ## Deferred (blockers, not capacity)
 
+### Long-term memory / recall MCP
+
+A `recall(query)` MCP tool over embed-indexed session transcripts (and, on top of that, an optional extension of the graphify graph with conversation-derived nodes). Researched + planned 2026-05-05; parked, not shipping. Full plan, advisor critique, eval-first DoD, and 6 milestones live in [`roadmap/long-term-memory-recall.md`](./roadmap/long-term-memory-recall.md). Pick up when an eval-driven need surfaces.
+
 ### Honeycomb MCP integration for observability
 
 Registered as `marvin-honeycomb`. Would expose trace querying as tools the executor could invoke while debugging production issues.

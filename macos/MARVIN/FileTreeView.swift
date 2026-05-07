@@ -584,6 +584,14 @@ private struct FileTreeRow: View {
         let kind: FileTypeIcon.Kind = node.isDirectory
             ? .directory
             : FileTypeIcon.kind(for: node.path)
+        // Git-status badge resolution. For files: look up the row's
+        // absolute path in the bridge's dirtyStatus map (populated
+        // by BranchService from `git status --porcelain=v1`). For
+        // directories: roll up — show a tint dot when any descendant
+        // is dirty. The roll-up scan is O(dirtyCount) per directory
+        // row; at typical project sizes (a few hundred dirty files
+        // at most, a few dozen visible directory rows) it's free.
+        let dirty = GitStatusBadge.resolve(for: node, bridge: MarvinBridge.shared)
         return HStack(spacing: 6) {
             Image(systemName: FileTypeIcon.symbol(for: kind))
                 .foregroundStyle(FileTypeIcon.color(for: kind))
@@ -592,8 +600,20 @@ private struct FileTreeRow: View {
                 .font(.system(size: 13))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(isSelected ? Color.white : .primary)
+                .foregroundStyle(rowTextColour(dirty: dirty))
             Spacer(minLength: 0)
+            if let dirty = dirty {
+                Text(dirty.label)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isSelected ? Color.white : dirty.colour)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(dirty.colour.opacity(isSelected ? 0.0 : 0.15))
+                    )
+                    .help(dirty.tooltip)
+            }
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)
@@ -668,6 +688,19 @@ private struct FileTreeRow: View {
                 .keyboardShortcut(.delete, modifiers: [.command])
         }
         .accessibilityIdentifier("file-tree-row:\(node.path)")
+    }
+
+    /// Tint the row's filename when the file is dirty. Selected rows
+    /// always read on white (the accent fill below the row already
+    /// carries the selection signal). Unselected dirty rows borrow
+    /// the badge colour at slightly muted alpha so the user can see
+    /// at a glance which files were touched without scanning the
+    /// badge column. Untouched rows fall back to the system primary
+    /// foreground so the file tree stays calm by default.
+    private func rowTextColour(dirty: GitStatusBadge?) -> AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(Color.white) }
+        guard let dirty = dirty else { return AnyShapeStyle(.primary) }
+        return AnyShapeStyle(dirty.colour.opacity(0.95))
     }
 }
 

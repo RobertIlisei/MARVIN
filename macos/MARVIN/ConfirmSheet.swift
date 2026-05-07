@@ -195,23 +195,19 @@ private struct ConfirmToolInput: View {
     }
 
     private var fileMutationView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             if let path = stringField("file_path") ?? stringField("path") {
                 Label(path, systemImage: "doc.text")
                     .font(.callout.monospaced())
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
             if name == "Edit" {
-                let oldLen = stringField("old_string")?.count ?? 0
-                let newLen = stringField("new_string")?.count ?? 0
-                Text("Replace \(oldLen) chars with \(newLen) chars")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                editDiffView
             } else if name == "Write", let content = stringField("content") {
-                Text("Write \(content.count) chars")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                writeContentView(content)
             }
         }
         .padding(10)
@@ -220,6 +216,93 @@ private struct ConfirmToolInput: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color(nsColor: .textBackgroundColor).opacity(0.5))
         )
+    }
+
+    /// Edit before/after — two stacked monospaced blocks tinted red
+    /// (removed) and green (added). Without this, the user only saw
+    /// "Replace N chars with M chars" and had no way to know whether
+    /// they were approving a typo fix or a 200-line refactor; the
+    /// difference matters for gated mode.
+    @ViewBuilder
+    private var editDiffView: some View {
+        let oldStr = stringField("old_string") ?? ""
+        let newStr = stringField("new_string") ?? ""
+        let replaceAll = (boolField("replace_all") == true)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(replaceAll
+                 ? "Replace ALL occurrences (\(oldStr.count) → \(newStr.count) chars):"
+                 : "Replace (\(oldStr.count) → \(newStr.count) chars):")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    diffBlock(prefix: "-", text: oldStr, color: .red)
+                    diffBlock(prefix: "+", text: newStr, color: .green)
+                }
+            }
+            .frame(maxHeight: 240)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.black.opacity(0.18))
+            )
+        }
+    }
+
+    /// Single colored block of the diff. The leading prefix (-/+)
+    /// per line keeps it readable when the user copies the text.
+    private func diffBlock(prefix: String, text: String, color: Color) -> some View {
+        let lines = text.isEmpty ? ["(empty)"] : text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 6) {
+                    Text(prefix)
+                        .font(.system(size: 11).monospaced().weight(.semibold))
+                        .foregroundStyle(color)
+                        .frame(width: 10, alignment: .leading)
+                    Text(line.isEmpty ? " " : line)
+                        .font(.system(size: 11).monospaced())
+                        .foregroundStyle(color)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+            }
+        }
+        .padding(.vertical, 2)
+        .background(color.opacity(0.08))
+    }
+
+    /// Write content — the full file body about to be written. Capped
+    /// to a reasonable scroll height; the user can copy the whole
+    /// thing via textSelection if they want.
+    private func writeContentView(_ content: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Write \(content.count) chars to file:")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(content)
+                    .font(.system(size: 11).monospaced())
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 240)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.green.opacity(0.06))
+            )
+        }
+    }
+
+    private func boolField(_ key: String) -> Bool? {
+        guard case let .object(dict) = input,
+              case let .bool(v) = dict[key] ?? .null else {
+            return nil
+        }
+        return v
     }
 
     private var jsonDumpView: some View {

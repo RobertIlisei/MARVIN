@@ -36,6 +36,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "MARVIN", targets: ["MARVIN"]),
+        .executable(name: "MARVINTests", targets: ["MARVINTests"]),
     ],
     dependencies: [
         // Phase 5b — STTextView is the AppKit text view we use for the
@@ -168,9 +169,22 @@ let package = Package(
         ),
     ],
     targets: [
+        // ADR-0022: pure-logic library. Holds helpers that have no UI
+        // and no @MainActor coupling — context-pressure parsing /
+        // band classification, and the Scope-met sentinel detector.
+        // Living in a library target lets `MARVINTests` link them
+        // (executable targets cannot be linked from another target,
+        // even with @testable import). The MARVIN executable depends
+        // on this too so the production code path is the same as the
+        // test code path.
+        .target(
+            name: "MARVINLogic",
+            path: "MARVINLogic"
+        ),
         .executableTarget(
             name: "MARVIN",
             dependencies: [
+                "MARVINLogic",
                 .product(name: "STTextView", package: "STTextView"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
@@ -199,6 +213,20 @@ let package = Package(
                 "Resources",
             ],
             resources: []
+        ),
+        // ADR-0022: pure-helper tests for the context-pressure
+        // segment + Scope-met detector. We use a tiny executable
+        // target with hand-rolled assertions rather than XCTest /
+        // Swift Testing because the user's local toolchain
+        // (Command Line Tools, no Xcode.app) doesn't link those
+        // frameworks via SPM. The functions exercised here have no
+        // UI and no @MainActor annotation, so a plain executable is
+        // sufficient. Run via `swift run MARVINTests` — exit code 0
+        // means all assertions passed.
+        .executableTarget(
+            name: "MARVINTests",
+            dependencies: ["MARVINLogic"],
+            path: "MARVINTests"
         ),
     ]
 )

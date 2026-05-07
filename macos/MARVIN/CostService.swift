@@ -11,6 +11,10 @@ import AppKit
 
 extension Notification.Name {
     static let marvinTurnCompleted = Notification.Name("marvin.turnCompleted")
+    /// Posted by the AppStatusBar context segment when the user clicks
+    /// "Reset context for next message". The chat preview model
+    /// observes this and arms `resetSdkOnNextSend`. ADR-0022 §3 follow-up.
+    static let marvinRequestSdkReset = Notification.Name("marvin.requestSdkReset")
 }
 
 @MainActor

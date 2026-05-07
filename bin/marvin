@@ -188,14 +188,16 @@ prefs_has_skip() {
 }
 
 check_chromium() {
-  # Purely advisory — Playwright works without it, but marvin-playwright
-  # MCP needs Chromium to drive localhost. Not a gate.
+  # Advisory — MARVIN drives Playwright via plain `npx playwright` from
+  # Bash (no MCP). Chromium is needed for browser-driven verification
+  # turns; missing Chromium just means MARVIN falls back to curl/HTTP
+  # checks for those workflows. Not a gate.
   if [ -d "$HOME/Library/Caches/ms-playwright" ] || [ -d "$HOME/.cache/ms-playwright" ]; then
-    ok "Playwright Chromium installed (marvin-playwright MCP ready)"
+    ok "Playwright Chromium installed (browser-driven verification available)"
   elif prefs_has_skip chromium; then
     dim "  Chromium skipped by user (delete $STATE_DIR/install-prefs.json to re-prompt)"
   else
-    dim "  Chromium not installed — marvin-playwright MCP will be unavailable"
+    dim "  Chromium not installed — browser-driven verification will fall back to curl"
     dim "  install:  npx playwright install chromium  (or run scripts/setup.sh)"
   fi
   return 0
@@ -795,11 +797,24 @@ cmd_install_macos_app() {
   ok "built $built_app"
 
   info "copying to /Applications"
-  # Don't nuke /Applications/MARVIN.app — that's the Tauri build.
-  # Only replace MARVIN-Swift.app.
   rm -rf "$MACOS_APP_BUNDLE_DIR"
   cp -R "$built_app" "$MACOS_APP_BUNDLE_DIR"
   ok "installed at $MACOS_APP_BUNDLE_DIR"
+
+  # ── Migrate from legacy MARVIN-Swift.app ─────────────────────────────
+  # Pre-rename (commit 6351f94) shipped as /Applications/MARVIN-Swift.app.
+  # If it's still around, quit any running instance and delete the bundle
+  # so a stale Dock pin doesn't keep relaunching the old binary. Dock
+  # entries are left alone — the user re-pins MARVIN.app themselves.
+  local legacy_app="/Applications/MARVIN-Swift.app"
+  if [ -d "$legacy_app" ]; then
+    info "removing legacy $legacy_app"
+    osascript -e 'tell application "MARVIN-Swift" to quit' 2>/dev/null || true
+    pkill -f "$legacy_app/Contents/MacOS/MARVIN-Swift" 2>/dev/null || true
+    sleep 1
+    rm -rf "$legacy_app"
+    ok "removed legacy bundle"
+  fi
 
   # ── Sidecar: ensure a production Next.js build exists ─────────────────
   # The launchd agent runs `pnpm start` (production mode). That requires

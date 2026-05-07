@@ -123,6 +123,21 @@ struct ChatMessage: Identifiable, Equatable {
             createdAt: Date()
         )
     }
+
+    /// One-line system row. Used for soft inline annotations like
+    /// "Compacted earlier turns · ~120K tokens freed" (ADR-0022) or
+    /// any other lifecycle marker the user benefits from seeing
+    /// in-stream rather than as a banner.
+    static func system(text: String) -> ChatMessage {
+        let blockId = UUID().uuidString
+        return ChatMessage(
+            id: "system-\(UUID().uuidString)",
+            role: .system,
+            blocks: [.text(id: blockId, text: text)],
+            isStreaming: false,
+            createdAt: Date()
+        )
+    }
 }
 
 // MARK: - Stream-json reducer
@@ -250,6 +265,20 @@ enum ChatStreamReducer {
         // landed; without this guard we'd zap the result back to
         // nil and the card would lose the output.
         var out = messages
+        let alreadyPresent = out.contains(where: { $0.id == env.message.id })
+        if !alreadyPresent {
+            // A *new* assistant message means every prior assistant
+            // row is sealed — only the row currently being written
+            // can be streaming. Without this, intermediate tool-only
+            // messages (which the SDK sometimes emits without a
+            // stop_reason) would keep showing "streaming…" pips long
+            // after their tool result landed, and the chat would
+            // show eight green-checkmarked tool cards all claiming to
+            // still be in flight.
+            for i in out.indices where out[i].role == .assistant && out[i].isStreaming {
+                out[i].isStreaming = false
+            }
+        }
         if let idx = out.firstIndex(where: { $0.id == env.message.id }) {
             let merged = mergePreservingResults(
                 old: out[idx].blocks,
@@ -360,26 +389,16 @@ enum ChatStreamReducer {
     }
 
     private static func reduceSystem(_ messages: [ChatMessage], data: Data) -> [ChatMessage] {
-        // We only surface a system row for the very first `system`
-        // event of a turn (subtype: init), and even then keep it
-        // terse — the React side does the same. Skip rate_limit_event
-        // and other noise.
-        struct SystemEnvelope: Codable {
-            let subtype: String?
-        }
-        guard let env = try? JSONDecoder().decode(SystemEnvelope.self, from: data) else {
-            return messages
-        }
-        guard env.subtype == "init" else { return messages }
-        var out = messages
-        out.append(ChatMessage(
-            id: "system-\(UUID().uuidString)",
-            role: .system,
-            blocks: [.text(id: UUID().uuidString, text: "session initialised")],
-            isStreaming: false,
-            createdAt: Date()
-        ))
-        return out
+        // No system rows. The SDK emits a `system` cli.event with
+        // subtype `init` at the start of every turn — even when
+        // resuming an existing session_id — so previously the chat
+        // grew one "session initialised" line per turn. The label was
+        // misleading (the session isn't being re-initialised, the
+        // agent loop is just starting) and the row carried no
+        // information the user couldn't infer from their own message
+        // bubble. rate_limit_event and other system subtypes were
+        // already skipped; this drops the last one.
+        return messages
     }
 
     private static func reduceResult(_ messages: [ChatMessage], data: Data) -> [ChatMessage] {

@@ -620,7 +620,7 @@ final class FilesService {
     /// Inlines the body-cap on error to keep error logs from
     /// pulling 4 MB file contents into the surface — anything over
     /// 1 KB gets truncated.
-    private func getJSON<T: Decodable>(
+    private func getJSON<T: Decodable & Sendable>(
         url: URL,
         as: T.Type
     ) async throws -> T {
@@ -652,8 +652,15 @@ final class FilesService {
             }
             throw FilesServiceError.httpStatus(http.statusCode, body: body)
         }
+        // Decode off the main actor. /api/files/tree on a 5k-node project
+        // is ~800 KB; on a heavy monorepo it cracks several MB. Decoding
+        // on @MainActor noticeably blocks the UI on launch / project
+        // switch (the tree fetch races with sessions, projects, and
+        // git status — main-thread decode of any of them stutters).
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try await Task.detached(priority: .userInitiated) {
+                try JSONDecoder().decode(T.self, from: data)
+            }.value
         } catch {
             throw FilesServiceError.decode(underlying: error)
         }

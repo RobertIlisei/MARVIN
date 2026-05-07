@@ -121,6 +121,79 @@ export function loadSession(
   return { sessionId, projectId, turns };
 }
 
+/**
+ * Find the last SDK session id recorded in a MARVIN session's transcript.
+ *
+ * Two distinct ids exist in MARVIN:
+ *   - `marvinSessionId` — the JSONL filename, the transcript identity.
+ *   - `sessionId` (SDK) — the Claude Agent SDK's internal session id, what
+ *     `runAgent` needs as `resume` so the agent keeps its context across turns.
+ *
+ * The client only tracks `marvinSessionId`; the SDK's id is captured into
+ * `turn.completed.sessionId` after each turn but never round-tripped to the
+ * client. Without this lookup the SDK has no way to resume — every turn looks
+ * like a fresh conversation to the model. /api/chat calls this to translate
+ * `marvinSessionId → resume sessionId` automatically.
+ *
+ * Cached in-process: once a turn completes we know the SDK id and stash it,
+ * so subsequent turns in the same session don't re-read the JSONL (a 123 MB
+ * outlier in the wild was costing ~300 ms per /api/chat). Falls back to a
+ * disk scan on cache miss (cold start, sidecar restart, unfamiliar session).
+ *
+ * Returns `null` for unknown sessions or transcripts whose turns all completed
+ * with `sessionId: null` (rare — usually means the SDK errored before init).
+ */
+const sdkSessionIdCache = new Map<string, string>();
+const cacheKey = (projectId: string, marvinSessionId: string) =>
+  `${projectId}::${marvinSessionId}`;
+
+export function lastSdkSessionId(
+  projectId: string,
+  marvinSessionId: string,
+): string | null {
+  const key = cacheKey(projectId, marvinSessionId);
+  const cached = sdkSessionIdCache.get(key);
+  if (cached) return cached;
+  const path = marvinPaths.sessionFile(projectId, marvinSessionId);
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, "utf-8");
+  const lines = raw.split("\n");
+  // Reverse scan — the most recent turn.completed wins. Reading the whole
+  // file is cheap for typical sessions; the cache shields the 100+ MB
+  // outliers from re-reading on every turn.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line) continue;
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const turn = JSON.parse(t) as SessionTurn;
+      if (turn.type === "turn.completed" && turn.sessionId) {
+        sdkSessionIdCache.set(key, turn.sessionId);
+        return turn.sessionId;
+      }
+    } catch {
+      // skip malformed line
+    }
+  }
+  return null;
+}
+
+/**
+ * Eagerly populate the SDK-id cache from a freshly-completed turn. /api/chat
+ * calls this after `runAgent` returns so the next turn never has to scan
+ * the JSONL — and so a turn that never went through `lastSdkSessionId` (e.g.
+ * the very first turn of a session) still primes the cache.
+ */
+export function rememberSdkSessionId(
+  projectId: string,
+  marvinSessionId: string,
+  sdkSessionId: string,
+): void {
+  if (!sdkSessionId) return;
+  sdkSessionIdCache.set(cacheKey(projectId, marvinSessionId), sdkSessionId);
+}
+
 /** List sessions for a project, newest first (by mtime of the .jsonl). */
 export function listSessions(projectId: string): Array<{
   sessionId: string;

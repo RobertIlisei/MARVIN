@@ -462,13 +462,27 @@ enum ClipboardImage {
             }
         }
 
-        // 2. Raw image data — try the formats most likely to carry
-        //    the real bytes first (PNG/HEIC), then JPEG, then TIFF.
-        //    `com.apple.screenshot.png` is the type macOS 14+ puts on
-        //    the clipboard for ⌘⇧4-to-clipboard captures (in addition
-        //    to `public.png`, which is also there but arrives second).
+        // 2a. Try every type currently on the pasteboard whose name
+        //     is a screenshot variant. Apple has shipped at least
+        //     `com.apple.screenshot.png` and `com.apple.screenshot`;
+        //     macOS 26 may add new ones. We prefix-match on
+        //     `com.apple.screenshot` so future variants land in this
+        //     branch automatically without another redeploy.
+        if let types = pb.types {
+            for type in types where type.rawValue.hasPrefix("com.apple.screenshot") {
+                if let data = pb.data(forType: type),
+                   let image = NSImage(data: data),
+                   image.size.width > 0 && image.size.height > 0 {
+                    return image
+                }
+            }
+        }
+
+        // 2b. Standard image types — PNG/HEIC/JPEG/TIFF. Real
+        //     screenshots from ⌃⌘⇧4-to-clipboard land here too on
+        //     `public.png`; non-screenshot copies (Photos, Universal
+        //     Clipboard) usually carry these.
         let rawTypes: [NSPasteboard.PasteboardType] = [
-            NSPasteboard.PasteboardType("com.apple.screenshot.png"),
             .png,
             NSPasteboard.PasteboardType("public.png"),
             NSPasteboard.PasteboardType("public.heic"),

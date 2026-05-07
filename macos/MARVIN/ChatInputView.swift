@@ -35,6 +35,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// SwiftUI wrapper around an NSTextView. Bidirectional binding on
 /// `text`; `onSubmit` fires when the user hits ⌘⏎.
@@ -199,25 +200,92 @@ final class ChatNSTextView: NSTextView {
     ///    HEIC / TIFF data over `NSImage(pasteboard:)` to avoid
     ///    grabbing a 1024×1024 generic file-icon thumbnail.
     /// 3. Default text paste.
+    /// NSTextView's default validates the Edit ▸ Paste item by
+    /// checking only for text-shaped pasteboard content. Without
+    /// this override, ⌘V on a clipboard that holds *only* an image
+    /// (e.g. a `⌃⌘⇧4` screenshot, or a Photos copy) finds Paste
+    /// disabled — which means our `paste(_:)` override below never
+    /// gets invoked. We keep the item enabled whenever the
+    /// pasteboard carries an image type, a file URL, or any
+    /// `com.apple.screenshot.*` variant. The actual decoding still
+    /// goes through `paste(_:)` so the policy lives in one place.
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(NSText.paste(_:)) {
+            if pasteboardHasAttachableImageOrFile(NSPasteboard.general) {
+                return true
+            }
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    /// Mirror of validateMenuItem but for the modern user-interface-
+    /// validation protocol (toolbar buttons, validated NSResponder
+    /// chains, etc). Same predicate.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(NSText.paste(_:)) {
+            if pasteboardHasAttachableImageOrFile(NSPasteboard.general) {
+                return true
+            }
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    private func pasteboardHasAttachableImageOrFile(_ pb: NSPasteboard) -> Bool {
+        guard let types = pb.types else { return false }
+        for type in types {
+            // Image variants — covers PNG/HEIC/JPEG/TIFF + the
+            // dynamic `com.apple.screenshot.*` family macOS uses for
+            // ⌃⌘⇧4 captures.
+            if type == .png
+                || type == .tiff
+                || type == .fileURL
+                || type.rawValue.hasPrefix("public.image")
+                || type.rawValue.hasPrefix("public.png")
+                || type.rawValue.hasPrefix("public.jpeg")
+                || type.rawValue.hasPrefix("public.heic")
+                || type.rawValue.hasPrefix("public.heif")
+                || type.rawValue.hasPrefix("public.tiff")
+                || type.rawValue.hasPrefix("com.apple.screenshot")
+            {
+                return true
+            }
+        }
+        return false
+    }
+
     override func paste(_ sender: Any?) {
         let pb = NSPasteboard.general
-        #if DEBUG
-        NSLog("[ChatNSTextView.paste] types=\(pb.types ?? [])")
-        #endif
+        // Always-on diagnostic. Removed the #if DEBUG gate after a
+        // user report that ⌃⌘⇧4 → ⌘V wasn't producing an attachment;
+        // without this log we had no way to see which type the
+        // pasteboard was actually offering. The line is tagged so
+        // it's easy to grep out of dev.log.
+        NSLog("[ChatNSTextView.paste] types=\(pb.types?.map(\.rawValue) ?? [])")
         // 1. File URL(s) — bypass the NSImage round-trip entirely
         //    when the source is already a file on disk.
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
             let fileUrls = urls.filter { $0.isFileURL }
-            if !fileUrls.isEmpty, onFilePaste?(fileUrls) == true {
-                return
+            if !fileUrls.isEmpty {
+                if onFilePaste?(fileUrls) == true {
+                    NSLog("[ChatNSTextView.paste] → handled as file URLs (\(fileUrls.count))")
+                    return
+                } else {
+                    NSLog("[ChatNSTextView.paste] file URLs present but onFilePaste returned false")
+                }
             }
         }
         // 2. Raw image data on the pasteboard. Common for screenshots
         //    and Universal Clipboard pastes that don't include a file
         //    URL (the source app didn't expose one).
-        if let image = ClipboardImage.fromPasteboard(pb),
-           onImagePaste?(image) == true {
-            return
+        if let image = ClipboardImage.fromPasteboard(pb) {
+            if onImagePaste?(image) == true {
+                NSLog("[ChatNSTextView.paste] → handled as image (\(Int(image.size.width))×\(Int(image.size.height)))")
+                return
+            } else {
+                NSLog("[ChatNSTextView.paste] image extracted but onImagePaste returned false")
+            }
+        } else {
+            NSLog("[ChatNSTextView.paste] no image extracted from pasteboard — falling through to super")
         }
         super.paste(sender)
     }
@@ -232,7 +300,24 @@ final class ChatNSTextView: NSTextView {
 struct ChatInputBar: View {
     @Binding var text: String
     let onSubmit: () -> Void
+    /// Cancel the in-flight turn. Surfaced as a Stop button next to
+    /// Send/Queue while `isSending` is true. Bound to ⌘. as the
+    /// macOS-conventional cancel shortcut. nil hides the button (no
+    /// stop affordance — used in surfaces where cancel isn't
+    /// supported).
+    let onStop: (() -> Void)?
     let isSending: Bool
+    /// Replaces the static "Sending…" indicator with whatever MARVIN
+    /// is doing right now — "Thinking…", "Using Bash", "Writing
+    /// reply…", etc. Surfaced from the model's `currentActivity`,
+    /// driven by cli.event peeks. Nil falls back to "Working…" so a
+    /// brief pre-cli.event window doesn't show an empty label.
+    let activityLabel: String?
+    /// Number of messages the user typed while the current turn was
+    /// in flight. The footer shows "· N queued" so they can see the
+    /// pipeline length; the queued-chip strip above the input shows
+    /// the full content + per-row remove.
+    let queuedCount: Int
     /// Phase 5e — pre-send attachment chips (file mentions, image
     /// paste, snippets). Owned by the parent so they survive the
     /// editor's render cycle. The bar renders the chips + hosts
@@ -256,6 +341,36 @@ struct ChatInputBar: View {
     /// `translation` is total-since-start, not per-frame delta).
     @State private var dragStartHeight: Double? = nil
 
+    /// True while a Finder/Desktop drag is hovering over the input.
+    /// Drives a visible drop-target outline so the user knows the
+    /// chat will accept the file. Resets when the drag leaves or
+    /// the drop completes.
+    @State private var isDropTargeted: Bool = false
+
+    /// Resolve a list of NSItemProviders (the system's drag payload)
+    /// into file URLs and append them as attachments. Returns true
+    /// when at least one provider could be loaded — the drop-target
+    /// outline clears either way. Files load asynchronously so we
+    /// hop back to the main actor before mutating `attachments`.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+        for provider in providers {
+            guard provider.canLoadObject(ofClass: URL.self) else { continue }
+            accepted = true
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.isFileURL else { return }
+                Task { @MainActor in
+                    let kind = FileTypeIcon.kind(for: url.path)
+                    let att = kind == .image
+                        ? ChatAttachment(kind: .image(absPath: url.path))
+                        : ChatAttachment(kind: .file(absPath: url.path))
+                    attachments.append(att)
+                }
+            }
+        }
+        return accepted
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             ChatAttachmentsBar(attachments: $attachments)
@@ -269,7 +384,11 @@ struct ChatInputBar: View {
                 ChatTextEditor(
                     text: $text,
                     onSubmit: onSubmit,
-                    isDisabled: isSending,
+                    // Editor stays live during a turn so the user can
+                    // queue follow-up messages. Submitting while
+                    // isSending appends to the model's queue instead
+                    // of starting a parallel turn.
+                    isDisabled: false,
                     onImagePaste: { image in
                         guard let url = ClipboardImage.savePNG(image) else {
                             return false
@@ -331,25 +450,56 @@ struct ChatInputBar: View {
             .background(Color(nsColor: .textBackgroundColor))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    .strokeBorder(
+                        isDropTargeted
+                            ? Color.accentColor
+                            : Color(nsColor: .separatorColor),
+                        lineWidth: isDropTargeted ? 2 : 1
+                    )
             )
+            // Drag-and-drop landing zone for files (screenshots
+            // dragged from Desktop / Finder, image files, code
+            // files, etc.). Reuses the same classifier the paste
+            // path does — image files become image attachments
+            // (rendered with a thumbnail chip), other files become
+            // generic file attachments.
+            .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                handleDroppedProviders(providers)
+            }
 
             HStack(spacing: 8) {
                 if isSending {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Sending…")
+                    Text(activityLabel ?? "Working…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if queuedCount > 0 {
+                    Text(isSending ? "· \(queuedCount) queued" : "\(queuedCount) queued")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
                 }
                 Spacer()
-                Button("Send") {
+                if isSending, let onStop {
+                    Button(role: .destructive) {
+                        onStop()
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .keyboardShortcut(".", modifiers: [.command])
+                    .help("Cancel the in-flight turn. ⌘.")
+                }
+                Button(isSending ? "Queue" : "Send") {
                     onSubmit()
                 }
                 .keyboardShortcut(.return, modifiers: [])
-                .disabled((text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                           && attachments.isEmpty)
-                          || isSending)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          && attachments.isEmpty)
+                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -396,3 +546,4 @@ struct ChatInputBar: View {
             )
     }
 }
+

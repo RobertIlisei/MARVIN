@@ -96,6 +96,7 @@ final class ProjectsService {
                let activeProj = loaded.first(where: { $0.id == activeId }) {
                 CostService.shared.onProjectChanged(to: activeId)
                 BranchService.shared.onProjectChanged(to: activeProj.workDir)
+                MarvinBridge.shared.restoreFileState(forProject: activeId)
             }
         } catch {
             guard attempt < 3 else {
@@ -114,6 +115,7 @@ final class ProjectsService {
         if let proj = projects.first(where: { $0.id == id }) {
             CostService.shared.onProjectChanged(to: id)
             BranchService.shared.onProjectChanged(to: proj.workDir)
+            MarvinBridge.shared.restoreFileState(forProject: id)
         }
     }
 
