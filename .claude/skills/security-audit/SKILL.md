@@ -174,8 +174,8 @@ MARVIN's major components:
   trust boundary for tool execution.
 - The confirm gate (`canUseTool` callback). The security-relevant
   boundary — a bypass is an EoP.
-- The MCP servers (`marvin-graph`, `marvin-playwright`). In-process
-  today; STRIDE matters more if they ever become remote.
+- The MCP server (`marvin-graph`). In-process today; STRIDE matters more
+  if it ever becomes remote.
 - The shell spawner (`/api/terminal/run`). Executes user-provided
   commands in the project cwd. High-value threat surface.
 

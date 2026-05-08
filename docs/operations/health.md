@@ -85,7 +85,7 @@ Fix: set `ANTHROPIC_API_KEY` or run `claude auth login`.
 ## What it does NOT check
 
 - **Internet connectivity to Anthropic.** The endpoint doesn't round-trip to the API (no cost, no auth burn). If the internet is down, `/api/health` still reports `ok: true` — the failure shows up only when you try to send a turn.
-- **Playwright availability.** Chromium install status isn't probed. If Playwright is missing, the `marvin-playwright` MCP will fail to register at turn start, and the turn will note the missing tools — but `/api/health` won't flag it.
+- **Playwright availability.** Chromium install status isn't probed. If Playwright is missing, browser-automation turns (`npx playwright …` shell-outs) will fail at execution time — but `/api/health` won't flag it ahead of time.
 - **Graph health.** Whether a project has `graphify-out/graph.json` isn't checked. That's per-project and varies.
 
 ## Monitoring

@@ -48,7 +48,7 @@ The exact list lives in [`sidecar/packages/tools/src/policy.ts`](../../../sideca
 
 **MCP tools:**
 
-Any tool whose name starts with `mcp__` auto-allows. This includes `marvin-graph` and `marvin-playwright`. MCP servers are trusted — they're registered at turn-start by [`sdk-runner.ts`](../../../sidecar/packages/runtime/src/sdk-runner.ts), not arbitrary.
+Any tool whose name starts with `mcp__` auto-allows. Today that's just `marvin-graph` (the in-process knowledge-graph server). MCP servers are trusted — they're registered at turn-start by [`sdk-runner.ts`](../../sidecar/packages/runtime/src/sdk-runner.ts), not arbitrary.
 
 ### Confirm
 
