@@ -98,7 +98,7 @@ See [Storage reference](../reference/storage.md) for the full details. Summary:
 
 - **Anthropic API**: chat completions + tool calls, over HTTPS. Nothing else.
 - **Browser ↔ Next.js**: same machine, `localhost` only.
-- **Playwright MCP** (optional): MARVIN drives a local Chromium; no external traffic unless your Edit/Bash commands themselves fetch from the internet.
+- **Playwright** (optional, via `Bash` shell-out to `npx playwright`): MARVIN drives a local Chromium; no external traffic unless your Edit/Bash commands themselves fetch from the internet.
 
 ## What MARVIN never does
 

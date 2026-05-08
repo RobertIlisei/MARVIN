@@ -17,7 +17,7 @@ All env vars are optional. MARVIN runs on any machine with sensible defaults.
 
 - **Credentials**: if *both* `ANTHROPIC_API_KEY` and host credentials are present, the API key wins. See [Credentials](../security/credentials.md) for the full detection order.
 - **Data dir**: MARVIN will auto-create subdirectories it needs (`sessions/<projectId>/`). You can safely delete `~/.marvin/` — on next boot MARVIN will recreate an empty structure. You'll lose registered projects, cost history, and session transcripts.
-- **Playwright**: MARVIN no longer registers a Playwright MCP server (it leaked subprocesses on long sessions). When a turn needs a browser, MARVIN shells out via `Bash` — run `npx playwright install chromium` once per machine before that path is exercised.
+- **Playwright**: when a turn needs a browser, MARVIN shells out via `Bash` to `npx playwright`. Run `npx playwright install chromium` once per machine before that path is exercised.
 - **Port 3030**: hardcoded in `sidecar/package.json` scripts and in `/api/health` display. Not currently configurable via env.
 
 ## Per-session (not env)

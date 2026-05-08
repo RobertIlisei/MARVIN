@@ -188,30 +188,18 @@ from the bundle:
 If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
 reach for" section so MARVIN knows the trigger conditions.
 
-## Browser automation — plain Playwright via Bash
+## Browser automation — Playwright CLI via Bash
 
-MARVIN does NOT register a Playwright MCP server. The prior
-`@playwright/mcp` integration leaked subprocesses on long sessions
-(observed: stdio MCP children holding the parent CLI alive past
-`result`, wedging turns for 20+ min) and made every turn pay
-subprocess-spawn latency even when no browser work happened.
-
-The replacement is straightforward: when MARVIN needs a browser, it
-shells out via `Bash` to `npx playwright` directly. Same capability,
-zero per-turn cost, no orphan-process risk.
-
-One-time setup on a fresh machine:
+When MARVIN needs a browser (visual verification after UI work, end-to-end checks, "doesn't work on my machine" debugging), it shells out via `Bash` to the Playwright CLI directly. `npx playwright` is on PATH after the one-time setup:
 
 ```bash
 npx playwright install chromium
 ```
 
-Common shapes MARVIN reaches for (documented in `personality.ts` ▸
-"Browser tools"):
+Common shapes MARVIN reaches for (documented in `personality.ts` ▸ "Browser tools"):
 
 - One-shot screenshot: `npx -y playwright screenshot --browser=chromium <url> /tmp/out.png`
-- Scripted check: write `/tmp/check.mjs` using the Playwright Node API,
-  run with `node /tmp/check.mjs`
+- Scripted check: write `/tmp/check.mjs` using the Playwright Node API, run with `node /tmp/check.mjs`
 - Full e2e: `npx playwright test` against the project's config
 
 ## Adding a new feature
