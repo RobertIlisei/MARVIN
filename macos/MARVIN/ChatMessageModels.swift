@@ -30,6 +30,7 @@
 // pair-able via the shared `tool_use_id` Claude assigns.
 
 import Foundation
+import MARVINLogic
 
 /// Role of one Message. Plain enum — no associated values; per-role
 /// data lives in blocks or in the row view's logic.
@@ -414,7 +415,7 @@ enum ChatStreamReducer {
         let success = env.is_error == false
         let text: String
         if success, let ms = env.duration_ms {
-            text = "completed in \(ms)ms"
+            text = "completed in \(DurationFormat.humanize(ms: ms))"
         } else if let r = env.result {
             text = "ended: \(r)"
         } else {
