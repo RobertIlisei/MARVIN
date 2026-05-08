@@ -16,6 +16,12 @@ Wired in [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) via `CommandGro
 | `⌘ T` | Go to Symbol — fuzzy across the project's `graphify-out/graph.json` | Window menu |
 | `⌘ ⇧ B` | Run Build Task — discovers tasks from `package.json` / `Makefile` / `Package.swift` / `Cargo.toml` and injects the chosen command into the terminal | Window menu |
 | `⌘ ⇧ T` | Toggle theme (light / dark) | Window menu |
+| `⌘ B` | Toggle the file tree pane | Window menu |
+| `⌘ G` | Toggle the knowledge graph pane | Window menu |
+| `⌘ J` | Toggle the embedded terminal pane | Window menu |
+| `⌘ ⇧ P` | Toggle the browser preview pane | Window menu |
+
+Pane toggles persist across launches (`NativePrefs.shared.togglePane`, mirrored to `UserDefaults` under `marvin.panes`).
 
 ## Chat
 
@@ -85,13 +91,12 @@ Every native sheet (`ConfirmSheet`, `GitConfirmSheet`, `DiffSheet`, `ChatAttachm
 
 Surfaces that the old Next.js shell exposed via React keyboard handlers and that the SwiftUI app does not yet bind globally:
 
-- **`⌘ K` — Project Picker.** Project switching today goes through `⌘ O` (Open Project) or the `Open Recent` menu. A global `⌘ K` binding would re-introduce the picker shortcut MARVIN users had pre-Swift-migration.
-- **`⌘ ⇧ N` — Global "New Session".** Wired as a `File → New Session` menu item, but the action is a placeholder pending a formalised cross-window session-reset path. The chat preview window has its own `⌘ ⇧ N` (reset preview only).
-- **`⌘ B` / `⌘ G` / `⌘ J` / `⌘ ⇧ P` — pane toggles** (file tree, knowledge graph, terminal, browser preview). Panes are toggled today via the toolbar; no global keyboard bindings.
-- **`?` — overlay toggle.** Replaced by `⌘ /` (Window → Keyboard Shortcuts). The plain-key form fires inside text inputs, which makes it awkward in a native app; the modifier form is a deliberate shift.
-- **`F2` — rename selected.** File-tree rename is currently triggered from the context menu / a dedicated rename sheet rather than a keyboard binding.
+- **`⌘ K` — Project Picker.** Project switching today goes through `⌘ O` (Open Project) or the `Open Recent` menu. A global `⌘ K` binding for a fuzzy switcher across registered projects (mirroring the pre-migration shortcut) needs a small project-picker sheet — not yet built.
+- **`⌘ ⇧ N` — Global "New Session".** Wired as a `File → New Session` menu item, but the action is a placeholder. The active chat-session state currently lives inside the view that owns it (`@State private var model = ChatPreviewModel()`); a global keyboard binding needs a formal cross-view session-reset path (likely a `MarvinBridge.shared.triggerNewSession()` counter mirroring `triggerQuickOpen()` / `triggerSymbolSearch()`).
+- **`?` — overlay toggle.** Replaced by `⌘ /` (Window → Keyboard Shortcuts). The plain-key form fires inside text inputs, which makes it awkward in a native app; the modifier form is a deliberate shift, not a gap.
+- **`F2` — rename selected.** File-tree rename is currently triggered from the context menu and a dedicated rename sheet. A keyboard binding needs a focused-row state (`@FocusState`) on the tree, which isn't currently tracked at row granularity.
 
-These are tracked as follow-ups to the SwiftUI migration; none are SwiftUI limitations, only un-wired affordances.
+None of these are SwiftUI limitations — only un-wired affordances; the pane-toggle gap that was here previously is now bound in the Window menu.
 
 ## Related
 

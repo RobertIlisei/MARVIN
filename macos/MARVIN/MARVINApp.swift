@@ -450,6 +450,38 @@ struct MARVINApp: App {
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(MarvinBridge.shared.projectWorkDir == nil)
 
+                Divider()
+
+                // Pane toggles. The TopBarPopover already advertises
+                // these as the canonical kbd hints (⌘B / ⌘G / ⌘J / ⌘⇧P);
+                // the bindings here are what makes those hints real.
+                // NativePrefs.togglePane writes the new state through
+                // both UserDefaults and bridge.panes so every reader
+                // (ContentView, TopBarPopover, the persisted prefs) sees
+                // the same value.
+                Button("Toggle File Tree") {
+                    NativePrefs.shared.togglePane("files")
+                }
+                .keyboardShortcut("b", modifiers: [.command])
+
+                Button("Toggle Knowledge Graph") {
+                    NativePrefs.shared.togglePane("graph")
+                }
+                .keyboardShortcut("g", modifiers: [.command])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
+                Button("Toggle Terminal") {
+                    NativePrefs.shared.togglePane("terminal")
+                }
+                .keyboardShortcut("j", modifiers: [.command])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
+                Button("Toggle Browser Preview") {
+                    NativePrefs.shared.togglePane("preview")
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
                 // Phase 2g.3 retired the standalone "Native Chat
                 // (preview)" window. Phase 3d retired the standalone
                 // "Native Files (preview)" window. Phase 4g retired
