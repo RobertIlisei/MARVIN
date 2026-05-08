@@ -1,7 +1,8 @@
-# 0021 — Remove WKWebView ghost; fully-native Swift macOS app
+# ADR-0021 — Remove WKWebView ghost; fully-native Swift macOS app
 
-- Status: accepted
-- Date: 2026-05-05
+**Status:** Accepted
+**Date:** 2026-05-05
+**Deciders:** @robertilisei, MARVIN
 
 ## Context
 

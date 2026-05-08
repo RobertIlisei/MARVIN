@@ -23,17 +23,19 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0007](./0007-advisor-as-subagent-pattern.md) | Advisor as userland subagent pattern | Accepted | 2026-04-19 |
 | [0008](./0008-user-initiated-write-channel.md) | User-initiated write channel for the file tree | Accepted | 2026-04-21 |
 | [0009](./0009-file-uploads-from-os.md) | File uploads from the OS to the project tree | Accepted | 2026-04-21 |
-| [0010](./0010-desktop-wrapper-tauri.md) | Desktop wrapper via Tauri | Accepted | 2026-04-21 |
+| [0010](./0010-desktop-wrapper-tauri.md) | Desktop wrapper via Tauri | **Superseded by 0016** | 2026-04-21 |
 | [0011](./0011-sidecar-node-bundling.md) | Standalone `.app` via bundled Node sidecar | **Deprecated** | 2026-04-21 |
 | [0012](./0012-source-control-mutation-channel.md) | Source-control mutation channel | Accepted | 2026-04-21 |
 | [0013](./0013-git-remote-ops-and-credentials.md) | Git remote ops and credentials | Accepted | 2026-04-21 |
 | [0014](./0014-scout-subagents-read-only.md) | Read-only scout subagents for parallel research | Accepted | 2026-04-21 |
 | [0015](./0015-auto-mode-policy-floor-and-audit-log.md) | Auto-mode policy floor + audit log | Accepted | 2026-04-26 |
-| [0016](./0016-swift-migration.md) | SwiftUI macOS migration (phased) | Accepted | 2026-05-04 |
+| [0016](./0016-swift-migration.md) | SwiftUI macOS migration (phased) | Accepted (implemented) | 2026-05-04 |
 | [0017](./0017-phase-2-chat-native.md) | Phase 2 native chat surface: shape and sub-phases | Accepted | 2026-05-04 |
 | [0018](./0018-phase-3-files-source-control-native.md) | Phase 3 native files + source control: shape and sub-phases | Accepted | 2026-05-04 |
 | [0019](./0019-phase-4-brain-metalkit.md) | Phase 4 native BrainLiquid: shape and sub-phases | Accepted | 2026-05-04 |
 | [0020](./0020-phase-5-embedded-surfaces-native.md) | Phase 5 native embedded surfaces: shape and sub-phases | Accepted | 2026-05-05 |
+| [0021](./0021-webview-removal-fully-native-swift.md) | Remove WKWebView ghost; fully-native Swift macOS app | Accepted | 2026-05-05 |
+| [0022](./0022-context-pressure-observability-and-session-hygiene.md) | Context-pressure observability + session-hygiene nudges | Accepted | 2026-05-06 |
 
 ## Template
 

@@ -90,9 +90,10 @@ important signal.
 ## Always check
 
 - **New API routes have an entry in** [`docs/reference/api.md`](./docs/reference/api.md).
-  17 endpoints today; each lives in the reference with request/response
-  shapes + SSE event table. A new route without a doc entry is a
-  missed ADR-style obligation.
+  Each route ships with its request/response shapes and (where applicable)
+  SSE event table. A new route without a doc entry is a missed ADR-style
+  obligation. Quick sanity: `find sidecar/src/app/api -name route.ts | wc -l`
+  should match the number of `### \`(GET|POST|...)` headers in api.md.
 - **New MCP servers** (`marvin-*` alongside `marvin-graph`) have an
   entry in
   [`docs/reference/mcp-servers.md`](./docs/reference/mcp-servers.md)
