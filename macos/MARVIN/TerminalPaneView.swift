@@ -18,6 +18,7 @@
 //     escape sequences to keep the renderer simple.
 
 import SwiftUI
+import MARVINLogic
 
 struct TerminalPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
@@ -206,11 +207,12 @@ struct TerminalPaneView: View {
                 case .stderr(let data):
                     appendStreamChunk(data, kind: .stderr)
                 case .exit(let code, let signal, let durationMs):
+                    let dur = DurationFormat.humanize(ms: durationMs)
                     let summary: String = {
                         if let signal {
-                            return "[exit signal=\(signal) · \(durationMs)ms]"
+                            return "[exit signal=\(signal) · \(dur)]"
                         }
-                        return "[exit \(code ?? -1) · \(durationMs)ms]"
+                        return "[exit \(code ?? -1) · \(dur)]"
                     }()
                     lines.append(TermLine(kind: .info, text: summary))
                 case .error(let message):
