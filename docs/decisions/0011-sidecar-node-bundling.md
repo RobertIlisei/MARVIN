@@ -1,6 +1,6 @@
 # ADR-0011 — Standalone `.app` via bundled Node sidecar
 
-**Status:** Deprecated (rolled back 2026-04-21 — see §Deprecation note)
+**Status:** Superseded by [ADR-0023](./0023-brew-distributable-bundled-sidecar.md) (2026-05-08). Originally rolled back 2026-04-21 — see §Deprecation note for the historical reasoning; ADR-0023 explains why each rejection reverses under the brew-distribution persona.
 **Date:** 2026-04-21
 **Deciders:** @robertilisei, MARVIN
 **Extends:** [ADR-0010 — Desktop wrapper via Tauri](./0010-desktop-wrapper-tauri.md)
