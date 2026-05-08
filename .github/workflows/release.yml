@@ -33,9 +33,10 @@ permissions:
 jobs:
   build:
     name: build .app + cut release
-    # macos-14 is GitHub's Apple Silicon (arm64) runner. Native Swift
-    # build, no Rosetta, matches the binary we ship.
-    runs-on: macos-14
+    # macos-15 — Apple Silicon (arm64) runner with Xcode 16+. We need
+    # the newer Xcode because xcodegen emits objectVersion=77 project
+    # files that macos-14's Xcode 15 refuses to read.
+    runs-on: macos-15
 
     steps:
       - name: Checkout
