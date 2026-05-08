@@ -276,7 +276,7 @@ export function SetupPopover(props: SetupPopoverProps) {
 
         <Divider />
 
-        {/* Models lives in a dedicated dialog (apps/web/src/components/
+        {/* Models lives in a dedicated dialog (sidecar/src/components/
             settings/models-dialog.tsx). The popover just shows the
             current pair and a "Configure" button — the full picker
             with its preset cards + two selects is too tall to fit

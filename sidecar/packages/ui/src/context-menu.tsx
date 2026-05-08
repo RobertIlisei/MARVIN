@@ -8,7 +8,7 @@ import { cn } from "./utils"
 
 // MARVIN token shorthand.
 // Surfaces / borders / text / focus use the `@theme` variables defined in
-// `apps/web/src/app/globals.css` rather than shadcn's `--popover` /
+// `sidecar/src/app/globals.css` rather than shadcn's `--popover` /
 // `--accent` / `--muted-foreground` names (which MARVIN never declares —
 // see ADR-0006 for the theme cascade). Keeping the MARVIN tokens inline
 // here means the menu stays opaque without depending on a separate CSS

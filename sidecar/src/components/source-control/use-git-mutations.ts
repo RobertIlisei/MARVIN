@@ -48,7 +48,7 @@ export interface MutationError {
   detail?: unknown;
   /**
    * Populated only for `kind: "remote"`. The classifier lives in
-   * `apps/web/src/lib/git-remote-errors.ts` and drives the
+   * `sidecar/src/lib/git-remote-errors.ts` and drives the
    * specialised `RemoteErrorBanner`.
    */
   remote?: {
