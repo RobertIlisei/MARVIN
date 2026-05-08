@@ -151,14 +151,14 @@ dist/
 *.tsbuildinfo
 data/.marvin/            ← MARVIN's runtime data never lives in the repo
 .env*
-graphify-out/cache/
-graphify-out/.graphify_python
+graphify-out/            ← per-project regenerable graph artefacts
 .DS_Store
 .vscode/
 .idea/
 *.log
 .claude/settings.local.json
-.playwright-mcp/
+macos/.build/            ← Swift SPM build cache
+macos/build-spm/         ← SPM-mirror .app stage
 ```
 
 **Checked in** (surprising but intentional): the entire `.claude/skills/` bundle. Per [Quickstart](../getting-started/quickstart.md), `scripts/install-skills.sh` copies from this bundle into `~/.claude/skills/`. The install is idempotent and only falls back to a GitHub fetch when a skill is missing from the pinned bundle.

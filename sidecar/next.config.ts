@@ -15,13 +15,11 @@ const nextConfig: NextConfig = {
   ],
   // Next.js 16: formerly `experimental.serverComponentsExternalPackages`.
   // Keeps these packages out of the server bundle so they keep real
-  // module identity at runtime — important for `@playwright/mcp`
-  // (we resolve its CLI path via `require.resolve`) and
-  // `@anthropic-ai/*` (need full Node APIs, not bundler shims).
+  // module identity at runtime — `@anthropic-ai/*` need full Node APIs,
+  // not bundler shims.
   serverExternalPackages: [
     "@anthropic-ai/sdk",
     "@anthropic-ai/claude-agent-sdk",
-    "@playwright/mcp",
   ],
 };
 

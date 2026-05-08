@@ -91,7 +91,7 @@ If xcodegen is missing, `swift build` is used automatically as a fallback — no
 
 **Optional:**
 
-- `npx playwright install chromium` — needed for `marvin-playwright` MCP (browser automation)
+- `npx playwright install chromium` — needed for browser automation (MARVIN shells out to `npx playwright` when a turn needs a browser)
 - `pip install graphifyy` — needed for the knowledge graph (`/graphify`, graph-aware chat)
 
 After `claude auth login`, also visit [claude.ai](https://claude.ai) once with the same email to accept the latest Consumer Terms — the CLI returns 400 until you do.
@@ -241,7 +241,7 @@ docs/
 - Next.js 16 · TypeScript · Tailwind 4 · shadcn/ui
 - `@anthropic-ai/claude-agent-sdk`
 - pnpm workspaces · Turbo
-- In-process MCP servers: `marvin-graph` + `marvin-playwright` (`@playwright/mcp`)
+- In-process MCP server: `marvin-graph` (browser automation is via `npx playwright` shell-out, not an MCP)
 
 ---
 

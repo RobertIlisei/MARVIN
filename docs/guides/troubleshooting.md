@@ -93,9 +93,9 @@ ls -la <workDir>
 
 If the permissions are wrong, fix them (`chmod`, `chown`) or pick a different `workDir`.
 
-## Playwright MCP not available to MARVIN
+## Browser automation fails
 
-**Symptom:** MARVIN asks to use `marvin-playwright` tools and gets an SDK error that the server didn't register.
+**Symptom:** MARVIN tries to run `npx playwright screenshot …` (or similar) via Bash and gets an error about Chromium not being installed.
 
 **Cause:** Chromium binaries aren't installed.
 
@@ -105,7 +105,7 @@ If the permissions are wrong, fix them (`chmod`, `chown`) or pick a different `w
 npx playwright install chromium
 ```
 
-One-time per machine. MARVIN re-registers the MCP on the next turn.
+One-time per machine. MARVIN's next browser-automation turn picks up the installed binary automatically.
 
 ## "Can't go back to landing page" after picking a session
 

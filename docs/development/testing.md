@@ -62,13 +62,13 @@ curl -N -X POST -H 'content-type: application/json' \
 
 Works, doesn't scale.
 
-### Visual verification via Playwright MCP
+### Visual verification via Playwright
 
-The `marvin-playwright` MCP server can drive a real browser against `localhost:3030`. Past PRs have used it for verifying UI changes land correctly:
+MARVIN can shell out to `npx playwright` for screenshots and click flows against `localhost:3030`. Past PRs have used this to verify UI changes land correctly:
 
-> "Verified visually via `mcp__marvin-playwright` — MARVIN screenshot confirmed: staggered reveals, big italic wordmark, orbital rings, new status-bar style."
+> "Verified visually via `npx -y playwright screenshot` — confirmed: staggered reveals, big italic wordmark, orbital rings, new status-bar style."
 
-Ad-hoc, not a regression fixture.
+Ad-hoc, not a regression fixture. (MARVIN previously shipped a `marvin-playwright` MCP server; it was retired because the stdio child leaked subprocesses on long sessions. The shell-out replaces it.)
 
 ### Dog-fooding
 
@@ -115,7 +115,7 @@ Playwright tests driving the real shell. Expensive to maintain, but:
 - Session resume re-hydrates the transcript.
 - Wordmark click returns to hero after a session.
 
-Tools: `@playwright/test`. MARVIN already depends on `@playwright/mcp`, so the binary is present.
+Tools: `@playwright/test`. Run `npx playwright install chromium` once on a fresh machine.
 
 ### 4. SDK-in-the-loop tests
 
