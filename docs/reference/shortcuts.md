@@ -1,8 +1,8 @@
 # Keyboard shortcuts
 
-All shortcuts registered via a single `window` keydown listener in [`page.tsx`](../../../apps/web/src/app/page.tsx). An `isEditable` guard skips them when focus is inside an input, textarea, or contentEditable element, so they don't swallow keys while typing.
+All shortcuts registered via a single `window` keydown listener in [`page.tsx`](../../../sidecar/src/app/page.tsx). An `isEditable` guard skips them when focus is inside an input, textarea, or contentEditable element, so they don't swallow keys while typing.
 
-Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../../../apps/web/src/components/settings/shortcuts-help.tsx)).
+Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../../../sidecar/src/components/settings/shortcuts-help.tsx)).
 
 ## Global
 
@@ -101,5 +101,5 @@ Added as a conventional logo-as-home affordance after users reported the "new se
 
 ## Related
 
-- [`page.tsx` keyboard section](../../../apps/web/src/app/page.tsx) — the keydown handler.
-- [Shortcuts overlay component](../../../apps/web/src/components/settings/shortcuts-help.tsx) — the in-app help.
+- [`page.tsx` keyboard section](../../../sidecar/src/app/page.tsx) — the keydown handler.
+- [Shortcuts overlay component](../../../sidecar/src/components/settings/shortcuts-help.tsx) — the in-app help.

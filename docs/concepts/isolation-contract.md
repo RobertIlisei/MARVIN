@@ -46,7 +46,7 @@ Configurable via `MARVIN_DATA_DIR`. See [Environment variables](../reference/env
 
 ## What gets injected into the first message
 
-On Message #1 of each session, [`buildProjectContext()`](../../packages/project-context/src/index.ts) builds a project context block and appends it to the system prompt. The block contains:
+On Message #1 of each session, [`buildProjectContext()`](../../sidecar/packages/project-context/src/index.ts) builds a project context block and appends it to the system prompt. The block contains:
 
 - **Project docs** — whole file contents of `README.md`, `CLAUDE.md`, `PROJECT_STATUS.md`, `BUSINESS_OVERVIEW.md`, any `.md` at the repo root. No truncation. (An earlier implementation had a 6 KB cap; it was removed after real projects routinely exceeded it.)
 - **ADRs** — every file under `<workDir>/docs/adr/` verbatim.

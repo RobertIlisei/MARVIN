@@ -27,7 +27,7 @@ One endpoint: `GET /api/health`. One snapshot of "can MARVIN take a turn right n
 
 ## What `defaultModel` is
 
-The value that `defaultModel()` in [`claude-cli.ts`](../../../packages/runtime/src/claude-cli.ts) returns — `MARVIN_MODEL` env var, or else `claude-opus-4-7`.
+The value that `defaultModel()` in [`claude-cli.ts`](../../../sidecar/packages/runtime/src/claude-cli.ts) returns — `MARVIN_MODEL` env var, or else `claude-opus-4-7`.
 
 **It is NOT the model any active turn is using.** A live turn's model is determined by the chat body's `model` / `advisorModel` fields, which the browser picker supplies. See [Advisor strategy → resolution order](../concepts/advisor-strategy.md#resolution-order).
 

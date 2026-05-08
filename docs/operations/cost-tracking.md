@@ -4,7 +4,7 @@ MARVIN records spend on every completed turn and aggregates it per project.
 
 ## What gets recorded
 
-Every `turn.completed` event includes `costUsd` and `tokenUsage` fields from the Agent SDK. [`cost-tracker.ts`](../../../packages/runtime/src/cost-tracker.ts) appends a row to `~/.marvin/cost-tracker.json`:
+Every `turn.completed` event includes `costUsd` and `tokenUsage` fields from the Agent SDK. [`cost-tracker.ts`](../../../sidecar/packages/runtime/src/cost-tracker.ts) appends a row to `~/.marvin/cost-tracker.json`:
 
 ```json
 {
@@ -84,7 +84,7 @@ Note: deleting the ledger doesn't delete Anthropic's own billing records — the
 
 ## Related
 
-- [`cost-tracker.ts`](../../../packages/runtime/src/cost-tracker.ts)
+- [`cost-tracker.ts`](../../../sidecar/packages/runtime/src/cost-tracker.ts)
 - [HTTP API → Cost](../reference/api.md#cost)
 - [Advisor strategy](../concepts/advisor-strategy.md) — the cost-optimization escape hatch.
 - [Anthropic pricing](https://www.anthropic.com/pricing) — the authoritative rate card.

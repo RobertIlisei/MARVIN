@@ -38,7 +38,7 @@ Plus browser `localStorage` for UI preferences.
 }
 ```
 
-Managed by [`packages/runtime/src/projects.ts`](../../../packages/runtime/src/projects.ts). Edits: `/api/projects` POST/DELETE. IDs are derived from `workDir` via `slugifyWorkDir()` — stable across reinstalls if the path doesn't change.
+Managed by [`sidecar/packages/runtime/src/projects.ts`](../../../sidecar/packages/runtime/src/projects.ts). Edits: `/api/projects` POST/DELETE. IDs are derived from `workDir` via `slugifyWorkDir()` — stable across reinstalls if the path doesn't change.
 
 ### `active-project.json`
 
@@ -72,7 +72,7 @@ Append-on-turn ledger.
 }
 ```
 
-Aggregated per-project by [`cost-tracker.ts`](../../../packages/runtime/src/cost-tracker.ts) into today / 7d / lifetime summaries for `/api/cost`. Deleting this file resets the meter without breaking anything else.
+Aggregated per-project by [`cost-tracker.ts`](../../../sidecar/packages/runtime/src/cost-tracker.ts) into today / 7d / lifetime summaries for `/api/cost`. Deleting this file resets the meter without breaking anything else.
 
 ### `sessions/<projectId>/<sessionId>.jsonl`
 
@@ -127,7 +127,7 @@ Everything the UI needs to remember across reloads. Used for things that don't n
 
 | Key | Type | Default | Source |
 |---|---|---|---|
-| `marvin-theme` | `"dark" \| "light"` | absent (→ light) | [`theme-toggle.tsx`](../../../apps/web/src/components/settings/theme-toggle.tsx) |
+| `marvin-theme` | `"dark" \| "light"` | absent (→ light) | [`theme-toggle.tsx`](../../../sidecar/src/components/settings/theme-toggle.tsx) |
 | `marvin.permissionStrategy` | `"auto" \| "gated"` | `"auto"` | `<PermissionToggle>` |
 | `marvin.personality` | `"marvin" \| "neutral"` | `"marvin"` | `<PersonalityToggle>` |
 | `marvin.runtimeMode` | `"opus" \| "advisor"` (legacy) | `"opus"` | older `<RuntimeModeToggle>` |

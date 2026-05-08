@@ -18,7 +18,7 @@ The output is stored in `<workDir>/graphify-out/graph.json` plus an interactive 
 
 **Graphify-first is a hard rule, not a default.** The authoritative enforcement lives in two places that MARVIN actually reads at turn time:
 
-1. **`packages/runtime/src/personality.ts`** — cross-phase hard rule 6 (near the top of CORE_BEHAVIOR, alongside the phase-discipline rules): *"Graphify FIRST — never read a file blind."* Read / Grep / Glob on any source file for a structural question ("how does X work?", "who calls Y?", "blast radius of Z?") is forbidden until a `marvin-graph` MCP tool has pointed at a specific `source_file` + `source_location` citation. Explicit exceptions for trivial content reads (version checks, files the user just named) and files under active edit.
+1. **`sidecar/packages/runtime/src/personality.ts`** — cross-phase hard rule 6 (near the top of CORE_BEHAVIOR, alongside the phase-discipline rules): *"Graphify FIRST — never read a file blind."* Read / Grep / Glob on any source file for a structural question ("how does X work?", "who calls Y?", "blast radius of Z?") is forbidden until a `marvin-graph` MCP tool has pointed at a specific `source_file` + `source_location` citation. Explicit exceptions for trivial content reads (version checks, files the user just named) and files under active edit.
 
 2. **`CLAUDE.md`** Golden Rule 7 — the same directive, scoped to Claude Code sessions working on MARVIN itself. References the `/graphify query`, `/graphify path`, `/graphify explain` slash commands rather than the in-session `marvin-graph` MCP tools.
 
@@ -30,7 +30,7 @@ Both rules spell out the failure mode they exist to prevent: "grep and pray." A 
 
 ### 1. First-message context injection
 
-On turn 1 of each session, [`buildProjectContext()`](../../packages/project-context/src/index.ts) reads `<workDir>/graphify-out/graph.json` and prepends a compact **graph header** to the system prompt:
+On turn 1 of each session, [`buildProjectContext()`](../../sidecar/packages/project-context/src/index.ts) reads `<workDir>/graphify-out/graph.json` and prepends a compact **graph header** to the system prompt:
 
 ```
 ## Knowledge graph (graphify)
@@ -50,7 +50,7 @@ MARVIN orients from this before the first tool call, so it knows what's in the c
 
 ### 2. Per-turn MCP server
 
-Every turn, the Agent SDK mounts [`createGraphMcpServer()`](../../packages/graphify-bridge/src/mcp-server.ts) as an **in-process stdio MCP server** named `marvin-graph`. It exposes four tools:
+Every turn, the Agent SDK mounts [`createGraphMcpServer()`](../../sidecar/packages/graphify-bridge/src/mcp-server.ts) as an **in-process stdio MCP server** named `marvin-graph`. It exposes four tools:
 
 | Tool | Use case |
 |---|---|
@@ -93,7 +93,7 @@ MARVIN itself runs on a graph of *its own code* (the one under `<workDir>/graphi
 
 ## Watchdog + automatic refresh
 
-[`packages/graphify-bridge/src/watchdog.ts`](../../packages/graphify-bridge/src/watchdog.ts) debounces AST refresh on file changes (default 10 min). So during an active development session, the graph stays roughly current without manual runs.
+[`sidecar/packages/graphify-bridge/src/watchdog.ts`](../../sidecar/packages/graphify-bridge/src/watchdog.ts) debounces AST refresh on file changes (default 10 min). So during an active development session, the graph stays roughly current without manual runs.
 
 Doc/image changes still need a manual `/graphify . --update` because semantic re-extraction requires LLM calls and shouldn't fire on every keystroke.
 
@@ -121,5 +121,5 @@ Each writes the answer back into the graph as a new node (type `query` / `path_q
 
 - [Memory and ADRs](./memory-and-adrs.md) — graph is layer 1 of the three-layer ramification stack.
 - [MCP servers reference](../reference/mcp-servers.md) — full `marvin-graph` tool catalog.
-- [`packages/graphify-bridge/`](../../packages/graphify-bridge/) — the bridge implementation.
+- [`sidecar/packages/graphify-bridge/`](../../sidecar/packages/graphify-bridge/) — the bridge implementation.
 - [graphify SKILL.md](https://github.com/safishamsi/graphify) — upstream documentation for the skill itself.

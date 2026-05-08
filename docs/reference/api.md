@@ -1,13 +1,13 @@
 # HTTP API
 
-All routes are Next.js route handlers under `apps/web/src/app/api/`. They run on `localhost:3030`. No auth layer — binding is localhost-only and treats every caller as the logged-in user.
+All routes are Next.js route handlers under `sidecar/src/app/api/`. They run on `localhost:3030`. No auth layer — binding is localhost-only and treats every caller as the logged-in user.
 
 Conventions:
 
 - **Content-Type**: `application/json` unless noted (SSE streams use `text/event-stream`).
 - **Errors**: `{ error: string }` with appropriate 4xx / 5xx status.
 - **SSE events**: `event: <name>\ndata: <json>\n\n` framing.
-- **CSRF guard on every mutating route**: `POST` / `DELETE` / `PUT` / `PATCH` handlers require the header `X-Marvin-Client: 1`. Without it the route returns `403 csrf-guard` without executing. The header forces a CORS preflight so a drive-by tab at another origin cannot trigger the request. `GET` routes are not gated — cross-origin reads are blocked by SOP. Client code should use the `marvinFetch` wrapper in `apps/web/src/lib/csrf.ts`, which attaches the header automatically on mutating methods. ADR-0009 originally established this for multipart uploads; the universal enforcement is the generalisation.
+- **CSRF guard on every mutating route**: `POST` / `DELETE` / `PUT` / `PATCH` handlers require the header `X-Marvin-Client: 1`. Without it the route returns `403 csrf-guard` without executing. The header forces a CORS preflight so a drive-by tab at another origin cannot trigger the request. `GET` routes are not gated — cross-origin reads are blocked by SOP. Client code should use the `marvinFetch` wrapper in `sidecar/src/lib/csrf.ts`, which attaches the header automatically on mutating methods. ADR-0009 originally established this for multipart uploads; the universal enforcement is the generalisation.
 
 ## Chat
 
@@ -66,7 +66,7 @@ Resolve a pending confirm card.
 **Request body:** `{ turnId: string, toolCallId: string, decision: "allow" | "deny", denyMessage?: string }`
 **Response:** `{ ok: true }` or `{ ok: false, reason: string }`
 
-The server looks up the pending resolver in [`confirm-registry`](../../../packages/runtime/src/confirm-registry.ts) and resolves it — the SDK's `canUseTool` promise returns `{ behavior: decision, message: denyMessage }`.
+The server looks up the pending resolver in [`confirm-registry`](../../../sidecar/packages/runtime/src/confirm-registry.ts) and resolves it — the SDK's `canUseTool` promise returns `{ behavior: decision, message: denyMessage }`.
 
 ## Projects
 
@@ -205,14 +205,14 @@ because they never reach the log path.
 - `400 <fs-sandbox error code>` — `cwd` failed `checkFsPath` (e.g.
   `cwd-not-absolute`, `not-found`, `not-a-directory`).
 
-Implementation: [`apps/web/src/app/api/audit/auto/route.ts`](../../apps/web/src/app/api/audit/auto/route.ts);
-the writer lives at [`packages/runtime/src/auto-audit.ts`](../../packages/runtime/src/auto-audit.ts).
+Implementation: [`sidecar/src/app/api/audit/auto/route.ts`](../../sidecar/src/app/api/audit/auto/route.ts);
+the writer lives at [`sidecar/packages/runtime/src/auto-audit.ts`](../../sidecar/packages/runtime/src/auto-audit.ts).
 See [ADR-0015](../decisions/0015-auto-mode-policy-floor-and-audit-log.md)
 for the policy rationale.
 
 ## Files
 
-All file routes share a single path sandbox: `checkFsPath` in [`packages/runtime/src/fs-sandbox.ts`](../../packages/runtime/src/fs-sandbox.ts). Paths outside `cwd`, symlinks (target or ancestor), paths containing NUL, and paths longer than 1024 bytes are rejected before I/O. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md). The ignore list lives in [`packages/tools/src/fs-constants.ts`](../../packages/tools/src/fs-constants.ts) and is shared with the user-initiated write policy (M2).
+All file routes share a single path sandbox: `checkFsPath` in [`sidecar/packages/runtime/src/fs-sandbox.ts`](../../sidecar/packages/runtime/src/fs-sandbox.ts). Paths outside `cwd`, symlinks (target or ancestor), paths containing NUL, and paths longer than 1024 bytes are rejected before I/O. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md). The ignore list lives in [`sidecar/packages/tools/src/fs-constants.ts`](../../sidecar/packages/tools/src/fs-constants.ts) and is shared with the user-initiated write policy (M2).
 
 ### `GET /api/files/tree?cwd=…&depth=…`
 
@@ -342,7 +342,7 @@ Over-cap or policy-rejected files appear in `skipped[]` with a human-readable re
 
 Git is MARVIN's **third mutation channel** — parallel to the LLM tool channel and the user-initiated filesystem channel. Every mutating route runs `checkFsPath(cwd)` → `gitWritePolicy(op)` → (on `confirm` class) require `X-Marvin-Confirmed: <token>` minted by `/api/git/confirm`. See [ADR-0012](../decisions/0012-source-control-mutation-channel.md).
 
-Every git invocation goes through [`runGit`](../../packages/git/src/exec.ts) (`execFile` with `shell: false`); user-supplied refs / paths / remotes pass through [`argv-guards`](../../packages/git/src/argv-guards.ts) before appending to argv; commit messages travel via stdin, never argv.
+Every git invocation goes through [`runGit`](../../sidecar/packages/git/src/exec.ts) (`execFile` with `shell: false`); user-supplied refs / paths / remotes pass through [`argv-guards`](../../sidecar/packages/git/src/argv-guards.ts) before appending to argv; commit messages travel via stdin, never argv.
 
 **Read routes:**
 
@@ -433,7 +433,7 @@ Mints a one-shot token for a `confirm`-class op. Returns `{ token, expiresIn: 60
 
 **Remote routes (ADR-0013):**
 
-Credentials are inherited from the user's git configuration — MARVIN never stores, proxies, or prompts. `GIT_TERMINAL_PROMPT=0` turns any interactive credential prompt into immediate stderr. See [`apps/web/src/lib/git-remote-errors.ts`](../../apps/web/src/lib/git-remote-errors.ts) for the stderr classifier.
+Credentials are inherited from the user's git configuration — MARVIN never stores, proxies, or prompts. `GIT_TERMINAL_PROMPT=0` turns any interactive credential prompt into immediate stderr. See [`sidecar/src/lib/git-remote-errors.ts`](../../sidecar/src/lib/git-remote-errors.ts) for the stderr classifier.
 
 ### `POST /api/git/fetch` — `{ cwd, remote?: string }`
 
@@ -514,7 +514,7 @@ Consumed by the embedded xterm.js terminal pane.
 
 ### `POST /api/graph/query`
 
-Query the active project's `graphify-out/graph.json`. Passthrough to [`@marvin/graphify-bridge`](../../../packages/graphify-bridge/).
+Query the active project's `graphify-out/graph.json`. Passthrough to [`@marvin/graphify-bridge`](../../../sidecar/packages/graphify-bridge/).
 
 **Request body:** `{ cwd: string, op: "summary" | "search" | "neighbors" | "path", args: {...} }`
 

@@ -1,18 +1,18 @@
 # Tool permission policy
 
-Every tool call goes through [`toolPolicy()`](../../../packages/tools/src/policy.ts). The policy classifies the call into one of three outcomes: auto-allow, confirm, or hard-deny. The [confirm gate](../concepts/confirm-gate.md) enforces the classification structurally via the Agent SDK's `canUseTool` callback.
+Every tool call goes through [`toolPolicy()`](../../../sidecar/packages/tools/src/policy.ts). The policy classifies the call into one of three outcomes: auto-allow, confirm, or hard-deny. The [confirm gate](../concepts/confirm-gate.md) enforces the classification structurally via the Agent SDK's `canUseTool` callback.
 
 ## Three mutation channels
 
 MARVIN has three state-mutation surfaces, not one. Each has its own classifier + confirm registry; the only primitive they share is the path sandbox.
 
-1. **LLM tool channel** — MARVIN's `Edit`, `Write`, `Bash` tool calls, routed via `canUseTool` → `toolPolicy` → the turn-scoped [confirm registry](../../../packages/runtime/src/confirm-registry.ts). This page primarily documents that channel. See [ADR-0004](../decisions/0004-structural-confirm-gate.md).
+1. **LLM tool channel** — MARVIN's `Edit`, `Write`, `Bash` tool calls, routed via `canUseTool` → `toolPolicy` → the turn-scoped [confirm registry](../../../sidecar/packages/runtime/src/confirm-registry.ts). This page primarily documents that channel. See [ADR-0004](../decisions/0004-structural-confirm-gate.md).
 2. **User-initiated filesystem channel** — the file-tree UI's create / rename / move / delete / save / upload operations, routed through `/api/files/write/*` → `fsWritePolicy` → a session-scoped confirm-token registry. See [ADR-0008](../decisions/0008-user-initiated-write-channel.md) and [ADR-0009](../decisions/0009-file-uploads-from-os.md).
 3. **User-initiated git channel** — the Source Control panel's stage / unstage / discard / commit / branch / push / pull / fetch operations, routed through `/api/git/*` → `gitWritePolicy` → a parallel session-scoped confirm registry. See [ADR-0012](../decisions/0012-source-control-mutation-channel.md) and [ADR-0013](../decisions/0013-git-remote-ops-and-credentials.md) (M5, pending).
 
-The first two filesystem channels share the same ignore-list, hard-deny-segment list, and secret-file patterns — [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — so tightening one surface automatically tightens the other. The sandbox helper [`checkFsPath`](../../../packages/runtime/src/fs-sandbox.ts) is shared by all three channels and is the only supported way to validate a caller-provided path before I/O.
+The first two filesystem channels share the same ignore-list, hard-deny-segment list, and secret-file patterns — [`sidecar/packages/tools/src/fs-constants.ts`](../../../sidecar/packages/tools/src/fs-constants.ts) — so tightening one surface automatically tightens the other. The sandbox helper [`checkFsPath`](../../../sidecar/packages/runtime/src/fs-sandbox.ts) is shared by all three channels and is the only supported way to validate a caller-provided path before I/O.
 
-Git ops don't share the fs constants (they operate on the git state machine, not file paths), but every `/api/git/*` route still anchors its `cwd` through `checkFsPath` before invoking [`runGit`](../../../packages/git/src/exec.ts) — symlink escapes are a cross-channel concern.
+Git ops don't share the fs constants (they operate on the git state machine, not file paths), but every `/api/git/*` route still anchors its `cwd` through `checkFsPath` before invoking [`runGit`](../../../sidecar/packages/git/src/exec.ts) — symlink escapes are a cross-channel concern.
 
 ## The three outcomes
 
@@ -44,11 +44,11 @@ Bash calls are classified by regex-matching the `command` string. Matches get au
 | Process inspection | `ps`, `lsof -i`, `netstat -an`, `lsof -iTCP:<port>` |
 | Env inspection (non-secret) | `printenv`, `env | grep -v KEY`, `echo $PATH` |
 
-The exact list lives in [`packages/tools/src/policy.ts`](../../../packages/tools/src/policy.ts) as `AUTO_ALLOW_BASH_PATTERNS`. To add a pattern, PR the policy file — don't inline expand in the call site.
+The exact list lives in [`sidecar/packages/tools/src/policy.ts`](../../../sidecar/packages/tools/src/policy.ts) as `AUTO_ALLOW_BASH_PATTERNS`. To add a pattern, PR the policy file — don't inline expand in the call site.
 
 **MCP tools:**
 
-Any tool whose name starts with `mcp__` auto-allows. This includes `marvin-graph` and `marvin-playwright`. MCP servers are trusted — they're registered at turn-start by [`sdk-runner.ts`](../../../packages/runtime/src/sdk-runner.ts), not arbitrary.
+Any tool whose name starts with `mcp__` auto-allows. This includes `marvin-graph` and `marvin-playwright`. MCP servers are trusted — they're registered at turn-start by [`sdk-runner.ts`](../../../sidecar/packages/runtime/src/sdk-runner.ts), not arbitrary.
 
 ### Confirm
 
@@ -84,11 +84,11 @@ Blocks without prompting. Even in `auto` mode, these never run.
 
 Hard-denies return `{ behavior: "deny", message: "..." }` to the SDK. The executor sees the refusal as a tool_result and is expected to find an alternative path.
 
-The list is in `packages/tools/src/policy.ts` as `HARD_DENY_PATTERNS`. Adding one requires a decision — document in `docs/decisions/` if the pattern is controversial.
+The list is in `sidecar/packages/tools/src/policy.ts` as `HARD_DENY_PATTERNS`. Adding one requires a decision — document in `docs/decisions/` if the pattern is controversial.
 
 ## User-initiated file ops
 
-Classified by [`fsWritePolicy()`](../../../packages/tools/src/fs-write-policy.ts). Same three outcomes (`auto` / `confirm` / `deny`) enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/files/write/confirm`.
+Classified by [`fsWritePolicy()`](../../../sidecar/packages/tools/src/fs-write-policy.ts). Same three outcomes (`auto` / `confirm` / `deny`) enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/files/write/confirm`.
 
 | Op | Default class | Reason |
 |---|---|---|
@@ -103,11 +103,11 @@ Classified by [`fsWritePolicy()`](../../../packages/tools/src/fs-write-policy.ts
 | Any delete whose paths include `cwd` itself | deny | Project-root guardrail. |
 | Any path containing NUL bytes or > 1024 bytes | deny | Sandbox rejects before policy runs. |
 
-The deny-list and secret-pattern sources are [`packages/tools/src/fs-constants.ts`](../../../packages/tools/src/fs-constants.ts) — shared with the LLM-initiated channel so tightening one flows into the other.
+The deny-list and secret-pattern sources are [`sidecar/packages/tools/src/fs-constants.ts`](../../../sidecar/packages/tools/src/fs-constants.ts) — shared with the LLM-initiated channel so tightening one flows into the other.
 
 ## User-initiated git ops
 
-Classified by [`gitWritePolicy()`](../../../packages/git/src/git-write-policy.ts). Same three outcomes enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/git/confirm`.
+Classified by [`gitWritePolicy()`](../../../sidecar/packages/git/src/git-write-policy.ts). Same three outcomes enforced at the route boundary: `confirm`-class ops return `409 needs-confirm` unless the request carries an `X-Marvin-Confirmed: <token>` header minted by `/api/git/confirm`.
 
 | Op | Default class | Reason |
 |---|---|---|
@@ -133,7 +133,7 @@ Classified by [`gitWritePolicy()`](../../../packages/git/src/git-write-policy.ts
 | Any op whose `ref` / `remote` fails the argv-guards whitelist | deny | Injection vector. |
 | Any `cwd` failing `checkFsPath` | deny (at the sandbox layer) | — |
 
-The authoritative source is [`packages/git/src/git-write-policy.ts`](../../../packages/git/src/git-write-policy.ts); the classifier is pure and unit-tested.
+The authoritative source is [`sidecar/packages/git/src/git-write-policy.ts`](../../../sidecar/packages/git/src/git-write-policy.ts); the classifier is pure and unit-tested.
 
 ## Mode interactions
 
@@ -172,7 +172,7 @@ Not currently supported. A project's `.marvin/config.json` could in principle ca
 
 ## Subagent tool constraints
 
-MARVIN spawns two sanctioned subagent types via the Agent SDK's `agents` option (see [`sdk-runner.ts`](../../../packages/runtime/src/sdk-runner.ts)). Each carries its own SDK-level tool constraint — the parent's `canUseTool` gate does not reach subagent turns, so the `agents[*].disallowedTools` field is the structural backstop.
+MARVIN spawns two sanctioned subagent types via the Agent SDK's `agents` option (see [`sdk-runner.ts`](../../../sidecar/packages/runtime/src/sdk-runner.ts)). Each carries its own SDK-level tool constraint — the parent's `canUseTool` gate does not reach subagent turns, so the `agents[*].disallowedTools` field is the structural backstop.
 
 | Subagent | ADR | Disallowed tools | MCP servers | Model |
 |---|---|---|---|---|
@@ -194,8 +194,8 @@ Grep the transcripts for `"policy":"hard-deny"` to see what MARVIN tried to run 
 ## Related
 
 - [Confirm gate](../concepts/confirm-gate.md) — how the policy outcomes are enforced structurally.
-- [`packages/tools/src/policy.ts`](../../../packages/tools/src/policy.ts) — the authoritative implementation.
-- [`sdk-runner.ts`](../../../packages/runtime/src/sdk-runner.ts) — where `canUseTool` is installed.
+- [`sidecar/packages/tools/src/policy.ts`](../../../sidecar/packages/tools/src/policy.ts) — the authoritative implementation.
+- [`sdk-runner.ts`](../../../sidecar/packages/runtime/src/sdk-runner.ts) — where `canUseTool` is installed.
 - [ADR-0004 — structural confirm gate](../decisions/0004-structural-confirm-gate.md) — why the gate moved from CLI flags into the SDK callback.
 - [ADR-0008 — User-initiated write channel](../decisions/0008-user-initiated-write-channel.md) — the second mutation channel.
 - [ADR-0012 — Source-control mutation channel](../decisions/0012-source-control-mutation-channel.md) — the third mutation channel.

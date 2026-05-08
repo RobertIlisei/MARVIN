@@ -28,10 +28,10 @@ Reserve 🔴 Important for findings that:
   assistant, no multi-agent), 4 (separate workspace), 5 (no truncation),
   6 (no hardcoded project knowledge), 7 (graphify first).
 - Bypass the structural confirm gate in
-  `packages/runtime/src/sdk-runner.ts` — adding a path that runs tools
+  `sidecar/packages/runtime/src/sdk-runner.ts` — adding a path that runs tools
   without `canUseTool`, weakening `toolPolicy()` classification, or
   introducing a hardcoded "bypass" flag.
-- Touch credential-handling code (`packages/runtime/src/auth.ts`,
+- Touch credential-handling code (`sidecar/packages/runtime/src/auth.ts`,
   `~/.claude/` readers) and leak tokens into logs, transcripts, or the
   cost ledger.
 - Allow `.env*` / secret file reads without the explicit-intent signal
@@ -97,13 +97,13 @@ important signal.
   `marvin-playwright`) have an entry in
   [`docs/reference/mcp-servers.md`](./docs/reference/mcp-servers.md)
   and an updated "prefer `marvin-*`" note in
-  [`packages/runtime/src/personality.ts`](./packages/runtime/src/personality.ts).
+  [`sidecar/packages/runtime/src/personality.ts`](./sidecar/packages/runtime/src/personality.ts).
 - **Tool policy changes** (auto-allow regex additions, confirm/hard-deny
   list edits) have an ADR under `docs/decisions/`. Policy changes move
   silently otherwise and are a security boundary.
 - **Ignore / deny / secret lists** (dir names, path segments, filename
   patterns for secrets) live exclusively in
-  [`packages/tools/src/fs-constants.ts`](./packages/tools/src/fs-constants.ts).
+  [`sidecar/packages/tools/src/fs-constants.ts`](./sidecar/packages/tools/src/fs-constants.ts).
   A new inline `IGNORE = new Set(...)` or re-declared deny pattern in a
   route or component is a drift bug waiting to happen — both write
   channels (LLM + user-initiated) must share the same source. See
@@ -123,9 +123,9 @@ important signal.
   any of these is a 🔴 Important finding. See
   [ADR-0012](./docs/decisions/0012-source-control-mutation-channel.md).
 - **No `exec` / `spawn({ shell: true })` / string-concatenated
-  git commands** anywhere under `packages/git/` or
+  git commands** anywhere under `sidecar/packages/git/` or
   `sidecar/src/app/api/git/`. Every git invocation goes through
-  [`runGit`](./packages/git/src/exec.ts), which uses `execFile`
+  [`runGit`](./sidecar/packages/git/src/exec.ts), which uses `execFile`
   with a validated argv. Finding a direct `child_process.exec` or
   `spawn("sh", ["-c", …])` in a git path is a 🔴 Important finding.
 - **Remote-op routes inherit credentials, never handle them.**

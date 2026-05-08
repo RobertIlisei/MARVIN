@@ -12,7 +12,7 @@ You say "let's build the login page." MARVIN reads the codebase, proposes the sc
 - A **Next.js 16 web app** on `localhost:3030` with a three-pane shell: file tree · chat · brain/graph, plus stackable terminal, file viewer, and browser-preview panes.
 - A **per-project** workspace. Each project has its own knowledge graph (`<workDir>/graphify-out/`), its own ADRs (`<workDir>/docs/adr/*.md`), and its own memory log (`<workDir>/.marvin/memory.md`). MARVIN holds zero cross-session state about past projects.
 - An **operating model**, not just a chat frontend. MARVIN runs an 8-phase dialog on every change request: intake → discovery → impact analysis → architecture → plan → implement → verify → ship. See [The 8-phase workflow](../concepts/eight-phase-workflow.md).
-- A **tool-permission layer**. Every tool call is classified as auto-allowed, confirm-before-act, or hard-denied. Structural gate lives in `packages/runtime/src/sdk-runner.ts`'s `canUseTool` callback. See [Tool policy](../security/tool-policy.md).
+- A **tool-permission layer**. Every tool call is classified as auto-allowed, confirm-before-act, or hard-denied. Structural gate lives in `sidecar/packages/runtime/src/sdk-runner.ts`'s `canUseTool` callback. See [Tool policy](../security/tool-policy.md).
 
 ## What MARVIN is explicitly not
 

@@ -4,7 +4,7 @@ MARVIN needs Claude API access to function. It supports three credential forms, 
 
 ## Detection order
 
-[`getAnthropicAuth()`](../../../packages/runtime/src/auth.ts) walks this list on every turn. First hit wins.
+[`getAnthropicAuth()`](../../../sidecar/packages/runtime/src/auth.ts) walks this list on every turn. First hit wins.
 
 1. **Environment: `ANTHROPIC_API_KEY`.** Direct API key. Detected as `mode: "api-key"`.
 2. **Environment: `CLAUDE_CODE_OAUTH_TOKEN`.** Alternate token form that some Claude Code installs store in the environment. Detected as `mode: "host-credentials"` with hint "env `CLAUDE_CODE_OAUTH_TOKEN`".
@@ -65,7 +65,7 @@ If an API key is set, it sits in `process.env.ANTHROPIC_API_KEY` for the lifetim
 
 ## Related
 
-- [`auth.ts` source](../../../packages/runtime/src/auth.ts)
+- [`auth.ts` source](../../../sidecar/packages/runtime/src/auth.ts)
 - [Env vars](../reference/env-vars.md)
 - [Health checks](../operations/health.md)
 - [Data flow](./data-flow.md) — what leaves your machine.

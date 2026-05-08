@@ -32,7 +32,7 @@ JSONL is append-only. A single turn may contain many `cli.event` entries; a sing
 
 ## Decoupling turns from browser tabs
 
-Closing the tab mid-turn used to kill the Agent SDK run. No longer. [`turn-registry.ts`](../../../packages/runtime/src/turn-registry.ts) holds an in-memory map of live turns, keyed by `marvinSessionId`. Each entry has:
+Closing the tab mid-turn used to kill the Agent SDK run. No longer. [`turn-registry.ts`](../../../sidecar/packages/runtime/src/turn-registry.ts) holds an in-memory map of live turns, keyed by `marvinSessionId`. Each entry has:
 
 - The `AbortController` for the Agent SDK run.
 - An `EventEmitter` the SSE endpoint pumps events to.
@@ -87,5 +87,5 @@ If you want to prune: `rm ~/.marvin/sessions/<projectId>/*.jsonl`. The registere
 - [HTTP API → Chat](../reference/api.md#chat) — `/api/chat`, `/api/chat/cancel`, `/api/chat/resume`.
 - [HTTP API → Sessions](../reference/api.md#sessions) — listing + hydrating.
 - [Storage layout](../reference/storage.md)
-- [`turn-registry.ts`](../../../packages/runtime/src/turn-registry.ts)
-- [`session.ts`](../../../packages/runtime/src/session.ts)
+- [`turn-registry.ts`](../../../sidecar/packages/runtime/src/turn-registry.ts)
+- [`session.ts`](../../../sidecar/packages/runtime/src/session.ts)

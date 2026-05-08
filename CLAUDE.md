@@ -73,7 +73,7 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
 
 ### The firm surfaces
 
-MARVIN's prompt (`packages/runtime/src/personality.ts`) codifies several
+MARVIN's prompt (`sidecar/packages/runtime/src/personality.ts`) codifies several
 enumerated trigger / contract lists that replace soft "use judgement"
 language with deterministic MUST / MUST-NOT categories. When the prompt
 and a human doc disagree, the prompt wins — it's what MARVIN actually
@@ -184,7 +184,7 @@ from the bundle:
 | Observability | Honeycomb skills ship as a Claude Code plugin — `/plugin install honeycomb` |
 | Built-in Claude Code | `/review` (reviews a PR), `/security-review` (security pass on pending changes), `/init` (scaffolds CLAUDE.md) — no install step |
 
-`packages/runtime/src/personality.ts` tells MARVIN when to invoke each.
+`sidecar/packages/runtime/src/personality.ts` tells MARVIN when to invoke each.
 If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
 reach for" section so MARVIN knows the trigger conditions.
 

@@ -65,7 +65,7 @@ Two surfaces, same answer from different angles.
 
 **Soft criteria (this doc, for humans):** write an ADR when the decision is material, structural analysis can't recover it from code alone, and it bounds future work. Skip for typos, internal refactors that don't change contracts, or trivially-obvious choices.
 
-**Hard rules (what MARVIN actually uses at turn time):** the authoritative enumeration lives in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under Phase 4 "Deterministic ADR triggers". Nine MUST-write categories:
+**Hard rules (what MARVIN actually uses at turn time):** the authoritative enumeration lives in [`sidecar/packages/runtime/src/personality.ts`](../../sidecar/packages/runtime/src/personality.ts) under Phase 4 "Deterministic ADR triggers". Nine MUST-write categories:
 
 | # | Trigger |
 |---|---|
@@ -88,7 +88,7 @@ Plus anti-triggers (typos, internal refactors with no contract change, obvious c
 - **Phase 2 Discovery** — reads every `<workDir>/docs/adr/*.md`. Surfaces any that might conflict with the current ask.
 - **Phase 4 Architecture** — when a material decision is made, drafts an ADR and presents it. The user can edit or accept as-is.
 - **Phase 8 Ship** — writes the ADR to `<workDir>/docs/adr/NNNN-*.md` as part of the commit.
-- **Mode A / B / C in the workflow audit** — if ADRs are missing for past decisions, MARVIN proposes them (Mode A) and, on user approval, writes them (Mode B). See [`workflow-health.ts`](../../packages/project-context/src/workflow-health.ts).
+- **Mode A / B / C in the workflow audit** — if ADRs are missing for past decisions, MARVIN proposes them (Mode A) and, on user approval, writes them (Mode B). See [`workflow-health.ts`](../../sidecar/packages/project-context/src/workflow-health.ts).
 
 ### Reading your own ADRs
 
@@ -160,11 +160,11 @@ A fresh `workDir` has none of these. MARVIN's **workflow audit** (injected on ev
   I'll seed this with the first real decision we make together.
 ```
 
-See [`workflow-health.ts`](../../packages/project-context/src/workflow-health.ts) for the exact implementation.
+See [`workflow-health.ts`](../../sidecar/packages/project-context/src/workflow-health.ts) for the exact implementation.
 
 ## Related
 
 - [Isolation contract](./isolation-contract.md) — why these live in the user's repo.
 - [The 8-phase workflow](./eight-phase-workflow.md) — where ADRs and memory are written / read.
 - [Graphify integration](./graphify-integration.md) — the third layer of the ramification stack.
-- [`workflow-health.ts`](../../packages/project-context/src/workflow-health.ts) — Mode A / B / C audit detector.
+- [`workflow-health.ts`](../../sidecar/packages/project-context/src/workflow-health.ts) — Mode A / B / C audit detector.
