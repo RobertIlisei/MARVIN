@@ -29,11 +29,11 @@ WebView removed end-to-end (ADR-0021); native SwiftUI replaces every web-rendere
 ### Phase 1 — Foundations · shipped 2026-04-17
 
 - `~/marvin/` monorepo scaffold, pnpm workspaces + Turbo.
-- `apps/web/` Next.js 16 on port 3030.
-- `packages/runtime/` — Claude CLI + Agent SDK wrappers, auth, session, cost, personality.
-- `packages/project-context/` — first-message injection (docs + ADRs + memory + graph header + workflow audit).
-- `packages/graphify-bridge/` — watchdog, read-graph, in-process MCP server.
-- `packages/git-watch/`, `packages/tools/`, `packages/ui/` — supporting packages.
+- `sidecar/` Next.js 16 on port 3030.
+- `sidecar/packages/runtime/` — Claude CLI + Agent SDK wrappers, auth, session, cost, personality.
+- `sidecar/packages/project-context/` — first-message injection (docs + ADRs + memory + graph header + workflow audit).
+- `sidecar/packages/graphify-bridge/` — watchdog, read-graph, in-process MCP server.
+- `sidecar/packages/git-watch/`, `sidecar/packages/tools/`, `sidecar/packages/ui/` — supporting packages.
 - Baseline `/api/chat` SSE streaming, JSONL session persistence.
 
 **Milestone:** `curl http://localhost:3030/api/health` returns 200; `/api/chat` SSE-streams a MARVIN-voiced reply.
@@ -136,7 +136,7 @@ The pre-landing light theme based on `oklch(0.985 0.003 80)` — effectively pur
 - `--color-bg` → `oklch(0.95 0.006 80)` (was `0.985`)
 - `--color-bg-elev` → `oklch(0.935 0.005 80)` (was `0.975`; elevation gap widened from `0.010` to `0.015`)
 
-Chroma nudged from `0.003` → `0.006` so the surfaces read as warm paper rather than flat grey. Monaco `marvin-light` theme updated in lockstep (`editor.background` `#faf8f3` → `#f1ece1`; line-highlight matched a half-step below). Dark theme untouched. Touches `apps/web/src/app/globals.css` + `apps/web/src/components/settings/monaco-themes.ts`.
+Chroma nudged from `0.003` → `0.006` so the surfaces read as warm paper rather than flat grey. Monaco `marvin-light` theme updated in lockstep (`editor.background` `#faf8f3` → `#f1ece1`; line-highlight matched a half-step below). Dark theme untouched. Touches `sidecar/src/app/globals.css` + `sidecar/src/components/settings/monaco-themes.ts`.
 
 ## Not planned
 

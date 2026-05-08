@@ -45,7 +45,7 @@ MARVIN ships a per-project **Honeycomb config surface** so the executor can quer
 
 ### Storage precedence
 
-`packages/runtime/src/honeycomb-config.ts` resolves the active config in this order:
+`sidecar/packages/runtime/src/honeycomb-config.ts` resolves the active config in this order:
 
 1. `HONEYCOMB_API_KEY` + `HONEYCOMB_ENVIRONMENT` env vars (plus optional `HONEYCOMB_DATASET`, `HONEYCOMB_API_URL`) — useful for CI.
 2. `<workDir>/.marvin/honeycomb.json` — per-project, set via the UI.
@@ -63,7 +63,7 @@ Env vars beat files; workdir beats global.
 
 ### What's *next* (not in v1)
 
-- **`marvin-honeycomb` MCP server registration** — wire `packages/runtime/src/sdk-runner.ts` to spawn the Honeycomb MCP server when a config is present. Tools: `list_datasets`, `run_query`, `get_trace`, etc. Follow-up PR — the config surface lands first so you can pin credentials before the MCP tries to use them.
+- **`marvin-honeycomb` MCP server registration** — wire `sidecar/packages/runtime/src/sdk-runner.ts` to spawn the Honeycomb MCP server when a config is present. Tools: `list_datasets`, `run_query`, `get_trace`, etc. Follow-up PR — the config surface lands first so you can pin credentials before the MCP tries to use them.
 - **Skill wiring** — the `honeycomb-*` skills in `.claude/skills/` expect specific MCP tool names; the MCP PR aligns those.
 
 ## Debugging a turn
