@@ -15,8 +15,9 @@ Plus browser `localStorage` for UI preferences.
 ~/.marvin/
 ├── projects.json            registry of known projects
 ├── active-project.json      currently-selected project id
-├── config.json              user preferences
 ├── cost-tracker.json        append-on-turn spend ledger
+├── attachments/             chat-attached files (per-project subdirs)
+├── honeycomb.json           (optional) global Honeycomb config — see /api/honeycomb/config
 └── sessions/
     └── <projectId>/
         └── <sessionId>.jsonl   one event per line
@@ -48,9 +49,13 @@ Managed by [`sidecar/packages/runtime/src/projects.ts`](../../../sidecar/package
 
 Single-entry file. Written on `PUT /api/projects/active`.
 
-### `config.json`
+### `attachments/`
 
-User preferences set from the UI. Currently includes `personality`, others may be mirrored here if UI ever offers them server-side (today most prefs live only in `localStorage`).
+Chat-attached files, organised under `<projectId>/`. Populated by `/api/files/write/upload` when the user drops a file into the chat input; referenced by SDKMessage tool-result blocks. Cleaned up when a session ends. Not user-editable.
+
+### `honeycomb.json` (optional)
+
+Global Honeycomb / OTLP config. Per-project config at `<workDir>/.marvin/honeycomb.json` takes precedence; env vars take precedence over that. Created via `POST /api/honeycomb/config`; deleted via `DELETE /api/honeycomb/config`. File mode is `0600`. Schema: `{ apiKey, apiUrl?, environment?, dataset? }`.
 
 ### `cost-tracker.json`
 
