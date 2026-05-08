@@ -1,6 +1,6 @@
 # ADR-0010 — Desktop wrapper via Tauri
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0016](./0016-swift-migration.md) (2026-05-04). The Tauri wrapper landed and was used through v1.2; the SwiftUI native target replaced it across phases 1–5, and the Tauri tree was removed by `6351f94` (2026-05-07).
 **Date:** 2026-04-21
 **Deciders:** @robertilisei, MARVIN
 
