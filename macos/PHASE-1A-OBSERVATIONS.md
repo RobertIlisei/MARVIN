@@ -1,12 +1,17 @@
 # Phase 1a — daily-use observations
 
+> **Historical artifact.** This file captured the Phase 1a daily-use
+> evaluation that gated the rest of the SwiftUI migration. The
+> migration has since completed — Phases 1–5 shipped, the WebView
+> island was retired by [ADR-0021](../docs/decisions/0021-webview-removal-fully-native-swift.md),
+> and there is no longer a Tauri build to A/B against. Kept for the
+> diagnostic trail; do not edit further.
+
 Living notebook for the post-Phase-1a gate from
-[ADR-0016 §5](../../docs/decisions/0016-swift-migration.md). Phase 1a
-(WebView island) is shipped on the `feat/swift-migration` branch.
-Phases 1b–d (native menu bar, window-state restoration, NSToolbar)
-are deliberately deferred until there's enough daily-use data to
-decide whether they're worth the cost — or whether the WebView
-island already feels native enough.
+[ADR-0016 §5](../docs/decisions/0016-swift-migration.md). Phase 1a
+(WebView island) was the first shippable slice, with phases 1b–d
+(native menu bar, window-state restoration, NSToolbar) gated on
+real daily-use data.
 
 ## How to use this file
 

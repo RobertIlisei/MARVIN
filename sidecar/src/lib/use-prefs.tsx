@@ -170,7 +170,7 @@ interface PrefsContextValue {
 const PrefsContext = createContext<PrefsContextValue | null>(null);
 
 /**
- * Provider. Wrap the app once (in `apps/web/src/app/page.tsx` or a
+ * Provider. Wrap the app once (in `sidecar/src/app/page.tsx` or a
  * layout) and any descendant can read prefs without prop-drilling.
  *
  * Why provide via Context instead of a raw hook: page.tsx + TopBar +

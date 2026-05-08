@@ -1,5 +1,5 @@
 // TopBarPopovers — Phase 5d. Native peers of the web app's
-// LayoutPopover + SetupPopover (apps/web/src/components/shell/
+// LayoutPopover + SetupPopover (sidecar/src/components/shell/
 // top-bar-popovers.tsx). Mounted as NSToolbar items in MARVINApp.
 //
 // Why native peers instead of letting the web popovers stand:

@@ -1,5 +1,5 @@
 // FileTypes — Codable models for the file-tree + source-control wire
-// between the SwiftUI shell and the Node sidecar at apps/web. Phase
+// between the SwiftUI shell and the Node sidecar at sidecar. Phase
 // 3a foundation per docs/decisions/0018-phase-3-files-source-control-native.md.
 //
 // We deliberately keep the type set narrow at the foundation layer:
