@@ -21,6 +21,11 @@ graphify-out/
 macos/.build/
 macos/build-spm/
 
+# Bundled Node binary fetched by scripts/fetch-node.sh — too big to
+# commit (~90 MB stripped) and reproducible from the pinned SHA.
+# Lives only inside the .app bundle in the release artefact.
+vendor/node/
+
 # OS / editor
 .DS_Store
 .vscode/

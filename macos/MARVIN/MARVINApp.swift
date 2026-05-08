@@ -162,6 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appNapToken: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Spawn the bundled sidecar FIRST — Process.run() returns the
+        // moment the child is forked, well before Next.js binds to
+        // 3030, so kicking it off now overlaps Node startup with the
+        // SwiftUI window-creation work that follows. In dev (no
+        // bundled payload), this is a fast no-op and the offline view
+        // will instead guide the user to start `pnpm dev`. ADR-0023.
+        SidecarManager.shared.start()
+
         // Install the status item once on launch. The controller
         // retains the NSStatusItem itself; we just hold the
         // controller so it doesn't deallocate.
@@ -174,6 +182,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Tear down the bundled sidecar before the AppKit run-loop
+        // exits. Without this, the `node server.js` child survives
+        // Cmd-Q and keeps :3030 bound until the user logs out — a
+        // surprising "ghost server" the next launch fights with.
+        SidecarManager.shared.stop()
+
         if let token = appNapToken {
             ProcessInfo.processInfo.endActivity(token)
             appNapToken = nil

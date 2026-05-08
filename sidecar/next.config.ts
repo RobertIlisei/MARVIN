@@ -1,7 +1,27 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Standalone server output for the bundled .app sidecar. Per ADR-0023,
+  // the brew-distributed MARVIN.app ships .next/standalone/ + bundled node
+  // inside Contents/Resources. The standalone tree pulls in only the
+  // node_modules the server actually touches at runtime.
+  //
+  // outputFileTracingRoot is critical here: Next defaults to scanning the
+  // package directory only, but our @marvin/* workspace packages live
+  // one level up at ../packages/. Pointing the trace root at the repo
+  // root makes the tracer follow the workspace symlinks and bundle the
+  // real source — without this the standalone server crashes on first
+  // request with "Cannot find module '@marvin/runtime'".
+  output: "standalone",
+  outputFileTracingRoot: path.join(__dirname, ".."),
+  // We don't use `next/image` (chat is text-driven, files are markdown
+  // or code). Disable Next's image optimizer so the standalone bundle
+  // doesn't drag in sharp's cross-arch libvips binaries (~150 MB of
+  // .so files for Linux, riscv64, ppc64, etc., none of which we ship).
+  // ADR-0023 §Sizing.
+  images: { unoptimized: true },
   // Pass through workspace package transpilation — our /packages/* source uses
   // .ts directly and Next 16 handles it out of the box, but making the list
   // explicit documents intent.

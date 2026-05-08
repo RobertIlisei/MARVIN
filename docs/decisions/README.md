@@ -24,7 +24,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0008](./0008-user-initiated-write-channel.md) | User-initiated write channel for the file tree | Accepted | 2026-04-21 |
 | [0009](./0009-file-uploads-from-os.md) | File uploads from the OS to the project tree | Accepted | 2026-04-21 |
 | [0010](./0010-desktop-wrapper-tauri.md) | Desktop wrapper via Tauri | **Superseded by 0016** | 2026-04-21 |
-| [0011](./0011-sidecar-node-bundling.md) | Standalone `.app` via bundled Node sidecar | **Deprecated** | 2026-04-21 |
+| [0011](./0011-sidecar-node-bundling.md) | Standalone `.app` via bundled Node sidecar | **Superseded by 0023** | 2026-04-21 |
 | [0012](./0012-source-control-mutation-channel.md) | Source-control mutation channel | Accepted | 2026-04-21 |
 | [0013](./0013-git-remote-ops-and-credentials.md) | Git remote ops and credentials | Accepted | 2026-04-21 |
 | [0014](./0014-scout-subagents-read-only.md) | Read-only scout subagents for parallel research | Accepted | 2026-04-21 |
@@ -36,6 +36,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0020](./0020-phase-5-embedded-surfaces-native.md) | Phase 5 native embedded surfaces: shape and sub-phases | Accepted | 2026-05-05 |
 | [0021](./0021-webview-removal-fully-native-swift.md) | Remove WKWebView ghost; fully-native Swift macOS app | Accepted | 2026-05-05 |
 | [0022](./0022-context-pressure-observability-and-session-hygiene.md) | Context-pressure observability + session-hygiene nudges | Accepted | 2026-05-06 |
+| [0023](./0023-brew-distributable-bundled-sidecar.md) | Brew-distributable `.app` via bundled Node sidecar | Accepted | 2026-05-08 |
 
 ## Template
 
