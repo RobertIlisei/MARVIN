@@ -17,9 +17,6 @@ graphify-out/
 # Claude Code — local-only settings
 .claude/settings.local.json
 
-# Playwright MCP runtime cache (console logs, page dumps)
-.playwright-mcp/
-
 # macOS Swift build cache
 macos/.build/
 macos/build-spm/

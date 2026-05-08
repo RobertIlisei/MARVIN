@@ -10,7 +10,7 @@ What leaves your machine when MARVIN runs. Short answer: only API calls to Anthr
                                          ├── fs reads/writes    (same machine)
                                          ├── git invocations    (same machine)
                                          ├── shell commands     (same machine, your user)
-                                         ├── marvin-playwright  (same machine, optional)
+                                         ├── npx playwright …   (same machine, optional, via Bash)
                                          │
                                          └─── HTTPS ───▶ api.anthropic.com
 ```
@@ -53,7 +53,8 @@ If you block `api.anthropic.com` in your firewall, MARVIN fails loud (every turn
 ## What about MCP servers?
 
 - **`marvin-graph`**: in-process. Reads `<workDir>/graphify-out/graph.json` on your disk. No network.
-- **`marvin-playwright`** (optional): drives a local Chromium. The browser *itself* makes HTTP requests (to whatever URL MARVIN navigates to — usually `http://localhost:3000` or your dev server). MARVIN doesn't route that traffic through itself, but those pages can of course reach the internet.
+
+(MARVIN previously shipped a `marvin-playwright` MCP server; it was retired in favour of shelling out to `npx playwright` via `Bash`. When MARVIN drives a browser, the Chromium process *itself* makes HTTP requests — usually to `http://localhost:3000` or your dev server — but those pages can of course reach the internet. MARVIN doesn't proxy that traffic.)
 
 ## What about the graphify knowledge graph?
 
