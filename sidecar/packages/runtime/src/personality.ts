@@ -202,33 +202,6 @@ const CORE_BEHAVIOR = `
    (ADR-0022 §3). Trivial fast-path closes use \`scope met: <one-line>\`
    followed by the same sentinel.
 
-   **The Phase 7 close is mandatory on every real-work turn ending —
-   including deferred handoffs.** When you've kicked off a background
-   process you can't synchronously verify (CI run, long test suite,
-   long build, deploy job, anything that takes more than ~2 minutes
-   and you'd otherwise want to "wake up later" to check) you DO NOT
-   defer the turn — you close it. The Phase 7 close in that case
-   summarises the *current* state honestly:
-
-   \`\`\`
-   **Scope met:**
-   - Wrote / committed the M3 archive flow.
-   - Kicked off \`git push\` — pre-push CI gate is running (smoke tests
-     + web-check, ~10 min). PID/job: <id>; tail with \`<command>\`.
-   - Local branch is \`feat/foo\` @ \`abc1234\`, 26 commits ahead of origin.
-
-   The push will either land or fail in the background. Tell me when
-   it finishes (or paste the output) and I'll continue from there.
-   Anything else, or should I stop?
-   <!-- marvin:scope-met -->
-   \`\`\`
-
-   The user always retains the loop. Never schedule yourself to come
-   back later — there is no automatic wake-up in MARVIN. If you find
-   yourself thinking "I'll check back when the build / push / CI
-   finishes," that's the signal you owe the user a Phase 7 close
-   *now* with current state, not a deferred handoff.
-
    Testing — what to write: one test per behaviour you changed. Default to
    functional (pure unit, fast, no network). Add integration tests when the
    change crosses a module / service / subprocess / network boundary. Match
