@@ -1,105 +1,99 @@
 # Keyboard shortcuts
 
-All shortcuts registered via a single `window` keydown listener in [`page.tsx`](../../../sidecar/src/app/page.tsx). An `isEditable` guard skips them when focus is inside an input, textarea, or contentEditable element, so they don't swallow keys while typing.
+The macOS app's shortcut surface, sourced from the SwiftUI `commands` block in [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) plus per-view bindings (`.keyboardShortcut(...)`). Run `Window → Keyboard Shortcuts…` (`⌘/`) inside the app for the live overlay.
 
-Press `?` in the app to see the live overlay (source: [`shortcuts-help.tsx`](../../../sidecar/src/components/settings/shortcuts-help.tsx)).
+## Global (always available)
 
-## Global
+Wired in [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) via `CommandGroup` and `WindowGroup.commands { ... }`.
+
+| Keys | Action | Source |
+|---|---|---|
+| `⌘ O` | Open Project — NSOpenPanel; registers + activates the chosen `workDir` | File menu |
+| `⌘ ⌥ R` | Reveal active project in Finder | File menu |
+| `⌘ ⌥ T` | Open Terminal at the active project's `workDir` | File menu |
+| `⌘ /` | Open the **Keyboard Shortcuts** sheet (this list, native) | Window menu |
+| `⌘ P` | Quick Open File — fuzzy across the active project's tree | Window menu |
+| `⌘ T` | Go to Symbol — fuzzy across the project's `graphify-out/graph.json` | Window menu |
+| `⌘ ⇧ B` | Run Build Task — discovers tasks from `package.json` / `Makefile` / `Package.swift` / `Cargo.toml` and injects the chosen command into the terminal | Window menu |
+| `⌘ ⇧ T` | Toggle theme (light / dark) | Window menu |
+
+## Chat
+
+| Keys | Action | Source |
+|---|---|---|
+| `⏎` | Send message | `ChatInputView` |
+| `⌘ .` | Cancel the currently-running turn | `ChatInputView` |
+| `⌘ ⇧ A` | Add attachment | `ChatAttachments` |
+
+## File viewer (when an editor pane is focused)
 
 | Keys | Action |
 |---|---|
-| `⌘ K` / `Ctrl K` | Open the project picker |
-| `⌘ P` / `Ctrl P` | Go to file — fuzzy quick-open over the project tree |
-| `⌘ ⇧ N` / `Ctrl ⇧ N` | Start a new session (clears the current messages, returns to hero) |
-| `⌘ .` / `Ctrl .` | Cancel the currently-running turn |
-| `?` | Toggle the shortcuts overlay |
-| `Esc` | Close any open dialog (picker, shortcuts, model picker, add-project) |
+| `⌘ S` | Save the current file (CAS on mtime — banner surfaces if the file changed on disk). Refuses to mount on binary or >512 KB truncated files. |
+| `⌘ W` | Close the active file pane |
 
-## Panes
-
-| Keys | Action |
-|---|---|
-| `⌘ B` / `Ctrl B` | Toggle the file tree pane |
-| `⌘ G` / `Ctrl G` | Toggle the knowledge graph pane |
-| `⌘ J` / `Ctrl J` | Toggle the embedded terminal |
-| `⌘ ⇧ P` / `Ctrl ⇧ P` | Toggle the browser preview pane (moved from `⌘ P` — that shortcut now opens the fuzzy file picker, matching IDE muscle memory) |
-
-All pane states persist to `localStorage` via `react-resizable-panels`' `autoSaveId`.
-
-## Chat input
-
-| Keys | Action |
-|---|---|
-| `⏎` | Send message |
-| `⇧ ⏎` | Newline in the input (no send) |
-| `⌘ ⏎` | Also sends (parity for Mac-intuitive users) |
-
-## File tree
-
-Right-click any row to open the context menu. Gestures below work on the tree as a whole when it has focus.
+## File tree (when the tree row has focus)
 
 | Keys / gesture | Action |
 |---|---|
-| `⌘ ⌫` / `Ctrl ⌫` | Move selected item(s) to Trash |
-| `⌘ ⇧ ⌫` / `Ctrl ⇧ ⌫` | Delete selected item(s) permanently (confirm required) |
-| `F2` | Rename the currently-selected item (inline input; `Enter` commits, `Esc` cancels) |
-| `Shift-click` | Range-select from the last anchor to the clicked row |
-| `⌘-click` / `Ctrl-click` | Toggle individual rows in/out of the selection |
-| `Esc` | Clear the selection |
-| Drag a file/dir onto a directory | Move the dragged item(s) into that directory |
+| `Return` | Open the focused row in the centre viewer |
+| `Space` | Primary action for the row's bucket — stage (Changes / Untracked) or unstage (Staged); no-op in Conflicts |
+| `⌘ ⌫` | Move selected item(s) to Trash |
+| Drag onto a directory | Move the dragged item(s) into that directory |
 
-Destructive ops classified as `confirm` (permanent delete, secret-file writes, case-only renames) surface an AlertDialog. The user-initiated write channel is gated by `fsWritePolicy` — see [tool-policy](../security/tool-policy.md) and [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
+Destructive operations classified `confirm` (permanent delete, secret-file writes, case-only renames) surface a confirm sheet — see [tool-policy](../security/tool-policy.md) and [ADR-0008](../decisions/0008-user-initiated-write-channel.md).
 
-## Editor (focus inside Monaco)
+## Source control (when the status list has focus)
 
 | Keys | Action |
 |---|---|
-| `⌘ S` / `Ctrl S` | Save the current file (CAS on mtime — banner surfaces if the file changed on disk) |
+| `⌘ Return` | Commit (or amend, when the amend checkbox is on) |
+| `Space` | Primary action for the focused row's bucket — stage / unstage |
+| `Return` | Open the focused file in the centre viewer |
 
-The editor refuses to mount on binary or truncated (>512 KB) files so a save never silently corrupts them. Switching away from a dirty file surfaces the Unsaved Changes dialog.
-
-## Source Control panel (focus inside the status list)
-
-| Keys | Action |
-|---|---|
-| `↑` / `↓` | Move focus across the status list (spans bucket boundaries — Staged / Changes / Untracked) |
-| `Home` / `End` | Jump to the first / last row |
-| `Enter` | Open the focused file in the centre viewer |
-| `Space` | Primary action for the row's bucket — stage (Changes / Untracked) or unstage (Staged). No-op in Conflicts. |
-
-## Source Control panel (focus inside the commit textarea)
+## Terminal (when the terminal pane is focused)
 
 | Keys | Action |
 |---|---|
-| `⌘ Enter` / `Ctrl Enter` | Commit (or amend, when the amend checkbox is on) |
-| `Esc` | Exit amend mode without committing |
+| `⌘ K` | Clear scrollback |
+| `Ctrl C` | Cancel the running command (or clear the current line if idle) — handled by xterm |
+| `Ctrl L` | Clear the screen, preserve the current line buffer — handled by xterm |
+| `↑` / `↓` | Walk command history (capped at 100 entries) |
 
-## Terminal (focus inside the xterm pane)
+## Chat preview (when the standalone preview window is focused)
 
 | Keys | Action |
 |---|---|
-| `↑` / `↓` | Walk command history |
-| `Ctrl C` | Cancel the running command (or clear the current line if idle) |
-| `Ctrl L` | Clear the screen, preserve the current line buffer |
+| `⌘ ⇧ N` | Reset the preview state — wipes the message list and cancels any in-flight turn (`ChatPreviewModel.clear()`) |
 
-History persists to `localStorage.marvin.term.history`, capped at 100 entries.
+## Sheets and dialogs
 
-## Wordmark click
+Every native sheet (`ConfirmSheet`, `GitConfirmSheet`, `DiffSheet`, `ChatAttachments` picker, `FileTreeView` rename / delete, `TopBarPopovers`, `ShortcutsHelpSheet`) wires the standard SwiftUI conventions:
 
-The `marvin` wordmark in the top-left header is a button:
+| Keys | Action |
+|---|---|
+| `Esc` | Cancel / dismiss |
+| `Return` | Default action (allow, save, commit, …) |
 
-- **Hero state** (no messages): no-op (disabled).
-- **Shell state** (messages present): clicking returns to the hero, equivalent to `⌘⇧N` / "new session."
+## Offline view
 
-Added as a conventional logo-as-home affordance after users reported the "new session" button on the right of the header was easy to miss.
+| Keys | Action |
+|---|---|
+| `⌘ R` | Reconnect — re-runs `/api/health` against the sidecar |
 
-## Notes
+## Known gaps (vs the pre-migration web shell)
 
-- On Linux and Windows, substitute `Ctrl` for `⌘` everywhere.
-- `Cmd-P` overrides the browser's "print" shortcut only when MARVIN's tab has focus. If you want to print the MARVIN UI (why?), use the browser menu.
-- Shortcuts do not fire inside Monaco diff editors or the embedded terminal — those have their own focus handling.
+Surfaces that the old Next.js shell exposed via React keyboard handlers and that the SwiftUI app does not yet bind globally:
+
+- **`⌘ K` — Project Picker.** Project switching today goes through `⌘ O` (Open Project) or the `Open Recent` menu. A global `⌘ K` binding would re-introduce the picker shortcut MARVIN users had pre-Swift-migration.
+- **`⌘ ⇧ N` — Global "New Session".** Wired as a `File → New Session` menu item, but the action is a placeholder pending a formalised cross-window session-reset path. The chat preview window has its own `⌘ ⇧ N` (reset preview only).
+- **`⌘ B` / `⌘ G` / `⌘ J` / `⌘ ⇧ P` — pane toggles** (file tree, knowledge graph, terminal, browser preview). Panes are toggled today via the toolbar; no global keyboard bindings.
+- **`?` — overlay toggle.** Replaced by `⌘ /` (Window → Keyboard Shortcuts). The plain-key form fires inside text inputs, which makes it awkward in a native app; the modifier form is a deliberate shift.
+- **`F2` — rename selected.** File-tree rename is currently triggered from the context menu / a dedicated rename sheet rather than a keyboard binding.
+
+These are tracked as follow-ups to the SwiftUI migration; none are SwiftUI limitations, only un-wired affordances.
 
 ## Related
 
-- [`page.tsx` keyboard section](../../../sidecar/src/app/page.tsx) — the keydown handler.
-- [Shortcuts overlay component](../../../sidecar/src/components/settings/shortcuts-help.tsx) — the in-app help.
+- [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) — `commands` block, the source of truth for menu-bar shortcuts.
+- [Native `ShortcutsHelpSheet`](../../macos/MARVIN/ShortcutsHelpSheet.swift) — the sheet that opens via `⌘/`.
