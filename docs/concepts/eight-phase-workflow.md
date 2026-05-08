@@ -2,7 +2,7 @@
 
 MARVIN runs an 8-phase dialog on every new feature or change request. The phases aren't roles played by different agents (see [Single assistant](./single-assistant.md)) — they're stages one assistant moves through in one conversation.
 
-The workflow is encoded in [`packages/runtime/src/personality.ts`](../../packages/runtime/src/personality.ts) under `CORE_BEHAVIOR` and injected into MARVIN's system prompt on every turn. You can read the authoritative version there; this document explains why each phase exists and what to expect as the user.
+The workflow is encoded in [`sidecar/packages/runtime/src/personality.ts`](../../sidecar/packages/runtime/src/personality.ts) under `CORE_BEHAVIOR` and injected into MARVIN's system prompt on every turn. You can read the authoritative version there; this document explains why each phase exists and what to expect as the user.
 
 ## Why 8 phases instead of "just coding"
 
@@ -93,7 +93,7 @@ The user is the continuous overwatch; MARVIN narrates enough to let them catch a
 ## Escape hatches
 
 - **Trivial changes** (typo fixes, one-line comment edits) skip the full workflow. `personality.ts` explicitly says: don't ADR a typo.
-- **`Mode A` / `Mode B` / `Mode C`** — for ambiguous "check again" / "proceed" prompts, `personality.ts` has explicit rules on whether MARVIN should re-audit (Mode A), execute the already-proposed ADRs (Mode B), or move on (Mode C). See [Workflow audit](../../packages/project-context/src/workflow-health.ts).
+- **`Mode A` / `Mode B` / `Mode C`** — for ambiguous "check again" / "proceed" prompts, `personality.ts` has explicit rules on whether MARVIN should re-audit (Mode A), execute the already-proposed ADRs (Mode B), or move on (Mode C). See [Workflow audit](../../sidecar/packages/project-context/src/workflow-health.ts).
 
 ## The three-layer ramification stack
 
@@ -107,6 +107,6 @@ See [ADRs + memory](./memory-and-adrs.md) for how these three layers compose.
 
 ## Related
 
-- [`personality.ts` CORE_BEHAVIOR](../../packages/runtime/src/personality.ts) — the authoritative encoding.
+- [`personality.ts` CORE_BEHAVIOR](../../sidecar/packages/runtime/src/personality.ts) — the authoritative encoding.
 - [Isolation contract](./isolation-contract.md) — why all per-project state lives in the user's own repo, not in MARVIN.
 - [ADR-0001 — single assistant](../decisions/0001-single-assistant.md) — the "why phases, not agents" decision.

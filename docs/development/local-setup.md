@@ -35,13 +35,13 @@ Turbo runs every package's `dev` script. For MARVIN this is effectively `next de
 
 Hot-reload works for:
 
-- `apps/web/src/**` — Turbopack HMR, sub-second refresh.
-- `apps/web/src/app/globals.css` — instant, CSS HMR.
+- `sidecar/src/**` — Turbopack HMR, sub-second refresh.
+- `sidecar/src/app/globals.css` — instant, CSS HMR.
 - `packages/**/src/**` — hot-reload via pnpm workspace linking; may require a full refresh on server-side changes.
 
 Things that require a full restart:
 
-- `apps/web/package.json` changes (deps)
+- `sidecar/package.json` changes (deps)
 - `turbo.json`, `pnpm-workspace.yaml` changes
 - Environment variable changes — `pnpm dev` reads env at boot only.
 
@@ -59,7 +59,7 @@ pnpm -r typecheck
 pnpm -r build
 ```
 
-Compiles every package + runs `next build` for `apps/web`. Validates that the production bundler is happy — Next.js 16's stricter build-time checks catch things dev mode skips.
+Compiles every package + runs `next build` for `sidecar`. Validates that the production bundler is happy — Next.js 16's stricter build-time checks catch things dev mode skips.
 
 ## Clean
 

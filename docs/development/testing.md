@@ -15,10 +15,10 @@ Config: `vitest.config.ts` at the repo root. Node environment (no jsdom — the 
 
 | Module | File | Focus |
 |---|---|---|
-| `fs-sandbox` | `packages/runtime/tests/fs-sandbox.test.ts` | real tmp-dir fs — `..` escape, symlink rejection, ancestor-symlink realpath escape, NUL-byte, path-length cap, directory vs file, non-existent target + parent |
-| `fs-write-policy` | `packages/tools/tests/fs-write-policy.test.ts` | auto / confirm / deny classification for every op kind — `.git` / `node_modules` denies, project-root delete guard, secret-file confirm (`.env*`, `id_rsa`, `*.pem`, etc.), case-only rename warn, permanent delete always confirm, size cap deny |
-| `fs-constants` | `packages/tools/tests/fs-constants.test.ts` | ignore-list and secret-pattern membership — pinned so a casual removal shows up as a failing test |
-| `fs-write-confirm-registry` | `packages/runtime/tests/fs-write-confirm-registry.test.ts` | token one-shot consumption, cwd + op-kind + path-list structural match, rename from/to swap rejected |
+| `fs-sandbox` | `sidecar/packages/runtime/tests/fs-sandbox.test.ts` | real tmp-dir fs — `..` escape, symlink rejection, ancestor-symlink realpath escape, NUL-byte, path-length cap, directory vs file, non-existent target + parent |
+| `fs-write-policy` | `sidecar/packages/tools/tests/fs-write-policy.test.ts` | auto / confirm / deny classification for every op kind — `.git` / `node_modules` denies, project-root delete guard, secret-file confirm (`.env*`, `id_rsa`, `*.pem`, etc.), case-only rename warn, permanent delete always confirm, size cap deny |
+| `fs-constants` | `sidecar/packages/tools/tests/fs-constants.test.ts` | ignore-list and secret-pattern membership — pinned so a casual removal shows up as a failing test |
+| `fs-write-confirm-registry` | `sidecar/packages/runtime/tests/fs-write-confirm-registry.test.ts` | token one-shot consumption, cwd + op-kind + path-list structural match, rename from/to swap rejected |
 
 These tests are chosen because they're pure (no Agent SDK, no Next.js, no UI) and they cover the routes where a silent regression would re-open the write-channel attack surface.
 
@@ -82,11 +82,11 @@ When MARVIN adds tests, the order-of-valuable-coverage is roughly:
 
 Highest ROI, lowest cost:
 
-- **`packages/tools/policy.ts`** — classification of Bash commands into auto / confirm / deny. 50+ regex patterns; each needs a positive and negative case.
-- **`packages/runtime/cost-tracker.ts`** — append + summarize logic.
-- **`packages/runtime/projects.ts`** — `slugifyWorkDir()` + registry CRUD.
-- **`packages/runtime/models.ts`** — `/v1/models` response parser + fallback selection.
-- **`packages/graphify-bridge/read-graph.ts`** — BFS helpers against fixture graphs.
+- **`sidecar/packages/tools/policy.ts`** — classification of Bash commands into auto / confirm / deny. 50+ regex patterns; each needs a positive and negative case.
+- **`sidecar/packages/runtime/cost-tracker.ts`** — append + summarize logic.
+- **`sidecar/packages/runtime/projects.ts`** — `slugifyWorkDir()` + registry CRUD.
+- **`sidecar/packages/runtime/models.ts`** — `/v1/models` response parser + fallback selection.
+- **`sidecar/packages/graphify-bridge/read-graph.ts`** — BFS helpers against fixture graphs.
 
 Tools: `vitest` or `bun test`. Pick based on whichever the pnpm workspace stays coherent with — probably vitest.
 

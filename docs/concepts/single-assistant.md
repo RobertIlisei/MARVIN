@@ -37,7 +37,7 @@ What MARVIN will *not* do:
 - Let a subagent write code the main thread hasn't reviewed. Code edits happen in the main loop, under the confirm gate, visible to you.
 - Dispatch subagents through a "task artifact" / "kanban" layer. That's multi-agent orchestration by another name.
 
-See [`personality.ts` → CORE_BEHAVIOR → "Subagent delegation"](../../packages/runtime/src/personality.ts) for the exact rules encoded in MARVIN's system prompt.
+See [`personality.ts` → CORE_BEHAVIOR → "Subagent delegation"](../../sidecar/packages/runtime/src/personality.ts) for the exact rules encoded in MARVIN's system prompt.
 
 ## What this looks like in practice
 
@@ -82,4 +82,4 @@ MARVIN is not the right tool for those workloads. It's built for the pair-progra
 
 - [ADR-0001 — single assistant, not an agent team](../decisions/0001-single-assistant.md) — the formal decision record.
 - [The 8-phase workflow](./eight-phase-workflow.md) — how "roles" become phases.
-- `personality.ts` [`CORE_BEHAVIOR`](../../packages/runtime/src/personality.ts) — what MARVIN's system prompt actually says on this.
+- `personality.ts` [`CORE_BEHAVIOR`](../../sidecar/packages/runtime/src/personality.ts) — what MARVIN's system prompt actually says on this.

@@ -37,25 +37,25 @@ Everything except the Anthropic API call runs on `localhost`. No MARVIN backend 
 
 ## The three pieces that do real work
 
-### `apps/web/` — Next.js 16 shell
+### `sidecar/` — Next.js 16 shell
 
 Three-pane layout on `localhost:3030`. File tree · chat · brain/graph pane. Stackable center-column panes for file viewer, terminal, and browser preview. All state lives in React + `localStorage` — no client-side server, no DB.
 
-- Chat stream: `/api/chat` → SSE → [`useChatStream`](../../apps/web/src/components/chat/use-chat-stream.ts) in the client.
-- Confirm gate: `/api/confirm` writes back into an in-process [`confirm-registry`](../../packages/runtime/src/confirm-registry.ts) keyed by `(turnId, toolUseId)`.
-- Turn lifecycle: [`turn-registry`](../../packages/runtime/src/turn-registry.ts) decouples SDK execution from the browser's HTTP request so refresh doesn't kill a running turn.
+- Chat stream: `/api/chat` → SSE → [`useChatStream`](../../sidecar/src/components/chat/use-chat-stream.ts) in the client.
+- Confirm gate: `/api/confirm` writes back into an in-process [`confirm-registry`](../../sidecar/packages/runtime/src/confirm-registry.ts) keyed by `(turnId, toolUseId)`.
+- Turn lifecycle: [`turn-registry`](../../sidecar/packages/runtime/src/turn-registry.ts) decouples SDK execution from the browser's HTTP request so refresh doesn't kill a running turn.
 
-### `packages/runtime/` — Agent SDK wrapper
+### `sidecar/packages/runtime/` — Agent SDK wrapper
 
 Owns auth, session persistence, model resolution, cost accounting, tool policy, MCP server registration, and the `canUseTool` structural gate.
 
-- [`sdk-runner.ts`](../../packages/runtime/src/sdk-runner.ts) — the `runAgent()` entrypoint that `/api/chat` calls. Registers MCP servers, wires personality + project context, installs the confirm gate when `permissionStrategy === "gated"`.
-- [`auth.ts`](../../packages/runtime/src/auth.ts) — `getAnthropicAuth()` detects which credential form is available (API key env var, Keychain history, Linux/Win `~/.claude/*.json`).
-- [`session.ts`](../../packages/runtime/src/session.ts) — appends every event to `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
-- [`cost-tracker.ts`](../../packages/runtime/src/cost-tracker.ts) — appends a row per turn to `~/.marvin/cost-tracker.json`, summarizes today / 7d / lifetime.
-- [`projects.ts`](../../packages/runtime/src/projects.ts) — registry for `~/.marvin/projects.json` + `active-project.json`.
+- [`sdk-runner.ts`](../../sidecar/packages/runtime/src/sdk-runner.ts) — the `runAgent()` entrypoint that `/api/chat` calls. Registers MCP servers, wires personality + project context, installs the confirm gate when `permissionStrategy === "gated"`.
+- [`auth.ts`](../../sidecar/packages/runtime/src/auth.ts) — `getAnthropicAuth()` detects which credential form is available (API key env var, Keychain history, Linux/Win `~/.claude/*.json`).
+- [`session.ts`](../../sidecar/packages/runtime/src/session.ts) — appends every event to `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
+- [`cost-tracker.ts`](../../sidecar/packages/runtime/src/cost-tracker.ts) — appends a row per turn to `~/.marvin/cost-tracker.json`, summarizes today / 7d / lifetime.
+- [`projects.ts`](../../sidecar/packages/runtime/src/projects.ts) — registry for `~/.marvin/projects.json` + `active-project.json`.
 
-### `packages/graphify-bridge/` — knowledge-graph plumbing
+### `sidecar/packages/graphify-bridge/` — knowledge-graph plumbing
 
 An in-process MCP server the Agent SDK mounts on every turn. Exposes four tools:
 
@@ -64,13 +64,13 @@ An in-process MCP server the Agent SDK mounts on every turn. Exposes four tools:
 - `graph_neighbors` — 1-hop / 2-hop blast radius from a node.
 - `graph_path` — shortest path between two concepts.
 
-See [Graphify integration](../concepts/graphify-integration.md) for the rationale ("36× cheaper than reading files for structural questions") and [`mcp-server.ts`](../../packages/graphify-bridge/src/mcp-server.ts) for the implementation.
+See [Graphify integration](../concepts/graphify-integration.md) for the rationale ("36× cheaper than reading files for structural questions") and [`mcp-server.ts`](../../sidecar/packages/graphify-bridge/src/mcp-server.ts) for the implementation.
 
 ## Data flow for a single turn
 
 1. **User submits** chat input. Client POSTs to `/api/chat` with `{ message, cwd, model, advisorModel, personality, permissionStrategy, marvinSessionId }`.
 2. **Server resolves** the executor + advisor models (body > `runtimeMode` > `defaultModel()`), builds the project context block (first message only), generates a fresh `turnId`.
-3. **Server opens** the SSE response and starts [`runAgent()`](../../packages/runtime/src/sdk-runner.ts). The SDK registers MCP servers (`marvin-graph`, `marvin-playwright`) and either installs the `canUseTool` confirm callback (gated) or a no-op one (auto).
+3. **Server opens** the SSE response and starts [`runAgent()`](../../sidecar/packages/runtime/src/sdk-runner.ts). The SDK registers the `marvin-graph` MCP server and either installs the `canUseTool` confirm callback (gated) or a no-op one (auto). Browser automation is no longer wired as an MCP server — see [browser tools in personality.ts](../../sidecar/packages/runtime/src/personality.ts) for the `npx playwright` shell-out pattern.
 4. **SDK runs** the turn. Every `SDKMessage` is forwarded to the client as a `cli.event` SSE event and appended to the JSONL session file. If the confirm gate fires, a `confirm.request` event goes out, and the SDK waits for `/api/confirm` to resolve.
 5. **On completion**, the server emits `turn.completed` with the cost + token + duration + final session id. The cost tracker gets a new row.
 6. **Browser reconnect** mid-turn? The `turn-registry` still has the event bus alive. A new SSE subscriber tails it from the reconnect point. See [Session persistence](../operations/sessions.md).
