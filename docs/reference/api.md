@@ -607,6 +607,65 @@ Runtime status + auth detection + defaults.
 
 **Note:** `defaultModel` is the fallback used only when `/api/chat` doesn't get an explicit model. It is **not** what any active turn is using. See [Health checks](../operations/health.md) for how to inspect the actual live model.
 
+## Authentication
+
+UI-managed Anthropic credential mode for the Settings panel ("Authentication" section). The choice persists at `~/.marvin/auth-config.json` (file mode `0600`) and overrides every env-var path; see [Credentials](../security/credentials.md) for the full resolution chain. The raw key only travels in the `POST` body; every `GET` returns a redacted form (last-4 only).
+
+### `GET /api/auth/config`
+
+Returns the current config and the resolver's effective decision.
+
+**Response:**
+
+```ts
+{
+  config: {
+    mode: "cli" | "api-key" | null;        // null = no file (default)
+    keyHint: string | null;                 // "…wxyz" when api-key + key
+    savedAt: string | null;                 // ISO timestamp of last write
+    path: string;                           // absolute path of the config file
+  };
+  file: {
+    exists: boolean;
+    mode: number | null;                    // POSIX permission bits (0o600 expected)
+  };
+  effective: {                              // what getAnthropicAuth() will return
+    mode: "host-credentials" | "api-key" | "oauth" | "none";
+    credentialHint: string | null;
+    error: string | null;
+  };
+}
+```
+
+### `POST /api/auth/config`
+
+Persist a mode change (and optional key).
+
+**Request body:**
+
+```ts
+{
+  mode: "cli" | "api-key";
+  apiKey?: string;       // required when mode === "api-key"; trimmed
+}
+```
+
+**Response:** same shape as the `GET` payload, reflecting the new state.
+
+**Errors:**
+
+| Status | Body | Meaning |
+|---|---|---|
+| `400` | `{ "error": "mode must be 'cli' or 'api-key'" }` | Missing or unknown mode |
+| `400` | `{ "error": "apiKey is required when mode is api-key" }` | mode=api-key without a key |
+| `413` | `{ "error": "body too large" }` | `Content-Length` over 8 KB |
+
+### `DELETE /api/auth/config`
+
+Remove the config file. Resolution falls back to the env-var chain, then host credentials.
+
+**Response:** same shape as `GET`, plus `removed: boolean` (false when the file didn't exist).
+
 ## Honeycomb (telemetry)
 
 Per-project Honeycomb configuration for OpenTelemetry export. The raw API key only travels in a `POST` body; every `GET` returns the redacted form. Files are written with `0600` permissions to `<cwd>/.marvin/honeycomb.json`. Resolution precedence (highest first): `HONEYCOMB_*` env vars, per-`cwd` file, global `~/.marvin/honeycomb.json`. See [`honeycomb-config.ts`](../../sidecar/packages/runtime/src/honeycomb-config.ts) for the storage layout.

@@ -1,16 +1,22 @@
 # Credentials
 
-MARVIN needs Claude API access to function. It supports three credential forms, auto-detected in priority order, with a `MARVIN_USE_HOST_CREDENTIALS` kill switch.
+MARVIN needs Claude API access to function. It supports three credential forms — auto-detected in priority order, overridable from the macOS app's Settings panel, with a `MARVIN_USE_HOST_CREDENTIALS` kill switch.
 
 ## Detection order
 
-[`getAnthropicAuth()`](../../../sidecar/packages/runtime/src/auth.ts) walks this list on every turn. First hit wins.
+[`getAnthropicAuth()`](../../sidecar/packages/runtime/src/auth.ts) walks this list on every turn. First hit wins.
 
-1. **Environment: `ANTHROPIC_API_KEY`.** Direct API key. Detected as `mode: "api-key"`.
-2. **Environment: `CLAUDE_CODE_OAUTH_TOKEN`.** Alternate token form that some Claude Code installs store in the environment. Detected as `mode: "host-credentials"` with hint "env `CLAUDE_CODE_OAUTH_TOKEN`".
-3. **Linux / Windows: `~/.claude/.credentials.json` or `~/.claude/auth.json`.** Cross-platform storage for the Claude CLI. Detected as `mode: "host-credentials"` with hint "`~/.claude` (CLI-managed · auto-detected)".
-4. **macOS: recent activity in `~/Library/Application Support/claude-cli/history.jsonl`.** The CLI's actual credentials live in the macOS Keychain (see caveat below), but the history file proves a `claude auth login` ran. Detected as `mode: "host-credentials"`.
-5. **Nothing.** Detected as `mode: "none"`. `/api/health` returns `ok: false`. MARVIN won't take turns until this is fixed.
+1. **UI override: `~/.marvin/auth-config.json`.** Persisted choice from Settings → Authentication ([API: `/api/auth/config`](../reference/api.md#authentication)).
+   - `mode: "api-key"` with a key → that key wins over every env-var path.
+   - `mode: "cli"` → forces host-credentials, ignores `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` even if they're in the parent shell environment. Falls through to `mode: "none"` if no `~/.claude/` is detected.
+   - File absent (default for fresh installs) → step 2.
+2. **Environment: `ANTHROPIC_API_KEY`.** Direct API key. Detected as `mode: "api-key"`.
+3. **Environment: `CLAUDE_CODE_OAUTH_TOKEN`.** Alternate token form that some Claude Code installs store in the environment. Detected as `mode: "oauth"`.
+4. **Linux / Windows: `~/.claude/.credentials.json` or `~/.claude/auth.json`.** Cross-platform storage for the Claude CLI. Detected as `mode: "host-credentials"` with hint "`~/.claude` (CLI-managed · auto-detected)".
+5. **macOS: recent activity in `~/Library/Application Support/claude-cli/history.jsonl`.** The CLI's actual credentials live in the macOS Keychain (see caveat below), but the history file proves a `claude auth login` ran. Detected as `mode: "host-credentials"`.
+6. **Nothing.** Detected as `mode: "none"`. `/api/health` returns `ok: false`. MARVIN won't take turns until this is fixed.
+
+The UI override is stored at `~/.marvin/auth-config.json` with file mode `0600`. The raw key is **never** returned by `GET /api/auth/config` — only a last-4 hint. See [Storage layout](../reference/storage.md) for the file's place in `~/.marvin/`.
 
 ## macOS Keychain caveat
 

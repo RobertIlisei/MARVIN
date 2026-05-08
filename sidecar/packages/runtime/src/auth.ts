@@ -23,6 +23,8 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { readAuthConfig } from "./auth-config";
+
 export type AuthMode = "host-credentials" | "oauth" | "api-key" | "none";
 
 export interface AnthropicAuthStatus {
@@ -97,6 +99,37 @@ function hasHostCredentialsOnDisk(): boolean {
 }
 
 export function getAnthropicAuth(): AnthropicAuthStatus {
+  // UI-managed override (Settings → Authentication). When the user has
+  // explicitly chosen a mode in the macOS app, that choice wins over
+  // every env-var path. mode === "cli" forces host-credentials regardless
+  // of any ANTHROPIC_API_KEY hanging around in the shell environment.
+  const cfg = readAuthConfig();
+  if (cfg) {
+    if (cfg.mode === "api-key" && cfg.apiKey) {
+      return {
+        mode: isOAuthToken(cfg.apiKey) ? "oauth" : "api-key",
+        credentialHint: maskKey(cfg.apiKey),
+        error: null,
+      };
+    }
+    if (cfg.mode === "cli") {
+      if (hasHostCredentialsOnDisk()) {
+        return {
+          mode: "host-credentials",
+          credentialHint: "~/.claude (CLI-managed · selected in UI)",
+          error: null,
+        };
+      }
+      return {
+        mode: "none",
+        credentialHint: null,
+        error:
+          "UI selected 'Claude CLI', but no host credentials found. " +
+          "Run `claude auth login`, or switch to 'Anthropic API key' in Settings.",
+      };
+    }
+  }
+
   if (trimEnv("MARVIN_USE_HOST_CREDENTIALS") === "1") {
     return {
       mode: "host-credentials",
@@ -158,22 +191,36 @@ export function buildSubprocessEnv(): NodeJS.ProcessEnv {
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE;
 
+  const cfg = readAuthConfig();
   const status = getAnthropicAuth();
   switch (status.mode) {
     case "host-credentials":
-      // The CLI will read its own token from disk; don't override.
+      // The CLI will read its own token from disk. If the user picked
+      // "Claude CLI" in the UI, also strip any ANTHROPIC_API_KEY /
+      // CLAUDE_CODE_OAUTH_TOKEN that happens to be in the parent process
+      // env so the CLI doesn't override the explicit UI choice.
+      if (cfg?.mode === "cli") {
+        delete env.ANTHROPIC_API_KEY;
+        delete env.CLAUDE_CODE_OAUTH_TOKEN;
+      }
       return env;
     case "oauth": {
+      // UI config wins, then env. OAuth tokens MUST go via
+      // CLAUDE_CODE_OAUTH_TOKEN — Claude CLI rejects them via
+      // ANTHROPIC_API_KEY ("Invalid API key").
       const token =
-        trimEnv("CLAUDE_CODE_OAUTH_TOKEN") || trimEnv("ANTHROPIC_API_KEY");
-      // OAuth tokens MUST go via CLAUDE_CODE_OAUTH_TOKEN — Claude CLI rejects
-      // OAuth tokens passed via ANTHROPIC_API_KEY ("Invalid API key").
+        (cfg?.mode === "api-key" ? cfg.apiKey : undefined) ||
+        trimEnv("CLAUDE_CODE_OAUTH_TOKEN") ||
+        trimEnv("ANTHROPIC_API_KEY");
       delete env.ANTHROPIC_API_KEY;
       env.CLAUDE_CODE_OAUTH_TOKEN = token;
       return env;
     }
     case "api-key": {
-      const key = trimEnv("ANTHROPIC_API_KEY");
+      // UI config wins, then env.
+      const key =
+        (cfg?.mode === "api-key" ? cfg.apiKey : undefined) ||
+        trimEnv("ANTHROPIC_API_KEY");
       env.ANTHROPIC_API_KEY = key;
       delete env.CLAUDE_CODE_OAUTH_TOKEN;
       return env;

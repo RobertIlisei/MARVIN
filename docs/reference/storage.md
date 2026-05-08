@@ -17,6 +17,7 @@ Plus browser `localStorage` for UI preferences.
 ├── active-project.json      currently-selected project id
 ├── cost-tracker.json        append-on-turn spend ledger
 ├── attachments/             chat-attached files (per-project subdirs)
+├── auth-config.json         (optional, 0600) UI-managed Anthropic auth — see /api/auth/config
 ├── honeycomb.json           (optional) global Honeycomb config — see /api/honeycomb/config
 └── sessions/
     └── <projectId>/
