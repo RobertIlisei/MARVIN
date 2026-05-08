@@ -168,9 +168,9 @@ For each major component (service boundary, trust zone), walk STRIDE:
 
 MARVIN's major components:
 
-- The Next.js API layer (`apps/web/src/app/api/*`). Local-only, but
+- The Next.js API layer (`sidecar/src/app/api/*`). Local-only, but
   worth reasoning about if the app is ever exposed over network.
-- The Agent SDK runner (`packages/runtime/src/sdk-runner.ts`) — the
+- The Agent SDK runner (`sidecar/packages/runtime/src/sdk-runner.ts`) — the
   trust boundary for tool execution.
 - The confirm gate (`canUseTool` callback). The security-relevant
   boundary — a bypass is an EoP.
@@ -210,7 +210,7 @@ Findings (by severity):
 
   [CRITICAL] (confidence 9/10) <ID>
   Category:     A03 — Injection
-  File:Line:    apps/web/src/app/api/terminal/run/route.ts:47
+  File:Line:    sidecar/src/app/api/terminal/run/route.ts:47
   Title:        Unescaped command interpolation in shell spawn
   Exploit:      <concrete attack scenario>
   Impact:       <what can go wrong>
@@ -232,12 +232,12 @@ MARVIN-specific location suggestion: `<workDir>/.marvin/security/<date>.md`.
 
 Highest-value surfaces for MARVIN to audit:
 
-1. **Tool policy** (`packages/tools/src/policy.ts`) — auto-allow regex
+1. **Tool policy** (`sidecar/packages/tools/src/policy.ts`) — auto-allow regex
    list, hard-deny list. A gap here is a direct EoP.
-2. **Credential handlers** (`packages/runtime/src/auth.ts`) — token
+2. **Credential handlers** (`sidecar/packages/runtime/src/auth.ts`) — token
    readers, Keychain access, env var fallback. Leakage into logs or
    transcripts = CRITICAL.
-3. **Shell spawn** (`apps/web/src/app/api/terminal/run/route.ts`) —
+3. **Shell spawn** (`sidecar/src/app/api/terminal/run/route.ts`) —
    user-controlled command string, process lifetime, output
    streaming. Review when touched.
 4. **File access** — `/api/files/*` endpoints. Path sandbox

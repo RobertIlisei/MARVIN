@@ -32,7 +32,7 @@ An audit is "shipped" when **every** of the following is true:
 2. **The Golden-Rule prerequisites work.** Specifically:
    - The knowledge graph (`graphify-out/graph.json`) is rooted in
      this repo (smoke check: at least one node's `source_file` starts
-     with `apps/` or `packages/`).
+     with `macos/` or `sidecar/`).
    - `pnpm -r typecheck` clean.
    - `pnpm test` clean — including any new tests added for findings
      in this audit.
@@ -79,7 +79,7 @@ A [changelog](../history/CHANGELOG.md) entry is "complete" when:
 
 3. **Includes a verification claim** — what the author actually ran
    to know it worked. "`pnpm -r typecheck` clean" or "Vitest pin in
-   `packages/tools/tests/policy.test.ts` passes 26/26". Vague
+   `sidecar/packages/tools/tests/policy.test.ts` passes 26/26". Vague
    "should work" lines don't count.
 
 4. **Names the touched files** when the change is structural or
@@ -108,13 +108,13 @@ A single line in the to-do list (TaskList) is "done" when:
    way audit work goes unfollowable.
 
 3. **Local typecheck clean** for every workspace the change touched.
-   Use `apps/web/node_modules/.bin/tsc --noEmit` per package; we
+   Use `sidecar/node_modules/.bin/tsc --noEmit` per package; we
    can't reach `pnpm -r typecheck` from inside Cowork's sandbox.
 
 4. **For security / policy / gate changes:** a Vitest unit test pins
    the new behaviour. Rule of thumb — if the change touches
-   `packages/tools/`, `packages/runtime/src/sdk-runner.ts`,
-   `packages/runtime/src/fs-sandbox.ts`, or any `/api/*/route.ts`,
+   `sidecar/packages/tools/`, `sidecar/packages/runtime/src/sdk-runner.ts`,
+   `sidecar/packages/runtime/src/fs-sandbox.ts`, or any `/api/*/route.ts`,
    tests are part of the task. The scope is "the new branch", not
    "every line in the file".
 

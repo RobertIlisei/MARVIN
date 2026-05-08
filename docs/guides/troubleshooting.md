@@ -48,7 +48,7 @@ If you don't care about new models showing up in the dropdown, ignore it — the
 
 **Cause:** the pre-paint theme bootstrap script sets `<html data-theme="dark">` before React hydrates. SSR had no such attribute. React warns on the diff.
 
-**Fix:** should not happen after [ADR-0006](../decisions/0006-light-first-theme-cascade.md) — `<html>` has `suppressHydrationWarning`. If you see this on the current `main` branch, the attribute was removed in a refactor — restore it in `apps/web/src/app/layout.tsx`.
+**Fix:** should not happen after [ADR-0006](../decisions/0006-light-first-theme-cascade.md) — `<html>` has `suppressHydrationWarning`. If you see this on the current `main` branch, the attribute was removed in a refactor — restore it in `sidecar/src/app/layout.tsx`.
 
 ## Session resume shows an empty transcript
 
