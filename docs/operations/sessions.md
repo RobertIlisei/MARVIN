@@ -1,6 +1,6 @@
 # Sessions — persistence + resume
 
-Every MARVIN conversation is a **session**. Sessions have an id, a project, a transcript on disk, and a lifecycle that decouples from any single browser tab.
+Every MARVIN conversation is a **session**. Sessions have an id, a project, a transcript on disk, and a lifecycle that decouples from any single client connection (macOS app window or browser tab).
 
 ## Lifecycle
 
@@ -30,15 +30,15 @@ There is no "session closed" marker on disk. A session's end is implicit — it'
 
 JSONL is append-only. A single turn may contain many `cli.event` entries; a single MARVIN session typically contains 1-N turns.
 
-## Decoupling turns from browser tabs
+## Decoupling turns from client connections
 
-Closing the tab mid-turn used to kill the Agent SDK run. No longer. [`turn-registry.ts`](../../../sidecar/packages/runtime/src/turn-registry.ts) holds an in-memory map of live turns, keyed by `marvinSessionId`. Each entry has:
+Closing the client mid-turn used to kill the Agent SDK run. No longer. [`turn-registry.ts`](../../sidecar/packages/runtime/src/turn-registry.ts) holds an in-memory map of live turns, keyed by `marvinSessionId`. Each entry has:
 
 - The `AbortController` for the Agent SDK run.
 - An `EventEmitter` the SSE endpoint pumps events to.
 - An `ended: boolean` flag.
 
-`/api/chat` detaches the SDK run from `req.signal`. Only an explicit `POST /api/chat/cancel` aborts. Closing the browser tab just unsubscribes the HTTP listener — the turn continues in the background.
+`/api/chat` detaches the SDK run from `req.signal`. Only an explicit `POST /api/chat/cancel` aborts. Closing the macOS app window (or a browser tab, in dev) just unsubscribes the HTTP listener — the turn continues in the background.
 
 ## Reconnecting to a live turn
 
@@ -47,7 +47,7 @@ Closing the tab mid-turn used to kill the Agent SDK run. No longer. [`turn-regis
 - **Live turn exists** → server opens a new SSE stream against the registry's emitter. Client catches up with any buffered events + any new ones as they fire.
 - **No live turn** → returns `204 No Content`. Client falls back to loading the on-disk JSONL via `GET /api/sessions/[sessionId]`.
 
-The client's `useChatStream.attachLive()` runs on mount, silently trying to re-subscribe. Users reloading the tab mid-turn don't need to do anything; MARVIN keeps going and the UI catches up.
+The client's `useChatStream.attachLive()` runs on mount, silently trying to re-subscribe. Users reloading the client mid-turn don't need to do anything; MARVIN keeps going and the UI catches up.
 
 ## Hydrating from JSONL
 
