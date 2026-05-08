@@ -8,9 +8,23 @@ For the chronological history with diagnostic trails per entry, see [`docs/histo
 
 _Active work. Add a one-line entry when a piece of work starts; move it to `## Shipped` (with the date) when it lands. Keep entries terse — link out to a PR, ADR, or roadmap note for detail._
 
-_Nothing in flight right now._
+_(nothing in flight — all feature work landed in v1.3 below)_
 
 ## Shipped
+
+### v1.3 — Fully-native IDE surface · shipped 2026-05-05
+
+WebView removed end-to-end (ADR-0021); native SwiftUI replaces every web-rendered panel. IDE feature set shipped across 8 milestones on `feat/swift-migration`:
+
+- **WebView removal (M5)** — WKScriptMessageHandler bridge, injected JS, WebView.swift, and marvin-shell.ts deleted. NativePrefs + ProjectsService own all pref/project state. NSOpenPanel replaces the web picker.
+- **MRU file picker (M1)** — QuickOpenSheet tracks recently-opened files per project; shows RECENT / ALL FILES sections. Persisted via UserDefaults.
+- **Find in Files (M2)** — Ripgrep-backed `/api/files/search` route + FindInFilesView sidebar tab. Debounced search, case/word/regex toggles, match highlighting, collapsible file groups, include glob filter, Replace field.
+- **Symbol Search (M3)** — ⌘T Go to Symbol sheet reads `graphify-out/graph.json` from disk; fuzzy-filters by label + file path.
+- **Diff gutter (M4)** — `git diff HEAD --unified=0` parsed into `[Int: DiffLineStatus]`; `DiffGutterBar` NSView overlaid on the STLineNumberRulerView right edge. Green/orange/red pip per line.
+- **File history (M5)** — `git log --follow` in `GitHistoryService`; click-to-copy SHA popover in the editor header.
+- **Build task palette (M6)** — ⌘⇧B discovers tasks from `package.json`, `Makefile`, `Package.swift`, `Cargo.toml`; injects selected command into the terminal pane.
+- **Diagnostics panel (M7/M8)** — `DiagnosticsService` auto-detects tsc/eslint/swift build; `DiagnosticsPanelView` Problems tab in the bottom panel; clickable ⊗N/⚠N badge in `AppStatusBar`.
+- **Source control push/pull/fetch** — `FilesService` + `SourceControlView` header buttons; calls `/api/git/push`, `/api/git/pull`, `/api/git/fetch`.
 
 ### Phase 1 — Foundations · shipped 2026-04-17
 
@@ -92,6 +106,10 @@ Closed every 🔴 finding in the [2026-04-26 full audit](./reviews/2026-04-26-fu
 - TopBar collapsed (17 controls → 7), empty-state hero trimmed, sticky-bottom chat scroll, single `useMarvinPrefs()` Context, `bin/marvin doctor` graph smoke check.
 
 ## Deferred (blockers, not capacity)
+
+### Long-term memory / recall MCP
+
+A `recall(query)` MCP tool over embed-indexed session transcripts (and, on top of that, an optional extension of the graphify graph with conversation-derived nodes). Researched + planned 2026-05-05; parked, not shipping. Full plan, advisor critique, eval-first DoD, and 6 milestones live in [`roadmap/long-term-memory-recall.md`](./roadmap/long-term-memory-recall.md). Pick up when an eval-driven need surfaces.
 
 ### Honeycomb MCP integration for observability
 

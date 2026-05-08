@@ -1,0 +1,253 @@
+// ChatAgentsFooter — Phase 5e. Sits under the chat input as a
+// compact agent / model selector — the convention every modern
+// IDE-with-AI-chat uses (Cursor, Continue, Aider, Zed Assistant):
+// the model picker lives in the chat surface, not the global
+// toolbar, because switching the executor / advisor is a per-turn
+// decision the user makes WHILE drafting a message, not from
+// "settings".
+//
+// The footer is split into:
+//   • executor pill — primary model that handles the turn.
+//   • advisor pill — optional second-opinion model. "—" when nil.
+//   • models button — opens the ModelsDialog sheet.
+//   • personality pill — marvin / neutral toggle (the "voice").
+//
+// Clicking either model pill opens the ModelsDialog. Clicking the
+// personality pill toggles between marvin and neutral via the
+// existing bridge dispatch path.
+
+import SwiftUI
+
+struct ChatAgentsFooter: View {
+    @Environment(MarvinBridge.self) private var bridge
+    @State private var modelsDialogOpen = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            modelPill(
+                role: "executor",
+                value: trim(bridge.executorModel) ?? "default",
+                tint: bridge.executorModel == nil ? .secondary : .accentColor
+            )
+            Image(systemName: "arrow.right")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            modelPill(
+                role: "advisor",
+                value: bridge.advisorModel.flatMap(trim) ?? "—",
+                tint: bridge.advisorModel == nil ? .secondary : .accentColor
+            )
+            Spacer(minLength: 8)
+            personalityPill
+            thinkingModePicker
+            modeBadge
+        }
+        .sheet(isPresented: $modelsDialogOpen) {
+            ModelsDialog()
+                .environment(bridge)
+        }
+    }
+
+    // MARK: - Pills
+
+    private func modelPill(role: String, value: String, tint: Color) -> some View {
+        Button {
+            modelsDialogOpen = true
+        } label: {
+            HStack(spacing: 5) {
+                Text(role)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .tracking(1)
+                Text(value)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(tint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("\(role): \(value) — click to configure")
+    }
+
+    /// Voice / personality pill. Single click toggles between
+    /// "marvin" and "neutral" (only two options, like the web peer).
+    private var personalityPill: some View {
+        let active = bridge.personality ?? "marvin"
+        let next = active == "marvin" ? "neutral" : "marvin"
+        return Button {
+            NativePrefs.shared.setPersonality(next)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 9))
+                Text(active)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(active == "marvin" ? Color.accentColor : .secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Voice — click to switch between MARVIN and neutral")
+    }
+
+    /// Thinking-mode picker (Fast / Thinking / Max). Maps to the
+    /// SDK's `effort` field server-side via `effortForThinkingMode`.
+    /// Disables the Max chip when the executor is Sonnet (advisor
+    /// runtimeMode) — Sonnet doesn't support the `max` rung. The
+    /// runtime would silently downgrade anyway, but graying out the
+    /// chip keeps the UI honest.
+    private var thinkingModePicker: some View {
+        let active = bridge.thinkingMode
+        let executorIsOpus: Bool = {
+            guard let e = bridge.executorModel else { return true }
+            return e.range(of: "opus", options: .caseInsensitive) != nil
+        }()
+        return Menu {
+            Button {
+                NativePrefs.shared.setThinkingMode("fast")
+            } label: {
+                Label("Fast", systemImage: "hare")
+            }
+            Button {
+                NativePrefs.shared.setThinkingMode("thinking")
+            } label: {
+                Label("Thinking", systemImage: "brain")
+            }
+            Button {
+                NativePrefs.shared.setThinkingMode("max")
+            } label: {
+                Label("Max", systemImage: "bolt.fill")
+            }
+            .disabled(!executorIsOpus)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: thinkingModeIcon(active))
+                    .font(.system(size: 9))
+                Text(active)
+                    .font(.system(size: 11, design: .monospaced))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(thinkingModeColour(active))
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(thinkingModeHelp(active, executorIsOpus: executorIsOpus))
+    }
+
+    private func thinkingModeIcon(_ mode: String) -> String {
+        switch mode {
+        case "fast": return "hare"
+        case "max": return "bolt.fill"
+        default: return "brain"
+        }
+    }
+
+    private func thinkingModeColour(_ mode: String) -> Color {
+        switch mode {
+        case "fast": return .secondary
+        case "max": return .accentColor
+        default: return .primary
+        }
+    }
+
+    private func thinkingModeHelp(_ mode: String, executorIsOpus: Bool) -> String {
+        switch mode {
+        case "fast":
+            return "Thinking: Fast (effort low) — minimal extended reasoning, quickest responses."
+        case "max":
+            return executorIsOpus
+                ? "Thinking: Max (effort max) — maximum reasoning. Opus only."
+                : "Thinking: Max — falls back to Thinking on non-Opus executor."
+        default:
+            return executorIsOpus
+                ? "Thinking: Thinking (effort high) — deep reasoning when needed. Default."
+                : "Thinking: Thinking (effort high) — Max requires Opus."
+        }
+    }
+
+    /// Permission-strategy badge. Auto = green; Gated = amber. Tap
+    /// to flip. Lives here too because the per-turn confirm shape
+    /// is one of the most "I want to know what mode I'm in" things
+    /// in the chat — same reason VS Code surfaces the workspace
+    /// trust state next to the chat send button.
+    private var modeBadge: some View {
+        let isAuto = bridge.permissionStrategy == "auto"
+        return Button {
+            let next = isAuto ? "gated" : "auto"
+            NativePrefs.shared.setPermissionStrategy(next)
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(isAuto ? Color.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(isAuto ? "auto" : "gated")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(isAuto
+              ? "Permissions: auto (full bypass). Click to switch to gated."
+              : "Permissions: gated (tool-call confirms). Click to switch to auto.")
+    }
+
+    // MARK: - Helpers
+
+    /// Lossy trim mirroring web `summariseModels`. Drops the
+    /// `claude-` prefix and the trailing -2YYMMDD date stamp so
+    /// the pill stays compact.
+    private func trim(_ id: String?) -> String? {
+        guard var s = id else { return nil }
+        if s.hasPrefix("claude-") { s = String(s.dropFirst("claude-".count)) }
+        if let r = s.range(of: #"-2\d{6}$"#, options: .regularExpression) {
+            s = String(s[..<r.lowerBound])
+        }
+        return s
+    }
+}
