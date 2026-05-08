@@ -459,17 +459,83 @@ surfaces them when you invoke by name.
 
 For visual verification after UI work, end-to-end flow checks, and
 "doesn't work on my machine" debugging, drive Playwright directly via
-\`Bash\` — \`npx playwright\` is on PATH (the user runs
-\`npx playwright install chromium\` once during setup). Common shapes:
+\`Bash\`. There is no Playwright MCP — every browser action is a shell
+command. \`npx playwright\` is on PATH; the user runs
+\`npx playwright install chromium\` once during machine setup.
 
-- One-shot screenshot: \`npx -y playwright screenshot --browser=chromium <url> /tmp/out.png\`
-- Scripted check: write a tiny \`/tmp/check.mjs\` using \`@playwright/test\` or the
-  Playwright Node API, then run it with \`node /tmp/check.mjs\`.
-- Full e2e suite: invoke the project's existing \`npx playwright test\` configuration.
+### Pick the right shape
 
-If the project doesn't have Chromium yet, suggest
-\`npx playwright install chromium\` and proceed with \`curl\` for
-HTTP / HTML assertions in the meantime.
+Three shapes cover ~all browser work. Choose by what you actually need.
+
+**1. Screenshot only — use the \`screenshot\` subcommand.**
+Single page render, no DOM assertions. The CLI handles browser launch,
+navigation, and image write — no Node script needed.
+
+\`\`\`bash
+npx -y playwright screenshot --browser=chromium \\
+  --wait-for-selector='main' \\
+  --full-page \\
+  --viewport-size=1280,800 \\
+  http://localhost:3000 /tmp/out.png
+\`\`\`
+
+Useful flags: \`--device='iPhone 14'\`, \`--wait-for-timeout=2000\`,
+\`--load-state=networkidle\`.
+
+**2. Scripted check — write \`/tmp/check.mjs\`, run it via npx.**
+Use this when you need to click, type, read text, assert state, or
+capture multiple pages. Two failure modes to avoid up front:
+
+- **\`Cannot find package 'playwright'\`** — \`node /tmp/check.mjs\` resolves
+  packages from the script's directory; \`/tmp\` has no \`node_modules\`.
+  **Fix:** run via \`npx --package=playwright -- node /tmp/check.mjs\`.
+  That makes npx provide the \`playwright\` resolution path before
+  executing your script.
+- **Imports of \`@playwright/test\`** — that's the test runner. Standalone
+  scripts import from \`playwright\` (the library). Use
+  \`import { chromium } from 'playwright'\` and \`browser.newContext()\` /
+  \`page.goto()\` directly. Don't write \`test(...)\` blocks for one-off checks.
+
+Working skeleton:
+
+\`\`\`js
+// /tmp/check.mjs
+import { chromium } from 'playwright';
+const browser = await chromium.launch();
+const page = await browser.newPage();
+await page.goto('http://localhost:3000');
+await page.waitForSelector('main');
+console.log('title:', await page.title());
+console.log('h1:', await page.textContent('h1'));
+await page.screenshot({ path: '/tmp/out.png', fullPage: true });
+await browser.close();
+\`\`\`
+
+Run with: \`npx --package=playwright -- node /tmp/check.mjs\`.
+
+**3. Project test suite — \`npx playwright test\`.**
+Only when the project already has \`@playwright/test\` configured (look for
+\`playwright.config.{ts,js}\`). Don't write new tests in \`/tmp\` if the
+project has a tests directory — drop them where they belong.
+
+### Common errors, fast fixes
+
+| Symptom | Fix |
+|---|---|
+| \`Executable doesn't exist at .../chromium-XXXX/...\` | \`npx playwright install chromium\` |
+| \`Cannot find package 'playwright'\` (running \`/tmp/check.mjs\`) | Run via \`npx --package=playwright -- node /tmp/check.mjs\` |
+| \`net::ERR_CONNECTION_REFUSED\` | Dev server isn't up — start it (or wait for it) before the browser call |
+| \`TimeoutError: Timeout 30000ms exceeded\` waiting for selector | Selector wrong, or page didn't render — open with \`--full-page\` screenshot first to see what's actually there |
+| \`require is not defined in ES module scope\` | Use \`import\` syntax — \`/tmp/check.mjs\` is ESM (the \`.mjs\` extension forces it) |
+
+### Do not
+
+- Don't loop screenshots to "see if the page loaded" — use
+  \`--wait-for-selector\` or \`page.waitForSelector\` instead.
+- Don't \`npm install playwright\` in the user's project to make \`/tmp\`
+  scripts work — use the \`npx --package=playwright\` form.
+- Don't write Playwright code inline inside \`Bash -c '...'\` heredocs —
+  the quoting is fragile. Always write to \`/tmp/check.mjs\` first, then run.
 
 ## Workflow audit — catching up an in-flight project
 
