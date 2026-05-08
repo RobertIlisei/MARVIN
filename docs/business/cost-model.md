@@ -73,7 +73,7 @@ See [Cost tracking](../operations/cost-tracking.md) for the implementation.
 
 ## Local machine cost
 
-Near zero. MARVIN's server is a Next.js dev process (~200 MB RAM idle, low CPU). The browser tab holds the UI. Disk usage:
+Near zero. MARVIN's sidecar is a Next.js production process (~200 MB RAM idle, low CPU), kept up by a launchd user agent. The macOS app holds the UI. Disk usage:
 
 - JSONL session transcripts: ~0.5-5 MB per 20-turn session.
 - Knowledge graph (per project): ~100 KB-few MB.

@@ -1,6 +1,6 @@
 # ADR-0016 — Native macOS app via SwiftUI (incremental migration)
 
-**Status:** Accepted
+**Status:** Accepted — implemented; the WebView island that this ADR's phases were built around was retired by [ADR-0021](./0021-webview-removal-fully-native-swift.md) on 2026-05-05. v1.3 (Fully-native IDE surface) shipped the same day.
 **Date:** 2026-05-04
 **Deciders:** @robertilisei, MARVIN
 
@@ -18,7 +18,7 @@ Field experience after ~2 weeks of daily use surfaced friction the wrapper can't
 
 Tier 1 of the perf work (production build by default, [PR #52](https://github.com/RobertIlisei/MARVIN/pull/52)) restored most of the dev-mode-induced lag. Tier 2 (memoization + drag-time rAF gating) cleaned up the rest of the visible jitter. Tier 3 (battery / `saveData` gating) is deferred. **If the app feels native-grade after Tier 1 + 2 land in production**, the SwiftUI migration is unnecessary cost; the right move is to revisit this ADR rather than accelerate it. **If it doesn't**, this ADR scopes the answer.
 
-## Decision (Proposed)
+## Decision
 
 Add a SwiftUI macOS target at `apps/macos/` and migrate the app to it incrementally, in phases — not as a Big Bang rewrite. The Node runtime (`packages/runtime` + Next.js API routes at `apps/web/src/app/api/*`) stays unchanged: it remains the brain of the operation, accessed via HTTP from the SwiftUI process. The web frontend at `apps/web` stays alive for as long as we have surfaces that haven't been ported yet — `apps/macos` and `apps/web` co-exist.
 

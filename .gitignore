@@ -9,10 +9,10 @@ data/.marvin/
 .env
 .env.local
 
-# graphify — check in the graph + report, ignore the extraction cache
-# and the python-interpreter pointer.
-**/graphify-out/cache/
-graphify-out/.graphify_python
+# graphify — generated artefacts, regenerated locally per project via
+# `/graphify . --update`. Not source of truth, don't track.
+graphify-out/
+**/graphify-out/
 
 # Claude Code — local-only settings
 .claude/settings.local.json
@@ -20,12 +20,9 @@ graphify-out/.graphify_python
 # Playwright MCP runtime cache (console logs, page dumps)
 .playwright-mcp/
 
-# Tauri / Rust build output (dead apps/desktop left as historical reference)
-apps/desktop/src-tauri/target/
-apps/desktop/src-tauri/gen/
-
 # macOS Swift build cache
 macos/.build/
+macos/build-spm/
 
 # OS / editor
 .DS_Store
