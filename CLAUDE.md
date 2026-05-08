@@ -93,14 +93,19 @@ and a fallback judgement test for cases the lists don't cover.
 ## Repo layout
 
 ```
-apps/web/                    # Next.js 16, port 3030
-packages/
-  runtime/                   # Claude CLI wrapper + auth + session + personality
-  tools/                     # Bash, Edit, Write, Read, Grep, Glob, WebFetch, WebSearch
-  project-context/           # spec + infra-probes injection
-  graphify-bridge/           # knowledge-graph read + refresh
-  git-watch/                 # commit stream
-  ui/                        # shadcn primitives + MARVIN chat bubble, diff, file tree
+macos/                       # SwiftUI macOS app (Xcode / SPM)
+  MARVIN/                    # Swift sources
+  project.yml                # xcodegen manifest
+  Package.swift              # SPM manifest (swift build fallback)
+sidecar/                     # Next.js 16 sidecar, port 3030
+  src/                       # Next.js app (API routes + React UI)
+  packages/
+    runtime/                 # Claude CLI wrapper + auth + session + personality
+    tools/                   # Tool policy — auto / confirm / deny
+    project-context/         # spec + infra-probes injection
+    graphify-bridge/         # knowledge-graph read + refresh
+    git-watch/               # commit stream
+    ui/                      # shadcn primitives
 data/.marvin/                # transcripts, cost tracker, graph cache (gitignored)
 ```
 
@@ -108,13 +113,35 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 
 | Path | Responsibility |
 |---|---|
-| `apps/web/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
-| `packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
-| `packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
-| `packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
-| `packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
-| `packages/git-watch/` | Commit detector — surfaces new commits inline, per `workDir`. |
-| `packages/ui/` | shadcn primitives shared by the web app. |
+| `sidecar/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
+| `sidecar/packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
+| `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
+| `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
+| `sidecar/packages/git-watch/` | Commit detector — surfaces new commits inline, per `workDir`. |
+| `sidecar/packages/ui/` | shadcn primitives shared by the sidecar. |
+
+## Cross-session continuity — `.marvin/memory.md`
+
+MARVIN holds **no** persistent in-memory state between sessions (Golden
+rule 4). The bridge across sessions is a single file: `<workDir>/.marvin/memory.md`,
+appended to during the Ship phase and re-read by `buildProjectContext`
+on the first turn of every new session. This is the place to record
+decisions, invariants, and gotchas that the next session needs to know
+without re-deriving them — Anthropic's "memory tool" pattern, file-backed.
+
+The chat surfaces this in two places (ADR-0022):
+
+- **AppStatusBar context indicator** hover tooltip notes
+  `memory.md auto-loaded` so the user can see the layer is active.
+- **Scope-met chip strip** offers a `Save to memory.md` button below
+  the latest message when a real-work turn closes, so the just-completed
+  scope can be persisted before clicking `Start fresh next turn (⌘⇧N)`.
+
+`memory.md` is the only sanctioned cross-session persistence. Don't
+shadow it with a parallel sidecar cache, a remote KV, or hidden state
+in `~/.marvin/` — keeping it in the project directory makes it the
+user's thing, not MARVIN's.
 
 ## Data directory
 
@@ -161,30 +188,31 @@ from the bundle:
 If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
 reach for" section so MARVIN knows the trigger conditions.
 
-## Playwright MCP
+## Browser automation — plain Playwright via Bash
 
-MARVIN ships its own Playwright MCP server so agent sessions can drive
-a real browser against `localhost` / LAN URLs — the host's own
-Playwright MCP (if any) is often sandboxed. Registered in
-`packages/runtime/src/sdk-runner.ts` as `marvin-playwright`, backed by
-[`@playwright/mcp`](https://www.npmjs.com/package/@playwright/mcp).
+MARVIN does NOT register a Playwright MCP server. The prior
+`@playwright/mcp` integration leaked subprocesses on long sessions
+(observed: stdio MCP children holding the parent CLI alive past
+`result`, wedging turns for 20+ min) and made every turn pay
+subprocess-spawn latency even when no browser work happened.
 
-One-time setup on a fresh machine (needed for the browser binaries —
-they're not shipped via npm):
+The replacement is straightforward: when MARVIN needs a browser, it
+shells out via `Bash` to `npx playwright` directly. Same capability,
+zero per-turn cost, no orphan-process risk.
+
+One-time setup on a fresh machine:
 
 ```bash
 npx playwright install chromium
 ```
 
-Env knobs (all optional):
+Common shapes MARVIN reaches for (documented in `personality.ts` ▸
+"Browser tools"):
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `MARVIN_PLAYWRIGHT` | unset (= enabled) | set to `0` to skip registering the MCP |
-| `MARVIN_PLAYWRIGHT_HEADED` | `0` (headless) | set to `1` for a visible window |
-| `MARVIN_PLAYWRIGHT_BROWSER` | chromium | `chromium` / `firefox` / `webkit` |
-| `MARVIN_PLAYWRIGHT_PROFILE` | isolated | path to a persistent user-data-dir |
-| `MARVIN_PLAYWRIGHT_VIEWPORT` | default | e.g. `1440,900` |
+- One-shot screenshot: `npx -y playwright screenshot --browser=chromium <url> /tmp/out.png`
+- Scripted check: write `/tmp/check.mjs` using the Playwright Node API,
+  run with `node /tmp/check.mjs`
+- Full e2e: `npx playwright test` against the project's config
 
 ## Adding a new feature
 

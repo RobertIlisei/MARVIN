@@ -20,6 +20,13 @@ graphify-out/.graphify_python
 # Playwright MCP runtime cache (console logs, page dumps)
 .playwright-mcp/
 
+# Tauri / Rust build output (dead apps/desktop left as historical reference)
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# macOS Swift build cache
+macos/.build/
+
 # OS / editor
 .DS_Store
 .vscode/

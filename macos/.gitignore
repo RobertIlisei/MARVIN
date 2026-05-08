@@ -1,0 +1,24 @@
+# Generated Xcode project — regenerate from project.yml via xcodegen.
+# project.pbxproj is diff-hostile and changes on every Xcode-side
+# touch; never check it in. See BUILD.md.
+MARVIN.xcodeproj/
+
+# Swift Package Manager build outputs
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode user state
+*.xcuserstate
+xcuserdata/
+
+# Xcode build artefacts (when xcodebuild is run from this dir)
+build/
+DerivedData/
+
+# SPM fallback bundle staging — `bin/marvin install-macos-app` builds
+# MARVIN-Swift.app here when Xcode is unavailable. Regenerated each run.
+build-spm/
+
+# macOS metadata
+.DS_Store
