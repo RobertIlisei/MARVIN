@@ -27,7 +27,7 @@ import MARVINLogic
 /// String-based event log with a structured ChatMessage list driven
 /// by ChatStreamReducer.
 /// Permission strategy values the sidecar accepts. Mirrors the
-/// PermissionStrategy union in apps/web/src/app/api/chat/route.ts.
+/// PermissionStrategy union in sidecar/src/app/api/chat/route.ts.
 /// Phase 2g.1 — used by the native chat's send path; user picks
 /// in Settings (defaults to .auto, the same as the web app's
 /// out-of-the-box behaviour).

@@ -1,6 +1,6 @@
 // BrainProfile — Phase 4a foundation. Swift mirror of the TypeScript
 // `Profile` struct + `PROFILES` table from
-// apps/web/src/components/brain/brain-liquid.tsx, plus the lerp +
+// sidecar/src/components/brain/brain-liquid.tsx, plus the lerp +
 // easing primitives the per-frame loop depends on.
 //
 // Source of truth: the `Brain Lab _standalone_.html` the design team
@@ -31,7 +31,7 @@
 import Foundation
 
 /// MARVIN's coarse UI state — drives the brain's behavioural profile.
-/// Mirror of `MarvinUiState` in apps/web/src/components/chat/types.ts.
+/// Mirror of `MarvinUiState` in sidecar/src/components/chat/types.ts.
 /// `cancelling` is in the TS union for symmetry with the chat state
 /// machine but doesn't get its own profile; it falls through to
 /// `idle` (matching the TS `PROFILES[state] ?? PROFILES.idle`

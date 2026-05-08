@@ -198,7 +198,7 @@ let package = Package(
                 .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
             ],
             // SPM looks for Sources/MARVIN by default; we keep
-            // sources at apps/macos/MARVIN to match the Xcode
+            // sources at macos/MARVIN to match the Xcode
             // project layout, so point SPM at the same dir.
             path: "MARVIN",
             // Info.plist is consumed by Xcode via project.yml,

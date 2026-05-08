@@ -1,9 +1,9 @@
 // ChatTypes — Codable models for the SSE wire format between the
-// Swift native chat island and the Node sidecar at apps/web.
+// Swift native chat island and the Node sidecar at sidecar.
 //
 // Phase 2a foundation. The wire contract is documented in
 // docs/decisions/0017-phase-2-chat-native.md §1 — this file is the
-// Swift-side mirror of the shapes apps/web/src/app/api/chat/route.ts
+// Swift-side mirror of the shapes sidecar/src/app/api/chat/route.ts
 // emits.
 //
 // Design notes:
@@ -196,7 +196,7 @@ struct ChatRequest: Codable {
 /// One entry from GET /api/sessions?projectId=… — drives the
 /// "Sessions" menu in ChatPreviewView's header so users can pick
 /// a past transcript without having to remember its uuid. Mirrors
-/// `SessionSummary` in apps/web/src/app/api/sessions/route.ts.
+/// `SessionSummary` in sidecar/src/app/api/sessions/route.ts.
 struct SessionSummary: Codable, Equatable, Identifiable {
     let sessionId: String
     /// ISO 8601 timestamp of the most-recent write to the JSONL file.

@@ -66,7 +66,7 @@ describe("isSafePathspec", () => {
   it("accepts ordinary paths", () => {
     for (const p of [
       "src/index.ts",
-      "apps/web/page.tsx",
+      "sidecar/page.tsx",
       "file with spaces.txt",
       "unicode/café.md",
       ".gitignore",

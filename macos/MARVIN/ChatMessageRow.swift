@@ -26,7 +26,7 @@ struct ChatMessageRow: View {
         // User messages right-align in an accent-tinted bubble
         // (chat-UI convention; matches the web `<MessageView>`'s
         // `justify-end` + `bg-[color:var(--color-accent-glow)]`
-        // bubble in apps/web/src/components/chat/message-view.tsx).
+        // bubble in sidecar/src/components/chat/message-view.tsx).
         // Everything else stays left-aligned with a 56pt role gutter
         // on the left and no bubble — matches the assistant /
         // system / result rendering on the web side.

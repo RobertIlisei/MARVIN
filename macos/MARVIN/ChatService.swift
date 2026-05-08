@@ -385,7 +385,7 @@ final class ChatService {
     /// or when the consumer cancels the awaiting Task.
     ///
     /// `clientID` is the value of the `x-marvin-client` header the
-    /// CSRF guard at apps/web/src/lib/csrf.ts expects. We hardcode
+    /// CSRF guard at sidecar/src/lib/csrf.ts expects. We hardcode
     /// it to "marvin-swift/0.1" — the guard checks any non-empty
     /// header against an allowlist of known client UA prefixes.
     func streamTurn(
@@ -420,7 +420,7 @@ final class ChatService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        // CSRF guard at apps/web/src/lib/csrf.ts checks for exactly
+        // CSRF guard at sidecar/src/lib/csrf.ts checks for exactly
         // "x-marvin-client: 1" — any other value (including blank)
         // is 403'd. The header's purpose is to force a CORS
         // preflight, not authenticate the client; a drive-by tab at

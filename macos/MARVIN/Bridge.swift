@@ -163,7 +163,7 @@ final class MarvinBridge {
 
     /// Phase 5d — pane visibility map posted via `panes-changed`.
     /// Drives the native Layout popover. Defaults match
-    /// DEFAULT_PREFS in apps/web/src/lib/use-prefs.tsx (files +
+    /// DEFAULT_PREFS in sidecar/src/lib/use-prefs.tsx (files +
     /// brain on; everything else off) so the popover shows the
     /// right initial state before the web side hydrates.
     struct PaneState: Equatable {

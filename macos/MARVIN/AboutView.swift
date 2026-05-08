@@ -1,13 +1,11 @@
 // AboutView — replaces SwiftUI's default About panel with one that
-// shows live sidecar info pulled from HealthMonitor. Useful during
-// the migration evaluation period: tells you at a glance which
-// MARVIN you're looking at (Tauri vs Swift) and what the sidecar
-// is currently reporting (auth mode, model, data dir).
+// shows live sidecar info pulled from HealthMonitor (auth mode,
+// model, data dir).
 //
 // Mounted as a separate Window scene in MARVINApp.swift, opened via
 // the App menu's About item (CommandGroup(replacing: .appInfo)).
-// Phase 1+: if we add settings, status, etc. as their own panels,
-// they follow the same Window-scene + openWindow(id:) pattern.
+// Settings, status, and other panels follow the same Window-scene +
+// openWindow(id:) pattern.
 
 import SwiftUI
 

@@ -1,5 +1,5 @@
 // TerminalPaneView — Phase 5e. Native peer of the web app's
-// Terminal (apps/web/src/components/terminal/terminal.tsx).
+// Terminal (sidecar/src/components/terminal/terminal.tsx).
 //
 // Design choice: the existing `/api/terminal/run` endpoint is a
 // one-shot command runner streaming SSE events (started / stdout /

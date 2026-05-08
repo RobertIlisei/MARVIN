@@ -48,11 +48,11 @@ describe("hasDenySegment", () => {
   it("returns true when any segment matches", () => {
     expect(hasDenySegment("a/.git/hook")).toBe(true);
     expect(hasDenySegment("node_modules/foo")).toBe(true);
-    expect(hasDenySegment("apps/web/.next/cache")).toBe(true);
+    expect(hasDenySegment("sidecar/.next/cache")).toBe(true);
   });
 
   it("returns false for clean paths", () => {
-    expect(hasDenySegment("apps/web/src/page.tsx")).toBe(false);
+    expect(hasDenySegment("sidecar/src/page.tsx")).toBe(false);
     expect(hasDenySegment("packages/runtime/index.ts")).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 // MARVIN UI primitives — shadcn-style components on radix-ui + Tailwind.
 // Import named exports from the subpath (`@marvin/ui/button`) for smaller
-// apps/web bundles; this barrel exists only for convenience in tests.
+// sidecar bundles; this barrel exists only for convenience in tests.
 
 export * from "./alert-dialog";
 export * from "./avatar";

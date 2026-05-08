@@ -71,7 +71,7 @@
   },
   "overrides": [
     {
-      "includes": ["apps/web/src/components/brain/brain-liquid.tsx"],
+      "includes": ["sidecar/src/components/brain/brain-liquid.tsx"],
       "linter": {
         "rules": {
           "suspicious": { "noExplicitAny": "off" },

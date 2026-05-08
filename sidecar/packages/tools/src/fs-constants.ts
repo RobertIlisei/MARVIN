@@ -12,7 +12,7 @@
 /**
  * Directory names excluded from tree walks, writes, and policy enforcement.
  * Historical: this set previously lived inline in
- * `apps/web/src/app/api/files/tree/route.ts`.
+ * `sidecar/src/app/api/files/tree/route.ts`.
  */
 export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
   "node_modules",

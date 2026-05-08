@@ -3,7 +3,7 @@
 /**
  * TopBar — MARVIN's global header strip.
  *
- * Extracted from `apps/web/src/app/page.tsx` during the A2
+ * Extracted from `sidecar/src/app/page.tsx` during the A2
  * decomposition pass. Previously lived inline as a 150-line
  * `const header = (...)` JSX expression next to the Home state, which
  * made state changes in the header's control panels (model picker,

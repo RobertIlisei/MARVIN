@@ -1,6 +1,6 @@
 // ChatMessageModels — domain types for the native message list.
 //
-// Phase 2c. The shapes here mirror what apps/web/src/components/
+// Phase 2c. The shapes here mirror what sidecar/src/components/
 // chat/types.ts (`Block`, `Message`) declares on the React side, so
 // the two renderers stay easy to keep in sync without forcing a
 // codegen step. We deliberately don't share types via a JSON Schema

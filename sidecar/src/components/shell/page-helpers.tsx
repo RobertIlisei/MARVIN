@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Small presentational helpers extracted from `apps/web/src/app/page.tsx`
+ * Small presentational helpers extracted from `sidecar/src/app/page.tsx`
  * as part of the A2 decomposition pass. Pure JSX + props, no state,
  * no effects — safe to move without behaviour change.
  *
