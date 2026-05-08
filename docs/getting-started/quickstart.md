@@ -97,4 +97,4 @@ Type a message into the composer. Press ⏎ (or ⌘⏎). MARVIN will:
 | `port 3030 already in use` | Another MARVIN instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill or use it |
 | Blank page, console errors about hydration | Rare. Usually fixed by `pnpm dev` restart | If persistent, see [Troubleshooting](../guides/troubleshooting.md) |
 | Browser-preview pane shows blank | Target page sends `X-Frame-Options: DENY` | Use the ↗ button to open in a new tab |
-| Playwright MCP not available to MARVIN | Chromium binary not installed | `npx playwright install chromium` |
+| Browser automation fails (`npx playwright …`) | Chromium binary not installed | `npx playwright install chromium` |

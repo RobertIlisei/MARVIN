@@ -192,7 +192,7 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 💸 Cost tracker — daily/weekly/lifetime spend per project
 - 🔀 Monaco diff viewer — see exactly what MARVIN is about to do before allowing
 - 🧰 Model picker — executor + advisor slots, live model list from Anthropic
-- 🌐 Playwright MCP — MARVIN drives real browsers against `localhost` / LAN URLs
+- 🌐 Playwright via Bash — MARVIN drives real browsers against `localhost` / LAN URLs by shelling out to `npx playwright`
 - 🔄 Resume across reloads — closing the window doesn't kill a running turn
 - 📊 Graph-aware chat — in-process MCP exposes `graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`
 

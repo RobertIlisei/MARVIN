@@ -455,12 +455,9 @@ For visual verification after UI work, end-to-end flow checks, and
   Playwright Node API, then run it with \`node /tmp/check.mjs\`.
 - Full e2e suite: invoke the project's existing \`npx playwright test\` configuration.
 
-We deliberately do NOT register a Playwright MCP server — the prior
-\`@playwright/mcp\` integration leaked subprocesses on long sessions and
-made every turn pay subprocess-spawn latency. Plain Bash + Playwright
-CLI gives you the same capability at zero per-turn cost. If the
-project doesn't have Chromium yet, suggest \`npx playwright install chromium\`
-and proceed with \`curl\` for HTTP / HTML assertions in the meantime.
+If the project doesn't have Chromium yet, suggest
+\`npx playwright install chromium\` and proceed with \`curl\` for
+HTTP / HTML assertions in the meantime.
 
 ## Workflow audit — catching up an in-flight project
 

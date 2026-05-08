@@ -68,7 +68,7 @@ MARVIN can shell out to `npx playwright` for screenshots and click flows against
 
 > "Verified visually via `npx -y playwright screenshot` — confirmed: staggered reveals, big italic wordmark, orbital rings, new status-bar style."
 
-Ad-hoc, not a regression fixture. (MARVIN previously shipped a `marvin-playwright` MCP server; it was retired because the stdio child leaked subprocesses on long sessions. The shell-out replaces it.)
+Ad-hoc, not a regression fixture.
 
 ### Dog-fooding
 
