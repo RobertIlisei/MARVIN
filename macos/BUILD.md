@@ -1,25 +1,26 @@
-# Building the MARVIN macOS app (Phase 1a)
+# Building the MARVIN macOS app
 
-This is the dev loop for the SwiftUI native target that lives at
-`apps/macos/`. Phase 1a boots a window with three states wired to a
-sidecar health probe: connecting / online (full-bleed `WKWebView`
-pointed at the Node sidecar) / offline. Phases 1b–6 progressively
-replace pieces of the WebView with native AppKit / SwiftUI views.
+Dev loop for the SwiftUI native target at `macos/`. The app is fully
+native (no WebView) and talks to the Next.js sidecar at `sidecar/` over
+HTTP/SSE on `localhost:3030`. See
+[ADR-0016](../docs/decisions/0016-swift-migration.md) for the migration
+rationale and [ADR-0021](../docs/decisions/0021-webview-removal-fully-native-swift.md)
+for the WebView-retirement decision.
 
-See [ADR-0016](../../docs/decisions/0016-swift-migration.md) for the
-full migration plan + the resolved decisions behind every choice
-below.
+> **For end users.** The one-liner installer at `scripts/install.sh`
+> handles everything in this doc — toolchain bootstrap, build, install
+> to `/Applications`, and the launchd sidecar agent. This file is for
+> developers building MARVIN from a working clone.
 
 ## Prerequisites
 
-There are two viable build paths — pick whichever matches what's
-already on your machine.
+Two viable build paths — pick whichever matches what's on your machine.
 
 ### Path A — full Xcode (preferred for shipping)
 
 | Tool | Why | Install |
 |---|---|---|
-| **Xcode 16+** | Builds a real `.app` with full Xcode warnings, scheme support, and the eventual signing/notarization wiring. macOS 14 Sonoma minimum is set in `project.yml`. | App Store → Xcode |
+| **Xcode 16+** | Builds a real `.app` with full warnings, scheme support, and the eventual signing/notarization wiring. macOS 14 Sonoma minimum is set in `project.yml`. | App Store → Xcode |
 | **xcodegen** | Regenerates `MARVIN.xcodeproj` from `project.yml`. The generated project is gitignored — every contributor produces their own copy. | `brew install xcodegen` |
 
 ### Path B — Command Line Tools only (fallback, no Xcode)
@@ -31,7 +32,7 @@ already on your machine.
 ## First-time setup on a fresh clone
 
 ```bash
-cd apps/macos
+cd macos
 xcodegen generate         # produces MARVIN.xcodeproj from project.yml
 open MARVIN.xcodeproj     # opens in Xcode — Build/Run from there (⌘R)
 ```
@@ -46,18 +47,25 @@ open.
 ### Smoke compile (no Xcode required)
 
 ```bash
-cd apps/macos
+cd macos
 swift build               # ~2 s clean, much faster incremental
 ```
 
-This uses `Package.swift` and only verifies the Swift compiles; it
-does NOT produce a runnable `.app`. Useful when you've only got
-Command Line Tools, or as a CI gate.
+Uses `Package.swift` and only verifies the Swift compiles; it does NOT
+produce a runnable `.app`. Useful when you've only got Command Line
+Tools, or as a CI gate.
 
-### Run the actual app
+### Run the unit tests
 
 ```bash
-cd apps/macos
+cd macos
+swift test                # MARVINLogic + MARVINTests targets
+```
+
+### Run the actual app from Xcode
+
+```bash
+cd macos
 xcodegen generate         # if project.yml changed since last time
 xcodebuild \
   -project MARVIN.xcodeproj \
@@ -68,11 +76,11 @@ xcodebuild \
 open build/Build/Products/Debug/MARVIN.app
 ```
 
-Or just open `MARVIN.xcodeproj` in Xcode and hit ⌘R. Xcode is faster
-on incremental builds and gives you live SwiftUI previews.
+Or just open `MARVIN.xcodeproj` in Xcode and hit ⌘R. Xcode is faster on
+incremental builds and gives you live SwiftUI previews.
 
-`bin/marvin install-macos-app` (from the repo root) automates the
-xcodegen + xcodebuild + install steps for end-users; see below.
+`bin/marvin install-macos-app` (from the repo root) automates xcodegen +
+xcodebuild + install for end users; see below.
 
 ### Install as a real Application
 
@@ -85,13 +93,8 @@ bin/marvin install-macos-app
 bin/marvin start
 
 # 3) Launch the .app.
-open /Applications/MARVIN-Swift.app
+open /Applications/MARVIN.app
 ```
-
-Installs as **MARVIN-Swift.app**, distinct from the Tauri build at
-`/Applications/MARVIN.app`. Both coexist during the migration
-evaluation period; Phase 6 (Tauri retire) renames this to
-`MARVIN.app` and uninstalls the Tauri one.
 
 After step 3 you should see:
 
@@ -112,45 +115,38 @@ After step 3 you should see:
 The script picks its build path automatically:
 
 - If `xcodebuild` and `xcodegen` are both available → xcodegen +
-  xcodebuild + copy to /Applications.
+  xcodebuild + copy to `/Applications`.
 - Otherwise → `swift build -c release`, manual bundle assembly
   (executable + substituted `Info.plist` + ad-hoc `codesign`).
 
-Phase 1a uses ad-hoc signing either way — Gatekeeper warns on first
-open (right-click → Open). Real Developer ID + notarization gets
-wired at the end of Phase 1 once a signing identity is plumbed in.
+Ad-hoc signing means Gatekeeper warns on first open (right-click →
+Open). Real Developer ID + notarization is a separate body of work; not
+required for daily local use.
 
 ## Architecture
 
-The Swift app is a pure UI layer. The Node sidecar (`apps/web` +
-`packages/runtime`) is the backend, accessed via HTTP on
-`localhost:3030`. The `.app` never reads Anthropic credentials,
-never spawns the Claude CLI, never persists session transcripts —
-all of that stays in Node. See ADR-0016 for the rationale.
+The Swift app is the entire UI. The Node sidecar (`sidecar/`) is the
+backend, accessed via HTTP/SSE on `localhost:3030`. The `.app` never
+reads Anthropic credentials, never spawns the Claude CLI, never persists
+session transcripts — all of that stays in Node. See ADR-0016 for the
+rationale.
 
 ```
-MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (apps/web, started by bin/marvin)
+MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, started by bin/marvin)
 ```
-
-Phase 0 only uses `/api/health` for the connection probe. Phase 1
-adds a `WKWebView` that loads the same `localhost:3030` and renders
-the existing web UI. Phases 2–6 progressively replace web islands
-with native AppKit/SwiftUI views.
 
 ## File layout
 
 ```
-apps/macos/
+macos/
 ├── BUILD.md                 # this file
 ├── README.md                # high-level overview + status
-├── Package.swift            # SPM manifest (smoke compile only)
+├── Package.swift            # SPM manifest (smoke compile + swift test)
 ├── project.yml              # xcodegen — source of truth for .xcodeproj
-└── MARVIN/
-    ├── MARVINApp.swift      # @main entry, Window scene, command bar
-    ├── ContentView.swift    # connecting / online (WebView) / offline states
-    ├── HealthMonitor.swift  # /api/health poller, connection state machine
-    ├── WebView.swift        # NSViewRepresentable wrapping WKWebView
-    └── Info.plist           # bundle metadata, ATS config, deployment target
+├── MARVIN/                  # main app target (SwiftUI / AppKit views,
+│                            # services, native bridges)
+├── MARVINLogic/             # pure-logic library (no UIKit, no AppKit)
+└── MARVINTests/             # swift test target
 ```
 
 `MARVIN.xcodeproj/` (when generated) is `.gitignore`-d.
@@ -162,19 +158,4 @@ apps/macos/
 | `swift build` fails with "PreviewsMacros not found" | You're running outside Xcode and added a `#Preview` block | Wrap the preview in a comment block (or run via Xcode); see `ContentView.swift` note. |
 | Window stays in "connecting…" forever | `bin/marvin start` isn't running, or it's bound to a different port | `curl http://localhost:3030/api/health` should return JSON. If not, run `bin/marvin start` from the repo root. |
 | Gatekeeper "MARVIN is damaged" on first open | Ad-hoc-signed app; macOS doesn't trust it | Right-click → Open → confirm. One-time per build. |
-| `xcodebuild` complains "no such file: MARVIN.xcodeproj" | You haven't run `xcodegen generate` yet | Run it from `apps/macos/`. |
-
-## What Phase 1a deliberately does NOT do
-
-- Render anything natively beyond the connecting/offline shells —
-  `.online` is a single full-bleed WebView. Native chat / file tree /
-  diff viewer land in Phases 2–5.
-- Replace the Tauri build (`apps/desktop/`) — both targets coexist
-  until Phase 6.
-- Bundle Node — the sidecar still runs separately. ADR-0011 territory.
-- Cross-platform — macOS only. Windows / Linux stay on Tauri.
-- Real signing — ad-hoc only until end of Phase 1.
-- Survive a mid-session sidecar drop without flicker — every online
-  → offline → online transition tears down the WebView and loses
-  scroll / form / focus. Documented tradeoff (`ContentView.swift`);
-  re-evaluate if it bites in practice.
+| `xcodebuild` complains "no such file: MARVIN.xcodeproj" | You haven't run `xcodegen generate` yet | Run it from `macos/`. |
