@@ -627,7 +627,7 @@ final class FilesService {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Same CSRF discipline as ChatService — apps/web/src/lib/csrf.ts
+        // Same CSRF discipline as ChatService — sidecar/src/lib/csrf.ts
         // checks for exactly "x-marvin-client: 1". Read endpoints
         // don't strictly need the header (the guard mostly cares about
         // mutations), but applying it uniformly means we don't have

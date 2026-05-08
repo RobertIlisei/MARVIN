@@ -1,5 +1,5 @@
 // GitConfirmSheet — Phase 3g. Native equivalent of the web
-// guarded-mutation confirm dialog (apps/web/src/components/source-
+// guarded-mutation confirm dialog (sidecar/src/components/source-
 // control/git-confirm-prompt.tsx). Shown when /api/git/<op> returns
 // a 409 needs-confirm response — the user OKs, we mint a token via
 // /api/git/confirm, and re-issue the original mutation with the

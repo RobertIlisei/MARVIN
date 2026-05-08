@@ -1141,5 +1141,5 @@ export default function Home() {
 
 // A2 decomposition: `LabeledGroup`, `PaneToggle`, `Capability`,
 // `ExamplePrompt`, and `labelFor` moved to
-// apps/web/src/components/shell/page-helpers.tsx. Pure JSX + props
+// sidecar/src/components/shell/page-helpers.tsx. Pure JSX + props
 // with no state/effects — safe to extract without behaviour change.

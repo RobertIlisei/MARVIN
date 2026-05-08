@@ -40,7 +40,7 @@ Reserve 🔴 Important for findings that:
   [docs/security/data-flow.md](./docs/security/data-flow.md)).
 - Break the per-project isolation contract — MARVIN source referencing
   a specific user project's service names, paths, or framework.
-- Change a public API shape in `apps/web/src/app/api/` without
+- Change a public API shape in `sidecar/src/app/api/` without
   updating [docs/reference/api.md](./docs/reference/api.md).
 
 ## What Nit means here
@@ -124,7 +124,7 @@ important signal.
   [ADR-0012](./docs/decisions/0012-source-control-mutation-channel.md).
 - **No `exec` / `spawn({ shell: true })` / string-concatenated
   git commands** anywhere under `packages/git/` or
-  `apps/web/src/app/api/git/`. Every git invocation goes through
+  `sidecar/src/app/api/git/`. Every git invocation goes through
   [`runGit`](./packages/git/src/exec.ts), which uses `execFile`
   with a validated argv. Finding a direct `child_process.exec` or
   `spawn("sh", ["-c", …])` in a git path is a 🔴 Important finding.
@@ -147,7 +147,7 @@ important signal.
   headers). Must read from `executorModel` / `advisorModel` state, not
   inline literals. The `<BranchBadge>`-era stale "model: claude-opus-4-7"
   in the brain panel was exactly this bug.
-- **Log lines emitted by `apps/web/src/app/api/` routes** don't include
+- **Log lines emitted by `sidecar/src/app/api/` routes** don't include
   full request bodies, user messages, API keys, or tokens. Session
   transcripts go to `~/.marvin/sessions/*.jsonl` by design; random
   `console.log` is not that channel.

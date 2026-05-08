@@ -28,44 +28,44 @@ const FIXTURE: TreeNode[] = [
     children: [
       {
         name: "web",
-        path: "/apps/web",
+        path: "/sidecar",
         type: "dir",
         children: [
           {
             name: "src",
-            path: "/apps/web/src",
+            path: "/sidecar/src",
             type: "dir",
             children: [
               {
                 name: "components",
-                path: "/apps/web/src/components",
+                path: "/sidecar/src/components",
                 type: "dir",
                 children: [
                   {
                     name: "brain",
-                    path: "/apps/web/src/components/brain",
+                    path: "/sidecar/src/components/brain",
                     type: "dir",
                     children: [
                       {
                         name: "scout-orb.tsx",
-                        path: "/apps/web/src/components/brain/scout-orb.tsx",
+                        path: "/sidecar/src/components/brain/scout-orb.tsx",
                         type: "file",
                       },
                       {
                         name: "advisor-orb.tsx",
-                        path: "/apps/web/src/components/brain/advisor-orb.tsx",
+                        path: "/sidecar/src/components/brain/advisor-orb.tsx",
                         type: "file",
                       },
                     ],
                   },
                   {
                     name: "file-tree",
-                    path: "/apps/web/src/components/file-tree",
+                    path: "/sidecar/src/components/file-tree",
                     type: "dir",
                     children: [
                       {
                         name: "file-tree.tsx",
-                        path: "/apps/web/src/components/file-tree/file-tree.tsx",
+                        path: "/sidecar/src/components/file-tree/file-tree.tsx",
                         type: "file",
                       },
                     ],
@@ -74,15 +74,15 @@ const FIXTURE: TreeNode[] = [
               },
               {
                 name: "app",
-                path: "/apps/web/src/app",
+                path: "/sidecar/src/app",
                 type: "dir",
                 children: [
-                  { name: "page.tsx", path: "/apps/web/src/app/page.tsx", type: "file" },
+                  { name: "page.tsx", path: "/sidecar/src/app/page.tsx", type: "file" },
                 ],
               },
             ],
           },
-          { name: "package.json", path: "/apps/web/package.json", type: "file" },
+          { name: "package.json", path: "/sidecar/package.json", type: "file" },
         ],
       },
     ],
@@ -95,18 +95,18 @@ describe("computeFilterMatches", () => {
     const { visiblePaths, forceOpenDirs } = computeFilterMatches(FIXTURE, "scout");
     // The file itself is visible, plus the ancestor chain so the
     // result isn't an orphaned leaf.
-    expect(visiblePaths).toContain("/apps/web/src/components/brain/scout-orb.tsx");
-    expect(visiblePaths).toContain("/apps/web/src/components/brain");
-    expect(visiblePaths).toContain("/apps/web/src/components");
-    expect(visiblePaths).toContain("/apps/web/src");
-    expect(visiblePaths).toContain("/apps/web");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain/scout-orb.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain");
+    expect(visiblePaths).toContain("/sidecar/src/components");
+    expect(visiblePaths).toContain("/sidecar/src");
+    expect(visiblePaths).toContain("/sidecar");
     expect(visiblePaths).toContain("/apps");
     // Sibling files should be hidden.
-    expect(visiblePaths).not.toContain("/apps/web/src/components/brain/advisor-orb.tsx");
+    expect(visiblePaths).not.toContain("/sidecar/src/components/brain/advisor-orb.tsx");
     expect(visiblePaths).not.toContain("/README.md");
     // Every ancestor of the match becomes force-open so users see the
     // result without manual expansion.
-    expect(forceOpenDirs).toContain("/apps/web/src/components/brain");
+    expect(forceOpenDirs).toContain("/sidecar/src/components/brain");
     expect(forceOpenDirs).toContain("/apps");
   });
 
@@ -123,21 +123,21 @@ describe("computeFilterMatches", () => {
     // VS Code behaviour: typing "brain" should show everything under
     // brain/ without requiring each descendant to match too.
     const { visiblePaths } = computeFilterMatches(FIXTURE, "brain");
-    expect(visiblePaths).toContain("/apps/web/src/components/brain/scout-orb.tsx");
-    expect(visiblePaths).toContain("/apps/web/src/components/brain/advisor-orb.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain/scout-orb.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain/advisor-orb.tsx");
     // But NOT leak to sibling dirs at the same level.
-    expect(visiblePaths).not.toContain("/apps/web/src/components/file-tree/file-tree.tsx");
+    expect(visiblePaths).not.toContain("/sidecar/src/components/file-tree/file-tree.tsx");
   });
 
   it("matches multiple results across unrelated branches", () => {
     const { visiblePaths } = computeFilterMatches(FIXTURE, ".tsx");
     // All three .tsx files + their ancestor chains, no .md, no
     // package.json.
-    expect(visiblePaths).toContain("/apps/web/src/components/brain/scout-orb.tsx");
-    expect(visiblePaths).toContain("/apps/web/src/components/brain/advisor-orb.tsx");
-    expect(visiblePaths).toContain("/apps/web/src/components/file-tree/file-tree.tsx");
-    expect(visiblePaths).toContain("/apps/web/src/app/page.tsx");
-    expect(visiblePaths).not.toContain("/apps/web/package.json");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain/scout-orb.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/components/brain/advisor-orb.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/components/file-tree/file-tree.tsx");
+    expect(visiblePaths).toContain("/sidecar/src/app/page.tsx");
+    expect(visiblePaths).not.toContain("/sidecar/package.json");
     expect(visiblePaths).not.toContain("/README.md");
   });
 
@@ -152,11 +152,11 @@ describe("computeFilterMatches", () => {
     // — otherwise the user sees the collapsed tree and wonders where
     // the filter went.
     const { forceOpenDirs } = computeFilterMatches(FIXTURE, "page.tsx");
-    expect(forceOpenDirs).toContain("/apps/web/src/app");
-    expect(forceOpenDirs).toContain("/apps/web/src");
-    expect(forceOpenDirs).toContain("/apps/web");
+    expect(forceOpenDirs).toContain("/sidecar/src/app");
+    expect(forceOpenDirs).toContain("/sidecar/src");
+    expect(forceOpenDirs).toContain("/sidecar");
     expect(forceOpenDirs).toContain("/apps");
     // A dir with no matches under it must NOT be force-opened.
-    expect(forceOpenDirs).not.toContain("/apps/web/src/components");
+    expect(forceOpenDirs).not.toContain("/sidecar/src/components");
   });
 });

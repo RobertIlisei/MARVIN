@@ -309,12 +309,10 @@ struct MARVINApp: App {
             ContentView()
                 .environment(health)
                 .environment(bridge)
-                // 1440×900 default + 960×600 floor — matches the
-                // existing Tauri config (tauri.conf.json) so users
-                // don't see a different window geometry across the
-                // two builds during the migration. Phase 1c adds
-                // `frameAutosaveName`, so subsequent launches restore
-                // the user's last frame in preference to ideal*.
+                // 1440×900 default + 960×600 floor.
+                // `frameAutosaveName` (wired below) restores the
+                // user's last frame in preference to ideal* on
+                // subsequent launches.
                 .frame(
                     minWidth: 960,
                     idealWidth: 1440,
