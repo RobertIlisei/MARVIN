@@ -477,201 +477,26 @@ cmd_logs() {
 }
 
 # ─────────────────────────────────────────────────────────────────────
-# macOS .app install flow (ADR-0010 v1 compromise + launchd agent).
+# macOS .app install flow (ADR-0016 SwiftUI native + launchd agent).
 #
-# MARVIN's Tauri `.app` is a thin window pointed at http://localhost:3030.
-# The window itself doesn't start the Next.js server — ADR-0011 tried to
-# bundle a Node sidecar and got rolled back (binary size, code-signing
-# churn, runtime drift). The pragmatic compromise: install a launchd
-# user agent that keeps `pnpm start` (production Next.js) running in the
-# background. The `.app` then works as a double-click launcher, no
-# terminal needed.
+# MARVIN's `.app` is a fully-native SwiftUI build (no WebView per
+# ADR-0021). The `.app` itself doesn't start the Next.js sidecar — a
+# launchd user agent does, in the background, so the `.app` can be
+# double-clicked from /Applications/ without a terminal first.
 #
-# `install-app` builds the `.app`, copies it to /Applications/, and
-# installs the launchd plist. `uninstall-app` reverses both. The plist
-# binds absolute paths at install time — moving the MARVIN source
-# means re-running install.
+# `install-macos-app` builds the `.app`, copies it to /Applications/,
+# and installs the launchd plist. `uninstall-macos-app` reverses both.
+# The plist binds absolute paths at install time — moving the MARVIN
+# source means re-running install.
 
-readonly APP_NAME="MARVIN"
-readonly APP_BUNDLE_DIR="/Applications/${APP_NAME}.app"
 readonly AGENT_LABEL="net.marvin.desktop.server"
 readonly AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
-readonly BUILT_APP_PATH="sidecar/src-tauri/target/release/bundle/macos/${APP_NAME}.app"
 
-cmd_install_app() {
-  info "installing ${APP_NAME} as a macOS app"
-
-  # Preflight — need Rust + build tools. If Cargo isn't on PATH, try
-  # sourcing the default install location so users don't have to
-  # remember `. $HOME/.cargo/env` every time.
-  if ! command -v cargo >/dev/null 2>&1; then
-    if [ -f "$HOME/.cargo/env" ]; then
-      # shellcheck disable=SC1091
-      . "$HOME/.cargo/env"
-    fi
-  fi
-  if ! command -v cargo >/dev/null 2>&1; then
-    fail "cargo not found — Tauri needs the Rust toolchain"
-    dim "  install with:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
-    return 2
-  fi
-
-  local pnpm_abs
-  pnpm_abs="$(command -v pnpm)" || {
-    fail "pnpm not found on PATH — can't create the launchd agent"
-    return 2
-  }
-
-  info "building .app (this takes a minute on a cold Cargo cache)"
-  if ! pnpm --filter @marvin/desktop build >"$STATE_DIR/desktop-build.log" 2>&1; then
-    fail "build failed — see $STATE_DIR/desktop-build.log"
-    tail -20 "$STATE_DIR/desktop-build.log" | sed 's/^/    /'
-    return 1
-  fi
-  ok "built $BUILT_APP_PATH"
-
-  if [ ! -d "$BUILT_APP_PATH" ]; then
-    fail "build completed but ${APP_NAME}.app not found at expected path"
-    dim "  expected: $REPO_ROOT/$BUILT_APP_PATH"
-    return 1
-  fi
-
-  # Copy into /Applications. The rm-then-cp avoids "source inside
-  # destination" issues on repeat installs. /Applications is writable
-  # without sudo for the current user on most modern macOS setups;
-  # if it isn't we'll get a clear permission error.
-  info "installing to $APP_BUNDLE_DIR"
-  if [ -d "$APP_BUNDLE_DIR" ]; then
-    rm -rf "$APP_BUNDLE_DIR" || {
-      fail "couldn't remove previous $APP_BUNDLE_DIR — try: sudo rm -rf $APP_BUNDLE_DIR"
-      return 1
-    }
-  fi
-  cp -R "$BUILT_APP_PATH" "$APP_BUNDLE_DIR" || {
-    fail "copy to /Applications failed — permissions?"
-    return 1
-  }
-  ok "installed ${APP_NAME}.app"
-
-  # Passthrough env vars. The running server needs credentials +
-  # telemetry config to work without the user later hunting through a
-  # shell. An explicit allowlist is intentional — we don't want to
-  # smuggle arbitrary shell state into a launch agent. If any of these
-  # are set in the installing shell, they get baked into the plist.
-  #
-  # Primary path for Honeycomb telemetry is still the Settings UI
-  # (MARVIN auto-exports OTEL vars from saved config at turn-start),
-  # so most users never need this. It exists for the advanced case
-  # where a user already drives telemetry via shell env vars.
-  local -a passthrough_keys=(
-    CLAUDE_CODE_ENABLE_TELEMETRY
-    OTEL_METRICS_EXPORTER
-    OTEL_LOGS_EXPORTER
-    OTEL_EXPORTER_OTLP_PROTOCOL
-    OTEL_EXPORTER_OTLP_ENDPOINT
-    OTEL_EXPORTER_OTLP_HEADERS
-    OTEL_SERVICE_NAME
-    OTEL_RESOURCE_ATTRIBUTES
-    HONEYCOMB_API_KEY
-    HONEYCOMB_ENVIRONMENT
-    HONEYCOMB_DATASET
-    HONEYCOMB_API_URL
-    ANTHROPIC_API_KEY
-    CLAUDE_CODE_OAUTH_TOKEN
-    MARVIN_USE_HOST_CREDENTIALS
-  )
-  local passthrough_env_xml=""
-  local passthrough_count=0
-  local key val val_escaped
-  for key in "${passthrough_keys[@]}"; do
-    val="${!key:-}"
-    [ -n "$val" ] || continue
-    # XML-escape the value — & < > are the only ones that matter
-    # inside a <string> node.
-    val_escaped=$(printf '%s' "$val" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
-    passthrough_env_xml+="
-    <key>${key}</key>
-    <string>${val_escaped}</string>"
-    passthrough_count=$((passthrough_count + 1))
-  done
-  if [ "$passthrough_count" -gt 0 ]; then
-    dim "  passing through $passthrough_count env var(s) from the installing shell"
-  fi
-
-  # Write the launchd user agent plist. Bakes in absolute paths for
-  # pnpm + REPO_ROOT so launchd doesn't need PATH-discovery. If the
-  # user moves either, they re-run install-app.
-  info "installing launchd agent → $AGENT_PLIST"
-  mkdir -p "$(dirname "$AGENT_PLIST")"
-  cat >"$AGENT_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>${AGENT_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>${REPO_ROOT}/scripts/sidecar-launcher.sh</string>
-    <string>dev</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>${REPO_ROOT}</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>${HOME}</string>
-    <key>MARVIN_PORT</key>
-    <string>${PORT}</string>${passthrough_env_xml}
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>NetworkState</key>
-    <true/>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>${REPO_ROOT}/${STATE_DIR}/launchd-stdout.log</string>
-  <key>StandardErrorPath</key>
-  <string>${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log</string>
-</dict>
-</plist>
-PLIST
-  ok "wrote agent plist"
-
-  # Unload any previous instance (idempotent install), then load.
-  launchctl unload "$AGENT_PLIST" 2>/dev/null || true
-  if ! launchctl load "$AGENT_PLIST" 2>/dev/null; then
-    fail "launchctl load failed — try: launchctl load $AGENT_PLIST"
-    return 1
-  fi
-  ok "launchd agent loaded"
-
-  # Give the agent a few seconds to boot before we claim success.
-  info "waiting for server to come up on :$PORT"
-  local n=0
-  while [ $n -lt 30 ]; do
-    if curl -sf "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
-      echo
-      ok "${APP_NAME} installed and running"
-      printf '  %-16s %s\n' "app:"     "$APP_BUNDLE_DIR"
-      printf '  %-16s %s\n' "agent:"   "$AGENT_PLIST"
-      printf '  %-16s %s\n' "server:"  "http://localhost:$PORT"
-      printf '  %-16s %s\n' "logs:"    "${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log"
-      echo
-      dim "  open via Spotlight / Launchpad / Dock — double-click ${APP_NAME}"
-      dim "  uninstall: $0 uninstall-app"
-      return 0
-    fi
-    printf '.' ; n=$((n + 1)) ; sleep 1
-  done
-  echo
-  warn "server didn't respond within 30s — the launchd agent is loaded but may still be compiling"
-  dim "  tail the logs:  tail -f ${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log"
-  return 0
-}
+# Legacy Tauri install path was removed 2026-05-08 once the SwiftUI
+# native target took over (commits 6351f94 + ADR-0021). The launchd
+# agent identifier above is preserved so an uninstall on a machine
+# that was originally set up by the old `install-app` cleans up the
+# right plist.
 
 readonly MACOS_APP_NAME="MARVIN"
 readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
@@ -693,7 +518,7 @@ cmd_install_macos_app() {
   #     Tools (no full Xcode). Manually assembles the .app bundle
   #     from the SPM executable + a substituted Info.plist. Same
   #     binary semantics, simpler dev loop, no signing identity.
-  info "installing ${MACOS_APP_NAME} (SwiftUI / Phase 1a)"
+  info "installing ${MACOS_APP_NAME} (SwiftUI native)"
 
   local macos_dir="$REPO_ROOT/macos"
   if [ ! -f "$macos_dir/project.yml" ]; then
@@ -908,28 +733,6 @@ PLIST
   dim "  open app:   open '$MACOS_APP_BUNDLE_DIR'"
 }
 
-cmd_uninstall_app() {
-  info "uninstalling ${APP_NAME} (Tauri build)"
-
-  if [ -f "$AGENT_PLIST" ]; then
-    launchctl unload "$AGENT_PLIST" 2>/dev/null || true
-    rm -f "$AGENT_PLIST"
-    ok "removed launchd agent"
-  else
-    dim "  no launchd agent at $AGENT_PLIST"
-  fi
-
-  if [ -d "$APP_BUNDLE_DIR" ]; then
-    rm -rf "$APP_BUNDLE_DIR"
-    ok "removed $APP_BUNDLE_DIR"
-  else
-    dim "  no ${APP_NAME}.app at $APP_BUNDLE_DIR"
-  fi
-
-  ok "uninstall complete"
-  dim "  source tree + ~/.marvin/ left alone; rm them by hand if you want"
-}
-
 cmd_uninstall_macos_app() {
   info "uninstalling MARVIN (SwiftUI build)"
 
@@ -990,8 +793,6 @@ macOS .app (double-click-to-launch):
                             manual bundle assembly (Command Line Tools
                             only, no Developer account required).
   marvin uninstall-macos-app  remove MARVIN.app + launchd agent
-  marvin install-app        (legacy) Tauri build + launchd agent
-  marvin uninstall-app      (legacy) remove Tauri .app + agent
 
   marvin help           this message
 
@@ -1017,9 +818,7 @@ case "${1:-start}" in
   status)   cmd_status  ;;
   logs)     cmd_logs    ;;
   doctor)   cmd_doctor  ;;
-  install-app)          cmd_install_app          ;;
   install-macos-app)    cmd_install_macos_app    ;;
-  uninstall-app)        cmd_uninstall_app        ;;
   uninstall-macos-app)  cmd_uninstall_macos_app  ;;
   help|-h|--help)  cmd_help ;;
   *)
