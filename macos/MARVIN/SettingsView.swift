@@ -68,6 +68,13 @@ struct SettingsView: View {
                 }
             }
 
+            // Anthropic auth — pick between the host's `claude auth
+            // login` session (default, today's behaviour) and a
+            // Console API key supplied through the UI. Backed by
+            // /api/auth/config, persisted at ~/.marvin/auth-config.json
+            // with 0600.
+            AuthSettingsSection()
+
             // Phase 2g.1 — permission strategy. Lives in its own
             // section because it's the highest-stakes setting the
             // native chat surfaces (auto = full bypass; gated =

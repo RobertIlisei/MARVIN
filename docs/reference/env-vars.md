@@ -4,10 +4,12 @@ All env vars are optional. MARVIN runs on any machine with sensible defaults.
 
 ### Credentials + model
 
+The Settings panel ("Authentication" section) writes a UI-managed override to `~/.marvin/auth-config.json` (`0600`). When that file is present, it wins over every variable below. See [Credentials](../security/credentials.md) for the full resolution order and [`/api/auth/config`](./api.md#authentication) for the surface that manages it.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Direct Anthropic API key. When set, wins over host-credentials. |
-| `MARVIN_USE_HOST_CREDENTIALS` | `1` (auto) | Allow `getAnthropicAuth()` to auto-detect a prior `claude auth login`. Set to `0` to disable. |
+| `ANTHROPIC_API_KEY` | — | Direct Anthropic API key. Used unless `~/.marvin/auth-config.json` says otherwise. |
+| `MARVIN_USE_HOST_CREDENTIALS` | `1` (auto) | Allow `getAnthropicAuth()` to auto-detect a prior `claude auth login`. Set to `0` to disable. Has no effect when `auth-config.json` exists. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | Alternate credential form — some setups store the Claude CLI's token here. Auto-detected. |
 | `MARVIN_MODEL` | `claude-opus-4-7` | Default model for `/api/chat` when no explicit `model` is sent. |
 | `MARVIN_CLAUDE_BIN` | — | Absolute path to a specific Claude CLI binary. Overrides the `claude` resolver. |
