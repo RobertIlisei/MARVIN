@@ -96,10 +96,33 @@ settings:
       SWIFT_COMPILATION_MODE: wholemodule
 
 targets:
+  # Pure-logic library mirroring Package.swift's MARVINLogic target.
+  # Holds helpers with no UI / no @MainActor coupling — context-pressure
+  # parsing, Scope-met sentinel, DurationFormat — so MARVINTests can
+  # link them (executable targets cannot be linked from another target).
+  # The MARVIN app target depends on this so the production code path
+  # is the same as the test code path. Drift between this and
+  # Package.swift is the bug — keep aligned.
+  MARVINLogic:
+    type: framework
+    platform: macOS
+    sources:
+      - path: MARVINLogic
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.marvin.macos.logic
+        # Frameworks default to a dynamic install name; with an .app
+        # consumer + ad-hoc signing this is fine. SKIP_INSTALL keeps
+        # xcodebuild from trying to put the framework in the wrong
+        # archive slot during Release builds.
+        SKIP_INSTALL: YES
+        DEFINES_MODULE: YES
+
   MARVIN:
     type: application
     platform: macOS
     dependencies:
+      - target: MARVINLogic
       - package: STTextView
         product: STTextView
       - package: SwiftTreeSitter
