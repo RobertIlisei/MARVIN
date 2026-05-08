@@ -24,7 +24,7 @@ If you just want to run MARVIN, start with [Quickstart](./getting-started/quicks
 - [HTTP API](./reference/api.md) — 17 endpoints, request/response shapes, SSE events
 - [Environment variables](./reference/env-vars.md)
 - [Storage layout](./reference/storage.md) — `~/.marvin/` + localStorage keys
-- [MCP servers](./reference/mcp-servers.md) — `marvin-graph`, `marvin-playwright`
+- [MCP servers](./reference/mcp-servers.md) — `marvin-graph`
 - [Keyboard shortcuts](./reference/shortcuts.md)
 
 ## Operations

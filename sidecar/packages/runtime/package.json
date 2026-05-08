@@ -16,7 +16,6 @@
     "./confirm-registry": "./src/confirm-registry.ts",
     "./projects": "./src/projects.ts",
     "./cost-tracker": "./src/cost-tracker.ts",
-    "./playwright-mcp": "./src/playwright-mcp.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
@@ -36,7 +35,6 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.113",
     "@marvin/tools": "workspace:*",
-    "@marvin/graphify-bridge": "workspace:*",
-    "@playwright/mcp": "^0.0.70"
+    "@marvin/graphify-bridge": "workspace:*"
   }
 }

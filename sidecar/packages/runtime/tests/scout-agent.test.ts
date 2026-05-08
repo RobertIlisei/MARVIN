@@ -25,14 +25,6 @@ describe("SCOUT_AGENT (ADR-0014)", () => {
     expect(SCOUT_AGENT.mcpServers).toEqual(["marvin-graph"]);
   });
 
-  it("does NOT inherit marvin-playwright", () => {
-    // Playwright's action tools are write-equivalent (submit forms,
-    // click through flows). Scouts are research, not drivers. If a
-    // research use case genuinely needs a live browser it escalates
-    // back to the main session — see ADR-0014 alternatives.
-    expect(SCOUT_AGENT.mcpServers ?? []).not.toContain("marvin-playwright");
-  });
-
   it("inherits the parent turn's model (no Opus escalation)", () => {
     // Opus-hint is the advisor's job (ADR-0007), not the scout's.
     // A scout that silently runs on Opus would blow through cost

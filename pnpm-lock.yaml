@@ -53,9 +53,6 @@ importers:
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@playwright/mcp':
-        specifier: ^0.0.70
-        version: 0.0.70
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -167,9 +164,6 @@ importers:
       '@marvin/tools':
         specifier: workspace:*
         version: link:../tools
-      '@playwright/mcp':
-        specifier: ^0.0.70
-        version: 0.0.70
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -644,11 +638,6 @@ packages:
 
   '@oxc-project/types@0.126.0':
     resolution: {integrity: sha512-oGfVtjAgwQVVpfBrbtk4e1XDyWHRFta6BS3GWVzrF8xYBT2VGQAk39yJS/wFSMrZqoiCU4oghT3Ch0HaHGIHcQ==}
-
-  '@playwright/mcp@0.0.70':
-    resolution: {integrity: sha512-Kl0a6l9VL8rvT1oBou3hS5yArjwWV9UlwAkq+0skfK1YVg8XfmmNaAmwZhMeNx/ZhGiWXfCllo6rD/jvZz+WuA==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   '@radix-ui/number@1.1.1':
     resolution: {integrity: sha512-MkKCwxlXTgz6CFoJx3pCwn07GKp36+aZyu/u2Ln2VrA5DcdyCZkASEDBTd8x5whTQQL5CiYf4prXKLcgQdv29g==}
@@ -1877,11 +1866,6 @@ packages:
   fs.realpath@1.0.0:
     resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
 
-  fsevents@2.3.2:
-    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
-    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
-    os: [darwin]
-
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -2241,16 +2225,6 @@ packages:
   pkce-challenge@5.0.1:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
-
-  playwright-core@1.60.0-alpha-1774999321000:
-    resolution: {integrity: sha512-ams3Zo4VXxeOg5ZTTh16GkE8g48Bmxo/9pg9gXl9SVKlVohCU7Jaog7XntY8yFuzENA6dJc1Fz7Z/NNTm9nGEw==}
-    engines: {node: '>=18'}
-    hasBin: true
-
-  playwright@1.60.0-alpha-1774999321000:
-    resolution: {integrity: sha512-Bd5DkzYKG+2g1jLO6NeTXmGLbBYSFffJIOsR4l4hUBkJvzvGGdLZ7jZb2tOtb0WIoWXQKdQj3Ap6WthV4DBS8w==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   postcss@8.4.31:
     resolution: {integrity: sha512-PS08Iboia9mts/2ygV3eLpY5ghnUcfLV/EXTOW1E2qYxJKGGBUtNjN76FYHnMs36RmARn41bC0AZmn+rR0OVpQ==}
@@ -2972,11 +2946,6 @@ snapshots:
     optional: true
 
   '@oxc-project/types@0.126.0': {}
-
-  '@playwright/mcp@0.0.70':
-    dependencies:
-      playwright: 1.60.0-alpha-1774999321000
-      playwright-core: 1.60.0-alpha-1774999321000
 
   '@radix-ui/number@1.1.1': {}
 
@@ -4191,9 +4160,6 @@ snapshots:
 
   fs.realpath@1.0.0: {}
 
-  fsevents@2.3.2:
-    optional: true
-
   fsevents@2.3.3:
     optional: true
 
@@ -4482,14 +4448,6 @@ snapshots:
   pinkie@2.0.4: {}
 
   pkce-challenge@5.0.1: {}
-
-  playwright-core@1.60.0-alpha-1774999321000: {}
-
-  playwright@1.60.0-alpha-1774999321000:
-    dependencies:
-      playwright-core: 1.60.0-alpha-1774999321000
-    optionalDependencies:
-      fsevents: 2.3.2
 
   postcss@8.4.31:
     dependencies:

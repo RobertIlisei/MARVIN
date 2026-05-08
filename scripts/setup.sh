@@ -7,7 +7,7 @@
 # Prompts for:
 #   - Claude Code CLI         (required for any chat)
 #   - graphify Python package (recommended — Golden Rule 7 graph queries)
-#   - Playwright Chromium     (required for the marvin-playwright MCP)
+#   - Playwright Chromium     (required for browser automation via `npx playwright`)
 #
 # Each prompt is Y/n/never. "never" is persisted in
 # .marvin/install-prefs.json so future setup + doctor runs stop asking.
@@ -271,12 +271,12 @@ setup_chromium() {
   fi
 
   cat <<EOF
-  $(printf '%s%s%s' "$C_BLD" "What it gives you" "$C_RST"): the marvin-playwright MCP — MARVIN can drive
-    a real browser against localhost / LAN URLs (screenshots, click flows,
-    DOM inspection).
-  $(printf '%s%s%s' "$C_BLD" "If skipped" "$C_RST"): marvin-playwright MCP doesn't register. Everything
-    else works. Install later with 'npx playwright install chromium' or
-    set MARVIN_PLAYWRIGHT=0 to silence the doctor warning.
+  $(printf '%s%s%s' "$C_BLD" "What it gives you" "$C_RST"): browser automation — MARVIN can shell out to
+    'npx playwright' to drive a real browser against localhost / LAN URLs
+    (screenshots, click flows, DOM inspection).
+  $(printf '%s%s%s' "$C_BLD" "If skipped" "$C_RST"): browser-automation turns will fail until chromium is
+    installed. Everything else works. Install later with
+    'npx playwright install chromium'.
 EOF
   case "$(prompt_install 'playwright chromium' 'Y'; echo $?)" in
     0)

@@ -93,8 +93,8 @@ important signal.
   17 endpoints today; each lives in the reference with request/response
   shapes + SSE event table. A new route without a doc entry is a
   missed ADR-style obligation.
-- **New MCP servers** (`marvin-*` alongside `marvin-graph` and
-  `marvin-playwright`) have an entry in
+- **New MCP servers** (`marvin-*` alongside `marvin-graph`) have an
+  entry in
   [`docs/reference/mcp-servers.md`](./docs/reference/mcp-servers.md)
   and an updated "prefer `marvin-*`" note in
   [`sidecar/packages/runtime/src/personality.ts`](./sidecar/packages/runtime/src/personality.ts).
