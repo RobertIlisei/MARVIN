@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./paths": "./src/paths.ts",
     "./auth": "./src/auth.ts",
+    "./auth-config": "./src/auth-config.ts",
     "./claude-cli": "./src/claude-cli.ts",
     "./session": "./src/session.ts",
     "./personality": "./src/personality.ts",
