@@ -150,11 +150,26 @@ targets:
     sources:
       - path: MARVIN
         # Resources/ holds AppIcon.icns + the source SVGs (idle /
-        # active for menu bar, app for the Dock gradient). Tell
-        # xcodegen to treat them as bundle resources, not sources.
+        # active for menu bar, app for the Dock gradient) + the
+        # tree-sitter Queries/ subtree. Exclude from compile sources
+        # below; the entries that follow add them as bundle resources.
         excludes:
           - "Resources/**"
+      # Top-level resource files (AppIcon.icns, *.svg) FLATTENED into
+      # Contents/Resources/. Without this — using `type: folder` on the
+      # parent — xcodegen makes the entire Resources/ a folder reference,
+      # ending up at Contents/Resources/Resources/AppIcon.icns where
+      # CFBundleIconFile=AppIcon and Bundle.main.url(forResource:) can't
+      # find them. That's the icon-missing bug v0.1.0 shipped with.
       - path: MARVIN/Resources
+        buildPhase: resources
+        excludes:
+          - "Queries/**"
+      # tree-sitter highlight queries — these DO need their directory
+      # structure preserved (SyntaxHighlighter loads with subdirectory:
+      # "Queries"), so this single subtree gets the folder-reference
+      # treatment the parent doesn't. Lands at Contents/Resources/Queries/.
+      - path: MARVIN/Resources/Queries
         type: folder
         buildPhase: resources
     info:
