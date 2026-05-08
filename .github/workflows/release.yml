@@ -1,0 +1,177 @@
+# Release workflow — builds MARVIN.app with the bundled sidecar, zips
+# it, and attaches the artefact + its sha256 to a GitHub Release.
+#
+# Per ADR-0023 the brew tap (RobertIlisei/homebrew-marvin) consumes
+# this output: the cask formula references the release zip URL and
+# pins the sha256 we compute here. Bumping a version means tagging
+# `v$(version)` here, then bumping the cask formula in the tap repo.
+#
+# Triggered manually (workflow_dispatch) AND on tag push so a `git
+# tag v0.1.0 && git push --tags` produces a release with no extra
+# ceremony. The manual trigger is useful for re-running a failed
+# release without re-tagging.
+#
+# We ad-hoc sign — no Apple Developer ID. Brew strips the quarantine
+# xattr at install time, so end users don't see the Gatekeeper
+# warning.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.0). Defaults to package.json version."
+        required: false
+
+permissions:
+  contents: write  # needed to create the GitHub Release
+
+jobs:
+  build:
+    name: build .app + cut release
+    # macos-14 is GitHub's Apple Silicon (arm64) runner. Native Swift
+    # build, no Rosetta, matches the binary we ship.
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Tooling ───────────────────────────────────────────────────
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # ── Resolve version ────────────────────────────────────────────
+      # On tag push, GITHUB_REF_NAME is the tag (v0.1.0); strip the v.
+      # On manual dispatch, the input wins; otherwise fall back to
+      # package.json's version.
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            v="${{ inputs.version }}"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="$(jq -r .version package.json)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v"   >> "$GITHUB_OUTPUT"
+          echo "release version: $v"
+
+      # ── Build the bundled .app ─────────────────────────────────────
+      # bin/marvin install-macos-app would copy to /Applications/, which
+      # the runner doesn't allow without elevated perms. We invoke the
+      # underlying steps directly here so the artefact lands in a
+      # workspace-relative path we can zip.
+      - name: Fetch bundled Node
+        run: scripts/fetch-node.sh arm64
+
+      - name: Build sidecar (Next standalone)
+        run: pnpm --filter @marvin/web build
+
+      - name: Build MARVIN.app via xcodegen + xcodebuild
+        run: |
+          set -euo pipefail
+          cd macos
+          xcodegen generate
+          xcodebuild \
+            -project MARVIN.xcodeproj \
+            -scheme MARVIN \
+            -configuration Release \
+            -derivedDataPath build \
+            -quiet \
+            build
+          built="build/Build/Products/Release/MARVIN.app"
+          test -d "$built"
+          # Stage into a known artefact dir so subsequent steps don't
+          # have to recompute the path.
+          mkdir -p ../artifacts
+          rm -rf ../artifacts/MARVIN.app
+          cp -R "$built" ../artifacts/MARVIN.app
+
+      - name: Bundle sidecar payload into MARVIN.app
+        env:
+          MARVIN_BUNDLE_NO_SMOKE: "1"  # smoke-probe runs CLI tools the runner can't always satisfy; rely on the install-time probe locally
+        run: |
+          scripts/bundle-sidecar.sh artifacts/MARVIN.app/Contents/Resources arm64
+
+      - name: Re-codesign (ad-hoc, deep)
+        run: codesign --force --deep --sign - artifacts/MARVIN.app
+
+      # ── Zip + checksum ─────────────────────────────────────────────
+      - name: Create zip
+        id: zip
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          name="MARVIN-${v}-arm64.zip"
+          # Use ditto so xattrs and metadata are preserved and the zip
+          # is in the format Homebrew Cask expects.
+          ditto -c -k --keepParent artifacts/MARVIN.app "artifacts/${name}"
+          sha="$(shasum -a 256 "artifacts/${name}" | awk '{print $1}')"
+          echo "name=$name"     >> "$GITHUB_OUTPUT"
+          echo "path=artifacts/${name}" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha"    >> "$GITHUB_OUTPUT"
+          echo "MARVIN-${v}-arm64.zip sha256: $sha"
+
+      # ── Publish the release ────────────────────────────────────────
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: MARVIN ${{ steps.version.outputs.version }}
+          body: |
+            ## Install via Homebrew
+
+            ```bash
+            brew tap RobertIlisei/marvin
+            brew install --cask marvin
+            ```
+
+            ## Manual install (without Homebrew)
+
+            Download the zip below, unzip, and drag MARVIN.app into `/Applications`.
+            Because we don't notarize, macOS will refuse to open the app on first
+            launch — strip the quarantine xattr once:
+
+            ```bash
+            xattr -dr com.apple.quarantine /Applications/MARVIN.app
+            ```
+
+            (Homebrew does this for you. Manual installs need the one-liner.)
+
+            ## Artefact
+
+            - `${{ steps.zip.outputs.name }}`
+            - sha256: `${{ steps.zip.outputs.sha256 }}`
+
+            See [ADR-0023](https://github.com/RobertIlisei/MARVIN/blob/main/docs/decisions/0023-brew-distributable-bundled-sidecar.md) for the bundling architecture.
+          files: ${{ steps.zip.outputs.path }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
