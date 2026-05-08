@@ -232,6 +232,40 @@ runner.suite("scope-met") {
     }
 }
 
+runner.suite("DurationFormat") {
+    runner.test("sub-second renders fractional") {
+        runner.expect(DurationFormat.humanize(ms: 0), equals: "0.00s", "0ms")
+        runner.expect(DurationFormat.humanize(ms: 420), equals: "0.42s", "420ms")
+        runner.expect(DurationFormat.humanize(ms: 999), equals: "1s", "999ms rounds up")
+    }
+
+    runner.test("under a minute shows seconds only") {
+        runner.expect(DurationFormat.humanize(ms: 1_000), equals: "1s", "1s exact")
+        runner.expect(DurationFormat.humanize(ms: 12_300), equals: "12s", "12.3s rounds down")
+        runner.expect(DurationFormat.humanize(ms: 12_500), equals: "13s", "12.5s rounds up")
+        runner.expect(DurationFormat.humanize(ms: 59_499), equals: "59s", "just under 1m")
+    }
+
+    runner.test("under an hour shows m + s") {
+        runner.expect(DurationFormat.humanize(ms: 60_000), equals: "1m 0s", "1m exact")
+        runner.expect(DurationFormat.humanize(ms: 75_000), equals: "1m 15s", "1m 15s")
+        runner.expect(DurationFormat.humanize(ms: 258_167), equals: "4m 18s", "the screenshot case")
+        runner.expect(DurationFormat.humanize(ms: 3_599_000), equals: "59m 59s", "just under 1h")
+    }
+
+    runner.test("an hour and over shows h + m + s") {
+        runner.expect(DurationFormat.humanize(ms: 3_600_000), equals: "1h 0m 0s", "1h exact")
+        runner.expect(DurationFormat.humanize(ms: 630_885), equals: "10m 31s", "the original screenshot case")
+        runner.expect(DurationFormat.humanize(ms: 7_290_000), equals: "2h 1m 30s", "2h 1m 30s")
+        runner.expect(DurationFormat.humanize(ms: 90_061_000), equals: "25h 1m 1s", "longer than a day still renders")
+    }
+
+    runner.test("negative is clamped to zero") {
+        runner.expect(DurationFormat.humanize(ms: -1), equals: "0.00s", "-1ms → 0.00s")
+        runner.expect(DurationFormat.humanize(ms: -5_000), equals: "0.00s", "-5s → 0.00s")
+    }
+}
+
 // MARK: - run + report
 
 if runner.failures.isEmpty {
