@@ -90,7 +90,7 @@ WebView removed end-to-end (ADR-0021); native SwiftUI replaces every web-rendere
 
 ### v1.1 — install-app + scout subagents · shipped 2026-04-21
 
-- `bin/marvin install-app` ships a real `/Applications/MARVIN.app` plus a launchd user agent that auto-starts the server on login. See [`apps/desktop/README.md`](../apps/desktop/README.md) and [ADR-0010](./decisions/0010-desktop-wrapper-tauri.md).
+- `bin/marvin install-app` ships a real `/Applications/MARVIN.app` plus a launchd user agent that auto-starts the server on login. (The original Tauri-based wrapper from [ADR-0010](./decisions/0010-desktop-wrapper-tauri.md) was retired by [ADR-0016](./decisions/0016-swift-migration.md) — current install path is `bin/marvin install-macos-app`.)
 - Scout subagents (`subagent_type: "scout"`) — read-only research carve-out via the SDK's `agents:` option. SDK-level `disallowedTools` is the structural backstop. See [ADR-0014](./decisions/0014-scout-subagents-read-only.md).
 - File tree toolbar, source control panel polish, model-picker presets.
 

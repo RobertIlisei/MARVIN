@@ -1,5 +1,5 @@
 // SourceControlView — Phase 3e. Native equivalent of the web
-// `<SourceControlPanel>` (apps/web/src/components/source-control/
+// `<SourceControlPanel>` (sidecar/src/components/source-control/
 // source-control-panel.tsx).
 //
 // Read-only in 3e per ADR-0018 §3 — clicking a row does nothing yet.
@@ -453,9 +453,9 @@ struct PendingGitConfirm: Identifiable {
 ///   │ ▾ Conflicted (1)                 │
 ///   │   ▫ packages/ui/foo.ts           │
 ///   │ ▾ Staged (3)                     │
-///   │   ▫ M  apps/web/page.tsx         │
+///   │   ▫ M  sidecar/page.tsx         │
 ///   │ ▾ Changes (5)                    │
-///   │   ▫ M  apps/macos/...            │
+///   │   ▫ M  macos/...                 │
 ///   │ ▾ Untracked (2)                  │
 ///   │   ▫ ?  notes.txt                 │
 ///   ├──────────────────────────────────┤
