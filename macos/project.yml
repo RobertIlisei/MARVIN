@@ -104,19 +104,21 @@ targets:
   # is the same as the test code path. Drift between this and
   # Package.swift is the bug — keep aligned.
   MARVINLogic:
-    type: framework
+    # Static library, not a framework. Frameworks need a bundle layout
+    # (Info.plist + Versions/A symlink farm) that xcodegen doesn't
+    # auto-generate for type:framework targets, and the missing
+    # Info.plist crashes the embedded codesign step on Release builds
+    # ("bundle format unrecognized, invalid, or unsuitable"). Static
+    # link sidesteps the bundle entirely — Swift module emission still
+    # happens, so MARVIN can `import MARVINLogic` exactly as before.
+    type: library.static
     platform: macOS
     sources:
       - path: MARVINLogic
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: net.marvin.macos.logic
-        # Frameworks default to a dynamic install name; with an .app
-        # consumer + ad-hoc signing this is fine. SKIP_INSTALL keeps
-        # xcodebuild from trying to put the framework in the wrong
-        # archive slot during Release builds.
-        SKIP_INSTALL: YES
         DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
 
   MARVIN:
     type: application
