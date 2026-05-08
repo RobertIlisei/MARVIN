@@ -94,10 +94,10 @@ first place TDD should land is wherever tests are going to live.
 
 For MARVIN-scoped TDD:
 
-- **Pure functions** in `packages/tools/src/policy.ts`,
-  `packages/runtime/src/cost-tracker.ts`,
-  `packages/runtime/src/projects.ts`,
-  `packages/graphify-bridge/src/read-graph.ts` — low friction. Pick
+- **Pure functions** in `sidecar/packages/tools/src/policy.ts`,
+  `sidecar/packages/runtime/src/cost-tracker.ts`,
+  `sidecar/packages/runtime/src/projects.ts`,
+  `sidecar/packages/graphify-bridge/src/read-graph.ts` — low friction. Pick
   vitest or bun test. Each test is seconds.
 - **API route integration** — boot a Next.js test server, fire HTTP
   requests, assert responses. Higher friction but higher coverage.

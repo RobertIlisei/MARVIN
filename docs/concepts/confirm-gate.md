@@ -12,7 +12,7 @@ Best for experienced users who want uninterrupted flow. This is how MARVIN is de
 
 ### Gated
 
-The pre-flight `canUseTool` callback is installed. Every tool call is classified by [`toolPolicy()`](../../packages/tools/src/policy.ts) into one of three outcomes:
+The pre-flight `canUseTool` callback is installed. Every tool call is classified by [`toolPolicy()`](../../sidecar/packages/tools/src/policy.ts) into one of three outcomes:
 
 | Outcome | Behavior | Examples |
 |---|---|---|
@@ -57,8 +57,8 @@ browser                    Next.js                  Agent SDK
 
 Key pieces:
 
-- [`canUseTool` callback in `sdk-runner.ts`](../../packages/runtime/src/sdk-runner.ts) — the SDK invokes this before running each tool. Returns `{ behavior: "allow" | "deny" }`.
-- [`confirm-registry.ts`](../../packages/runtime/src/confirm-registry.ts) — in-process map keyed by `(turnId, toolUseId)` that holds the pending promise resolver.
+- [`canUseTool` callback in `sdk-runner.ts`](../../sidecar/packages/runtime/src/sdk-runner.ts) — the SDK invokes this before running each tool. Returns `{ behavior: "allow" | "deny" }`.
+- [`confirm-registry.ts`](../../sidecar/packages/runtime/src/confirm-registry.ts) — in-process map keyed by `(turnId, toolUseId)` that holds the pending promise resolver.
 - `/api/confirm` — POST endpoint the client calls after the user clicks allow/deny; looks up the resolver and resolves the promise.
 - `confirm.request` SSE event — sent to the client with the policy's reason + tool input so the `<ConfirmPrompt>` component can render a diff (for Edit/Write) or a command block (for Bash).
 
@@ -66,7 +66,7 @@ This is a **structural** gate. The Agent SDK cannot execute the tool until the p
 
 ## What "whitelisted Bash" means
 
-[`toolPolicy()`](../../packages/tools/src/policy.ts) checks the `command` field against a regex list of known-safe patterns:
+[`toolPolicy()`](../../sidecar/packages/tools/src/policy.ts) checks the `command` field against a regex list of known-safe patterns:
 
 - Read-only git: `git status`, `git log`, `git diff`, `git show`, `git rev-parse …`
 - Read-only filesystem: `ls`, `pwd`, `cat`, `head`, `tail`, `wc`, `file`
@@ -88,7 +88,7 @@ Non-negotiable. Even in `auto` mode, these never run:
 - Anything reading/writing `.env*` files without explicit user intent in the message
 - `dd of=/dev/…` and other disk-level destructive commands
 
-The list lives in [`packages/tools/src/policy.ts`](../../packages/tools/src/policy.ts) as `HARD_DENY_PATTERNS`. Adding a pattern requires a decision — don't tune it silently.
+The list lives in [`sidecar/packages/tools/src/policy.ts`](../../sidecar/packages/tools/src/policy.ts) as `HARD_DENY_PATTERNS`. Adding a pattern requires a decision — don't tune it silently.
 
 ## When to prefer which mode
 
@@ -106,5 +106,5 @@ The list lives in [`packages/tools/src/policy.ts`](../../packages/tools/src/poli
 
 - [ADR-0004 — structural confirm gate via Agent SDK migration](../decisions/0004-structural-confirm-gate.md) — why we moved from the CLI to the Agent SDK.
 - [Tool policy reference](../security/tool-policy.md) — the full auto / confirm / deny matrix.
-- [`sdk-runner.ts`](../../packages/runtime/src/sdk-runner.ts) — the gate implementation.
-- [`packages/tools/src/policy.ts`](../../packages/tools/src/policy.ts) — the classification regexes.
+- [`sdk-runner.ts`](../../sidecar/packages/runtime/src/sdk-runner.ts) — the gate implementation.
+- [`sidecar/packages/tools/src/policy.ts`](../../sidecar/packages/tools/src/policy.ts) — the classification regexes.

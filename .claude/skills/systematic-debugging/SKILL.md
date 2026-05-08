@@ -156,7 +156,7 @@ MARVIN's surfaces where systematic debugging pays off most:
   `cli.event` → `turn.completed` boundary.
 - **Confirm-gate timing** — race between the client's `/api/confirm`
   POST and the SDK's `canUseTool` promise. See
-  [`packages/runtime/src/confirm-registry.ts`](../../../packages/runtime/src/confirm-registry.ts).
+  [`sidecar/packages/runtime/src/confirm-registry.ts`](../../../sidecar/packages/runtime/src/confirm-registry.ts).
 - **Session resume** — `turn-registry` vs `hydrateFromSession`
   disagreement when reconnecting mid-turn. See
   [docs/operations/sessions.md](../../../docs/operations/sessions.md).
