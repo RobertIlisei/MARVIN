@@ -54,7 +54,7 @@ If you block `api.anthropic.com` in your firewall, MARVIN fails loud (every turn
 
 - **`marvin-graph`**: in-process. Reads `<workDir>/graphify-out/graph.json` on your disk. No network.
 
-(MARVIN previously shipped a `marvin-playwright` MCP server; it was retired in favour of shelling out to `npx playwright` via `Bash`. When MARVIN drives a browser, the Chromium process *itself* makes HTTP requests — usually to `http://localhost:3000` or your dev server — but those pages can of course reach the internet. MARVIN doesn't proxy that traffic.)
+When MARVIN shells out to `npx playwright` via `Bash`, the Chromium process *itself* makes HTTP requests — usually to `http://localhost:3000` or your dev server — but those pages can of course reach the internet. MARVIN doesn't proxy that traffic.
 
 ## What about the graphify knowledge graph?
 
