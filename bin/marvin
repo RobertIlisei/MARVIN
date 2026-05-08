@@ -477,17 +477,23 @@ cmd_logs() {
 }
 
 # ─────────────────────────────────────────────────────────────────────
-# macOS .app install flow (ADR-0016 SwiftUI native + launchd agent).
+# macOS .app install flow (ADR-0016 SwiftUI native + ADR-0023 bundled sidecar).
 #
 # MARVIN's `.app` is a fully-native SwiftUI build (no WebView per
-# ADR-0021). The `.app` itself doesn't start the Next.js sidecar — a
-# launchd user agent does, in the background, so the `.app` can be
-# double-clicked from /Applications/ without a terminal first.
+# ADR-0021). Per ADR-0023, the `.app` ships its own Node 22 binary +
+# Next.js standalone build inside Contents/Resources/, and the SwiftUI
+# process spawns the sidecar on launch (cleaning it up on quit). This
+# is the default — same path the brew-distributed `.app` takes.
+#
+# Pass `--launchd` to keep the legacy behavior where a user-agent
+# launchd plist runs `pnpm start` from the source repo. That path is
+# still useful for developers who want the sidecar persistent across
+# logins without keeping the `.app` open.
 #
 # `install-macos-app` builds the `.app`, copies it to /Applications/,
-# and installs the launchd plist. `uninstall-macos-app` reverses both.
-# The plist binds absolute paths at install time — moving the MARVIN
-# source means re-running install.
+# and (default) bundles node + sidecar into Contents/Resources, or
+# (with --launchd) installs the launchd plist. `uninstall-macos-app`
+# reverses whichever path was used (it removes both unconditionally).
 
 readonly AGENT_LABEL="net.marvin.desktop.server"
 readonly AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
@@ -503,12 +509,17 @@ readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
 
 cmd_install_macos_app() {
   # Builds the SwiftUI native target at macos/ and installs the
-  # resulting MARVIN.app bundle to /Applications/, then wires a launchd
-  # user agent that starts the Next.js sidecar on login so the app works
-  # on double-click without needing a terminal. Ad-hoc signed — no Apple
-  # Developer account required; Gatekeeper warns on first open
-  # (right-click → Open to bypass, or System Settings → Privacy &
-  # Security → "Open Anyway"). See ADR-0016.
+  # resulting MARVIN.app bundle to /Applications/. By default (per
+  # ADR-0023) the .app is self-contained: bundles node + the Next.js
+  # standalone sidecar in Contents/Resources/, and the SwiftUI process
+  # spawns it on launch. Pass `--launchd` to keep the older user-agent
+  # plist behavior instead.
+  #
+  # Ad-hoc signed — no Apple Developer account required; Gatekeeper
+  # warns on first open (right-click → Open to bypass, or System
+  # Settings → Privacy & Security → "Open Anyway"). The brew-installed
+  # path strips the quarantine xattr automatically — no warning there.
+  # See ADR-0016, ADR-0023.
   #
   # Two build paths, picked by what's installed:
   #   • xcodebuild + xcodegen (preferred) — produces a real Xcode
@@ -518,7 +529,21 @@ cmd_install_macos_app() {
   #     Tools (no full Xcode). Manually assembles the .app bundle
   #     from the SPM executable + a substituted Info.plist. Same
   #     binary semantics, simpler dev loop, no signing identity.
-  info "installing ${MACOS_APP_NAME} (SwiftUI native)"
+
+  # Parse install mode. Default: --bundled (ADR-0023).
+  local install_mode="bundled"
+  for arg in "$@"; do
+    case "$arg" in
+      --launchd) install_mode="launchd" ;;
+      --bundled) install_mode="bundled" ;;
+      *)
+        warn "install-macos-app: unknown flag '$arg' (expected --bundled or --launchd)"
+        return 2
+        ;;
+    esac
+  done
+
+  info "installing ${MACOS_APP_NAME} (SwiftUI native, mode=${install_mode})"
 
   local macos_dir="$REPO_ROOT/macos"
   if [ ! -f "$macos_dir/project.yml" ]; then
@@ -642,8 +667,9 @@ cmd_install_macos_app() {
   fi
 
   # ── Sidecar: ensure a production Next.js build exists ─────────────────
-  # The launchd agent runs `pnpm start` (production mode). That requires
-  # .next/ to exist. Build now if stale — the user just installed, so
+  # Both install modes need .next/ — the bundled mode copies the
+  # standalone tree into Contents/Resources, the launchd mode runs
+  # `pnpm start`. Build now if stale — the user just installed, so
   # paying the build cost once here is the right trade-off.
   if build_is_fresh; then
     ok "Next.js build is fresh"
@@ -657,7 +683,66 @@ cmd_install_macos_app() {
     fi
   fi
 
-  # ── Sidecar: launchd user agent ────────────────────────────────────────
+  # ── Bundled mode (default, ADR-0023) ──────────────────────────────────
+  # Drop a pinned Node 22 binary + the Next standalone tree into
+  # Contents/Resources/ and re-codesign the bundle. The SwiftUI app
+  # auto-detects the bundled payload and spawns it on launch.
+  if [ "$install_mode" = "bundled" ]; then
+    info "fetching bundled node runtime"
+    if "$REPO_ROOT/scripts/fetch-node.sh" arm64 >>"$LOG_FILE" 2>&1; then
+      ok "node runtime ready"
+    else
+      fail "fetch-node failed — see $LOG_FILE"
+      return 1
+    fi
+
+    info "bundling sidecar payload into MARVIN.app"
+    if "$REPO_ROOT/scripts/bundle-sidecar.sh" "$MACOS_APP_BUNDLE_DIR/Contents/Resources" arm64 >>"$LOG_FILE" 2>&1; then
+      ok "sidecar bundled"
+    else
+      fail "bundle-sidecar failed — see $LOG_FILE"
+      return 1
+    fi
+
+    # Re-codesign the bundle now that we've dropped a new executable
+    # (node) + thousands of files into Resources/. --deep walks the
+    # entire bundle so the bundled node binary inherits the ad-hoc
+    # signature, which is what lets it execute under macOS hardened
+    # runtime when MARVIN.app is launched.
+    info "re-signing MARVIN.app (ad-hoc, post-bundle)"
+    if codesign --force --deep --sign - "$MACOS_APP_BUNDLE_DIR" >/dev/null 2>&1; then
+      ok "ad-hoc signed"
+    else
+      warn "post-bundle codesign failed — sidecar may not start under hardened runtime"
+    fi
+
+    # Tear down the legacy launchd agent if it exists from a prior
+    # `--launchd` install. Bundled mode owns the sidecar lifecycle
+    # via the SwiftUI app; a stale launchd agent would race on :3030.
+    if [ -f "$AGENT_PLIST" ]; then
+      launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+      rm -f "$AGENT_PLIST"
+      ok "removed legacy launchd agent (bundled mode owns sidecar lifecycle)"
+    fi
+
+    # Health probe — open MARVIN.app and wait for /api/health. We
+    # don't `open` the app here because the user likely wants control
+    # over when it appears in their Dock; instead we just print the
+    # next-step instructions. The first manual launch will spawn the
+    # bundled sidecar via SidecarManager.
+    echo
+    ok "MARVIN.app is ready (bundled sidecar mode)"
+    printf '  %-14s %s\n' "app:"    "$MACOS_APP_BUNDLE_DIR"
+    printf '  %-14s %s\n' "size:"   "$(du -sh "$MACOS_APP_BUNDLE_DIR" 2>/dev/null | awk '{print $1}')"
+    printf '  %-14s %s\n' "logs:"   "$HOME/Library/Logs/MARVIN/sidecar.log"
+    echo
+    dim "  Double-click MARVIN in /Applications — the sidecar starts with the app."
+    dim "  Gatekeeper: right-click → Open on first launch (no warning when installed via brew)."
+    dim "  Uninstall:  $0 uninstall-macos-app"
+    return 0
+  fi
+
+  # ── Launchd mode (--launchd opt-in) ───────────────────────────────────
   # Runs `pnpm start` (Next.js production) via scripts/sidecar-launcher.sh,
   # which enriches PATH at runtime so nvm/Homebrew pnpm is always found —
   # no baked absolute pnpm path that breaks after Node/pnpm upgrades.
