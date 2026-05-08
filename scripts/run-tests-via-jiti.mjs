@@ -344,21 +344,21 @@ globalThis.expect = expect;
 // supported above. Critically, this includes every audit-fix-pass
 // test file (#15 / #35 policy.test.ts, #17 honeycomb-telemetry.test.ts).
 const SUITES = [
-  "packages/tools/tests/policy.test.ts",
-  "packages/tools/tests/fs-write-policy.test.ts",
-  "packages/tools/tests/fs-constants.test.ts",
-  "packages/runtime/tests/fs-sandbox.test.ts",
-  "packages/runtime/tests/honeycomb-telemetry.test.ts",
-  "packages/runtime/tests/honeycomb-config.test.ts",
-  "packages/runtime/tests/fs-write-confirm-registry.test.ts",
-  "packages/git/src/argv-guards.test.ts",
-  "packages/git/src/git-write-policy.test.ts",
-  "packages/git/src/parse-porcelain-v2.test.ts",
-  "apps/web/tests/csrf.test.ts",
-  "apps/web/tests/file-tree-filter.test.ts",
-  "apps/web/tests/model-picker-presets.test.ts",
-  "apps/web/tests/task-role.test.ts",
-  "packages/runtime/tests/scout-agent.test.ts",
+  "sidecar/packages/tools/tests/policy.test.ts",
+  "sidecar/packages/tools/tests/fs-write-policy.test.ts",
+  "sidecar/packages/tools/tests/fs-constants.test.ts",
+  "sidecar/packages/runtime/tests/fs-sandbox.test.ts",
+  "sidecar/packages/runtime/tests/honeycomb-telemetry.test.ts",
+  "sidecar/packages/runtime/tests/honeycomb-config.test.ts",
+  "sidecar/packages/runtime/tests/fs-write-confirm-registry.test.ts",
+  "sidecar/packages/git/src/argv-guards.test.ts",
+  "sidecar/packages/git/src/git-write-policy.test.ts",
+  "sidecar/packages/git/src/parse-porcelain-v2.test.ts",
+  "sidecar/tests/csrf.test.ts",
+  "sidecar/tests/file-tree-filter.test.ts",
+  "sidecar/tests/model-picker-presets.test.ts",
+  "sidecar/tests/task-role.test.ts",
+  "sidecar/packages/runtime/tests/scout-agent.test.ts",
 ];
 
 const jiti = createJiti(import.meta.url, {

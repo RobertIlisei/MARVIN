@@ -2,12 +2,12 @@
   "extends": "./tsconfig.base.json",
   "include": [],
   "references": [
-    { "path": "./apps/web" },
-    { "path": "./packages/runtime" },
-    { "path": "./packages/tools" },
-    { "path": "./packages/project-context" },
-    { "path": "./packages/graphify-bridge" },
-    { "path": "./packages/git-watch" },
-    { "path": "./packages/ui" }
+    { "path": "./sidecar" },
+    { "path": "./sidecar/packages/runtime" },
+    { "path": "./sidecar/packages/tools" },
+    { "path": "./sidecar/packages/project-context" },
+    { "path": "./sidecar/packages/graphify-bridge" },
+    { "path": "./sidecar/packages/git-watch" },
+    { "path": "./sidecar/packages/ui" }
   ]
 }

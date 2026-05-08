@@ -1,0 +1,175 @@
+# xcodegen project manifest — generates MARVIN.xcodeproj on demand.
+#
+# Why xcodegen instead of checking in the .xcodeproj: project.pbxproj
+# is diff-hostile, drifts on every Xcode-side touch, and is the cause
+# of most "merge conflict in the Xcode project" pain. xcodegen
+# regenerates a clean project from this YAML in <1s. The generated
+# .xcodeproj is gitignored.
+#
+# Bootstrap on a fresh clone:
+#   brew install xcodegen
+#   cd macos && xcodegen generate
+#   open MARVIN.xcodeproj
+#
+# All locked-in choices come from ADR-0016.
+
+name: MARVIN
+
+# Phase 5b — external Swift packages used by the embedded surfaces.
+# Mirror of `dependencies:` in Package.swift; xcodegen and SPM each
+# resolve these through their own paths but the wire (URL + version
+# constraints) is the same. Drift between the two manifests IS the
+# bug — bump versions in both.
+packages:
+  STTextView:
+    url: https://github.com/krzyzanowskim/STTextView.git
+    from: 1.0.0
+  SwiftTreeSitter:
+    url: https://github.com/ChimeHQ/SwiftTreeSitter.git
+    from: 0.9.0
+  tree-sitter-swift:
+    url: https://github.com/alex-pinkus/tree-sitter-swift.git
+    branch: with-generated-files
+  tree-sitter-typescript:
+    url: https://github.com/tree-sitter/tree-sitter-typescript.git
+    from: 0.23.0
+  tree-sitter-go:
+    url: https://github.com/tree-sitter/tree-sitter-go.git
+    from: 0.23.0
+  tree-sitter-rust:
+    url: https://github.com/tree-sitter/tree-sitter-rust.git
+    from: 0.23.0
+  tree-sitter-json:
+    url: https://github.com/tree-sitter/tree-sitter-json.git
+    from: 0.24.0
+  tree-sitter-html:
+    url: https://github.com/tree-sitter/tree-sitter-html.git
+    from: 0.23.0
+  tree-sitter-c:
+    url: https://github.com/tree-sitter/tree-sitter-c.git
+    from: 0.23.0
+  tree-sitter-cpp:
+    url: https://github.com/tree-sitter/tree-sitter-cpp.git
+    from: 0.23.0
+  tree-sitter-bash:
+    url: https://github.com/tree-sitter/tree-sitter-bash.git
+    from: 0.23.0
+
+# Top-level options — Apple-shop defaults plus explicit minima.
+options:
+  bundleIdPrefix: net.marvin
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "14.0"
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+  xcodeVersion: "16.0"
+
+# Two settings groups (debug / release) plus shared base. The base
+# carries the team-agnostic flags; debug/release tweak optimisation,
+# stripping, and signing identity.
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: NO
+    CLANG_ENABLE_MODULES: YES
+    # Ad-hoc signing for Phase 0 — Gatekeeper warns on first open
+    # but the .app runs locally. Real Developer ID + notarization
+    # gets wired at the end of Phase 1 once a signing identity is
+    # plumbed in (see ADR-0016 §3 — Resolved decisions).
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGNING_REQUIRED: YES
+    CODE_SIGNING_ALLOWED: YES
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      ONLY_ACTIVE_ARCH: YES
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+
+targets:
+  MARVIN:
+    type: application
+    platform: macOS
+    dependencies:
+      - package: STTextView
+        product: STTextView
+      - package: SwiftTreeSitter
+        product: SwiftTreeSitter
+      - package: tree-sitter-swift
+        product: TreeSitterSwift
+      - package: tree-sitter-typescript
+        product: TreeSitterTypeScript
+      - package: tree-sitter-go
+        product: TreeSitterGo
+      - package: tree-sitter-rust
+        product: TreeSitterRust
+      - package: tree-sitter-json
+        product: TreeSitterJSON
+      - package: tree-sitter-html
+        product: TreeSitterHTML
+      - package: tree-sitter-c
+        product: TreeSitterC
+      - package: tree-sitter-cpp
+        product: TreeSitterCPP
+      - package: tree-sitter-bash
+        product: TreeSitterBash
+    sources:
+      - path: MARVIN
+        # Resources/ holds AppIcon.icns + the source SVGs (idle /
+        # active for menu bar, app for the Dock gradient). Tell
+        # xcodegen to treat them as bundle resources, not sources.
+        excludes:
+          - "Resources/**"
+      - path: MARVIN/Resources
+        type: folder
+        buildPhase: resources
+    info:
+      path: MARVIN/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.marvin.macos
+        # PRODUCT_NAME is the on-disk bundle name. Deliberately
+        # different from the Tauri "MARVIN.app" so both bundles can
+        # coexist in /Applications/ during the migration evaluation
+        # period. Phase 6 (Tauri retire — ADR-0016) renames this to
+        # `MARVIN` and uninstalls the Tauri app.
+        PRODUCT_NAME: MARVIN
+        # We DON'T point at MARVIN/Info.plist here even though it's
+        # the source — xcodegen wires `info.path` and Xcode auto-
+        # generates the GENERATE_INFOPLIST_FILE wiring. Setting both
+        # would conflict.
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: MARVIN/Info.plist
+        # Sandbox is intentionally OFF for Phase 0 — the app talks
+        # to the local Node sidecar on loopback (which sandbox would
+        # block without entitlements) and Phase 0 isn't App-Store-
+        # bound. Re-evaluate at distribution.
+        ENABLE_APP_SANDBOX: NO
+
+# A single shared scheme so the project opens cleanly in Xcode and
+# has a default Build/Run target. xcodegen generates this if asked.
+schemes:
+  MARVIN:
+    build:
+      targets:
+        MARVIN: all
+    run:
+      config: Debug
+      askForAppToLaunch: false
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

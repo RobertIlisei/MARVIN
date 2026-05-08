@@ -1,0 +1,1165 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* `tw-animate-css` ports the tailwindcss-animate utilities to Tailwind v4's
+ * CSS-first config. The shadcn-style primitives under `@marvin/ui` rely on
+ * `data-[state=open]:animate-in data-[state=open]:fade-in-0
+ * data-[state=open]:zoom-in-95` (and their `=closed` counterparts) to
+ * enter + leave smoothly. Without this import those classes don't exist,
+ * the content card ends up in an inconsistent state (overlay visible,
+ * card hidden at opacity:0 / scale:.95) and the Settings dialog appears
+ * as a transparent veil with no body. The inline style={} on DialogContent
+ * (see packages/ui/src/dialog.tsx) is the belt-and-braces fallback for
+ * colour + border, but the animation init state still needs these
+ * utilities. Keep both. */
+
+/* Tailwind sees these names and generates utilities; the *values* below
+ * are the light (default) baseline. Dark mode overrides them via
+ * [data-theme="dark"] further down. This matches the Claude-Design
+ * handoff's cascade: light = :root, dark = opt-in attribute. */
+@theme {
+  /* Light surfaces — warm paper, not pure white. Bumped down from the
+   * original oklch(0.985) on 2026-04-21 after user feedback "too
+   * bright, especially over long sessions." Landing zone is the
+   * 0.93–0.95 range called out in docs/roadmap.md. 0.95 keeps the
+   * "paper" identity without veering into cream; 0.935 on elev opens
+   * a visible elevation gap (was 0.010, now 0.015). Chroma held to
+   * 0.006 — enough warmth to read as paper rather than flat grey,
+   * not enough to tint the UI yellow. */
+  --color-bg: oklch(0.95 0.006 80);
+  --color-bg-elev: oklch(0.935 0.005 80);
+  --color-bg-glass: oklch(1 0 0 / 0.65);
+
+  --color-fg: oklch(0.18 0.005 80);
+  --color-fg-dim: oklch(0.42 0.005 80);
+  --color-fg-faint: oklch(0.62 0.004 80);
+
+  --color-border: oklch(0.18 0.005 80 / 0.08);
+  --color-border-strong: oklch(0.18 0.005 80 / 0.16);
+
+  /* Accent — monochrome ink on paper (handoff palette). */
+  --color-accent: oklch(0.18 0.005 80);
+  --color-accent-deep: oklch(0.28 0.005 80);
+  --color-accent-glow: oklch(0.18 0.005 80 / 0.12);
+
+  --color-success: oklch(0.6 0.12 150);
+  --color-warn: oklch(0.7 0.14 70);
+  --color-danger: oklch(0.6 0.18 25);
+
+  /* ---------------- Git-status hues ----------------
+   * The file tree + source-control panel render single-letter status
+   * badges (M / A / D / R / ? / U / T) for each changed file. Before
+   * these tokens existed, M and R fell back to `--color-accent` /
+   * `--color-accent-deep`, which in light mode are near-black ink
+   * (0.18 / 0.28 lightness). That blends into directory-name text of
+   * the same tone → user reported the badges invisible in light.
+   *
+   * Git's conventional colour language maps well here: modified → blue,
+   * renamed → purple. Added stays green (--color-success), deleted
+   * stays red (--color-danger), untracked stays amber (--color-warn).
+   * Light values are chosen at ~0.48–0.52 lightness for AA contrast
+   * against the 0.95 paper bg; dark values at ~0.72–0.78 for AAA
+   * contrast against the near-black canvas. */
+  --color-git-modified: oklch(0.50 0.16 245);
+  --color-git-renamed: oklch(0.52 0.17 310);
+
+  --shadow-glow: 0 0 24px 2px oklch(0.18 0.005 80 / 0.06);
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
+                  0 6px 16px -10px rgba(24, 22, 18, 0.1),
+                  0 30px 60px -30px rgba(24, 22, 18, 0.16);
+
+  /* ---------------- Shadcn-compat aliases ----------------
+   * The `@marvin/ui` primitives (Dialog, Sheet, Tabs, Button,
+   * DropdownMenu, Select, Card, AlertDialog) are shadcn-style and
+   * reference CSS variables like `--background`, `--popover`,
+   * `--foreground`, `--muted`, `--ring`, etc. — variables MARVIN's
+   * @theme doesn't declare natively. Without these aliases, Dialog
+   * content renders transparent (`bg-background` → no bg), Button
+   * `outline` variant loses its background, Tabs' active state
+   * disappears, and so on.
+   *
+   * Each alias points at the MARVIN token it should mirror:
+   *   background / card / popover → bg-elev (surfaces)
+   *   foreground / card-foreground / popover-foreground → fg
+   *   primary / accent → accent
+   *   primary-foreground / accent-foreground → bg (contrast on top)
+   *   muted → bg-elev, muted-foreground → fg-faint
+   *   destructive → danger
+   *   ring / input → border-strong
+   *
+   * Defined once in the shared @theme block so both light and dark
+   * get them automatically via the MARVIN tokens they alias (which
+   * themselves flip in the [data-theme="dark"] override below).
+   */
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-fg);
+  --color-card: var(--color-bg-elev);
+  --color-card-foreground: var(--color-fg);
+  --color-popover: var(--color-bg-elev);
+  --color-popover-foreground: var(--color-fg);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-bg);
+  --color-secondary: var(--color-bg-elev);
+  --color-secondary-foreground: var(--color-fg);
+  --color-muted: var(--color-bg-elev);
+  --color-muted-foreground: var(--color-fg-faint);
+  --color-accent-foreground: var(--color-bg);
+  --color-destructive: var(--color-danger);
+  --color-destructive-foreground: var(--color-bg);
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-accent-deep);
+
+  /* ---------------- Materials ----------------
+   * Vibrancy-inspired surface tokens. Tauri's WKWebView doesn't expose
+   * NSVisualEffectView to the web shell (would require
+   * macOSPrivateApi: true → App Store reject), so these are *simulated*
+   * via subtle tints on top of --color-bg. The goal is that toolbars
+   * and sidebars read as layered materials rather than flat paint —
+   * the cue macOS apps rely on to feel "three-dimensional."
+   *
+   *   --material-toolbar   top-bar strip + chat header
+   *   --material-sidebar   left column (Files / Source Control)
+   *   --material-popover   dialogs, menus, dropdowns
+   *
+   * Dark-theme overrides below. Add new materials here if you find
+   * yourself typing the same bg triplet twice in a component. */
+  --material-toolbar: oklch(0.965 0.005 80);
+  --material-sidebar: oklch(0.955 0.007 80);
+  --material-popover: oklch(0.965 0.004 80);
+
+  /* ---------------- Chrome spacing ----------------
+   * A1 polish introduces density tokens so the bump from "web-tight"
+   * to "macOS-loose" lands in one place. Tailwind utilities still work
+   * everywhere; these are for panel chrome that used to type
+   * `px-3 py-2` inline. */
+  --pad-chrome: 14px;     /* top-bar, panel headers */
+  --pad-panel: 18px;      /* body of a panel / dialog / card */
+  --pad-row: 10px 14px;   /* list row padding */
+  --gap-panel: 12px;      /* vertical stack gap inside a panel */
+
+  /* Tauri titleBarStyle: "Overlay" + hiddenTitle: true means traffic
+   * lights overlay the window at ~(13, 16) from top-left. Content in
+   * the top-left needs to avoid colliding with them in full-screen.
+   * Use this on the first top-level element (header / sidebar top). */
+  --titlebar-h: 28px;
+}
+
+/* Light defaults repeated on :root for explicit cascade + halo seeds.
+ * Dark override lives in [data-theme="dark"] below. */
+:root {
+  color-scheme: light;
+
+  /* Halo seeds for body::before / body::after. Comma triplets so they
+   * drop into rgba() with a dynamic alpha. Light = iridescent
+   * (purple/blue/pink) Apple-Intelligence cue. */
+  --color-halo-1: 180, 156, 216;
+  --color-halo-2: 156, 204, 220;
+  --color-halo-3: 216, 168, 196;
+
+  /* Display-tint / wordmark dot defaults to the foreground ink so
+   * .font-display renders unchanged in light. Dark overrides below. */
+  --display-tint: var(--color-fg);
+  --display-dot: var(--color-fg);
+}
+
+/* ---------------- Dark theme ----------------
+ * Pure black canvas, icy-blue accent (matches the brain particle palette),
+ * slightly elevated panel surfaces with hairline borders.
+ * Per the DARK_THEME_HANDOFF.md spec from Claude Design. */
+[data-theme="dark"] {
+  --color-bg: #000;
+  --color-bg-elev: oklch(0.18 0.012 240);
+  --color-bg-glass: oklch(0.14 0.012 240 / 0.72);
+
+  --color-fg: oklch(0.95 0.020 220);
+  --color-fg-dim: oklch(0.74 0.030 220);
+  --color-fg-faint: oklch(0.54 0.025 220);
+
+  /* Borders in dark were at 0.10 / 0.20 alpha, which against pure-black
+   * --color-bg reads as basically invisible (that "a bit off" feeling —
+   * everything bleeds together without separation lines). Bumping to
+   * 0.14 / 0.26 brings them back to reading as hairlines without
+   * losing the subtle, non-harsh character the handoff specified. */
+  --color-border: oklch(0.85 0.04 220 / 0.14);
+  --color-border-strong: oklch(0.85 0.04 220 / 0.26);
+
+  /* Icy-blue accent — same family as the nebula particle highlights. */
+  --color-accent: oklch(0.82 0.10 230);
+  --color-accent-deep: oklch(0.60 0.12 230);
+  --color-accent-glow: oklch(0.82 0.10 230 / 0.24);
+
+  --color-success: oklch(0.74 0.14 160);
+  --color-warn: oklch(0.78 0.13 75);
+  --color-danger: oklch(0.72 0.18 25);
+
+  /* Git-status hues in dark — lighter variants of the light tokens so
+   * they stay legible on the near-black canvas. See §Git-status hues
+   * in the light @theme block for the rationale. */
+  --color-git-modified: oklch(0.76 0.12 240);
+  --color-git-renamed: oklch(0.78 0.14 310);
+
+  /* Cool halo seeds for the ambient body::before wash. */
+  --color-halo-1: 140, 180, 230;
+  --color-halo-2: 110, 150, 210;
+  --color-halo-3: 170, 200, 240;
+
+  --shadow-glow: 0 0 30px 2px oklch(0.82 0.10 230 / 0.18);
+  --shadow-panel: 0 1px 0 oklch(0.85 0.04 220 / 0.05) inset,
+                  0 20px 60px -24px rgba(0, 0, 0, 0.7);
+
+  /* Icy-blue display tint & wordmark dot per handoff. */
+  --display-tint: oklch(0.86 0.08 225);
+  --display-dot: oklch(0.78 0.12 230);
+
+  /* Dark materials — slate-blue tints on top of the pure-black
+   * canvas. Widened the spread (was toolbar 0.20 / sidebar 0.22 /
+   * popover 0.24 — only 2-point gaps, which read as "flat" even
+   * though each was technically above the next). Now 0.22 / 0.26 /
+   * 0.30 gives popover a clear "floating above the sidebar" cue,
+   * and the sidebar a clear "above the toolbar strip." */
+  --material-toolbar: oklch(0.22 0.016 240);
+  --material-sidebar: oklch(0.26 0.018 240);
+  --material-popover: oklch(0.30 0.020 240);
+
+  color-scheme: dark;
+}
+
+/* Tint the display serif — falls back to --color-fg in light mode via
+ * the --display-tint default above. */
+.font-display {
+  color: var(--display-tint);
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  min-height: 100vh;
+  /* System stack first — SF Pro on macOS/iOS, Segoe UI on Windows,
+   * system default on Linux. No Google Fonts network hit before first
+   * paint; UI feels native to whatever OS the user is on. Geist used
+   * to live at the front of this stack and was the first thing making
+   * MARVIN feel "generic web app" rather than "Mac app" in the Tauri
+   * window. A1 polish (2026-04-21): system fonts take the lead. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro",
+    "Segoe UI", "Roboto", "Helvetica Neue", "Helvetica", "Arial",
+    sans-serif;
+  /* SF Pro responds well to these OpenType features; they're harmless
+   * on Segoe / Roboto which just ignore unknown tags. */
+  font-feature-settings: "ss01", "ss08";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background 0.6s ease;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, "Menlo", monospace;
+}
+
+/* Editorial display — for the MARVIN wordmark, hero heading, and any
+ * display-serif moment. Italic variant set at usage sites. */
+.font-display {
+  font-family: var(--font-display), "Iowan Old Style", "Apple Garamond",
+    Georgia, "Times New Roman", serif;
+  font-feature-settings: "liga", "dlig", "salt";
+  letter-spacing: -0.01em;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Ambient backdrop — intensity reacts to --marvin-activity 0..1. The
+ * colour shifted from cyan/blue to amber + rust, matching the new
+ * sulphur accent. Keeps the same "breathing when idle, brightening
+ * when busy" behaviour. */
+body {
+  --marvin-activity: 0.05;
+}
+body[data-marvin="idle"]       { --marvin-activity: 0.08; }
+body[data-marvin="thinking"]   { --marvin-activity: 0.55; }
+body[data-marvin="tool"]       { --marvin-activity: 0.70; }
+body[data-marvin="writing"]    { --marvin-activity: 0.92; }
+/* `cancelling` reads as "winding down" — between thinking and idle. */
+body[data-marvin="cancelling"] { --marvin-activity: 0.30; }
+body[data-marvin="error"]      { --marvin-activity: 0.45; }
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse at 18% 22%,
+      rgba(var(--color-halo-1), calc(0.05 + var(--marvin-activity) * 0.12)),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 82% 78%,
+      rgba(var(--color-halo-2), calc(0.04 + var(--marvin-activity) * 0.10)),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse at 50% 115%,
+      rgba(var(--color-halo-3), calc(0.03 + var(--marvin-activity) * 0.10)),
+      transparent 55%
+    );
+  pointer-events: none;
+  z-index: -1;
+  transition: background 0.9s ease;
+}
+
+/* Slow drift of a soft haze, keeps the background breathing when idle. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: -12%;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(var(--color-halo-1), 0.04), transparent 40%),
+    radial-gradient(circle at 70% 60%, rgba(var(--color-halo-2), 0.03), transparent 40%);
+  filter: blur(48px);
+  pointer-events: none;
+  z-index: -1;
+  animation: backdrop-drift 28s ease-in-out infinite;
+}
+
+/* Grain overlay — SVG turbulence at very low opacity. Adds paper-like
+ * tactility without murdering contrast. Fixed so it doesn't scroll
+ * with content; positioned above the backdrop but below everything else. */
+html {
+  position: relative;
+}
+html::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  /* Light (default) grain: black ink specks, multiply-blend for paper. */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.42 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+  background-size: 220px 220px;
+  opacity: 0.025;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Dark-theme grain: light specks, screen-blend to lift black. Per the
+ * handoff's Edit 2 tone-down: opacity stays subtle, blend inverts. */
+[data-theme="dark"] html::after {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9  0 0 0 0 0.93  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+  background-size: 160px 160px;
+  opacity: 0.04;
+  mix-blend-mode: screen;
+}
+
+@keyframes backdrop-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(2%, -1%) scale(1.04); }
+  66%      { transform: translate(-1%, 2%) scale(0.97); }
+}
+
+/* Panel glass treatment */
+.glass {
+  background: var(--color-bg-glass);
+  backdrop-filter: saturate(1.1) blur(10px);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Thin scrollbars — theme-aware via border-strong var. */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 4px;
+}
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fg-faint);
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* --- MARVIN brain animation --- */
+@keyframes breathe {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.07);
+  }
+}
+
+@keyframes breathe-calm {
+  0%, 100% {
+    opacity: 0.22;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.03);
+  }
+}
+
+@keyframes fire-intense {
+  0%, 100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
+@keyframes synapse-fire {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes halo-pulse {
+  0%, 100% {
+    opacity: 0.2;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(1.05);
+  }
+}
+
+/* Concentric halo rings that ripple outward during activity. */
+@keyframes halo-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.42;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
+}
+
+@keyframes halo-ring-calm {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.15;
+  }
+  100% {
+    transform: scale(1.2);
+    opacity: 0;
+  }
+}
+
+/* Sparks that drift off the brain when MARVIN is actively thinking / writing. */
+@keyframes spark-drift {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.6);
+  }
+  20% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--spark-dx, 40px), var(--spark-dy, -30px)) scale(1.1);
+  }
+}
+
+/* Ambient dust — slow orbital drift inside the silhouette. */
+@keyframes dust-drift {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  15%, 85% {
+    opacity: var(--dust-opacity, 0.45);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dust-dx, 20px), var(--dust-dy, -14px));
+  }
+}
+
+/* Edge rhythm — edges brighten subtly as if data is flowing, even without
+ * a visible particle. Cheap (opacity only, composites well). */
+@keyframes edge-pulse {
+  0%, 100% {
+    stroke-opacity: 0.18;
+  }
+  50% {
+    stroke-opacity: 0.52;
+  }
+}
+
+@keyframes error-flicker {
+  0%, 100% {
+    filter: hue-rotate(0deg);
+  }
+  10%, 30%, 50% {
+    filter: hue-rotate(-160deg);
+  }
+  20%, 40% {
+    filter: hue-rotate(0deg);
+  }
+}
+
+/* Staggered hero entry — think of it as a planetarium show opening.
+ * Each stage uses the same keyframe but starts at a different delay. */
+@keyframes hero-stage {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+    letter-spacing: 0.04em;
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    letter-spacing: inherit;
+    filter: blur(0);
+  }
+}
+
+.hero-brain-intro {
+  animation: hero-stage 1.15s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.hero-stage-1 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.25s both; }
+.hero-stage-2 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.55s both; }
+.hero-stage-3 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 0.85s both; }
+.hero-stage-4 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 1.15s both; }
+.hero-stage-5 { animation: hero-stage 0.9s cubic-bezier(0.22, 0.9, 0.3, 1) 1.45s both; }
+
+/* Slow orbital sweep behind the hero brain — a thin amber line that
+ * traces a wide ellipse, evoking a planetarium or orrery. Only visible
+ * on the empty-state canvas (use .hero-orbit on the wrapper). */
+@keyframes orbit-sweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Hero orbital rings — light (default) = desaturated ink; dark =
+ * icy-blue to match the nebula palette. */
+.hero-orbit::before,
+.hero-orbit::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 480px;
+  height: 480px;
+  margin-left: -240px;
+  margin-top: -240px;
+  border-radius: 50%;
+  border: 1px solid oklch(0.18 0.005 80 / 0.08);
+  pointer-events: none;
+  animation: orbit-sweep 40s linear infinite;
+}
+.hero-orbit::after {
+  width: 620px;
+  height: 620px;
+  margin-left: -310px;
+  margin-top: -310px;
+  border-color: oklch(0.18 0.005 80 / 0.06);
+  border-style: dashed;
+  animation-duration: 90s;
+  animation-direction: reverse;
+}
+[data-theme="dark"] .hero-orbit::before {
+  border-color: oklch(0.82 0.10 230 / 0.16);
+}
+[data-theme="dark"] .hero-orbit::after {
+  border-color: oklch(0.82 0.10 230 / 0.10);
+}
+
+/* Constellation — a very faint dot grid that scrolls slowly across the
+ * hero view. Implemented as a radial-gradient tile so it composites
+ * cheaply and doesn't pop when the window is resized. */
+@keyframes constellation-drift {
+  0%   { background-position: 0 0, 40px 40px; }
+  100% { background-position: 800px -800px, 840px -760px; }
+}
+
+/* Light (default) — faint ink specks under multiply; dark = icy-blue
+ * specks under screen so they lift off the black canvas. */
+.constellation {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, oklch(0.18 0.005 80 / 0.18) 1px, transparent 1.5px),
+    radial-gradient(circle, oklch(0.18 0.005 80 / 0.1) 1px, transparent 1.5px);
+  background-size: 80px 80px, 120px 120px;
+  background-position: 0 0, 40px 40px;
+  opacity: 0.35;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  animation: constellation-drift 320s linear infinite;
+}
+[data-theme="dark"] .constellation {
+  background-image:
+    radial-gradient(circle, oklch(0.92 0.04 220 / 0.28) 1px, transparent 1.5px),
+    radial-gradient(circle, oklch(0.82 0.10 230 / 0.18) 1px, transparent 1.5px);
+  opacity: 0.25;
+  mix-blend-mode: screen;
+}
+
+/* Wordmark glow — light mode drops it (ink on paper doesn't glow);
+ * dark mode gets the icy-blue shimmer. */
+.title-glow {
+  text-shadow: none;
+}
+[data-theme="dark"] .title-glow {
+  text-shadow:
+    0 0 22px oklch(0.82 0.10 230 / 0.38),
+    0 0 52px oklch(0.60 0.12 230 / 0.22);
+}
+
+/* Slight "rise-in" for incoming chat messages */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 0.25s ease-out;
+}
+
+/* ---------------------------------------------------------------------------
+ * Confirm-prompt attention pulse.
+ *
+ * Fires three times when a confirm card first renders, then stops. The
+ * point is to draw the eye to a high-stakes prompt (Edit / Write /
+ * Bash) without becoming a sustained nag — three soft breaths is
+ * enough that a user who isn't already looking at the chat panel
+ * notices, and not so much that a user who IS looking gets annoyed.
+ *
+ * The colour is dynamic: each instance sets `--pulse-tint` inline
+ * (warn-yellow for routine confirms, danger-red for destructive
+ * patterns) so the same animation can read at two severities. Honours
+ * `prefers-reduced-motion` by collapsing to a static glow — the visual
+ * cue stays, the motion drops.
+ *
+ * See [docs/reviews/2026-04-26-full-audit.md, finding #11].
+ * ------------------------------------------------------------------------- */
+@keyframes confirm-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--pulse-tint, var(--color-warn));
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+.confirm-pulse {
+  animation: confirm-pulse 1.6s ease-in-out 0s 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm-pulse {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--pulse-tint, var(--color-warn));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Advisor companion orb — hidden by default; animates in when the
+ * `advisor` tool is actively firing in the current turn. Transforms +
+ * opacity on the wrapper; the inner halo + orbit ring keep their own
+ * loops while visible. See `advisor-orb.tsx`.
+ * ------------------------------------------------------------------------ */
+
+.advisor-orb-wrap {
+  opacity: 0;
+  transform: translateX(32px) scale(0.7);
+  transition:
+    opacity 0.45s cubic-bezier(0.22, 0.9, 0.3, 1),
+    transform 0.55s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.advisor-orb-wrap.is-active {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+.advisor-orb-wrap.is-active .advisor-orb-svg {
+  animation: advisor-breathe 2.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px oklch(0.82 0.10 230 / 0.55));
+}
+.advisor-orb-wrap.is-active .advisor-orbit-ring {
+  transform-origin: 50% 50%;
+  animation: advisor-orbit 12s linear infinite;
+}
+@keyframes advisor-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+@keyframes advisor-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Scout orb — sibling to the advisor orb, fires while a `Task` subagent
+ * with `subagent_type: "scout"` / `description: "scout: …"` is active in
+ * the current turn. Same transition shape as the advisor so both orbs
+ * enter/leave with identical cadence (one is escalation, one is
+ * parallel research — both quiet). See `scout-orb.tsx`.
+ *
+ * Entry comes from the *left* (translateX(-32px)) so the scout and
+ * advisor arrive from opposite sides, visually suggesting "inputs
+ * converging on the main brain." If both fire at once they flank
+ * symmetrically rather than stacking.
+ * ------------------------------------------------------------------------ */
+
+.scout-orb-wrap {
+  opacity: 0;
+  transform: translateX(-32px) scale(0.7);
+  transition:
+    opacity 0.35s ease,
+    transform 0.55s cubic-bezier(0.22, 0.9, 0.3, 1);
+}
+.scout-orb-wrap.is-active {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+.scout-orb-wrap.is-active .scout-orb-svg {
+  animation: scout-breathe 2.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px oklch(0.78 0.14 170 / 0.55));
+}
+.scout-orb-wrap.is-active .scout-ripple-inner {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+}
+.scout-orb-wrap.is-active .scout-ripple-mid {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+  animation-delay: 1s;
+}
+.scout-orb-wrap.is-active .scout-ripple-outer {
+  transform-origin: 50% 50%;
+  animation: scout-ripple 3.2s ease-out infinite;
+  animation-delay: 2s;
+}
+@keyframes scout-breathe {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* Three concentric rings, staggered — reads as outward-radiating search
+   waves without demanding as much visual weight as the advisor's
+   continuous orbit. */
+@keyframes scout-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  18% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Design-system primitives ported from the Claude Design handoff.
+ * Adapted to MARVIN's existing sulphur-amber dark palette — same visual
+ * vocabulary (pill / kbd / timeline / status-rail), warmer accent colors.
+ * ------------------------------------------------------------------------ */
+
+::selection {
+  background: var(--color-accent-glow);
+  color: var(--color-fg);
+}
+
+.hairline {
+  background: var(--color-border);
+  height: 1px;
+}
+
+/* Mono uppercase eyebrow label — tiny, wide-tracked, ghost-colored. Used
+ * for section headings inside panels, metadata rows, and the state
+ * indicator. Named `.eyebrow` (not `.label`) to avoid clashing with
+ * semantic <label> elements. */
+.eyebrow {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-fg-faint);
+}
+
+/* Keyboard-hint chip — slim, MARVIN-palette. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-elev);
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--color-fg-dim);
+}
+
+/* Unified pill button. `data-active="true"` flips to inverted amber fill. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  font-size: 12px;
+  color: var(--color-fg-dim);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+.pill:hover {
+  color: var(--color-fg);
+  border-color: var(--color-border-strong);
+  background: var(--color-bg-elev);
+}
+.pill[data-active="true"] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent-deep);
+}
+.pill[data-active="true"]:hover {
+  background: var(--color-accent-deep);
+  border-color: var(--color-accent-deep);
+}
+.pill-sm {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.pill-ghost {
+  border-color: transparent;
+}
+.pill-ghost:hover {
+  border-color: var(--color-border);
+}
+
+/* Left marginal rule — used by block quotes or inset notes. */
+.marginalia {
+  position: relative;
+}
+.marginalia::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+
+/* Timeline thread for stacked tool calls — a single hairline spine with
+ * dots at each node. Mirrors the design's departure from boxed cards. */
+.timeline {
+  position: relative;
+  padding-left: 22px;
+}
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--color-border-strong);
+}
+.timeline-node {
+  position: relative;
+}
+.timeline-node::before {
+  content: "";
+  position: absolute;
+  left: -19px;
+  top: 12px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  border: 1.5px solid var(--color-fg-dim);
+}
+.timeline-node[data-status="running"]::before {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+.timeline-node[data-status="error"]::before {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+}
+.timeline-node[data-status="warn"]::before {
+  border-color: var(--color-warn);
+  background: var(--color-warn);
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--color-accent-glow);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(217, 200, 106, 0);
+  }
+}
+
+/* Status hairline — sits under the header. Width + opacity react to
+ * `data-marvin` state; error state swaps the shimmer color for danger. */
+@keyframes hairline-flow {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+.status-rail {
+  position: relative;
+  height: 1px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+.status-rail::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent) 50%,
+    transparent
+  );
+  opacity: var(--rail-opacity, 0);
+  animation: hairline-flow var(--rail-duration, 2.4s) linear infinite;
+}
+body[data-marvin="thinking"] .status-rail::after {
+  --rail-opacity: 0.5;
+  --rail-duration: 2.2s;
+}
+body[data-marvin="tool"] .status-rail::after {
+  --rail-opacity: 0.65;
+  --rail-duration: 1.6s;
+}
+body[data-marvin="writing"] .status-rail::after {
+  --rail-opacity: 0.75;
+  --rail-duration: 1.2s;
+}
+body[data-marvin="error"] .status-rail::after {
+  --rail-opacity: 0.55;
+  --rail-duration: 3s;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-danger),
+    transparent
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * MARVIN-Swift host shell — hide web-rendered controls that the
+ * SwiftUI toolbar already shows natively. The attribute is set at
+ * document-start by the WKUserScript injected in
+ * apps/macos/MARVIN/Bridge.swift, so these rules apply on first
+ * paint with no flicker. Plain web / Tauri builds don't have the
+ * attribute and render normally.
+ *
+ * If you add a new native toolbar item that mirrors a web control,
+ * tag the web one with a data-marvin-* attribute and add a rule
+ * here.
+ * ────────────────────────────────────────────────────────────── */
+/* IMPORTANT: web controls only get hidden here once their native
+ * SwiftUI replacement is at full feature parity. data-marvin-cost-pill
+ * was hidden in 1d.4 prematurely (popover with today/7d/lifetime/turns/
+ * tokens/daily bar chart was missing natively), reverted in 1d.6,
+ * and re-applied in 1d.7 once the native popover landed with day
+ * labels + immediate hover overlay matching the web behaviour.
+ *
+ * Wordmark trio: only function (return to home) is reachable via ⌘⇧N. */
+[data-host-shell="swift"] [data-marvin-cost-pill],
+[data-host-shell="swift"] [data-marvin-wordmark],
+[data-host-shell="swift"] [data-marvin-version-pip],
+[data-host-shell="swift"] [data-marvin-wordmark-divider],
+/* Phase 1d.26 — these four are now reachable via the native menu
+ * bar: new session ⌘⇧N (File menu), settings ⌘, (App menu),
+ * shortcuts ⌘/ (Window menu), theme toggle ⌘⇧T (Window menu).
+ * Hiding the in-WebView duplicates makes the chrome feel native
+ * (less to look at inside the page) without removing functionality
+ * — every action is still one keystroke away. */
+[data-host-shell="swift"] [data-marvin-new-session],
+[data-host-shell="swift"] [data-marvin-settings-button],
+[data-host-shell="swift"] [data-marvin-shortcuts-button],
+[data-host-shell="swift"] [data-marvin-theme-toggle],
+/* Phase 2g.2 — chat surface. Native chat (Phase 2c-f) renders
+ * outside the WebView in the SwiftUI shell, so the in-page chat
+ * pane is a duplicate. Tagging is per layout: the active-session
+ * `<Panel id="side-chat">` and the empty-state ChatInput +
+ * example-prompts wrappers all carry data-marvin-chat-pane.
+ * BrainLiquid in the empty state stays visible because the brain
+ * is its own island (Phase 4 ports it to MetalKit; until then
+ * the WebView shows it). The 3-pane PanelGroup will resize the
+ * remaining (file tree / work area) panes to fill the freed
+ * space because the side-chat Panel collapses to display:none. */
+[data-host-shell="swift"] [data-marvin-chat-pane] {
+  display: none;
+}
+
+/* Phase 3d — file tree pane. Native NSOutlineView-style tree
+ * (FileTreeView.swift) is the leftmost pane of the main window's
+ * HSplitView in the SwiftUI shell, so the in-page Panel id="tree"
+ * + LeftColumnTabs + FileTree + SourceControlPanel are duplicates.
+ * Tagging the whole Panel + its resize handle hides both columns
+ * cleanly; react-resizable-panels redistributes the freed width to
+ * the remaining (center / chat) panes.
+ *
+ * Trade-off: ADR-0018 §3 sub-phase 3d hides the Files tab AND the
+ * Source Control tab (they share the column). 3e ships a native
+ * SourceControlPanel that replaces the web one; the user is
+ * temporarily without an SCM surface in the Swift shell during the
+ * 3d→3e gap. Web / Tauri builds keep the tabbed sidebar untouched. */
+[data-host-shell="swift"] [data-marvin-file-tree] {
+  display: none;
+}
+
+/* Phase 4g (ADR-0019) — hide BrainLiquid in MARVIN-Swift.
+ *
+ * The native shell promotes a MetalKit MTKView into the right pane
+ * of the main window's HSplitView (above the native chat), mirroring
+ * the web's `side-top` panel placement. Hiding the in-WebView
+ * <BrainLiquid> avoids two brains rendering at once.
+ *
+ * The selector targets every <BrainLiquid> wrapper — the project-
+ * page side-top instance AND the landing-page hero. The native
+ * MTKView only renders in the project-page main-window layout
+ * (post-project-selection), so the landing-page hero looks empty
+ * in MARVIN-Swift, but the user only sees that screen for the few
+ * frames between launch and first project select; we don't promote
+ * a native landing-hero brain just for that transition.
+ *
+ * Web + Tauri builds keep the BrainLiquid untouched. */
+[data-host-shell="swift"] [data-marvin-brain] {
+  display: none;
+}
+
+/* Phase 5c (ADR-0020) — hide the WebView's Monaco file viewer in
+ * MARVIN-Swift. The native shell promotes a STTextView-backed viewer
+ * (with tree-sitter highlighting from 5b) into the work-pane file
+ * slot. Hiding the in-WebView <FileViewer> Panel avoids two viewers
+ * stacking; the work-pane's other sub-panes (preview, graph,
+ * terminal) keep rendering in the WebView until 5d–5f port them.
+ *
+ * Web + Tauri builds keep Monaco. */
+[data-host-shell="swift"] [data-marvin-monaco] {
+  display: none;
+}
+
+/* Phase 5c (ADR-0020) — hide the web work-pane's empty-state hint
+ * ("work pane / open a file from the tree…") in the SwiftUI shell.
+ * MARVIN-Swift owns the middle pane through ContentView's webIsland
+ * + a native FileViewerView overlay; the web hint reads as a leaked
+ * placeholder when our native shell already fills that area. Web +
+ * Tauri builds keep the empty-state hint as before. */
+[data-host-shell="swift"] [data-marvin-work-empty] {
+  display: none;
+}
+
+/* Phase 4 follow-up — the web's right `<aside>` (side-top brain +
+ * side-chat) is fully reproduced in the SwiftUI shell's third
+ * HSplitView pane (BrainPaneView + ChatPreviewView). Hide the
+ * entire web `Panel id="side"` AND its preceding PanelResizeHandle
+ * so react-resizable-panels redistributes the freed width to the
+ * (file tree | center) panes. Without this, the web aside still
+ * occupied 37% width even with its inner brain + chat-pane
+ * children individually `display: none`'d.
+ *
+ * Web + Tauri builds keep the side aside as before. */
+[data-host-shell="swift"] [data-marvin-side-pane] {
+  display: none;
+}
+
+/* Phase 5d (ADR-0020) — the web top bar is now a duplicate stripe
+ * inside the SwiftUI shell. Native NSToolbar (Layout + Setup
+ * popovers + Models dialog) is the source of truth for permissions,
+ * model selection, personality, and pane toggles. The web project
+ * picker / branch badge are mirrored as the NSWindow title +
+ * subtitle. Hiding the web top bar entirely now gives the user one
+ * chrome layer instead of two, matching IDE conventions (VS Code,
+ * Xcode, IntelliJ — toolbar above the work area, no second stripe).
+ *
+ * Web + Tauri builds keep the top bar as before. */
+[data-host-shell="swift"] [data-marvin-top-bar] {
+  display: none !important;
+}
+
+/* Phase 5d follow-up — the web `.status-rail` is the 2-px activity
+ * gradient that sits directly under the top bar. Without the top
+ * bar (hidden above) the rail reads as a stray hairline at the
+ * very top of the work pane. Hide it in the SwiftUI shell — the
+ * native NSToolbar's busy/idle state is already conveyed via the
+ * connection-status pip + the menu-bar StatusItem icon swap, so
+ * the rail is redundant here. */
+[data-host-shell="swift"] .status-rail {
+  display: none !important;
+}
+
+/* Phase 5d follow-up — kill the empty-shell hero (BrainLiquid +
+ * example prompts) when running inside MARVIN-Swift. The native
+ * shell brings its own brain (MetalKit MTKView in the right pane)
+ * + native chat input, so the web's empty-shell view reads as a
+ * duplicate brand surface bleeding through behind the native
+ * NSToolbar / file viewer when the user lands on the page with no
+ * project active. Web + Tauri builds keep the empty-shell as the
+ * landing surface. */
+[data-host-shell="swift"] [data-marvin-empty-shell] {
+  display: none !important;
+}
