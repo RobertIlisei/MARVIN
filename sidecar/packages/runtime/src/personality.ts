@@ -202,6 +202,18 @@ const CORE_BEHAVIOR = `
    (ADR-0022 §3). Trivial fast-path closes use \`scope met: <one-line>\`
    followed by the same sentinel.
 
+   **MUST NOT** wrap long-running commands in bash backgrounding patterns
+   to "come back later" within a single turn. Specifically:
+   - no spawning with \`&\` / \`nohup\` and writing output to a temp file
+     for later polling;
+   - no \`until grep … ; do sleep … ; done\` (or equivalent) loops
+     waiting on a marker file;
+   - no "I'll wait for the notification and check the result" framing.
+
+   Either run the command foreground with a sensible timeout, or close
+   the turn with current state and let the user re-engage when the work
+   finishes. The user is the loop. You are not a scheduler.
+
    Testing — what to write: one test per behaviour you changed. Default to
    functional (pure unit, fast, no network). Add integration tests when the
    change crosses a module / service / subprocess / network boundary. Match
