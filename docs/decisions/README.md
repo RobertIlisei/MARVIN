@@ -37,6 +37,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0021](./0021-webview-removal-fully-native-swift.md) | Remove WKWebView ghost; fully-native Swift macOS app | Accepted | 2026-05-05 |
 | [0022](./0022-context-pressure-observability-and-session-hygiene.md) | Context-pressure observability + session-hygiene nudges | Accepted | 2026-05-06 |
 | [0023](./0023-brew-distributable-bundled-sidecar.md) | Brew-distributable `.app` via bundled Node sidecar | Accepted | 2026-05-08 |
+| [0024](./0024-project-aware-skill-recommendations.md) | Project-aware skill recommendations | Accepted | 2026-05-11 |
 
 ## Template
 
