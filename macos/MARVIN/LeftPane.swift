@@ -15,6 +15,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
     case files
     case search
     case sourceControl
+    case skills
     var id: String { rawValue }
 
     var label: String {
@@ -22,6 +23,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .files: return "Files"
         case .search: return "Search"
         case .sourceControl: return "Source Control"
+        case .skills: return "Skills"
         }
     }
 
@@ -30,6 +32,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .files: return "doc.text"
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
+        case .skills: return "sparkle"
         }
     }
 }
@@ -63,6 +66,9 @@ struct LeftPane: View {
                 SourceControlView()
                     .opacity(tab == .sourceControl ? 1 : 0)
                     .allowsHitTesting(tab == .sourceControl)
+                SkillsPane()
+                    .opacity(tab == .skills ? 1 : 0)
+                    .allowsHitTesting(tab == .skills)
             }
         }
     }
