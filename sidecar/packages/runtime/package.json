@@ -23,7 +23,8 @@
     "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts",
     "./honeycomb-config": "./src/honeycomb-config.ts",
     "./honeycomb-telemetry": "./src/honeycomb-telemetry.ts",
-    "./auto-audit": "./src/auto-audit.ts"
+    "./auto-audit": "./src/auto-audit.ts",
+    "./skills-index": "./src/skills-index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
