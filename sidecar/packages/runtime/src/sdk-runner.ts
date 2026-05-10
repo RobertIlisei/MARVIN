@@ -24,6 +24,7 @@
 
 import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
+import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { KNOWN_TOOL_NAMES, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
@@ -507,6 +508,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // that instead of failing the turn.
   const graphMcp = createGraphMcpServer(cwd);
 
+  // Project-local skills plugin (ADR-0024). When the project has
+  // committed any `<workDir>/.marvin/skills/<name>/SKILL.md` files, we
+  // synthesize a minimal plugin manifest at `<workDir>/.marvin/.claude-plugin/plugin.json`
+  // (idempotent — never overwrites a customised one) and pass the
+  // plugin spec to the SDK so the project-local skills become callable
+  // from this session. No skills committed → `null` returned, the
+  // option is omitted, the SDK runs with user-global skills only.
+  const projectSkillsPlugin = projectSkillsPluginConfig(cwd);
+
   // Permission wiring. Both modes install a `canUseTool` callback so the
   // hard-deny floor (rm -rf /, force-push to main, etc.) and the auto-
   // audit log keep firing in either path. In `auto` mode the logger
@@ -541,6 +551,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     mcpServers: {
       "marvin-graph": graphMcp,
     },
+    // Project-local skills (ADR-0024). When `<workDir>/.marvin/skills/`
+    // contains at least one SKILL.md, the SDK loads the synthesised
+    // plugin and the project's skills become callable from this turn.
+    // Project-local skill names SHADOW user-global ones on conflict —
+    // mirrors the per-project MCP override precedence rule.
+    ...(projectSkillsPlugin ? { plugins: [projectSkillsPlugin] } : {}),
     // ADR-0014: register the read-only `scout` subagent so MARVIN can
     // dispatch parallel research (graph-first, read-only, synthesis-
     // returning) via `Task` with `subagent_type: "scout"`. The advisor

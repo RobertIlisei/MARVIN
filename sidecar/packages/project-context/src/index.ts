@@ -23,6 +23,11 @@ import {
   checkWorkflowHealth,
   formatWorkflowHealthBlock,
 } from "./workflow-health";
+import {
+  detectFingerprint,
+  formatFingerprintBlock,
+  formatSkillAuditBlock,
+} from "./fingerprint";
 
 export interface ProjectContextOptions {
   /** The active project's working directory. Docs are read from here. */
@@ -122,17 +127,34 @@ export async function buildProjectContext(
     /* non-fatal */
   }
 
-  // Non-first-message turns still get the workflow-health header so MARVIN
-  // keeps seeing the gap reminder. Skip the expensive doc/ADR/memory/graph
+  // Skill-audit pending block (ADR-0024). Same self-expiring shape as
+  // workflow-health: re-injects every turn UNTIL `<workDir>/.marvin/skills.md`
+  // exists. The fingerprint itself is heavy context — first-message only —
+  // but the audit-pending reminder needs to persist so an ambiguous
+  // continuation prompt still triggers the recommendation rule.
+  let fingerprint: ReturnType<typeof detectFingerprint> | null = null;
+  let skillAuditBlock = "";
+  try {
+    fingerprint = detectFingerprint(options.workDir);
+    skillAuditBlock = formatSkillAuditBlock(fingerprint);
+  } catch {
+    /* non-fatal */
+  }
+
+  // Non-first-message turns still get the persistent reminders so MARVIN
+  // keeps seeing them. Skip the expensive doc/ADR/memory/graph/fingerprint
   // re-injection — those already landed on turn 1.
   if (!options.firstMessage) {
-    if (!workflowHealthBlock) return "";
+    if (!workflowHealthBlock && !skillAuditBlock) return "";
     const header =
       "# Project context (ongoing turn)\n\n" +
-      "Workflow deliverables still missing. The audit supersedes the " +
-      "immediate ask until you close these gaps or the user explicitly " +
-      "tells you to skip.\n\n---\n\n";
-    return `${header}${workflowHealthBlock}`;
+      "Standing reminders below. They persist every turn until the " +
+      "underlying signal (workflow gaps, skill audit) is closed on " +
+      "disk.\n\n---\n\n";
+    const parts: string[] = [];
+    if (workflowHealthBlock) parts.push(workflowHealthBlock);
+    if (skillAuditBlock) parts.push(skillAuditBlock);
+    return `${header}${parts.join("\n\n---\n\n")}`;
   }
 
   const files = options.files ?? DEFAULT_FILES;
@@ -246,8 +268,14 @@ export async function buildProjectContext(
     "Use them to ground your work. If you notice drift between what they " +
     "describe and what the code actually contains, surface it before acting.\n\n---\n\n";
 
+  // Fingerprint block — heavy context, first-message only. Only emits
+  // when the project has substance and at least one tag matched.
+  const fingerprintBlock = fingerprint ? formatFingerprintBlock(fingerprint) : "";
+
   const parts: string[] = [];
   if (workflowHealthBlock) parts.push(workflowHealthBlock);
+  if (skillAuditBlock) parts.push(skillAuditBlock);
+  if (fingerprintBlock) parts.push(fingerprintBlock);
   if (graphBlock) parts.push(graphBlock);
   if (sections.length > 0) parts.push(sections.join("\n\n---\n\n"));
   const body = parts.join("\n\n---\n\n");
@@ -259,3 +287,9 @@ export type { InfraProbe } from "./infra-probes";
 export { formatProbeBlock, probeDockerContainer, probeHttp, runProbes } from "./infra-probes";
 export type { WorkflowHealth } from "./workflow-health";
 export { checkWorkflowHealth, formatWorkflowHealthBlock } from "./workflow-health";
+export type { ProjectFingerprint } from "./fingerprint";
+export {
+  detectFingerprint,
+  formatFingerprintBlock,
+  formatSkillAuditBlock,
+} from "./fingerprint";
