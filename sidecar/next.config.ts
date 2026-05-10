@@ -22,6 +22,19 @@ const nextConfig: NextConfig = {
   // .so files for Linux, riscv64, ppc64, etc., none of which we ship).
   // ADR-0023 §Sizing.
   images: { unoptimized: true },
+  // Force-include the platform-specific Claude Agent SDK native binary.
+  // The SDK loads `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`
+  // via dynamic require at runtime — Next's static trace can't see it,
+  // so it gets dropped from the standalone bundle. Without this, the
+  // bundled sidecar inside MARVIN.app throws on every chat turn:
+  //   "Native CLI binary for darwin-arm64 not found."
+  // We only ship darwin-arm64 builds (see .github/workflows/release.yml),
+  // so we only need the one platform variant.
+  outputFileTracingIncludes: {
+    "**/*": [
+      "../node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-darwin-arm64*/**",
+    ],
+  },
   // Pass through workspace package transpilation — our /packages/* source uses
   // .ts directly and Next 16 handles it out of the box, but making the list
   // explicit documents intent.
