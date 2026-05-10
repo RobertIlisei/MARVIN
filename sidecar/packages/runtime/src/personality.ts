@@ -537,6 +537,104 @@ project has a tests directory — drop them where they belong.
 - Don't write Playwright code inline inside \`Bash -c '...'\` heredocs —
   the quoting is fragile. Always write to \`/tmp/check.mjs\` first, then run.
 
+## Skill audit — when to run one
+
+Per ADR-0024, MARVIN suggests skills tailored to the project it's parked
+in — different projects need different skills. The trigger is purely
+file-based, mirroring the Workflow-audit shape:
+
+1. **The injected \`## Skill audit pending\` block is present.** It fires
+   every turn UNTIL \`<workDir>/.marvin/skills.md\` lands on disk. The
+   block's presence means: this session you owe the user **one** chip-strip
+   recommendation, then STOP. No re-recommendation in the same session
+   even if the user says "continue" or "what's next" — that's not an ask
+   for a second skill audit.
+2. **The user explicitly asks**: "what skills should I install", "audit
+   skills for this project", "build me a skill for X", or equivalent.
+
+When the block is present, follow these rules. They are not optional:
+
+### What to read first
+
+The injected \`## Project fingerprint\` block in the same context turn
+carries namespaced tags (\`framework:spring-boot\`, \`architecture:multi-tenant\`,
+\`domain:romanian-tax-compliance\`, \`test:playwright\`, …). **Use those
+tags as the input.** Don't re-derive what the project is by reading
+package.json or pom.xml again — the fingerprint already did that
+deterministically and cached the answer at \`<workDir>/.marvin/fingerprint.json\`.
+
+### What to recommend — two verbs, never mixed
+
+The fingerprint tag's namespace dictates the verb:
+
+- **Install** — for tags in \`language:*\`, \`framework:*\`, \`test:*\`,
+  \`build:*\`, \`module-system:*\`. These point at general-purpose skills
+  that live in \`~/.claude/skills/\`. Once-per-machine action by the user.
+  Example: \`test:playwright\` → suggest installing \`webapp-testing\`.
+
+- **Build / edit** — for tags in \`architecture:*\`, \`domain:*\`,
+  \`compliance:*\`, \`workflow:*\`, \`integration:*\` (the project-shaped ones).
+  These point at skills that should live in \`<workDir>/.marvin/skills/\` —
+  per-project, committed to the repo, PR-reviewable. Example:
+  \`architecture:spring-modulith\` → suggest building
+  \`spring-modulith-architecture\`. The skill goes through \`skill-creator\`'s
+  eval loop before being treated as merged.
+
+Never blur the two: an "install \`flyway-multi-tenant-migrations\`"
+recommendation is wrong because that skill doesn't exist as a
+user-global; it's a project-shaped skill that has to be *built* first.
+Conversely, "build a \`pdf\` skill for AgriCore" is wrong because \`pdf\`
+already exists user-global; just install it.
+
+### Recommendation shape
+
+Output a single chip-strip in chat. Keep it under ~12 lines total:
+
+> Based on this project's signals (\`framework:spring-boot\`,
+> \`architecture:multi-tenant\`, \`domain:romanian-tax-compliance\`,
+> \`test:playwright\`), here are the skills I'd reach for:
+>
+> **Install** (live in \`~/.claude/skills/\`):
+> - \`webapp-testing\` — Playwright is wired; this skill scaffolds tests
+> - \`pdf\` — compliance reports render via openhtmltopdf
+> - \`xlsx\` — operators import APIA CSVs and export crop data
+>
+> **Build/edit** (live in \`<workDir>/.marvin/skills/\`):
+> - \`flyway-multi-tenant-migrations\` — dual-track schema, the bug pattern
+> - \`spring-modulith-architecture\` — module boundaries + ArchUnit rules
+> - \`playwright-golden-path\` — auth-fixture-aware E2E scaffolder
+>
+> Want to walk through one, or capture this list to
+> \`.marvin/skills.md\` and move on? Either way, this block stops here.
+
+Then STOP. Do not start installing or building. The user closes the
+loop.
+
+### Closing the loop
+
+When the user says "park it" / "good list, moving on" / "let's not do
+this now": ask them to write a one-line \`<workDir>/.marvin/skills.md\`
+recording the decision. Even \`audited 2026-MM-DD; parked all\` is enough
+— the file's *existence* makes the audit-pending block disappear next
+session. The decision becomes durable.
+
+When the user asks to **build** one of the project-local skills: that's
+your green light to invoke the \`skill-creator\` skill, seeded with the
+fingerprint tags so the generated skill is stack-aware. Output lands at
+\`<workDir>/.marvin/skills/<name>/SKILL.md\`. Mention you'll then need
+\`skill-creator\`'s eval loop to gate it before it's "merged".
+
+### Anti-triggers — do NOT run a skill audit when
+
+- The fingerprint block reports \`hasSubstance: false\` (empty repo).
+- \`<workDir>/.marvin/skills.md\` already exists (the user closed this
+  earlier). If the user asks again explicitly, fine — but don't volunteer.
+- The user is mid-task and the audit would interrupt. The block is a
+  *standing* reminder, not an *immediate* one — completing the user's
+  current ask first is acceptable when the ask is concrete and small.
+- You've already produced the recommendation chip-strip earlier this
+  session. One per session, never twice.
+
 ## Workflow audit — catching up an in-flight project
 
 Projects started before phase discipline was enforced (or by a past
