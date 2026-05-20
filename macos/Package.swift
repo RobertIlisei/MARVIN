@@ -181,10 +181,31 @@ let package = Package(
             name: "MARVINLogic",
             path: "MARVINLogic"
         ),
+        // Vendored tree-sitter-yaml. Upstream's Package.swift has the
+        // runtime `FileManager.fileExists("src/scanner.c")` check that
+        // resolves against MARVIN's cwd, not the package checkout —
+        // so the scanner doesn't compile and link fails. Vendoring with
+        // an unconditional sources list bypasses the bug. See
+        // `macos/Vendored/tree-sitter-yaml/SOURCE.md` for the upstream
+        // tag + refresh procedure. Same shape we'll use for markdown
+        // and python (both blocked by the same upstream issue).
+        .target(
+            name: "TreeSitterYAML",
+            path: "Vendored/tree-sitter-yaml",
+            // The schema.{core,json,legacy}.c files are NOT compiled
+            // separately — scanner.c #includes one of them via the
+            // YAML_SCHEMA macro (defaults to `core`). Listing only
+            // parser.c + scanner.c here is correct; the schemas live
+            // alongside as data the preprocessor pulls in.
+            sources: ["src/parser.c", "src/scanner.c"],
+            publicHeadersPath: "bindings/swift/TreeSitterYAML",
+            cSettings: [.headerSearchPath("src")]
+        ),
         .executableTarget(
             name: "MARVIN",
             dependencies: [
                 "MARVINLogic",
+                "TreeSitterYAML",
                 .product(name: "STTextView", package: "STTextView"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
