@@ -41,30 +41,110 @@ export const MARVIN_CLIENT_HEADER = "x-marvin-client";
 export const MARVIN_CLIENT_VALUE = "1";
 
 /**
+ * Allowed origins for mutating requests. The sidecar only ever serves
+ * UI on loopback (`localhost` / `127.0.0.1`) — any other Origin is
+ * either a misconfiguration or a hostile cross-origin attempt.
+ *
+ * Audit 🟠 #5: the prior `requireMarvinClient` relied solely on the
+ * `X-Marvin-Client` custom header forcing a CORS preflight. That's
+ * load-bearing against drive-by browser tabs, but breaks down in
+ * three scenarios:
+ *   • a same-origin XSS on any localhost-bound dev server (it can
+ *     add the custom header trivially);
+ *   • a userscript or non-browser client (curl, electron) that adds
+ *     the header by hand;
+ *   • a future browser bug that relaxes the preflight.
+ *
+ * Adding an Origin / Sec-Fetch-Site allowlist closes those gaps:
+ * even a same-origin XSS at `attacker.localhost:8080` now fails the
+ * Origin check, and a hostile curl call has to spoof both signals.
+ */
+const ALLOWED_ORIGIN_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",  // IPv6 loopback
+]);
+
+function isAllowedOrigin(originValue: string | null): boolean {
+  if (!originValue) return false;
+  try {
+    const url = new URL(originValue);
+    // `URL.hostname` strips brackets from IPv6 literals; restore them
+    // so we can compare uniformly with the `[::1]` entry.
+    const host = originValue.startsWith("http://[::") || originValue.startsWith("https://[::")
+      ? `[${url.hostname}]`
+      : url.hostname;
+    return ALLOWED_ORIGIN_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Server-side guard. Call at the top of every mutating route handler.
- * Returns a 403 NextResponse when the header is missing; returns null
- * when the request is safe to continue.
+ * Returns a 403 NextResponse when the request fails any of:
+ *   1. `X-Marvin-Client: 1` custom header is present
+ *   2. `Origin` (or `Referer` as fallback) resolves to localhost
+ *   3. `Sec-Fetch-Site` is absent or one of `same-origin` / `none`
+ *      (the values browsers set for first-party fetches)
+ *
+ * Returns null when the request is safe to continue.
  *
  * 403 rather than 401 because the user's session isn't the issue —
- * the REQUEST SHAPE is. A client that can't add a custom header is
- * one we don't accept mutations from, period.
- *
- * The error body intentionally carries the required header name and
- * value so a legitimate developer hitting this endpoint via curl gets
- * a useful message instead of a blank wall. Attackers can't use it to
- * bypass anything — they can't add the header from a drive-by tab by
- * design; the error is just diagnostic text.
+ * the REQUEST SHAPE is. A client that can't satisfy all three checks
+ * is one we don't accept mutations from, period.
  */
 export function requireMarvinClient(req: NextRequest): NextResponse | null {
+  // 1. Custom-header check — the original CSRF defence. A drive-by
+  //    tab can't add this header without first satisfying the
+  //    preflight, which we never accept.
   const header = req.headers.get(MARVIN_CLIENT_HEADER);
-  if (header === MARVIN_CLIENT_VALUE) return null;
-  return NextResponse.json(
-    {
-      error: "csrf-guard",
-      detail: `mutating routes require "${MARVIN_CLIENT_HEADER}: ${MARVIN_CLIENT_VALUE}" — this forces a CORS preflight so a drive-by tab at another origin cannot trigger the request`,
-    },
-    { status: 403 },
-  );
+  if (header !== MARVIN_CLIENT_VALUE) {
+    return NextResponse.json(
+      {
+        error: "csrf-guard",
+        detail: `mutating routes require "${MARVIN_CLIENT_HEADER}: ${MARVIN_CLIENT_VALUE}" — this forces a CORS preflight so a drive-by tab at another origin cannot trigger the request`,
+      },
+      { status: 403 },
+    );
+  }
+
+  // 2. Origin allowlist. Browsers send Origin on all cross-origin
+  //    requests AND on same-origin POSTs. Curl + Electron + scripts
+  //    can spoof it but must do so explicitly — combined with #1
+  //    the bar is meaningfully higher than header-only.
+  const origin = req.headers.get("origin");
+  const referer = req.headers.get("referer");
+  // Most browser requests carry Origin. CLI clients sometimes only
+  // carry Referer (rare for POSTs but possible). Accept either.
+  const candidate = origin ?? referer;
+  if (candidate !== null && !isAllowedOrigin(candidate)) {
+    return NextResponse.json(
+      {
+        error: "csrf-guard-origin",
+        detail: `Origin "${candidate}" not in the allowlist (localhost / 127.0.0.1 / [::1])`,
+      },
+      { status: 403 },
+    );
+  }
+
+  // 3. Sec-Fetch-Site — set by every modern browser. Acceptable
+  //    values for our case: `same-origin` (UI calling its own
+  //    sidecar) and `none` (user-typed URL, browser extension, or
+  //    server-initiated request that has no referrer). Cross-origin
+  //    fetches set `cross-site` or `same-site` — both rejected.
+  const sfs = req.headers.get("sec-fetch-site");
+  if (sfs !== null && sfs !== "same-origin" && sfs !== "none") {
+    return NextResponse.json(
+      {
+        error: "csrf-guard-fetch-site",
+        detail: `Sec-Fetch-Site "${sfs}" indicates a cross-origin request`,
+      },
+      { status: 403 },
+    );
+  }
+
+  return null;
 }
 
 /**

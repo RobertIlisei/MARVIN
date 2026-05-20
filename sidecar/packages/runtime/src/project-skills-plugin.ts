@@ -27,6 +27,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { validateProjectCwd } from "./projects";
+
 /**
  * If `<workDir>/.marvin/skills/<name>/SKILL.md` exists for at least one
  * skill, ensure `<workDir>/.marvin/.claude-plugin/plugin.json` exists,
@@ -35,10 +37,24 @@ import { join } from "node:path";
  *
  * The manifest is idempotent: we only write if missing. We never
  * overwrite a manifest the user has customised.
+ *
+ * Security: this function WRITES a file inside `workDir` (the plugin
+ * manifest). Audit 🔴 #3 flagged that a caller passing an arbitrary
+ * path could plant `.claude-plugin/plugin.json` anywhere. We now gate
+ * on `validateProjectCwd` — only registered projects are eligible.
+ * For non-projects (or invalid paths), we return null and the SDK
+ * runs with user-global skills only.
  */
 export function projectSkillsPluginConfig(
   workDir: string,
 ): { type: "local"; path: string } | null {
+  // Defence-in-depth: the SDK runner already calls this only with the
+  // active session's `cwd`, which the project-picker has validated.
+  // The check below catches any future caller (or test harness) that
+  // forgets to do that.
+  const valid = validateProjectCwd(workDir);
+  if (!valid.ok) return null;
+
   const skillsDir = join(workDir, ".marvin", "skills");
   if (!hasAnySkill(skillsDir)) return null;
 
