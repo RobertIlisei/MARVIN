@@ -157,12 +157,36 @@ targets:
         # to them in src/. No extra setting needed for the include
         # resolution because they're siblings.
 
+  # Vendored tree-sitter-markdown — block-level grammar only.
+  # Upstream Package.swift depends on the official tree-sitter
+  # `swift-tree-sitter` binding; MARVIN pins the ChimeHQ
+  # SwiftTreeSitter binding, so the two would collide. Vendoring just
+  # the source bypasses the conflict. See SOURCE.md for details.
+  TreeSitterMarkdown:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Vendored/tree-sitter-markdown/src
+        includes:
+          - "parser.c"
+          - "scanner.c"
+      - path: Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown
+        buildPhase: none
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/Vendored/tree-sitter-markdown/src
+          - $(SRCROOT)/Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown
+
   MARVIN:
     type: application
     platform: macOS
     dependencies:
       - target: MARVINLogic
       - target: TreeSitterYAML
+      - target: TreeSitterMarkdown
       - package: STTextView
         product: STTextView
       - package: SwiftTreeSitter
