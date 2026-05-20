@@ -7,10 +7,18 @@ HTTP/SSE on `localhost:3030`. See
 rationale and [ADR-0021](../docs/decisions/0021-webview-removal-fully-native-swift.md)
 for the WebView-retirement decision.
 
-> **For end users.** The one-liner installer at `scripts/install.sh`
-> handles everything in this doc — toolchain bootstrap, build, install
-> to `/Applications`, and the launchd sidecar agent. This file is for
-> developers building MARVIN from a working clone.
+> **For end users.** The canonical install is the Homebrew cask:
+>
+> ```bash
+> brew tap RobertIlisei/marvin && brew install --cask marvin-ai
+> ```
+>
+> The cask token is `marvin-ai` (not `marvin`, which collides with the
+> existing "Amazing Marvin" cask). The cask drops MARVIN.app into
+> `/Applications/` with the sidecar bundled inside
+> `MARVIN.app/Contents/Resources/`. This file is for developers
+> building MARVIN from a working clone; `bin/marvin install-macos-app`
+> is the developer alternative.
 
 ## Prerequisites
 
@@ -132,7 +140,7 @@ session transcripts — all of that stays in Node. See ADR-0016 for the
 rationale.
 
 ```
-MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, started by bin/marvin)
+MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, bundled inside MARVIN.app and spawned on launch — ADR-0023)
 ```
 
 ## File layout
