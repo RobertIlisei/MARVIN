@@ -17,9 +17,9 @@
  *
  * Tags are intentionally namespaced (`language:typescript`,
  * `framework:next@16`, `architecture:multi-tenant`,
- * `domain:vertical-tax-compliance`). Namespacing is what lets the
- * catalog match without ambiguity — there's no risk of confusing a
- * `framework:react` skill with a `language:c` one.
+ * `compliance:gdpr`). Namespacing is what lets the catalog match
+ * without ambiguity — there's no risk of confusing a `framework:react`
+ * skill with a `language:c` one.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -395,9 +395,6 @@ function domainTagsFromContext(workDir: string): string[] {
 
   const hay = sources.join(" ").toLowerCase();
 
-  if (/anaf|apia|efactura|e-factura|vertical|romania/.test(hay)) {
-    tags.add("domain:vertical-tax-compliance");
-  }
   if (/multi-tenant|multitenant|per-tenant/.test(hay)) {
     tags.add("architecture:multi-tenant");
   }
@@ -412,7 +409,7 @@ function domainTagsFromContext(workDir: string): string[] {
     tags.add("integration:postgis");
   }
   if (/openbao|vault|secrets/.test(hay)) tags.add("integration:secrets-manager");
-  if (/grant|pocidif|pnrr|afir|milestone/.test(hay)) {
+  if (/grant|milestone/.test(hay)) {
     tags.add("workflow:grant-evidence");
   }
   return [...tags];

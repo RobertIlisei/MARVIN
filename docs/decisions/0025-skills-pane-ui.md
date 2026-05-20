@@ -7,7 +7,7 @@
 
 ## Context
 
-ADR-0024 wired project-aware skill recommendations into MARVIN. Detection works (the fingerprint emits 43 tags on the example project). Recommendations work (the Skill-audit firm surface in `personality.ts` produces a chip-strip in chat). Closing the loop works (the user writes `<workDir>/.marvin/skills.md` to make the audit-pending block disappear).
+ADR-0024 wired project-aware skill recommendations into MARVIN. Detection works (the fingerprint emits 43 tags on a real project). Recommendations work (the Skill-audit firm surface in `personality.ts` produces a chip-strip in chat). Closing the loop works (the user writes `<workDir>/.marvin/skills.md` to make the audit-pending block disappear).
 
 What's missing is *visibility*. Skills exist as files on disk in two trees:
 
@@ -200,7 +200,7 @@ This is the "skill catalog index" deferred from ADR-0024 §What's NOT in this PR
 
 ## Verification
 
-- `GET /api/skills?workDir=…` against the example project returns at least 5 suggestions matching tags it produces (`webapp-testing` from `test:playwright`, `flyway-multi-tenant-migrations` from `integration:flyway` + `architecture:multi-tenant`, etc.). User-global section lists the existing ~20 skills from `~/.claude/skills/`. Project-local section is empty until the first SKILL.md lands.
+- `GET /api/skills?workDir=…` against a real project returns at least 5 suggestions matching tags it produces (`webapp-testing` from `test:playwright`, `flyway-multi-tenant-migrations` from `integration:flyway` + `architecture:multi-tenant`, etc.). User-global section lists the existing ~20 skills from `~/.claude/skills/`. Project-local section is empty until the first SKILL.md lands.
 - `POST /api/skills/park` against an arbitrary workDir creates `<workDir>/.marvin/skills.md` with the expected one-line content. The audit-pending block stops re-injecting next session.
 - `DELETE /api/skills/park` removes the file. The audit-pending block re-injects on the next first-message turn.
 - The Skills tab in LeftPane renders the three sections, displays the suggestion chips, and the buttons fire the right actions:
@@ -215,7 +215,7 @@ This is the "skill catalog index" deferred from ADR-0024 §What's NOT in this PR
 - [ ] `sidecar/src/app/api/skills/route.ts` exposes `GET`. `sidecar/src/app/api/skills/park/route.ts` exposes `POST` + `DELETE`. Both write routes are CSRF-guarded.
 - [ ] `macos/MARVIN/SkillsPane.swift` renders three sections + the audit decision footer, hooked to the API.
 - [ ] `LeftPane.swift` gains a 4th tab "Skills" — same Picker pattern as the existing tabs.
-- [ ] Cold-start test on the example project: open MARVIN, switch LeftPane to Skills tab, see at least 5 suggestions. Click "park all", verify `<workDir>/.marvin/skills.md` lands and the audit footer flips to "Audit: parked 2026-05-11".
+- [ ] Cold-start test on a real project: open MARVIN, switch LeftPane to Skills tab, see at least 5 suggestions. Click "park all", verify `<workDir>/.marvin/skills.md` lands and the audit footer flips to "Audit: parked 2026-05-11".
 
 ## Related
 

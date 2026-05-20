@@ -6,7 +6,7 @@
 
 ## Context
 
-MARVIN's current skill set is hardcoded into `personality.ts` Phase 5 ("Skills to reach for") and is identical for every project the user opens. A Spring-Modulith regulated-vertical SaaS, a Next.js frontend monorepo, an embedded firmware project, and an ML training pipeline all see the same trigger list — `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design`, `graphify`. The list isn't *wrong* for any of those, but it's missing what each project specifically needs and it never points the user at skills they don't yet have.
+MARVIN's current skill set is hardcoded into `personality.ts` Phase 5 ("Skills to reach for") and is identical for every project the user opens. A Spring-Modulith backend service, a Next.js frontend monorepo, an embedded firmware project, and an ML training pipeline all see the same trigger list — `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design`, `graphify`. The list isn't *wrong* for any of those, but it's missing what each project specifically needs and it never points the user at skills they don't yet have.
 
 Skills are the right granularity for this — coarser (generic LLM advice) loses domain context; finer (one-off scaffolders) doesn't compose. A skill is a named, scoped, evaluable capability, and there's a working ecosystem (`anthropics/skills`, the user's `~/.claude/skills/`, the existing `skill-creator` skill that produces new ones).
 
@@ -28,9 +28,9 @@ Signal sources, all cheap:
 - **Framework tells** — substrings in those manifests (`next`, `vite`, `spring-boot-starter`, `django`, `fastapi`, `@nestjs/core`, `expo`, `swiftui`, `tauri`, `electron`).
 - **Architecture signals** — `apps/*` (monorepo), `terraform/`, `infrastructure/`, `.github/workflows/`, `docker-compose.yml`, `Modulith` annotations in source.
 - **Test stack** — `vitest`, `jest`, `playwright`, `cypress`, `pytest`, `junit5`, `testcontainers`.
-- **Domain / compliance** — keywords scanned in `<workDir>/.marvin/memory.md` and ADR titles (`tax-authority`, `subsidy-registry`, `e-invoicing`, `HIPAA`, `PCI`, `SOX`, `GDPR`).
+- **Domain / compliance** — keywords scanned in `<workDir>/.marvin/memory.md` and ADR titles (`HIPAA`, `PCI`, `SOX`, `GDPR`).
 
-Tags are namespaced (`language:typescript`, `framework:next@16`, `architecture:modular-monolith`, `domain:vertical-tax-compliance`, `test:playwright`). The namespace is what lets the catalog match without ambiguity.
+Tags are namespaced (`language:typescript`, `framework:next@16`, `architecture:modular-monolith`, `compliance:gdpr`, `test:playwright`). The namespace is what lets the catalog match without ambiguity.
 
 ### 2. Skill catalog index (`runtime/src/skill-catalog.ts`)
 
@@ -64,7 +64,7 @@ A new MUST/MUST-NOT block in the personality, gated like Workflow Audit. Two mod
 
 **A. Soft suggestion (non-disruptive).** When (1) `<workDir>/.marvin/fingerprint.json` exists, (2) `<workDir>/.marvin/skills.md` is missing or empty, and (3) the user opens a fresh real-work session — emit a single chip-strip recommendation:
 
-> *Based on your project's signals (Spring-Modulith, PostGIS, Playwright, regulatory compliance), here are the skills I'd reach for: **install** `webapp-testing`, `pdf`; **build** `flyway-multi-tenant-migrations`, `playwright-golden-path`. Want to walk through them?*
+> *Based on your project's signals (Spring-Modulith, PostGIS, Playwright, GDPR), here are the skills I'd reach for: **install** `webapp-testing`, `pdf`; **build** `flyway-multi-tenant-migrations`, `playwright-golden-path`. Want to walk through them?*
 
 STOP after one suggestion per session. Disappear once `<workDir>/.marvin/skills.md` lands.
 
@@ -104,7 +104,7 @@ The system degrades to noise without these. Five non-negotiable rules:
 **Positive**
 
 - A non-trivial fraction of the friction MARVIN currently produces (suggesting `webapp-testing` to a project that doesn't have a UI; never suggesting `pdf` to a project that renders compliance reports as PDF) goes away.
-- The ecosystem of project-local skills becomes a real artefact teams can share. the example project's `e-invoicing-ubl21` skill is copyable into the next regulated-vertical project without re-derivation.
+- The ecosystem of project-local skills becomes a real artefact teams can share. A project-local skill written for one project's domain (e-invoicing, tenant onboarding, etc.) is copyable into the next project in the same vertical without re-derivation.
 - New contributors inherit the project's MARVIN customisation by cloning the repo. No onboarding doc to maintain.
 - ADR-driven design means subsequent contributors can reason about *why* skills are wired this way, not just *that* they are.
 
@@ -138,7 +138,7 @@ The system degrades to noise without these. Five non-negotiable rules:
 
 *What it is:* Add 30 more skills to the trigger list.
 
-*Why rejected:* Token weight on every turn. No project awareness. Doesn't scale to the long tail of project-shaped skills (`vertical-e-invoicing-ubl21`, `example-project-rbac-capability`) that don't generalise.
+*Why rejected:* Token weight on every turn. No project awareness. Doesn't scale to the long tail of project-shaped skills (per-domain invoicing validators, project-specific RBAC capabilities) that don't generalise.
 
 ### Skill catalog as a remote service
 
@@ -148,13 +148,13 @@ The system degrades to noise without these. Five non-negotiable rules:
 
 ## Verification
 
-- `detectFingerprint(workDir)` against the example project returns tags including `language:java`, `framework:spring-boot@3.5`, `framework:react@19`, `architecture:modular-monolith`, `architecture:multi-tenant`, `test:playwright`, `domain:vertical-tax-compliance`. All deterministic, all cheap.
+- `detectFingerprint(workDir)` against a Spring-Boot + React monorepo returns tags including `language:java`, `framework:spring-boot@3.5`, `framework:react@19`, `architecture:modular-monolith`, `architecture:multi-tenant`, `test:playwright`, `compliance:gdpr`. All deterministic, all cheap.
 - Cached `fingerprint.json` is regenerated when the cache mtime is older than the newest project file (excluding ignored dirs).
 - The skill catalog walks both filesystems and produces a single index. A `findByTags(["framework:spring-boot"])` query returns the matching subset; an empty filesystem produces an empty index without throwing.
 - The `<workDir>/.marvin/skills/` path is added to the SDK's skill discovery; a project-local skill with the same name as a user-global one wins precedence.
-- The Skill-audit block fires on a fresh the example project session and DOES NOT fire on subsequent turns once `<workDir>/.marvin/skills.md` lands.
+- The Skill-audit block fires on a fresh a real project session and DOES NOT fire on subsequent turns once `<workDir>/.marvin/skills.md` lands.
 - A built skill at `<workDir>/.marvin/skills/<name>/SKILL.md` is callable by MARVIN on the next turn without restart.
-- Cold-start test: open MARVIN on the example project knowing nothing in this session — the first-turn injection includes a `## Project fingerprint` summary AND a single skill-audit recommendation. No second recommendation in the same session.
+- Cold-start test: open MARVIN on a real project knowing nothing in this session — the first-turn injection includes a `## Project fingerprint` summary AND a single skill-audit recommendation. No second recommendation in the same session.
 
 ## Scope of Done
 
@@ -164,7 +164,7 @@ The system degrades to noise without these. Five non-negotiable rules:
 - [ ] `sdk-runner.ts` adds `<workDir>/.marvin/skills/` to the SDK's skill discovery path with higher precedence.
 - [ ] `personality.ts` carries a "Skill audit — when to run one" block, gated by file existence, with an explicit STOP-after-one rule.
 - [ ] `buildProjectContext` injects a `## Project fingerprint` block on first message AND a self-expiring `## Skill audit pending` block until `<workDir>/.marvin/skills.md` exists.
-- [ ] Cold-start test on the example project produces a relevant recommendation.
+- [ ] Cold-start test on a real project produces a relevant recommendation.
 
 ## Related
 
