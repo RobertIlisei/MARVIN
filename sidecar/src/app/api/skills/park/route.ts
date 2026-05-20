@@ -24,11 +24,11 @@
  */
 
 import { type NextRequest, NextResponse } from "next/server";
-import { resolve } from "node:path";
 import {
   clearSkillsAuditDecision,
   writeSkillsAuditDecision,
 } from "@marvin/runtime/skills-index";
+import { validateProjectCwd } from "@marvin/runtime/projects";
 import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
@@ -40,16 +40,6 @@ interface ParkBody {
   workDir?: string;
   note?: string;
   parkedNames?: string[];
-}
-
-function validateWorkDir(raw: unknown): { ok: true; workDir: string } | { ok: false; status: number; error: string } {
-  if (typeof raw !== "string" || raw.length === 0) {
-    return { ok: false, status: 400, error: "workDir is required" };
-  }
-  if (!raw.startsWith("/")) {
-    return { ok: false, status: 400, error: "workDir must be an absolute path" };
-  }
-  return { ok: true, workDir: resolve(raw) };
 }
 
 export async function POST(req: NextRequest) {
@@ -68,7 +58,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
 
-  const v = validateWorkDir(body.workDir);
+  // Verify the caller is targeting a registered project — without
+  // this check, anyone past CSRF could write `.marvin/skills.md`
+  // into ANY absolute path. Audit 🔴 #2.
+  const v = validateProjectCwd(body.workDir);
   if (!v.ok) return NextResponse.json({ error: v.error }, { status: v.status });
 
   const note = typeof body.note === "string" && body.note.length > 0 && body.note.length < 500
@@ -87,7 +80,7 @@ export async function DELETE(req: NextRequest) {
   if (guard) return guard;
 
   const raw = req.nextUrl.searchParams.get("workDir");
-  const v = validateWorkDir(raw);
+  const v = validateProjectCwd(raw);
   if (!v.ok) return NextResponse.json({ error: v.error }, { status: v.status });
 
   const result = clearSkillsAuditDecision(v.workDir);

@@ -17,33 +17,25 @@
  */
 
 import { type NextRequest, NextResponse } from "next/server";
-import { resolve } from "node:path";
 import { buildSkillsIndex } from "@marvin/runtime/skills-index";
+import { validateProjectCwd } from "@marvin/runtime/projects";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const raw = req.nextUrl.searchParams.get("workDir");
-  if (!raw) {
-    return NextResponse.json(
-      { error: "workDir query is required" },
-      { status: 400 },
-    );
+  // Verify the caller is targeting a registered project — see
+  // `validateProjectCwd` for the contract. Belt-and-braces here:
+  // the GET is a read-only response so the risk is "data leakage
+  // about which paths exist", but uniform validation across the
+  // route family is easier to reason about than a per-verb policy.
+  const v = validateProjectCwd(raw);
+  if (!v.ok) {
+    return NextResponse.json({ error: v.error }, { status: v.status });
   }
-  // Reject relative paths defensively. The frontend always sends
-  // absolute paths from the bridge state, but a relative path would
-  // resolve against the sidecar process cwd which is meaningless to
-  // the user.
-  if (!raw.startsWith("/")) {
-    return NextResponse.json(
-      { error: "workDir must be an absolute path" },
-      { status: 400 },
-    );
-  }
-  const workDir = resolve(raw);
   try {
-    const index = buildSkillsIndex(workDir);
+    const index = buildSkillsIndex(v.workDir);
     return NextResponse.json(index);
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
