@@ -93,6 +93,48 @@ export function listProjects(): ProjectRecord[] {
   });
 }
 
+/**
+ * Validate that `raw` is a workDir belonging to a registered project.
+ * Mutating routes that take a workDir from the client (skills, plugin
+ * manifest, etc.) MUST call this before writing — otherwise a caller
+ * who slips past CSRF could pass any absolute path and we'd write
+ * `.marvin/` inside it. ADR-0024 makes `<workDir>/.marvin/` a sanctioned
+ * project-local storage location, but only for projects the user has
+ * explicitly opened.
+ *
+ * Returns the canonical workDir on success, or an error result the
+ * caller turns into a 4xx response. Comparison is done on resolved
+ * absolute paths so `/foo/bar`, `/foo/bar/`, `/foo/./bar` all match
+ * an entry recorded as `/foo/bar`.
+ */
+export type ValidateProjectCwdResult =
+  | { ok: true; workDir: string }
+  | { ok: false; status: number; error: string };
+
+export function validateProjectCwd(raw: unknown): ValidateProjectCwdResult {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return { ok: false, status: 400, error: "workDir is required" };
+  }
+  if (!raw.startsWith("/")) {
+    return { ok: false, status: 400, error: "workDir must be an absolute path" };
+  }
+  const resolved = resolve(raw);
+  const projects = listProjects();
+  const match = projects.find((p) => resolve(p.workDir) === resolved);
+  if (!match) {
+    // Don't leak the registered project list — same 403 for "not a
+    // project" as for "doesn't exist." The user's UI only ever sends
+    // workDirs it got from `GET /api/projects`, so a 403 here means
+    // either a stale UI cache or a hostile client.
+    return {
+      ok: false,
+      status: 403,
+      error: "workDir is not a registered project",
+    };
+  }
+  return { ok: true, workDir: resolved };
+}
+
 export function getProject(id: string): ProjectRecord | null {
   return readProjectsFile().projects.find((p) => p.id === id) ?? null;
 }
