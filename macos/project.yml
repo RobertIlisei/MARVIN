@@ -180,6 +180,26 @@ targets:
           - $(SRCROOT)/Vendored/tree-sitter-markdown/src
           - $(SRCROOT)/Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown
 
+  # Vendored tree-sitter-python — same FileManager.fileExists upstream
+  # bug as YAML. Vendoring with an unconditional sources list bypasses it.
+  TreeSitterPython:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Vendored/tree-sitter-python/src
+        includes:
+          - "parser.c"
+          - "scanner.c"
+      - path: Vendored/tree-sitter-python/bindings/swift/TreeSitterPython
+        buildPhase: none
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/Vendored/tree-sitter-python/src
+          - $(SRCROOT)/Vendored/tree-sitter-python/bindings/swift/TreeSitterPython
+
   MARVIN:
     type: application
     platform: macOS
@@ -187,6 +207,7 @@ targets:
       - target: MARVINLogic
       - target: TreeSitterYAML
       - target: TreeSitterMarkdown
+      - target: TreeSitterPython
       - package: STTextView
         product: STTextView
       - package: SwiftTreeSitter
