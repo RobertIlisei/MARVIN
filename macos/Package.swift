@@ -201,11 +201,31 @@ let package = Package(
             publicHeadersPath: "bindings/swift/TreeSitterYAML",
             cSettings: [.headerSearchPath("src")]
         ),
+        // Vendored tree-sitter-markdown (block-level grammar only).
+        // Upstream Package.swift depends on `tree-sitter/swift-tree-sitter`
+        // (the official binding); MARVIN pins the ChimeHQ binding, so the
+        // two would collide. Vendoring just the source files, with our own
+        // target definition, sidesteps the conflict.
+        //
+        // Scope: block grammar only. The matching `tree-sitter-markdown-inline`
+        // grammar coordinates with this one via tree-sitter's "language
+        // injection" feature, which our highlighter doesn't yet wire — adding
+        // inline support is a separate follow-up. Block-level covers headers /
+        // fenced code / lists / blockquotes / tables / HTML blocks.
+        // See `macos/Vendored/tree-sitter-markdown/SOURCE.md` for provenance.
+        .target(
+            name: "TreeSitterMarkdown",
+            path: "Vendored/tree-sitter-markdown",
+            sources: ["src/parser.c", "src/scanner.c"],
+            publicHeadersPath: "bindings/swift/TreeSitterMarkdown",
+            cSettings: [.headerSearchPath("src")]
+        ),
         .executableTarget(
             name: "MARVIN",
             dependencies: [
                 "MARVINLogic",
                 "TreeSitterYAML",
+                "TreeSitterMarkdown",
                 .product(name: "STTextView", package: "STTextView"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
