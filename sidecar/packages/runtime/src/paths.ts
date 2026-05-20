@@ -11,7 +11,7 @@
  * project list, MARVIN's own config.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -25,6 +25,19 @@ export function getMarvinDataDir(): string {
   const dir = raw ? resolve(raw) : resolve(getHomeDir(), ".marvin");
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
+  }
+  // Audit 🟡 #12 + #13: tighten root dir mode to 0700, both on
+  // create AND on every call (idempotent re-chmod). Other users on
+  // a shared machine should not be able to read MARVIN's
+  // auth-config.json / projects.json / session JSONLs / cost
+  // tracker / honeycomb.json. Re-chmod-on-every-call ensures
+  // existing installs that pre-date this fix get tightened too;
+  // it's a single fchmod syscall on the happy path.
+  // Best-effort; mode bits may not stick on every filesystem.
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    /* non-fatal */
   }
   return dir;
 }
@@ -56,5 +69,16 @@ export function ensureDir(path: string): void {
   const dir = path.endsWith("/") ? path : path.substring(0, path.lastIndexOf("/"));
   if (dir && !existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
+    // Audit 🟡 #12: ~/.marvin/ contains auth-config.json, projects.json,
+    // sessions/, cost-tracker.json — secret-bearing files that
+    // shouldn't be readable by other users on the same machine.
+    // Default mkdir mode is 0755 (group + world read); tighten to
+    // 0700 on creation. Best-effort: chmod may not stick on some
+    // filesystems but we don't fail the write if it doesn't.
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      /* non-fatal */
+    }
   }
 }

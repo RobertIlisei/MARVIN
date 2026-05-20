@@ -52,8 +52,16 @@ const BASE: Record<ToolName, ToolPolicyClass> = {
   Read: "auto",
   Grep: "auto",
   Glob: "auto",
-  WebFetch: "auto",
-  WebSearch: "auto",
+  // WebFetch / WebSearch reach the public internet. Auto-allowing
+  // every fetch means a prompt-injection in source code MARVIN reads
+  // can quietly egress to an attacker-controlled URL — audit 🟡 #16.
+  // Move to `confirm` so the user sees the URL + the chosen domain
+  // before MARVIN follows it. The cost is one click per web call,
+  // which matches user expectations for "AI is about to make a network
+  // request on my behalf." Scouts have WebFetch in their disallowedTools
+  // (PR #91 / 🟠 #10), so this `confirm` only fires for the main session.
+  WebFetch: "confirm",
+  WebSearch: "confirm",
   Edit: "confirm",
   Write: "confirm",
   Bash: "confirm",
