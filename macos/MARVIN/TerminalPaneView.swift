@@ -137,7 +137,7 @@ struct TerminalPaneView: View {
     }
 
     private func lineView(_ line: TermLine) -> some View {
-        let color: Color = {
+        let defaultColor: Color = {
             switch line.kind {
             case .prompt: return Color.accentColor
             case .stdout: return .primary
@@ -145,9 +145,17 @@ struct TerminalPaneView: View {
             case .info:   return .secondary
             }
         }()
-        return Text(stripANSI(line.text))
+        // ANSI colour passthrough — most build tools (cargo, pnpm,
+        // pytest, make, gradle) emit colourful diagnostics. Parse the
+        // SGR escapes into AttributedString runs so they render
+        // legibly instead of either stripping the codes (loses the
+        // signal) or printing raw `^[[31m` (visually garbled).
+        // Prompt + stderr + info lines keep their kind-derived base
+        // colour as the foreground default; per-character ANSI fg
+        // attributes override it where the upstream tool set one.
+        let attributed = ANSIParser.parse(line.text, defaultColor: defaultColor)
+        return Text(attributed)
             .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
     }
@@ -283,27 +291,6 @@ struct TerminalPaneView: View {
         UserDefaults.standard.set(h, forKey: historyKey)
     }
 
-    /// Strip ANSI CSI / OSC escape sequences. Real ANSI parsing would
-    /// preserve colours; for the first cut we just hide the escape
-    /// codes so they don't render as garbage in the monospace text.
-    private func stripANSI(_ s: String) -> String {
-        // ESC [ ... m (and other CSI terminators)
-        let csiPattern = "\u{001B}\\[[0-9;?]*[ -/]*[@-~]"
-        // ESC ] ... BEL (OSC). Less common; covered for safety.
-        let oscPattern = "\u{001B}\\][^\u{0007}]*\u{0007}"
-        var out = s
-        for pat in [csiPattern, oscPattern] {
-            if let regex = try? NSRegularExpression(pattern: pat) {
-                let ns = out as NSString
-                out = regex.stringByReplacingMatches(
-                    in: out,
-                    range: NSRange(location: 0, length: ns.length),
-                    withTemplate: ""
-                )
-            }
-        }
-        return out
-    }
 }
 
 // MARK: - SSE runner
