@@ -24,7 +24,21 @@
  * reads, but we still log them for completeness.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import path from "node:path";
 
 export type AutoAuditEntryKind =
@@ -92,6 +106,91 @@ function auditFilePath(workDir: string): string {
  * Append an entry. Returns silently on any failure — the caller MUST
  * NOT depend on this for correctness.
  */
+/**
+ * Rotate threshold (bytes). When the active file exceeds this size on
+ * write, rename it to `auto-audit.<ISO>.jsonl` and start a fresh
+ * file. 5 MB is roughly 50k entries on a busy session — well past
+ * "anything anyone would page through" but small enough to not bloat
+ * the project dir. Audit 🟠 #6.
+ */
+const ROTATE_AT_BYTES = 5 * 1024 * 1024;
+
+/**
+ * How many rotated files to keep. The active file is always present;
+ * we keep this many archives. Audit 🟠 #6.
+ */
+const KEEP_ARCHIVES = 4;
+
+function listArchives(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.startsWith("auto-audit.") && n.endsWith(".jsonl"))
+      .filter((n) => n !== "auto-audit.jsonl") // active file isn't an archive
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * If the active log is past the size threshold, rename it to a
+ * timestamped archive and prune older archives down to KEEP_ARCHIVES.
+ * Best-effort — failure leaves the active file in place and we
+ * continue appending to it. Worst case: the file grows past the
+ * threshold for a while.
+ */
+function rotateIfNeeded(dir: string, activePath: string): void {
+  try {
+    const st = statSync(activePath);
+    if (st.size < ROTATE_AT_BYTES) return;
+  } catch {
+    // No active file → nothing to rotate.
+    return;
+  }
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const archivePath = path.join(dir, `auto-audit.${stamp}.jsonl`);
+    renameSync(activePath, archivePath);
+    // Prune oldest archives beyond the keep cap.
+    const archives = listArchives(dir);
+    const overflow = archives.length - KEEP_ARCHIVES;
+    for (let i = 0; i < overflow; i += 1) {
+      try {
+        unlinkSync(path.join(dir, archives[i]));
+      } catch {
+        /* non-fatal */
+      }
+    }
+  } catch {
+    /* non-fatal — caller will keep appending to the old file */
+  }
+}
+
+/**
+ * Atomic-ish append. `appendFileSync` opens-writes-closes in one
+ * syscall internally on POSIX, but a process crash between the
+ * write and the fsync leaves no guarantee the line landed durably.
+ * For the audit log (where partial lines would corrupt
+ * `readAutoAuditTail`) we open with O_APPEND + write + fsync + close
+ * so concurrent appends from sibling sidecar instances on the same
+ * project can't interleave, and a hard crash mid-fsync at worst
+ * loses the last entry (never produces a partial one).
+ *
+ * Audit 🟡 #15.
+ */
+function atomicAppendLine(filePath: string, line: string): void {
+  // O_APPEND | O_WRONLY | O_CREAT, mode 0600 — multi-user readability
+  // was raised in the parent audit (🟡 #12); the active log inherits
+  // the same tightening.
+  const fd = openSync(filePath, "a", 0o600);
+  try {
+    writeSync(fd, line);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function appendAutoAuditEntry(
   workDir: string,
   args: {
@@ -105,7 +204,16 @@ export function appendAutoAuditEntry(
   if (!TOOLS_WORTH_LOGGING.has(args.tool)) return;
   try {
     const dir = path.join(workDir, ".marvin");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+      try {
+        chmodSync(dir, 0o700);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    const activePath = auditFilePath(workDir);
+    rotateIfNeeded(dir, activePath);
     const entry: AutoAuditEntry = {
       at: new Date().toISOString(),
       tool: args.tool,
@@ -114,7 +222,7 @@ export function appendAutoAuditEntry(
       turnId: args.turnId,
       toolUseId: args.toolUseId,
     };
-    appendFileSync(auditFilePath(workDir), `${JSON.stringify(entry)}\n`, "utf-8");
+    atomicAppendLine(activePath, `${JSON.stringify(entry)}\n`);
   } catch {
     /* swallow — log writes must never block the SDK turn */
   }
