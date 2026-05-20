@@ -6,7 +6,12 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-_(nothing in flight — last shipping milestone was v0.1.6 on 2026-05-20)_
+- **Syntax-highlighter coverage — YAML.** Add `tree-sitter-yaml` SPM dep + `Resources/Queries/yaml.scm`. Trivial; every project has compose / workflow / kubeconfig files. ~15 min.
+- **Syntax-highlighter coverage — Markdown.** Vendor `tree-sitter-markdown` to bypass the upstream `tree-sitter/swift-tree-sitter` binding-conflict documented in `macos/Package.swift`. Half of all docs are `.md`. ~30 min.
+- **Syntax-highlighter coverage — Python.** Vendor `tree-sitter-python` with a patched `Package.swift` (the upstream runtime `FileManager.fileExists("src/scanner.c")` check is the documented blocker). Most-asked-for missing language. ~1 hr.
+- **Terminal pane — ANSI colour passthrough.** Replace the current `stripANSI(_:)` with a small CSI-colour parser that maps the 16 standard + 8 bright ANSI colours to `NSAttributedString` foreground attributes. `cargo`, `pnpm`, `pytest`, `make`, `gradle` output becomes legible. Contained to `macos/MARVIN/TerminalPaneView.swift`. ~half day.
+
+_When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
 
