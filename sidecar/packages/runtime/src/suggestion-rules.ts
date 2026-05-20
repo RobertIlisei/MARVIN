@@ -96,20 +96,6 @@ export const SUGGESTION_RULES: SuggestionRule[] = [
       "Backend with a database often produces PDF reports — install pdf if you generate compliance docs, invoices, or evidence packs.",
     requiresAlsoTag: "language:java",
   },
-  {
-    matchTag: "domain:vertical-tax-compliance",
-    suggest: "pdf",
-    verb: "install",
-    rationale:
-      "regulatory compliance reports (NITRATES, CAP, PPP) render as PDF — install the pdf skill for layout fidelity.",
-  },
-  {
-    matchTag: "domain:vertical-tax-compliance",
-    suggest: "xlsx",
-    verb: "install",
-    rationale:
-      "vertical-domain tenants import subsidy-registry CSVs and export crop data as Excel — install xlsx for the round-trip.",
-  },
   // Generic engineering skills that apply broadly. We don't suggest
   // these on every project because spam — only when the fingerprint
   // hints at a real testing/security/PR culture.
@@ -218,18 +204,11 @@ export const SUGGESTION_RULES: SuggestionRule[] = [
       "Terraform + Ansible orchestration has a specific apply→provision→deploy ordering — a project-local skill sequences it.",
   },
   {
-    matchTag: "domain:vertical-tax-compliance",
-    suggest: "vertical-e-invoicing-ubl21",
-    verb: "build",
-    rationale:
-      "e-invoicing UBL 2.1 / standards validation is highly specific; a project-local skill knows your invoice-line edge cases.",
-  },
-  {
     matchTag: "workflow:grant-evidence",
     suggest: "evidence-pack-runbook",
     verb: "build",
     rationale:
-      "grant-program/funding-program milestone deliverables need a deterministic evidence-bundle process. Capture it as a runnable skill.",
+      "Grant/milestone deliverables need a deterministic evidence-bundle process. Capture it as a runnable skill.",
   },
   {
     matchTag: "compliance:gdpr",

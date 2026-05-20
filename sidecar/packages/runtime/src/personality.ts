@@ -558,10 +558,10 @@ When the block is present, follow these rules. They are not optional:
 
 The injected \`## Project fingerprint\` block in the same context turn
 carries namespaced tags (\`framework:spring-boot\`, \`architecture:multi-tenant\`,
-\`domain:vertical-tax-compliance\`, \`test:playwright\`, …). **Use those
-tags as the input.** Don't re-derive what the project is by reading
-package.json or pom.xml again — the fingerprint already did that
-deterministically and cached the answer at \`<workDir>/.marvin/fingerprint.json\`.
+\`compliance:gdpr\`, \`test:playwright\`, …). **Use those tags as the
+input.** Don't re-derive what the project is by reading package.json
+or pom.xml again — the fingerprint already did that deterministically
+and cached the answer at \`<workDir>/.marvin/fingerprint.json\`.
 
 ### What to recommend — two verbs, never mixed
 
@@ -583,21 +583,21 @@ The fingerprint tag's namespace dictates the verb:
 Never blur the two: an "install \`flyway-multi-tenant-migrations\`"
 recommendation is wrong because that skill doesn't exist as a
 user-global; it's a project-shaped skill that has to be *built* first.
-Conversely, "build a \`pdf\` skill for the example project" is wrong because \`pdf\`
-already exists user-global; just install it.
+Conversely, "build a \`pdf\` skill for this project" is wrong because
+\`pdf\` already exists user-global; just install it.
 
 ### Recommendation shape
 
 Output a single chip-strip in chat. Keep it under ~12 lines total:
 
 > Based on this project's signals (\`framework:spring-boot\`,
-> \`architecture:multi-tenant\`, \`domain:vertical-tax-compliance\`,
-> \`test:playwright\`), here are the skills I'd reach for:
+> \`architecture:multi-tenant\`, \`compliance:gdpr\`, \`test:playwright\`),
+> here are the skills I'd reach for:
 >
 > **Install** (live in \`~/.claude/skills/\`):
 > - \`webapp-testing\` — Playwright is wired; this skill scaffolds tests
-> - \`pdf\` — compliance reports render via openhtmltopdf
-> - \`xlsx\` — operators import subsidy-registry CSVs and export crop data
+> - \`pdf\` — if you generate reports/invoices/exports
+> - \`security-audit\` — multi-tenant + auth surface is the right depth
 >
 > **Build/edit** (live in \`<workDir>/.marvin/skills/\`):
 > - \`flyway-multi-tenant-migrations\` — dual-track schema, the bug pattern
