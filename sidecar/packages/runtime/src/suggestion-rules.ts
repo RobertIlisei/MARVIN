@@ -96,20 +96,6 @@ export const SUGGESTION_RULES: SuggestionRule[] = [
       "Backend with a database often produces PDF reports — install pdf if you generate compliance docs, invoices, or evidence packs.",
     requiresAlsoTag: "language:java",
   },
-  {
-    matchTag: "domain:romanian-tax-compliance",
-    suggest: "pdf",
-    verb: "install",
-    rationale:
-      "Romanian compliance reports (NITRATES, CAP, PPP) render as PDF — install the pdf skill for layout fidelity.",
-  },
-  {
-    matchTag: "domain:romanian-tax-compliance",
-    suggest: "xlsx",
-    verb: "install",
-    rationale:
-      "Romanian agri tenants import APIA CSVs and export crop data as Excel — install xlsx for the round-trip.",
-  },
   // Generic engineering skills that apply broadly. We don't suggest
   // these on every project because spam — only when the fingerprint
   // hints at a real testing/security/PR culture.
@@ -218,18 +204,11 @@ export const SUGGESTION_RULES: SuggestionRule[] = [
       "Terraform + Ansible orchestration has a specific apply→provision→deploy ordering — a project-local skill sequences it.",
   },
   {
-    matchTag: "domain:romanian-tax-compliance",
-    suggest: "romanian-eFactura-ubl21",
-    verb: "build",
-    rationale:
-      "Romanian eFactura UBL 2.1 / RO-CIUS validation is highly specific; a project-local skill knows your invoice-line edge cases.",
-  },
-  {
     matchTag: "workflow:grant-evidence",
     suggest: "evidence-pack-runbook",
     verb: "build",
     rationale:
-      "PoCIDIF/PNRR milestone deliverables need a deterministic evidence-bundle process. Capture it as a runnable skill.",
+      "Grant/milestone deliverables need a deterministic evidence-bundle process. Capture it as a runnable skill.",
   },
   {
     matchTag: "compliance:gdpr",
