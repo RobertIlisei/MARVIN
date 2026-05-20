@@ -143,6 +143,12 @@ targets:
       base:
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # Explicit modulemap. xcodebuild doesn't auto-synthesise one
+        # from publicHeadersPath the way swift build does; without
+        # this, `import TreeSitterYAML` from MARVIN.swift fails with
+        # "no such module" at the xcodebuild Swift compile step even
+        # though the static library + C header are present.
+        MODULEMAP_FILE: $(SRCROOT)/Vendored/tree-sitter-yaml/bindings/swift/TreeSitterYAML/module.modulemap
         # scanner.c #includes "tree_sitter/parser.h"; the schema
         # files live next to it. src/ needs to be on the header
         # search path for both.
@@ -176,6 +182,7 @@ targets:
       base:
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        MODULEMAP_FILE: $(SRCROOT)/Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown/module.modulemap
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Vendored/tree-sitter-markdown/src
           - $(SRCROOT)/Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown
@@ -196,6 +203,7 @@ targets:
       base:
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        MODULEMAP_FILE: $(SRCROOT)/Vendored/tree-sitter-python/bindings/swift/TreeSitterPython/module.modulemap
         HEADER_SEARCH_PATHS:
           - $(SRCROOT)/Vendored/tree-sitter-python/src
           - $(SRCROOT)/Vendored/tree-sitter-python/bindings/swift/TreeSitterPython
