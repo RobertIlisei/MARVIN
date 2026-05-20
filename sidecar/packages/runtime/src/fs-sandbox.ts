@@ -31,8 +31,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { validateProjectCwd } from "./projects";
+
 export type SandboxErrorCode =
   | "cwd-not-absolute"
+  | "cwd-not-registered"
   | "path-contains-null"
   | "path-too-long"
   | "path-escapes-cwd"
@@ -103,6 +106,20 @@ export async function checkFsPath(
 
   if (!path.isAbsolute(cwd)) {
     return err("cwd-not-absolute", `cwd must be absolute: ${cwd}`);
+  }
+  // Audit 🟠 #9: every mutating route that takes a cwd from the
+  // client must verify it matches a registered project. Path-
+  // sandboxing alone (`isInside(cwd, target)`) doesn't help if
+  // `cwd` itself is `/etc` — checkFsPath would then happily
+  // allow writes anywhere under /etc. The registered-project
+  // check makes the sandbox boundary the project root the user
+  // actually opened, not an attacker-supplied path.
+  const projectCheck = validateProjectCwd(cwd);
+  if (!projectCheck.ok) {
+    return err(
+      "cwd-not-registered",
+      `cwd is not a registered project: ${cwd}`,
+    );
   }
   if (target.includes("\0")) {
     return err("path-contains-null", "target contains NUL byte");
