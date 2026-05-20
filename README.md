@@ -22,51 +22,39 @@ MARVIN has two components that work together:
 | **macOS app** | `macos/` | Native SwiftUI app — IDE shell, chat, file tree, source control, terminal, diff viewer |
 | **Sidecar** | `sidecar/` | Next.js 16 server on `:3030` — Claude Agent SDK runner, tool policy, git API, file API, session storage |
 
-The Swift app talks to the sidecar over `localhost:3030`. The sidecar starts automatically on login via a launchd user agent installed by `bin/marvin install-macos-app`.
+The Swift app talks to the sidecar over `localhost:3030`. In a brew install the sidecar is bundled inside `MARVIN.app/Contents/Resources/` (alongside a pinned Node 22 runtime) and spawned by the SwiftUI process on launch; quitting MARVIN cleans it up. See [ADR-0023](./docs/decisions/0023-brew-distributable-bundled-sidecar.md).
 
 ---
 
-## Install (one-liner)
+## Install
 
-No Apple Developer account required. Builds from source — ad-hoc signed.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/scripts/install.sh | bash
-```
-
-**What it does:**
-1. Checks prerequisites (git, Node ≥ 22, pnpm, Xcode / Swift CLT)
-2. Clones the repo to `~/.marvin-app`
-3. Installs Node dependencies (`pnpm install`)
-4. Builds `MARVIN.app` and installs it to `/Applications`
-5. Installs a launchd agent so the sidecar starts automatically on login
-6. Symlinks `bin/marvin` → `/usr/local/bin/marvin`
-
-**First launch note:** macOS Gatekeeper will warn on the first open because the
-app is ad-hoc signed. Right-click → Open, or go to System Settings → Privacy &
-Security → "Open Anyway".
-
-**To uninstall:**
+### Recommended — Homebrew (no toolchain required)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/scripts/uninstall.sh | bash
-# or, if marvin is already on PATH:
-marvin uninstall-macos-app
+brew tap RobertIlisei/marvin
+brew install --cask marvin-ai
 ```
 
----
+That's it. MARVIN.app appears in `/Applications`, the bundled sidecar starts with the app, quitting MARVIN cleans it up. No Swift, Node, pnpm, Xcode, or Apple Developer account required on your machine.
 
-## Install from source (existing clone)
+**You'll need Anthropic credentials** to use it — either run `claude login` (the Claude CLI handles it) or paste an API key in MARVIN → Settings → Authentication.
 
-If you already have the repo:
+**Updates:** `brew upgrade --cask marvin-ai`. **Uninstall:** `brew uninstall --cask marvin-ai` (add `--zap` to also wipe `~/.marvin`).
+
+> Note: the cask token is `marvin-ai`, not `marvin` — the plain token is taken by the unrelated "Amazing Marvin" productivity app in the official homebrew-cask repo.
+
+### From source (developer install)
+
+If you've cloned the repo and want to build locally:
 
 ```bash
-bin/marvin install-macos-app   # build → /Applications/MARVIN.app + launchd agent
-bin/marvin uninstall-macos-app # remove app + agent (source tree untouched)
+bin/marvin install-macos-app   # build → /Applications/MARVIN.app
+bin/marvin uninstall-macos-app # remove app
 ```
 
-Requires `xcodegen` + Xcode, **or** just the Swift Command Line Tools (`xcode-select --install`).
-If xcodegen is missing, `swift build` is used automatically as a fallback — no Developer account needed in either path.
+Default install mode is **bundled** (per ADR-0023) — same shape as the brew artefact. Pass `--launchd` for the legacy mode that runs the sidecar from the source repo via a user-agent plist.
+
+Requires `xcodegen` + Xcode, **or** just the Swift Command Line Tools (`xcode-select --install`). If `xcodegen` is missing, `swift build` is used automatically as a fallback — no Developer account needed in either path.
 
 ---
 
@@ -247,6 +235,12 @@ docs/
 
 ## Status
 
+**v0.1.6 — Brew-installable, project-aware (current).**
+
+- **Brew cask** — `brew install --cask marvin-ai` produces a working IDE on a fresh Mac with no Swift / Node / pnpm / Xcode required. Bundled Node 22 + Next.js standalone sidecar inside `MARVIN.app/Contents/Resources/` (ADR-0023).
+- **Project-aware skill recommendations** — fingerprint detector emits namespaced tags (`framework:next`, `architecture:multi-tenant`, `test:playwright`, …) from a project's manifests + memory file; the suggestion engine maps tags to skills you can either install user-global or build project-local. ADR-0024.
+- **Skills pane** — fourth tab in the left pane (Files / Search / Source Control / Skills): suggestions for the current project, your user-global skill catalog, and project-local skills. One-click "park all" closes the audit loop. ADR-0025.
+
 **v1.3 — Fully native IDE surface (shipped 2026-05-05).**
 
 The WebView is gone. The macOS app is a pure SwiftUI IDE shell backed by the
@@ -261,8 +255,6 @@ IDE features the browser couldn't provide:
 - **Push / pull / fetch** — full remote ops in the source control panel
 - **Session history** — clock menu in chat header restores any past session
 - **Right-pane resize** — min-width fixed so brain + chat never overlap other panes
-- **App renamed** — `MARVIN-Swift.app` → `MARVIN.app`
-- **Install & uninstall** — `bin/marvin install-macos-app` / `uninstall-macos-app` + remote one-liner
 
 See [`docs/roadmap.md`](./docs/roadmap.md) and [`docs/history/CHANGELOG.md`](./docs/history/CHANGELOG.md).
 
@@ -284,7 +276,7 @@ curl -s http://localhost:3030/api/health | jq .
 | `EADDRINUSE :::3030` | Another instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it |
 | MARVIN.app won't open | Gatekeeper ad-hoc signing warning | Right-click → Open, or System Settings → Privacy & Security → Open Anyway |
 | Graph pane → "no graph found" | graphify not run on the project | `cd <workDir> && /graphify .` |
-| Sidecar not starting on login | launchd agent not loaded | `launchctl load ~/Library/LaunchAgents/net.marvin.desktop.server.plist` |
+| Sidecar didn't spawn with the app | Bundled sidecar crashed | Tail `~/Library/Logs/MARVIN/sidecar.log` for the cause; relaunch MARVIN |
 | Build fails: `No module 'STTextView'` | SPM not resolved | `cd macos && swift package resolve` |
 | Models dropdown → "fallback list" | Node can't read macOS Keychain token | Set `ANTHROPIC_API_KEY` directly |
 | Chat sessions not loading | First launch post-install | Open the sessions menu (clock icon) and click a session |
@@ -297,7 +289,7 @@ bin/marvin doctor   # preflight checks
 bin/marvin logs     # tail .marvin/dev.log
 ```
 
-**Still stuck?** Open an issue at [github.com/RobertIlisei/MARVIN/issues](https://github.com/RobertIlisei/MARVIN/issues) with `/api/health` output, the last 20 lines of `~/.marvin-app/.marvin/launchd-stderr.log`, and your macOS version.
+**Still stuck?** Open an issue at [github.com/RobertIlisei/MARVIN/issues](https://github.com/RobertIlisei/MARVIN/issues) with `/api/health` output, the last 20 lines of `~/Library/Logs/MARVIN/sidecar.log`, and your macOS version.
 
 ---
 
