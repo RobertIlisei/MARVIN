@@ -11,7 +11,7 @@
 //
 // Layout mirrors Cursor's bottom bar:
 //
-//   ⏺ online · main● · agri-saas · ⊗0 ⚠0   …   Ln 1, Col 1 · Spaces: 4 · UTF-8 · LF · Swift · 🔔
+//   ⏺ online · main● · my-project · ⊗0 ⚠0   …   Ln 1, Col 1 · Spaces: 4 · UTF-8 · LF · Swift · 🔔
 //
 // Sections:
 //   • LEFT  — connection pip, branch (with dirty pip), project name,

@@ -204,7 +204,7 @@ const cwd = body.cwd?.trim() || process.cwd();
 
 If a client sends a chat request without `cwd` (no project picked,
 empty-state hero), the route falls back to **MARVIN's own
-`process.cwd()`** — i.e. `/Users/robertilisei/marvin/`. Hello,
+`process.cwd()`** — i.e. `/path/to/marvin/`. Hello,
 self-modifying agent. Golden Rule 4 ("the user's project is a
 separate workspace") and ADR-0005 (per-project isolation) both forbid
 this.
