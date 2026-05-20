@@ -38,6 +38,7 @@ import TreeSitterGo
 import TreeSitterHTML
 import TreeSitterJSON
 import TreeSitterMarkdown
+import TreeSitterPython
 import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTypeScript
@@ -73,6 +74,7 @@ enum HighlightLanguage: String {
     case bash
     case yaml
     case markdown
+    case python
 
     /// Pick a language by lowercased file extension (no leading
     /// dot) or by well-known filename. Returns nil for unsupported
@@ -126,6 +128,8 @@ enum HighlightLanguage: String {
             return .yaml
         case "md", "markdown":
             return .markdown
+        case "py", "pyi":
+            return .python
         default:
             // Everything else (Dockerfile / Makefile / sql / toml /
             // css / xml / svg / plist / python / ruby / java /
@@ -162,6 +166,8 @@ enum HighlightLanguage: String {
             return Language(language: tree_sitter_yaml())
         case .markdown:
             return Language(language: tree_sitter_markdown())
+        case .python:
+            return Language(language: tree_sitter_python())
         }
     }
 
