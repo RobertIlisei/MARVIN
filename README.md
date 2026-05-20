@@ -310,18 +310,16 @@ Every release zip published since v0.1.x is signed with [minisign](https://jedis
 **Public key** (pinned here, in the [`homebrew-marvin`](https://github.com/RobertIlisei/homebrew-marvin#release-signing) tap's README, and in [`Casks/marvin-ai.rb`](https://github.com/RobertIlisei/homebrew-marvin/blob/main/Casks/marvin-ai.rb)):
 
 <!-- Canonical machine-readable copy: .minisign-pubkey (repo root). -->
-<!-- Pubkey is currently a PLACEHOLDER — to be replaced when @robertilisei -->
-<!-- generates the minisign key pair per ADR-0026 §"Key generation". -->
-<!-- After the first signed release, this block will contain a 2-line -->
-<!-- minisign pubkey: a comment line ("untrusted comment: …") + a -->
-<!-- ~64-character base64 key line ("RWQ…"). -->
+<!-- This pubkey + the matching private key were generated 2026-05-20 -->
+<!-- per ADR-0026 §"Key generation". Rotation cadence: 2 years OR -->
+<!-- immediately on suspected secret-store breach. -->
 
 ```
-untrusted comment: minisign public key for RobertIlisei/MARVIN
-<the base64 pubkey line>
+untrusted comment: minisign public key 0794CFDFA5E629D5
+RWTVKeal38+UBwQ3tC8ETdPZkv8fFLchoXdtwi7UI9XMhaJWuUwx4QAQ
 ```
 
-(The block above currently shows the *shape* of a minisign pubkey, not the actual key. See [`.minisign-pubkey`](./.minisign-pubkey) at the repo root for the canonical copy; it tracks the same placeholder note until the first signed release lands.)
+The same key is mirrored in [`.minisign-pubkey`](./.minisign-pubkey), in the [`homebrew-marvin`](https://github.com/RobertIlisei/homebrew-marvin#release-signing) tap's README, and in [`Casks/marvin-ai.rb`](https://github.com/RobertIlisei/homebrew-marvin/blob/main/Casks/marvin-ai.rb) as the `MARVIN_MINISIGN_PUBKEY` constant. Three pinned copies across two repos — a tap-repo compromise that swapped the cask's pubkey would be visibly inconsistent with this repo's record.
 
 **Verify a downloaded release:**
 
