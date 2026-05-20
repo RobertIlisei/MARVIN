@@ -303,6 +303,48 @@ bin/marvin logs     # tail .marvin/dev.log
 
 ---
 
+## Release signing
+
+Every release zip published since v0.1.x is signed with [minisign](https://jedisct1.github.io/minisign/). The signature lives next to the zip on each GitHub Release as `MARVIN-<version>-arm64.zip.minisig`.
+
+**Public key** (pinned here, in the [`homebrew-marvin`](https://github.com/RobertIlisei/homebrew-marvin#release-signing) tap's README, and in [`Casks/marvin-ai.rb`](https://github.com/RobertIlisei/homebrew-marvin/blob/main/Casks/marvin-ai.rb)):
+
+<!-- Canonical machine-readable copy: .minisign-pubkey (repo root). -->
+<!-- Pubkey is currently a PLACEHOLDER — to be replaced when @robertilisei -->
+<!-- generates the minisign key pair per ADR-0026 §"Key generation". -->
+<!-- After the first signed release, this block will contain a 2-line -->
+<!-- minisign pubkey: a comment line ("untrusted comment: …") + a -->
+<!-- ~64-character base64 key line ("RWQ…"). -->
+
+```
+untrusted comment: minisign public key for RobertIlisei/MARVIN
+<the base64 pubkey line>
+```
+
+(The block above currently shows the *shape* of a minisign pubkey, not the actual key. See [`.minisign-pubkey`](./.minisign-pubkey) at the repo root for the canonical copy; it tracks the same placeholder note until the first signed release lands.)
+
+**Verify a downloaded release:**
+
+```bash
+brew install minisign
+VERSION=0.1.9   # whichever version you downloaded
+curl -fLO "https://github.com/RobertIlisei/MARVIN/releases/download/v${VERSION}/MARVIN-${VERSION}-arm64.zip"
+curl -fLO "https://github.com/RobertIlisei/MARVIN/releases/download/v${VERSION}/MARVIN-${VERSION}-arm64.zip.minisig"
+curl -fLO https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/.minisign-pubkey
+minisign -V -p .minisign-pubkey -m "MARVIN-${VERSION}-arm64.zip"
+```
+
+A successful verify prints `Signature and comment signature verified` and exits 0. If the signature doesn't verify, **do not install the artefact** — and please open an issue, because either:
+
+- the tap repo or the release was tampered with, or
+- our private key was lost (in which case we'll publish a rotation announcement, also signed)
+
+See [ADR-0026](./docs/decisions/0026-release-artefact-signing-minisign.md) for the full signing model, the threat shapes this defends against, and the key-rotation policy.
+
+The cask install path (`brew install --cask marvin-ai`) does not yet auto-verify the signature — Phase 2 of ADR-0026 will add a `preflight` step. Until then, manual verification is the canonical path for users who care.
+
+---
+
 ## License
 
 [MIT](./LICENSE) · © 2026 Robert Ilisei

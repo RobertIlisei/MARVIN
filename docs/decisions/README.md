@@ -39,6 +39,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0023](./0023-brew-distributable-bundled-sidecar.md) | Brew-distributable `.app` via bundled Node sidecar | Accepted | 2026-05-08 |
 | [0024](./0024-project-aware-skill-recommendations.md) | Project-aware skill recommendations | Accepted | 2026-05-11 |
 | [0025](./0025-skills-pane-ui.md) | Skills pane UI (v1) | Accepted | 2026-05-11 |
+| [0026](./0026-release-artefact-signing-minisign.md) | Release artefact signing via minisign | Accepted | 2026-05-20 |
 
 ## Template
 
