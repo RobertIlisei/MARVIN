@@ -40,6 +40,7 @@ import TreeSitterJSON
 import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTypeScript
+import TreeSitterYAML
 
 /// One highlight span returned by the highlighter. The caller
 /// applies a colour to `range` based on `captureName`. Multiple
@@ -69,6 +70,7 @@ enum HighlightLanguage: String {
     case c
     case cpp
     case bash
+    case yaml
 
     /// Pick a language by lowercased file extension (no leading
     /// dot) or by well-known filename. Returns nil for unsupported
@@ -118,10 +120,12 @@ enum HighlightLanguage: String {
             return .cpp
         case "sh", "bash", "zsh", "fish", "ksh":
             return .bash
+        case "yaml", "yml":
+            return .yaml
         default:
-            // Everything else (Dockerfile / Makefile / yaml / sql /
-            // toml / css / xml / svg / plist / python / ruby / java
-            // / markdown / lua / ini / properties …) — the regex
+            // Everything else (Dockerfile / Makefile / sql / toml /
+            // css / xml / svg / plist / python / ruby / java /
+            // markdown / lua / ini / properties …) — the regex
             // highlighter handles them with proper per-language
             // patterns, no fallback to a wrong grammar.
             return nil
@@ -150,6 +154,8 @@ enum HighlightLanguage: String {
             return Language(language: tree_sitter_cpp())
         case .bash:
             return Language(language: tree_sitter_bash())
+        case .yaml:
+            return Language(language: tree_sitter_yaml())
         }
     }
 
