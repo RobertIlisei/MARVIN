@@ -257,7 +257,7 @@ Ripgrep-backed full-text search across the project. ripgrep honours `.gitignore`
 
 **Caps:** 500 matching files, 50 matches per file, 10 s timeout.
 
-Consumed by the macOS app's Find in Files sidebar tab (`FindInFilesView`) — see ADR-0021 / v1.3 milestone M2.
+Consumed by the macOS app's Find in Files sidebar tab (`FindInFilesView`) — see ADR-0021 milestone M2.
 
 ### `POST /api/files/reveal`
 
@@ -549,7 +549,7 @@ Query the active project's `graphify-out/graph.json`. Passthrough to [`@marvin/g
 
 ### `GET /api/graph/query?cwd=&op=&q=&hops?=&from?=&to?=&limit?=`
 
-Same passthrough, exposed as a GET so simple queries (search-by-label, single-node neighbors) can be hit without a body. The query-string form is what the macOS app's Symbol Search (⌘⇧T, v1.3 milestone M3) uses.
+Same passthrough, exposed as a GET so simple queries (search-by-label, single-node neighbors) can be hit without a body. The query-string form is what the macOS app's Symbol Search (⌘⇧T, ADR-0021 milestone M3) uses.
 
 ### `GET /api/graph/html?cwd=…`
 

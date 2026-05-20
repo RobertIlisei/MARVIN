@@ -1,6 +1,32 @@
 # Quickstart
 
-From a fresh clone to a running MARVIN on `localhost:3030` with a working chat turn. Should take under 5 minutes.
+From a fresh install to a running MARVIN with a working chat turn. Should take under 5 minutes.
+
+## Recommended path — Homebrew cask
+
+For end users, the canonical install is the Homebrew cask. The cask drops
+`MARVIN.app` into `/Applications/` with Node 22.11.0, the Next standalone
+tree, and every dependency bundled inside `MARVIN.app/Contents/Resources/`.
+
+```bash
+brew tap RobertIlisei/marvin
+brew install --cask marvin-ai
+```
+
+The cask token is **`marvin-ai`** (not `marvin`, which would collide with
+the unrelated "Amazing Marvin" cask on the homebrew-cask main tap).
+
+Set `ANTHROPIC_API_KEY` in your shell (or run `claude auth login`),
+launch MARVIN from the Dock, pick a project directory, and you're done.
+See [Credentials](../security/credentials.md) for the full detection
+order.
+
+Skip to step 6 below if you took the brew path.
+
+## Developer install — clone + pnpm
+
+The rest of this page is the from-source path for contributors building
+MARVIN itself.
 
 ## 1. Prerequisites
 
@@ -8,6 +34,7 @@ From a fresh clone to a running MARVIN on `localhost:3030` with a working chat t
 |---|---|---|
 | Node.js | ≥ 22 | `brew install node@22` / `nvm install 22` |
 | pnpm | 10.33+ | `npm install -g pnpm@10.33.0` (or use the `packageManager` field via Corepack) |
+| Xcode | 16+ (or Command Line Tools only) | App Store, or `xcode-select --install` |
 | Anthropic credentials | any one: `ANTHROPIC_API_KEY` env var **OR** `claude auth login` previously run | see [Credentials](../security/credentials.md) |
 | Chromium (optional) | latest | `npx playwright install chromium` — only if you want MARVIN to drive a browser |
 

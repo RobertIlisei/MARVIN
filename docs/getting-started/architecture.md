@@ -35,6 +35,11 @@ One page. What runs where, and how data moves.
 
 Everything except the Anthropic API call runs on `localhost`. No MARVIN backend exists — your machine *is* the backend.
 
+The "Next.js 16 app" box above runs as a Node process spawned by the
+SwiftUI host on launch ([ADR-0023](../decisions/0023-brew-distributable-bundled-sidecar.md));
+the bundled sidecar and the macOS app ship together in
+`MARVIN.app/Contents/Resources/` via the Homebrew cask.
+
 ## The three pieces that do real work
 
 ### `sidecar/` — Next.js 16 shell

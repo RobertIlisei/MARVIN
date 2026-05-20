@@ -27,7 +27,7 @@ The rest of this page is the historical reasoning for picking MIT over
 the alternatives. Kept so the choice is auditable — the ADR analogue
 for a legal decision. Summary:
 
-- MARVIN's entire dependency surface (Next.js, React, xterm.js, Monaco, Tauri plugins we touch) is MIT or Apache 2.0. Matching MIT keeps the outbound story simple.
+- MARVIN's entire dependency surface (Next.js, React, xterm.js, Monaco, the Claude Agent SDK) is MIT or Apache 2.0. Matching MIT keeps the outbound story simple.
 - The project is one author + one AI pair. Copyleft enforcement overhead would exceed any protection benefit.
 - No patents to worry about — MARVIN is glue around Anthropic's SDK. Apache 2.0's patent grant would be precautionary rather than substantive.
 - MIT's brevity matches the project's character. Every ADR has favoured the simpler option.
