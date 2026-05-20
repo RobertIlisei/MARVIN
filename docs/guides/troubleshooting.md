@@ -2,6 +2,13 @@
 
 Common issues, probable causes, fixes. Ordered by "how often it happens in practice."
 
+> **Note on log paths.** When MARVIN is installed via the Homebrew cask
+> (`brew install --cask marvin-ai`), the sidecar runs as a child of the
+> SwiftUI process and its stderr lands at
+> `~/Library/Logs/MARVIN/sidecar.log`. When running from a clone with
+> `pnpm dev`, the same output goes to the terminal you started `pnpm
+> dev` in. The two are interchangeable below — read whichever exists.
+
 ## MARVIN won't take a turn
 
 **Symptom:** chat input is enabled, you send a message, nothing happens or an immediate error.
