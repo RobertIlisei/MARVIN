@@ -13,8 +13,8 @@ all run in Swift. There is no `WKWebView` and no `apps/web` shell —
 every UI surface is AppKit / SwiftUI / MetalKit.
 
 For the dev loop, prerequisites, and `bin/marvin install-macos-app`, see
-[BUILD.md](./BUILD.md). For the end-user one-liner installer, see
-[`scripts/install.sh`](../scripts/install.sh).
+[BUILD.md](./BUILD.md). End users install via Homebrew:
+`brew tap RobertIlisei/marvin && brew install --cask marvin-ai`.
 
 ## What this is
 
@@ -53,7 +53,7 @@ BUILD.md for the rationale.
 ## Architecture in one diagram
 
 ```
-MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, started by launchd)
+MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, spawned by the SwiftUI process)
         │                         │
         │                         └── packages/runtime  (Claude CLI, sessions, cost,
         │                                                project context, personality)
@@ -62,5 +62,8 @@ MARVIN.app  ──HTTP/SSE──▶  localhost:3030  (sidecar/, started by launc
             MARVIN/             (views, services, NativePrefs, bridges)
 ```
 
-The launchd user agent installed by `bin/marvin install-macos-app`
-ensures the sidecar is up before the app is launched.
+The sidecar is bundled inside `MARVIN.app/Contents/Resources/` (Node 22.11.0
+darwin-arm64 + the Next standalone tree) and spawned by the SwiftUI process on
+launch — see [ADR-0023](../docs/decisions/0023-brew-distributable-bundled-sidecar.md).
+A launchd user agent is still available as an opt-in path via
+`bin/marvin install-macos-app --launchd`.

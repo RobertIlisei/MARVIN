@@ -31,10 +31,13 @@ You say "let's build the login page." MARVIN reads the codebase, proposes the sc
 ## What you need
 
 - macOS 14 (Sonoma) or later.
-- Xcode 16+ or just the Command Line Tools (`xcode-select --install`) — the installer falls back to the SPM build path if Xcode is missing.
-- Node.js **>= 22** and pnpm — the installer auto-installs both via Homebrew on a fresh macbook.
 - Claude credentials — an `ANTHROPIC_API_KEY`, or a `claude auth login` done previously (auto-detected).
 - Optional: `npx playwright install chromium` if you want MARVIN to drive a browser against your local dev server.
+
+The end-user install path is a Homebrew cask — Node, the Next sidecar, and
+the SwiftUI app all ship bundled inside `MARVIN.app/Contents/Resources/`.
+You only need a working clone + pnpm + Xcode 16 (or Command Line Tools)
+if you intend to build MARVIN from source as a contributor.
 
 See [Quickstart](./quickstart.md) for the one-liner install.
 

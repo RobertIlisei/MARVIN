@@ -24,7 +24,13 @@ This is the ground truth for "what did MARVIN do." Grep-able, replay-able, diff-
 
 ### Server-side stderr
 
-Next.js dev server logs unhandled exceptions, Turbopack messages, SDK runtime errors. Shows up in the terminal running `pnpm dev`.
+Next.js logs unhandled exceptions, Turbopack messages, SDK runtime errors.
+
+- **Bundled mode** (installed via `brew install --cask marvin-ai`):
+  stderr lands at `~/Library/Logs/MARVIN/sidecar.log` — the SwiftUI
+  host pipes the spawned Node process's stderr to this file (ADR-0023).
+- **Dev mode** (`pnpm dev` from a clone): same output, but it shows up
+  in the terminal running `pnpm dev`.
 
 ## What's deliberately absent
 
@@ -74,8 +80,8 @@ Env vars beat files; workdir beats global.
 2. **Check the tool policy verdict.** If a tool call was blocked or confirmed, the `confirm.request` event (when gated) or policy classification (in the `cli.event` metadata) shows why.
 3. **Check cost ledger.** If the session's cost seems off, `cost-tracker.json` has per-turn breakdown.
 4. **Check `/api/health`.** `ok: false` means the runtime state is wrong (no credentials, binary missing). Fix that before looking at higher-layer issues.
-5. **Browser devtools** for client-side issues (hydration mismatches, `useChatStream` events not firing).
-6. **Server stderr** for SDK-layer exceptions.
+5. **Browser devtools** for client-side issues (hydration mismatches, `useChatStream` events not firing) — only applicable in dev mode (`pnpm dev`).
+6. **Server stderr** for SDK-layer exceptions — `~/Library/Logs/MARVIN/sidecar.log` in bundled mode, or the `pnpm dev` terminal in dev mode.
 
 ## Logging verbosity
 
