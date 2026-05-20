@@ -285,6 +285,19 @@ targets:
         # block without entitlements) and Phase 0 isn't App-Store-
         # bound. Re-evaluate at distribution.
         ENABLE_APP_SANDBOX: NO
+        # Tell the Swift frontend where to find each vendored
+        # grammar's modulemap. Each library target sets MODULEMAP_FILE
+        # so it compiles against the right interface, but xcodebuild
+        # does NOT auto-propagate that to dependents — the consumer
+        # needs explicit include paths to resolve `import TreeSitterX`.
+        # SPM's swift build handles this via publicHeadersPath
+        # automatically, which is why local `swift build` works. The
+        # v0.1.7 release.yml run failed at xcodebuild without this with
+        # `error: no such module 'TreeSitterMarkdown'`.
+        SWIFT_INCLUDE_PATHS:
+          - $(SRCROOT)/Vendored/tree-sitter-yaml/bindings/swift/TreeSitterYAML
+          - $(SRCROOT)/Vendored/tree-sitter-markdown/bindings/swift/TreeSitterMarkdown
+          - $(SRCROOT)/Vendored/tree-sitter-python/bindings/swift/TreeSitterPython
 
 # A single shared scheme so the project opens cleanly in Xcode and
 # has a default Build/Run target. xcodegen generates this if asked.
