@@ -220,12 +220,26 @@ let package = Package(
             publicHeadersPath: "bindings/swift/TreeSitterMarkdown",
             cSettings: [.headerSearchPath("src")]
         ),
+        // Vendored tree-sitter-python. Same FileManager.fileExists
+        // bug as tree-sitter-yaml in the upstream Package.swift —
+        // scanner.c gets dropped when loaded transitively. Vendoring
+        // with an unconditional sources list bypasses it.
+        // See `macos/Vendored/tree-sitter-python/SOURCE.md` for the
+        // upstream commit + refresh procedure.
+        .target(
+            name: "TreeSitterPython",
+            path: "Vendored/tree-sitter-python",
+            sources: ["src/parser.c", "src/scanner.c"],
+            publicHeadersPath: "bindings/swift/TreeSitterPython",
+            cSettings: [.headerSearchPath("src")]
+        ),
         .executableTarget(
             name: "MARVIN",
             dependencies: [
                 "MARVINLogic",
                 "TreeSitterYAML",
                 "TreeSitterMarkdown",
+                "TreeSitterPython",
                 .product(name: "STTextView", package: "STTextView"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
