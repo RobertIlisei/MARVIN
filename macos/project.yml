@@ -120,11 +120,49 @@ targets:
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
 
+  # Vendored tree-sitter-yaml. Mirrors the same target in
+  # `Package.swift` so the xcodebuild path picks it up. We can't
+  # use the upstream `tree-sitter-yaml` SPM package because its
+  # Package.swift has a runtime FileManager.fileExists check that
+  # drops scanner.c when loaded transitively. Vendoring with an
+  # unconditional sources list bypasses the bug.
+  # See macos/Vendored/tree-sitter-yaml/SOURCE.md for provenance.
+  TreeSitterYAML:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Vendored/tree-sitter-yaml/src
+        includes:
+          - "parser.c"
+          - "scanner.c"
+      - path: Vendored/tree-sitter-yaml/bindings/swift/TreeSitterYAML
+        # The public header (yaml.h) declaring tree_sitter_yaml().
+        # SwiftTreeSitter bridges to it via Language(language: …).
+        buildPhase: none
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        # scanner.c #includes "tree_sitter/parser.h"; the schema
+        # files live next to it. src/ needs to be on the header
+        # search path for both.
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/Vendored/tree-sitter-yaml/src
+          - $(SRCROOT)/Vendored/tree-sitter-yaml/bindings/swift/TreeSitterYAML
+        # The C compiler needs to find the schema.*.c files when
+        # scanner.c #includes one of them via the YAML_SCHEMA macro.
+        # Source list above is files, not the directory — the schema
+        # .c files aren't compiled standalone but ARE pulled in by
+        # the preprocessor relative to scanner.c, which lives next
+        # to them in src/. No extra setting needed for the include
+        # resolution because they're siblings.
+
   MARVIN:
     type: application
     platform: macOS
     dependencies:
       - target: MARVINLogic
+      - target: TreeSitterYAML
       - package: STTextView
         product: STTextView
       - package: SwiftTreeSitter
