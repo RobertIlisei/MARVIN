@@ -139,6 +139,7 @@ check_port() {
     if [ -f "$PID_FILE" ] && [ "$pid" = "$(cat "$PID_FILE")" ]; then
       # It's our own previous instance.
       ok "port $PORT already bound by MARVIN (pid $pid)"
+      check_bind_address || true
       return 10  # sentinel — already-running
     fi
     fail "port $PORT is bound by a non-MARVIN process (pid $pid)"
@@ -146,6 +147,32 @@ check_port() {
     return 3
   fi
   ok "port $PORT is free"
+}
+
+# Audit 🟡 #11: when a MARVIN sidecar IS listening, affirmatively
+# verify it bound to loopback (127.0.0.1 / [::1]) rather than 0.0.0.0
+# / `*` (LAN-reachable). The package.json scripts pass `--hostname
+# 127.0.0.1` since the v0.1.8 hardening, but a user who edits them
+# or runs Next with a different invocation could regress this
+# silently. We surface a warning in `doctor` so the regression is
+# visible. lsof prints `*:<port>` for IPv4 wildcard binds and
+# `[::]:<port>` for IPv6 wildcard — both LAN-reachable; treat as
+# warnings.
+check_bind_address() {
+  local addresses
+  addresses="$(lsof -iTCP:"$PORT" -sTCP:LISTEN -nP 2>/dev/null \
+                 | awk 'NR>1 {print $9}')"
+  local non_loopback
+  non_loopback="$(printf '%s\n' "$addresses" \
+                    | grep -v -E '^(127\.0\.0\.1|\[::1\]):'"$PORT"'$' \
+                    | grep -v '^$' || true)"
+  if [ -n "$non_loopback" ]; then
+    fail "sidecar is bound to a non-loopback address — LAN reachable:"
+    printf '%s\n' "$non_loopback" | sed 's/^/    /'
+    dim "  fix:  edit sidecar/package.json's dev/start scripts to pass --hostname 127.0.0.1"
+    return 4
+  fi
+  ok "sidecar bound to loopback only (127.0.0.1 / [::1])"
 }
 
 check_credentials() {
