@@ -1,10 +1,11 @@
 # ADR-0023 — Brew-distributable `.app` via bundled Node sidecar
 
-**Status:** Accepted
+**Status:** Accepted (install location superseded by ADR-0027 on 2026-05-20)
 **Date:** 2026-05-08
 **Deciders:** @robertilisei, MARVIN
 **Supersedes:** [ADR-0011 — Standalone `.app` via bundled Node sidecar (Deprecated)](./0011-sidecar-node-bundling.md)
 **Extends:** [ADR-0016 — SwiftUI macOS migration](./0016-swift-migration.md), [ADR-0021 — Remove WKWebView ghost; fully-native Swift macOS app](./0021-webview-removal-fully-native-swift.md)
+**Partially superseded by:** [ADR-0027 — Install MARVIN.app to `~/Applications`, not `/Applications`](./0027-macos-26-gatekeeper-user-applications.md). macOS 26 kernel-kills ad-hoc-signed bundles in `/Applications`; the install destination moved to `~/Applications/MARVIN.app`. Everything else in this ADR (bundled Node, sidecar payload, brew cask flow) still applies.
 
 ## Context
 

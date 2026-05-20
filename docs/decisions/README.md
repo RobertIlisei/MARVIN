@@ -36,10 +36,11 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0020](./0020-phase-5-embedded-surfaces-native.md) | Phase 5 native embedded surfaces: shape and sub-phases | Accepted | 2026-05-05 |
 | [0021](./0021-webview-removal-fully-native-swift.md) | Remove WKWebView ghost; fully-native Swift macOS app | Accepted | 2026-05-05 |
 | [0022](./0022-context-pressure-observability-and-session-hygiene.md) | Context-pressure observability + session-hygiene nudges | Accepted | 2026-05-06 |
-| [0023](./0023-brew-distributable-bundled-sidecar.md) | Brew-distributable `.app` via bundled Node sidecar | Accepted | 2026-05-08 |
+| [0023](./0023-brew-distributable-bundled-sidecar.md) | Brew-distributable `.app` via bundled Node sidecar | Accepted (install location superseded by 0027) | 2026-05-08 |
 | [0024](./0024-project-aware-skill-recommendations.md) | Project-aware skill recommendations | Accepted | 2026-05-11 |
 | [0025](./0025-skills-pane-ui.md) | Skills pane UI (v1) | Accepted | 2026-05-11 |
 | [0026](./0026-release-artefact-signing-minisign.md) | Release artefact signing via minisign | Accepted | 2026-05-20 |
+| [0027](./0027-macos-26-gatekeeper-user-applications.md) | Install MARVIN.app to `~/Applications`, not `/Applications` | Accepted | 2026-05-20 |
 
 ## Template
 
