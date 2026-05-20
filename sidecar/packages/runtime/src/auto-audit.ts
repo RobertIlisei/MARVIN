@@ -155,8 +155,10 @@ function rotateIfNeeded(dir: string, activePath: string): void {
     const archives = listArchives(dir);
     const overflow = archives.length - KEEP_ARCHIVES;
     for (let i = 0; i < overflow; i += 1) {
+      const name = archives[i];
+      if (!name) continue;
       try {
-        unlinkSync(path.join(dir, archives[i]));
+        unlinkSync(path.join(dir, name));
       } catch {
         /* non-fatal */
       }
