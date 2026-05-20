@@ -1,0 +1,9 @@
+// Explicit modulemap so xcodebuild can present the vendored
+// tree-sitter-yaml C library as a Swift module. swift build
+// (SPM) auto-synthesizes one from publicHeadersPath; xcodebuild
+// requires it written out.
+
+module TreeSitterYAML {
+    header "yaml.h"
+    export *
+}
