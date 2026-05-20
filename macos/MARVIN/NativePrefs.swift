@@ -37,6 +37,12 @@ final class NativePrefs {
     private(set) var themeName: String? = nil
     /// 0 = tab; positive = that many spaces. Default 4 matches VS Code / Cursor.
     private(set) var indentSize: Int = 4
+    /// First-launch onboarding has been shown + dismissed. False on a
+    /// fresh `brew install` until the user clicks "Get started" in
+    /// OnboardingView; true thereafter. The Help menu carries a
+    /// "Show Onboarding…" entry that flips this back to false if the
+    /// user wants to see the flow again.
+    private(set) var hasCompletedOnboarding: Bool = false
 
     private init() {
         loadFromDefaults()
@@ -271,6 +277,23 @@ final class NativePrefs {
         if saved > 0 || d.object(forKey: "marvin.indentSize") != nil {
             indentSize = max(0, min(saved, 8))
         }
+        hasCompletedOnboarding = d.bool(forKey: "marvin.onboarding.completed")
+    }
+
+    // MARK: - Onboarding
+
+    /// Flip the onboarding-done flag. Call from OnboardingView's
+    /// "Get started" / "Skip for now" buttons. Idempotent.
+    func markOnboardingComplete() {
+        hasCompletedOnboarding = true
+        UserDefaults.standard.set(true, forKey: "marvin.onboarding.completed")
+    }
+
+    /// Reset the flag — Help → Show Onboarding… invokes this so the
+    /// user can re-view the flow.
+    func resetOnboarding() {
+        hasCompletedOnboarding = false
+        UserDefaults.standard.removeObject(forKey: "marvin.onboarding.completed")
     }
 
     /// Push initial values to MarvinBridge so views still reading

@@ -137,12 +137,20 @@ struct ContentView: View {
                 connectingView
             case .online:
                 if bridge.projectWorkDir == nil {
-                    // No active project — show the welcome / startup screen
-                    // so the user can open or create a project, matching the
-                    // Xcode / VS Code welcome window pattern.
-                    WelcomeView()
-                        .environment(bridge)
-                        .transition(.opacity)
+                    // No active project. First-launch users hit
+                    // OnboardingView — a brief welcome + credential
+                    // check. Subsequent launches drop straight to
+                    // WelcomeView (the existing project picker).
+                    // hasCompletedOnboarding flips when the user
+                    // dismisses OnboardingView's last step.
+                    if !NativePrefs.shared.hasCompletedOnboarding {
+                        OnboardingView()
+                            .transition(.opacity)
+                    } else {
+                        WelcomeView()
+                            .environment(bridge)
+                            .transition(.opacity)
+                    }
                 } else {
                 // IDE-style 3-pane split — every divider is a
                 // draggable NSSplitView handle. The ideal sizes are
