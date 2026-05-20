@@ -204,7 +204,15 @@ export const SCOUT_AGENT: AgentDefinition = {
     "investigation, context-pressure offload). Never for writes or " +
     "sequential implementation — scouts return a synthesis, not a " +
     "change.",
-  disallowedTools: ["Edit", "Write", "Bash", "NotebookEdit"],
+  // No writes (Edit/Write/Bash/NotebookEdit) by SDK-level contract.
+  // WebFetch is also blocked: a scout's job is reading the project's
+  // own code + the graph, not the public web. Audit 🟠 #10 flagged
+  // WebFetch as a potential exfil channel — a prompt-injection in
+  // source code MARVIN reads could ask the scout to GET an
+  // attacker-controlled URL with a request body shaped by the
+  // scout's parent env. If the scout needs web context for a brief,
+  // it escalates to the parent MARVIN session which can confirm.
+  disallowedTools: ["Edit", "Write", "Bash", "NotebookEdit", "WebFetch"],
   mcpServers: ["marvin-graph"],
   model: "inherit",
   prompt: [

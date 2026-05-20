@@ -12,7 +12,7 @@
  * `turn.completed` event with aggregated totals.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ClaudeStreamEvent, TokenUsage } from "./claude-cli";
 import { marvinPaths } from "./paths";
@@ -85,19 +85,114 @@ export interface SessionRecord {
 }
 
 function ensureDir(path: string): void {
-  if (!existsSync(path)) mkdirSync(path, { recursive: true });
+  if (!existsSync(path)) {
+    mkdirSync(path, { recursive: true });
+    // Tighten dir mode to 0700. Audit 🟠 #7: ~/.marvin/sessions/
+    // contains every chat turn including tool I/O — secret-file
+    // reads, `printenv` output, etc. World-readable session dirs
+    // are a real exfiltration surface on shared Macs + iCloud
+    // Drive sync. chmod is best-effort (some filesystems don't
+    // honour mode bits; we don't fail the write if it doesn't
+    // stick).
+    try {
+      chmodSync(path, 0o700);
+    } catch {
+      /* non-fatal */
+    }
+  }
+}
+
+/**
+ * Regex patterns for known secret shapes. Best-effort, not
+ * defence-in-depth — a regex pass can't reliably detect every
+ * possible secret, and the right defence against persisted secrets
+ * is "don't read .env-like files in MARVIN sessions." But this
+ * catches the common cases (Anthropic key shapes, AWS access keys,
+ * GitHub PATs, Slack tokens, JWTs) when they slip into a tool
+ * input/result and would otherwise land verbatim in the JSONL.
+ *
+ * Each pattern replaces the secret with the same `[REDACTED]` token
+ * so the structure of the payload is preserved (length will change,
+ * but that's acceptable — the JSONL is for replay, not byte-exact
+ * reconstruction).
+ */
+const SECRET_PATTERNS: RegExp[] = [
+  // Anthropic API keys (live + console)
+  /sk-ant-[a-zA-Z0-9_-]{20,}/g,
+  // Generic Stripe-style keys
+  /sk_live_[a-zA-Z0-9]{20,}/g,
+  /sk_test_[a-zA-Z0-9]{20,}/g,
+  /pk_live_[a-zA-Z0-9]{20,}/g,
+  // GitHub personal access tokens
+  /ghp_[a-zA-Z0-9]{30,}/g,
+  /gho_[a-zA-Z0-9]{30,}/g,
+  /ghu_[a-zA-Z0-9]{30,}/g,
+  /ghs_[a-zA-Z0-9]{30,}/g,
+  /ghr_[a-zA-Z0-9]{30,}/g,
+  // AWS access key IDs (always 20 chars, AKIA/ASIA prefix)
+  /\bA[KS]IA[A-Z0-9]{16}\b/g,
+  // Slack bot/user tokens
+  /xox[abprs]-[a-zA-Z0-9-]{10,}/g,
+  // JWT (header.payload.signature, all base64url)
+  /\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]{6,}\b/g,
+  // PEM private key blobs (multi-line; the BEGIN line alone is enough
+  // signal that secrets follow, and downstream readers will see
+  // [REDACTED] mid-block).
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
+];
+
+function redactSecrets(s: string): string {
+  let out = s;
+  for (const pat of SECRET_PATTERNS) {
+    out = out.replace(pat, "[REDACTED]");
+  }
+  return out;
+}
+
+/**
+ * Walk a JSON-shaped value and run `redactSecrets` over every
+ * string field. Preserves the structure (keys, nested objects,
+ * arrays) so downstream JSONL replay still understands the payload —
+ * only the string leaves change.
+ */
+function redactDeep(value: unknown): unknown {
+  if (typeof value === "string") return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactDeep);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactDeep(v);
+    }
+    return out;
+  }
+  return value;
 }
 
 /** Append one event. Guarantees the parent dir exists. Synchronous on purpose
- *  — these are tiny writes and we want ordering. */
+ *  — these are tiny writes and we want ordering. Persisted payload is
+ *  passed through a secret-pattern redactor (audit 🟠 #7) so secrets
+ *  that slip into tool I/O don't end up world-readable on disk. */
 export function appendSessionTurn(
   projectId: string,
   sessionId: string,
   turn: SessionTurn,
 ): void {
   const path = marvinPaths.sessionFile(projectId, sessionId);
-  ensureDir(dirname(path));
-  appendFileSync(path, `${JSON.stringify(turn)}\n`, "utf-8");
+  const dir = dirname(path);
+  ensureDir(dir);
+  const isFirstWrite = !existsSync(path);
+  const redacted = redactDeep(turn) as SessionTurn;
+  appendFileSync(path, `${JSON.stringify(redacted)}\n`, "utf-8");
+  if (isFirstWrite) {
+    // Match the directory's 0700 with the file's 0600. Same
+    // best-effort contract — non-fatal if the underlying filesystem
+    // doesn't honour mode bits.
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      /* non-fatal */
+    }
+  }
 }
 
 /** Load a session transcript from disk. Returns `null` when the file doesn't exist. */

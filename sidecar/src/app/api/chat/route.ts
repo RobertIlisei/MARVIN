@@ -5,7 +5,7 @@ import { buildProjectContext } from "@marvin/project-context";
 import { defaultModel } from "@marvin/runtime/claude-cli";
 import { recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
-import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
+import { slugifyWorkDir, touchProject, validateProjectCwd } from "@marvin/runtime/projects";
 import {
   type PermissionStrategy,
   type RuntimeMode,
@@ -348,27 +348,28 @@ export async function POST(req: NextRequest) {
 function validateCwd(rawCwd: string | undefined): string | null {
   if (!rawCwd) return "cwd is required — pick a project before chatting";
   if (!isAbsolute(rawCwd)) return "cwd must be an absolute path";
-  // Refuse exact equality with MARVIN's process root. Defence in
-  // depth: also reject paths inside a `marvin` install ancestor that
-  // contain MARVIN's marker files. We can't introspect every install
-  // mode, so the simple equality check + a heuristic on a `package.json`
-  // whose `name === "marvin"` is the practical floor.
+  // Audit 🟠 #9: check the cwd is a registered project. The check
+  // implicitly rejects MARVIN's own install root (not in projects.json)
+  // AND replaces the existsSync / statSync fallback (the user can
+  // only add a project via the picker, which already verified the
+  // path exists + is a directory).
+  const projectCheck = validateProjectCwd(rawCwd);
+  if (!projectCheck.ok) {
+    // The picker may have a stale entry pointing at a now-deleted dir;
+    // fall back to the existence check so the error message is
+    // diagnosable.
+    const resolvedCwd = resolve(rawCwd);
+    if (!existsSync(resolvedCwd)) return `cwd does not exist: ${resolvedCwd}`;
+    return projectCheck.error;
+  }
+  // Defence in depth: still refuse equality with MARVIN's process root.
+  // validateProjectCwd already rejects this (MARVIN's repo isn't a
+  // registered project) but a future contributor might add it for some
+  // testing reason — keep the explicit check.
   const resolvedCwd = resolve(rawCwd);
   const marvinRoot = resolve(process.cwd());
   if (resolvedCwd === marvinRoot) {
     return "cwd cannot be MARVIN's own install root";
-  }
-  if (!existsSync(resolvedCwd)) {
-    return `cwd does not exist: ${resolvedCwd}`;
-  }
-  let stat: ReturnType<typeof statSync>;
-  try {
-    stat = statSync(resolvedCwd);
-  } catch (e) {
-    return `cwd is unreadable: ${(e as Error).message}`;
-  }
-  if (!stat.isDirectory()) {
-    return `cwd is not a directory: ${resolvedCwd}`;
   }
   return null;
 }
