@@ -1,0 +1,9 @@
+// Explicit modulemap so xcodebuild can present the vendored
+// tree-sitter-markdown C library as a Swift module. swift build
+// (SPM) auto-synthesizes one from publicHeadersPath; xcodebuild
+// requires it written out.
+
+module TreeSitterMarkdown {
+    header "markdown.h"
+    export *
+}
