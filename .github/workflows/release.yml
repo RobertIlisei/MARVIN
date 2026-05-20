@@ -141,6 +141,43 @@ jobs:
           echo "sha256=$sha"    >> "$GITHUB_OUTPUT"
           echo "MARVIN-${v}-arm64.zip sha256: $sha"
 
+      # ── Minisign signature (ADR-0026) ──────────────────────────────
+      # Sign the zip with a long-lived minisign key. Private key + key
+      # password are GitHub Actions secrets; public key is published
+      # out-of-band in MARVIN's README + the tap repo's README.
+      # If the secrets aren't set (project-fork, first install before
+      # @robertilisei has uploaded the key), the step is a no-op so a
+      # fresh fork can still cut releases without the trust property.
+      - name: Sign zip with minisign
+        id: sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "MINISIGN_SECRET_KEY not set — skipping signature (see ADR-0026)"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          brew install minisign
+          # Write the key to a tmpfile inside the runner. The runner is
+          # ephemeral but we still scope to /private/tmp + chmod 0600 so a
+          # concurrent action step on the same runner can't read it.
+          keyfile="$(mktemp -t marvin-minisign-XXXXXX.key)"
+          chmod 0600 "$keyfile"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "$keyfile"
+          # -W passes the password via stdin so it doesn't show up in `ps`.
+          # minisign appends `.minisig` to the input path automatically.
+          printf '%s\n' "${MINISIGN_PASSWORD}" | \
+            minisign -S -s "$keyfile" -m "${{ steps.zip.outputs.path }}" -t "MARVIN ${{ steps.version.outputs.version }}"
+          rm -f "$keyfile"
+          sigpath="${{ steps.zip.outputs.path }}.minisig"
+          test -f "$sigpath"
+          echo "sigpath=$sigpath" >> "$GITHUB_OUTPUT"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "Signed → $sigpath"
+
       # ── Publish the release ────────────────────────────────────────
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -152,7 +189,7 @@ jobs:
 
             ```bash
             brew tap RobertIlisei/marvin
-            brew install --cask marvin
+            brew install --cask marvin-ai
             ```
 
             ## Manual install (without Homebrew)
@@ -167,12 +204,27 @@ jobs:
 
             (Homebrew does this for you. Manual installs need the one-liner.)
 
+            ## Verify the signature (ADR-0026)
+
+            ```bash
+            brew install minisign
+            curl -fLO https://github.com/RobertIlisei/MARVIN/releases/download/${{ steps.version.outputs.tag }}/${{ steps.zip.outputs.name }}
+            curl -fLO https://github.com/RobertIlisei/MARVIN/releases/download/${{ steps.version.outputs.tag }}/${{ steps.zip.outputs.name }}.minisig
+            minisign -V -P "$(curl -fsSL https://raw.githubusercontent.com/RobertIlisei/MARVIN/main/.minisign-pubkey)" \
+              -m ${{ steps.zip.outputs.name }}
+            ```
+
+            The pubkey is also pinned in [`README.md`](https://github.com/RobertIlisei/MARVIN/#release-signing) and the tap's README.
+
             ## Artefact
 
             - `${{ steps.zip.outputs.name }}`
             - sha256: `${{ steps.zip.outputs.sha256 }}`
+            - minisign sig: `${{ steps.zip.outputs.name }}.minisig`
 
-            See [ADR-0023](https://github.com/RobertIlisei/MARVIN/blob/main/docs/decisions/0023-brew-distributable-bundled-sidecar.md) for the bundling architecture.
-          files: ${{ steps.zip.outputs.path }}
-          fail_on_unmatched_files: true
+            See [ADR-0023](https://github.com/RobertIlisei/MARVIN/blob/main/docs/decisions/0023-brew-distributable-bundled-sidecar.md) for the bundling architecture and [ADR-0026](https://github.com/RobertIlisei/MARVIN/blob/main/docs/decisions/0026-release-artefact-signing-minisign.md) for the signing model.
+          files: |
+            ${{ steps.zip.outputs.path }}
+            ${{ steps.sign.outputs.sigpath }}
+          fail_on_unmatched_files: false
           generate_release_notes: true

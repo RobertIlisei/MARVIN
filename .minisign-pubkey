@@ -1,0 +1,24 @@
+# PLACEHOLDER — minisign public key for MARVIN release signing
+#
+# This file is referenced by .github/workflows/release.yml (in the
+# release-notes template's verify recipe) and by docs/decisions/0026-
+# release-artefact-signing-minisign.md. Until the actual key is
+# generated and uploaded, releases skip the signing step gracefully.
+#
+# Replacement procedure (one-time):
+#   1. brew install minisign
+#   2. minisign -G -p ~/.minisign/marvin.pub -s ~/.minisign/marvin.key
+#      (choose a strong password; store it in a password manager)
+#   3. cat ~/.minisign/marvin.pub
+#      — it has two lines: a comment + the base64-encoded pubkey.
+#   4. Replace this entire file's content with those two lines.
+#   5. gh secret set MINISIGN_SECRET_KEY --repo RobertIlisei/MARVIN \
+#        --body "$(cat ~/.minisign/marvin.key)"
+#      gh secret set MINISIGN_PASSWORD --repo RobertIlisei/MARVIN \
+#        --body '<the-password>'
+#   6. Commit the updated `.minisign-pubkey` file.
+#   7. Cut the next release (v0.1.x); the workflow signs the zip and
+#      uploads a .minisig sidecar.
+#
+# See ADR-0026 §"Key generation + secret-store onboarding" for full
+# context including the rotation policy.
