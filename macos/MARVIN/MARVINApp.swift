@@ -511,6 +511,16 @@ struct MARVINApp: App {
             // and a "$AppName Help" item; CommandGroup(replacing:
             // .help) lets us put real items there.
             CommandGroup(replacing: .help) {
+                Button("Show Onboarding…") {
+                    // Reset the flag — onboarding renders when
+                    // projectWorkDir is nil. If the user is currently
+                    // inside a project, ask them to close it (File →
+                    // Close Project, or pick the project picker)
+                    // and the onboarding will appear on the next
+                    // empty-state.
+                    NativePrefs.shared.resetOnboarding()
+                }
+                Divider()
                 Button("MARVIN on GitHub") {
                     if let url = URL(string: "https://github.com/RobertIlisei/MARVIN") {
                         NSWorkspace.shared.open(url)
