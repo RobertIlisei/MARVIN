@@ -535,22 +535,110 @@ Invocation:
 Always brief the scout with what you've already searched / read / queried,
 or it will guess.
 
-## Skills (invoke via \`Skill\` tool, before writing output)
+## Skill triggers — deterministic invocation
 
-- \`test-driven-development\` — bug fixes / concrete specs. RED-GREEN-REFACTOR.
-- \`systematic-debugging\` — moment a bug appears. 4-phase root cause.
-- \`pr-review\` — Phase 8, before commit on material diffs.
-- \`security-audit\` — heavier than \`/security-review\`; for auth /
-  credentials / persistence / shell exec / sandbox / network egress.
-- \`frontend-design\` — UI work where you have aesthetic latitude (avoids
-  generic Inter/Roboto/purple-gradient defaults).
-- \`graphify\` — via \`/graphify\` slash command, not the Skill tool.
+Skills exist precisely because MARVIN's natural approximation of a
+procedure (TDD, root-cause debugging, PR review) is consistently
+shallower than the procedure itself. The audit on 2026-05-22 found
+\`test-driven-development\` fired **0 times across ~3000 qualifying
+contexts** because the rule was "follow the principles yourself"
+rather than "invoke the skill". \`graphify\` fired 10× more often than
+every other skill because it's the only one wired as a deterministic
+MUST. This section closes the gap — every skill below has an
+enumerated MUST trigger and an enumerated MUST-NOT list. **NO BYPASS.**
+When a trigger fires, you invoke the skill; substituting your own
+mental model is a rule violation.
 
-Match description to task. If a skill is unavailable, say so once and
-proceed using the principles yourself. Other skills exist
-(\`mcp-builder\`, \`webapp-testing\`, \`docx\`, \`pdf\`, \`pptx\`, \`xlsx\`,
-\`internal-comms\`, honeycomb:* observability skills) — Claude Code
-surfaces them when you invoke by name.
+### Skill: \`test-driven-development\`
+
+**MUST invoke before writing implementation code when:**
+1. Implementing a new feature (anything beyond a one-line config tweak).
+2. Fixing a non-trivial bug — the kind where the failure mode is not
+   visible in the error message alone.
+3. The user explicitly says "use TDD" / "test-first" / "RED-GREEN".
+4. Adding a new public API surface (route, MCP tool, exported function).
+
+**MUST-NOT invoke for:**
+- Typos / lint / formatting / whitespace fixes.
+- Docs-only edits (\`*.md\`, comments only).
+- Single-line config changes (env-var rename, threshold bump).
+- Auto-generated code (codegen output, lockfile changes).
+
+### Skill: \`systematic-debugging\`
+
+**MUST invoke before proposing any fix when:**
+1. A test fails.
+2. A build / typecheck / lint fails after a code change.
+3. A reported bug or "this doesn't work" message arrives from the user.
+4. An exception, stack trace, or error log line appears in your tool output.
+5. Behaviour deviates from expectation on even one observable.
+
+**MUST-NOT invoke for:**
+- A syntax error with the offending character clearly identified in
+  the error message.
+- An obviously-missing import statement.
+- A typo that a spell-checker would catch.
+
+### Skill: \`pr-review\`
+
+**MUST invoke in Phase 8 (Ship) when:**
+1. The diff is >50 changed lines OR touches >3 files.
+2. The diff touches auth / credentials / tool-policy / sandbox /
+   shell-exec / persistence / migrations.
+3. The user explicitly says "review" / "audit" / "before I merge".
+
+**MUST-NOT invoke for:**
+- Docs-only PRs (only \`*.md\` files changed).
+- Single-file lint / format fixes.
+- Lockfile-only PRs.
+
+### Skill: \`security-audit\`
+
+**MUST invoke when:**
+1. The diff touches auth flows / credential handling / tool-policy.
+2. The diff adds a new shell-execution path or unsafe Bash regex.
+3. The diff changes the fs-sandbox / fs-write-policy.
+4. The diff adds a new network-egress capability.
+5. The user explicitly says "security review" / "audit for vulns" /
+   "STRIDE".
+
+**MUST-NOT invoke for:**
+- Routine refactors that don't touch the security boundary.
+- UI-only changes (no auth, no creds, no shell).
+
+### Skill: \`frontend-design\`
+
+**MUST invoke when:**
+1. The task is "build a UI / page / component" with aesthetic latitude.
+2. The user says "make it look good" / "polish the UI" / "design X".
+3. Generating a new visual surface from scratch.
+
+**MUST-NOT invoke for:**
+- One-line CSS tweaks.
+- Fixing a layout bug (use \`systematic-debugging\`).
+- Editing existing component logic without aesthetic redesign.
+
+### Skill: \`graphify\`
+
+Already governed by Golden Rule 7 + cross-phase rules 6 and 7. Don't
+restate the rules here — defer to that section.
+
+### Other skills available by name
+
+\`webapp-testing\` (Playwright-driven verification), \`mcp-builder\` (new
+MCP server scaffolding), \`docx\` / \`pdf\` / \`pptx\` / \`xlsx\` (file
+formats), \`internal-comms\` (status writeups), \`skill-creator\` (build
+a new project-local or user-global skill), \`honeycomb:*\` (observability,
+when the user has honeycomb wired). Invoke by name when the task shape
+matches.
+
+### When a skill trigger fires AND the skill is unavailable
+
+Say so ONCE in the response: "Skill \`<name>\` not installed — proceeding
+with the principles, but install with \`<command>\` for next time."
+Do NOT ask the user to install inline (that's the user-pings flow).
+Do NOT silently substitute your own approximation — the user needs to
+know the skill's specific procedure wasn't applied.
 
 ## Browser tools
 
