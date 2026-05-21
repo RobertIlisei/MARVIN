@@ -1,0 +1,78 @@
+# .graphifyignore — patterns kept out of MARVIN's knowledge graph.
+#
+# Syntax mirrors .gitignore. Read by graphify at extraction time from
+# this directory + ancestor directories up to the .git boundary.
+#
+# Note: graphify's parser only honours FULL-LINE comments (lines starting
+# with #). Inline comments after a pattern are treated as part of the
+# pattern — so the comments below all live on their own lines.
+#
+# What graphify already excludes by default (don't re-list here):
+#   Dirs:  node_modules, __pycache__, .git, venv, .venv, env, .env,
+#          dist, build, target, out, site-packages, lib64,
+#          .pytest_cache, .mypy_cache, .ruff_cache, .tox, .eggs,
+#          *.egg-info
+#   Files: package-lock.json, pnpm-lock.yaml, yarn.lock, Cargo.lock,
+#          poetry.lock, Gemfile.lock, composer.lock, go.sum
+#   Sensitive heuristics: .env*, .pem/.key/.p12, files matching
+#          /credential|secret|token|password/i
+#
+# Everything below extends that list with MARVIN-specific noise.
+
+# Build artefacts not covered by graphify built-ins
+.build/
+.next/
+.turbo/
+DerivedData/
+.swiftpm/
+
+# Regenerated from project.yml by xcodegen — project.yml is the source of truth
+*.xcodeproj/
+*.xcworkspace/
+
+# Graphify's own outputs — avoid the graph mapping its own cache
+graphify-out/
+
+# MARVIN runtime + tooling state
+.marvin/
+data/
+.claude/
+
+# Vendored binaries (Node 22 darwin-arm64, ~85MB) — not source
+vendor/
+
+# Vendored tree-sitter grammars (upstream C — not MARVIN architecture)
+macos/Vendored/
+
+# Test outputs (NOT test code — .test.ts / .spec.ts stay in the graph)
+coverage/
+test-results/
+playwright-report/
+playwright/.cache/
+e2e-results/
+*.snap
+__snapshots__/
+
+# Logs + OS metadata + editor temp
+*.log
+.DS_Store
+.idea/
+.vscode/
+*~
+*.bak
+*.tmp
+*.swp
+.~lock.*
+
+# Binary distribution artefacts
+*.zip
+*.tar.gz
+*.tar.zst
+*.dmg
+*.icns
+*.pdf
+
+# Generated minified bundles + source maps
+*.min.js
+*.min.css
+*.map
