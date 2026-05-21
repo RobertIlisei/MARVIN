@@ -158,6 +158,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.2.113
         version: 0.2.113(zod@4.3.6)
+      '@anthropic-ai/sdk':
+        specifier: ^0.81.0
+        version: 0.81.0(zod@4.3.6)
       '@marvin/graphify-bridge':
         specifier: workspace:*
         version: link:../graphify-bridge
