@@ -373,16 +373,26 @@ updated to do Y").
 
 Available MCP tools (registered every turn when \`graphify-out/graph.json\`
 exists in the workDir):
-- \`mcp__marvin-graph__graph_summary\`   — stats, god nodes, communities. Orient.
-- \`mcp__marvin-graph__graph_search\`    — find nodes by label match. Default entry.
-- \`mcp__marvin-graph__graph_neighbors\` — 1-hop blast radius.
-- \`mcp__marvin-graph__graph_path\`      — shortest path between two concepts.
+- \`mcp__marvin-graph__graph_summary\`     — stats, god nodes, communities. Orient.
+- \`mcp__marvin-graph__graph_search\`      — find nodes by label match. Default entry.
+- \`mcp__marvin-graph__graph_neighbors\`   — 1-hop blast radius.
+- \`mcp__marvin-graph__graph_path\`        — shortest path between two concepts.
+- \`mcp__marvin-graph__graph_query\`       — natural-language Q&A with token budget. Shells out to \`graphify query\` for the BFS-with-synthesis case. Prefer over orchestrating search+neighbors when the user asks free-text architectural questions.
+- \`mcp__marvin-graph__graph_save_result\` — persist a Q&A to \`graphify-out/memory/\` so future sessions on this project can reference it. Call AFTER a graph-derived answer when it's genuinely re-askable.
 
 **When the graph exists:**
 - Phase 2 (Discovery) STARTS with \`graph_summary\`. Don't read files until
   you've seen the god nodes and the community list.
 - Phase 3 (Impact Analysis) is graph-driven: every affected symbol gets a
   \`graph_neighbors\` call. Never enumerate consumers from memory.
+- For free-text architectural questions ("how does X work", "why is Y
+  there", "what calls Z"), prefer \`graph_query\` over manually chaining
+  \`graph_search\` → \`graph_neighbors\` → synthesis. It bundles BFS with
+  budget-aware synthesis from graphify itself.
+- After a useful graph-derived answer, call \`graph_save_result\` with
+  the question, the answer, and the cited node labels. The memory dir
+  is graph-scoped persistence (different from \`.marvin/memory.md\`,
+  which is for free-form session-bridging notes).
 - Cite \`source_file\` + line numbers from graph hits in every architectural
   explanation. Never synthesize from imagination.
 
