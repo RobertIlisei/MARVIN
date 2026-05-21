@@ -5,7 +5,7 @@ From a fresh install to a running MARVIN with a working chat turn. Should take u
 ## Recommended path — Homebrew cask
 
 For end users, the canonical install is the Homebrew cask. The cask drops
-`MARVIN.app` into `/Applications/` with Node 22.11.0, the Next standalone
+`MARVIN.app` into `~/Applications/` with Node 22.11.0, the Next standalone
 tree, and every dependency bundled inside `MARVIN.app/Contents/Resources/`.
 
 ```bash
@@ -15,6 +15,43 @@ brew install --cask marvin-ai
 
 The cask token is **`marvin-ai`** (not `marvin`, which would collide with
 the unrelated "Amazing Marvin" cask on the homebrew-cask main tap).
+
+### First launch — one-time Gatekeeper step (macOS 26+)
+
+MARVIN is ad-hoc signed (no paid Apple Developer Programme membership).
+On macOS 26 (Tahoe) this means the first Finder launch fires the
+"Apple could not verify..." dialog, and you whitelist the bundle once
+through System Settings. After that, MARVIN launches normally for the
+life of the install. Step by step:
+
+1. Double-click `MARVIN.app` (Finder, Spotlight, or Launchpad).
+2. macOS shows **"Apple could not verify MARVIN.app is free of malware..."** — click **Done**. *Do not* click "Move to Bin".
+3. Open **System Settings → Privacy & Security**, scroll to the **Security** section near the bottom.
+4. Find the line **"MARVIN.app was blocked from use..."** and click **Open Anyway**.
+5. Authorize with Touch ID or your password. MARVIN launches and the bundle is whitelisted permanently.
+
+Why this exists: macOS 26 enforces a stricter Gatekeeper check on
+non-notarized apps. Apple removed the right-click → Open shortcut that
+worked on macOS 15 and earlier; the System Settings click-through is
+now the only way through for ad-hoc-signed apps. See
+[ADR-0027](../decisions/0027-macos-26-gatekeeper-user-applications.md)
+for the full empirical detail. Notarization (Phase 3 of
+[ADR-0026](../decisions/0026-release-artefact-signing-minisign.md))
+would remove this popup entirely; it's blocked on a paid Apple
+Developer ID.
+
+### Upgrades and uninstall
+
+| Action | Command |
+|---|---|
+| Upgrade | `brew upgrade --cask marvin-ai` |
+| Uninstall | `brew uninstall --cask marvin-ai` |
+| Uninstall + wipe data (`~/.marvin/`, logs, prefs) | `brew uninstall --cask marvin-ai --zap` |
+
+Upgrades skip the Gatekeeper dance — the whitelist persists across
+versions for a given install.
+
+### Set credentials, pick a project, you're done
 
 Set `ANTHROPIC_API_KEY` in your shell (or run `claude auth login`),
 launch MARVIN from the Dock, pick a project directory, and you're done.
