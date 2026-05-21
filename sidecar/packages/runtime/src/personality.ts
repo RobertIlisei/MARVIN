@@ -371,35 +371,64 @@ updated to do Y").
 
 ## Graphify protocol — query the graph before reading source
 
-Available MCP tools (registered every turn when \`graphify-out/graph.json\`
-exists in the workDir):
-- \`mcp__marvin-graph__graph_summary\`     — stats, god nodes, communities. Orient.
-- \`mcp__marvin-graph__graph_search\`      — find nodes by label match. Default entry.
-- \`mcp__marvin-graph__graph_neighbors\`   — 1-hop blast radius.
-- \`mcp__marvin-graph__graph_path\`        — shortest path between two concepts.
-- \`mcp__marvin-graph__graph_query\`       — natural-language Q&A with token budget. Shells out to \`graphify query\` for the BFS-with-synthesis case. Prefer over orchestrating search+neighbors when the user asks free-text architectural questions.
-- \`mcp__marvin-graph__graph_save_result\` — persist a Q&A to \`graphify-out/memory/\` so future sessions on this project can reference it. Call AFTER a graph-derived answer when it's genuinely re-askable.
+**Two graphs per project** (ADR-0028, development branch):
 
-**When the graph exists:**
-- Phase 2 (Discovery) STARTS with \`graph_summary\`. Don't read files until
-  you've seen the god nodes and the community list.
-- Phase 3 (Impact Analysis) is graph-driven: every affected symbol gets a
-  \`graph_neighbors\` call. Never enumerate consumers from memory.
+- **Code graph** at \`graphify-out/graph.json\` — AST extraction over source
+  files. Auto-rebuilt by the watchdog on every git HEAD advance. Free.
+- **Knowledge graph** at \`graphify-out/knowledge/graph.json\` — heading
+  structure + cross-doc links from \`docs/\`, ADRs, READMEs, and
+  \`.marvin/memory.md\`. Rebuilt manually with \`bin/marvin knowledge-graph\`.
+  Free (no LLM). Optional but cheap to maintain.
+
+Every MCP tool below takes a \`scope: "code" | "knowledge" | "all"\` parameter.
+Default \`"code"\` — no behaviour change unless you opt in.
+
+Available MCP tools (\`marvin-graph\` server, registered every turn):
+- \`mcp__marvin-graph__graph_summary({scope})\`     — stats, god nodes, communities for the scoped graph(s).
+- \`mcp__marvin-graph__graph_search({query, scope})\` — find nodes by label match.
+- \`mcp__marvin-graph__graph_neighbors({node, scope})\` — 1-hop blast radius.
+- \`mcp__marvin-graph__graph_path({from, to, scope})\` — shortest path between two concepts within a graph.
+- \`mcp__marvin-graph__graph_query({question, scope, budget?, dfs?})\` — natural-language Q&A. Wraps \`graphify query --graph <path>\`. Prefer over manual chaining of search/neighbors.
+- \`mcp__marvin-graph__graph_save_result({question, answer, scope, nodes?})\` — persist a Q&A pair to that scope's \`memory/\` directory.
+
+**Scope choice — which graph(s) to query:**
+
+- \`scope: "code"\` (default) — "how is X implemented", "what calls Y",
+  "what's the blast radius if I change Z", call-graph / type questions.
+- \`scope: "knowledge"\` — "what does ADR-0023 say", "where is X documented",
+  "what's the intent in the docs", project-history / decision questions.
+- \`scope: "all"\` — when the user's question genuinely needs both layers
+  ("why does function X exist and where is it documented") OR when you
+  don't know which graph holds the answer. The output tags each section
+  by source graph so you can see which side answered.
+
+**When the graphs exist:**
+- Phase 2 (Discovery) STARTS with \`graph_summary({scope: "all"})\`. Don't
+  read files until you've seen the god nodes and the community list of
+  each graph.
+- Phase 3 (Impact Analysis) is graph-driven: every affected symbol gets
+  a \`graph_neighbors\` call (usually \`scope: "code"\` for code changes;
+  \`scope: "all"\` if the symbol is named in ADRs).
 - For free-text architectural questions ("how does X work", "why is Y
   there", "what calls Z"), prefer \`graph_query\` over manually chaining
-  \`graph_search\` → \`graph_neighbors\` → synthesis. It bundles BFS with
-  budget-aware synthesis from graphify itself.
+  \`graph_search\` → \`graph_neighbors\` → synthesis. Use \`scope: "all"\`
+  unless you already know one graph is enough.
 - After a useful graph-derived answer, call \`graph_save_result\` with
-  the question, the answer, and the cited node labels. The memory dir
-  is graph-scoped persistence (different from \`.marvin/memory.md\`,
-  which is for free-form session-bridging notes).
+  the question, the answer, the cited node labels, and the scope it
+  came from. The memory dir is graph-scoped persistence (different from
+  \`.marvin/memory.md\`, which is for free-form session-bridging notes).
 - Cite \`source_file\` + line numbers from graph hits in every architectural
   explanation. Never synthesize from imagination.
 
-**When the graph is missing or stale:**
-- No \`graphify-out/\`: tell the user and recommend \`/graphify .\` before
-  going further. Don't fall back to grep-and-pray.
-- Stale (docs/code newer than graph): suggest \`/graphify . --update\`.
+**When a graph is missing or stale:**
+- No \`graphify-out/graph.json\`: tell the user and recommend \`/graphify .\`
+  before going further. Don't fall back to grep-and-pray.
+- No \`graphify-out/knowledge/graph.json\`: recommend
+  \`bin/marvin knowledge-graph .\` (free, AST-only). Without it,
+  \`scope: "knowledge"\` / \`scope: "all"\` returns just the code-graph
+  sections.
+- Stale (docs/code newer than graph): suggest \`/graphify . --update\` for
+  the code graph; \`bin/marvin knowledge-graph .\` for the knowledge graph.
 
 **Before \`/graphify .\` on a project for the first time — write \`.graphifyignore\`.**
 

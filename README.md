@@ -28,7 +28,13 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 
 ## Install
 
-### Recommended — Homebrew (no toolchain required)
+> **Two tracks** — `main` is **stable** (last release: v0.1.13). `development`
+> is where multi-graph + future-shaped changes (ADR-0028 onward) land first.
+> Brew always installs the stable cask; to try the development branch, clone
+> + build from source against `git checkout development`. Switch back to
+> stable at any time with `brew install --cask marvin-ai` or `git checkout main`.
+
+### Recommended — Homebrew (no toolchain required, stable track)
 
 ```bash
 brew tap RobertIlisei/marvin
@@ -57,6 +63,28 @@ bin/marvin uninstall-macos-app # remove app (both ~/Applications and legacy /App
 Default install mode is **bundled** (per ADR-0023) — same shape as the brew artefact. Pass `--launchd` for the legacy mode that runs the sidecar from the source repo via a user-agent plist.
 
 Requires `xcodegen` + Xcode, **or** just the Swift Command Line Tools (`xcode-select --install`). If `xcodegen` is missing, `swift build` is used automatically as a fallback — no Developer account needed in either path.
+
+### Tracking the development branch
+
+The `development` branch carries multi-graph + features in progress for the next release ([ADR-0028](./docs/decisions/0028-multi-graph-architecture.md)). Use it if you want the latest; fall back to stable any time.
+
+```bash
+git clone https://github.com/RobertIlisei/MARVIN.git ~/marvin
+cd ~/marvin
+git checkout development
+bin/marvin install-macos-app
+```
+
+**Rollback to stable:**
+
+```bash
+git checkout main
+bin/marvin install-macos-app   # rebuilds + reinstalls the stable bundle
+# or, if you want the signed brew artefact:
+brew install --cask marvin-ai
+```
+
+`graphify-out/knowledge/` is gitignored and harmless to leave behind on rollback — the stable branch ignores it.
 
 ---
 

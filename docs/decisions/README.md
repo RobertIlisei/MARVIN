@@ -41,6 +41,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0025](./0025-skills-pane-ui.md) | Skills pane UI (v1) | Accepted | 2026-05-11 |
 | [0026](./0026-release-artefact-signing-minisign.md) | Release artefact signing via minisign | Accepted | 2026-05-20 |
 | [0027](./0027-macos-26-gatekeeper-user-applications.md) | Install MARVIN.app to `~/Applications`, not `/Applications` | Accepted | 2026-05-20 |
+| [0028](./0028-multi-graph-architecture.md) | Multi-graph (code + knowledge), federated at the MCP layer | Accepted (development branch) | 2026-05-21 |
 
 ## Template
 

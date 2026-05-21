@@ -15,7 +15,7 @@
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { summarizeGraph } from "@marvin/graphify-bridge";
+import { graphPathForScope, summarizeGraph } from "@marvin/graphify-bridge";
 
 import type { InfraProbe } from "./infra-probes";
 import { formatProbeBlock, runProbes } from "./infra-probes";
@@ -218,7 +218,9 @@ export async function buildProjectContext(
   // detailed queries happen through the graph_* tools at runtime.
   let graphBlock = "";
   try {
-    const summary = summarizeGraph(options.workDir);
+    // First-message orientation reads the CODE graph only — knowledge graph
+    // is opt-in per ADR-0028 and not part of the standing prompt.
+    const summary = summarizeGraph(graphPathForScope(options.workDir, "code"));
     if (summary.ok) {
       const godNodeLines = summary.godNodes
         .slice(0, 8)

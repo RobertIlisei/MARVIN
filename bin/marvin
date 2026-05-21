@@ -964,6 +964,37 @@ cmd_uninstall_macos_app() {
   dim "  source tree at $REPO_ROOT left intact — rm -rf $REPO_ROOT to purge"
 }
 
+# ─────────────────────────────────────────────────────────────────────
+# Knowledge-graph builder (development branch, ADR-0028)
+#
+# Builds <workDir>/graphify-out/knowledge/graph.json from the project's
+# docs/, ADRs, top-level READMEs, and .marvin/memory.md. AST-only — no
+# LLM cost — using a small markdown structural extractor + graphify's
+# community-detection clustering for parity with the code graph.
+#
+# Manual on purpose: the user decides when the knowledge layer has
+# shifted enough to be worth rebuilding. The code graph stays
+# auto-rebuilt by the watchdog on commit; this one doesn't.
+#
+# Inputs default to: CLAUDE.md, README.md, docs/, .marvin/memory.md.
+# Override with --inputs:
+#   bin/marvin knowledge-graph . --inputs CLAUDE.md docs/ ARCHITECTURE.md
+cmd_knowledge_graph() {
+  local target="${1:-.}"
+  shift 2>/dev/null || true
+  if ! command -v python3 >/dev/null 2>&1; then
+    fail "python3 not found on PATH — required for the knowledge-graph builder"
+    return 2
+  fi
+  local script="$REPO_ROOT/scripts/build-knowledge-graph.py"
+  if [ ! -f "$script" ]; then
+    fail "knowledge-graph script missing: $script"
+    return 1
+  fi
+  info "building knowledge graph from $target"
+  python3 "$script" "$target" "$@"
+}
+
 cmd_help() {
   cat <<'EOF'
 marvin — lifecycle script for the MARVIN dev server
@@ -987,6 +1018,13 @@ macOS .app (double-click-to-launch):
                             manual bundle assembly (Command Line Tools
                             only, no Developer account required).
   marvin uninstall-macos-app  remove MARVIN.app + launchd agent
+
+Knowledge graph (development branch, ADR-0028):
+
+  marvin knowledge-graph [<workDir>] [--inputs <relpath> ...]
+                              build <workDir>/graphify-out/knowledge/graph.json
+                              from docs/, ADRs, .marvin/memory.md, READMEs.
+                              AST-only — no LLM cost. Manual rebuild only.
 
   marvin help           this message
 
@@ -1016,6 +1054,7 @@ case "$subcommand" in
   doctor)   cmd_doctor  ;;
   install-macos-app)    cmd_install_macos_app "$@"   ;;
   uninstall-macos-app)  cmd_uninstall_macos_app      ;;
+  knowledge-graph)      cmd_knowledge_graph "$@"     ;;
   help|-h|--help)  cmd_help ;;
   *)
     fail "unknown subcommand: $subcommand"

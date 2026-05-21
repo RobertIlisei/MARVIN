@@ -1,7 +1,9 @@
 export { createGraphMcpServer } from "./mcp-server";
 export {
+  type GraphScope,
   type GraphSummary,
   getNeighbors,
+  graphPathForScope,
   type Neighbor,
   type PathHop,
   resolveNode,
