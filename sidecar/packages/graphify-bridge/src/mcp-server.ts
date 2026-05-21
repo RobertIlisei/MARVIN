@@ -8,13 +8,26 @@
  * so they share memory with the web app — no subprocess spawn, no stdio.
  *
  * Tools
- *   graph_summary   — corpus overview: stats, god nodes, top communities.
- *   graph_search    — find nodes whose label matches a query.
- *   graph_neighbors — 1-hop neighbours of a node (blast-radius starter).
- *   graph_path      — shortest path between two concepts.
+ *   graph_summary      — corpus overview: stats, god nodes, top communities.
+ *   graph_search       — find nodes whose label matches a query.
+ *   graph_neighbors    — 1-hop neighbours of a node (blast-radius starter).
+ *   graph_path         — shortest path between two concepts.
+ *   graph_query        — BFS / DFS traversal answering a natural-language
+ *                        question with a token budget (wraps the graphify
+ *                        CLI's `query` subcommand).
+ *   graph_save_result  — persist a Q&A pair to graphify-out/memory/ so
+ *                        future sessions can leverage prior answers (wraps
+ *                        graphify CLI's `save-result` subcommand).
  *
- * All tools are read-only — safe to auto-allow in the tool policy.
+ * The first four tools are pure in-process reads of `graphify-out/graph.json`
+ * and are safe to auto-allow. The last two shell out to the `graphify` CLI;
+ * `graph_query` is read-only (still safe to auto-allow), while
+ * `graph_save_result` writes under `graphify-out/memory/` and so should go
+ * through the standard confirm path.
  */
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -26,6 +39,12 @@ import {
   shortestPath,
   summarizeGraph,
 } from "./read-graph";
+
+const pExecFile = promisify(execFile);
+
+function graphifyBin(): string {
+  return process.env.GRAPHIFY_BIN || "graphify";
+}
 
 function textResult(text: string) {
   return {
@@ -149,6 +168,105 @@ export function createGraphMcpServer(workDir: string) {
             lines.push("  (no neighbours — this node is isolated in the graph)");
           }
           return textResult(lines.join("\n"));
+        },
+      ),
+      tool(
+        "graph_query",
+        "Ask a natural-language architectural question against the project's knowledge graph. Runs the graphify CLI's BFS (default) or DFS traversal with a token budget and returns a synthesised answer with source citations. Prefer this over orchestrating graph_search + graph_neighbors manually when the user asks a free-text 'how does X work', 'what calls Y', 'why does Z exist' style question. Falls through cleanly if `graphify-out/graph.json` is missing.",
+        {
+          question: z
+            .string()
+            .min(1)
+            .describe("Free-text architectural question to ask the graph."),
+          budget: z
+            .number()
+            .int()
+            .min(200)
+            .max(8000)
+            .optional()
+            .describe(
+              "Max answer length in tokens. Default 2000. Lower (~500) for follow-ups inside a larger turn; higher for the first orientation question.",
+            ),
+          dfs: z
+            .boolean()
+            .optional()
+            .describe(
+              "If true, use depth-first traversal (trace a specific path). Default is BFS (broad context).",
+            ),
+        },
+        async ({ question, budget, dfs }) => {
+          const args = ["query", question, "--budget", String(budget ?? 2000)];
+          if (dfs) args.push("--dfs");
+          try {
+            const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
+              cwd: workDir,
+              timeout: 60_000,
+              maxBuffer: 4 * 1024 * 1024,
+            });
+            const out = stdout.trim();
+            if (out.length === 0) {
+              return errorResult(
+                stderr.trim() ||
+                  "graphify query returned no output — is graphify-out/graph.json present?",
+              );
+            }
+            return textResult(out);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return errorResult(`graphify query failed: ${message}`);
+          }
+        },
+      ),
+      tool(
+        "graph_save_result",
+        "Persist a graph-derived Q&A pair to `graphify-out/memory/` so future sessions on this project can reference it. Call after a `graph_query` (or any architectural answer you derived from graph citations) when the answer is genuinely useful and likely to be re-asked. The memory dir survives across sessions, like `.marvin/memory.md` — but scoped to graph-citable knowledge specifically.",
+        {
+          question: z
+            .string()
+            .min(1)
+            .describe("The question that was asked."),
+          answer: z
+            .string()
+            .min(1)
+            .describe("The answer derived from the graph."),
+          type: z
+            .enum(["query", "path_query", "explain"])
+            .optional()
+            .describe(
+              "Which graph tool produced the answer. Default 'query'. Use 'path_query' for graph_path answers, 'explain' for single-node walkthroughs.",
+            ),
+          nodes: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "Source node labels cited in the answer (so a future query can rank by overlap). Optional but recommended.",
+            ),
+        },
+        async ({ question, answer, type, nodes }) => {
+          const args = [
+            "save-result",
+            "--question",
+            question,
+            "--answer",
+            answer,
+            "--type",
+            type ?? "query",
+          ];
+          if (nodes && nodes.length > 0) {
+            args.push("--nodes", ...nodes);
+          }
+          try {
+            const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
+              cwd: workDir,
+              timeout: 15_000,
+              maxBuffer: 1024 * 1024,
+            });
+            const out = (stdout.trim() || stderr.trim() || "saved").trim();
+            return textResult(out);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return errorResult(`graphify save-result failed: ${message}`);
+          }
         },
       ),
       tool(
