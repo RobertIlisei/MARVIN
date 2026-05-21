@@ -24,7 +24,8 @@
     "./honeycomb-config": "./src/honeycomb-config.ts",
     "./honeycomb-telemetry": "./src/honeycomb-telemetry.ts",
     "./auto-audit": "./src/auto-audit.ts",
-    "./skills-index": "./src/skills-index.ts"
+    "./skills-index": "./src/skills-index.ts",
+    "./project-skill-discoverer": "./src/project-skill-discoverer.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -36,6 +37,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.113",
+    "@anthropic-ai/sdk": "^0.81.0",
     "@marvin/tools": "workspace:*",
     "@marvin/graphify-bridge": "workspace:*"
   }

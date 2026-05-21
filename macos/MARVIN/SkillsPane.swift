@@ -33,6 +33,7 @@ private struct SkillsIndexResponse: Decodable {
     let userGlobal: [InstalledSkill]
     let projectLocal: [ProjectLocalSkill]
     let audit: AuditBlock
+    let discovered: DiscoveredBlock?
 
     struct FingerprintBlock: Decodable {
         let tags: [String]
@@ -70,6 +71,24 @@ private struct SkillsIndexResponse: Decodable {
         let skillsMdPath: String
         let decisionLine: String?
     }
+
+    /// LLM-discovered build suggestions (ADR-0028, development branch).
+    /// Populated by POST /api/skills/discover; null on a stable build that
+    /// doesn't yet have the discoverer wired.
+    struct DiscoveredBlock: Decodable {
+        let suggestions: [DiscoveredSuggestion]
+        let discoveredAt: String?
+        let costCents: Int?
+        let stale: Bool
+    }
+
+    struct DiscoveredSuggestion: Decodable, Identifiable {
+        let name: String
+        let description: String
+        let rationale: String
+        let suggestedBody: String
+        var id: String { name }
+    }
 }
 
 // MARK: - View
@@ -90,6 +109,15 @@ struct SkillsPane: View {
     /// Skills live outside the project workDir so the standard sandboxed
     /// file viewer can't open them.
     @State private var viewedSkill: ViewedSkill?
+    /// In-flight discovery state — ADR-0028 development-branch feature.
+    /// `discovering = true` while POST /api/skills/discover is open; the
+    /// section UI shows a spinner during that window.
+    @State private var discovering: Bool = false
+    /// Per-suggestion build-in-flight state — keyed by suggestion name so
+    /// clicking Build on one suggestion doesn't disable Build on the others.
+    @State private var buildingSuggestion: String?
+    /// Detailed-explanation popover for a discovered suggestion's rationale + body.
+    @State private var inspectedDiscovered: SkillsIndexResponse.DiscoveredSuggestion?
 
     /// The currently-displayed skill in the View sheet.
     struct ViewedSkill: Identifiable, Equatable {
@@ -124,6 +152,210 @@ struct SkillsPane: View {
         .task(id: bridge.projectWorkDir) { await refresh() }
         .sheet(item: $viewedSkill) { skill in
             skillViewerSheet(skill)
+        }
+        .sheet(item: $inspectedDiscovered) { suggestion in
+            discoveredDetailSheet(suggestion)
+        }
+    }
+
+    // MARK: - Discovered (LLM) suggestions section (ADR-0028)
+
+    @ViewBuilder
+    private func discoveredSection(_ block: SkillsIndexResponse.DiscoveredBlock?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.tint)
+                Text("MARVIN suggests building")
+                    .font(.headline)
+                if let d = block, d.stale {
+                    Text("stale — fingerprint changed")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                Spacer()
+                Button {
+                    Task { await runDiscovery() }
+                } label: {
+                    if discovering {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.small)
+                            Text("Discovering…").font(.caption)
+                        }
+                    } else {
+                        Label(
+                            (block?.suggestions.isEmpty ?? true)
+                                ? "Discover skills"
+                                : "Re-discover",
+                            systemImage: "wand.and.stars"
+                        )
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(discovering)
+            }
+            if let d = block, !d.suggestions.isEmpty {
+                ForEach(d.suggestions) { s in
+                    discoveredRow(s)
+                }
+                if let at = d.discoveredAt, let cents = d.costCents {
+                    Text("Discovered \(shortDate(at)) · \(cents)¢")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else if let at = d.discoveredAt {
+                    Text("Discovered \(shortDate(at))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            } else {
+                Text("Click Discover to ask MARVIN which project-local skills would be most useful for this codebase. One LLM call; ~1–3¢. Suggestions are cached at `.marvin/discovered-skills.json`.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func discoveredRow(_ s: SkillsIndexResponse.DiscoveredSuggestion) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(s.name)
+                    .font(.system(.body, design: .monospaced))
+                    .fontWeight(.medium)
+                Text(s.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            Spacer()
+            Button("Why?") { inspectedDiscovered = s }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            Button("Build") {
+                Task { await buildDiscovered(s) }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(buildingSuggestion != nil)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func discoveredDetailSheet(_ s: SkillsIndexResponse.DiscoveredSuggestion) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(s.name).font(.system(.headline, design: .monospaced))
+                    Text(s.description).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Build") { Task { await buildDiscovered(s); inspectedDiscovered = nil } }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Close") { inspectedDiscovered = nil }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .controlSize(.small)
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Rationale").font(.subheadline.bold())
+                        Text(s.rationale).font(.callout)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Proposed SKILL.md body").font(.subheadline.bold())
+                        Text(s.suggestedBody)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+            }
+        }
+        .frame(minWidth: 720, idealWidth: 880, minHeight: 460, idealHeight: 600)
+    }
+
+    private func shortDate(_ iso: String) -> String {
+        // Convert "2026-05-22T01:37:54Z" → "2026-05-22 01:37"
+        if let r = iso.range(of: "T") {
+            return iso.prefix(upTo: r.lowerBound) + " " + iso[r.upperBound...].prefix(5)
+        }
+        return iso
+    }
+
+    private func runDiscovery() async {
+        guard let workDir = bridge.projectWorkDir else { return }
+        await MainActor.run { self.discovering = true }
+        defer { Task { @MainActor in self.discovering = false } }
+
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/skills/discover"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        req.timeoutInterval = 130
+        let body: [String: Any] = ["workDir": workDir]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            _ = try await URLSession.shared.data(for: req)
+            await refresh()  // re-read /api/skills which now includes the cached discovery
+        } catch {
+            await MainActor.run {
+                self.pasteboardToast = "Discovery failed: \(error.localizedDescription)"
+            }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run { self.pasteboardToast = nil }
+        }
+    }
+
+    private func buildDiscovered(_ s: SkillsIndexResponse.DiscoveredSuggestion) async {
+        guard let workDir = bridge.projectWorkDir else { return }
+        await MainActor.run { self.buildingSuggestion = s.name }
+        defer { Task { @MainActor in self.buildingSuggestion = nil } }
+
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/skills/scaffold"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        let body: [String: Any] = [
+            "workDir": workDir,
+            "name": s.name,
+            "description": s.description,
+            "body": s.suggestedBody,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                    ?? "HTTP \(http.statusCode)"
+                await MainActor.run {
+                    self.pasteboardToast = "Build failed: \(detail)"
+                }
+            } else {
+                await MainActor.run {
+                    self.pasteboardToast = "Built \(s.name) at .marvin/skills/\(s.name)/"
+                }
+            }
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            await MainActor.run { self.pasteboardToast = nil }
+            await refresh()
+        } catch {
+            await MainActor.run {
+                self.pasteboardToast = "Build failed: \(error.localizedDescription)"
+            }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run { self.pasteboardToast = nil }
         }
     }
 
@@ -176,6 +408,8 @@ struct SkillsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 suggestionsSection(idx)
+                Divider()
+                discoveredSection(idx.discovered)
                 Divider()
                 userGlobalSection(idx.userGlobal)
                 Divider()

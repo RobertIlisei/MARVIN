@@ -19,6 +19,7 @@ import {
   type ProjectFingerprint,
 } from "@marvin/project-context";
 
+import { readCachedDiscovery } from "./project-skill-discoverer";
 import { listProjectSkills } from "./project-skills-plugin";
 import {
   applySuggestionRules,
@@ -63,6 +64,26 @@ export interface SkillsIndex {
     decided: boolean;
     skillsMdPath: string;
     decisionLine?: string;
+  };
+  /**
+   * Cached LLM-discovered build suggestions (ADR-0028 / development branch).
+   * Populated by `bin/marvin knowledge-graph`-style on-demand run via
+   * `POST /api/skills/discover`. Empty until the user explicitly clicks
+   * "Discover" in the Skills pane.
+   */
+  discovered: {
+    suggestions: Array<{
+      name: string;
+      description: string;
+      rationale: string;
+      suggestedBody: string;
+    }>;
+    discoveredAt: string | null;
+    costCents: number | null;
+    fingerprintMarker: string | null;
+    /** True when the cached suggestions were produced for a fingerprint
+     *  that no longer matches — UI shows a "stale, re-run" hint. */
+    stale: boolean;
   };
 }
 
@@ -170,6 +191,21 @@ export function buildSkillsIndex(workDir: string): SkillsIndex {
     /* not present → not decided */
   }
 
+  // Read cached LLM-discovered build suggestions (if any). The cache
+  // file is written by `POST /api/skills/discover`; this read is best-
+  // effort — corrupt or absent → empty suggestions, never throws.
+  const cachedDiscovery = readCachedDiscovery(workDir);
+  const currentFingerprintMarker = fp.tags.join("|");
+  const discovered = {
+    suggestions: cachedDiscovery?.suggestions ?? [],
+    discoveredAt: cachedDiscovery?.discoveredAt ?? null,
+    costCents: cachedDiscovery?.costCents ?? null,
+    fingerprintMarker: cachedDiscovery?.fingerprintMarker ?? null,
+    stale:
+      cachedDiscovery != null &&
+      cachedDiscovery.fingerprintMarker !== currentFingerprintMarker,
+  };
+
   return {
     fingerprint: {
       tags: fp.tags,
@@ -184,6 +220,7 @@ export function buildSkillsIndex(workDir: string): SkillsIndex {
       skillsMdPath,
       ...(decisionLine ? { decisionLine } : {}),
     },
+    discovered,
   };
 }
 
