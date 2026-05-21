@@ -86,8 +86,9 @@ reads at turn time.
 | **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
+| **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
 
-The pattern is the same across all three: a MUST list, a MUST-NOT list,
+The pattern is the same across all of them: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
 
 ## Repo layout
