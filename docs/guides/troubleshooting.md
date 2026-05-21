@@ -9,6 +9,64 @@ Common issues, probable causes, fixes. Ordered by "how often it happens in pract
 > `pnpm dev`, the same output goes to the terminal you started `pnpm
 > dev` in. The two are interchangeable below — read whichever exists.
 
+## MARVIN.app won't launch — "Apple could not verify..."
+
+**Symptom (macOS 26 / Tahoe):** double-clicking `MARVIN.app` in
+`~/Applications` pops a dialog: *"Apple could not verify "MARVIN.app"
+is free of malware that may harm your Mac or compromise your privacy."*
+Buttons offered are **Done** and **Move to Bin** — there is no
+"Open" button and right-click → Open does nothing.
+
+**Cause:** MARVIN is ad-hoc signed (no paid Apple Developer Programme
+membership). On macOS 26 Apple removed the right-click → Open shortcut
+that worked on earlier macOS versions; ad-hoc apps must be whitelisted
+once through System Settings.
+
+**Fix (one time, persists across upgrades):**
+
+1. Click **Done** on the popup (not Move to Bin).
+2. Open **System Settings → Privacy & Security**, scroll to the **Security** section.
+3. Find **"MARVIN.app was blocked from use because it is not from an identified developer"** and click **Open Anyway**.
+4. Authorize with Touch ID or your password. MARVIN launches and the bundle is whitelisted for the life of the install.
+
+If you don't see the "MARVIN.app was blocked..." line, double-click
+the app first to register the block, then check Privacy & Security
+within 30 seconds.
+
+See [ADR-0027](../decisions/0027-macos-26-gatekeeper-user-applications.md)
+for the technical detail (path-specific kernel-level Gatekeeper kill
+that motivated the `~/Applications` install location).
+
+## MARVIN.app dies at 32 KB RSS in `/Applications`
+
+**Symptom (macOS 26):** Double-click `MARVIN.app` in `/Applications/`,
+the process briefly appears in Activity Monitor at ~32 KB RSS, then
+vanishes. No dialog, no log, no UI window.
+
+**Cause:** macOS 26 kernel-kills ad-hoc-signed bundles launched from
+`/Applications/` regardless of signature state. This is path-specific
+— the same bundle launched from `~/Applications/` runs normally.
+
+**Fix:** uninstall + reinstall via the current cask, which targets
+`~/Applications/`:
+
+```bash
+brew uninstall --cask marvin-ai
+brew install --cask marvin-ai
+```
+
+If you installed from source: `bin/marvin install-macos-app` (post
+v0.1.12) installs to `~/Applications/` automatically and migrates
+the legacy `/Applications/MARVIN.app` away. Pull and rerun:
+
+```bash
+cd ~/marvin && git pull
+bin/marvin install-macos-app
+```
+
+The empirical detail (same bundle, three paths, two outcomes) lives
+in [ADR-0027](../decisions/0027-macos-26-gatekeeper-user-applications.md).
+
 ## MARVIN won't take a turn
 
 **Symptom:** chat input is enabled, you send a message, nothing happens or an immediate error.
