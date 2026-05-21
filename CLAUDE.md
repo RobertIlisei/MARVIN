@@ -224,12 +224,27 @@ Apply it before claiming anything is shipped.
 
 ## graphify
 
-A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(1691 nodes · 3051 edges · 117 communities as of 2026-05-21, AST-only
-rebuild after introducing [`.graphifyignore`](./.graphifyignore)).
+**Two graphs per project (ADR-0028, development branch).** MARVIN's own
+repo:
+
+- **Code graph** at `graphify-out/graph.json` — AST extraction of source
+  files. 1691 nodes · 3051 edges · 117 communities (2026-05-21 rebuild
+  after [`.graphifyignore`](./.graphifyignore) landed). Auto-rebuilt on
+  every commit.
+- **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
+  structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
+  `.marvin/memory.md`. 971 nodes · 1178 edges · 72 communities (built
+  2026-05-21). Manual rebuild via `bin/marvin knowledge-graph .` — free
+  (no LLM cost), but only fires when you ask.
+
+Each MCP tool (`graph_summary`, `graph_search`, `graph_neighbors`,
+`graph_path`, `graph_query`, `graph_save_result`) takes a `scope` parameter
+of `"code"` (default), `"knowledge"`, or `"all"`. Default preserves
+backwards-compatible behaviour — every existing call site queries the
+code graph as before.
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
-non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
+non-negotiable rule, not a nice-to-have. Querying a graph is ~36× cheaper
 per question than file reads and catches structural couplings grep would
 miss.
 
@@ -265,9 +280,13 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### After changes
 
-- Code-only changes: `/graphify . --update` (AST-only, no LLM cost).
-- Docs / `personality.ts` changes: `/graphify . --update` (triggers
-  semantic re-extraction — minimal cost at this corpus size).
+- **Code changes** (`*.ts`, `*.swift`, etc.): the watchdog auto-rebuilds
+  on commit. To force: `/graphify . --update` (AST-only, no LLM cost).
+- **Doc changes** (`docs/`, ADRs, README, memory.md): the code graph
+  doesn't include these; rebuild the knowledge graph with
+  `bin/marvin knowledge-graph .` (AST-only, no LLM cost).
+- **`personality.ts` changes** (which influences MARVIN's behaviour but
+  is a TS file): `/graphify . --update` picks it up via the code graph.
 
 ### God nodes (most-connected abstractions)
 

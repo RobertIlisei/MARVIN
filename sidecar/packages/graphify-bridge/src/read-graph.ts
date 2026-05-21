@@ -1,12 +1,29 @@
 /**
- * Read-side of the graphify bridge. The graph is a plain JSON file written
- * by the `graphify` Python CLI under `<workDir>/graphify-out/graph.json`.
- * Nothing here spawns Python — we just load the file and surface summaries
- * the UI can render.
+ * Read-side of the graphify bridge. Loads a per-project graph JSON file and
+ * surfaces summaries / search / neighbour queries.
+ *
+ * Graph location is parametrised — pass the full path to graph.json. The
+ * helper `graphPathForScope(workDir, scope)` resolves the canonical paths
+ * MARVIN uses for the two-graph topology (ADR-0028):
+ *
+ *   scope "code"      → <workDir>/graphify-out/graph.json
+ *   scope "knowledge" → <workDir>/graphify-out/knowledge/graph.json
+ *
+ * Default scope is "code" — every existing call site keeps working without
+ * change.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+
+export type GraphScope = "code" | "knowledge";
+
+export function graphPathForScope(workDir: string, scope: GraphScope = "code"): string {
+  const root = resolve(workDir);
+  return scope === "knowledge"
+    ? join(root, "graphify-out", "knowledge", "graph.json")
+    : join(root, "graphify-out", "graph.json");
+}
 
 export interface GraphNode {
   id: string;
@@ -66,10 +83,9 @@ function emptySummary(path: string, error: string | null): GraphSummary {
   };
 }
 
-export function summarizeGraph(workDir: string): GraphSummary {
-  const graphPath = join(resolve(workDir), "graphify-out", "graph.json");
+export function summarizeGraph(graphPath: string): GraphSummary {
   if (!existsSync(graphPath)) {
-    return emptySummary(graphPath, "No graphify-out/graph.json in this project.");
+    return emptySummary(graphPath, `No graph at ${graphPath}.`);
   }
   let raw: RawNodeLink;
   let updatedAt: string;
@@ -161,8 +177,7 @@ export interface ResolvedNode {
   degree: number;
 }
 
-function loadRaw(workDir: string): { raw: RawNodeLink; nodes: GraphNode[]; links: GraphLink[] } | null {
-  const graphPath = join(resolve(workDir), "graphify-out", "graph.json");
+function loadRaw(graphPath: string): { raw: RawNodeLink; nodes: GraphNode[]; links: GraphLink[] } | null {
   if (!existsSync(graphPath)) return null;
   try {
     const raw = JSON.parse(readFileSync(graphPath, "utf-8")) as RawNodeLink;
@@ -188,10 +203,10 @@ function computeDegrees(links: GraphLink[]): Map<string, number> {
 }
 
 export function resolveNode(
-  workDir: string,
+  graphPath: string,
   queryOrId: string,
 ): ResolvedNode | null {
-  const data = loadRaw(workDir);
+  const data = loadRaw(graphPath);
   if (!data) return null;
   const direct = data.nodes.find((n) => n.id === queryOrId);
   const degree = computeDegrees(data.links);
@@ -223,13 +238,13 @@ export interface Neighbor {
 }
 
 export function getNeighbors(
-  workDir: string,
+  graphPath: string,
   nodeQueryOrId: string,
   limit = 20,
 ): { node: GraphNode; neighbors: Neighbor[] } | null {
-  const data = loadRaw(workDir);
+  const data = loadRaw(graphPath);
   if (!data) return null;
-  const resolved = resolveNode(workDir, nodeQueryOrId);
+  const resolved = resolveNode(graphPath, nodeQueryOrId);
   if (!resolved) return null;
   const id = resolved.node.id;
   const byId = new Map<string, GraphNode>();
@@ -269,14 +284,14 @@ export interface PathHop {
 }
 
 export function shortestPath(
-  workDir: string,
+  graphPath: string,
   fromQueryOrId: string,
   toQueryOrId: string,
 ): PathHop[] | null {
-  const data = loadRaw(workDir);
+  const data = loadRaw(graphPath);
   if (!data) return null;
-  const from = resolveNode(workDir, fromQueryOrId);
-  const to = resolveNode(workDir, toQueryOrId);
+  const from = resolveNode(graphPath, fromQueryOrId);
+  const to = resolveNode(graphPath, toQueryOrId);
   if (!from || !to) return null;
   if (from.node.id === to.node.id) {
     return [{ id: from.node.id, label: from.node.label ?? from.node.id }];
@@ -337,31 +352,15 @@ export function shortestPath(
   return reversed.reverse();
 }
 
-export function searchGraph(workDir: string, query: string, limit = 20): SearchHit[] {
-  const graphPath = join(resolve(workDir), "graphify-out", "graph.json");
-  if (!existsSync(graphPath)) return [];
-  let raw: RawNodeLink;
-  try {
-    raw = JSON.parse(readFileSync(graphPath, "utf-8")) as RawNodeLink;
-  } catch {
-    return [];
-  }
-  const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
-  const links = Array.isArray(raw.links)
-    ? raw.links
-    : Array.isArray(raw.edges)
-      ? raw.edges
-      : [];
-  const degree = new Map<string, number>();
-  for (const l of links) {
-    if (typeof l.source === "string") degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
-    if (typeof l.target === "string") degree.set(l.target, (degree.get(l.target) ?? 0) + 1);
-  }
+export function searchGraph(graphPath: string, query: string, limit = 20): SearchHit[] {
+  const data = loadRaw(graphPath);
+  if (!data) return [];
+  const degree = computeDegrees(data.links);
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const terms = q.split(/\s+/).filter(Boolean);
   const hits: SearchHit[] = [];
-  for (const n of nodes) {
+  for (const n of data.nodes) {
     const label = (n.label ?? n.id).toLowerCase();
     const score = terms.reduce((acc, t) => acc + (label.includes(t) ? 1 : 0), 0);
     if (score === 0) continue;
