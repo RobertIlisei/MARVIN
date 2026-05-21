@@ -532,21 +532,42 @@ readonly AGENT_PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 # right plist.
 
 readonly MACOS_APP_NAME="MARVIN"
-readonly MACOS_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
+
+# Install dir — ~/Applications, not /Applications. macOS 26 (Tahoe)
+# enforces a kernel-level Gatekeeper check that kills ad-hoc-signed
+# bundles launched from `/Applications/` regardless of code-signature
+# state — the binary spawns and is immediately killed (drops to ~32 KB
+# RSS, no UI, no logs). The same bundle launched from `~/Applications/`
+# runs normally because user-scope Applications is exempt from that
+# specific check. The standard user-space Gatekeeper popup ("Apple could
+# not verify…") still fires on first Finder launch and is resolved by
+# System Settings → Privacy & Security → Open Anyway (one time per
+# install). See ADR-0027.
+readonly MACOS_APP_BUNDLE_DIR="$HOME/Applications/${MACOS_APP_NAME}.app"
+
+# Legacy path on macOS 25 and earlier. Uninstalls + reinstalls clean it
+# up so a stale Dock pin or Spotlight entry doesn't keep pointing at the
+# old (broken-on-26) location.
+readonly MACOS_LEGACY_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
 
 cmd_install_macos_app() {
   # Builds the SwiftUI native target at macos/ and installs the
-  # resulting MARVIN.app bundle to /Applications/. By default (per
+  # resulting MARVIN.app bundle to ~/Applications/. By default (per
   # ADR-0023) the .app is self-contained: bundles node + the Next.js
   # standalone sidecar in Contents/Resources/, and the SwiftUI process
   # spawns it on launch. Pass `--launchd` to keep the older user-agent
   # plist behavior instead.
   #
-  # Ad-hoc signed — no Apple Developer account required; Gatekeeper
-  # warns on first open (right-click → Open to bypass, or System
-  # Settings → Privacy & Security → "Open Anyway"). The brew-installed
-  # path strips the quarantine xattr automatically — no warning there.
-  # See ADR-0016, ADR-0023.
+  # Why ~/Applications and not /Applications: macOS 26 enforces a
+  # kernel-level Gatekeeper check that kills ad-hoc-signed bundles
+  # launched from /Applications. User-scope Applications is exempt
+  # from that specific check; the binary actually runs. See ADR-0027.
+  #
+  # Ad-hoc signed — no Apple Developer account required. The first
+  # Finder launch still pops the "Apple could not verify…" dialog;
+  # the user clears it once via System Settings → Privacy & Security
+  # → Open Anyway, after which the bundle is whitelisted for the life
+  # of the install. See ADR-0016, ADR-0023, ADR-0027.
   #
   # Two build paths, picked by what's installed:
   #   • xcodebuild + xcodegen (preferred) — produces a real Xcode
@@ -673,23 +694,38 @@ cmd_install_macos_app() {
   fi
   ok "built $built_app"
 
-  info "copying to /Applications"
+  info "copying to ~/Applications"
+  mkdir -p "$(dirname "$MACOS_APP_BUNDLE_DIR")"
   rm -rf "$MACOS_APP_BUNDLE_DIR"
   cp -R "$built_app" "$MACOS_APP_BUNDLE_DIR"
   ok "installed at $MACOS_APP_BUNDLE_DIR"
+
+  # ── Migrate from /Applications (broken on macOS 26 — ADR-0027) ──────
+  # macOS 26 kernel-kills ad-hoc-signed bundles in /Applications. We
+  # install to ~/Applications now, but a user upgrading from <0.1.12
+  # has /Applications/MARVIN.app left behind — quit it, remove it, so
+  # Spotlight + the Dock don't relaunch the dead bundle.
+  if [ -d "$MACOS_LEGACY_APP_BUNDLE_DIR" ]; then
+    info "removing legacy /Applications/MARVIN.app (now installed to ~/Applications)"
+    osascript -e 'tell application "MARVIN" to quit' 2>/dev/null || true
+    pkill -f "$MACOS_LEGACY_APP_BUNDLE_DIR/Contents/MacOS/MARVIN" 2>/dev/null || true
+    sleep 1
+    rm -rf "$MACOS_LEGACY_APP_BUNDLE_DIR"
+    ok "removed $MACOS_LEGACY_APP_BUNDLE_DIR"
+  fi
 
   # ── Migrate from legacy MARVIN-Swift.app ─────────────────────────────
   # Pre-rename (commit 6351f94) shipped as /Applications/MARVIN-Swift.app.
   # If it's still around, quit any running instance and delete the bundle
   # so a stale Dock pin doesn't keep relaunching the old binary. Dock
   # entries are left alone — the user re-pins MARVIN.app themselves.
-  local legacy_app="/Applications/MARVIN-Swift.app"
-  if [ -d "$legacy_app" ]; then
-    info "removing legacy $legacy_app"
+  local legacy_swift_app="/Applications/MARVIN-Swift.app"
+  if [ -d "$legacy_swift_app" ]; then
+    info "removing legacy $legacy_swift_app"
     osascript -e 'tell application "MARVIN-Swift" to quit' 2>/dev/null || true
-    pkill -f "$legacy_app/Contents/MacOS/MARVIN-Swift" 2>/dev/null || true
+    pkill -f "$legacy_swift_app/Contents/MacOS/MARVIN-Swift" 2>/dev/null || true
     sleep 1
-    rm -rf "$legacy_app"
+    rm -rf "$legacy_swift_app"
     ok "removed legacy bundle"
   fi
 
@@ -763,8 +799,8 @@ cmd_install_macos_app() {
     printf '  %-14s %s\n' "size:"   "$(du -sh "$MACOS_APP_BUNDLE_DIR" 2>/dev/null | awk '{print $1}')"
     printf '  %-14s %s\n' "logs:"   "$HOME/Library/Logs/MARVIN/sidecar.log"
     echo
-    dim "  Double-click MARVIN in /Applications — the sidecar starts with the app."
-    dim "  Gatekeeper: right-click → Open on first launch (no warning when installed via brew)."
+    dim "  Open MARVIN.app from ~/Applications (or via Spotlight) — the sidecar starts with the app."
+    dim "  Gatekeeper (one time, macOS 26): System Settings → Privacy & Security → Open Anyway."
     dim "  Uninstall:  $0 uninstall-macos-app"
     return 0
   fi
@@ -832,8 +868,8 @@ PLIST
       printf '  %-14s %s\n' "agent:"  "$AGENT_PLIST"
       printf '  %-14s %s\n' "logs:"   "${REPO_ROOT}/${STATE_DIR}/launchd-stderr.log"
       echo
-      dim "  Double-click MARVIN in /Applications — or:  open '$MACOS_APP_BUNDLE_DIR'"
-      dim "  Gatekeeper: right-click → Open on first launch."
+      dim "  Open MARVIN.app from ~/Applications — or:  open '$MACOS_APP_BUNDLE_DIR'"
+      dim "  Gatekeeper (one time, macOS 26): System Settings → Privacy & Security → Open Anyway."
       dim "  Uninstall:  $0 uninstall-macos-app"
       return 0
     fi
@@ -857,12 +893,20 @@ cmd_uninstall_macos_app() {
     dim "  no launchd agent at $AGENT_PLIST"
   fi
 
-  # Remove the .app bundle.
+  # Remove the .app bundle (current location + legacy /Applications).
+  local removed_any=0
   if [ -d "$MACOS_APP_BUNDLE_DIR" ]; then
     rm -rf "$MACOS_APP_BUNDLE_DIR"
     ok "removed $MACOS_APP_BUNDLE_DIR"
-  else
-    dim "  no MARVIN.app at $MACOS_APP_BUNDLE_DIR"
+    removed_any=1
+  fi
+  if [ -d "$MACOS_LEGACY_APP_BUNDLE_DIR" ]; then
+    rm -rf "$MACOS_LEGACY_APP_BUNDLE_DIR"
+    ok "removed $MACOS_LEGACY_APP_BUNDLE_DIR (legacy path, pre-ADR-0027)"
+    removed_any=1
+  fi
+  if [ "$removed_any" -eq 0 ]; then
+    dim "  no MARVIN.app found at either ~/Applications or /Applications"
   fi
 
   # Remove the /usr/local/bin/marvin symlink if it points into this repo.
@@ -923,18 +967,20 @@ EOF
 # ─────────────────────────────────────────────────────────────────────
 # Dispatch
 
-case "${1:-start}" in
+subcommand="${1:-start}"
+shift 2>/dev/null || true
+case "$subcommand" in
   start)    cmd_start   ;;
   stop)     cmd_stop    ;;
   restart)  cmd_restart ;;
   status)   cmd_status  ;;
   logs)     cmd_logs    ;;
   doctor)   cmd_doctor  ;;
-  install-macos-app)    cmd_install_macos_app    ;;
-  uninstall-macos-app)  cmd_uninstall_macos_app  ;;
+  install-macos-app)    cmd_install_macos_app "$@"   ;;
+  uninstall-macos-app)  cmd_uninstall_macos_app      ;;
   help|-h|--help)  cmd_help ;;
   *)
-    fail "unknown subcommand: $1"
+    fail "unknown subcommand: $subcommand"
     echo
     cmd_help
     exit 1
