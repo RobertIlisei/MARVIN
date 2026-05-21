@@ -36,6 +36,13 @@ export interface WorkflowHealth {
    * `null` when the graph is missing or not meaningfully stale.
    */
   graphStaleDays: number | null;
+  /**
+   * Whether `<workDir>/.graphifyignore` exists. When false on a substantial
+   * project, graphify will pull in node_modules-sized cache trees / vendored
+   * code / build artefacts — see ADR-context in the project's CLAUDE.md.
+   * MARVIN's personality.ts carries the protocol for scaffolding one.
+   */
+  graphifyIgnorePresent: boolean;
   /** Human-readable list of gaps, empty array when healthy. */
   gaps: string[];
 }
@@ -166,6 +173,15 @@ export function checkWorkflowHealth(workDir: string): WorkflowHealth {
     /* not present */
   }
 
+  // Cheap stat — no Read needed since we only care about presence + non-zero size.
+  let graphifyIgnorePresent = false;
+  try {
+    const st = statSync(join(workDir, ".graphifyignore"));
+    graphifyIgnorePresent = st.isFile() && st.size > 0;
+  } catch {
+    /* absent */
+  }
+
   if (hasSubstance && adrCount === 0) {
     gaps.push("no ADRs — `docs/adr/` is empty or missing");
   }
@@ -182,6 +198,18 @@ export function checkWorkflowHealth(workDir: string): WorkflowHealth {
       `graph is ${graphStaleDays}d stale vs newest code — run \`/graphify . --update\``,
     );
   }
+  // The .graphifyignore gap is independent of whether the graph already
+  // exists. If it exists without an ignore, the graph is probably mapping
+  // cache trees / vendored code; if it doesn't exist yet, we want the
+  // ignore in place BEFORE the first build so day-one is clean.
+  // Either way, propose scaffolding one via the personality.ts protocol.
+  if (hasSubstance && !graphifyIgnorePresent) {
+    gaps.push(
+      graphPresent
+        ? "no `.graphifyignore` — graph likely maps caches / build dirs / vendored code; scaffold one and rebuild"
+        : "no `.graphifyignore` — write one BEFORE `/graphify .` so day-one is clean (see graphify-protocol in your instructions)",
+    );
+  }
 
   return {
     workDir,
@@ -190,6 +218,7 @@ export function checkWorkflowHealth(workDir: string): WorkflowHealth {
     memoryPresent,
     graphPresent,
     graphStaleDays,
+    graphifyIgnorePresent,
     gaps,
   };
 }
