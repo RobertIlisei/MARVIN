@@ -35,7 +35,9 @@ brew tap RobertIlisei/marvin
 brew install --cask marvin-ai
 ```
 
-That's it. MARVIN.app appears in `/Applications`, the bundled sidecar starts with the app, quitting MARVIN cleans it up. No Swift, Node, pnpm, Xcode, or Apple Developer account required on your machine.
+That's it. MARVIN.app appears in `~/Applications`, the bundled sidecar starts with the app, quitting MARVIN cleans it up. No Swift, Node, pnpm, Xcode, or Apple Developer account required on your machine.
+
+> **First launch — one-time Gatekeeper step (macOS 26+).** MARVIN is ad-hoc signed (no paid Apple Developer Programme membership). On first double-click macOS shows "Apple could not verify…": click **Done**, then open **System Settings → Privacy & Security**, scroll to the **Security** section, find "MARVIN.app was blocked from use…", and click **Open Anyway**. This whitelist persists for the life of the install — you only do it once. ([ADR-0027](./docs/decisions/0027-macos-26-gatekeeper-user-applications.md) has the technical detail.)
 
 **You'll need Anthropic credentials** to use it — either run `claude login` (the Claude CLI handles it) or paste an API key in MARVIN → Settings → Authentication.
 
@@ -48,8 +50,8 @@ That's it. MARVIN.app appears in `/Applications`, the bundled sidecar starts wit
 If you've cloned the repo and want to build locally:
 
 ```bash
-bin/marvin install-macos-app   # build → /Applications/MARVIN.app
-bin/marvin uninstall-macos-app # remove app
+bin/marvin install-macos-app   # build → ~/Applications/MARVIN.app
+bin/marvin uninstall-macos-app # remove app (both ~/Applications and legacy /Applications)
 ```
 
 Default install mode is **bundled** (per ADR-0023) — same shape as the brew artefact. Pass `--launchd` for the legacy mode that runs the sidecar from the source repo via a user-agent plist.
@@ -134,7 +136,7 @@ bin/marvin install-macos-app    # build + install + launchd
 bin/marvin start
 
 # Terminal 2 — open the built app
-open /Applications/MARVIN.app
+open ~/Applications/MARVIN.app
 # or for a faster edit-rebuild-run loop while working on the Swift side:
 cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/...
 ```

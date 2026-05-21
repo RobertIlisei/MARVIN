@@ -6,6 +6,7 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
+- **macOS 26 Gatekeeper fix — install to `~/Applications`** ([ADR-0027](./decisions/0027-macos-26-gatekeeper-user-applications.md)). macOS 26 (Tahoe) kernel-kills ad-hoc-signed bundles in `/Applications` regardless of signature state; the same `.app` runs cleanly from `~/Applications`. `bin/marvin install-macos-app` and the Homebrew cask both retarget to `~/Applications/MARVIN.app`; uninstall cleans up the legacy `/Applications` path. New users still hit the user-space Privacy & Security popup on first Finder launch (one-time whitelist via "Open Anyway"). README + cask `caveats` document the click-through.
 - **Syntax-highlighter coverage — YAML.** Add `tree-sitter-yaml` SPM dep + `Resources/Queries/yaml.scm`. Trivial; every project has compose / workflow / kubeconfig files. ~15 min.
 - **Syntax-highlighter coverage — Markdown.** Vendor `tree-sitter-markdown` to bypass the upstream `tree-sitter/swift-tree-sitter` binding-conflict documented in `macos/Package.swift`. Half of all docs are `.md`. ~30 min.
 - **Syntax-highlighter coverage — Python.** Vendor `tree-sitter-python` with a patched `Package.swift` (the upstream runtime `FileManager.fileExists("src/scanner.c")` check is the documented blocker). Most-asked-for missing language. ~1 hr.
