@@ -225,13 +225,28 @@ Apply it before claiming anything is shipped.
 ## graphify
 
 A knowledge graph of MARVIN's own code + docs is at `graphify-out/graph.json`
-(820 nodes · 988 edges · 167 communities as of 2026-05-04, post the
-PLAN.md retirement + DoD discipline pass).
+(1691 nodes · 3051 edges · 117 communities as of 2026-05-21, AST-only
+rebuild after introducing [`.graphifyignore`](./.graphifyignore)).
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
 non-negotiable rule, not a nice-to-have. Querying the graph is ~36× cheaper
 per question than file reads and catches structural couplings grep would
 miss.
+
+### What the graph excludes
+
+[`.graphifyignore`](./.graphifyignore) extends graphify's built-in skip list
+with MARVIN-specific noise — `graphify-out/` itself, `.turbo/`, `.next/`,
+`.build/`, `.marvin/`, `data/`, `vendor/`, `*.xcodeproj/`, `macos/Vendored/`
+(tree-sitter grammars), test outputs (`coverage/`, `playwright-report/`,
+`*.snap`), `*.log`, `*.icns`, binary distribution artefacts (`*.zip`,
+`*.tar.gz`, `*.dmg`). Test **code** (`*.test.ts`, `*.spec.ts`) stays in
+the graph — that's contract-by-example signal worth keeping.
+
+Use the gitignore-syntax `.graphifyignore` at any project's root to scope
+graphify the same way — `graphify` honours the file relative to where it
+runs. Inline `# comments` after a pattern are NOT supported by graphify's
+parser as of v0.4.23; put comments on their own line.
 
 ### Before any structural exploration or codebase question
 
@@ -256,6 +271,15 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### God nodes (most-connected abstractions)
 
+After the 2026-05-21 rebuild: `GET()` (92 edges), `POST()` (88),
+`trim()` (41) are the real architectural anchors. Language primitives
+also bubble to the top — `string`, `text`, `View`, `font`, `Kind`,
+`data`, `.push()` — those are AST-noise from the tree-sitter pass,
+not concepts; treat them as background. The `.graphifyignore` filters
+files, not node kinds; a follow-up to filter language primitives from
+the AST extractor would need to live in graphify itself.
+
+Pre-2026-05-21 stale list, kept for reference:
 `GET()` (61 edges), `POST()` (58), `trim()` (29), `ADR-0015 — Auto-mode
 policy floor + audit log` (17), `/api/git/* third mutation channel` (17),
 `ADR index` (15), `8-phase senior-engineer workflow` (15), `Changelog
