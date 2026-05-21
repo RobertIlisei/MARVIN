@@ -85,6 +85,19 @@ struct SkillsPane: View {
     /// One-line confirmation surface for clipboard-driven actions.
     /// Auto-clears after a short delay so it doesn't pile up.
     @State private var pasteboardToast: String?
+    /// Skill content shown in the View sheet. Loaded via /api/skills/content,
+    /// which whitelists ~/.claude/skills/ and <workDir>/.marvin/skills/.
+    /// Skills live outside the project workDir so the standard sandboxed
+    /// file viewer can't open them.
+    @State private var viewedSkill: ViewedSkill?
+
+    /// The currently-displayed skill in the View sheet.
+    struct ViewedSkill: Identifiable, Equatable {
+        let name: String
+        let path: String
+        let content: String
+        var id: String { path }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -109,6 +122,51 @@ struct SkillsPane: View {
             }
         }
         .task(id: bridge.projectWorkDir) { await refresh() }
+        .sheet(item: $viewedSkill) { skill in
+            skillViewerSheet(skill)
+        }
+    }
+
+    // MARK: - Skill viewer sheet
+
+    @ViewBuilder
+    private func skillViewerSheet(_ skill: ViewedSkill) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "scroll")
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(skill.name).font(.headline)
+                    Text(skill.path).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(skill.path, forType: .string)
+                } label: {
+                    Label("Copy path", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Close") { viewedSkill = nil }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            Divider()
+            ScrollView {
+                Text(skill.content)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+        }
+        .frame(minWidth: 720, idealWidth: 880, minHeight: 460, idealHeight: 600)
     }
 
     // MARK: - Content
@@ -446,11 +504,52 @@ struct SkillsPane: View {
     }
 
     private func openSkillFile(_ path: String) {
-        // Reuse the existing in-app file open contract — `setSelectedFile`
-        // routes the path through MarvinBridge so the open-file tab
-        // semantics (focus existing tab vs append new) stay uniform.
-        Task { @MainActor in
-            MarvinBridge.shared.setSelectedFile(path)
+        // Skills live OUTSIDE the project workDir (`~/.claude/skills/...`)
+        // so the sandboxed /api/files/raw endpoint refuses them. We hit
+        // /api/skills/content instead, which applies a tight whitelist
+        // (~/.claude/skills/ + <workDir>/.marvin/skills/) and returns the
+        // file content directly. Result renders in the .sheet defined on
+        // the root body via `viewedSkill`.
+        Task {
+            await MainActor.run { self.loadError = nil }
+            var components = URLComponents(
+                url: ServerConfig.baseURL.appendingPathComponent("api/skills/content"),
+                resolvingAgainstBaseURL: false
+            )!
+            var items: [URLQueryItem] = [URLQueryItem(name: "path", value: path)]
+            if let workDir = await MainActor.run(body: { bridge.projectWorkDir }) {
+                items.append(URLQueryItem(name: "workDir", value: workDir))
+            }
+            components.queryItems = items
+            guard let url = components.url else { return }
+            var req = URLRequest(url: url)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            do {
+                let (data, response) = try await URLSession.shared.data(for: req)
+                if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                    let errBody = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                        ?? "HTTP \(http.statusCode)"
+                    await MainActor.run {
+                        self.loadError = "Failed to load skill: \(errBody)"
+                    }
+                    return
+                }
+                struct Payload: Decodable { let path: String; let content: String }
+                let parsed = try JSONDecoder().decode(Payload.self, from: data)
+                let name = URL(fileURLWithPath: parsed.path)
+                    .deletingLastPathComponent().lastPathComponent
+                await MainActor.run {
+                    self.viewedSkill = ViewedSkill(
+                        name: name,
+                        path: parsed.path,
+                        content: parsed.content
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    self.loadError = "Failed to load skill: \(error.localizedDescription)"
+                }
+            }
         }
     }
 }
