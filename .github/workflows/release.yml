@@ -96,6 +96,22 @@ jobs:
       - name: Build sidecar (Next standalone)
         run: pnpm --filter @marvin/web build
 
+      # ── Stamp resolved version into Info.plist ─────────────────────
+      # Without this, every release ships with the placeholder value
+      # in macos/MARVIN/Info.plist (0.1.0) and the About panel keeps
+      # reporting v0.1.0 no matter how many releases land. Use plutil
+      # rather than sed so the XML stays well-formed. Mutation is
+      # in-tree but the runner discards it after the build.
+      - name: Stamp version into Info.plist
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          plist="macos/MARVIN/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$v" "$plist"
+          plutil -replace CFBundleVersion           -string "$v" "$plist"
+          echo "Stamped Info.plist with version $v"
+          plutil -p "$plist" | grep -E "CFBundle(ShortVersion|Version)"
+
       - name: Build MARVIN.app via xcodegen + xcodebuild
         run: |
           set -euo pipefail

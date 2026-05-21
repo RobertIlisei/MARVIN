@@ -599,6 +599,44 @@ cmd_install_macos_app() {
     return 1
   fi
 
+  # ── Stamp Info.plist with a real version ────────────────────────────
+  # The About panel reads CFBundleShortVersionString from Info.plist.
+  # Without stamping, every local build ships with the placeholder
+  # ("0.1.0") baked into the source plist and the user sees the same
+  # version forever no matter how many times they `git pull`. Use the
+  # latest annotated tag when one exists; append a short-SHA suffix
+  # when HEAD is ahead of that tag so a dev build is visibly distinct
+  # from a release ("0.1.12+8a3baab"). plutil keeps the XML well-formed.
+  #
+  # The source plist is restored on function return — the built .app
+  # has the stamped plist baked in by xcodebuild + the manual SPM-bundle
+  # path, so restoring the source after the build leaves a clean working
+  # tree without affecting the installed bundle.
+  local stamp_plist="$macos_dir/MARVIN/Info.plist"
+  local stamp_backup
+  stamp_backup="$(mktemp -t marvin-info-plist.XXXXXX)"
+  cp -p "$stamp_plist" "$stamp_backup"
+  trap 'cp -p "$stamp_backup" "$stamp_plist" 2>/dev/null; rm -f "$stamp_backup"' RETURN
+
+  local stamp_version
+  if stamp_version="$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null)"; then
+    stamp_version="${stamp_version#v}"   # strip leading "v" from v0.1.12
+    local stamp_sha
+    stamp_sha="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo)"
+    if [ -n "$stamp_sha" ] \
+       && [ "$(git -C "$REPO_ROOT" rev-parse "v${stamp_version}^{}" 2>/dev/null)" != "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" ]; then
+      stamp_version="${stamp_version}+${stamp_sha}"
+    fi
+  else
+    stamp_version="0.0.0-dev"
+  fi
+  if plutil -replace CFBundleShortVersionString -string "$stamp_version" "$stamp_plist" 2>/dev/null \
+     && plutil -replace CFBundleVersion -string "$stamp_version" "$stamp_plist" 2>/dev/null; then
+    ok "stamped Info.plist with version $stamp_version"
+  else
+    warn "could not stamp Info.plist (plutil failed) — bundle will report whatever's in the source plist"
+  fi
+
   # Pick the build path. xcodebuild only counts as "available" if it
   # actually runs (CLT installs ship a stub that errors out).
   local use_spm=0
