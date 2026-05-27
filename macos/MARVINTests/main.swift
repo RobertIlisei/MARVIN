@@ -155,6 +155,110 @@ runner.suite("context-band") {
     }
 }
 
+// MARK: - tool-use-counter (2026-05-27 graphify-drift audit)
+//
+// Pin the cli.event parser and the band classifier. The audit found
+// that MARVIN was treating `graph_search` as a fancier grep and
+// bypassing the rest of the graphify protocol, producing ~7:1 file-ops
+// to graph-ops drift across a week of sessions. This chip surfaces
+// that ratio live; the band thresholds are tuned for the observed
+// drift profile.
+
+runner.suite("tool-use-counter-parse") {
+    runner.test("non-assistant events return zero delta") {
+        let json = #"{"type":"system","subtype":"init","session_id":"s1"}"#
+        let delta = ToolUseCounter.deltaForCliEvent(Data(json.utf8))
+        runner.expect(delta, equals: ToolUseCounts(), "system event → zero delta")
+    }
+
+    runner.test("graph_summary counts in both totals") {
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"tool_use","name":"mcp__marvin-graph__graph_summary","id":"a"}
+        ]}}
+        """#
+        let delta = ToolUseCounter.deltaForCliEvent(Data(json.utf8))
+        runner.expect(delta.graphCalls, equals: 1, "counts toward graph total")
+        runner.expect(delta.graphSummaryCalls, equals: 1, "and toward summary total")
+        runner.expect(delta.fileReadCalls, equals: 0, "not a file read")
+    }
+
+    runner.test("graph_search counts as graph but NOT as summary") {
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"tool_use","name":"mcp__marvin-graph__graph_search","id":"a"}
+        ]}}
+        """#
+        let delta = ToolUseCounter.deltaForCliEvent(Data(json.utf8))
+        runner.expect(delta.graphCalls, equals: 1, "graph_search is a graph call")
+        runner.expect(delta.graphSummaryCalls, equals: 0, "but NOT a summary call")
+    }
+
+    runner.test("Read/Grep/Glob count as file reads") {
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"tool_use","name":"Read","id":"a"},
+          {"type":"tool_use","name":"Grep","id":"b"},
+          {"type":"tool_use","name":"Glob","id":"c"}
+        ]}}
+        """#
+        let delta = ToolUseCounter.deltaForCliEvent(Data(json.utf8))
+        runner.expect(delta.fileReadCalls, equals: 3, "all three count")
+        runner.expect(delta.graphCalls, equals: 0, "none are graph calls")
+    }
+
+    runner.test("Bash / Edit / Write do NOT count") {
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"tool_use","name":"Bash","id":"a"},
+          {"type":"tool_use","name":"Edit","id":"b"},
+          {"type":"tool_use","name":"Write","id":"c"}
+        ]}}
+        """#
+        let delta = ToolUseCounter.deltaForCliEvent(Data(json.utf8))
+        runner.expect(delta, equals: ToolUseCounts(), "mutators are off-axis for this chip")
+    }
+}
+
+runner.suite("tool-use-counter-band") {
+    runner.test("low totals → idle") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 1, fileReadCalls: 2, graphSummaryCalls: 0))
+        runner.expect(band == .idle, "3 total → idle")
+    }
+
+    runner.test("balanced ratio → healthy") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 5, fileReadCalls: 10, graphSummaryCalls: 1))
+        runner.expect(band == .healthy, "2:1 file:graph with orient → healthy")
+    }
+
+    runner.test("ratio above 4:1 → drifting") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 2, fileReadCalls: 12, graphSummaryCalls: 1))
+        runner.expect(band == .drifting, "6:1 file:graph → drifting")
+    }
+
+    runner.test("ratio above 8:1 → critical") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 2, fileReadCalls: 20, graphSummaryCalls: 1))
+        runner.expect(band == .critical, "10:1 file:graph → critical")
+    }
+
+    runner.test("no graph_summary after 10 reads → drifting (orient-missing rule)") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 5, fileReadCalls: 10, graphSummaryCalls: 0))
+        runner.expect(band == .drifting, "10 reads with 0 summary trips the orient check")
+    }
+
+    runner.test("no graph_summary after 20 reads → critical (orient-missing rule)") {
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 8, fileReadCalls: 20, graphSummaryCalls: 0))
+        runner.expect(band == .critical, "20 reads with 0 summary tips to critical")
+    }
+
+    runner.test("zero graph calls but reads under 10 → idle / healthy") {
+        // Edge case: a turn with 4 reads and 0 graph calls is below the
+        // "idle" floor (< 5 total) so we don't flag it.
+        let band = ToolUseCounter.band(ToolUseCounts(graphCalls: 0, fileReadCalls: 4, graphSummaryCalls: 0))
+        runner.expect(band == .idle, "below total floor → idle, no signal")
+    }
+}
+
 // MARK: - scope-met (ADR-0022 §3)
 //
 // Pin the Scope-met sentinel detector. The personality emits an

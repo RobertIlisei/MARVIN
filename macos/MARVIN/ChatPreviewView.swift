@@ -676,6 +676,13 @@ final class ChatPreviewModel {
             if s.sdkSessionFresh == true {
                 b.residentContextTokens = nil
                 b.billableThisTurn = nil
+                // 2026-05-27 graphify-drift audit — the "graph N · reads M"
+                // chip is per SDK-session, same lifetime as the context
+                // counter. Zero it on session-fresh so the next turn
+                // starts from a clean slate the user can read.
+                b.sessionGraphCalls = 0
+                b.sessionFileReadCalls = 0
+                b.sessionGraphSummaryCalls = 0
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
@@ -697,6 +704,7 @@ final class ChatPreviewModel {
                 if let s = peek.state { b.marvinState = s }
                 if let label = peek.activity { currentActivity = label }
                 ContextUsageReader.applyTo(bridge: b, cliEventData: data)
+                ToolUseCounter.applyTo(bridge: b, cliEventData: data)
             }
         case .confirmRequest(let c):
             // Phase 2e — queue the confirm; the view's sheet

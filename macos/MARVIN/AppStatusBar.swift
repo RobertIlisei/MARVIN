@@ -218,6 +218,7 @@ struct AppStatusBar: View {
                 Divider().frame(height: 10)
             }
             contextSegment
+            toolUseSegment
             costSegment
             bellSegment
         }
@@ -281,6 +282,48 @@ struct AppStatusBar: View {
         case .high:     return AnyShapeStyle(Color.orange)
         case .critical: return AnyShapeStyle(Color.red)
         }
+    }
+
+    /// 2026-05-27 graphify-drift audit — live counter of graph_* MCP
+    /// calls vs Read/Grep/Glob calls in the current SDK session. The
+    /// colour signals when MARVIN is bypassing the graphify protocol.
+    /// Hidden until at least 5 total tool calls have landed so we don't
+    /// distract on idle / trivial turns.
+    @ViewBuilder
+    private var toolUseSegment: some View {
+        let counts = ToolUseCounts(
+            graphCalls: bridge.sessionGraphCalls,
+            fileReadCalls: bridge.sessionFileReadCalls,
+            graphSummaryCalls: bridge.sessionGraphSummaryCalls
+        )
+        let band = ToolUseCounter.band(counts)
+        if band != .idle {
+            HStack(spacing: 4) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 10))
+                Text("graph \(bridge.sessionGraphCalls) · reads \(bridge.sessionFileReadCalls)")
+            }
+            .foregroundStyle(toolUseColour(for: band))
+            .help(toolUseHover(band: band, counts: counts))
+            Divider().frame(height: 10)
+        }
+    }
+
+    private func toolUseColour(for band: ToolUseBand) -> AnyShapeStyle {
+        switch band {
+        case .idle:     return AnyShapeStyle(.tertiary)
+        case .healthy:  return AnyShapeStyle(.secondary)
+        case .drifting: return AnyShapeStyle(Color.orange)
+        case .critical: return AnyShapeStyle(Color.red)
+        }
+    }
+
+    private func toolUseHover(band: ToolUseBand, counts: ToolUseCounts) -> String {
+        var text = "\(band.hint)\n"
+        text += "graph: \(counts.graphCalls) (summary \(counts.graphSummaryCalls)) · "
+        text += "reads: \(counts.fileReadCalls)\n"
+        text += "graphify-first protocol — see CLAUDE.md golden rule 7"
+        return text
     }
 
     private func hoverText(resident: Int, billable: Int?, band: ContextBand) -> String {

@@ -129,6 +129,17 @@ final class MarvinBridge {
     /// orthogonal axes. Nil when no assistant turn has emitted usage.
     var billableThisTurn: Int? = nil
 
+    /// Per-session tool-use counts (2026-05-27 graphify-drift audit).
+    /// Incremented in the chat preview's cli.event handler via
+    /// `ToolUseCounter.deltaForCliEvent`. Reset to zero when the
+    /// sidecar reports a fresh SDK session (same trigger as
+    /// `residentContextTokens`). The AppStatusBar's "graph N · reads M"
+    /// chip reads these to surface live drift between the graphify
+    /// protocol and observed behaviour.
+    var sessionGraphCalls: Int = 0
+    var sessionFileReadCalls: Int = 0
+    var sessionGraphSummaryCalls: Int = 0
+
     /// Active personality ("marvin" or "neutral") posted via
     /// `personality-changed`. Drives the About panel's Personality
     /// row so the user can see which mode MARVIN is in without
