@@ -19,3 +19,17 @@ extension ContextUsageReader {
         if let b = parsed.billable { bridge.billableThisTurn = b }
     }
 }
+
+extension ToolUseCounter {
+    /// Parse + push to the bridge in one call. Increments the per-session
+    /// counts the AppStatusBar's "graph N · reads M" chip reads.
+    /// 2026-05-27 graphify-drift audit.
+    @MainActor
+    static func applyTo(bridge: MarvinBridge, cliEventData data: Data) {
+        let delta = deltaForCliEvent(data)
+        if delta == ToolUseCounts() { return }
+        bridge.sessionGraphCalls += delta.graphCalls
+        bridge.sessionFileReadCalls += delta.fileReadCalls
+        bridge.sessionGraphSummaryCalls += delta.graphSummaryCalls
+    }
+}
