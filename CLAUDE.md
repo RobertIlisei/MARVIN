@@ -81,7 +81,7 @@ reads at turn time.
 
 | Rule | Location | Purpose |
 |---|---|---|
-| **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above | When to consult the graph before reading source files |
+| **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above; "Per-tool MUST triggers" section in `personality.ts` | When to consult the graph before reading source files. The 2026-05-27 audit found ~7:1 file-ops to graph-ops drift and that `graph_search` was overused as a glorified grep while `graph_summary` / `graph_query` / `graph_save_result` were near-zero. Each of the 6 graph_* MCP tools now has its own enumerated MUST trigger + MUST-NOT bypass list; AppStatusBar surfaces the live ratio. |
 | **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
 | **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
@@ -107,6 +107,15 @@ sidecar/                     # Next.js 16 sidecar, port 3030
     graphify-bridge/         # knowledge-graph read + refresh
     git-watch/               # commit stream
     ui/                      # shadcn primitives
+.claude/                     # Claude Code project surface (shared)
+  commands/                  # repo-specific slash commands
+                             #   /graph-refresh — rebuild code + knowledge
+                             #   /rebuild-app   — bundle + install MARVIN.app
+  hooks/validate-bash.sh     # PreToolUse: deny --no-verify, force-push to
+                             # main, reset --hard origin/*, gpgsign bypass
+  settings.json              # shared permissions + hook wiring
+  settings.local.json        # personal overrides (gitignored)
+  skills/                    # pinned Anthropic skill bundle (see Skills section)
 data/.marvin/                # transcripts, cost tracker, graph cache (gitignored)
 ```
 

@@ -57,10 +57,14 @@ whole design. Honour the contract.
 
 1. **GRAPHIFY-FIRST.** Before any "how does X work" / "who calls Y" / blast-
    radius question, AND before reading any source file you don't already
-   own in the current task, call a \`mcp__marvin-graph__*\` tool
-   (\`graph_summary\`, \`graph_search\`, \`graph_neighbors\`, \`graph_path\`).
-   Source files only after the graph has named them. If the project has no
-   graph the MCP tool says so politely — that's the only valid skip.
+   own in the current task, call the **right** \`mcp__marvin-graph__*\` tool.
+   The per-tool MUST list ("Graphify protocol" section below) enumerates
+   six distinct triggers — calling \`graph_search\` does NOT satisfy
+   \`graph_summary\`'s trigger; calling \`graph_search\` ≥3× in a row means
+   you should be using \`graph_query\` instead. The audit found ~7:1 file-
+   ops to graph-ops drift across a week of sessions; the status-bar chip
+   surfaces that ratio live. Honour each tool's trigger, not just the
+   "I used some graph tool" check.
 2. **ADVISOR ON HARD CALLS.** New service / module boundary, DB schema,
    public API, security/auth, migrations, anything ADR-worthy — fire a
    Task-based advisor consult BEFORE committing. Cite the advisor's
@@ -371,7 +375,7 @@ updated to do Y").
 
 ## Graphify protocol — query the graph before reading source
 
-**Two graphs per project** (ADR-0028, development branch):
+**Two graphs per project** (ADR-0028):
 
 - **Code graph** at \`graphify-out/graph.json\` — AST extraction over source
   files. Auto-rebuilt by the watchdog on every git HEAD advance. Free.
@@ -402,25 +406,147 @@ Available MCP tools (\`marvin-graph\` server, registered every turn):
   don't know which graph holds the answer. The output tags each section
   by source graph so you can see which side answered.
 
-**When the graphs exist:**
-- Phase 2 (Discovery) STARTS with \`graph_summary({scope: "all"})\`. Don't
-  read files until you've seen the god nodes and the community list of
-  each graph.
-- Phase 3 (Impact Analysis) is graph-driven: every affected symbol gets
-  a \`graph_neighbors\` call (usually \`scope: "code"\` for code changes;
-  \`scope: "all"\` if the symbol is named in ADRs).
-- For free-text architectural questions ("how does X work", "why is Y
-  there", "what calls Z"), prefer \`graph_query\` over manually chaining
-  \`graph_search\` → \`graph_neighbors\` → synthesis. Use \`scope: "all"\`
-  unless you already know one graph is enough.
-- After a useful graph-derived answer, call \`graph_save_result\` with
-  the question, the answer, the cited node labels, and the scope it
-  came from. The memory dir is graph-scoped persistence (different from
-  \`.marvin/memory.md\`, which is for free-form session-bridging notes).
-- Cite \`source_file\` + line numbers from graph hits in every architectural
-  explanation. Never synthesize from imagination.
+### Per-tool MUST triggers — deterministic, NO judgement call
 
-**When a graph is missing or stale:**
+The 2026-05-27 audit found that across 7 days of project sessions, \`graph_search\`
+fired 406×, \`graph_neighbors\` 13×, \`graph_query\` 8×, \`graph_summary\` 2×,
+\`graph_path\` 0×, \`graph_save_result\` 0× — while \`Read\`/\`Grep\`/\`Glob\` fired
+~900× in a single session. The protocol below was being satisfied by one
+\`graph_search\` call and then bypassed. These triggers convert each graph
+tool into an enumerated MUST — calling another graph_* tool does NOT
+satisfy a different graph_*'s trigger.
+
+#### \`graph_summary\` — MUST
+
+Trigger: **first turn of any non-trivial conversation** in a project that has
+a graph. Specifically:
+- The very first tool call when the user's ask is anything beyond a literal
+  one-file edit / a question about a named file's contents.
+- The first tool call after the user has reset context (\`sdk-session.fresh\`).
+- The first tool call of Phase 2 (Discovery) on any non-trivial work.
+
+Call as \`graph_summary({scope: "all"})\` by default unless you already know
+the project has no knowledge graph (then \`scope: "code"\`).
+
+MUST-NOT skip because:
+- "I already know this project" — sessions are independent; the graph state
+  is the cheapest re-orientation available, ~2KB output.
+- "graph_search already returned hits" — \`graph_search\` is name-lookup;
+  it does not show god nodes or communities. Those are what reveal the
+  shape of the codebase.
+- "the user asked something specific" — specific asks still need the
+  god-node list to decide which subgraph to walk.
+
+#### \`graph_query\` — MUST
+
+Trigger: any user question of the form **"how does X work"**, **"why does X
+exist"**, **"what calls X"**, **"what would break if I changed X"**, or
+any other free-text architectural / blast-radius question where the answer
+is a synthesis across multiple nodes.
+
+Call as \`graph_query({question: "<user's literal question or a tight
+rephrase>", scope: "all"})\`. The graphify backend walks the BFS frontier
+for you — manually chaining \`graph_search\` → \`graph_neighbors\` →
+synthesizing in-prompt costs ~5× the tokens and produces worse answers.
+
+MUST-NOT substitute:
+- \`graph_search\` alone — that's name-lookup, not Q&A. A search hit list is
+  not an answer.
+- \`graph_search\` → \`Read\` chain. If the question can be answered from the
+  graph, answering from the graph + cited \`source_file\`s is what the
+  protocol requires.
+- Skipping to \`Read\`/\`Grep\` because "I think I know where it is". The
+  human equivalent of "trust me bro" — the rule exists because the data
+  shows you don't.
+
+#### \`graph_neighbors\` — MUST
+
+Trigger: any symbol you intend to **modify, rename, delete, or change the
+signature/contract of** in Phase 3 (Impact Analysis) or Phase 6 (Implement).
+One \`graph_neighbors\` call per affected symbol before the diff lands.
+
+Call as \`graph_neighbors({node: "<symbol-or-node-id>", scope: "code"})\`
+for code symbols; \`scope: "all"\` if the symbol is also referenced in ADRs.
+
+MUST-NOT skip because:
+- "it's a small change" — small changes with unexpected 1-hop consumers
+  are exactly the regression class \`graph_neighbors\` exists to surface.
+- "I'll find the callers with grep" — text search misses dynamic dispatch,
+  re-exports, and config-level references the graph catches.
+
+#### \`graph_path\` — MUST
+
+Trigger: any user question of the form **"what's the relationship between
+X and Y"**, **"how does X reach Y"**, **"is X coupled to Y"**, or any
+investigation where you need the chain of nodes that connect two named
+concepts.
+
+Call as \`graph_path({from: "<A>", to: "<B>", scope: "code"})\` (or
+\`scope: "all"\` for ADR↔code paths). One call beats a search-each-side-
+then-Read-everything chain.
+
+#### \`graph_search\` — MUST + MUST-NOT
+
+MUST trigger: you need to **resolve a name to a node id** before another
+graph_* call. Example: user says "how is the auth middleware wired" —
+one \`graph_search({query: "auth middleware"})\` to find the actual node
+label, then \`graph_neighbors\`/\`graph_query\` on the named result.
+
+MUST-NOT use as a primary answer:
+- A list of \`graph_search\` hits is **not an architectural explanation**.
+  Followed by \`Read\` of each hit is the failure mode the protocol exists
+  to prevent — it's grep with extra steps.
+- ≥3 consecutive \`graph_search\` calls in one turn is a signal you should
+  be using \`graph_query\` instead. Bail and switch.
+
+#### \`graph_save_result\` — MUST
+
+Trigger: you've just **synthesised a multi-step graph-derived answer**
+that the user is likely to ask again (architectural explanation, call
+chain, blast-radius enumeration). Persist it so the next session doesn't
+re-walk the same path.
+
+Call as \`graph_save_result({question: "<the question as asked>", answer:
+"<your synthesis, cited>", scope: "<scope you used>", nodes:
+["nodeId1", ...]})\`. The memory dir is per-graph; it complements
+\`.marvin/memory.md\` (which is free-form, cross-session, human-edited).
+
+MUST-NOT skip:
+- "the answer was short" — the test is whether the question would recur,
+  not the length of the answer. "Where is the cost tracker initialised"
+  recurs every session; save it.
+
+### Cross-tool MUST-NOTs
+
+1. **NEVER read source files for a structural question before the graph
+   has named them.** First-line response to "how does X work" is a graph_*
+   tool, not \`Read\` / \`Grep\` / \`Glob\`. The data shows this is the #1 drift
+   mode — ~900 file ops vs ~140 graph ops per session.
+2. **NEVER answer an architectural question from prompt-memory ("I recall
+   that…").** Cite a graph hit or admit you don't know yet.
+3. **NEVER let \`graph_search\` count as having "used the graph".** It's the
+   name-lookup primitive, not the Q&A. The audit found this is exactly
+   the bypass shape: one search, then bail to Read.
+4. **NEVER skip \`graph_summary\` at session start because the previous session
+   covered the same project.** Sessions are independent; graph state may
+   have advanced (commits land, ADRs added). Re-orient.
+
+### Self-check at end of any real-work turn
+
+Before claiming a Phase 2 / Phase 3 / Phase 6 milestone done, ask yourself
+the three audit questions:
+- Did I call \`graph_summary\` at the start of this conversation? If no, did
+  the work genuinely fit the fast-path exception?
+- For every "how does X work" / "what calls Y" question I answered, did I
+  use \`graph_query\` or \`graph_neighbors\` — or did I shortcut to \`Read\`?
+- For every symbol I modified, did I run \`graph_neighbors\` first?
+
+If the honest answer to any of these is "no, I shortcut" — say so in the
+turn-close. The status bar's "graph N · files M" chip will surface drift
+to the user regardless; honesty here costs nothing and admitting the
+shortcut beats being caught by the telemetry.
+
+### When a graph is missing or stale (the only valid skips)
 - No \`graphify-out/graph.json\`: tell the user and recommend \`/graphify .\`
   before going further. Don't fall back to grep-and-pray.
 - No \`graphify-out/knowledge/graph.json\`: recommend
@@ -429,6 +555,9 @@ Available MCP tools (\`marvin-graph\` server, registered every turn):
   sections.
 - Stale (docs/code newer than graph): suggest \`/graphify . --update\` for
   the code graph; \`bin/marvin knowledge-graph .\` for the knowledge graph.
+
+Cite \`source_file\` + line numbers from graph hits in every architectural
+explanation. Never synthesize from imagination.
 
 **Before \`/graphify .\` on a project for the first time — write \`.graphifyignore\`.**
 
