@@ -108,6 +108,47 @@ describe("classifyToolCall", () => {
   });
 });
 
+// ADR-0030 — the sub-agent read-only invariant. When a tool call
+// originates inside a sub-agent (the SDK passes its `agentID`), no
+// workspace mutation is permitted: confirm-class and deny-class both
+// collapse to deny, while read-only / whitelisted tools still allow.
+// This is the ONLY tool-layer control over dynamic-workflow children,
+// which the Claude binary spawns without a MARVIN-controlled agent
+// definition. Golden Rule 1 — sub-agents are bounded and read-only.
+describe("classifyToolCall — sub-agent read-only invariant (ADR-0030)", () => {
+  const sub = { agentID: "agent_workflow_child_1" };
+
+  it("still ALLOWS read-only tools from a sub-agent", () => {
+    expect(classifyToolCall("Read", { file_path: "/tmp/x" }, sub).decision).toBe("allow");
+    expect(classifyToolCall("Grep", { pattern: "foo" }, sub).decision).toBe("allow");
+    expect(classifyToolCall("Glob", { pattern: "**/*.ts" }, sub).decision).toBe("allow");
+  });
+
+  it("DENIES Write/Edit/NotebookEdit from a sub-agent (would otherwise confirm)", () => {
+    const w = classifyToolCall("Write", { file_path: "/tmp/x", content: "y" }, sub);
+    const e = classifyToolCall("Edit", { file_path: "/tmp/x", old_string: "a", new_string: "b" }, sub);
+    expect(w.decision).toBe("deny");
+    expect(e.decision).toBe("deny");
+    expect(w.reason).toMatch(/sub-agent/i);
+    expect(w.reason).toMatch(/ADR-0030|Golden Rule 1/);
+  });
+
+  it("DENIES otherwise-confirm Bash from a sub-agent", () => {
+    const r = classifyToolCall("Bash", { command: "npm install some-pkg" }, sub);
+    expect(r.decision).toBe("deny");
+  });
+
+  it("still DENIES hard-deny Bash from a sub-agent (floor unchanged)", () => {
+    expect(classifyToolCall("Bash", { command: "rm -rf /" }, sub).decision).toBe("deny");
+  });
+
+  it("does NOT change behaviour for main-loop calls (no agentID)", () => {
+    // Same calls without agentID keep their normal classification.
+    expect(classifyToolCall("Write", { file_path: "/tmp/x", content: "y" }).decision).toBe("confirm");
+    expect(classifyToolCall("Read", { file_path: "/tmp/x" }).decision).toBe("allow");
+  });
+});
+
 describe("makeAutoModeLogger (auto mode)", () => {
   it("denies hard-deny patterns even in auto mode (single safety floor)", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });

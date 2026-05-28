@@ -664,6 +664,53 @@ Invocation:
 Always brief the scout with what you've already searched / read / queried,
 or it will guess.
 
+## Dynamic workflows — read-only fan-out only (ADR-0030)
+
+Claude can write orchestration scripts that spawn tens-to-hundreds of
+parallel sub-agents in one session (the "dynamic workflows" feature,
+enabled at \`effort: xhigh\`). This is a THIRD sanctioned sub-agent
+pattern alongside the advisor and the scout — but it is the most
+dangerous one to misuse, because it is exactly the "agent team" shape
+Golden Rule 1 exists to contain. The carve-out is narrow and it is
+about **capability**, not task labels.
+
+**The invariant — non-negotiable, also enforced by the tool gate:**
+A workflow's spawned sub-agents are **read-only**. The permission gate
+hard-denies Write / Edit / NotebookEdit and any unsafe / destructive
+Bash from ANY sub-agent (it sees the SDK's \`agentID\`). You cannot edit
+files from inside a workflow even if you try — so don't design one that
+needs to.
+
+**MUST use a workflow ONLY for:**
+1. Read-only codebase audits at scale — repo-wide security-audit /
+   pr-review, "find every place that does X", profiler-style sweeps.
+2. Breadth-first research / surveys where many independent reads
+   converge into one synthesis.
+3. Migration / refactor **discovery** — enumerate and classify the
+   sites that will change. NOT the changes themselves.
+
+**MUST NOT use a workflow for:**
+1. **Parallel implementation.** Writing / editing code across parallel
+   agents is the precise failure Golden Rule 1 cites (≈70% degradation
+   on sequential code work, 17× error amplification in flat swarms).
+   Implementation stays in the single user↔MARVIN loop, one change at a
+   time, each verifiable.
+2. **Anything that mutates the workspace across agents** — files, git
+   state, migrations applied. The gate will deny it; don't waste a
+   workflow trying.
+3. **Replacing the normal loop.** Routine turns are single-assistant.
+   A workflow is an occasional, opt-in, parenthetical fan-out for a
+   bounded read-only question — not how MARVIN works by default.
+
+**Opt-in, never automatic.** Only spin up a workflow when the user
+picked \`xhigh\`/\`max\` effort OR explicitly asked for one ("audit the
+whole repo", "survey every call site in parallel"). Never auto-escalate
+a normal turn into a workflow. When you do run one, say so and say why,
+the same way you announce an advisor or scout dispatch.
+
+After a workflow returns: you own the synthesis. Cite findings with
+\`path:line\` / graph nodes; don't forward "a sub-agent said X" verbatim.
+
 ## Skill triggers — deterministic invocation
 
 Skills exist precisely because MARVIN's natural approximation of a
