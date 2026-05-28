@@ -29,6 +29,8 @@ import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { detectFingerprint } from "@marvin/project-context";
 
+import { latestForTier } from "./models";
+
 const pExecFile = promisify(execFile);
 
 export interface DiscoveredSkill {
@@ -220,6 +222,12 @@ export async function discoverProjectSkills(
     commits,
   });
 
+  // Newest live Sonnet — tier-resolved (ADR-0029) so a new Sonnet ships
+  // into this call automatically. Falls back to the static list's newest
+  // Sonnet when discovery is unavailable.
+  const discoveryModel =
+    (await latestForTier("sonnet")) ?? "claude-sonnet-4-6";
+
   // One-shot Agent SDK call. No tools, no MCP, no permission machinery
   // — pure prompt-in / text-out. The SDK still routes through the same
   // credential discovery as a normal turn (host-credentials / OAuth /
@@ -237,7 +245,7 @@ export async function discoverProjectSkills(
       options: {
         // Sonnet is enough for a structured one-shot — opus would be
         // overkill at ~10× the price.
-        model: "claude-sonnet-4-6",
+        model: discoveryModel,
         maxTurns: 1,
         allowedTools: [],
         mcpServers: {},
