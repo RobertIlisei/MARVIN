@@ -9,7 +9,6 @@ import { slugifyWorkDir, touchProject, validateProjectCwd } from "@marvin/runtim
 import {
   type PermissionStrategy,
   type RuntimeMode,
-  type ThinkingMode,
   resolveRuntimeMode,
   runAgent,
 } from "@marvin/runtime/sdk-runner";
@@ -51,8 +50,9 @@ interface ChatRequestBody {
   /** Permission strategy. `auto` (default) = full bypass, no confirm gate.
    *  `gated` = Edit/Write/unsafe Bash render a confirm card. */
   permissionStrategy?: PermissionStrategy;
-  /** Thinking mode (Fast / Thinking / Max). Maps to SDK `effort`. */
-  thinkingMode?: ThinkingMode;
+  /** Reasoning-effort selection — ladder value (low/medium/high/xhigh/max)
+   *  or legacy fast/thinking/max alias. Maps to SDK `effort`. */
+  thinkingMode?: string;
   /** When true, skip the PROJECT_STATUS/BUSINESS_OVERVIEW/probe injection. */
   skipProjectContext?: boolean;
   /**
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
   const personality: PersonalityMode = body.personality ?? "marvin";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
-  const thinkingMode: ThinkingMode = body.thinkingMode ?? "thinking";
+  const thinkingMode: string = body.thinkingMode ?? "high";
 
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
