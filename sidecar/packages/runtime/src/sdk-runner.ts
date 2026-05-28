@@ -95,45 +95,83 @@ export async function resolveRuntimeMode(mode: RuntimeMode): Promise<{
 export type PermissionStrategy = "auto" | "gated";
 
 /**
- * User-facing thinking-mode picker. Three coarse modes that map to
- * the SDK's 5-level `effort` field — chosen for UX parity with
- * claude.ai / Claude Code, which expose the same shape.
+ * The SDK's reasoning-effort ladder, surfaced directly in MARVIN's
+ * picker (UX parity with Claude Desktop / Claude Code, which let you
+ * pick the level rather than a coarse alias):
  *
- *   - `fast`     → SDK `effort: "low"`. Minimal extended thinking,
- *                  fastest responses. Good for chat-style follow-ups
- *                  and edits where the answer is mostly mechanical.
- *   - `thinking` → SDK `effort: "high"`. The previous-default
- *                  behaviour — deep reasoning when needed, MARVIN's
- *                  baseline.
- *   - `max`      → SDK `effort: "max"`. Maximum effort, longest
- *                  thinking budget. Opus-only — falls back to
- *                  `"high"` when the executor model is Sonnet
- *                  (advisor mode), since Sonnet doesn't support the
- *                  `max` rung. The fallback is silent at the SDK
- *                  layer; the UI disables the Max chip when the
- *                  executor is Sonnet so the user is never surprised.
+ *   - `low`    — minimal extended thinking, fastest responses.
+ *   - `medium` — moderate thinking.
+ *   - `high`   — deep reasoning (the SDK default, MARVIN's baseline).
+ *   - `xhigh`  — deeper than high. Opus-only; this is the rung that
+ *                enables Claude's dynamic-workflow ("ultracode")
+ *                behaviour — the model may spin up parallel subagents
+ *                for large audits/migrations. Falls back to `high` on
+ *                non-Opus executors.
+ *   - `max`    — maximum effort, longest budget. Opus-only; falls back
+ *                to `high` on non-Opus executors.
  *
- * The advisor model (when invoked as a server-side subagent on hard
- * decisions) is left at the SDK default — its job is the hard call,
- * which it should think through regardless of the executor's mode.
+ * The advisor model (server-side subagent on hard decisions) is left
+ * at the SDK default — its job is the hard call, which it thinks
+ * through regardless of the executor's effort.
  */
-export type ThinkingMode = "fast" | "thinking" | "max";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Legacy 3-mode picker values, accepted for backward compatibility
+ *  (persisted prefs, old transcripts). Mapped onto the effort ladder. */
+const LEGACY_EFFORT_ALIAS: Record<string, ReasoningEffort> = {
+  fast: "low",
+  thinking: "high",
+  // "max" is already a valid ladder rung — passes through.
+};
+
+const EFFORT_LEVELS: readonly ReasoningEffort[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+/** Top rungs (`xhigh`, `max`) are Opus-only per the SDK; on other
+ *  executors the SDK silently falls back to `high`, and so do we so
+ *  the call is always valid even if the UI and a stale pref disagree. */
+function supportsTopEffort(model: string): boolean {
+  return /opus/i.test(model);
+}
 
 /**
- * Map a user-facing thinking mode to the SDK's `effort` value, with
- * the Opus-only `max` rung downgraded to `high` on non-Opus models.
- *
- * Pure dispatcher — exported so tests can pin the mapping (and the
- * model-aware fallback) without spinning up a turn.
+ * Resolve a user-facing effort selection (new ladder value OR a legacy
+ * fast/thinking/max alias) to a concrete SDK `effort`, applying the
+ * Opus-only fallback for the top two rungs. Unknown / undefined input
+ * defaults to `high` (the SDK default). Pure — exported so tests can
+ * pin the mapping + fallback without spinning up a turn.
  */
+export function resolveEffort(
+  selection: string | undefined,
+  model: string,
+): ReasoningEffort {
+  const raw = (selection ?? "high").toLowerCase();
+  const mapped = LEGACY_EFFORT_ALIAS[raw] ?? (raw as ReasoningEffort);
+  const level: ReasoningEffort = EFFORT_LEVELS.includes(mapped)
+    ? mapped
+    : "high";
+  if ((level === "xhigh" || level === "max") && !supportsTopEffort(model)) {
+    return "high";
+  }
+  return level;
+}
+
+/**
+ * @deprecated Use {@link resolveEffort}. Kept as a thin alias so any
+ * older import keeps compiling; the picker now sends ladder values
+ * directly. Returns the resolved SDK effort for a legacy 3-mode value.
+ */
+export type ThinkingMode = "fast" | "thinking" | "max";
 export function effortForThinkingMode(
   mode: ThinkingMode,
   model: string,
-): "low" | "high" | "max" {
-  if (mode === "fast") return "low";
-  if (mode === "thinking") return "high";
-  // max — only valid on Opus 4.6 / 4.7 per SDK docs.
-  return /opus/i.test(model) ? "max" : "high";
+): ReasoningEffort {
+  return resolveEffort(mode, model);
 }
 
 export interface RunAgentInput {
@@ -149,12 +187,14 @@ export interface RunAgentInput {
   /** Permission strategy. Defaults to `auto` when omitted. */
   permissionStrategy?: PermissionStrategy;
   /**
-   * User-facing thinking mode (Fast / Thinking / Max). Maps to the
-   * SDK's `effort` field via `effortForThinkingMode`. Defaults to
-   * `thinking` when omitted, matching the SDK's `effort: high`
-   * default. See `ThinkingMode` for the mapping.
+   * User-facing reasoning-effort selection. A {@link ReasoningEffort}
+   * ladder value (`low`/`medium`/`high`/`xhigh`/`max`) or a legacy
+   * `fast`/`thinking`/`max` alias. Resolved to the SDK `effort` field
+   * via {@link resolveEffort} (Opus-only fallback for the top rungs).
+   * Defaults to `high` when omitted. Field name kept as `thinkingMode`
+   * for wire/transcript/pref backward compatibility.
    */
-  thinkingMode?: ThinkingMode;
+  thinkingMode?: string;
   appendSystemPrompt: string;
   onEvent: (event: SDKMessage) => void;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
@@ -587,13 +627,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       scout: SCOUT_AGENT,
     },
     includePartialMessages: false,
-    // Thinking mode → SDK effort. The user-facing modes (fast /
-    // thinking / max) map to a subset of the SDK's 5-level effort
-    // ladder; `max` falls back to `high` on non-Opus executors per
-    // `effortForThinkingMode`. Defaults to `"thinking"` (= effort
-    // "high") which matches the SDK default and MARVIN's prior
-    // behaviour, so existing sessions keep their current responsiveness.
-    effort: effortForThinkingMode(input.thinkingMode ?? "thinking", model),
+    // Reasoning-effort selection → SDK effort. Accepts the full ladder
+    // (low/medium/high/xhigh/max) and legacy fast/thinking/max aliases;
+    // `xhigh`/`max` fall back to `high` on non-Opus executors per
+    // `resolveEffort`. Defaults to `high` (the SDK default), so existing
+    // sessions keep their current responsiveness.
+    effort: resolveEffort(input.thinkingMode, model),
     ...(advisorModel ? { advisorModel } : {}),
     ...(sessionId ? { resume: sessionId } : {}),
   } as Options;
