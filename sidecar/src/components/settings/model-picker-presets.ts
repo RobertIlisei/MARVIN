@@ -20,9 +20,10 @@ export interface Preset {
   id: PresetId;
   label: string;
   helper: string;
-  /** Fallback values used when `/api/models` hasn't responded yet or the
-   *  expected tier is missing from the list. These match the hardcoded
-   *  defaults in `resolveRuntimeMode()` exactly. */
+  /** Load-time-only fallback, used when `/api/models` hasn't responded
+   *  yet or the expected tier is missing. The runtime resolves models
+   *  tier-based (`resolveRuntimeMode` → `latestForTier`, ADR-0029), so
+   *  these literals are cosmetic-during-load, not the actual defaults. */
   fallback: { executor: string | null; advisor: string | null };
 }
 
@@ -37,7 +38,7 @@ export const PRESETS: readonly Preset[] = [
     id: "advisor",
     label: "Advisor",
     helper: "Sonnet executes, Opus advises on hard steps. ~30% cheaper.",
-    fallback: { executor: "claude-sonnet-4-6", advisor: "claude-opus-4-6" },
+    fallback: { executor: "claude-sonnet-4-6", advisor: "claude-opus-4-8" },
   },
 ] as const;
 
@@ -97,7 +98,9 @@ export function activePreset(
     if (!executor) return "solo";
     const latestOpus = pickTierId("opus", models, null);
     if (latestOpus && executor === latestOpus) return "solo";
-    if (executor === "claude-opus-4-7") return "solo"; // hardcoded default
+    // No live list yet but the chosen executor is some Opus — treat as
+    // solo by tier rather than matching a hardcoded version id.
+    if (models.length === 0 && /opus/i.test(executor)) return "solo";
   }
   // Advisor: both slots filled, executor is Sonnet-tier, advisor is Opus-tier.
   if (executor && advisor) {
@@ -106,13 +109,14 @@ export function activePreset(
     if (execModel?.tier === "sonnet" && advModel?.tier === "opus") {
       return "advisor";
     }
-    // Fallback-list case: models[] is empty but ids match the hardcoded
-    // advisor-mode defaults. Keeps the preset highlighted during the
-    // loading moment instead of flickering to "custom" and back.
+    // Loading case: models[] is empty so we can't look up tiers. Match
+    // by id shape (sonnet executor + opus advisor) instead of hardcoded
+    // version ids, so the preset stays highlighted during the loading
+    // moment instead of flickering to "custom" and back.
     if (
       models.length === 0 &&
-      executor === "claude-sonnet-4-6" &&
-      advisor === "claude-opus-4-6"
+      /sonnet/i.test(executor) &&
+      /opus/i.test(advisor)
     ) {
       return "advisor";
     }

@@ -10,6 +10,7 @@
 import { execSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { buildSubprocessEnv } from "./auth";
+import { fallbackNewestOfTier } from "./models";
 
 /* ── CLI binary discovery ──────────────────────────────────────────────── */
 
@@ -52,14 +53,16 @@ export function discoverClaudeBinary(): string {
 /* ── Model + timeout ───────────────────────────────────────────────────── */
 
 export function defaultModel(): string {
+  // The pair-programming loop is sequential code work — the regime where
+  // Opus pulls furthest ahead of Sonnet/Haiku — so the user-facing partner
+  // defaults to the newest Opus. Live discovery (resolveRuntimeMode →
+  // latestForTier) picks the freshest Opus when online; this sync path is
+  // the last resort (env override, else the newest entry in the single
+  // hardcoded fallback list in models.ts). No version id lives here. ADR-0029.
   return (
     process.env.MARVIN_MODEL?.trim() ||
-    // MARVIN defaults to Opus 4.7. The pair-programming loop is sequential code
-    // work, which is the regime where Opus pulls furthest ahead of Sonnet/Haiku.
-    // Multi-agent / smaller-executor strategies (Advisor Strategy, subagent
-    // delegation) are layered on top when helpful — the user-facing partner
-    // stays top-tier.
-    "claude-opus-4-7"
+    fallbackNewestOfTier("opus") ||
+    "claude-opus-4-8"
   );
 }
 

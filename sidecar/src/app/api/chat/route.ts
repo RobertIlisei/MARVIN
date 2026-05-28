@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
 
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
-  const resolved = resolveRuntimeMode(runtimeMode);
+  const resolved = await resolveRuntimeMode(runtimeMode);
   const model = body.model?.trim() || resolved.model || defaultModel();
   const advisorModel = body.advisorModel?.trim() || resolved.advisorModel;
   const firstMessage = !body.marvinSessionId;

@@ -41,29 +41,42 @@ import {
   makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
+import { latestForTier } from "./models";
+import { defaultModel } from "./claude-cli";
 
 export type RuntimeMode = "opus" | "advisor";
 
 /** Map a user-facing runtime mode to the SDK's model + advisorModel pair.
  *
- *  - `opus`: full Opus 4.7 everywhere — the default, highest quality.
- *  - `advisor`: Sonnet 4.6 drives the turn loop (cheap, fast), Opus 4.6 is
- *    registered as the `advisorModel` so the executor can call it through
- *    the server-side advisor tool on hard steps. Per Anthropic's launch
- *    data (advisor_20260301), this saves ~30-40% on routine code work
- *    with minimal quality loss.
+ *  - `opus`: the newest live Opus everywhere — the default, highest quality.
+ *  - `advisor`: the newest live Sonnet drives the turn loop (cheap, fast),
+ *    the newest live Opus is registered as `advisorModel` so the executor
+ *    can call it through the server-side advisor tool on hard steps. Per
+ *    Anthropic's launch data (advisor_20260301), this saves ~30-40% on
+ *    routine code work with minimal quality loss.
+ *
+ *  Tier-resolved via `latestForTier` (ADR-0029) so a newly-shipped model
+ *  (e.g. Opus 4.8) becomes the default automatically — no hardcoded
+ *  version id to bump. Falls back to `defaultModel()` (env / last-known-
+ *  good) when discovery is unavailable. Async because tier resolution
+ *  goes through the live-model TTL cache.
  */
-export function resolveRuntimeMode(mode: RuntimeMode): {
+export async function resolveRuntimeMode(mode: RuntimeMode): Promise<{
   model: string;
   advisorModel?: string;
-} {
+}> {
   if (mode === "advisor") {
+    const [sonnet, opus] = await Promise.all([
+      latestForTier("sonnet"),
+      latestForTier("opus"),
+    ]);
     return {
-      model: "claude-sonnet-4-6",
-      advisorModel: "claude-opus-4-6",
+      model: sonnet ?? defaultModel(),
+      advisorModel: opus ?? undefined,
     };
   }
-  return { model: "claude-opus-4-7" };
+  const opus = await latestForTier("opus");
+  return { model: opus ?? defaultModel() };
 }
 
 /**

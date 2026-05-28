@@ -19,6 +19,7 @@
  *   - No deep probe on every health check.
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -96,6 +97,73 @@ function hasHostCredentialsOnDisk(): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The macOS Keychain item the Claude Code CLI stores its OAuth material
+ * under. The value is a JSON blob shaped roughly:
+ *   { "claudeAiOauth": { "accessToken": "sk-ant-oat-…",
+ *                        "refreshToken": "…", "expiresAt": 1234567890123 } }
+ */
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+/** In-process cache so we don't shell out to `security` (and risk a
+ *  Keychain GUI prompt) on every model-discovery call. ADR-0029. */
+let cachedHostToken: { token: string; readAt: number } | null = null;
+const HOST_TOKEN_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Best-effort read of the Claude Code OAuth access token from the macOS
+ * Keychain. This is the credential the SDK already uses every turn in
+ * host-credentials mode — but because it lives in the Keychain rather
+ * than an env var or on-disk file, the model-discovery REST call
+ * (`/v1/models`) had no way to reach it and silently degraded to a
+ * hardcoded fallback list. ADR-0029.
+ *
+ * Returns null on any failure: non-darwin platform, item absent, parse
+ * error, expired token, or the user declining the one-time Keychain
+ * access prompt. Callers MUST treat null as "no live credential" and
+ * fall back gracefully — this is never load-bearing for a turn (the
+ * SDK handles auth for turns independently).
+ *
+ * Cached in-process for HOST_TOKEN_TTL_MS.
+ */
+export function readHostOAuthToken(): string | null {
+  if (process.platform !== "darwin") return null;
+  const now = Date.now();
+  if (cachedHostToken && now - cachedHostToken.readAt < HOST_TOKEN_TTL_MS) {
+    return cachedHostToken.token;
+  }
+  try {
+    const raw = execFileSync(
+      "security",
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+        // Swallow stderr ("could not be found") — failure is expected and
+        // handled by the catch / null return.
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      claudeAiOauth?: { accessToken?: string; expiresAt?: number };
+    };
+    const token = parsed.claudeAiOauth?.accessToken?.trim();
+    if (!token) return null;
+    // `expiresAt` is epoch-ms. If clearly in the past the token is stale —
+    // the CLI refreshes it on its next turn, but we can't, so skip rather
+    // than burn a doomed 401. Lenient when the field is absent.
+    const expiresAt = parsed.claudeAiOauth?.expiresAt;
+    if (typeof expiresAt === "number" && expiresAt > 0 && expiresAt < now) {
+      return null;
+    }
+    cachedHostToken = { token, readAt: now };
+    return token;
+  } catch {
+    return null;
+  }
 }
 
 export function getAnthropicAuth(): AnthropicAuthStatus {
