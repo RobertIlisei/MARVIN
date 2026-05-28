@@ -113,12 +113,14 @@ struct ChatAgentsFooter: View {
         .help("Voice — click to switch between MARVIN and neutral")
     }
 
-    /// Thinking-mode picker (Fast / Thinking / Max). Maps to the
-    /// SDK's `effort` field server-side via `effortForThinkingMode`.
-    /// Disables the Max chip when the executor is Sonnet (advisor
-    /// runtimeMode) — Sonnet doesn't support the `max` rung. The
-    /// runtime would silently downgrade anyway, but graying out the
-    /// chip keeps the UI honest.
+    /// Reasoning-effort picker — the full SDK ladder (Low / Medium /
+    /// High / XHigh / Max), matching Claude Desktop & the CLI. Maps to
+    /// the SDK's `effort` field server-side via `resolveEffort`. The
+    /// top two rungs (XHigh, Max) are Opus-only; they're disabled when
+    /// the executor is Sonnet (advisor runtimeMode). The runtime would
+    /// silently downgrade anyway, but graying them out keeps the UI
+    /// honest. XHigh additionally enables Claude's dynamic-workflow
+    /// ("ultracode") behaviour — called out in its help text.
     private var thinkingModePicker: some View {
         let active = bridge.thinkingMode
         let executorIsOpus: Bool = {
@@ -126,27 +128,17 @@ struct ChatAgentsFooter: View {
             return e.range(of: "opus", options: .caseInsensitive) != nil
         }()
         return Menu {
-            Button {
-                NativePrefs.shared.setThinkingMode("fast")
-            } label: {
-                Label("Fast", systemImage: "hare")
-            }
-            Button {
-                NativePrefs.shared.setThinkingMode("thinking")
-            } label: {
-                Label("Thinking", systemImage: "brain")
-            }
-            Button {
-                NativePrefs.shared.setThinkingMode("max")
-            } label: {
-                Label("Max", systemImage: "bolt.fill")
-            }
-            .disabled(!executorIsOpus)
+            effortButton("low", "Low", "hare", executorIsOpus: executorIsOpus)
+            effortButton("medium", "Medium", "gauge.with.dots.needle.33percent", executorIsOpus: executorIsOpus)
+            effortButton("high", "High", "brain", executorIsOpus: executorIsOpus)
+            Divider()
+            effortButton("xhigh", "XHigh", "brain.head.profile", executorIsOpus: executorIsOpus)
+            effortButton("max", "Max", "bolt.fill", executorIsOpus: executorIsOpus)
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: thinkingModeIcon(active))
                     .font(.system(size: 9))
-                Text(active)
+                Text(effortLabel(active))
                     .font(.system(size: 11, design: .monospaced))
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8))
@@ -170,34 +162,70 @@ struct ChatAgentsFooter: View {
         .help(thinkingModeHelp(active, executorIsOpus: executorIsOpus))
     }
 
+    /// One effort-ladder row. `xhigh`/`max` are disabled off-Opus.
+    @ViewBuilder
+    private func effortButton(
+        _ value: String,
+        _ title: String,
+        _ icon: String,
+        executorIsOpus: Bool
+    ) -> some View {
+        let opusOnly = value == "xhigh" || value == "max"
+        Button {
+            NativePrefs.shared.setThinkingMode(value)
+        } label: {
+            Label(title, systemImage: icon)
+        }
+        .disabled(opusOnly && !executorIsOpus)
+    }
+
+    /// Short display label for the chip. Normalises any legacy value
+    /// that slipped through so the chip never shows "thinking"/"fast".
+    private func effortLabel(_ mode: String) -> String {
+        switch mode {
+        case "fast", "low": return "low"
+        case "medium": return "medium"
+        case "thinking", "high": return "high"
+        case "xhigh": return "xhigh"
+        case "max": return "max"
+        default: return mode
+        }
+    }
+
     private func thinkingModeIcon(_ mode: String) -> String {
         switch mode {
-        case "fast": return "hare"
+        case "fast", "low": return "hare"
+        case "medium": return "gauge.with.dots.needle.33percent"
+        case "xhigh": return "brain.head.profile"
         case "max": return "bolt.fill"
-        default: return "brain"
+        default: return "brain" // high / thinking
         }
     }
 
     private func thinkingModeColour(_ mode: String) -> Color {
         switch mode {
-        case "fast": return .secondary
-        case "max": return .accentColor
+        case "fast", "low": return .secondary
+        case "xhigh", "max": return .accentColor
         default: return .primary
         }
     }
 
     private func thinkingModeHelp(_ mode: String, executorIsOpus: Bool) -> String {
         switch mode {
-        case "fast":
-            return "Thinking: Fast (effort low) — minimal extended reasoning, quickest responses."
+        case "fast", "low":
+            return "Effort: Low — minimal extended reasoning, quickest responses."
+        case "medium":
+            return "Effort: Medium — moderate reasoning."
+        case "xhigh":
+            return executorIsOpus
+                ? "Effort: XHigh — deeper than High. Enables dynamic workflows (parallel subagents for large audits/migrations). Opus only."
+                : "Effort: XHigh — falls back to High on a non-Opus executor."
         case "max":
             return executorIsOpus
-                ? "Thinking: Max (effort max) — maximum reasoning. Opus only."
-                : "Thinking: Max — falls back to Thinking on non-Opus executor."
-        default:
-            return executorIsOpus
-                ? "Thinking: Thinking (effort high) — deep reasoning when needed. Default."
-                : "Thinking: Thinking (effort high) — Max requires Opus."
+                ? "Effort: Max — maximum reasoning, longest budget. Opus only."
+                : "Effort: Max — falls back to High on a non-Opus executor."
+        default: // high / thinking
+            return "Effort: High — deep reasoning when needed. Default."
         }
     }
 

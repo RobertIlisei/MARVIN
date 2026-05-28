@@ -32,7 +32,7 @@ final class NativePrefs {
     /// Maps to the SDK's `effort` field server-side. "thinking" matches the
     /// SDK default and MARVIN's prior behaviour, so existing users see no
     /// change in responsiveness until they pick differently.
-    private(set) var thinkingMode: String = "thinking"
+    private(set) var thinkingMode: String = "high"
     private(set) var panes: MarvinBridge.PaneState = .init()
     private(set) var themeName: String? = nil
     /// 0 = tab; positive = that many spaces. Default 4 matches VS Code / Cursor.
@@ -88,16 +88,33 @@ final class NativePrefs {
         MarvinBridge.shared.permissionStrategy = v
     }
 
-    /// User-facing thinking mode: "fast" | "thinking" | "max".
-    /// Mirrors `ThinkingMode` in `sdk-runner.ts`. Picking "max" while
-    /// the executor is Sonnet is allowed at this layer — the runtime
-    /// silently downgrades to high — but the toolbar picker disables
-    /// the chip when the executor isn't Opus to keep the UX honest.
+    /// User-facing reasoning-effort selection. The full SDK ladder
+    /// ("low" | "medium" | "high" | "xhigh" | "max"), mirroring
+    /// `ReasoningEffort` in `sdk-runner.ts`. Legacy 3-mode values
+    /// ("fast" | "thinking") are still accepted and normalised on the
+    /// way in, so older persisted prefs migrate seamlessly. Picking
+    /// "xhigh"/"max" while the executor is Sonnet is allowed here — the
+    /// runtime silently downgrades to high — but the picker disables
+    /// those rungs off-Opus to keep the UX honest.
     func setThinkingMode(_ v: String) {
-        guard v == "fast" || v == "thinking" || v == "max" else { return }
-        thinkingMode = v
-        UserDefaults.standard.set(v, forKey: "marvin.thinkingMode")
-        MarvinBridge.shared.thinkingMode = v
+        let normalised = NativePrefs.normaliseEffort(v)
+        guard let level = normalised else { return }
+        thinkingMode = level
+        UserDefaults.standard.set(level, forKey: "marvin.thinkingMode")
+        MarvinBridge.shared.thinkingMode = level
+    }
+
+    /// Map any accepted input (ladder value or legacy alias) onto the
+    /// canonical effort ladder. Returns nil for unrecognised input so
+    /// `setThinkingMode` can reject it. Single source of truth for the
+    /// legacy→ladder migration, used on both write and load.
+    static func normaliseEffort(_ v: String) -> String? {
+        switch v.lowercased() {
+        case "fast": return "low"
+        case "thinking": return "high"
+        case "low", "medium", "high", "xhigh", "max": return v.lowercased()
+        default: return nil
+        }
     }
 
     func togglePane(_ key: String) {
@@ -262,8 +279,10 @@ final class NativePrefs {
             permissionStrategy = perm
         }
         if let mode = d.string(forKey: "marvin.thinkingMode"),
-           mode == "fast" || mode == "thinking" || mode == "max" {
-            thinkingMode = mode
+           let level = NativePrefs.normaliseEffort(mode) {
+            // Normalise legacy fast/thinking → low/high on load so the
+            // UI speaks one vocabulary regardless of when the pref was set.
+            thinkingMode = level
         }
         if let str = d.string(forKey: "marvin.panes"),
            let data = str.data(using: .utf8),

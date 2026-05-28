@@ -154,12 +154,13 @@ final class MarvinBridge {
     /// ADR-0021 M1: writable by NativePrefs directly.
     var permissionStrategy: String = "auto"
 
-    /// User-facing thinking mode: "fast" | "thinking" | "max".
-    /// Maps to the SDK's `effort` field in the runtime layer (see
-    /// `effortForThinkingMode`). The toolbar picker writes here via
-    /// NativePrefs; ChatPreviewView reads it when minting a turn so
-    /// the chosen mode reaches the sidecar in the same request.
-    var thinkingMode: String = "thinking"
+    /// User-facing reasoning-effort selection — the SDK ladder
+    /// "low" | "medium" | "high" | "xhigh" | "max" (see `resolveEffort`
+    /// in the runtime). The toolbar picker writes here via NativePrefs;
+    /// ChatPreviewView reads it when minting a turn so the chosen effort
+    /// reaches the sidecar in the same request. `xhigh` is the rung that
+    /// enables Claude's dynamic-workflow behaviour.
+    var thinkingMode: String = "high"
 
     /// Per-file porcelain status from `git status --porcelain=v1`.
     /// Keyed by absolute path; value is the trimmed two-char code
