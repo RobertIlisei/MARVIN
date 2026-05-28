@@ -11,13 +11,19 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    user-MARVIN loop. Do not reintroduce multi-agent dispatch, role catalogs,
    pipeline rules, or Kanban-as-source-of-truth — that pattern degrades up to
    70 % on sequential code work and amplifies errors 17× in flat-topology
-   "bag of agents" setups (2026 multi-agent coding literature). The two
-   sanctioned exceptions are bounded, read-only subagents spawned by the main
-   session for a parenthetical task: the **advisor** (second opinion on hard
-   decisions — [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md))
-   and the **scout** (breadth-first read-only research — [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md)).
-   Any new subagent type requires a new ADR; the orchestrator-with-scouts
-   shape is a carve-out, not a precedent.
+   "bag of agents" setups (2026 multi-agent coding literature). The three
+   sanctioned exceptions are bounded, **read-only** subagents spawned by the
+   main session for a parenthetical task: the **advisor** (second opinion on
+   hard decisions — [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md)),
+   the **scout** (breadth-first read-only research — [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md)),
+   and **dynamic workflows** (read-only audit / research / discovery fan-out
+   at `effort: xhigh`, opt-in — [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md)).
+   All three share one enforced invariant: **a subagent cannot mutate the
+   workspace** — the permission gate hard-denies Write/Edit/NotebookEdit and
+   unsafe Bash from any call that carries an SDK `agentID`. Parallel
+   *implementation* remains forbidden; that's the failure this rule exists to
+   prevent. Any new subagent type requires a new ADR; these carve-outs are
+   not a precedent for general multi-agent dispatch.
 2. **Plan-first, execute-second, verify-third.** For non-trivial work,
    sketch the approach before writing code, then verify it after. This is a
    practice, not an artifact rule — write things down where they help (chat,
@@ -84,6 +90,7 @@ reads at turn time.
 | **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above; "Per-tool MUST triggers" section in `personality.ts` | When to consult the graph before reading source files. The 2026-05-27 audit found ~7:1 file-ops to graph-ops drift and that `graph_search` was overused as a glorified grep while `graph_summary` / `graph_query` / `graph_save_result` were near-zero. Each of the 6 graph_* MCP tools now has its own enumerated MUST trigger + MUST-NOT bypass list; AppStatusBar surfaces the live ratio. |
 | **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
 | **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
+| **Dynamic workflows** | "Dynamic workflows — read-only fan-out only" section in `personality.ts` | When `effort: xhigh` may fan out parallel subagents — read-only audit / research / discovery ONLY, opt-in, never parallel implementation. Enforced by the subagent read-only invariant in `classifyToolCall` (any `agentID` call that mutates is hard-denied). See [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md). |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
