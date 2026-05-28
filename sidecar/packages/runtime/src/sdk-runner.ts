@@ -378,6 +378,12 @@ export function friendlyError(raw: string): string {
 export function classifyToolCall(
   name: string,
   input: Record<string, unknown>,
+  opts?: {
+    /** The SDK's `agentID` for this call. Present iff the tool call
+     *  originates inside a sub-agent (scout, advisor, or a dynamic-
+     *  workflow child). See ADR-0030. */
+    agentID?: string;
+  },
 ): { decision: "allow" | "confirm" | "deny"; reason: string } {
   // Tools outside our named set (Task, NotebookEdit, MCP, etc.) are
   // auto-allowed by default — they're sandboxed or delegate back to tools
@@ -386,8 +392,33 @@ export function classifyToolCall(
     return { decision: "allow", reason: `${name} is not in the gated set.` };
   }
   const policy = toolPolicy(name as ToolName, input);
-  if (policy.class === "auto") return { decision: "allow", reason: policy.reason };
-  if (policy.class === "deny") return { decision: "deny", reason: policy.reason };
+  const baseDecision: "allow" | "confirm" | "deny" =
+    policy.class === "auto" ? "allow" : policy.class === "deny" ? "deny" : "confirm";
+
+  // SUBAGENT READ-ONLY INVARIANT (ADR-0030, Golden Rule 1).
+  // No MARVIN subagent — scout, advisor, or dynamic-workflow child —
+  // may mutate the workspace. Scouts are already write-denied via
+  // `disallowedTools`, but dynamic-workflow children are spawned by the
+  // Claude binary with no MARVIN-controlled agent definition, so the
+  // ONLY tool-layer control over them is this gate. The SDK passes
+  // `agentID` precisely so the parent permission handler can govern
+  // sub-agent calls. For any sub-agent call we collapse the ladder:
+  // read-only / whitelisted tools (auto-class) stay allowed; everything
+  // that would otherwise confirm OR deny (Write / Edit / NotebookEdit /
+  // unsafe or destructive Bash) is hard-denied. There is no per-subagent
+  // confirm UI, and "confirm" must never silently become "allow" here.
+  if (opts?.agentID && baseDecision !== "allow") {
+    return {
+      decision: "deny",
+      reason:
+        `Sub-agent (${opts.agentID}) attempted a workspace-mutating tool ` +
+        `(${name}). MARVIN sub-agents are read-only — Golden Rule 1 / ADR-0030. ` +
+        `Mutations belong to the single main loop.`,
+    };
+  }
+
+  if (baseDecision === "allow") return { decision: "allow", reason: policy.reason };
+  if (baseDecision === "deny") return { decision: "deny", reason: policy.reason };
   return { decision: "confirm", reason: policy.reason };
 }
 
@@ -437,9 +468,9 @@ export function makeAutoModeLogger(args: {
   turnId: string;
 }): CanUseTool {
   const { cwd, turnId } = args;
-  return async (toolName, toolInput, { toolUseID }) => {
+  return async (toolName, toolInput, { toolUseID, agentID }) => {
     const safeInput = normaliseInput(toolInput);
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
     if (cls.decision === "deny") {
       return {
         behavior: "deny",
@@ -472,9 +503,9 @@ export function makeGatedCanUseTool(args: {
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
 }): CanUseTool {
   const { cwd, turnId, onConfirmRequest } = args;
-  return async (toolName, toolInput, { toolUseID, title, description, displayName }) => {
+  return async (toolName, toolInput, { toolUseID, title, description, displayName, agentID }) => {
     const safeInput = normaliseInput(toolInput);
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>);
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
 
     if (cls.decision === "allow") {
       // Audit-log mutators that auto-allow under `gated` too. Read /
