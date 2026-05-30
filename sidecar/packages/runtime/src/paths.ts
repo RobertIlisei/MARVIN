@@ -62,6 +62,11 @@ export const marvinPaths = {
     join(getMarvinDataDir(), "sessions", projectId, `${sessionId}.jsonl`),
   /** Active project pointer (last project the user opened). */
   activeProject: () => join(getMarvinDataDir(), "active-project.json"),
+  /** Directory of per-project pending-wakeup files (ADR-0031). */
+  wakeupsDir: () => join(getMarvinDataDir(), "wakeups"),
+  /** Per-project pending self-scheduled wakeups (ADR-0031). */
+  wakeupsFile: (projectId: string) =>
+    join(getMarvinDataDir(), "wakeups", `${projectId}.json`),
 } as const;
 
 /** Ensure the parent directory of a file exists. Safe to call on every write. */

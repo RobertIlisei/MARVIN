@@ -3,27 +3,18 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { buildProjectContext } from "@marvin/project-context";
 import { defaultModel } from "@marvin/runtime/claude-cli";
-import { recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
-import { slugifyWorkDir, touchProject, validateProjectCwd } from "@marvin/runtime/projects";
+import { slugifyWorkDir, validateProjectCwd } from "@marvin/runtime/projects";
 import {
   type PermissionStrategy,
   type RuntimeMode,
   resolveRuntimeMode,
-  runAgent,
 } from "@marvin/runtime/sdk-runner";
-import {
-  appendSessionTurn,
-  lastSdkSessionId,
-  rememberSdkSessionId,
-} from "@marvin/runtime/session";
-import {
-  emitTurnEvent,
-  endLiveTurn,
-  registerLiveTurn,
-} from "@marvin/runtime/turn-registry";
+import { appendSessionTurn, lastSdkSessionId } from "@marvin/runtime/session";
+import { emitTurnEvent, registerLiveTurn } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
+import { runDetachedTurn } from "@/lib/turn-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -193,8 +184,23 @@ export async function POST(req: NextRequest) {
   });
 
   // Fire-and-forget: the SDK loop runs to completion regardless of
-  // whether this HTTP request is still connected.
-  void runAgentDetached();
+  // whether this HTTP request is still connected. The orchestration lives
+  // in `runDetachedTurn` (shared with self-scheduled wakeups, ADR-0031).
+  void runDetachedTurn({
+    liveTurn,
+    projectId,
+    marvinSessionId,
+    turnId,
+    message,
+    cwd,
+    model,
+    advisorModel,
+    permissionStrategy,
+    thinkingMode,
+    sessionId: sdkResumeId,
+    appendSystemPrompt,
+    personality,
+  });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -244,84 +250,6 @@ export async function POST(req: NextRequest) {
       );
     },
   });
-
-  async function runAgentDetached() {
-    const result = await runAgent({
-      message,
-      cwd,
-      model,
-      ...(advisorModel ? { advisorModel } : {}),
-      permissionStrategy,
-      thinkingMode,
-      turnId,
-      sessionId: sdkResumeId,
-      appendSystemPrompt,
-      onEvent: (event) => {
-        appendSessionTurn(projectId, marvinSessionId, {
-          type: "cli.event",
-          at: new Date().toISOString(),
-          event,
-        });
-        emitTurnEvent(liveTurn, "cli.event", event);
-      },
-      onConfirmRequest: (payload) => {
-        appendSessionTurn(projectId, marvinSessionId, {
-          type: "confirm.request",
-          at: new Date().toISOString(),
-          payload,
-        });
-        emitTurnEvent(liveTurn, "confirm.request", payload);
-      },
-      // Only explicit cancels via /api/chat/cancel reach the SDK.
-      signal: liveTurn.abortController.signal,
-    });
-
-    if (!result.ok) {
-      const payload = { error: result.error ?? "Unknown error" };
-      appendSessionTurn(projectId, marvinSessionId, {
-        type: "turn.error",
-        at: new Date().toISOString(),
-        error: payload.error,
-      });
-      endLiveTurn(liveTurn, { event: "turn.error", data: payload });
-      return;
-    }
-
-    appendSessionTurn(projectId, marvinSessionId, {
-      type: "turn.completed",
-      at: new Date().toISOString(),
-      durationMs: result.durationMs ?? null,
-      costUsd: result.costUsd ?? null,
-      tokenUsage: result.tokenUsage ?? null,
-      sessionId: result.sessionId ?? null,
-    });
-    if (result.sessionId) {
-      // Prime the in-process cache so the *next* /api/chat for this
-      // marvinSessionId skips the JSONL re-scan in `lastSdkSessionId`.
-      rememberSdkSessionId(projectId, marvinSessionId, result.sessionId);
-    }
-    recordTurnCost({
-      projectId,
-      costUsd: result.costUsd ?? null,
-      tokenUsage: result.tokenUsage ?? null,
-    });
-    try {
-      touchProject(projectId);
-    } catch {
-      /* project may not be registered (cwd used directly) — fine */
-    }
-    endLiveTurn(liveTurn, {
-      event: "turn.completed",
-      data: {
-        sessionId: result.sessionId,
-        durationMs: result.durationMs,
-        costUsd: result.costUsd,
-        tokenUsage: result.tokenUsage,
-        marvinSessionId,
-        turnId,
-      },
-    });
-  }
 
   return new Response(stream, {
     headers: {
