@@ -25,6 +25,7 @@
 import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import { createWakeupMcpServer } from "./wakeup-tools";
 import { KNOWN_TOOL_NAMES, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
@@ -196,6 +197,18 @@ export interface RunAgentInput {
    */
   thinkingMode?: string;
   appendSystemPrompt: string;
+  /**
+   * Session + config identity the `marvin-control` wakeup tools (ADR-0031)
+   * capture so a self-scheduled turn can resume THIS session under the same
+   * posture. Optional so non-chat callers (tests, scout) can omit them — the
+   * wakeup server is only wired when `marvinSessionId` + `projectId` are
+   * present.
+   */
+  marvinSessionId?: string;
+  projectId?: string;
+  personality?: "marvin" | "neutral";
+  /** Depth of this turn in a wakeup chain (0 = human-started). ADR-0031. */
+  wakeupDepth?: number;
   onEvent: (event: SDKMessage) => void;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
   signal?: AbortSignal;
@@ -600,6 +613,25 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // that instead of failing the turn.
   const graphMcp = createGraphMcpServer(cwd);
 
+  // In-process MCP server exposing the self-wakeup tools (ADR-0031). Only
+  // wired when we know which session to resume — a wakeup turn must be able
+  // to re-enter THIS marvinSession. Captures the turn's config so the fired
+  // turn inherits the same model / permission posture (no elevation).
+  const wakeupMcp =
+    input.marvinSessionId && input.projectId
+      ? createWakeupMcpServer({
+          marvinSessionId: input.marvinSessionId,
+          projectId: input.projectId,
+          cwd,
+          model,
+          advisorModel: advisorModel ?? null,
+          personality: input.personality ?? "marvin",
+          permissionStrategy,
+          thinkingMode: input.thinkingMode ?? "high",
+          depth: input.wakeupDepth ?? 0,
+        })
+      : null;
+
   // Project-local skills plugin (ADR-0024). When the project has
   // committed any `<workDir>/.marvin/skills/<name>/SKILL.md` files, we
   // synthesize a minimal plugin manifest at `<workDir>/.marvin/.claude-plugin/plugin.json`
@@ -642,6 +674,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     },
     mcpServers: {
       "marvin-graph": graphMcp,
+      ...(wakeupMcp ? { "marvin-control": wakeupMcp } : {}),
     },
     // Project-local skills (ADR-0024). When `<workDir>/.marvin/skills/`
     // contains at least one SKILL.md, the SDK loads the synthesised
