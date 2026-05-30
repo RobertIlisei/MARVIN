@@ -103,6 +103,35 @@ if [ -d "$PUBLIC_SRC" ]; then
   rsync -a --quiet "$PUBLIC_SRC/" "$TARGET/sidecar/sidecar/public/"
 fi
 
+# ── Restore Claude Agent SDK native-binary sibling symlink ────────────
+# Next's standalone tracer copies @anthropic-ai/claude-agent-sdk and its
+# darwin-arm64 native package (added via outputFileTracingIncludes in
+# next.config.ts) into the bundle, BUT it drops the pnpm sibling symlink
+# the SDK relies on for runtime resolution. Without that link, sdk.mjs
+# throws:
+#   "Native CLI binary for darwin-arm64 not found. Reinstall
+#    @anthropic-ai/claude-agent-sdk without --omit=optional, or set
+#    options.pathToClaudeCodeExecutable."
+# Recreate the symlink pnpm would have placed there. Idempotent — silently
+# skips if the parent dir doesn't exist (e.g. SDK was tree-shaken out).
+SDK_PNPM_PARENT="$(find "$TARGET/sidecar/node_modules/.pnpm" \
+  -maxdepth 4 -type d -name "@anthropic-ai" \
+  -path "*@anthropic-ai+claude-agent-sdk@*/node_modules/@anthropic-ai" \
+  2>/dev/null | head -n1)"
+if [ -n "$SDK_PNPM_PARENT" ] && [ -d "$SDK_PNPM_PARENT" ]; then
+  NATIVE_PKG="$(basename "$(find "$TARGET/sidecar/node_modules/.pnpm" \
+    -maxdepth 1 -type d \
+    -name "@anthropic-ai+claude-agent-sdk-${TRIPLE}@*" 2>/dev/null | head -n1)")"
+  if [ -n "$NATIVE_PKG" ]; then
+    LINK_TARGET="../../../$NATIVE_PKG/node_modules/@anthropic-ai/claude-agent-sdk-${TRIPLE}"
+    LINK_PATH="$SDK_PNPM_PARENT/claude-agent-sdk-${TRIPLE}"
+    if [ ! -e "$LINK_PATH" ]; then
+      ln -s "$LINK_TARGET" "$LINK_PATH"
+      echo "bundle-sidecar: restored claude-agent-sdk-${TRIPLE} symlink"
+    fi
+  fi
+fi
+
 # ── Trim cross-arch sharp libvips ─────────────────────────────────────
 # pnpm hoists every optional sharp variant (~150 MB across linux-arm,
 # linux-x64, linuxmusl, riscv64, ppc64, s390x, wasm32, …). We only
