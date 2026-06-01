@@ -90,6 +90,50 @@ describe("toolPolicy — Bash confirm fallback", () => {
   });
 });
 
+describe("toolPolicy — Bash run_in_background hard-deny (ADR-0032)", () => {
+  it("denies a backgrounded command outright", () => {
+    const result = toolPolicy("Bash", {
+      command: "git commit -am wip",
+      run_in_background: true,
+    });
+    expect(result.class).toBe("deny");
+    expect(result.reason).toMatch(/schedule_wakeup|foreground/);
+  });
+
+  it("denies background even for an otherwise auto-allowed read", () => {
+    // The background contract is the problem, not the command — a
+    // backgrounded `git status` still can't report on completion.
+    const result = toolPolicy("Bash", {
+      command: "git status",
+      run_in_background: true,
+    });
+    expect(result.class).toBe("deny");
+  });
+
+  it("leaves classification unchanged when run_in_background is false", () => {
+    expect(toolPolicy("Bash", { command: "git status", run_in_background: false }).class).toBe(
+      "auto",
+    );
+    expect(toolPolicy("Bash", { command: "make build", run_in_background: false }).class).toBe(
+      "confirm",
+    );
+  });
+
+  it("leaves classification unchanged when run_in_background is absent", () => {
+    expect(toolPolicy("Bash", { command: "make build" }).class).toBe("confirm");
+  });
+
+  it("does not affect Task backgrounding (different tool, out of scope)", () => {
+    // Task/Agent run_in_background is a separate field; the Bash deny must
+    // not bleed into it. A sanctioned scout stays auto regardless.
+    const result = toolPolicy("Task", {
+      subagent_type: "scout",
+      run_in_background: true,
+    });
+    expect(result.class).toBe("auto");
+  });
+});
+
 describe("toolPolicy — Task subagent gating (audit finding #3)", () => {
   it("auto-allows sanctioned `scout` subagent", () => {
     const result = toolPolicy("Task", { subagent_type: "scout" });
