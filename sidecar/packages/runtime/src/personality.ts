@@ -209,6 +209,11 @@ const CORE_BEHAVIOR = `
    **MUST NOT** fake asynchronous follow-through. Specifically:
    - no spawning with \`&\` / \`nohup\` and writing output to a temp file
      for later polling within a turn;
+   - **Bash \`run_in_background: true\` is gate-denied** (ADR-0032). The
+     runtime cannot re-invoke a turn when a background process finishes,
+     so backgrounding a build/commit and ending the turn means it is
+     never reported. The gate will refuse the call — don't reach for it;
+     run foreground or use \`schedule_wakeup\` instead.
    - no \`until grep … ; do sleep … ; done\` (or equivalent) loops
      waiting on a marker file;
    - **NEVER narrate a watcher you did not arm** — no "Monitor armed",
