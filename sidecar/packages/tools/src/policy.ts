@@ -150,6 +150,25 @@ export interface ToolPolicyDecision {
 
 export function toolPolicy(name: ToolName, input: Record<string, unknown>): ToolPolicyDecision {
   if (name === "Bash") {
+    // Background Bash is hard-denied (ADR-0032). The SDK Bash tool's
+    // `run_in_background` returns a shell id and expects the model to poll
+    // output WITHIN the same turn ("Use Read to read the output later").
+    // MARVIN's runtime has NO mechanism to re-invoke a turn when a
+    // background process finishes — so "run it in the background, I'll be
+    // notified on completion" is a promise that never fires once the turn
+    // ends (the exact failure ADR-0031 fixed for time-based check-backs,
+    // re-surfacing via Bash). Make it mechanical, not a prompt nudge:
+    // refuse the call and steer to foreground or schedule_wakeup.
+    if (input.run_in_background === true) {
+      return {
+        class: "deny",
+        reason:
+          "Background Bash is disabled (ADR-0032): MARVIN can't notify a turn " +
+          "when a background process finishes, so it would silently never report. " +
+          "Run the command foreground (raise `timeout` if it's slow), or for a " +
+          "genuinely long job use `schedule_wakeup` to return later and check.",
+      };
+    }
     const cmd = typeof input.command === "string" ? input.command.trim() : "";
     if (BASH_HARD_DENY.some((r) => r.test(cmd))) {
       return { class: "deny", reason: "Matches a hard-deny pattern (destructive)." };
