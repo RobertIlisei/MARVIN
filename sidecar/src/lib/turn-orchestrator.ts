@@ -34,7 +34,10 @@ import {
   endLiveTurn,
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
-import type { WakeupRecord } from "@marvin/runtime/wakeup-scheduler";
+import {
+  setWakeupFireHandler,
+  type WakeupRecord,
+} from "@marvin/runtime/wakeup-scheduler";
 
 export interface DetachedTurnParams {
   liveTurn: LiveTurn;
@@ -224,3 +227,13 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     wakeupDepth: record.depth,
   });
 }
+
+// Wire the fire handler onto the scheduler's global singleton AT MODULE LOAD.
+// This module is imported by `/api/chat` (the request path that also builds
+// the wakeup MCP tool and arms the timers), so this runs in the SAME chunk
+// the timers fire in — guaranteeing `fireHandler` is set before any wakeup
+// can fire, independent of whether `instrumentation.ts` runs in the
+// standalone bundle. This is the fix for the "scheduler fires but no turn
+// starts" bug: previously the handler was wired only from instrumentation,
+// which in standalone is a separate entry with its own module copy.
+setWakeupFireHandler(startScheduledTurn);
