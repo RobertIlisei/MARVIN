@@ -90,20 +90,40 @@ export type ScheduleResult =
 
 type FireHandler = (record: WakeupRecord) => void | Promise<void>;
 
-// ── Module state (single-process) ──────────────────────────────────────
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
-let fireHandler: FireHandler | null = null;
-let armed = false;
+// ── Module state (single-process, GLOBAL singleton) ────────────────────
+// CRITICAL: this state MUST be shared across every copy of this module in
+// the bundle. In the Next.js *standalone* build (the brew-distributed .app
+// sidecar), `instrumentation.ts` is a separate entry point from the API
+// routes, and the bundler can give each entry its OWN copy of this module.
+// If `fireHandler` / `timers` were plain module-locals, the handler set by
+// instrumentation would land on one copy while the timer that fires lives
+// on another — so `fire()` would run, drop the persisted record, and find
+// `fireHandler === null`: the wakeup evaporates with no turn. That was the
+// real "scheduler never fires" bug. Pinning the state to `globalThis`
+// collapses all copies onto one object so the handler, timers, and arm
+// latch are genuinely shared. (`turn-registry` survives without this only
+// because it's imported solely from route chunks, never instrumentation.)
+interface WakeupState {
+  timers: Map<string, ReturnType<typeof setTimeout>>;
+  fireHandler: FireHandler | null;
+  armed: boolean;
+}
+const STATE_KEY = "__marvinWakeupSchedulerState__";
+const g = globalThis as unknown as Record<string, WakeupState | undefined>;
+const state: WakeupState =
+  g[STATE_KEY] ??
+  (g[STATE_KEY] = { timers: new Map(), fireHandler: null, armed: false });
 
 /**
- * Inject the turn-dispatch handler. Called once from the app server-boot
- * hook (`instrumentation.ts`). Until set, a fired wakeup is a no-op aside
- * from removing itself — so a wakeup that fires before the handler is wired
- * (vanishingly unlikely; boot order arms after injection) is simply lost,
- * never duplicated.
+ * Inject the turn-dispatch handler onto the shared singleton. Wired from
+ * BOTH the server-boot hook (`instrumentation.ts`) AND the request path
+ * (`turn-orchestrator`) — idempotent, last-writer-wins, both set the same
+ * function. The request-path wiring is the load-bearing one: it runs in the
+ * same chunk that schedules and fires timers, so it cannot miss even if
+ * instrumentation never executes in standalone.
  */
 export function setWakeupFireHandler(handler: FireHandler): void {
-  fireHandler = handler;
+  state.fireHandler = handler;
 }
 
 // ── Persistence ────────────────────────────────────────────────────────
@@ -210,10 +230,10 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
 }
 
 export function cancelWakeup(id: string, projectId?: string): boolean {
-  const existing = timers.get(id);
+  const existing = state.timers.get(id);
   if (existing) {
     clearTimeout(existing);
-    timers.delete(id);
+    state.timers.delete(id);
   }
   // Find the owning project file if not supplied.
   const pids = projectId ? [projectId] : listProjectIds();
@@ -232,8 +252,8 @@ export function cancelWakeup(id: string, projectId?: string): boolean {
  * 24 h past due are dropped as stale.
  */
 export function armAll(): { armed: number; firedImmediately: number; dropped: number } {
-  if (armed) return { armed: 0, firedImmediately: 0, dropped: 0 };
-  armed = true;
+  if (state.armed) return { armed: 0, firedImmediately: 0, dropped: 0 };
+  state.armed = true;
   const now = Date.now();
   let armedCount = 0;
   let firedImmediately = 0;
@@ -273,33 +293,43 @@ function listProjectIds(): string[] {
 }
 
 function arm(record: WakeupRecord): void {
-  const existing = timers.get(record.id);
+  const existing = state.timers.get(record.id);
   if (existing) clearTimeout(existing);
   const delayMs = Math.max(0, record.fireAt - Date.now());
   const t = setTimeout(() => void fire(record), delayMs);
   // Don't hold the event loop open on the timer's account — the Next
   // server process stays alive via its HTTP listener regardless.
   t.unref?.();
-  timers.set(record.id, t);
+  state.timers.set(record.id, t);
 }
 
 async function fire(record: WakeupRecord): Promise<void> {
-  timers.delete(record.id);
+  state.timers.delete(record.id);
   // Remove from disk BEFORE dispatching so a handler crash can't cause the
   // same wakeup to fire twice on the next boot.
   unpersist(record.projectId, record.id);
-  if (!fireHandler) return;
+  if (!state.fireHandler) {
+    // Should never happen now that the handler is wired from the request
+    // path (turn-orchestrator) onto this same global singleton. Log loudly
+    // if it ever does — a silent return here is the original lost-wakeup bug.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[wakeup-scheduler] fired wakeup ${record.id} (${record.reason}) but no fireHandler is wired — turn NOT started. This is a wiring bug.`,
+    );
+    return;
+  }
   try {
-    await fireHandler(record);
-  } catch {
-    /* handler is responsible for its own error surfacing (turn.error) */
+    await state.fireHandler(record);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[wakeup-scheduler] fireHandler threw for ${record.id}:`, err);
   }
 }
 
 /** Test-only: clear in-memory timers + the armed latch. */
 export function __resetSchedulerForTests(): void {
-  for (const t of timers.values()) clearTimeout(t);
-  timers.clear();
-  fireHandler = null;
-  armed = false;
+  for (const t of state.timers.values()) clearTimeout(t);
+  state.timers.clear();
+  state.fireHandler = null;
+  state.armed = false;
 }

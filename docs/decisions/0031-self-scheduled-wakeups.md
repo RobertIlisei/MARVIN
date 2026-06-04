@@ -95,6 +95,28 @@ accepts this — wakeups are minutes-apart checks, the window is small. The
 guard (on fire, if a live turn is active, re-arm +N s instead of clobbering)
 is a deliberate follow-up, not silently half-built here.
 
+## Implementation note — standalone module isolation (fixed in v0.1.16)
+
+The first cut wired the fire handler ONLY from `instrumentation.ts` and kept
+scheduler state (`fireHandler`, `timers`) as plain module-locals. That worked
+in `next dev`/unit tests but **silently failed in the brew-distributed
+standalone `.app`**: in Next's standalone output, `instrumentation.ts` is a
+separate entry point and the bundler gives it its OWN copy of
+`wakeup-scheduler`. The handler landed on instrumentation's copy while the
+timers (armed during a chat turn) lived on the route chunk's copy — so
+`fire()` ran, dropped the persisted record, found `fireHandler === null`, and
+the wakeup evaporated with no turn. Symptom: `schedule_wakeup` succeeds and
+persists, the timer fires, but **no follow-up turn ever appears**.
+
+Fix: (1) pin scheduler state to a `globalThis` singleton so every module copy
+shares one object; (2) ALSO wire the handler from `turn-orchestrator` (the
+request-path chunk that schedules + fires timers), idempotently, so it's set
+even if instrumentation never runs. Verified end-to-end against a real
+standalone build (boot-time `armAll` fires a past-due wakeup → a
+`[scheduled wakeup …]` turn is written). The lesson generalises: **any
+cross-cutting singleton reachable from both `instrumentation` and route
+chunks must be `globalThis`-pinned in standalone.**
+
 ## Scope of Done
 
 - [ ] `schedule_wakeup` / `cancel_wakeup` tools callable from a MARVIN turn.
