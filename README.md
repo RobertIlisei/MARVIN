@@ -28,13 +28,13 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 
 ## Install
 
-> **Two tracks** — `main` is **stable** (last release: v0.1.13). `development`
-> is where multi-graph + future-shaped changes (ADR-0028 onward) land first.
-> Brew always installs the stable cask; to try the development branch, clone
-> + build from source against `git checkout development`. Switch back to
-> stable at any time with `brew install --cask marvin-ai` or `git checkout main`.
+> **Releases.** Homebrew installs the latest tagged release (currently
+> **v0.1.21**). `main` and `development` are fast-forwarded together at each
+> release; `development` is where in-progress changes land between them. To
+> build from source on either branch, `git checkout <branch>` then
+> `bin/marvin install-macos-app`.
 
-### Recommended — Homebrew (no toolchain required, stable track)
+### Recommended — Homebrew (no toolchain required)
 
 ```bash
 brew tap RobertIlisei/marvin
@@ -64,27 +64,24 @@ Default install mode is **bundled** (per ADR-0023) — same shape as the brew ar
 
 Requires `xcodegen` + Xcode, **or** just the Swift Command Line Tools (`xcode-select --install`). If `xcodegen` is missing, `swift build` is used automatically as a fallback — no Developer account needed in either path.
 
-### Tracking the development branch
+### Building from a branch
 
-The `development` branch carries multi-graph + features in progress for the next release ([ADR-0028](./docs/decisions/0028-multi-graph-architecture.md)). Use it if you want the latest; fall back to stable any time.
+`main` and `development` track together at each release; `development` carries any work in progress between releases ([ADR-0028](./docs/decisions/0028-multi-graph-architecture.md) multi-graph landed this way). Build either from source:
 
 ```bash
 git clone https://github.com/RobertIlisei/MARVIN.git ~/marvin
 cd ~/marvin
-git checkout development
+git checkout development   # or: main
 bin/marvin install-macos-app
 ```
 
-**Rollback to stable:**
+**Back to the signed release artefact** at any time:
 
 ```bash
-git checkout main
-bin/marvin install-macos-app   # rebuilds + reinstalls the stable bundle
-# or, if you want the signed brew artefact:
 brew install --cask marvin-ai
 ```
 
-`graphify-out/knowledge/` is gitignored and harmless to leave behind on rollback — the stable branch ignores it.
+`graphify-out/knowledge/` is gitignored and harmless to leave behind when switching branches.
 
 ---
 
@@ -204,7 +201,7 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
 - 📎 Image paste in chat (⌘V, screenshots, dragged images)
 - 🌓 Light / dark theme — respects system preference
-- ✅ Agent change review — Cursor-style: a live "N files changed" strip while MARVIN edits, then per-hunk accept/reject against pre-agent baselines (rejecting restores *your* uncommitted state, not git HEAD — ADR-0034)
+- ✅ Agent change review — VS Code / Cursor-style: a live "N files changed" strip while MARVIN edits opens its own resizable window with a side-by-side (original │ modified) diff, line numbers, and a Split/Inline toggle. Per-hunk / per-file accept-reject against pre-agent baselines (rejecting restores *your* uncommitted state, not git HEAD); committing a change clears it from the review the way it leaves VS Code's Source Control list (ADR-0034)
 - 🎚️ Per-role reasoning effort — independent Low→Max effort pickers for the executor and the advisor (ADR-0033)
 
 **Web sidecar**
@@ -268,9 +265,10 @@ docs/
 
 ## Status
 
-**v0.1.19 — Agent reliability + change review (current).**
+**v0.1.21 — Change-review diff editor (current).**
 
-- **Agent change review** — the permission gate snapshots every file's pre-image on first agent touch per session; a live "N files changed" strip opens a review sheet with per-hunk accept/reject. Accept advances the baseline, reject reverse-applies to disk — never `git discard`, which would destroy uncommitted user work. v1 blind spot: Bash-driven mutations aren't pre-imaged. ADR-0034.
+- **VS Code / Cursor-style diff editor** — the review surface is its own resizable window: side-by-side original │ modified, line numbers, and a Split/Inline toggle (v0.1.20). The editor's diff gutter now tracks lines exactly on scroll — markers come from STTextView's real layout geometry, cached, instead of a line-height guess that drifted (v0.1.21). And **committing a change clears it from the review** the way it leaves VS Code's Source Control list — a committed change is an accepted one (`reconcileCommitted`, drops only, never rewrites a baseline). ADR-0034.
+- **Agent change review** — the permission gate snapshots every file's pre-image on first agent touch per session; accept advances the baseline, reject reverse-applies to disk — never `git discard`, which would destroy uncommitted user work. v1 blind spot: Bash-driven mutations aren't pre-imaged. ADR-0034.
 - **Per-role reasoning effort** — the advisor is a registered agent definition carrying its own model + effort, settable independently of the executor (the SDK's `advisorModel` option turned out to be unwired; the agents-map registration is what actually works). ADR-0033.
 - **Self-scheduled wakeups** — `schedule_wakeup` / `cancel_wakeup` / `list_wakeups` MCP tools backed by a bounded, persistent, boot-re-armed scheduler; a fired wakeup starts a real turn that resumes the session. Bash `run_in_background` is gate-denied (the runtime can't deliver completion notifications, so the capability shouldn't exist). ADRs 0031, 0032.
 - **The bundled app owns its port** — launch reclaims `:3030` from any stale sidecar before spawning, and `/api/health` reports the serving process's app version, so "new app on disk, old code in memory" can't recur. ADR-0035.
