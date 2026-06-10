@@ -33,6 +33,8 @@ final class NativePrefs {
     /// SDK default and MARVIN's prior behaviour, so existing users see no
     /// change in responsiveness until they pick differently.
     private(set) var thinkingMode: String = "high"
+    /// Advisor effort (ADR-0033); nil = follow the executor's effort.
+    private(set) var advisorThinkingMode: String? = nil
     private(set) var panes: MarvinBridge.PaneState = .init()
     private(set) var themeName: String? = nil
     /// 0 = tab; positive = that many spaces. Default 4 matches VS Code / Cursor.
@@ -102,6 +104,22 @@ final class NativePrefs {
         thinkingMode = level
         UserDefaults.standard.set(level, forKey: "marvin.thinkingMode")
         MarvinBridge.shared.thinkingMode = level
+    }
+
+    /// Advisor-specific reasoning effort (ADR-0033). `nil` means
+    /// "follow the executor" — the pre-0033 behaviour and the default.
+    /// Same ladder + legacy-alias normalisation as the executor's.
+    func setAdvisorThinkingMode(_ v: String?) {
+        guard let v else {
+            advisorThinkingMode = nil
+            UserDefaults.standard.removeObject(forKey: "marvin.advisorThinkingMode")
+            MarvinBridge.shared.advisorThinkingMode = nil
+            return
+        }
+        guard let level = NativePrefs.normaliseEffort(v) else { return }
+        advisorThinkingMode = level
+        UserDefaults.standard.set(level, forKey: "marvin.advisorThinkingMode")
+        MarvinBridge.shared.advisorThinkingMode = level
     }
 
     /// Map any accepted input (ladder value or legacy alias) onto the
@@ -284,6 +302,10 @@ final class NativePrefs {
             // UI speaks one vocabulary regardless of when the pref was set.
             thinkingMode = level
         }
+        if let advMode = d.string(forKey: "marvin.advisorThinkingMode"),
+           let advLevel = NativePrefs.normaliseEffort(advMode) {
+            advisorThinkingMode = advLevel
+        }
         if let str = d.string(forKey: "marvin.panes"),
            let data = str.data(using: .utf8),
            let pc = try? JSONDecoder().decode(PanesCodable.self, from: data) {
@@ -325,6 +347,7 @@ final class NativePrefs {
         b.advisorModel        = advisorModel
         b.permissionStrategy  = permissionStrategy
         b.thinkingMode        = thinkingMode
+        b.advisorThinkingMode = advisorThinkingMode
         b.panes               = panes
         b.themeName           = themeName
         b.indentSize          = indentSize

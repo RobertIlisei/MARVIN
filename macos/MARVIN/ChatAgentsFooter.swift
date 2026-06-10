@@ -40,6 +40,7 @@ struct ChatAgentsFooter: View {
             Spacer(minLength: 8)
             personalityPill
             thinkingModePicker
+            advisorEffortPicker
             modeBadge
         }
         .sheet(isPresented: $modelsDialogOpen) {
@@ -160,6 +161,83 @@ struct ChatAgentsFooter: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(thinkingModeHelp(active, executorIsOpus: executorIsOpus))
+    }
+
+    /// Advisor-specific effort picker (ADR-0033). Defaults to "follow"
+    /// — the advisor inherits the executor's effort, the pre-0033
+    /// behaviour — so the chip stays quiet until the user explicitly
+    /// splits the two. The ladder mirrors `thinkingModePicker`;
+    /// `xhigh`/`max` gate on the ADVISOR model being Opus (nil means
+    /// the default advisor, which is Opus).
+    private var advisorEffortPicker: some View {
+        let active = bridge.advisorThinkingMode // nil = follow executor
+        let advisorIsOpus: Bool = {
+            guard let a = bridge.advisorModel else { return true }
+            return a.range(of: "opus", options: .caseInsensitive) != nil
+        }()
+        return Menu {
+            Button {
+                NativePrefs.shared.setAdvisorThinkingMode(nil)
+            } label: {
+                Label("Follow executor", systemImage: "arrow.turn.down.left")
+            }
+            Divider()
+            advisorEffortButton("low", "Low", "hare", advisorIsOpus: advisorIsOpus)
+            advisorEffortButton("medium", "Medium", "gauge.with.dots.needle.33percent", advisorIsOpus: advisorIsOpus)
+            advisorEffortButton("high", "High", "brain", advisorIsOpus: advisorIsOpus)
+            Divider()
+            advisorEffortButton("xhigh", "XHigh", "brain.head.profile", advisorIsOpus: advisorIsOpus)
+            advisorEffortButton("max", "Max", "bolt.fill", advisorIsOpus: advisorIsOpus)
+        } label: {
+            HStack(spacing: 5) {
+                Text("adv")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .tracking(1)
+                Image(systemName: active.map(thinkingModeIcon) ?? "arrow.turn.down.left")
+                    .font(.system(size: 9))
+                Text(active.map(effortLabel) ?? "follow")
+                    .font(.system(size: 11, design: .monospaced))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(active.map(thinkingModeColour) ?? .secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(active == nil
+              ? "Advisor effort: follows the executor's effort. Click to set independently."
+              : "Advisor effort: \(effortLabel(active!)) — independent of the executor (ADR-0033).")
+    }
+
+    /// One advisor effort-ladder row. `xhigh`/`max` gate on the advisor
+    /// model being Opus.
+    @ViewBuilder
+    private func advisorEffortButton(
+        _ value: String,
+        _ title: String,
+        _ icon: String,
+        advisorIsOpus: Bool
+    ) -> some View {
+        let opusOnly = value == "xhigh" || value == "max"
+        Button {
+            NativePrefs.shared.setAdvisorThinkingMode(value)
+        } label: {
+            Label(title, systemImage: icon)
+        }
+        .disabled(opusOnly && !advisorIsOpus)
     }
 
     /// One effort-ladder row. `xhigh`/`max` are disabled off-Opus.

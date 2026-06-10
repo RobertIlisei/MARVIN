@@ -52,6 +52,9 @@ export interface WakeupRecord {
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
   thinkingMode: string;
+  /** Advisor-specific effort (ADR-0033); absent = follow the executor.
+   *  Optional so pre-0033 persisted records keep parsing. */
+  advisorThinkingMode?: string;
   /** The message injected as the wakeup turn's prompt (already prefixed). */
   prompt: string;
   /** Human reason shown back to MARVIN/the user. */
@@ -77,6 +80,7 @@ export interface ScheduleWakeupInput {
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
   thinkingMode: string;
+  advisorThinkingMode?: string | undefined;
   delaySeconds: number;
   reason: string;
   prompt: string;
@@ -218,6 +222,9 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
     personality: input.personality,
     permissionStrategy: input.permissionStrategy,
     thinkingMode: input.thinkingMode,
+    ...(input.advisorThinkingMode
+      ? { advisorThinkingMode: input.advisorThinkingMode }
+      : {}),
     prompt: input.prompt,
     reason: input.reason,
     createdAt: new Date().toISOString(),

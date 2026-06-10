@@ -162,6 +162,11 @@ final class MarvinBridge {
     /// enables Claude's dynamic-workflow behaviour.
     var thinkingMode: String = "high"
 
+    /// Advisor-specific reasoning effort (ADR-0033). Same ladder as
+    /// `thinkingMode`; `nil` means the advisor follows the executor's
+    /// effort (the pre-0033 behaviour and the default).
+    var advisorThinkingMode: String? = nil
+
     /// Per-file porcelain status from `git status --porcelain=v1`.
     /// Keyed by absolute path; value is the trimmed two-char code
     /// (e.g. "M" for modified, "A" for added, "??" for untracked,
