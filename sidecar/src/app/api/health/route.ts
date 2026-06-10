@@ -23,6 +23,13 @@ export async function GET() {
       binaryError,
       model: defaultModel(),
       dataDir: getMarvinDataDir(),
+      // ADR-0035 — the app version this sidecar was spawned by.
+      // SidecarManager injects MARVIN_APP_VERSION at spawn; null means a
+      // dev sidecar (pnpm dev) or a pre-0.1.19 bundle. Lets any observer
+      // (About panel, release verification, debugging) confirm the
+      // SERVING process matches the bundle on disk — the stale-sidecar-
+      // adoption failure was invisible without it.
+      version: process.env.MARVIN_APP_VERSION ?? null,
     },
     { headers: { "Cache-Control": "no-store" } },
   );

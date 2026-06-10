@@ -86,6 +86,15 @@ final class SidecarManager {
             return
         }
 
+        // ADR-0035 — the bundled app OWNS its port. A sidecar leaked by a
+        // crashed/force-killed earlier instance keeps :3030 bound; the new
+        // spawn then dies on EADDRINUSE and the app silently talks to the
+        // STALE server — new on disk, old in memory. (This shipped two
+        // releases whose sidecar features weren't actually live.) Reclaim
+        // the port before spawning so the serving process is always the
+        // one from THIS bundle. Dev builds never reach here (guard above).
+        reclaimPort()
+
         // Open / create the log file. We append rather than truncate
         // so a crash report kept across sessions stays readable. If
         // the file grows past 10 MB, rotate it once at startup.
@@ -131,6 +140,12 @@ final class SidecarManager {
         // optimizer (we ship `images.unoptimized: true` in next.config),
         // but belt-and-braces: tell it not to look for sharp.
         env["NEXT_SHARP_PATH"] = ""
+        // ADR-0035 — stamp the spawning app's version into the sidecar so
+        // /api/health can report which bundle the SERVING process came
+        // from. Null on the wire = dev sidecar or pre-0.1.19 bundle.
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            env["MARVIN_APP_VERSION"] = version
+        }
         proc.environment = env
 
         // Pipe stdout + stderr to the log file. Single Pipe → both
@@ -182,6 +197,56 @@ final class SidecarManager {
         process = nil
         logHandle?.closeFile()
         logHandle = nil
+    }
+
+    /// ADR-0035 — kill whatever is listening on the sidecar port before
+    /// we spawn ours. SIGTERM first, brief grace, SIGKILL leftovers.
+    ///
+    /// Runs synchronously at app boot (bounded: one lsof + ≤1.5 s grace,
+    /// and only when the port is actually contended). Deliberately
+    /// unconditional in bundled mode — even a same-version listener gets
+    /// replaced, because "kill and respawn" is deterministic where
+    /// "probe and adopt" left us serving six-day-old code. A user who
+    /// intentionally runs `pnpm dev` on this port alongside the BUNDLED
+    /// app loses that race by design: the installed app owns its port.
+    private func reclaimPort() {
+        let port = ServerConfig.port
+        guard let pids = listenerPids(onPort: port), !pids.isEmpty else { return }
+        NSLog("SidecarManager: reclaiming port \(port) from stale pid(s) \(pids)")
+        for pid in pids { kill(pid, SIGTERM) }
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline {
+            if listenerPids(onPort: port)?.isEmpty ?? true { return }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        for pid in listenerPids(onPort: port) ?? [] {
+            NSLog("SidecarManager: SIGKILL stubborn pid \(pid) on port \(port)")
+            kill(pid, SIGKILL)
+        }
+        // One last beat so the kernel releases the socket before bind.
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+
+    /// PIDs listening on `port` (loopback or any-interface), via lsof.
+    /// Returns nil when lsof itself failed (treat as "unknown" — we
+    /// proceed to spawn and let EADDRINUSE surface in the log).
+    private func listenerPids(onPort port: Int) -> [pid_t]? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+        } catch {
+            return nil
+        }
+        proc.waitUntilExit()
+        // lsof exits 1 when nothing matches — that's the happy path.
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let out = String(data: data, encoding: .utf8) else { return [] }
+        return out.split(whereSeparator: \.isNewline).compactMap { pid_t($0.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// Rotate the sidecar log if it's grown past 10 MB. We keep one
