@@ -9,6 +9,35 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-10 — v0.1.21: diff-gutter accuracy + commit clears the review.**
+  Two fixes to the change-review surface, both reported from live use of
+  v0.1.20.
+  - **Diff gutter drifted on scroll.** The editor's change bar
+    (`DiffGutterBar`, the green/orange/red strip beside the line numbers)
+    positioned each marker from a *font-metric guess* of a uniform line
+    height: `y = (lineNo-1) × guessedHeight − scrollY`. Any sub-pixel
+    mismatch with STTextView's real TextKit 2 line height compounds with
+    the line number, so the bars drifted further from their lines the
+    deeper you scrolled; a missing `isFlipped` override also mirrored them
+    vertically. Rewritten to read each changed line's real top + height
+    straight from the layout fragments and cache that geometry (rebuilt
+    only when the diff set changes — scrolling reuses the cache, no
+    re-layout, no jank). `isFlipped = true` matches the ruler.
+  - **Commit now clears the review (ADR-0034 follow-up).** The review
+    baseline is pre-agent-touch, not git HEAD, so committing didn't drop
+    files from the strip the way it drops them from VS Code's Source
+    Control list. `reconcileCommitted` (called by `GET /api/changes`)
+    auto-accepts any reviewed file now clean vs HEAD — a committed change
+    is an accepted one — independent of how the commit happened. Drops
+    only; never rewrites a baseline, so reject still restores uncommitted
+    work. HEAD-gated so a quiescent poll is one `git rev-parse`. 2 new
+    unit tests (committed-drops / uncommitted-stays; no-op outside a repo).
+  - Also folded in: an opaque, z-raised header on the editor + review
+    panes with `.clipped()` scroll content, so scroll content can't bleed
+    over the file-path header.
+  - **Verification.** 15/15 checkpoint tests pass; runtime + web tsc clean
+    (pre-existing test-file errors untouched); `swift build` clean;
+    rebuilt + relaunched locally for the gutter check before tagging.
 - **2026-06-10 — v0.1.20: change review becomes a real diff editor.**
   The v0.1.18 review surface shipped as a SwiftUI `.sheet`, which is
   clamped to its parent (the chat pane) and rendered a cramped
