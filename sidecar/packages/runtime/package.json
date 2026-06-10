@@ -19,6 +19,7 @@
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
+    "./change-checkpoints": "./src/change-checkpoints.ts",
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
     "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts",
@@ -41,6 +42,7 @@
     "@anthropic-ai/sdk": "^0.81.0",
     "@marvin/tools": "workspace:*",
     "@marvin/graphify-bridge": "workspace:*",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "diff": "^8.0.0"
   }
 }
