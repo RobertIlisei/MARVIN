@@ -9,6 +9,56 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-10 — v0.1.14 → v0.1.19: agent reliability arc + Cursor-style
+  change review.** Six releases closing one failure theme — MARVIN
+  promising follow-through it couldn't deliver — plus the change-review
+  feature and the release-pipeline bug that masked two of the fixes.
+  - **Diagnosis (v0.1.14, ADR-0031).** MARVIN narrated watchers it didn't
+    have ("Monitor armed — I'll continue when it reports"): a turn is only
+    ever started by `POST /api/chat`; nothing re-invokes it. Built
+    `schedule_wakeup` / `cancel_wakeup` / `list_wakeups` (`marvin-control`
+    in-process MCP) over a bounded scheduler (60 s–24 h, ≤5
+    pending/session, chain-depth ≤8, persisted + re-armed on boot); fired
+    wakeups dispatch through the shared `runDetachedTurn` orchestrator
+    extracted from the chat route.
+  - **Same failure, second surface (v0.1.15, ADR-0032).** The model
+    re-routed via Bash `run_in_background: true` ("I'll be notified on
+    completion" — the SDK contract is actually poll-within-turn). Prompt
+    rules are theatre under auto-mode; hard-denied at `toolPolicy` instead,
+    steering to foreground or `schedule_wakeup`.
+  - **The real scheduler bug (v0.1.16).** Wakeups scheduled, persisted,
+    timers fired — and no turn ever started. Next standalone gives
+    `instrumentation.ts` its own module copy: the fire handler was wired
+    onto instrumentation's copy, the timers lived on the route chunk's.
+    Fixed with a `globalThis` singleton + request-path handler wiring;
+    verified end-to-end against a real standalone build.
+  - **Per-role effort (v0.1.17, ADR-0033).** Advisor became a registered
+    `agents:`-map definition carrying its own model + `effort`
+    (`advisorThinkingMode`, native `adv` chip, "follow executor" default).
+    Found en route: SDK `Options.advisorModel` is typed but never
+    forwarded by sdk.mjs 0.2.113 — the registration is the wiring that
+    works.
+  - **Change review (v0.1.18, ADR-0034).** Permission gate snapshots
+    pre-images on first agent touch per session
+    (`change-checkpoints.ts`); `/api/changes` + `/diff` + `/resolve`
+    expose the changed set, structured hunks, and hunk/file/all
+    accept-reject (accept advances the baseline; reject reverse-applies
+    to disk — never `git discard`, which reverts to HEAD and would
+    destroy uncommitted user work). Native live strip +
+    `ReviewChangesSheet` with per-hunk ✓/✗. 13 unit tests pin the
+    semantics; E2E-verified against the live build. v1 blind spot:
+    Bash mutations aren't pre-imaged.
+  - **The masking bug (v0.1.19, ADR-0035).** E2E on 0.1.18 initially
+    404'd: a sidecar leaked by a force-killed app instance had held
+    `:3030` since June 4 — new spawns died on EADDRINUSE and the app
+    silently served six-day-old code, so v0.1.17's sidecar half was
+    never live either. Fix: bundled app reclaims its port before
+    spawning (lsof → SIGTERM → SIGKILL) and stamps
+    `MARVIN_APP_VERSION` into the sidecar; `/api/health` now reports
+    `version` so serving-process ≠ bundle-on-disk is detectable.
+  - **Verification.** 332 vitest passing (+35 across the arc; 16
+    pre-existing failures untouched), tsc clean, `swift build` clean,
+    every release sha download-verified before the cask bump.
 - **2026-04-26 — Bugfix: ModelPicker `alwaysExpanded` for dialog use.**
   Follow-up to the previous Setup-popover fix: moving the picker into
   a dialog wasn't enough — the picker still rendered its own

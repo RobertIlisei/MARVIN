@@ -204,9 +204,12 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
 - 📎 Image paste in chat (⌘V, screenshots, dragged images)
 - 🌓 Light / dark theme — respects system preference
+- ✅ Agent change review — Cursor-style: a live "N files changed" strip while MARVIN edits, then per-hunk accept/reject against pre-agent baselines (rejecting restores *your* uncommitted state, not git HEAD — ADR-0034)
+- 🎚️ Per-role reasoning effort — independent Low→Max effort pickers for the executor and the advisor (ADR-0033)
 
 **Web sidecar**
 - 🔒 Structural confirm gate — every Edit/Write/Bash pre-flight, auto-mode audit log
+- ⏰ Self-scheduled wakeups — MARVIN's "I'll check back in 10 minutes" is real: the `schedule_wakeup` tool arms a bounded server-side timer that starts an actual follow-up turn (ADR-0031); background-and-forget Bash is gate-denied so a build can't finish unreported (ADR-0032)
 - 💸 Cost tracker — daily/weekly/lifetime spend per project
 - 🔀 Monaco diff viewer — see exactly what MARVIN is about to do before allowing
 - 🧰 Model picker — executor + advisor slots, live model list from Anthropic
@@ -265,7 +268,14 @@ docs/
 
 ## Status
 
-**v0.1.6 — Brew-installable, project-aware (current).**
+**v0.1.19 — Agent reliability + change review (current).**
+
+- **Agent change review** — the permission gate snapshots every file's pre-image on first agent touch per session; a live "N files changed" strip opens a review sheet with per-hunk accept/reject. Accept advances the baseline, reject reverse-applies to disk — never `git discard`, which would destroy uncommitted user work. v1 blind spot: Bash-driven mutations aren't pre-imaged. ADR-0034.
+- **Per-role reasoning effort** — the advisor is a registered agent definition carrying its own model + effort, settable independently of the executor (the SDK's `advisorModel` option turned out to be unwired; the agents-map registration is what actually works). ADR-0033.
+- **Self-scheduled wakeups** — `schedule_wakeup` / `cancel_wakeup` / `list_wakeups` MCP tools backed by a bounded, persistent, boot-re-armed scheduler; a fired wakeup starts a real turn that resumes the session. Bash `run_in_background` is gate-denied (the runtime can't deliver completion notifications, so the capability shouldn't exist). ADRs 0031, 0032.
+- **The bundled app owns its port** — launch reclaims `:3030` from any stale sidecar before spawning, and `/api/health` reports the serving process's app version, so "new app on disk, old code in memory" can't recur. ADR-0035.
+
+**v0.1.6 — Brew-installable, project-aware.**
 
 - **Brew cask** — `brew install --cask marvin-ai` produces a working IDE on a fresh Mac with no Swift / Node / pnpm / Xcode required. Bundled Node 22 + Next.js standalone sidecar inside `MARVIN.app/Contents/Resources/` (ADR-0023).
 - **Project-aware skill recommendations** — fingerprint detector emits namespaced tags (`framework:next`, `architecture:multi-tenant`, `test:playwright`, …) from a project's manifests + memory file; the suggestion engine maps tags to skills you can either install user-global or build project-local. ADR-0024.
