@@ -67,6 +67,9 @@ struct TurnStarted: Codable {
     let permissionStrategy: String?
     let personality: String?
     let thinkingMode: String?
+    /// Advisor-specific effort in force for this turn (ADR-0033);
+    /// nil = the advisor followed the executor's effort.
+    let advisorThinkingMode: String?
     /// ADR-0022 §3 follow-up: true when the sidecar started this turn
     /// without resuming a prior SDK session (either a brand-new
     /// transcript or an explicit `resetSdkSession: true`). The
@@ -155,6 +158,10 @@ struct ChatRequest: Codable {
     /// defaults to "thinking" (= SDK effort high) when absent, which
     /// matches MARVIN's prior behaviour, so old clients keep working.
     let thinkingMode: String?
+    /// Advisor-specific reasoning effort (ADR-0033). Optional — absent
+    /// means the advisor follows the executor's effort, matching the
+    /// pre-0033 single-effort behaviour.
+    let advisorThinkingMode: String?
     /// ADR-0022 §3 follow-up: when true, the sidecar starts the next
     /// SDK turn with a fresh server-side session — drops the
     /// cumulative cache that drives latency without losing the
@@ -174,6 +181,7 @@ struct ChatRequest: Codable {
         runtimeMode: String? = nil,
         permissionStrategy: String? = nil,
         thinkingMode: String? = nil,
+        advisorThinkingMode: String? = nil,
         resetSdkSession: Bool? = nil
     ) {
         self.message = message
@@ -187,6 +195,7 @@ struct ChatRequest: Codable {
         self.runtimeMode = runtimeMode
         self.permissionStrategy = permissionStrategy
         self.thinkingMode = thinkingMode
+        self.advisorThinkingMode = advisorThinkingMode
         self.resetSdkSession = resetSdkSession
     }
 }

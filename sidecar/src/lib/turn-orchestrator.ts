@@ -50,6 +50,8 @@ export interface DetachedTurnParams {
   advisorModel?: string | undefined;
   permissionStrategy: PermissionStrategy;
   thinkingMode: string;
+  /** Advisor-specific effort (ADR-0033); undefined = follow the executor. */
+  advisorThinkingMode?: string | undefined;
   sessionId?: string | undefined;
   appendSystemPrompt: string;
   personality: "marvin" | "neutral";
@@ -74,6 +76,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     advisorModel,
     permissionStrategy,
     thinkingMode,
+    advisorThinkingMode,
     sessionId,
     appendSystemPrompt,
     personality,
@@ -87,6 +90,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     ...(advisorModel ? { advisorModel } : {}),
     permissionStrategy,
     thinkingMode,
+    ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     turnId,
     sessionId,
     appendSystemPrompt,
@@ -200,6 +204,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     personality: record.personality,
     permissionStrategy: record.permissionStrategy,
     thinkingMode: record.thinkingMode,
+    advisorThinkingMode: record.advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
   };
@@ -221,6 +226,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     advisorModel: record.advisorModel ?? undefined,
     permissionStrategy: record.permissionStrategy,
     thinkingMode: record.thinkingMode,
+    advisorThinkingMode: record.advisorThinkingMode,
     sessionId: sdkResumeId,
     appendSystemPrompt,
     personality: record.personality,

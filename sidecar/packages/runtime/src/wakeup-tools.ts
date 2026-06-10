@@ -29,6 +29,8 @@ export interface WakeupToolContext {
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
   thinkingMode: string;
+  /** Advisor-specific effort (ADR-0033); undefined = follow the executor. */
+  advisorThinkingMode?: string | undefined;
   /** Depth of THIS turn in a wakeup chain (0 if started by a human). */
   depth: number;
 }
@@ -74,6 +76,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         personality: ctx.personality,
         permissionStrategy: ctx.permissionStrategy,
         thinkingMode: ctx.thinkingMode,
+        advisorThinkingMode: ctx.advisorThinkingMode,
         delaySeconds,
         reason,
         prompt,

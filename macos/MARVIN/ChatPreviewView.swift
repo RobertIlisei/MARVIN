@@ -332,6 +332,7 @@ final class ChatPreviewModel {
             advisorModel: prefs.advisorModel,
             permissionStrategy: strategy,
             thinkingMode: prefs.thinkingMode,
+            advisorThinkingMode: prefs.advisorThinkingMode,
             resetSdkSession: resetThisTurn ? true : nil
         )
         activeTask = Task { @MainActor in

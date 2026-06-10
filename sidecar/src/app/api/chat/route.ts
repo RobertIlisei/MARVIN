@@ -44,6 +44,10 @@ interface ChatRequestBody {
   /** Reasoning-effort selection — ladder value (low/medium/high/xhigh/max)
    *  or legacy fast/thinking/max alias. Maps to SDK `effort`. */
   thinkingMode?: string;
+  /** Reasoning effort for the ADVISOR subagent, independent of the
+   *  executor's (ADR-0033). Same ladder values; omitted = follow the
+   *  executor's effort. */
+  advisorThinkingMode?: string;
   /** When true, skip the PROJECT_STATUS/BUSINESS_OVERVIEW/probe injection. */
   skipProjectContext?: boolean;
   /**
@@ -111,6 +115,10 @@ export async function POST(req: NextRequest) {
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
   const thinkingMode: string = body.thinkingMode ?? "high";
+  // Advisor effort intentionally has NO "high" fallback here — undefined
+  // means "follow the executor", resolved inside runAgent (ADR-0033).
+  const advisorThinkingMode: string | undefined =
+    body.advisorThinkingMode?.trim() || undefined;
 
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
@@ -170,6 +178,7 @@ export async function POST(req: NextRequest) {
     personality,
     permissionStrategy,
     thinkingMode,
+    advisorThinkingMode: advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
   };
@@ -197,6 +206,7 @@ export async function POST(req: NextRequest) {
     advisorModel,
     permissionStrategy,
     thinkingMode,
+    advisorThinkingMode,
     sessionId: sdkResumeId,
     appendSystemPrompt,
     personality,

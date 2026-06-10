@@ -179,8 +179,21 @@ export interface RunAgentInput {
   message: string;
   cwd: string;
   model: string;
-  /** Optional advisor model — enables the SDK's server-side advisor tool. */
+  /**
+   * Optional advisor model. Carried by the registered `advisor` agent
+   * definition (ADR-0033) — the SDK `advisorModel` Option is typed but
+   * NOT forwarded by sdk.mjs 0.2.113, so the agents-map registration is
+   * the wiring that actually works. Still passed as an Option for
+   * forward-compat with SDK versions that wire it.
+   */
   advisorModel?: string | undefined;
+  /**
+   * Reasoning effort for the ADVISOR subagent, independent of the
+   * executor's `thinkingMode` (ADR-0033). Same ladder values. Defaults
+   * to the executor's effort when omitted — preserving the old
+   * single-effort behaviour.
+   */
+  advisorThinkingMode?: string | undefined;
   /** Unique ID for this turn — used to key the confirm registry. */
   turnId: string;
   /** Resume a previous SDK session by ID (omit for a new one). */
@@ -326,6 +339,54 @@ export const SCOUT_AGENT: AgentDefinition = {
     "Skip any section that has nothing to say. Brevity is the deliverable.",
   ].join("\n"),
 };
+
+/**
+ * Build the registered `advisor` agent definition (ADR-0033).
+ *
+ * Why a registered agent instead of the old `general-purpose` + model-hint
+ * pattern (ADR-0007): the Task tool input has NO effort field, so per-advisor
+ * reasoning effort can only be set on an `agents:`-map definition — the SDK's
+ * `AgentDefinition.effort` is the one mechanical lever. Registering also
+ * fixes the advisor model wiring: the SDK `advisorModel` Option is typed but
+ * not forwarded by sdk.mjs 0.2.113, whereas `AgentDefinition.model` accepts a
+ * full model id and works.
+ *
+ * Read-only like the scout (Golden Rule 1 / ADR-0030): the subagent gate in
+ * `classifyToolCall` already hard-denies mutations from any agentID, and
+ * `disallowedTools` is the SDK-level backstop. The advisor reasons about a
+ * plan; it does not touch the workspace.
+ */
+export function buildAdvisorAgent(args: {
+  /** Full model id for the advisor; falls back to inheriting the executor. */
+  model?: string | undefined;
+  /** Resolved SDK effort for the advisor. */
+  effort: ReasoningEffort;
+}): AgentDefinition {
+  return {
+    description:
+      "Second-opinion advisor. Spawn for a blunt critique of a plan, " +
+      "ADR, or hard decision — risks missed, alternatives, pushback, " +
+      "verdict. Read-only; returns advice, never edits.",
+    disallowedTools: ["Edit", "Write", "Bash", "NotebookEdit", "WebFetch"],
+    mcpServers: ["marvin-graph"],
+    model: args.model ?? "inherit",
+    effort: args.effort,
+    prompt: [
+      "You are an advisor consulted by MARVIN's executor for a second",
+      "opinion. You are not MARVIN; the user does not see you directly.",
+      "Be blunt — agreement theater helps no one. Structure your reply:",
+      "",
+      "## Risks the plan misses",
+      "## Alternatives worth considering",
+      "## Pushback on the weakest points",
+      "## Verdict (go / go-with-caveats / reject — one paragraph)",
+      "",
+      "Ground claims in the provided context; consult the marvin-graph",
+      "MCP tools or read files when the question is structural. Return",
+      "the critique and nothing else.",
+    ].join("\n"),
+  };
+}
 
 /**
  * Pretty-print known upstream error patterns into actionable messages.
@@ -628,6 +689,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           personality: input.personality ?? "marvin",
           permissionStrategy,
           thinkingMode: input.thinkingMode ?? "high",
+          advisorThinkingMode: input.advisorThinkingMode,
           depth: input.wakeupDepth ?? 0,
         })
       : null;
@@ -684,11 +746,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     ...(projectSkillsPlugin ? { plugins: [projectSkillsPlugin] } : {}),
     // ADR-0014: register the read-only `scout` subagent so MARVIN can
     // dispatch parallel research (graph-first, read-only, synthesis-
-    // returning) via `Task` with `subagent_type: "scout"`. The advisor
-    // carve-out (ADR-0007) continues to use `subagent_type: "general-
-    // purpose"` with an Opus hint; scout and advisor do not overlap.
+    // returning) via `Task` with `subagent_type: "scout"`.
+    // ADR-0033: register the `advisor` agent so consults carry their OWN
+    // model + reasoning effort — the Task input has no effort field, so
+    // the agents-map definition is the only mechanical lever for
+    // per-advisor effort. Replaces the ADR-0007 `general-purpose` +
+    // model-hint spawn (still policy-sanctioned for back-compat).
     agents: {
       scout: SCOUT_AGENT,
+      advisor: buildAdvisorAgent({
+        model: advisorModel,
+        // Default the advisor to the EXECUTOR's effort when no separate
+        // advisor effort was picked — exactly the pre-ADR-0033 behaviour.
+        effort: resolveEffort(
+          input.advisorThinkingMode ?? input.thinkingMode,
+          advisorModel ?? model,
+        ),
+      }),
     },
     includePartialMessages: false,
     // Reasoning-effort selection → SDK effort. Accepts the full ladder
