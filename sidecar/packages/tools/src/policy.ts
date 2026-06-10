@@ -77,8 +77,12 @@ const BASE: Record<ToolName, ToolPolicyClass> = {
  * Subagent types MARVIN may dispatch via `Task` without a confirm
  * prompt. The set is small and ADR-bound:
  *   - `scout`           — read-only research subagent (ADR-0014).
- *   - `general-purpose` — the SDK's generic delegate; used by the
- *                         advisor pattern (ADR-0007). Inherits the
+ *   - `advisor`         — registered second-opinion agent carrying its
+ *                         own model + reasoning effort (ADR-0033).
+ *                         Read-only via disallowedTools + the agentID
+ *                         mutation gate (ADR-0030).
+ *   - `general-purpose` — the SDK's generic delegate; the legacy
+ *                         advisor spawn shape (ADR-0007). Inherits the
  *                         parent session's tool set, so it remains
  *                         gated transitively.
  *
@@ -87,6 +91,7 @@ const BASE: Record<ToolName, ToolPolicyClass> = {
  */
 const SANCTIONED_SUBAGENT_TYPES: ReadonlySet<string> = new Set([
   "scout",
+  "advisor",
   "general-purpose",
 ]);
 

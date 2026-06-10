@@ -140,6 +140,11 @@ describe("toolPolicy — Task subagent gating (audit finding #3)", () => {
     expect(result.class).toBe("auto");
   });
 
+  it("auto-allows sanctioned `advisor` subagent (ADR-0033)", () => {
+    const result = toolPolicy("Task", { subagent_type: "advisor" });
+    expect(result.class).toBe("auto");
+  });
+
   it("auto-allows sanctioned `general-purpose` subagent", () => {
     const result = toolPolicy("Task", {
       subagent_type: "general-purpose",
