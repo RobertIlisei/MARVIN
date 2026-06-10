@@ -9,6 +9,29 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-10 — v0.1.20: change review becomes a real diff editor.**
+  The v0.1.18 review surface shipped as a SwiftUI `.sheet`, which is
+  clamped to its parent (the chat pane) and rendered a cramped
+  single-column unified diff with line-truncated rows — the user's words:
+  "very small, it's not like Cursor's or VS Code's." Reworked into the
+  diff-editor surface those tools have (ADR-0034 update):
+  - **Own window.** `Window("Review Changes", id: "marvin-review")`,
+    default 1280×820, min 820×520, `openWindow`-driven — resizable,
+    zoomable, full-screen-able, no longer size-bounded by the pane.
+  - **Side-by-side diff** (default). Original left, modified right, each
+    with line numbers parsed from the hunk header; a removed-run/added-run
+    is paired index-by-index into modified rows, leftovers render
+    delete-only / insert-only. A **Split/Inline toggle** keeps the unified
+    view one click away. Rows wrap instead of truncating and are
+    selectable.
+  - **Cross-window plumbing.** `ReviewWindowTarget` (app-scope singleton)
+    carries `(cwd, marvinSessionId)` from the chat view to the window
+    scene; the model posts `.marvinAgentChangesDidMutate` after every
+    accept/reject so the "N files changed" strip re-counts across the
+    window boundary. Per-hunk / per-file / all accept-reject and the
+    checkpoint semantics are unchanged.
+  - **Verification.** `swift build` clean; no stale `ReviewChangesSheet`
+    references remain.
 - **2026-06-10 — v0.1.14 → v0.1.19: agent reliability arc + Cursor-style
   change review.** Six releases closing one failure theme — MARVIN
   promising follow-through it couldn't deliver — plus the change-review

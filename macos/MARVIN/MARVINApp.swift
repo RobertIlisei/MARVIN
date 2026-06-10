@@ -318,6 +318,11 @@ struct MARVINApp: App {
     /// migration phases land).
     private let bridge = MarvinBridge.shared
 
+    /// ADR-0034 — which (cwd, session) the Review Changes window shows.
+    /// App-scope singleton because the chat view that triggers the open
+    /// and the review window scene are separate view trees.
+    private let reviewTarget = ReviewWindowTarget.shared
+
     var body: some Scene {
         Window("MARVIN", id: "marvin-main") {
             ContentView()
@@ -547,6 +552,21 @@ struct MARVINApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commandsRemoved()
+
+        // ADR-0034 — Review Changes lives in its OWN large resizable
+        // window, not a sheet clamped to the chat pane. This is the VS
+        // Code / Cursor diff-editor surface: side-by-side original |
+        // modified with line numbers, per-hunk accept/reject. Opened via
+        // openWindow(id: "marvin-review") from the "N files changed" strip,
+        // which first stamps the target (cwd, session) on reviewTarget.
+        Window("Review Changes", id: "marvin-review") {
+            ReviewChangesWindow()
+                .environment(reviewTarget)
+                .environment(bridge)
+        }
+        .defaultSize(width: 1280, height: 820)
+        .windowResizability(.contentMinSize)
         .commandsRemoved()
 
         // Phase 4g retired the standalone "Brain (preview)" Window
