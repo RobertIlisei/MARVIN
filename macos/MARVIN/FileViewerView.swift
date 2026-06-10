@@ -592,11 +592,23 @@ struct FileViewerView: View {
         // editor content. One status surface across the whole app —
         // matches Cursor / VS Code / IntelliJ.
         VStack(spacing: 0) {
+            // Tab bar + header sit above the editor's NSScrollView layer.
+            // An AppKit NSViewRepresentable otherwise composites ABOVE the
+            // adjacent SwiftUI chrome, so the line-number ruler bled up
+            // over the file name / path / "modified" badge while scrolling.
+            // .zIndex(1) raises the opaque chrome; content gets .clipped()
+            // so the ruler can't draw outside the scroll view's own frame.
             tabBar
+                .zIndex(1)
             Divider()
+                .zIndex(1)
             header
+                .zIndex(1)
             Divider()
+                .zIndex(1)
             content
+                .zIndex(0)
+                .clipped()
         }
         .background(Color(nsColor: .textBackgroundColor))
         .preferredColorScheme(bridge.preferredColorScheme)

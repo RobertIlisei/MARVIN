@@ -10,7 +10,7 @@
  * Returns `{ files: ChangedFile[] }`.
  */
 
-import { listChanges } from "@marvin/runtime/change-checkpoints";
+import { listChanges, reconcileCommitted } from "@marvin/runtime/change-checkpoints";
 import { type NextRequest, NextResponse } from "next/server";
 import { keyFromQuery } from "@/lib/changes-helpers";
 
@@ -20,5 +20,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const resolved = keyFromQuery(req);
   if ("error" in resolved) return resolved.error;
+  // ADR-0034 follow-up: a committed agent change is an accepted one — drop
+  // reviewed files now clean vs HEAD before listing, so committing clears
+  // the strip the way it clears VS Code's Source Control list. HEAD-gated,
+  // so a quiescent poll is just one `git rev-parse`.
+  reconcileCommitted(resolved.key, resolved.cwd);
   return NextResponse.json({ files: listChanges(resolved.key) });
 }

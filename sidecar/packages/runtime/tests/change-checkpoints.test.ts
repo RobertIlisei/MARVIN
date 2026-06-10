@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ import {
   diffFile,
   listChanges,
   recordPreImage,
+  reconcileCommitted,
   rejectAll,
   rejectFile,
   rejectHunk,
@@ -62,6 +64,40 @@ describe("recording + listing", () => {
     expect(changes[0]).toMatchObject({ path: "a.txt", status: "modified" });
     expect(changes[0]?.additions).toBe(1);
     expect(changes[0]?.deletions).toBe(1);
+  });
+
+  it("a committed agent change drops from the review; an uncommitted one stays", () => {
+    // ADR-0034 follow-up: a committed change is an accepted one — it should
+    // leave the review set the way it leaves VS Code's Source Control list.
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+    git("init", "-q");
+    git("config", "user.email", "t@t.test");
+    git("config", "user.name", "t");
+    git("commit", "--allow-empty", "-q", "-m", "root");
+
+    // Two files the agent edits. baseline (pre-touch) captured by agentWrites.
+    seed("kept.txt", "k1\n");
+    seed("done.txt", "d1\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "seed");
+    agentWrites("kept.txt", "k1\nk2\n");
+    agentWrites("done.txt", "d1\nd2\n");
+    expect(listChanges(KEY).map((c) => c.path).sort()).toEqual(["done.txt", "kept.txt"]);
+
+    // Commit only done.txt — its change is now in HEAD, kept.txt is not.
+    git("add", "done.txt");
+    git("commit", "-q", "-m", "land done.txt");
+
+    const dropped = reconcileCommitted(KEY, cwd);
+    expect(dropped).toEqual(["done.txt"]);
+    expect(listChanges(KEY).map((c) => c.path)).toEqual(["kept.txt"]);
+  });
+
+  it("reconcile is a no-op outside a git repo", () => {
+    agentWrites("a.txt", "one\n");
+    expect(reconcileCommitted(KEY, cwd)).toEqual([]);
+    expect(listChanges(KEY)).toHaveLength(1);
   });
 
   it("an agent-created file lists as added; agent-deleted as deleted", () => {

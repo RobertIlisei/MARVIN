@@ -29,6 +29,7 @@
  * terminal blind spot.
  */
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -346,6 +347,79 @@ export function rejectFile(key: CheckpointKey, relPath: string): boolean {
   return true;
 }
 
+// ── Commit reconciliation (ADR-0034 follow-up) ─────────────────────────
+//
+// The review baseline is pre-agent-touch, deliberately NOT git HEAD — so
+// `git commit` doesn't clear the review the way it clears VS Code's
+// Source Control list. But a committed change IS, by definition, an
+// accepted one: leaving it in the strip is stale noise. `reconcileCommitted`
+// drops any reviewed file whose working tree is now clean vs HEAD (its
+// agent change landed in a commit), independent of HOW the commit happened
+// (agent Bash, terminal, MARVIN's own SCM UI). It only DROPS entries — it
+// never rewrites a baseline — so it can't interfere with reject restoring
+// a user's uncommitted work.
+
+/** HEAD sha at which we last reconciled a key. Lets the steady-state poll
+ * skip the per-file probes until a commit actually moves HEAD. Optimization
+ * only — correctness never depends on it (worst case: an extra reconcile). */
+const lastReconciledHead = new Map<string, string>();
+
+function gitHead(cwd: string): string | null {
+  try {
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"], // swallow "fatal: not a git repo"
+    });
+    return out.trim() || null;
+  } catch {
+    return null; // not a git repo, detached/empty, or git missing
+  }
+}
+
+/** Clean vs HEAD = committed with no further edits. An empty
+ * `git status --porcelain` for the pathspec means tracked-and-clean; a
+ * non-empty result (" M" modified, staged, or "??" untracked) means it
+ * still differs from HEAD and stays under review. */
+function isCommittedVsHead(cwd: string, relPath: string): boolean {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", cwd, "status", "--porcelain", "--", relPath],
+      { encoding: "utf-8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return out.trim() === "";
+  } catch {
+    return false; // git error → never auto-drop
+  }
+}
+
+/**
+ * Auto-accept reviewed files whose agent change has been committed. Gated
+ * on HEAD movement so a quiescent poll costs one `rev-parse`. Returns the
+ * dropped paths (for logging / debugging; callers re-list afterwards).
+ */
+export function reconcileCommitted(key: CheckpointKey, cwd: string): string[] {
+  const manifest = readManifest(key);
+  if (!manifest || Object.keys(manifest.files).length === 0) return [];
+
+  const head = gitHead(cwd);
+  if (head === null) return []; // not a repo — nothing to reconcile against
+  const keyId = `${key.projectId}/${key.marvinSessionId}`;
+  if (lastReconciledHead.get(keyId) === head) return []; // no commit since last pass
+
+  const dropped: string[] = [];
+  for (const relPath of Object.keys(manifest.files)) {
+    if (isCommittedVsHead(cwd, relPath)) {
+      dropEntry(key, manifest, relPath);
+      dropped.push(relPath);
+    }
+  }
+  if (dropped.length > 0) writeManifest(key, manifest);
+  lastReconciledHead.set(keyId, head);
+  return dropped;
+}
+
 /**
  * Build a single-hunk patch object jsdiff can apply. Hunk indices refer
  * to the CURRENT recompute of diff(baseline → disk) — the caller fetched
@@ -444,4 +518,5 @@ export function __clearCheckpointsForTests(key: CheckpointKey): void {
     recursive: true,
     force: true,
   });
+  lastReconciledHead.delete(`${key.projectId}/${key.marvinSessionId}`);
 }

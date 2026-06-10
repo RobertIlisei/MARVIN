@@ -415,10 +415,18 @@ struct ReviewChangesScreen: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+                // Opaque + raised so the scrolling diff (line numbers) can
+                // never ride up over the file name / path / actions. The
+                // ScrollView below is .clipped() and given a lower zIndex.
+                .background(Color(nsColor: .windowBackgroundColor))
+                .zIndex(1)
                 Divider()
+                    .zIndex(1)
                 if model.viewMode == .split {
                     columnHeader
+                        .zIndex(1)
                     Divider()
+                        .zIndex(1)
                 }
                 ScrollView([.vertical, .horizontal]) {
                     LazyVStack(alignment: .leading, spacing: 12) {
@@ -433,6 +441,8 @@ struct ReviewChangesScreen: View {
                     .padding(12)
                     .frame(minWidth: model.viewMode == .split ? 760 : 480, alignment: .leading)
                 }
+                .zIndex(0)
+                .clipped()
             } else if let err = model.loadError {
                 Text(err)
                     .font(.system(size: 12))

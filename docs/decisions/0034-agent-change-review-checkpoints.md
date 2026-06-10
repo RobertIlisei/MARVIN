@@ -79,6 +79,23 @@ diff editor users expect. Replaced with:
   window boundary. `ReviewWindowTarget` (app-scope singleton) carries the
   `(cwd, marvinSessionId)` pair from the chat view to the window scene.
 
+### Update 2026-06-10 (v0.1.21) — commit auto-clears reviewed files
+
+The baseline is pre-agent-touch, NOT git HEAD (above), so `git commit`
+didn't clear the review the way it clears VS Code's Source Control list —
+users reasonably expected it to. A committed agent change is, by
+definition, an accepted one. `reconcileCommitted(key, cwd)` (in
+`change-checkpoints.ts`, called by `GET /api/changes` before listing) drops
+any reviewed file whose working tree is now **clean vs HEAD**
+(`git status --porcelain -- <path>` empty), regardless of how the commit
+happened (agent Bash, terminal, MARVIN's SCM UI). It only *drops* entries —
+never rewrites a baseline — so it cannot interfere with reject restoring a
+user's uncommitted work. Gated on HEAD movement (one `git rev-parse` per
+quiescent poll; per-file probes only after a commit lands). The native
+strip reflects the cleared set on its next refresh (turn boundary /
+cli.event / review-window open); a commit driven from an idle terminal
+clears on the next such tick rather than instantly — acceptable for v1.
+
 ## Known limitations (v1, deliberate)
 
 - **Bash mutations are not pre-imaged** — the gate cannot know a shell
