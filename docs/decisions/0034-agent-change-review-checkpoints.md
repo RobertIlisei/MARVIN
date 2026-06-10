@@ -54,8 +54,30 @@ Surfaces: `GET /api/changes` (changed set), `GET /api/changes/diff`
 (structured hunks), `POST /api/changes/resolve` (accept/reject ×
 hunk/file/all, CSRF-guarded). Native: a live **"N files changed · Review"**
 strip above the chat input (refreshes throttled per cli.event + at turn
-boundaries) opening `ReviewChangesSheet` — files left, hunks right, per-hunk
+boundaries) opens the review surface — files left, diff right, per-hunk
 ✓/✗, per-file and all-file actions.
+
+### Update 2026-06-10 — own window + side-by-side diff editor
+
+The first cut presented the review as a SwiftUI `.sheet`. A sheet is
+clamped to its parent (the chat pane) and rendered a cramped single-column
+unified diff with line-truncated rows — nothing like the VS Code / Cursor
+diff editor users expect. Replaced with:
+
+- A dedicated **`Window("Review Changes", id: "marvin-review")`** scene
+  (default 1280×820, min 820×520, `openWindow`-driven). Real window →
+  resizable, zoomable, full-screen-able, not size-bounded by the pane.
+- A **side-by-side diff** (`DiffViewMode.split`, default): original left,
+  modified right, each with line numbers parsed from the hunk header; a
+  removed-run/added-run is paired index-by-index into modified rows,
+  leftovers render as delete-only / insert-only. A **Split/Inline toggle**
+  keeps the old unified view one click away. Lines wrap (`fixedSize`
+  vertical) instead of truncating, and are `textSelection`-enabled.
+- Because the window is a separate view tree, the model posts
+  **`.marvinAgentChangesDidMutate`** after every accept/reject;
+  `ChatPreviewView` observes it to keep the strip count honest across the
+  window boundary. `ReviewWindowTarget` (app-scope singleton) carries the
+  `(cwd, marvinSessionId)` pair from the chat view to the window scene.
 
 ## Known limitations (v1, deliberate)
 

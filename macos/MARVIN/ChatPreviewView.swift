@@ -828,9 +828,8 @@ final class ChatPreviewModel {
 ///   └──────────────────────────────────┘
 struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
+    @Environment(\.openWindow) private var openWindow
     @State private var model = ChatPreviewModel()
-    /// ADR-0034 — review sheet for the agent's pending changed set.
-    @State private var reviewSheetOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -862,7 +861,7 @@ struct ChatPreviewView: View {
             }
             if !model.agentChangedFiles.isEmpty {
                 AgentChangesStrip(files: model.agentChangedFiles) {
-                    reviewSheetOpen = true
+                    openReviewWindow()
                 }
             }
             if !model.queuedMessages.isEmpty {
@@ -884,15 +883,6 @@ struct ChatPreviewView: View {
         }
         .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
-        // ADR-0034 — Cursor-style review of agent edits. The sheet owns
-        // its own model (fresh per open) so hunk indices are always a
-        // live recompute; onMutate keeps the strip's count honest.
-        .sheet(isPresented: $reviewSheetOpen) {
-            if let cwd = bridge.projectWorkDir,
-               let sid = model.marvinSessionId ?? model.loadedSessionId {
-                ReviewChangesSheet(model: makeReviewModel(cwd: cwd, sid: sid))
-            }
-        }
         // Phase 2h — hydrate the message list when the bridge
         // reports a (projectId, marvinSessionId) we haven't loaded
         // yet. Three triggers funnel through the same code path:
@@ -921,6 +911,19 @@ struct ChatPreviewView: View {
             ) { _ in
                 Task { @MainActor in
                     model.resetSdkOnNextSend = true
+                }
+            }
+            // ADR-0034 — the Review Changes window lives in a separate
+            // view tree; when it accepts/rejects a hunk it posts this so
+            // our "N files changed" strip re-counts without waiting for
+            // the next cli.event throttle window.
+            NotificationCenter.default.addObserver(
+                forName: .marvinAgentChangesDidMutate,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    model.refreshAgentChanges(force: true)
                 }
             }
         }
@@ -1085,13 +1088,20 @@ struct ChatPreviewView: View {
         )
     }
 
-    /// ADR-0034 — build the review sheet's model, wiring its mutation
-    /// callback back to the strip so accept/reject updates the count
-    /// without waiting for the next cli.event throttle window.
-    private func makeReviewModel(cwd: String, sid: String) -> ReviewChangesModel {
-        let m = ReviewChangesModel(cwd: cwd, marvinSessionId: sid)
-        m.onMutate = { model.refreshAgentChanges(force: true) }
-        return m
+    /// ADR-0034 — open the Review Changes window. Stamps the target
+    /// (cwd, session) pair the review model should fetch, then opens (or
+    /// focuses) the dedicated "marvin-review" window. Using a real window
+    /// — not a sheet clamped to this pane — gives the VS Code / Cursor
+    /// diff-editor surface its room. The window's model posts
+    /// `.marvinAgentChangesDidMutate` on every accept/reject; the observer
+    /// in onAppear keeps this view's strip count honest across the window
+    /// boundary.
+    private func openReviewWindow() {
+        guard let cwd = bridge.projectWorkDir,
+              let sid = model.marvinSessionId ?? model.loadedSessionId else { return }
+        ReviewWindowTarget.shared.cwd = cwd
+        ReviewWindowTarget.shared.sid = sid
+        openWindow(id: "marvin-review")
     }
 
     private var header: some View {
