@@ -67,6 +67,9 @@ export const marvinPaths = {
   /** Per-project pending self-scheduled wakeups (ADR-0031). */
   wakeupsFile: (projectId: string) =>
     join(getMarvinDataDir(), "wakeups", `${projectId}.json`),
+  /** Per-session agent-edit checkpoint store (ADR-0034). */
+  checkpointsDir: (projectId: string, marvinSessionId: string) =>
+    join(getMarvinDataDir(), "checkpoints", projectId, marvinSessionId),
 } as const;
 
 /** Ensure the parent directory of a file exists. Safe to call on every write. */
