@@ -26,6 +26,7 @@ import { type AgentDefinition, type CanUseTool, type Options, type PermissionRes
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { createWakeupMcpServer } from "./wakeup-tools";
+import { recordPreImage } from "./change-checkpoints";
 import { KNOWN_TOOL_NAMES, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
@@ -530,6 +531,42 @@ export function residentContextTokens(event: SDKMessage): number | null {
 }
 
 /**
+ * Snapshot the pre-image of a file an agent write tool is about to touch
+ * (ADR-0034 change review). Fires for main-loop Edit / Write /
+ * NotebookEdit only — subagent mutations are hard-denied anyway, and a
+ * snapshot for a call that ends up denied is harmless (baseline == disk,
+ * GC'd on the next read). Best-effort: checkpointing must never block or
+ * fail a write.
+ */
+function maybeRecordPreImage(args: {
+  checkpoint: { projectId: string; marvinSessionId: string } | undefined;
+  cwd: string;
+  turnId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  agentID: string | undefined;
+}): void {
+  if (!args.checkpoint || args.agentID) return;
+  if (!["Edit", "Write", "NotebookEdit"].includes(args.toolName)) return;
+  const raw =
+    args.toolName === "NotebookEdit" ? args.input.notebook_path : args.input.file_path;
+  if (typeof raw !== "string" || !raw) return;
+  try {
+    recordPreImage({
+      key: {
+        projectId: args.checkpoint.projectId,
+        marvinSessionId: args.checkpoint.marvinSessionId,
+      },
+      cwd: args.cwd,
+      turnId: args.turnId,
+      absPath: raw,
+    });
+  } catch {
+    /* never block the write on checkpoint bookkeeping */
+  }
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -540,11 +577,16 @@ export function residentContextTokens(event: SDKMessage): number | null {
 export function makeAutoModeLogger(args: {
   cwd: string;
   turnId: string;
+  /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
+  checkpoint?: { projectId: string; marvinSessionId: string };
 }): CanUseTool {
-  const { cwd, turnId } = args;
+  const { cwd, turnId, checkpoint } = args;
   return async (toolName, toolInput, { toolUseID, agentID }) => {
     const safeInput = normaliseInput(toolInput);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
+    if (cls.decision !== "deny") {
+      maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
+    }
     if (cls.decision === "deny") {
       return {
         behavior: "deny",
@@ -575,11 +617,18 @@ export function makeGatedCanUseTool(args: {
   cwd: string;
   turnId: string;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
+  /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
+  checkpoint?: { projectId: string; marvinSessionId: string };
 }): CanUseTool {
-  const { cwd, turnId, onConfirmRequest } = args;
+  const { cwd, turnId, onConfirmRequest, checkpoint } = args;
   return async (toolName, toolInput, { toolUseID, title, description, displayName, agentID }) => {
     const safeInput = normaliseInput(toolInput);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
+    if (cls.decision !== "deny") {
+      // Pre-image BEFORE the confirm round-trip too: if the user allows,
+      // the write executes inside the SDK with no further hook here.
+      maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
+    }
 
     if (cls.decision === "allow") {
       // Audit-log mutators that auto-allow under `gated` too. Read /
@@ -665,8 +714,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 
   // Both factories live at module scope so tests can pin the dispatch
   // (ADR-0015 §1) without spinning up a full `runAgent` loop.
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest });
-  const autoModeLogger = makeAutoModeLogger({ cwd, turnId });
+  // Change-review checkpointing (ADR-0034) needs the session identity to
+  // scope the store; absent (tests, ad-hoc callers) it simply disables.
+  const checkpoint =
+    input.marvinSessionId && input.projectId
+      ? { projectId: input.projectId, marvinSessionId: input.marvinSessionId }
+      : undefined;
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, ...(checkpoint ? { checkpoint } : {}) });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always

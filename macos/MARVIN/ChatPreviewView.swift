@@ -129,6 +129,30 @@ final class ChatPreviewModel {
     /// Cleared when the user resets.
     private(set) var marvinSessionId: String? = nil
 
+    /// ADR-0034 — the agent's pending changed set (Cursor-style review).
+    /// Refreshed live while edits stream (throttled) and on turn end;
+    /// drives the AgentChangesStrip above the input bar.
+    var agentChangedFiles: [AgentChangedFile] = []
+    /// Throttle stamp for live refreshes — at most one fetch per 2 s
+    /// while cli.events stream.
+    private var lastChangesRefresh: Date = .distantPast
+
+    /// Fetch the changed set for the active session. `force` skips the
+    /// throttle (turn boundaries, post-review mutations).
+    func refreshAgentChanges(force: Bool = false) {
+        guard let sid = marvinSessionId ?? loadedSessionId,
+              let cwd = MarvinBridge.shared.projectWorkDir, !cwd.isEmpty
+        else { return }
+        let now = Date()
+        if !force, now.timeIntervalSince(lastChangesRefresh) < 2 { return }
+        lastChangesRefresh = now
+        Task { @MainActor in
+            let files = (try? await ChangesService.shared.fetchChanges(
+                cwd: cwd, marvinSessionId: sid)) ?? []
+            self.agentChangedFiles = files
+        }
+    }
+
     /// Phase 2h — the (projectId, sessionId) pair that the current
     /// in-memory message list reflects. Set when hydrate succeeds;
     /// the view's bridge-change observer compares the bridge's
@@ -706,6 +730,10 @@ final class ChatPreviewModel {
                 if let label = peek.activity { currentActivity = label }
                 ContextUsageReader.applyTo(bridge: b, cliEventData: data)
                 ToolUseCounter.applyTo(bridge: b, cliEventData: data)
+                // ADR-0034 — keep the "N files changed" strip live while
+                // the agent streams edits. Throttled inside (2 s), so
+                // calling per-event is cheap.
+                refreshAgentChanges()
             }
         case .confirmRequest(let c):
             // Phase 2e — queue the confirm; the view's sheet
@@ -740,6 +768,8 @@ final class ChatPreviewModel {
             b.isBusy = false
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
+            // ADR-0034 — settle the changed-set strip at the turn boundary.
+            refreshAgentChanges(force: true)
             // Drain one queued message into the next turn. The activeTask
             // chain set isSending=false in its `defer` before this event
             // fires, so sendInternal() will start a fresh stream cleanly.
@@ -799,6 +829,8 @@ final class ChatPreviewModel {
 struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = ChatPreviewModel()
+    /// ADR-0034 — review sheet for the agent's pending changed set.
+    @State private var reviewSheetOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -828,6 +860,11 @@ struct ChatPreviewView: View {
             if model.resetSdkOnNextSend {
                 resetArmedChip
             }
+            if !model.agentChangedFiles.isEmpty {
+                AgentChangesStrip(files: model.agentChangedFiles) {
+                    reviewSheetOpen = true
+                }
+            }
             if !model.queuedMessages.isEmpty {
                 queuedStrip
             }
@@ -847,6 +884,15 @@ struct ChatPreviewView: View {
         }
         .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
+        // ADR-0034 — Cursor-style review of agent edits. The sheet owns
+        // its own model (fresh per open) so hunk indices are always a
+        // live recompute; onMutate keeps the strip's count honest.
+        .sheet(isPresented: $reviewSheetOpen) {
+            if let cwd = bridge.projectWorkDir,
+               let sid = model.marvinSessionId ?? model.loadedSessionId {
+                ReviewChangesSheet(model: makeReviewModel(cwd: cwd, sid: sid))
+            }
+        }
         // Phase 2h — hydrate the message list when the bridge
         // reports a (projectId, marvinSessionId) we haven't loaded
         // yet. Three triggers funnel through the same code path:
@@ -1037,6 +1083,15 @@ struct ChatPreviewView: View {
                 model.respond(to: head, decision: .deny)
             }
         )
+    }
+
+    /// ADR-0034 — build the review sheet's model, wiring its mutation
+    /// callback back to the strip so accept/reject updates the count
+    /// without waiting for the next cli.event throttle window.
+    private func makeReviewModel(cwd: String, sid: String) -> ReviewChangesModel {
+        let m = ReviewChangesModel(cwd: cwd, marvinSessionId: sid)
+        m.onMutate = { model.refreshAgentChanges(force: true) }
+        return m
     }
 
     private var header: some View {
