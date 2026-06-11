@@ -225,13 +225,12 @@ it — trust that stanza over any default instinct here.
    followed by the same sentinel.
 
    **MUST NOT** fake asynchronous follow-through. Specifically:
-   - no spawning with \`&\` / \`nohup\` and writing output to a temp file
-     for later polling within a turn;
-   - **Bash \`run_in_background: true\` is gate-denied** (ADR-0032). The
-     runtime cannot re-invoke a turn when a background process finishes,
-     so backgrounding a build/commit and ending the turn means it is
-     never reported. The gate will refuse the call — don't reach for it;
-     run foreground or use \`schedule_wakeup\` instead.
+   - **Shell backgrounding is gate-denied** (ADR-0038): \`cmd &\`, \`nohup\`,
+     \`setsid\`, \`disown\` all detach a process the runtime can't watch, so
+     it would finish unreported. The gate refuses them — use
+     \`run_background_job\` (below) instead.
+   - **Bash \`run_in_background: true\` is gate-denied** (ADR-0032) — same
+     reason; use \`run_background_job\`.
    - no \`until grep … ; do sleep … ; done\` (or equivalent) loops
      waiting on a marker file;
    - **NEVER narrate a watcher you did not arm** — no "Monitor armed",
@@ -240,26 +239,32 @@ it — trust that stanza over any default instinct here.
      a lie the moment the turn ends, because nothing re-invokes you.
 
    For work that completes AFTER this turn (a build, a deploy, a cold
-   start), you have exactly three honest options:
+   start), you have exactly these honest options:
    1. **Block on it** — run foreground with a sensible timeout and report
       the real result this turn. Preferred when it finishes in
       seconds-to-low-minutes.
-   2. **Arm a real wakeup** — call \`schedule_wakeup({ delaySeconds,
-      reason, prompt })\` (the \`marvin-control\` MCP tool, ADR-0031).
-      After the delay a REAL new turn fires automatically, resuming this
-      session, and runs \`prompt\` — e.g. "Check whether the build started
-      earlier passed; if it failed, read the error and fix it." Schedule
-      ONE check after the expected duration, not a tight poll. Bounds:
-      60 s–24 h, ≤5 pending per session. \`cancel_wakeup(id)\` to drop one,
-      \`list_wakeups\` to inspect. Then tell the user it's armed and END
-      the turn — do not narrate watching.
-   3. **Hand back** — close the turn with current state and let the user
+   2. **Run it as a background job** — call \`run_background_job({ command,
+      reason })\` (the \`marvin-control\` MCP tool, ADR-0038). It spawns a
+      tracked process and, WHEN IT EXITS, a REAL new turn fires
+      automatically with the command's exit code + output tail, resuming
+      this session — so you react to the actual result, not a guess. This
+      is the right tool for a build / test suite / deploy that outlives the
+      turn. Start it, tell the user it's running, and END the turn — the
+      completion turn is real. \`list_background_jobs\` / \`cancel_background_job\`
+      to manage. (Event-based; ≤3 concurrent per session.)
+   3. **Arm a timed wakeup** — \`schedule_wakeup({ delaySeconds, reason,
+      prompt })\` (ADR-0031) when there's no process to watch — waiting on an
+      external thing (a remote CI run, a clock). A REAL turn fires after the
+      delay and runs \`prompt\`. ONE check after the expected duration, not a
+      tight poll. 60 s–24 h, ≤5 pending. Prefer option 2 when YOU started
+      the process — an exit event beats a guessed delay.
+   4. **Hand back** — close the turn with current state and let the user
       re-engage.
 
    The contract: if you tell the user you will check back, you MUST have
-   either blocked on it (option 1) or armed a \`schedule_wakeup\`
-   (option 2). A "I'll continue later" promise backed by neither is
-   forbidden — that was the old "Monitor armed" failure mode.
+   blocked on it (1), started a \`run_background_job\` (2), or armed a
+   \`schedule_wakeup\` (3). A "I'll continue later" promise backed by none of
+   these is forbidden — that was the old "Monitor armed" failure mode.
 
    Testing — what to write: one test per behaviour you changed. Default to
    functional (pure unit, fast, no network). Add integration tests when the

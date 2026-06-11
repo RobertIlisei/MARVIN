@@ -18,6 +18,12 @@ import {
   listWakeups,
   scheduleWakeup,
 } from "./wakeup-scheduler";
+import {
+  MAX_JOBS_PER_SESSION,
+  cancelBackgroundJob,
+  listBackgroundJobs,
+  startBackgroundJob,
+} from "./background-jobs";
 
 /** Per-turn identity + config the wakeup tools capture for the future turn. */
 export interface WakeupToolContext {
@@ -119,9 +125,70 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     },
   );
 
+  // ── Background jobs with event-based completion wakeups (ADR-0038) ──────
+
+  const runJobTool = tool(
+    "run_background_job",
+    `Run a long-running shell command in the background and get a REAL follow-up turn when it FINISHES. Use this for anything that outlives a normal turn — builds, full test suites, installs, deploys, data jobs — INSTEAD of backgrounding with shell '&' / nohup (the gate denies those: nothing watches them, so you'd never hear back and would forget). Returns immediately with a job id; END YOUR TURN. When the process exits, a new turn starts automatically with the command's exit code + output tail, so you can react (fix a failure, or continue on success). For SHORT commands, just run them in the foreground and wait for the result instead. At most ${MAX_JOBS_PER_SESSION} concurrent jobs per session.`,
+    {
+      command: z
+        .string()
+        .min(1)
+        .describe("The shell command to run, e.g. 'pnpm build' or 'npx playwright test'."),
+      reason: z
+        .string()
+        .min(1)
+        .describe("Short human reason, e.g. 'production build'. Shown to the user."),
+    },
+    async ({ command, reason }) => {
+      const result = startBackgroundJob({
+        command,
+        reason,
+        ctx: {
+          marvinSessionId: ctx.marvinSessionId,
+          projectId: ctx.projectId,
+          cwd: ctx.cwd,
+          model: ctx.model,
+          advisorModel: ctx.advisorModel,
+          personality: ctx.personality,
+          permissionStrategy: ctx.permissionStrategy,
+          thinkingMode: ctx.thinkingMode,
+          advisorThinkingMode: ctx.advisorThinkingMode,
+          depth: ctx.depth,
+        },
+      });
+      if (!result.ok) return textResult(`Could not start background job: ${result.error}`);
+      return textResult(
+        `Background job started (id ${result.id}, pid ${result.pid}): \`${command}\`. END THE TURN now — when it finishes, a new turn will start automatically with the result. Do NOT narrate watching it; the completion turn is real.`,
+      );
+    },
+  );
+
+  const listJobsTool = tool(
+    "list_background_jobs",
+    "List this session's running background jobs (id, command, pid).",
+    {},
+    async () => {
+      const jobs = listBackgroundJobs(ctx.marvinSessionId);
+      if (jobs.length === 0) return textResult("No background jobs running for this session.");
+      const lines = jobs.map((j) => `- ${j.id} (pid ${j.pid}) — \`${j.command}\` — "${j.reason}"`);
+      return textResult(`Running background jobs (${jobs.length}):\n${lines.join("\n")}`);
+    },
+  );
+
+  const cancelJobTool = tool(
+    "cancel_background_job",
+    "Stop a running background job by id (from run_background_job or list_background_jobs). No completion turn fires for a cancelled job.",
+    { id: z.string().min(1).describe("The job id to cancel.") },
+    async ({ id }) => {
+      const ok = cancelBackgroundJob(id);
+      return textResult(ok ? `Cancelling background job ${id}.` : `No running job with id ${id}.`);
+    },
+  );
+
   return createSdkMcpServer({
     name: "marvin-control",
     version: "0.0.1",
-    tools: [scheduleTool, cancelTool, listTool],
+    tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool],
   });
 }

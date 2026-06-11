@@ -553,11 +553,20 @@ function modeGuidance(mode: AgentMode): string {
   if (mode === "plan") {
     return (
       "\n\n## Mode: PLAN (plan-first, approval-gated)\n" +
-      "You are in Plan mode. Investigate read-only, then produce a clear, " +
-      "ordered plan AND a `TodoWrite` checklist of the concrete steps. Do " +
-      "NOT edit yet — present the plan and call ExitPlanMode to hand it to " +
-      "the user for approval. Only after they approve do you execute, " +
-      "keeping the TodoWrite list updated (in_progress / completed) as you go."
+      "You are in Plan mode. Investigate read-only, then present a clear, " +
+      "ordered, numbered plan and call ExitPlanMode with it to hand it to the " +
+      "user for approval. Do NOT edit before approval.\n" +
+      "AFTER the user approves, the plan IS your task list — the user tracks " +
+      "your progress against it:\n" +
+      "1. IMMEDIATELY call `TodoWrite` with one item per numbered plan step " +
+      "(same wording, same order) before doing anything else.\n" +
+      "2. As you work, keep that `TodoWrite` list current: mark the step you " +
+      "are starting `in_progress`, and mark it `completed` the moment it's " +
+      "done, calling `TodoWrite` each time. Exactly one item `in_progress` at " +
+      "a time. Do not batch the updates to the end.\n" +
+      "3. Follow the plan's order; if reality forces a change, update the " +
+      "`TodoWrite` list to match and say why. This checklist is the user's " +
+      "only window into your progress — keeping it live is REQUIRED, not optional."
     );
   }
   return "";

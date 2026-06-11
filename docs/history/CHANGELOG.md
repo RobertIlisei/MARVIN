@@ -9,6 +9,39 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-11 — v0.1.23: event-based background jobs, fetch skills from Git,
+  Plan-mode follow-through, Skills-pane reorg.**
+  - **Background jobs with completion wakeups (ADR-0038).** "I'll be notified
+    when the build's done" is now true. The ADR-0032 deny was flag-only;
+    shell backgrounding (`&`, `nohup`, `setsid`, `disown`) slipped past and
+    orphaned the process, and wakeups were time-based only. New
+    `run_background_job` MCP tool spawns a tracked child and, on EXIT, fires a
+    REAL follow-up turn (the command's exit code + output tail) via the shared
+    wakeup dispatch (`fireNow`) — an event-triggered wakeup. Shell
+    backgrounding is now denied at the gate (lookbehind spares `&&`/`&>`),
+    steering to the tool. `list_/cancel_background_job`; ≤3 concurrent,
+    chain-depth ≤8; cancel fires no turn. 4 unit tests.
+  - **Fetch skills from Git + marketplaces (ADR-0039).** The Claude ecosystem
+    distributes skills as `SKILL.md` folders in Git repos / plugin
+    marketplaces (the official set is document/design only — no infra/devops);
+    MARVIN could only install its pinned bundle or AUTHOR a project-local one.
+    New "Add from GitHub" Skills-pane action + `POST /api/skills/add`: paste
+    any URL — a single skill, a multi-skill repo (pick-list), a `…/tree/…`
+    sub-path, or a plugin **marketplace** (detects `.claude-plugin/marketplace.json`,
+    lists plugins, installs a chosen plugin's skills resolving relative /
+    github / url / git-subdir sources). Clone + copy only (never executes the
+    repo); user-initiated; flows through ADR-0037 enablement. 9 unit tests.
+  - **Plan-mode follow-through (ADR-0036).** The plan opened in a modal and was
+    lost on dismiss, with no progress tracking. Now the plan is written into
+    the chat as a persistent `📋 Plan` message AND its numbered steps seed the
+    to-do checklist, so the approved plan becomes the Cursor-style tracked list
+    (○→◌→✓). The Plan prompt now REQUIRES mirroring the plan into `TodoWrite`
+    and ticking each step `in_progress`→`completed` as it goes.
+  - **Skills pane reorganised (ADR-0037).** Five flat, overlapping sections →
+    three by state: Active in this project · Installed-off-here (toggle on) ·
+    Recommended to add (rule-based + AI, merged). No more "all over the place".
+  - **Verification.** 13 new unit tests pass (jobs + skill-fetch); runtime +
+    tools + web tsc clean; `swift build` clean; rebuilt + relaunched locally.
 - **2026-06-11 — v0.1.22: Ask/Agent/Plan modes, Cursor-style chat surface,
   per-project skill enablement.** A large UX + control batch.
   - **Ask · Agent · Plan modes (ADR-0036).** A `mode` axis orthogonal to

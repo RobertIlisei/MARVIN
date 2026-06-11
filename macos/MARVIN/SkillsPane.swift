@@ -127,6 +127,27 @@ struct SkillsPane: View {
     /// Detailed-explanation popover for a discovered suggestion's rationale + body.
     @State private var inspectedDiscovered: SkillsIndexResponse.DiscoveredSuggestion?
 
+    // ADR-0039 — "Add from GitHub" sheet state.
+    @State private var addSheetOpen = false
+    @State private var addURL = ""
+    @State private var addScope = "user-global"
+    @State private var addBusy = false
+    @State private var addError: String?
+    /// Pick-list returned when the repo holds >1 skill.
+    @State private var addCandidates: [AddCandidate] = []
+    @State private var addSelected: Set<String> = []
+    /// Marketplace plugin pick-list (phase B) + the marketplace name.
+    @State private var addPlugins: [AddCandidate] = []
+    @State private var addMarketplace: String?
+
+    struct AddCandidate: Decodable, Identifiable {
+        let name: String
+        let displayName: String?
+        let description: String?
+        var id: String { name }
+        var title: String { displayName ?? name }
+    }
+
     /// The currently-displayed skill in the View sheet.
     struct ViewedSkill: Identifiable, Equatable {
         let name: String
@@ -163,6 +184,157 @@ struct SkillsPane: View {
         }
         .sheet(item: $inspectedDiscovered) { suggestion in
             discoveredDetailSheet(suggestion)
+        }
+        .sheet(isPresented: $addSheetOpen) { addFromGitSheet }
+    }
+
+    // MARK: - Add from GitHub (ADR-0039)
+
+    private var addFromGitSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle").foregroundStyle(.tint)
+                Text("Add a skill from GitHub").font(.headline)
+                Spacer()
+                Button("Close") { addSheetOpen = false }
+                    .keyboardShortcut(.escape, modifiers: [])
+            }
+            Text("Paste a Git repo URL — a single skill, a multi-skill repo, or a plugin marketplace (MARVIN detects which). It clones and copies the SKILL.md folder(s) in; it never runs anything from the repo. Third-party skills can carry scripts — only add sources you trust.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("https://github.com/owner/repo  ·  …/tree/main/skills/<name>", text: $addURL)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { Task { await fetchSkills() } }
+            Picker("Install to", selection: $addScope) {
+                Text("User-global (~/.claude/skills)").tag("user-global")
+                Text("This project (.marvin/skills)").tag("project-local")
+            }
+            .pickerStyle(.radioGroup)
+            .disabled(bridge.projectWorkDir == nil && addScope == "project-local")
+
+            // Marketplace (phase B): pick a plugin → installs its skills.
+            if !addPlugins.isEmpty {
+                Divider()
+                Text("Marketplace \(addMarketplace.map { "“\($0)”" } ?? "") — pick a plugin to install its skills:")
+                    .font(.caption.weight(.medium))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(addPlugins) { p in
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(p.title).font(.body.monospaced())
+                                    if let d = p.description, !d.isEmpty {
+                                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    }
+                                }
+                                Spacer()
+                                Button("Install") { Task { await fetchSkills(plugin: p.name) } }
+                                    .controlSize(.small)
+                                    .disabled(addBusy)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+            // Multi-skill repo: pick which skills.
+            if !addCandidates.isEmpty {
+                Divider()
+                Text("This repo has several skills — pick which to install:")
+                    .font(.caption.weight(.medium))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(addCandidates) { c in
+                            Toggle(isOn: Binding(
+                                get: { addSelected.contains(c.name) },
+                                set: { on in if on { addSelected.insert(c.name) } else { addSelected.remove(c.name) } }
+                            )) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(c.name).font(.body.monospaced())
+                                    if let d = c.description, !d.isEmpty {
+                                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+
+            if let err = addError {
+                Text(err).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                if addBusy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button(addCandidates.isEmpty ? "Fetch & install" : "Install selected") {
+                    Task { await fetchSkills() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(addBusy || addURL.trimmingCharacters(in: .whitespaces).isEmpty
+                          || (!addCandidates.isEmpty && addSelected.isEmpty))
+            }
+        }
+        .padding(18)
+        .frame(width: 520)
+    }
+
+    private func fetchSkills(plugin: String? = nil) async {
+        let url = addURL.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else { return }
+        await MainActor.run { addBusy = true; addError = nil }
+        defer { Task { @MainActor in addBusy = false } }
+
+        var body: [String: Any] = ["url": url, "scope": addScope]
+        if addScope == "project-local", let wd = bridge.projectWorkDir { body["workDir"] = wd }
+        if !addSelected.isEmpty { body["only"] = Array(addSelected) }
+        if let plugin { body["plugin"] = plugin }
+
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/skills/add"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        req.timeoutInterval = 90
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        struct AddResponse: Decodable {
+            let installed: [Installed]?
+            let available: [AddCandidate]?
+            let marketplace: Marketplace?
+            let error: String?
+            struct Installed: Decodable { let name: String }
+            struct Marketplace: Decodable { let name: String; let plugins: [AddCandidate] }
+        }
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let decoded = try? JSONDecoder().decode(AddResponse.self, from: data)
+            if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                await MainActor.run { addError = decoded?.error ?? "Add failed (HTTP \(http.statusCode))." }
+                return
+            }
+            if let mkt = decoded?.marketplace, !mkt.plugins.isEmpty {
+                await MainActor.run { addPlugins = mkt.plugins; addMarketplace = mkt.name; addCandidates = []; addError = nil }
+                return
+            }
+            if let available = decoded?.available, !available.isEmpty {
+                await MainActor.run { addCandidates = available; addPlugins = []; addError = nil }
+                return
+            }
+            if let installed = decoded?.installed, !installed.isEmpty {
+                await MainActor.run {
+                    pasteboardToast = "Installed: \(installed.map { $0.name }.joined(separator: ", "))"
+                    addSheetOpen = false
+                    addURL = ""; addCandidates = []; addSelected = []
+                    addPlugins = []; addMarketplace = nil
+                }
+                await refresh()
+                return
+            }
+            await MainActor.run { addError = decoded?.error ?? "Nothing was installed." }
+        } catch {
+            await MainActor.run { addError = error.localizedDescription }
         }
     }
 
@@ -414,14 +586,16 @@ struct SkillsPane: View {
     @ViewBuilder
     private func content(_ idx: SkillsIndexResponse) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                suggestionsSection(idx)
+            VStack(alignment: .leading, spacing: 18) {
+                // ADR-0037 — organised around the one question that matters:
+                // what is ACTIVE for this project. Active → available to turn
+                // on → recommended to add. (Was five flat, overlapping
+                // sections that read as "all over the place".)
+                activeSection(idx)
                 Divider()
-                discoveredSection(idx.discovered)
+                availableSection(idx)
                 Divider()
-                userGlobalSection(idx.userGlobal)
-                Divider()
-                projectLocalSection(idx.projectLocal)
+                recommendedSection(idx)
                 Divider()
                 auditFooter(idx.audit)
             }
@@ -429,6 +603,16 @@ struct SkillsPane: View {
             .padding(.vertical, 12)
         }
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    addError = nil; addCandidates = []; addSelected = []
+                    addPlugins = []; addMarketplace = nil
+                    addSheetOpen = true
+                } label: {
+                    Label("Add from GitHub", systemImage: "arrow.down.circle")
+                }
+                .help("Fetch a skill from a Git repo (ADR-0039)")
+            }
             ToolbarItem(placement: .automatic) {
                 Button {
                     Task { await refresh() }
@@ -441,27 +625,93 @@ struct SkillsPane: View {
         }
     }
 
-    @ViewBuilder
-    private func suggestionsSection(_ idx: SkillsIndexResponse) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "sparkle")
-                    .foregroundStyle(.yellow)
-                Text("Suggested for this project")
-                    .font(.headline)
+    /// Shared section header: icon · title · count chip.
+    private func sectionHeader(_ icon: String, _ tint: Color, _ title: String, count: Int? = nil) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).foregroundStyle(tint)
+            Text(title).font(.headline)
+            if let count {
+                Text("\(count)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
             }
-            if idx.suggestions.isEmpty {
-                Text("No suggestions for this fingerprint.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
+    /// 1 — what MARVIN actually uses here: active user-global + project-local.
+    @ViewBuilder
+    private func activeSection(_ idx: SkillsIndexResponse) -> some View {
+        let active = idx.userGlobal.filter { activeSkillNames.contains($0.name) }
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("checkmark.seal.fill", .green, "Active in this project",
+                          count: active.count + idx.projectLocal.count)
+            Text("What MARVIN uses here — the fingerprint picks these automatically; toggle to change. Skills that aren't active aren't offered to MARVIN for this project (ADR-0037).")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if active.isEmpty && idx.projectLocal.isEmpty {
+                Text("Nothing active yet — enable a skill below.")
+                    .font(.caption).foregroundStyle(.tertiary)
             } else {
-                Text("\(idx.fingerprint.tags.count) fingerprint tags · \(idx.suggestions.count) suggestions")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ForEach(active) { skill in
+                    installedRow(name: skill.name, description: skill.description, path: skill.path,
+                                 badge: nil, active: true,
+                                 onToggle: { Task { await toggleSkill(skill.name) } })
+                }
+                ForEach(idx.projectLocal) { skill in
+                    // Project-local skills are authored FOR this project — always
+                    // active, no toggle.
+                    installedRow(name: skill.name, description: skill.description, path: skill.path,
+                                 badge: "local")
+                }
+            }
+        }
+    }
+
+    /// 2 — installed on the machine but off here: toggle on to enable.
+    @ViewBuilder
+    private func availableSection(_ idx: SkillsIndexResponse) -> some View {
+        let inactive = idx.userGlobal.filter { !activeSkillNames.contains($0.name) }
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("tray", .gray, "Installed, off in this project", count: inactive.count)
+            Text("In ~/.claude/skills/ but not offered to MARVIN here. Toggle on to enable for this project.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if inactive.isEmpty {
+                Text("All installed skills are active here.")
+                    .font(.caption).foregroundStyle(.tertiary)
+            } else {
+                ForEach(inactive) { skill in
+                    installedRow(name: skill.name, description: skill.description, path: skill.path,
+                                 badge: nil, active: false,
+                                 onToggle: { Task { await toggleSkill(skill.name) } })
+                }
+            }
+        }
+    }
+
+    /// 3 — skills not installed/built yet: rule-based + AI-discovered, merged.
+    @ViewBuilder
+    private func recommendedSection(_ idx: SkillsIndexResponse) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("sparkle", .yellow, "Recommended to add",
+                          count: idx.suggestions.isEmpty ? nil : idx.suggestions.count)
+            Text("Not installed or built yet — matched to this project's fingerprint (\(idx.fingerprint.tags.count) tags). Install adds a user-global skill; build authors a project-local one.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if idx.suggestions.isEmpty {
+                Text("No rule-based suggestions for this fingerprint.")
+                    .font(.caption).foregroundStyle(.tertiary)
+            } else {
                 ForEach(idx.suggestions) { s in
                     suggestionRow(s)
                 }
             }
+            // AI discovery (the Discover button + its results) folds in here
+            // rather than as a separate top-level section.
+            discoveredSection(idx.discovered)
         }
     }
 
@@ -522,38 +772,6 @@ struct SkillsPane: View {
         }
     }
 
-    @ViewBuilder
-    private func userGlobalSection(_ skills: [SkillsIndexResponse.InstalledSkill]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "shippingbox")
-                Text("User-global skills").font(.headline)
-                Spacer()
-                Text("\(skills.count)").font(.caption).foregroundStyle(.secondary)
-            }
-            Text("~/.claude/skills/ — toggle which apply to THIS project (ADR-0037). All stay installed; inactive ones just aren't offered to MARVIN here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if skills.isEmpty {
-                Text("No user-global skills installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(skills) { skill in
-                    installedRow(
-                        name: skill.name,
-                        description: skill.description,
-                        path: skill.path,
-                        badge: nil,
-                        active: activeSkillNames.contains(skill.name),
-                        onToggle: { Task { await toggleSkill(skill.name) } }
-                    )
-                }
-            }
-        }
-    }
-
     /// Active skill names for the project (ADR-0037).
     private var activeSkillNames: Set<String> {
         Set(index?.enablement?.active ?? [])
@@ -578,35 +796,6 @@ struct SkillsPane: View {
         )
         _ = try? await URLSession.shared.data(for: req)
         await refresh()
-    }
-
-    @ViewBuilder
-    private func projectLocalSection(_ skills: [SkillsIndexResponse.ProjectLocalSkill]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "folder")
-                Text("Project-local skills").font(.headline)
-                Spacer()
-                Text("\(skills.count)").font(.caption).foregroundStyle(.secondary)
-            }
-            Text(".marvin/skills/")
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-            if skills.isEmpty {
-                Text("No project-local skills yet. Build one from a Suggested entry above.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(skills) { skill in
-                    installedRow(
-                        name: skill.name,
-                        description: skill.description,
-                        path: skill.path,
-                        badge: skill.shadowsUserGlobal ? "shadows global" : nil
-                    )
-                }
-            }
-        }
     }
 
     @ViewBuilder

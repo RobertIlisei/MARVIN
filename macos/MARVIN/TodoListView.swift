@@ -60,6 +60,39 @@ enum TodoExtractor {
     }
 }
 
+/// Parses a Plan-mode plan (ExitPlanMode markdown) into seed to-do items, so
+/// the approved plan becomes the tracked checklist (ADR-0036) even before the
+/// model emits its own `TodoWrite`. Picks up numbered (`1.` / `1)`) and
+/// bulleted (`-` / `*` / `•`) steps; ignores headings and prose. Falls back to
+/// non-empty lines, then to a single "Execute the plan" item.
+enum PlanParser {
+    static func todos(from plan: String) -> [TodoItem] {
+        let lines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var items: [String] = []
+        let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+        for line in lines {
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            if let re = stepRE, let m = re.firstMatch(in: line, range: range),
+               let r = Range(m.range(at: 1), in: line) {
+                let content = String(line[r])
+                    // strip markdown emphasis / inline code / trailing colons
+                    .replacingOccurrences(of: "**", with: "")
+                    .replacingOccurrences(of: "`", with: "")
+                if content.count > 1 { items.append(content) }
+            }
+        }
+        if items.isEmpty {
+            // No list markers — take substantive non-heading lines.
+            items = lines
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") && $0.count > 3 }
+        }
+        if items.isEmpty { items = ["Execute the plan"] }
+        // Cap so a giant plan doesn't flood the strip.
+        return items.prefix(20).map { TodoItem(content: $0, status: "pending", activeForm: nil) }
+    }
+}
+
 /// The checklist strip, hosted above the chat input by ChatPreviewView.
 struct TodoListStrip: View {
     let todos: [TodoItem]
