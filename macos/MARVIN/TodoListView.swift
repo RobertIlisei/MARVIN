@@ -120,7 +120,11 @@ struct TodoListStrip: View {
                 Image(systemName: allDone ? "checkmark.seal.fill" : "checklist")
                     .font(.system(size: 10))
                     .foregroundStyle(allDone ? .green : .purple)
-                Text(allDone ? "Plan complete" : "Plan")
+                // It's the model's TodoWrite task tracker — used in BOTH Agent
+                // and Plan mode. Calling it "Plan" made Agent-mode work look
+                // like planning, so it's "To-dos" (the Cursor term), neutral
+                // to the mode.
+                Text(allDone ? "To-dos complete" : "To-dos")
                     .font(.system(size: 11, weight: .semibold))
                 Text("\(done)/\(todos.count)")
                     .font(.system(size: 10, design: .monospaced))
@@ -135,7 +139,7 @@ struct TodoListStrip: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss the plan")
+                    .help("Dismiss the to-do list")
                 }
             }
             // Plans are short; cap the height and scroll if a long one
