@@ -96,36 +96,67 @@ enum PlanParser {
 /// The checklist strip, hosted above the chat input by ChatPreviewView.
 struct TodoListStrip: View {
     let todos: [TodoItem]
+    /// Dismiss the plan checklist entirely (the ✕). nil hides the close button.
+    var onClose: (() -> Void)? = nil
+
+    /// Collapse to just the header. Auto-set true once the plan completes so a
+    /// finished plan shrinks to a one-line "✓ Plan complete" the user can keep
+    /// or dismiss — instead of a stale full checklist lingering.
+    @State private var collapsed: Bool = false
 
     private var done: Int { todos.filter { $0.status == "completed" }.count }
+    private var allDone: Bool { !todos.isEmpty && done == todos.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Image(systemName: "checklist")
+                Button { withAnimation(.easeInOut(duration: 0.12)) { collapsed.toggle() } } label: {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                }
+                .buttonStyle(.plain)
+                Image(systemName: allDone ? "checkmark.seal.fill" : "checklist")
                     .font(.system(size: 10))
-                    .foregroundStyle(.purple)
-                Text("Plan")
+                    .foregroundStyle(allDone ? .green : .purple)
+                Text(allDone ? "Plan complete" : "Plan")
                     .font(.system(size: 11, weight: .semibold))
                 Text("\(done)/\(todos.count)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
+                if let onClose {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss the plan")
+                }
             }
             // Plans are short; cap the height and scroll if a long one
             // shows up so the strip never crowds the input bar.
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(todos.enumerated()), id: \.offset) { _, item in
-                        row(item)
+            if !collapsed {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(todos.enumerated()), id: \.offset) { _, item in
+                            row(item)
+                        }
                     }
                 }
+                .frame(maxHeight: 132)
             }
-            .frame(maxHeight: 132)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color.purple.opacity(0.06))
+        .background((allDone ? Color.green : Color.purple).opacity(0.06))
+        .onChange(of: allDone) { _, done in
+            if done { withAnimation(.easeInOut(duration: 0.15)) { collapsed = true } }
+        }
     }
 
     private func row(_ item: TodoItem) -> some View {

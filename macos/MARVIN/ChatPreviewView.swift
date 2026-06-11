@@ -543,6 +543,14 @@ final class ChatPreviewModel {
         resetSessionStrips()
     }
 
+    /// Dismiss the plan checklist (the ✕ on the strip). Clears the plan + its
+    /// captured text so the pane goes away once the user is done with it.
+    func dismissPlan() {
+        todos = []
+        currentPlanText = nil
+        planAwaitingApproval = false
+    }
+
     /// Plan / to-do / changed-files state is SESSION-scoped — clear it when a
     /// session is left (new chat, switch). Otherwise the previous session's
     /// "Plan 7/7" + "N files changed" strips linger in a fresh chat.
@@ -1521,7 +1529,9 @@ struct ChatPreviewView: View {
         var rows: [AnyView] = []
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
-        if !model.todos.isEmpty { rows.append(AnyView(TodoListStrip(todos: model.todos))) }
+        if !model.todos.isEmpty {
+            rows.append(AnyView(TodoListStrip(todos: model.todos, onClose: { model.dismissPlan() })))
+        }
         if model.planAwaitingApproval && !model.isSending {
             rows.append(AnyView(approvePlanChip))
         } else if planPausedWaiting {
