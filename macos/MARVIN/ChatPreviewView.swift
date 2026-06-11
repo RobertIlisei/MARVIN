@@ -152,6 +152,18 @@ final class ChatPreviewModel {
         return plan.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Concatenated text of the most recent assistant message — the plan, when
+    /// a Plan-mode turn just finished. Skips tool-call / non-text blocks.
+    func lastAssistantText() -> String? {
+        guard let msg = messages.last(where: { $0.role == .assistant }) else { return nil }
+        let parts = msg.blocks.compactMap { block -> String? in
+            if case let .text(_, text) = block { return text }
+            return nil
+        }
+        let joined = parts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
+    }
+
     /// ADR-0034 — the agent's pending changed set (Cursor-style review).
     /// Refreshed live while edits stream (throttled) and on turn end;
     /// drives the AgentChangesStrip above the input bar.
@@ -892,8 +904,11 @@ final class ChatPreviewModel {
             b.marvinState = "idle"
             b.isBusy = false
             // ADR-0036 (revised) — a Plan-mode turn just finished presenting a
-            // plan (read-only). Surface the inline Approve & execute affordance.
+            // plan (read-only). Surface the inline Approve & execute affordance,
+            // and capture the plan text (the turn's final assistant reply) so it
+            // can be saved to a file + followed alongside the chat.
             planAwaitingApproval = (b.mode == "plan")
+            if planAwaitingApproval { currentPlanText = lastAssistantText() }
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
@@ -1410,6 +1425,15 @@ struct ChatPreviewView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            Button {
+                savePlan()
+            } label: {
+                Label("Save plan", systemImage: "square.and.arrow.down")
+                    .font(.system(size: 11))
+            }
+            .controlSize(.small)
+            .disabled(model.currentPlanText?.isEmpty ?? true)
+            .help("Save this plan to a Markdown file so you can follow it outside the chat.")
             Button("Revise") {
                 // Stay in Plan mode; just nudge a revised plan.
                 model.draft = "Revise the plan — "
@@ -1431,6 +1455,28 @@ struct ChatPreviewView: View {
 
     /// Approve the presented plan: switch to Agent mode (so execution runs on
     /// the executor model, not the planning advisor) and start the run.
+    /// Save the current plan to a Markdown file (Cursor-style — follow the
+    /// plan in a file alongside the chat box). Defaults the panel to the
+    /// project dir with a dated name; writes the plan text and opens it.
+    private func savePlan() {
+        guard let plan = model.currentPlanText, !plan.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "PLAN.md"
+        if let wd = bridge.projectWorkDir {
+            panel.directoryURL = URL(fileURLWithPath: wd)
+        }
+        panel.message = "Save the plan as Markdown — follow it alongside the chat."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try plan.write(to: url, atomically: true, encoding: .utf8)
+            NSWorkspace.shared.open(url)
+        } catch {
+            model.lastError = "Could not save the plan: \(error.localizedDescription)"
+        }
+    }
+
     private func approvePlan() {
         guard !model.isSending else { return }
         NativePrefs.shared.setMode("agent")
