@@ -135,6 +135,18 @@ final class ChatPreviewModel {
     /// fresh SDK session.
     var todos: [TodoItem] = []
 
+    /// ADR-0036 — the most recent Plan-mode plan (from ExitPlanMode). Kept so
+    /// the plan persists in the chat + seeds the checklist even after the
+    /// approval window is dismissed. Cleared on a fresh SDK session.
+    var currentPlanText: String? = nil
+
+    /// Pull the `plan` string out of an ExitPlanMode confirm request.
+    func planText(from request: ConfirmRequest) -> String? {
+        guard case let .object(dict)? = request.input,
+              case let .string(plan)? = dict["plan"] else { return nil }
+        return plan.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// ADR-0034 — the agent's pending changed set (Cursor-style review).
     /// Refreshed live while edits stream (throttled) and on turn end;
     /// drives the AgentChangesStrip above the input bar.
@@ -768,6 +780,7 @@ final class ChatPreviewModel {
                 b.sessionGraphSummaryCalls = 0
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
+                currentPlanText = nil
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
@@ -814,6 +827,20 @@ final class ChatPreviewModel {
             // reappearing after the user already decided).
             if !pendingConfirms.contains(where: { $0.toolUseId == c.toolUseId }) {
                 pendingConfirms.append(c)
+            }
+            // ADR-0036 — Plan mode: when the plan arrives (ExitPlanMode),
+            // persist it in the chat AND seed the to-do checklist from its
+            // steps, so the plan survives closing the approval window and is
+            // tracked with checkmarks (Cursor-style) as MARVIN executes. The
+            // model's own TodoWrite calls then refine the statuses.
+            if c.toolName == "ExitPlanMode", let plan = planText(from: c),
+               !plan.isEmpty {
+                if currentPlanText != plan {
+                    currentPlanText = plan
+                    messages.append(.system(text: "📋 Plan\n\n\(plan)"))
+                    let seeded = PlanParser.todos(from: plan)
+                    if !seeded.isEmpty { todos = seeded }
+                }
             }
         case .turnCompleted:
             // Post a notification entry for the bell log.
