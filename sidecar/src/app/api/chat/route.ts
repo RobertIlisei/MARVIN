@@ -4,8 +4,10 @@ import { isAbsolute, resolve } from "node:path";
 import { buildProjectContext } from "@marvin/project-context";
 import { defaultModel } from "@marvin/runtime/claude-cli";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
+import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
 import { slugifyWorkDir, validateProjectCwd } from "@marvin/runtime/projects";
 import {
+  type AgentMode,
   type PermissionStrategy,
   type RuntimeMode,
   resolveRuntimeMode,
@@ -41,6 +43,9 @@ interface ChatRequestBody {
   /** Permission strategy. `auto` (default) = full bypass, no confirm gate.
    *  `gated` = Edit/Write/unsafe Bash render a confirm card. */
   permissionStrategy?: PermissionStrategy;
+  /** Autonomy mode (ADR-0036). `agent` (default) = full autonomy; `ask` =
+   *  read-only; `plan` = plan-first, approval-gated. */
+  mode?: AgentMode;
   /** Reasoning-effort selection — ladder value (low/medium/high/xhigh/max)
    *  or legacy fast/thinking/max alias. Maps to SDK `effort`. */
   thinkingMode?: string;
@@ -114,6 +119,7 @@ export async function POST(req: NextRequest) {
   const personality: PersonalityMode = body.personality ?? "marvin";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
+  const mode: AgentMode = body.mode ?? "agent";
   const thinkingMode: string = body.thinkingMode ?? "high";
   // Advisor effort intentionally has NO "high" fallback here — undefined
   // means "follow the executor", resolved inside runAgent (ADR-0033).
@@ -131,7 +137,18 @@ export async function POST(req: NextRequest) {
   const projectContext = body.skipProjectContext
     ? ""
     : await buildProjectContext({ workDir: cwd, firstMessage }).catch(() => "");
-  const appendSystemPrompt = projectContext ? `${systemPrompt}\n\n${projectContext}` : systemPrompt;
+  // ADR-0037 — name the skills ACTIVE for this project so the model stops
+  // reaching for the (always-loaded) irrelevant ones. Default from the
+  // fingerprint; overridable in the Skills pane (.marvin/skills.json).
+  let activeSkillsBlock = "";
+  try {
+    activeSkillsBlock = formatActiveSkillsBlock(cwd);
+  } catch {
+    /* best-effort; never block a turn on skill enablement */
+  }
+  const appendSystemPrompt = [systemPrompt, projectContext, activeSkillsBlock]
+    .filter(Boolean)
+    .join("\n\n");
 
   // Resolve the SDK resume id BEFORE we append turn.user (and before
   // `runAgentDetached` is dispatched below). Two distinct ids exist:
@@ -177,6 +194,7 @@ export async function POST(req: NextRequest) {
     runtimeMode,
     personality,
     permissionStrategy,
+    mode,
     thinkingMode,
     advisorThinkingMode: advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
@@ -205,6 +223,7 @@ export async function POST(req: NextRequest) {
     model,
     advisorModel,
     permissionStrategy,
+    mode,
     thinkingMode,
     advisorThinkingMode,
     sessionId: sdkResumeId,

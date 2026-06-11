@@ -203,6 +203,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🌓 Light / dark theme — respects system preference
 - ✅ Agent change review — VS Code / Cursor-style: a live "N files changed" strip while MARVIN edits opens its own resizable window with a side-by-side (original │ modified) diff, line numbers, and a Split/Inline toggle. Per-hunk / per-file accept-reject against pre-agent baselines (rejecting restores *your* uncommitted state, not git HEAD); committing a change clears it from the review the way it leaves VS Code's Source Control list (ADR-0034)
 - 🎚️ Per-role reasoning effort — independent Low→Max effort pickers for the executor and the advisor (ADR-0033)
+- 🧭 Ask · Agent · Plan modes — read-only Ask (enforced at the gate), full-autonomy Agent, and plan-first Plan that drafts a plan + live to-do checklist and waits for your approval before executing (ADR-0036). Cursor-style controls live in the input box; chat tabs open/close and persist per project
+- 🧩 Per-project skill enablement — the fingerprint picks the installed skills relevant to *this* project and tells MARVIN to ignore the rest; per-skill toggles in the Skills pane (ADR-0037)
 
 **Web sidecar**
 - 🔒 Structural confirm gate — every Edit/Write/Bash pre-flight, auto-mode audit log
@@ -265,7 +267,13 @@ docs/
 
 ## Status
 
-**v0.1.21 — Change-review diff editor (current).**
+**v0.1.22 — Modes, Cursor-style chat surface, skill enablement (current).**
+
+- **Ask · Agent · Plan modes** (ADR-0036) — a `mode` axis orthogonal to the auto/gated strategy. Ask is read-only (hard-denied at the gate); Plan runs under the SDK's plan mode and surfaces an approval card before executing; Agent is the unchanged default. The model's `TodoWrite` renders as a live checklist.
+- **Cursor-style chat surface** — mode + reasoning controls moved into the input box; chat tabs you can open and close, persisted per project.
+- **Per-project skill enablement** (ADR-0037) — installed ≠ active: a core/domain catalog + fingerprint default names the skills relevant to this project and tells the model to ignore the rest (20→7 on this repo). Skills-pane toggles + `.marvin/skills.json`.
+
+**v0.1.21 — Change-review diff editor.**
 
 - **VS Code / Cursor-style diff editor** — the review surface is its own resizable window: side-by-side original │ modified, line numbers, and a Split/Inline toggle (v0.1.20). The editor's diff gutter now tracks lines exactly on scroll — markers come from STTextView's real layout geometry, cached, instead of a line-height guess that drifted (v0.1.21). And **committing a change clears it from the review** the way it leaves VS Code's Source Control list — a committed change is an accepted one (`reconcileCommitted`, drops only, never rewrites a baseline). ADR-0034.
 - **Agent change review** — the permission gate snapshots every file's pre-image on first agent touch per session; accept advances the baseline, reject reverse-applies to disk — never `git discard`, which would destroy uncommitted user work. v1 blind spot: Bash-driven mutations aren't pre-imaged. ADR-0034.

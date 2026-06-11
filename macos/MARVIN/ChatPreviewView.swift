@@ -129,6 +129,12 @@ final class ChatPreviewModel {
     /// Cleared when the user resets.
     private(set) var marvinSessionId: String? = nil
 
+    /// ADR-0036 — the live to-do list from the model's `TodoWrite` calls.
+    /// Each TodoWrite rewrites the whole list with per-item status, so we
+    /// just replace this wholesale; drives the TodoListStrip. Cleared on a
+    /// fresh SDK session.
+    var todos: [TodoItem] = []
+
     /// ADR-0034 — the agent's pending changed set (Cursor-style review).
     /// Refreshed live while edits stream (throttled) and on turn end;
     /// drives the AgentChangesStrip above the input bar.
@@ -180,6 +186,53 @@ final class ChatPreviewModel {
     /// a parallel surface show up without a relaunch).
     private(set) var sessions: [SessionSummary] = []
     private var sessionsFetchTask: Task<Void, Never>?
+
+    /// Cursor-style OPEN tabs — the ordered session IDs the user has
+    /// opened in this window. Distinct from `sessions` (everything on
+    /// disk): a chat joins this list when opened (new turn, or picked from
+    /// the clock menu) and leaves it when its tab is closed. Persisted per
+    /// project so tabs survive a relaunch.
+    private(set) var openTabSessionIds: [String] = []
+
+    /// Add a session to the open-tab strip (idempotent, appends right).
+    func openTab(_ sessionId: String) {
+        guard !openTabSessionIds.contains(sessionId) else { return }
+        openTabSessionIds.append(sessionId)
+        persistOpenTabs()
+    }
+
+    /// Close a tab. If it was the active one, fall back to a neighbour
+    /// tab, or to a fresh chat when none remain.
+    func closeTab(_ sessionId: String) {
+        let wasActive = loadedSessionId == sessionId
+        let idx = openTabSessionIds.firstIndex(of: sessionId)
+        openTabSessionIds.removeAll { $0 == sessionId }
+        persistOpenTabs()
+        guard wasActive else { return }
+        // Prefer the tab that was to the right (or the new last one).
+        let next: String? = {
+            guard let idx else { return openTabSessionIds.last }
+            if idx < openTabSessionIds.count { return openTabSessionIds[idx] }
+            return openTabSessionIds.last
+        }()
+        if let next {
+            selectSession(next, fallbackProjectId: MarvinBridge.shared.activeProjectId)
+        } else {
+            clear()
+        }
+    }
+
+    private func persistOpenTabs() {
+        guard let pid = loadedProjectId else { return }
+        UserDefaults.standard.set(openTabSessionIds, forKey: "marvin.openTabs.\(pid)")
+    }
+
+    /// Restore the persisted open-tab set for a project. Called when the
+    /// active project resolves. Keeps only ids that still exist on disk.
+    func loadOpenTabs(projectId: String) {
+        let saved = UserDefaults.standard.stringArray(forKey: "marvin.openTabs.\(projectId)") ?? []
+        openTabSessionIds = saved
+    }
 
     /// Auto-hydrate: fetch sessions and load the right one. Called
     /// when no session is set (post-WebView-removal M5, activeMarvinSessionId
@@ -239,6 +292,7 @@ final class ChatPreviewModel {
     /// so this works even before the first hydrate has set loadedProjectId.
     func selectSession(_ sessionId: String, fallbackProjectId: String? = nil) {
         guard let projectId = loadedProjectId ?? fallbackProjectId else { return }
+        openTab(sessionId)  // opening a chat makes it a tab (Cursor-style)
         if loadedSessionId == sessionId { return }
         loadedSessionId = nil
         hydrate(projectId: projectId, sessionId: sessionId)
@@ -355,6 +409,7 @@ final class ChatPreviewModel {
             model: prefs.executorModel,
             advisorModel: prefs.advisorModel,
             permissionStrategy: strategy,
+            mode: prefs.mode,
             thinkingMode: prefs.thinkingMode,
             advisorThinkingMode: prefs.advisorThinkingMode,
             resetSdkSession: resetThisTurn ? true : nil
@@ -473,6 +528,7 @@ final class ChatPreviewModel {
 
         loadedProjectId = projectId
         loadedSessionId = sessionId
+        openTab(sessionId)  // hydrated session is an open tab (Cursor-style)
         isHydrating = true
         lastError = nil
         // Wipe state before replay — replay rebuilds the list from
@@ -686,6 +742,8 @@ final class ChatPreviewModel {
                 loadedSessionId = s.marvinSessionId
                 if loadedProjectId == nil { loadedProjectId = pid }
                 NativePrefs.shared.setLastSessionId(s.marvinSessionId, forProject: pid)
+                // The just-started chat becomes an open tab (Cursor-style).
+                openTab(s.marvinSessionId)
             }
             // ADR-0021 M4: drive brain profile natively from SSE.
             b.marvinState = "thinking"
@@ -708,12 +766,20 @@ final class ChatPreviewModel {
                 b.sessionGraphCalls = 0
                 b.sessionFileReadCalls = 0
                 b.sessionGraphSummaryCalls = 0
+                // ADR-0036 — a fresh SDK session starts with no plan.
+                todos = []
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
             // list IS the rendered surface, so the SwiftUI commit
             // that follows is what the user actually sees on screen.
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
+            // ADR-0036 — capture the latest TodoWrite list (Plan/Agent
+            // to-do checklist). Synchronous like the message reducer; the
+            // model write is cheap and drives the TodoListStrip.
+            if let latest = TodoExtractor.todos(from: data) {
+                todos = latest
+            }
             // Bridge mutations get hopped to the next runloop tick.
             // Without this, fast cli.event streams stack synchronous
             // @Observable writes inside a SwiftUI layout commit and
@@ -770,6 +836,11 @@ final class ChatPreviewModel {
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
             refreshAgentChanges(force: true)
+            // Refresh the session tab strip so a brand-new chat's first
+            // turn surfaces as a tab without waiting for a relaunch.
+            if let pid = loadedProjectId ?? b.activeProjectId {
+                refreshSessions(projectId: pid)
+            }
             // Drain one queued message into the next turn. The activeTask
             // chain set isSending=false in its `defer` before this event
             // fires, so sendInternal() will start a fresh stream cleanly.
@@ -833,6 +904,8 @@ struct ChatPreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            sessionTabs
+            Divider()
             header
             Divider()
             // Agents bar — model pills, personality, perms (auto/gated).
@@ -858,6 +931,9 @@ struct ChatPreviewView: View {
             }
             if model.resetSdkOnNextSend {
                 resetArmedChip
+            }
+            if !model.todos.isEmpty {
+                TodoListStrip(todos: model.todos)
             }
             if !model.agentChangedFiles.isEmpty {
                 AgentChangesStrip(files: model.agentChangedFiles) {
@@ -1040,6 +1116,129 @@ struct ChatPreviewView: View {
                 model.refreshSessions(projectId: pid)
             }
         }
+    }
+
+    /// Cursor-style chat tab strip at the very top of the chat: recent
+    /// sessions as one-click tabs (active highlighted) + a `+` for a new
+    /// chat. Replaces the dropdown-only switching, which felt clunky. The
+    /// clock menu in the header stays as the full-history overflow.
+    private var sessionTabs: some View {
+        HStack(spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    // A brand-new chat (nothing loaded yet) shows as its
+                    // own active "New chat" tab until the first turn mints
+                    // a session id that joins the open tabs.
+                    if model.loadedSessionId == nil {
+                        chatTab(title: "New chat", systemImage: "bubble.left.fill",
+                                active: true, onSelect: {}, onClose: nil)
+                    }
+                    ForEach(model.openTabSessionIds, id: \.self) { sid in
+                        chatTab(
+                            title: tabTitle(forSessionId: sid),
+                            systemImage: "bubble.left",
+                            active: sid == model.loadedSessionId,
+                            onSelect: {
+                                model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                            },
+                            onClose: { model.closeTab(sid) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+            }
+            Spacer(minLength: 4)
+            Button {
+                model.clear()
+                if let pid = bridge.activeProjectId { model.refreshSessions(projectId: pid) }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: 24, height: 22)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .help("New chat (⌘⇧N)")
+            .padding(.trailing, 8)
+        }
+        .frame(height: 32)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        .onAppear {
+            if let pid = bridge.activeProjectId {
+                model.loadOpenTabs(projectId: pid)
+                model.refreshSessions(projectId: pid)
+            }
+        }
+        .onChange(of: bridge.activeProjectId) { _, pid in
+            if let pid {
+                model.loadOpenTabs(projectId: pid)
+                model.refreshSessions(projectId: pid)
+            }
+        }
+    }
+
+    /// One open tab: a click-to-switch label + a close ✕. `onClose` nil
+    /// hides the ✕ (the ephemeral "New chat" tab can't be closed).
+    private func chatTab(
+        title: String,
+        systemImage: String,
+        active: Bool,
+        onSelect: @escaping () -> Void,
+        onClose: (() -> Void)?
+    ) -> some View {
+        HStack(spacing: 4) {
+            Button(action: onSelect) {
+                HStack(spacing: 5) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9))
+                    Text(title)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .buttonStyle(.plain)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Close tab")
+            }
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, onClose == nil ? 9 : 5)
+        .padding(.vertical, 4)
+        .frame(maxWidth: 190, alignment: .leading)
+        .foregroundStyle(active ? Color.primary : .secondary)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(active ? Color(nsColor: .textBackgroundColor) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor),
+                                lineWidth: active ? 0.5 : 0)
+                )
+        )
+        .help(title)
+    }
+
+    /// Short tab title for an open session id — its first user message,
+    /// or its date, looked up from the loaded session list. Falls back to
+    /// the id prefix when the summary isn't loaded yet.
+    private func tabTitle(forSessionId sid: String) -> String {
+        guard let s = model.sessions.first(where: { $0.sessionId == sid }) else {
+            return String(sid.prefix(8))
+        }
+        if let msg = s.firstUserMessage?.replacingOccurrences(of: "\n", with: " "),
+           !msg.trimmingCharacters(in: .whitespaces).isEmpty {
+            return msg.count > 26 ? String(msg.prefix(24)) + "…" : msg
+        }
+        return friendlyDate(s.updatedAt)
     }
 
     /// Format a session-summary label: "M/D · 12 turns · first 60 chars".

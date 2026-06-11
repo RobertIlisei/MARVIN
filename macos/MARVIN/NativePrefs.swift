@@ -28,6 +28,10 @@ final class NativePrefs {
     private(set) var executorModel: String? = nil
     private(set) var advisorModel: String? = nil
     private(set) var permissionStrategy: String = "auto"
+    /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Orthogonal to
+    /// permissionStrategy. Defaults to "agent" so existing behaviour is
+    /// unchanged until the user picks Ask or Plan.
+    private(set) var mode: String = "agent"
     /// ADR-0022 follow-up — user-facing thinking mode (Fast / Thinking / Max).
     /// Maps to the SDK's `effort` field server-side. "thinking" matches the
     /// SDK default and MARVIN's prior behaviour, so existing users see no
@@ -88,6 +92,14 @@ final class NativePrefs {
         permissionStrategy = v
         UserDefaults.standard.set(v, forKey: "marvin.permissionStrategy")
         MarvinBridge.shared.permissionStrategy = v
+    }
+
+    /// Autonomy mode (ADR-0036): ask | agent | plan.
+    func setMode(_ v: String) {
+        guard v == "ask" || v == "agent" || v == "plan" else { return }
+        mode = v
+        UserDefaults.standard.set(v, forKey: "marvin.mode")
+        MarvinBridge.shared.mode = v
     }
 
     /// User-facing reasoning-effort selection. The full SDK ladder
@@ -296,6 +308,9 @@ final class NativePrefs {
         if let perm = d.string(forKey: "marvin.permissionStrategy"), perm == "auto" || perm == "gated" {
             permissionStrategy = perm
         }
+        if let m = d.string(forKey: "marvin.mode"), m == "ask" || m == "agent" || m == "plan" {
+            mode = m
+        }
         if let mode = d.string(forKey: "marvin.thinkingMode"),
            let level = NativePrefs.normaliseEffort(mode) {
             // Normalise legacy fast/thinking → low/high on load so the
@@ -346,6 +361,7 @@ final class NativePrefs {
         b.executorModel       = executorModel
         b.advisorModel        = advisorModel
         b.permissionStrategy  = permissionStrategy
+        b.mode                = mode
         b.thinkingMode        = thinkingMode
         b.advisorThinkingMode = advisorThinkingMode
         b.panes               = panes

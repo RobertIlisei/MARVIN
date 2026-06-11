@@ -97,6 +97,21 @@ export async function resolveRuntimeMode(mode: RuntimeMode): Promise<{
 export type PermissionStrategy = "auto" | "gated";
 
 /**
+ * Autonomy mode for a turn (ADR-0036) — orthogonal to {@link PermissionStrategy}.
+ * Mode = what MARVIN may *do*; strategy = how its edits get *confirmed*.
+ *
+ *   - `ask`   — read-only. Any mutating tool (Edit / Write / NotebookEdit /
+ *               mutating Bash) is hard-denied at the gate; reads / grep /
+ *               graph still work. Like Cursor's Ask.
+ *   - `agent` — full autonomy (the default; pre-ADR-0036 behaviour). The
+ *               `auto`/`gated` strategy governs confirmation.
+ *   - `plan`  — the SDK's native `permissionMode: "plan"`: MARVIN drafts a
+ *               plan + to-do list, makes no edits, and surfaces an approval
+ *               step (ExitPlanMode) before executing.
+ */
+export type AgentMode = "ask" | "agent" | "plan";
+
+/**
  * The SDK's reasoning-effort ladder, surfaced directly in MARVIN's
  * picker (UX parity with Claude Desktop / Claude Code, which let you
  * pick the level rather than a coarse alias):
@@ -201,6 +216,10 @@ export interface RunAgentInput {
   sessionId?: string | undefined;
   /** Permission strategy. Defaults to `auto` when omitted. */
   permissionStrategy?: PermissionStrategy;
+  /** Autonomy mode (ADR-0036). Defaults to `agent` when omitted —
+   *  preserving pre-0.1.22 behaviour. `ask` makes the turn read-only at
+   *  the gate; `plan` runs under the SDK's plan permissionMode. */
+  mode?: AgentMode;
   /**
    * User-facing reasoning-effort selection. A {@link ReasoningEffort}
    * ladder value (`low`/`medium`/`high`/`xhigh`/`max`) or a legacy
@@ -458,6 +477,10 @@ export function classifyToolCall(
      *  originates inside a sub-agent (scout, advisor, or a dynamic-
      *  workflow child). See ADR-0030. */
     agentID?: string;
+    /** Ask mode (ADR-0036) — the whole turn is read-only. Collapses the
+     *  ladder exactly like the subagent invariant: auto-class allows,
+     *  anything that would confirm or deny is hard-denied. */
+    readOnly?: boolean;
   },
 ): { decision: "allow" | "confirm" | "deny"; reason: string } {
   // Tools outside our named set (Task, NotebookEdit, MCP, etc.) are
@@ -492,9 +515,52 @@ export function classifyToolCall(
     };
   }
 
+  // ASK MODE READ-ONLY INVARIANT (ADR-0036). The same collapse as the
+  // subagent invariant, applied to the whole turn: read-only / whitelisted
+  // tools stay allowed; anything that would confirm OR deny is hard-denied.
+  // The honest enforcement point for "Ask is read-only" — not a prompt.
+  if (opts?.readOnly && baseDecision !== "allow") {
+    return {
+      decision: "deny",
+      reason:
+        `Ask mode is read-only — ${name} would change the workspace. ` +
+        `Switch to Agent or Plan mode to make edits (ADR-0036).`,
+    };
+  }
+
   if (baseDecision === "allow") return { decision: "allow", reason: policy.reason };
   if (baseDecision === "deny") return { decision: "deny", reason: policy.reason };
   return { decision: "confirm", reason: policy.reason };
+}
+
+/** Mode-specific system-prompt stanza (ADR-0036). Empty for `agent` so
+ *  the default posture is unchanged. The gate / permissionMode do the
+ *  actual enforcement; this just sets expectations so the model behaves
+ *  coherently (e.g. proposes edits as suggestions in Ask instead of trying
+ *  them and getting denied). */
+function modeGuidance(mode: AgentMode): string {
+  if (mode === "ask") {
+    return (
+      "\n\n## Mode: ASK (read-only)\n" +
+      "You are in Ask mode. The permission gate hard-denies every " +
+      "workspace-mutating tool (Edit / Write / NotebookEdit / mutating " +
+      "Bash) for this entire turn — do not attempt them. Read, search, " +
+      "query the graph, and explain. When the user wants a change, " +
+      "describe exactly what you'd do and tell them to switch to Agent or " +
+      "Plan mode; do not try to edit."
+    );
+  }
+  if (mode === "plan") {
+    return (
+      "\n\n## Mode: PLAN (plan-first, approval-gated)\n" +
+      "You are in Plan mode. Investigate read-only, then produce a clear, " +
+      "ordered plan AND a `TodoWrite` checklist of the concrete steps. Do " +
+      "NOT edit yet — present the plan and call ExitPlanMode to hand it to " +
+      "the user for approval. Only after they approve do you execute, " +
+      "keeping the TodoWrite list updated (in_progress / completed) as you go."
+    );
+  }
+  return "";
 }
 
 /** Normalise toolInput to the record shape the SDK's PermissionResult
@@ -567,6 +633,42 @@ function maybeRecordPreImage(args: {
 }
 
 /**
+ * Plan-mode approval (ADR-0036). In `plan` mode the model finishes by
+ * calling `ExitPlanMode` to signal "ready to execute"; the SDK consults
+ * `canUseTool` for it. We route that through MARVIN's existing confirm
+ * pipeline so it becomes a user-facing approval — ALLOW = approve the plan
+ * and start executing (the SDK exits plan mode), DENY = keep planning. This
+ * is what makes Plan mode "wait for my approval" regardless of the auto/
+ * gated strategy. Returns null when this isn't the ExitPlanMode-in-plan
+ * case so callers fall through to normal classification.
+ */
+const EXIT_PLAN_TOOL = "ExitPlanMode";
+function maybePlanApproval(args: {
+  mode: AgentMode | undefined;
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | null {
+  if (args.mode !== "plan" || args.toolName !== EXIT_PLAN_TOOL || !args.onConfirmRequest) {
+    return null;
+  }
+  const onConfirmRequest = args.onConfirmRequest;
+  return new Promise<PermissionResult>((resolve) => {
+    registerPendingConfirm(args.turnId, args.toolUseID, resolve, args.input);
+    onConfirmRequest({
+      turnId: args.turnId,
+      toolUseId: args.toolUseID,
+      toolName: EXIT_PLAN_TOOL,
+      input: args.input,
+      reason: "Plan ready — approve to start executing, or keep planning.",
+      title: "Review plan",
+    });
+  });
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -579,11 +681,21 @@ export function makeAutoModeLogger(args: {
   turnId: string;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
   checkpoint?: { projectId: string; marvinSessionId: string };
+  /** Ask mode (ADR-0036) — make the turn read-only at the gate. */
+  readOnly?: boolean;
+  /** Autonomy mode (ADR-0036) — drives plan-approval routing. */
+  mode?: AgentMode;
+  /** Needed for the plan-approval confirm even in auto strategy. */
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
 }): CanUseTool {
-  const { cwd, turnId, checkpoint } = args;
+  const { cwd, turnId, checkpoint, readOnly, mode, onConfirmRequest } = args;
   return async (toolName, toolInput, { toolUseID, agentID }) => {
     const safeInput = normaliseInput(toolInput);
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
+    // Plan approval gate first — even in auto strategy, ExitPlanMode waits
+    // for the user (ADR-0036).
+    const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    if (planApproval) return planApproval;
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
     if (cls.decision !== "deny") {
       maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
     }
@@ -619,11 +731,18 @@ export function makeGatedCanUseTool(args: {
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
   checkpoint?: { projectId: string; marvinSessionId: string };
+  /** Ask mode (ADR-0036) — make the turn read-only at the gate. */
+  readOnly?: boolean;
+  /** Autonomy mode (ADR-0036) — drives plan-approval routing. */
+  mode?: AgentMode;
 }): CanUseTool {
-  const { cwd, turnId, onConfirmRequest, checkpoint } = args;
+  const { cwd, turnId, onConfirmRequest, checkpoint, readOnly, mode } = args;
   return async (toolName, toolInput, { toolUseID, title, description, displayName, agentID }) => {
     const safeInput = normaliseInput(toolInput);
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID });
+    // Plan approval gate first (ADR-0036).
+    const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    if (planApproval) return planApproval;
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
     if (cls.decision !== "deny") {
       // Pre-image BEFORE the confirm round-trip too: if the user allows,
       // the write executes inside the SDK with no further hook here.
@@ -720,8 +839,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     input.marvinSessionId && input.projectId
       ? { projectId: input.projectId, marvinSessionId: input.marvinSessionId }
       : undefined;
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
-  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, ...(checkpoint ? { checkpoint } : {}) });
+  // ADR-0036 autonomy mode. `ask` makes the gate read-only; `plan` runs
+  // under the SDK's plan permissionMode (approval before edits). Default
+  // `agent` is the pre-0.1.22 behaviour.
+  const mode: AgentMode = input.mode ?? "agent";
+  const readOnly = mode === "ask";
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
+  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -774,8 +898,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // for this turn only. The SDK passes this straight to the
     // spawned Claude CLI.
     env: turnEnv,
-    permissionMode: "default",
+    // ADR-0036: `plan` runs under the SDK's native plan mode (drafts a plan,
+    // auto-denies edits, surfaces ExitPlanMode for approval). `ask`/`agent`
+    // use `default` — Ask's read-only enforcement lives in the gate below.
+    permissionMode: mode === "plan" ? "plan" : "default",
     canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
+    // ADR-0036: SDK-level backstop for Ask read-only — the gate already
+    // hard-denies these, this is the belt-and-braces (same shape as the
+    // scout). Bash is NOT disallowed: read-only shell (ls/grep/cat) stays
+    // available; the gate denies only *mutating* Bash.
+    ...(readOnly ? { disallowedTools: ["Edit", "Write", "NotebookEdit"] } : {}),
     // PreToolUse fires on EVERY tool call BEFORE the SDK's permission
     // pipeline. canUseTool only gets called for tools the SDK considers
     // gate-worthy (Edit / Write / Bash) — Read / Grep / Glob auto-allow
@@ -787,7 +919,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: appendSystemPrompt,
+      append: appendSystemPrompt + modeGuidance(mode),
     },
     mcpServers: {
       "marvin-graph": graphMcp,

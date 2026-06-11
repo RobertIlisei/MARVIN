@@ -468,6 +468,11 @@ struct ChatInputBar: View {
             }
 
             HStack(spacing: 8) {
+                // Cursor-style per-turn controls on the bottom-left of the
+                // input — autonomy mode (Ask · Agent · Plan) + reasoning
+                // effort — in the same row as Send, the way Cursor lays out
+                // `∞ Agent ⌄  Auto ⌄` beneath the textarea.
+                ChatModeToolbar()
                 if isSending {
                     ProgressView()
                         .controlSize(.small)
