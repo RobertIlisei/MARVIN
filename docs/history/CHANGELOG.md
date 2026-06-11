@@ -9,6 +9,27 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-11 — v0.1.25: Plan-mode UX polish (from live use).** Five fixes
+  to the decoupled Plan flow:
+  - **Session-scoped strips.** The plan checklist + "N files changed" were
+    only cleared on a fresh SDK session, so a new chat / session switch
+    showed the *previous* session's strips. Cleared in `clear()` + `hydrate()`.
+  - **Approve/Continue are control actions, not fake user messages.** They
+    set the draft and `send()`-ed, so a long instruction appeared as an
+    un-editable *user* bubble. Now `sendControl` passes the instruction to
+    the agent (hidden — it needs the context) and shows a compact
+    `▶ Plan approved — executing` system row instead. (Cursor's behaviour.)
+  - **Save the plan to a file.** A "Save plan" action writes the plan as
+    Markdown (native save panel, defaults to `<workDir>/PLAN.md`) and opens
+    it, so the plan can be followed in a file alongside the chat.
+  - **Collapse / dismiss the checklist.** A finished list lingered with no
+    way to close it. The strip now has a collapse chevron + a ✕ dismiss, and
+    auto-collapses to a one-line "✓ … complete" when every item is done.
+  - **Label it "To-dos", not "Plan".** The `TodoWrite` checklist is the
+    model's task tracker used in BOTH Agent and Plan mode; labeling it "Plan"
+    made normal Agent-mode work look like planning. Renamed to "To-dos"
+    (Cursor term). The plan stays a distinct artifact (inline message + file).
+  - **Verification.** `swift build` clean across all five.
 - **2026-06-11 — v0.1.24: Plan mode decoupled (advisor plans, executor
   executes) + the chat strip tray.**
   - **Plan mode redesigned (ADR-0036 rev).** Live use of the SDK's coupled
