@@ -373,6 +373,19 @@ struct FileTreeView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                // Crash fix (v0.1.26): SwiftUI's `List` + `OutlineGroup` +
+                // `.sidebar` has a framework bug — when the list reconciles
+                // while a folder is expanded, `OutlineListCoordinator`
+                // animates a row collapse through `_NSOutlineViewAnimator`
+                // and asserts (`ViewListTree.visitItem` → SIGTRAP). This
+                // fires on EVERY reconcile, and the git-status badges
+                // (dirtyStatus) re-render the rows on every turn + a 15s
+                // poll — so a long session reliably hits it. Disabling
+                // animations on the list subtree means updates reload
+                // instantly instead of through the crashing animator. The
+                // tree has no animation worth keeping (selection + badges
+                // are instant anyway), so this is pure crash-avoidance.
+                .transaction { $0.disablesAnimations = true }
                 if response.truncated {
                     truncatedBanner(count: response.count)
                 }
@@ -734,7 +747,15 @@ private extension View {
 private extension FileNode {
     var outlineChildren: [FileNode]? {
         guard isDirectory else { return nil }
-        return children ?? []
+        let kids = children ?? []
+        // Defensive: OutlineGroup requires IDs unique across the WHOLE tree
+        // and asserts (crash) on a duplicate. `id` is the absolute path, so
+        // a symlink loop or a case-folding collision could produce dupes —
+        // dedupe siblings by path so a bad tree degrades gracefully instead
+        // of taking down the outline. No-op for well-formed trees.
+        guard kids.count > 1 else { return kids }
+        var seen = Set<String>()
+        return kids.filter { seen.insert($0.path).inserted }
     }
 }
 
