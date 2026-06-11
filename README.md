@@ -269,7 +269,9 @@ docs/
 
 ## Status
 
-**v0.1.24 — Plan mode decoupled, chat strip tray (current).**
+**v0.1.25 — Plan-mode UX polish (current).** Session-scoped strips (no stale plan in a new chat); Approve/Continue as hidden control actions (no fake user message in the chat); **Save plan** to a Markdown file you can follow alongside the chat; collapse/dismiss the checklist (auto-collapses when done); and the checklist relabeled **"To-dos"** — it's the task tracker (used in any mode), while the plan stays a distinct inline message + file.
+
+**v0.1.24 — Plan mode decoupled, chat strip tray.**
 
 - **Plan mode** (ADR-0036 rev) — a read-only planning turn on your chosen **advisor** model presents a numbered plan **inline** in the chat (no modal); an **"Approve & execute"** chip then runs it in a separate **Agent** turn on your **executor** model. Models routed by role; no re-planning.
 - **Chat strip tray** — the plan checklist, changed-files Review, and session controls now live in one opaque, divider-separated tray that no longer overlaps the message log.
