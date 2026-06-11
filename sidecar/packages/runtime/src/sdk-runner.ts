@@ -552,21 +552,20 @@ function modeGuidance(mode: AgentMode): string {
   }
   if (mode === "plan") {
     return (
-      "\n\n## Mode: PLAN (plan-first, approval-gated)\n" +
-      "You are in Plan mode. Investigate read-only, then present a clear, " +
-      "ordered, numbered plan and call ExitPlanMode with it to hand it to the " +
-      "user for approval. Do NOT edit before approval.\n" +
-      "AFTER the user approves, the plan IS your task list — the user tracks " +
-      "your progress against it:\n" +
-      "1. IMMEDIATELY call `TodoWrite` with one item per numbered plan step " +
-      "(same wording, same order) before doing anything else.\n" +
-      "2. As you work, keep that `TodoWrite` list current: mark the step you " +
-      "are starting `in_progress`, and mark it `completed` the moment it's " +
-      "done, calling `TodoWrite` each time. Exactly one item `in_progress` at " +
-      "a time. Do not batch the updates to the end.\n" +
-      "3. Follow the plan's order; if reality forces a change, update the " +
-      "`TodoWrite` list to match and say why. This checklist is the user's " +
-      "only window into your progress — keeping it live is REQUIRED, not optional."
+      "\n\n## Mode: PLAN (read-only — produce a plan, then STOP)\n" +
+      "You are in Plan mode. This turn is READ-ONLY: the gate hard-denies " +
+      "every edit/mutation, so do not attempt them. Investigate (read, grep, " +
+      "graph), then present ONE clear, ordered, **numbered** plan as your " +
+      "reply — and STOP.\n" +
+      "Hard rules:\n" +
+      "- Do NOT call ExitPlanMode. Do NOT start executing. Do NOT call " +
+      "`TodoWrite` yet. Just present the numbered plan and end the turn.\n" +
+      "- The user reviews the plan in the chat and clicks Approve, which " +
+      "starts a SEPARATE execution turn (Agent mode, the executor model). " +
+      "That turn — not this one — does the work and tracks a `TodoWrite` " +
+      "checklist of your plan's steps.\n" +
+      "- If the user asks you to revise, produce the new numbered plan and " +
+      "STOP again. Never silently keep planning in a loop."
     );
   }
   return "";
@@ -652,7 +651,7 @@ function maybeRecordPreImage(args: {
  * case so callers fall through to normal classification.
  */
 const EXIT_PLAN_TOOL = "ExitPlanMode";
-function maybePlanApproval(args: {
+function maybePlanApproval(_args: {
   mode: AgentMode | undefined;
   toolName: string;
   turnId: string;
@@ -660,21 +659,12 @@ function maybePlanApproval(args: {
   input: Record<string, unknown>;
   onConfirmRequest?: (request: ConfirmRequestPayload) => void;
 }): Promise<PermissionResult> | null {
-  if (args.mode !== "plan" || args.toolName !== EXIT_PLAN_TOOL || !args.onConfirmRequest) {
-    return null;
-  }
-  const onConfirmRequest = args.onConfirmRequest;
-  return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(args.turnId, args.toolUseID, resolve, args.input);
-    onConfirmRequest({
-      turnId: args.turnId,
-      toolUseId: args.toolUseID,
-      toolName: EXIT_PLAN_TOOL,
-      input: args.input,
-      reason: "Plan ready — approve to start executing, or keep planning.",
-      title: "Review plan",
-    });
-  });
+  // ADR-0036 (revised): Plan mode is now a read-only planning turn that
+  // presents the plan inline and stops — there is no modal ExitPlanMode
+  // approval and no plan→execute coupling. Disabled (kept as a no-op so the
+  // call sites stay stable). Approval is now an inline "Approve & execute"
+  // action in the chat that starts a fresh Agent-mode turn.
+  return null;
 }
 
 /**
@@ -848,11 +838,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     input.marvinSessionId && input.projectId
       ? { projectId: input.projectId, marvinSessionId: input.marvinSessionId }
       : undefined;
-  // ADR-0036 autonomy mode. `ask` makes the gate read-only; `plan` runs
-  // under the SDK's plan permissionMode (approval before edits). Default
-  // `agent` is the pre-0.1.22 behaviour.
+  // ADR-0036 autonomy mode (revised). BOTH `ask` and `plan` are read-only
+  // at the gate — Plan is now a read-only *planning* turn that produces the
+  // plan inline and stops; execution is a SEPARATE Agent-mode turn (on the
+  // executor model) the user starts by approving. This decouples plan from
+  // execute so they can use different models, and removes the modal +
+  // re-planning that the SDK's coupled plan permissionMode caused.
   const mode: AgentMode = input.mode ?? "agent";
-  const readOnly = mode === "ask";
+  const readOnly = mode === "ask" || mode === "plan";
   const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
   const autoModeLogger = makeAutoModeLogger({ cwd, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
 
@@ -907,10 +900,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // for this turn only. The SDK passes this straight to the
     // spawned Claude CLI.
     env: turnEnv,
-    // ADR-0036: `plan` runs under the SDK's native plan mode (drafts a plan,
-    // auto-denies edits, surfaces ExitPlanMode for approval). `ask`/`agent`
-    // use `default` — Ask's read-only enforcement lives in the gate below.
-    permissionMode: mode === "plan" ? "plan" : "default",
+    // ADR-0036 (revised): all modes use `default`. Plan + Ask read-only
+    // enforcement lives in the gate (`readOnly`) below — Plan is no longer
+    // the SDK's coupled plan permissionMode.
+    permissionMode: "default",
     canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
     // ADR-0036: SDK-level backstop for Ask read-only — the gate already
     // hard-denies these, this is the belt-and-braces (same shape as the

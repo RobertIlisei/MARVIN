@@ -140,6 +140,11 @@ final class ChatPreviewModel {
     /// approval window is dismissed. Cleared on a fresh SDK session.
     var currentPlanText: String? = nil
 
+    /// ADR-0036 (revised) — a Plan-mode turn just finished presenting a plan
+    /// (read-only), so we're waiting on the user to Approve & execute. Drives
+    /// the inline approval chip; cleared on the next send.
+    var planAwaitingApproval: Bool = false
+
     /// Pull the `plan` string out of an ExitPlanMode confirm request.
     func planText(from request: ConfirmRequest) -> String? {
         guard case let .object(dict)? = request.input,
@@ -344,6 +349,7 @@ final class ChatPreviewModel {
         guard !composed.isEmpty else { return }
         draft = ""
         attachments = []
+        planAwaitingApproval = false  // any send clears the plan-approval chip
         if isSending {
             // Turn already running — queue for after it completes.
             // turn.completed pops the head of this list and dispatches
@@ -859,6 +865,9 @@ final class ChatPreviewModel {
             // ADR-0021 M4: reset brain to idle natively.
             b.marvinState = "idle"
             b.isBusy = false
+            // ADR-0036 (revised) — a Plan-mode turn just finished presenting a
+            // plan (read-only). Surface the inline Approve & execute affordance.
+            planAwaitingApproval = (b.mode == "plan")
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
@@ -947,29 +956,19 @@ struct ChatPreviewView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
             Divider()
+            // The message log OWNS the flexible vertical space — it expands
+            // and contracts so the docked tray below never overlaps it.
             messagesPane
-                .frame(minHeight: 240)
+                .frame(minHeight: 140, maxHeight: .infinity)
             if let err = model.lastError {
                 errorBanner(err)
             }
-            Divider()
-            if scopeMetVisible {
-                scopeMetChipStrip
-            }
-            if model.resetSdkOnNextSend {
-                resetArmedChip
-            }
-            if !model.todos.isEmpty {
-                TodoListStrip(todos: model.todos)
-            }
-            if !model.agentChangedFiles.isEmpty {
-                AgentChangesStrip(files: model.agentChangedFiles) {
-                    openReviewWindow()
-                }
-            }
-            if !model.queuedMessages.isEmpty {
-                queuedStrip
-            }
+            // One clean, OPAQUE tray for every contextual strip, docked above
+            // the input with a hard top border. Each strip is separated, so
+            // session controls (Save to memory / Start fresh), the plan
+            // checklist, and the changed-files review read as distinct rows
+            // instead of bleeding into the log or into each other.
+            statusTray
             ChatInputBar(
                 text: Bindable(model).draft,
                 onSubmit: { model.send(cwd: bridge.projectWorkDir) },
@@ -1328,6 +1327,131 @@ struct ChatPreviewView: View {
         ReviewWindowTarget.shared.cwd = cwd
         ReviewWindowTarget.shared.sid = sid
         openWindow(id: "marvin-review")
+    }
+
+    /// ADR-0036 — a Plan checklist exists, the turn is idle, and at least one
+    /// item is unfinished: MARVIN has paused and is waiting on the user.
+    private var planPausedWaiting: Bool {
+        !model.isSending && model.todos.contains { $0.status != "completed" }
+    }
+
+    /// One-click resume for a paused plan. The freeform input still works for
+    /// a "continue + adjust" reply (what the user did manually).
+    private var continuePlanChip: some View {
+        let done = model.todos.filter { $0.status == "completed" }.count
+        return HStack(spacing: 8) {
+            Image(systemName: "pause.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.purple)
+            Text("Paused — \(done)/\(model.todos.count) steps done. Review, then continue.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                continuePlan()
+            } label: {
+                Label("Continue", systemImage: "arrow.right.circle.fill")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(model.isSending)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.purple.opacity(0.07))
+    }
+
+    private func continuePlan() {
+        guard !model.isSending else { return }
+        model.draft = "Continue with the remaining plan steps. First re-emit your "
+            + "TodoWrite checklist with current statuses, then proceed and keep it "
+            + "updated as you complete each item."
+        model.send(cwd: bridge.projectWorkDir)
+    }
+
+    /// ADR-0036 (revised) — inline "Approve & execute" after a plan turn.
+    private var approvePlanChip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checklist")
+                .font(.system(size: 11))
+                .foregroundStyle(.purple)
+            Text("Plan ready — review above, then approve to execute (runs in Agent mode on the executor).")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Revise") {
+                // Stay in Plan mode; just nudge a revised plan.
+                model.draft = "Revise the plan — "
+            }
+            .controlSize(.small)
+            Button {
+                approvePlan()
+            } label: {
+                Label("Approve & execute", systemImage: "play.fill")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.purple.opacity(0.08))
+    }
+
+    /// Approve the presented plan: switch to Agent mode (so execution runs on
+    /// the executor model, not the planning advisor) and start the run.
+    private func approvePlan() {
+        guard !model.isSending else { return }
+        NativePrefs.shared.setMode("agent")
+        model.draft = "The plan you just presented is approved — execute it now. "
+            + "Work through it in order, and maintain a TodoWrite checklist (one item "
+            + "per plan step) updated as you complete each step. Pause and ask if you "
+            + "hit a real decision."
+        model.send(cwd: bridge.projectWorkDir)
+    }
+
+    /// One opaque, clearly-separated tray for every contextual strip, docked
+    /// above the input. A hard top border separates it from the scrolling
+    /// message log (no more "the plan is in front of the log"), and each
+    /// active strip is its own divider-separated row so session controls, the
+    /// plan checklist, and the changed-files review never read as one blob.
+    @ViewBuilder
+    private var statusTray: some View {
+        let rows = trayRows
+        if !rows.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    if index > 0 { Divider() }
+                    row
+                }
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+            }
+        }
+    }
+
+    /// The active strips, in priority order, as type-erased rows.
+    private var trayRows: [AnyView] {
+        var rows: [AnyView] = []
+        if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
+        if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
+        if !model.todos.isEmpty { rows.append(AnyView(TodoListStrip(todos: model.todos))) }
+        if model.planAwaitingApproval && !model.isSending {
+            rows.append(AnyView(approvePlanChip))
+        } else if planPausedWaiting {
+            rows.append(AnyView(continuePlanChip))
+        }
+        if !model.agentChangedFiles.isEmpty {
+            rows.append(AnyView(AgentChangesStrip(files: model.agentChangedFiles) { openReviewWindow() }))
+        }
+        if !model.queuedMessages.isEmpty { rows.append(AnyView(queuedStrip)) }
+        return rows
     }
 
     private var header: some View {

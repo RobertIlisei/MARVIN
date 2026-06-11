@@ -1,5 +1,21 @@
 # ADR-0036 — Ask / Agent / Plan modes + live to-do list
 
+> **Revision 2026-06-11 (v0.1.24) — Plan mode decoupled.** The first cut used
+> the SDK's coupled plan permissionMode (plan → ExitPlanMode modal → execute
+> in the same turn, same model). Live use exposed three faults: (1) approval
+> popped a **modal window** instead of being inline like Cursor; (2)
+> approving/continuing stayed in plan mode, so MARVIN **re-planned** instead
+> of executing (a "second plan" appeared); (3) plan and execute couldn't use
+> **different models**. Revised design: **Plan mode is a read-only planning
+> turn** (same `readOnly` gate as Ask) that presents a numbered plan **inline
+> in the chat and stops** — no ExitPlanMode, no modal. The turn runs on the
+> chosen **advisor** model (role-routed, not hardcoded). An inline **"Approve
+> & execute"** chip then switches to **Agent mode** and runs the plan in a
+> **separate turn on the executor** model. So planning and execution use the
+> models you selected for each role, and re-planning can't happen because
+> execution isn't plan mode. The old ExitPlanMode/`ConfirmSheet` plan path
+> and SDK `permissionMode: "plan"` are retired.
+
 **Status:** Accepted — 2026-06-11
 **Touches:** `sdk-runner.ts` (new `mode` axis, read-only gate, plan
 permissionMode), chat API route, native `ChatAgentsFooter` / `NativePrefs`

@@ -269,7 +269,12 @@ docs/
 
 ## Status
 
-**v0.1.23 — Background jobs, fetch skills from Git, Plan follow-through (current).**
+**v0.1.24 — Plan mode decoupled, chat strip tray (current).**
+
+- **Plan mode** (ADR-0036 rev) — a read-only planning turn on your chosen **advisor** model presents a numbered plan **inline** in the chat (no modal); an **"Approve & execute"** chip then runs it in a separate **Agent** turn on your **executor** model. Models routed by role; no re-planning.
+- **Chat strip tray** — the plan checklist, changed-files Review, and session controls now live in one opaque, divider-separated tray that no longer overlaps the message log.
+
+**v0.1.23 — Background jobs, fetch skills from Git, Plan follow-through.**
 
 - **Background jobs** (ADR-0038) — `run_background_job` runs a long command past the turn and fires a real follow-up turn on exit with the result; shell backgrounding is denied at the gate.
 - **Fetch skills from Git** (ADR-0039) — "Add from GitHub" installs a skill from any repo, a `…/tree/…` sub-path, or a plugin marketplace (clone + copy only).
