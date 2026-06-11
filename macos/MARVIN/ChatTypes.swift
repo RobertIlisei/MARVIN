@@ -154,6 +154,10 @@ struct ChatRequest: Codable {
     let advisorModel: String?
     let runtimeMode: String?
     let permissionStrategy: String?
+    /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Optional —
+    /// sidecar defaults to "agent" when absent, so old clients are
+    /// unchanged.
+    let mode: String?
     /// Thinking mode (Fast / Thinking / Max). Optional — sidecar
     /// defaults to "thinking" (= SDK effort high) when absent, which
     /// matches MARVIN's prior behaviour, so old clients keep working.
@@ -180,6 +184,7 @@ struct ChatRequest: Codable {
         advisorModel: String? = nil,
         runtimeMode: String? = nil,
         permissionStrategy: String? = nil,
+        mode: String? = nil,
         thinkingMode: String? = nil,
         advisorThinkingMode: String? = nil,
         resetSdkSession: Bool? = nil
@@ -194,6 +199,7 @@ struct ChatRequest: Codable {
         self.advisorModel = advisorModel
         self.runtimeMode = runtimeMode
         self.permissionStrategy = permissionStrategy
+        self.mode = mode
         self.thinkingMode = thinkingMode
         self.advisorThinkingMode = advisorThinkingMode
         self.resetSdkSession = resetSdkSession

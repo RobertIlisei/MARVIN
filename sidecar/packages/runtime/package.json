@@ -27,6 +27,7 @@
     "./honeycomb-telemetry": "./src/honeycomb-telemetry.ts",
     "./auto-audit": "./src/auto-audit.ts",
     "./skills-index": "./src/skills-index.ts",
+    "./skill-enablement": "./src/skill-enablement.ts",
     "./project-skill-discoverer": "./src/project-skill-discoverer.ts"
   },
   "scripts": {

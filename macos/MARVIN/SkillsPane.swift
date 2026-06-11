@@ -34,6 +34,14 @@ private struct SkillsIndexResponse: Decodable {
     let projectLocal: [ProjectLocalSkill]
     let audit: AuditBlock
     let discovered: DiscoveredBlock?
+    /// ADR-0037 — which installed skills are ACTIVE for this project.
+    let enablement: Enablement?
+
+    struct Enablement: Decodable {
+        let active: [String]
+        let explicit: Bool
+        let core: [String]
+    }
 
     struct FingerprintBlock: Decodable {
         let tags: [String]
@@ -523,19 +531,53 @@ struct SkillsPane: View {
                 Spacer()
                 Text("\(skills.count)").font(.caption).foregroundStyle(.secondary)
             }
-            Text("~/.claude/skills/")
-                .font(.caption.monospaced())
+            Text("~/.claude/skills/ — toggle which apply to THIS project (ADR-0037). All stay installed; inactive ones just aren't offered to MARVIN here.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if skills.isEmpty {
                 Text("No user-global skills installed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(skills) { skill in
-                    installedRow(name: skill.name, description: skill.description, path: skill.path, badge: nil)
+                    installedRow(
+                        name: skill.name,
+                        description: skill.description,
+                        path: skill.path,
+                        badge: nil,
+                        active: activeSkillNames.contains(skill.name),
+                        onToggle: { Task { await toggleSkill(skill.name) } }
+                    )
                 }
             }
         }
+    }
+
+    /// Active skill names for the project (ADR-0037).
+    private var activeSkillNames: Set<String> {
+        Set(index?.enablement?.active ?? [])
+    }
+
+    /// Flip a user-global skill in/out of the project's active set. Switches
+    /// to an explicit `.marvin/skills.json` choice on first toggle.
+    private func toggleSkill(_ name: String) async {
+        guard let workDir = bridge.projectWorkDir, let idx = index else { return }
+        let userGlobalNames = Set(idx.userGlobal.map { $0.name })
+        var active = Set(idx.enablement?.active ?? [])
+        if active.contains(name) { active.remove(name) } else { active.insert(name) }
+        // Only user-global names go in the explicit list; project-local
+        // skills are always active and never sent.
+        let enabled = Array(active.intersection(userGlobalNames)).sorted()
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/skills/enable"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["workDir": workDir, "enabled": enabled]
+        )
+        _ = try? await URLSession.shared.data(for: req)
+        await refresh()
     }
 
     @ViewBuilder
@@ -568,8 +610,26 @@ struct SkillsPane: View {
     }
 
     @ViewBuilder
-    private func installedRow(name: String, description: String, path: String, badge: String?) -> some View {
+    private func installedRow(
+        name: String,
+        description: String,
+        path: String,
+        badge: String?,
+        active: Bool? = nil,
+        onToggle: (() -> Void)? = nil
+    ) -> some View {
         HStack(alignment: .top, spacing: 8) {
+            if let active, let onToggle {
+                Button(action: onToggle) {
+                    Image(systemName: active ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(active ? Color.green : .secondary)
+                        .font(.system(size: 15))
+                }
+                .buttonStyle(.plain)
+                .help(active
+                      ? "Active for this project — click to disable for this project."
+                      : "Inactive here — click to enable for this project.")
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(name).font(.body.monospaced())

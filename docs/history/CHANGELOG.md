@@ -9,6 +9,46 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-11 — v0.1.22: Ask/Agent/Plan modes, Cursor-style chat surface,
+  per-project skill enablement.** A large UX + control batch.
+  - **Ask · Agent · Plan modes (ADR-0036).** A `mode` axis orthogonal to
+    the auto/gated permission strategy (kept separate, by user choice).
+    **Ask** is read-only — `classifyToolCall` gains a `readOnly` invariant
+    (same collapse as the ADR-0030 subagent rule) that hard-denies every
+    mutating tool, plus an SDK `disallowedTools` backstop. **Plan** runs
+    under the SDK's native `permissionMode: "plan"`; `ExitPlanMode` is
+    routed through the confirm pipeline so it becomes an **approval card**
+    (Approve & execute / Keep planning) — Plan waits for the user before
+    executing. **Agent** is the unchanged default (`mode` omitted ⇒
+    identical behaviour). Native mode selector, persisted. Unit-tested.
+  - **Live to-do list.** The model's `TodoWrite` calls are captured from
+    the cli.event stream (`TodoExtractor`) and rendered as a checklist
+    (`TodoListStrip`) that ticks pending → in_progress → completed — most
+    visible in Plan mode.
+  - **Cursor-style input footer.** The mode + reasoning-effort controls
+    moved out of the crowded top agents bar into clean borderless pills in
+    the input box's bottom row (`ChatModeToolbar`), the way Cursor lays out
+    `∞ Agent ⌄  Auto ⌄`. The top bar is now just identity (models · voice ·
+    auto/gated).
+  - **Open/close chat tabs.** A real open-tab model (Cursor-style): a chat
+    becomes a tab when opened (new turn, or from the clock-menu history),
+    each tab has a close ✕ (closing the active one falls back to a
+    neighbour or a fresh chat), and the set is persisted per project
+    (`marvin.openTabs.<project>`). Replaces the dropdown-only switching.
+  - **Per-project skill enablement (ADR-0037).** A review found the SDK
+    loads all 20 installed skills into every session with no "installed vs
+    active" distinction (a Swift project needs ~4). SDK spike: no
+    main-thread skills allowlist in 0.2.113, so enablement lives at the
+    prompt layer. New `skill-enablement.ts`: a core/domain catalog +
+    fingerprint-defaulted active set (`.marvin/skills.json` for overrides);
+    each turn's prompt now names the active skills and tells the model to
+    ignore the rest. MARVIN's own repo: **20 → 7 active**. `GET /api/skills`
+    returns the active set; `POST /api/skills/enable`; Skills-pane toggles.
+    Unit-tested.
+  - **Verification.** 10 new unit tests pass (Ask read-only, skill
+    selection + skills.json); runtime + web tsc clean; `swift build` clean;
+    rebuilt + relaunched locally and the active-set computation verified
+    live (20→7) before tagging.
 - **2026-06-10 — v0.1.21: diff-gutter accuracy + commit clears the review.**
   Two fixes to the change-review surface, both reported from live use of
   v0.1.20.
