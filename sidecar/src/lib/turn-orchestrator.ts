@@ -20,6 +20,7 @@ import { recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { buildSystemPrompt } from "@marvin/runtime/personality";
 import { touchProject } from "@marvin/runtime/projects";
 import {
+  type AgentMode,
   type PermissionStrategy,
   runAgent,
 } from "@marvin/runtime/sdk-runner";
@@ -49,6 +50,8 @@ export interface DetachedTurnParams {
   model: string;
   advisorModel?: string | undefined;
   permissionStrategy: PermissionStrategy;
+  /** Autonomy mode (ADR-0036); defaults to `agent` in runAgent when omitted. */
+  mode?: AgentMode | undefined;
   thinkingMode: string;
   /** Advisor-specific effort (ADR-0033); undefined = follow the executor. */
   advisorThinkingMode?: string | undefined;
@@ -75,6 +78,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     model,
     advisorModel,
     permissionStrategy,
+    mode,
     thinkingMode,
     advisorThinkingMode,
     sessionId,
@@ -89,6 +93,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     model,
     ...(advisorModel ? { advisorModel } : {}),
     permissionStrategy,
+    ...(mode ? { mode } : {}),
     thinkingMode,
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     turnId,

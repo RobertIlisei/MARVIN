@@ -17,7 +17,7 @@
  */
 
 import { type NextRequest, NextResponse } from "next/server";
-import { buildSkillsIndex } from "@marvin/runtime/skills-index";
+import { CORE_SKILLS, computeActiveSkills } from "@marvin/runtime/skill-enablement";
 import { validateProjectCwd } from "@marvin/runtime/projects";
 
 export const runtime = "nodejs";
@@ -35,8 +35,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: v.error }, { status: v.status });
   }
   try {
-    const index = buildSkillsIndex(v.workDir);
-    return NextResponse.json(index);
+    // ADR-0037 — compute the active set alongside the index so the pane
+    // can render enable/disable state. `computeActiveSkills` builds the
+    // index internally, so this is the same single walk as before.
+    const { active, explicit, index } = computeActiveSkills(v.workDir);
+    return NextResponse.json({
+      ...index,
+      enablement: { active, explicit, core: [...CORE_SKILLS] },
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
     return NextResponse.json(

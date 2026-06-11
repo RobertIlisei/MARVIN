@@ -154,6 +154,11 @@ final class MarvinBridge {
     /// ADR-0021 M1: writable by NativePrefs directly.
     var permissionStrategy: String = "auto"
 
+    /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Orthogonal to
+    /// permissionStrategy. ChatPreviewView reads it when minting a turn.
+    /// Written by NativePrefs / the agents-bar mode picker.
+    var mode: String = "agent"
+
     /// User-facing reasoning-effort selection — the SDK ladder
     /// "low" | "medium" | "high" | "xhigh" | "max" (see `resolveEffort`
     /// in the runtime). The toolbar picker writes here via NativePrefs;

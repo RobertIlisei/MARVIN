@@ -45,37 +45,77 @@ struct ConfirmSheet: View {
     @State private var denyMessage: String = ""
     @Environment(\.dismiss) private var dismiss
 
+    /// ADR-0036 — Plan mode routes its ExitPlanMode approval through the
+    /// confirm pipeline. Allow = approve the plan and start executing;
+    /// Deny = keep planning. Rendered as a plan-review card, not a
+    /// tool-warning card.
+    private var isPlanApproval: Bool { request.toolName == "ExitPlanMode" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
             Divider()
-            toolBlock
-            if let reason = request.reason, !reason.isEmpty {
-                reasonBlock(reason)
+            if isPlanApproval {
+                planBlock
+            } else {
+                toolBlock
+                if let reason = request.reason, !reason.isEmpty {
+                    reasonBlock(reason)
+                }
+                Divider()
+                denyMessageField
             }
-            Divider()
-            denyMessageField
             Spacer(minLength: 0)
             actions
         }
         .padding(20)
-        .frame(width: 520)
+        .frame(width: isPlanApproval ? 620 : 520)
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.shield.fill")
+            Image(systemName: isPlanApproval ? "checklist" : "exclamationmark.shield.fill")
                 .font(.title2)
-                .foregroundStyle(.orange)
+                .foregroundStyle(isPlanApproval ? .purple : .orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("MARVIN wants to use a tool")
+                Text(isPlanApproval ? "MARVIN has a plan" : "MARVIN wants to use a tool")
                     .font(.headline)
-                Text(request.title ?? request.displayName ?? request.toolName)
+                Text(isPlanApproval
+                     ? "Review it — approve to start executing, or keep planning."
+                     : (request.title ?? request.displayName ?? request.toolName))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
         }
+    }
+
+    /// The plan text the model passed to ExitPlanMode (`input.plan`),
+    /// shown in a scrollable monospaced block. Falls back to a JSON dump
+    /// if the shape is unexpected.
+    private var planBlock: some View {
+        let plan = planText ?? ""
+        return ScrollView {
+            Text(plan.isEmpty ? "(no plan text provided)" : plan)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+                .padding(12)
+        }
+        .frame(maxHeight: 360)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        )
+    }
+
+    private var planText: String? {
+        guard let input = request.input,
+              case let .object(dict) = input,
+              case let .string(s) = dict["plan"] ?? .null else {
+            return nil
+        }
+        return s
     }
 
     /// Reuse the per-tool input renderer from the message list so
@@ -137,12 +177,12 @@ struct ConfirmSheet: View {
     private var actions: some View {
         HStack {
             Spacer()
-            Button("Deny") {
+            Button(isPlanApproval ? "Keep planning" : "Deny") {
                 onDeny(denyMessage.isEmpty ? nil : denyMessage)
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
-            Button("Allow") {
+            Button(isPlanApproval ? "Approve & execute" : "Allow") {
                 onAllow()
                 dismiss()
             }

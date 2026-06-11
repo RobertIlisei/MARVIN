@@ -17,13 +17,12 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.21** — change-review polish from live use: the editor's diff gutter
-now tracks lines exactly on scroll (real layout geometry, not a line-height
-guess), and committing a change clears it from the review the way it clears
-VS Code's Source Control list. Builds on v0.1.20's VS Code / Cursor-style
-diff editor (own resizable window, side-by-side diff, line numbers,
-Split/Inline toggle) and the agent-reliability + port-ownership work of
-v0.1.14–v0.1.19. Install via
+**v0.1.22** — Ask/Agent/Plan modes (read-only gate, native plan-approval,
+live to-do list), a Cursor-style chat surface (mode + reasoning pills under
+the input, open/close chat tabs), and per-project skill enablement (the
+fingerprint now picks an active subset of installed skills — 20→7 on this
+repo — and the prompt tells the model to ignore the rest). Builds on the
+change-review + diff-editor work of v0.1.20–v0.1.21. Install via
 `brew tap RobertIlisei/marvin && brew install --cask marvin-ai`. Earlier
 tags v0.1.0–v0.1.5 carried pre-scrub code and have been deleted from
 GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
@@ -33,6 +32,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-11 — v0.1.22 modes + Cursor-style chat surface + skill enablement** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md), [ADR-0037](./decisions/0037-skill-enablement-active-set.md)). Ask/Agent/Plan modes (Ask read-only at the gate; Plan = SDK plan mode + an `ExitPlanMode` approval card; Agent unchanged) + a live `TodoWrite` checklist. Mode/reasoning controls relocated into the input box (`ChatModeToolbar`); open/close chat tabs persisted per project. Per-project skill enablement: a core/domain catalog + fingerprint-defaulted active set, named in the system prompt so MARVIN ignores irrelevant installed skills (20→7 here); Skills-pane toggles + `.marvin/skills.json`.
 - **2026-06-10 — v0.1.21 diff-gutter accuracy + commit clears the review** ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md) update). `DiffGutterBar` now positions change markers from STTextView's real layout fragments (cached) instead of a font-metric line-height guess that drifted on scroll, and is `isFlipped`. `reconcileCommitted` (on `GET /api/changes`) auto-accepts reviewed files now clean vs HEAD, so committing clears them — drops only, never rewrites a baseline. 15/15 checkpoint tests.
 - **2026-06-10 — v0.1.20 change review as a real diff editor** ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md) update). The review surface moved off a pane-clamped `.sheet` into its own large resizable `Window` with a side-by-side (original | modified) diff, line numbers, and a Split/Inline toggle — the VS Code / Cursor diff-editor layout. Cross-window strip refresh via `.marvinAgentChangesDidMutate`; checkpoint semantics unchanged.
 - **2026-06-10 — v0.1.17–v0.1.19 per-role effort + agent change review + port ownership** ([ADR-0033](./decisions/0033-advisor-registered-agent-per-role-effort.md), [ADR-0034](./decisions/0034-agent-change-review-checkpoints.md), [ADR-0035](./decisions/0035-bundled-app-owns-its-port.md)). Advisor is a registered agent with its own model + effort (`adv` chip, "follow executor" default; SDK `advisorModel` Option found unwired). Cursor-style change review: gate-captured pre-image checkpoints, `/api/changes` family, live "N files changed" strip + per-hunk accept/reject sheet (E2E-verified). v0.1.19 closes the stale-sidecar-adoption bug that had masked two releases: the bundled app reclaims `:3030` before spawning and `/api/health` reports the serving process's `version`.
