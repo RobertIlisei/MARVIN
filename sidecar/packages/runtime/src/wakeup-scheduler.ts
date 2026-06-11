@@ -333,6 +333,28 @@ async function fire(record: WakeupRecord): Promise<void> {
   }
 }
 
+/**
+ * Dispatch a turn from a record IMMEDIATELY, bypassing the timer +
+ * persistence. Event-driven wakeups (background-job completion, ADR-0038)
+ * reuse the same shared fire handler / turn-dispatch path as time-based
+ * wakeups — they just trigger on a process exit instead of a clock.
+ */
+export async function fireNow(record: WakeupRecord): Promise<void> {
+  if (!state.fireHandler) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[wakeup-scheduler] fireNow(${record.id}) but no fireHandler is wired — turn NOT started. Wiring bug.`,
+    );
+    return;
+  }
+  try {
+    await state.fireHandler(record);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[wakeup-scheduler] fireNow handler threw for ${record.id}:`, err);
+  }
+}
+
 /** Test-only: clear in-memory timers + the armed latch. */
 export function __resetSchedulerForTests(): void {
   for (const t of state.timers.values()) clearTimeout(t);

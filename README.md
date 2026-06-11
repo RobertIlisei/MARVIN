@@ -205,6 +205,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🎚️ Per-role reasoning effort — independent Low→Max effort pickers for the executor and the advisor (ADR-0033)
 - 🧭 Ask · Agent · Plan modes — read-only Ask (enforced at the gate), full-autonomy Agent, and plan-first Plan that drafts a plan + live to-do checklist and waits for your approval before executing (ADR-0036). Cursor-style controls live in the input box; chat tabs open/close and persist per project
 - 🧩 Per-project skill enablement — the fingerprint picks the installed skills relevant to *this* project and tells MARVIN to ignore the rest; per-skill toggles in the Skills pane (ADR-0037)
+- ⬇️ Fetch skills from Git — "Add from GitHub" pulls a skill from any repo, a `…/tree/…` sub-path, or a plugin marketplace (ADR-0039); clone-and-copy only, never executes the repo
+- 🛰️ Event-based background jobs — `run_background_job` runs a build/test/deploy past the turn and fires a real follow-up turn when it exits (no more orphaned "I'll be notified" promises); shell `&`/`nohup` denied at the gate (ADR-0038)
 
 **Web sidecar**
 - 🔒 Structural confirm gate — every Edit/Write/Bash pre-flight, auto-mode audit log
@@ -267,7 +269,14 @@ docs/
 
 ## Status
 
-**v0.1.22 — Modes, Cursor-style chat surface, skill enablement (current).**
+**v0.1.23 — Background jobs, fetch skills from Git, Plan follow-through (current).**
+
+- **Background jobs** (ADR-0038) — `run_background_job` runs a long command past the turn and fires a real follow-up turn on exit with the result; shell backgrounding is denied at the gate.
+- **Fetch skills from Git** (ADR-0039) — "Add from GitHub" installs a skill from any repo, a `…/tree/…` sub-path, or a plugin marketplace (clone + copy only).
+- **Plan-mode follow-through** (ADR-0036) — the plan persists in the chat and becomes the tracked to-do checklist (○→◌→✓); the prompt requires live `TodoWrite` updates.
+- **Skills pane** reorganised by state: active here · installed-off-here · recommended to add.
+
+**v0.1.22 — Modes, Cursor-style chat surface, skill enablement.**
 
 - **Ask · Agent · Plan modes** (ADR-0036) — a `mode` axis orthogonal to the auto/gated strategy. Ask is read-only (hard-denied at the gate); Plan runs under the SDK's plan mode and surfaces an approval card before executing; Agent is the unchanged default. The model's `TodoWrite` renders as a live checklist.
 - **Cursor-style chat surface** — mode + reasoning controls moved into the input box; chat tabs you can open and close, persisted per project.

@@ -118,6 +118,15 @@ const BASH_AUTO_ALLOW: RegExp[] = [
 // `packages/tools/tests/policy.test.ts`.
 //
 // See [docs/reviews/2026-04-26-full-audit.md, finding #2].
+/**
+ * Shell-level backgrounding (ADR-0038). A trailing single `&` (not `&&`,
+ * not `&>`), or `nohup` / `setsid` / `disown` anywhere. The negative
+ * lookbehind `(?<![&>])` spares `a && b` and `cmd &> log`; the trailing
+ * group requires end-of-line / newline / comment so `a & b` mid-pipeline
+ * isn't the target (rare) but `cmd &` is.
+ */
+const SHELL_BACKGROUND_RE = /(?<![&>])&[ \t]*(?:$|\n|#)|\bnohup\b|\bsetsid\b|\bdisown\b/m;
+
 const BASH_HARD_DENY: RegExp[] = [
   // `rm -rf` followed by anything that resolves to a rooted, home-,
   // tilde-, or parent-relative target. The `-r` and `-R` flags both
@@ -168,13 +177,30 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
       return {
         class: "deny",
         reason:
-          "Background Bash is disabled (ADR-0032): MARVIN can't notify a turn " +
-          "when a background process finishes, so it would silently never report. " +
-          "Run the command foreground (raise `timeout` if it's slow), or for a " +
-          "genuinely long job use `schedule_wakeup` to return later and check.",
+          "Background Bash is disabled (ADR-0032): the SDK's run_in_background " +
+          "expects you to poll within the same turn. For a job that outlives the " +
+          "turn, use the `run_background_job` tool — it spawns a tracked process " +
+          "and starts a REAL follow-up turn when the job exits (ADR-0038).",
       };
     }
     const cmd = typeof input.command === "string" ? input.command.trim() : "";
+    // ADR-0038 — close the shell-backgrounding gap. The run_in_background
+    // FLAG was denied, but `cmd &` / nohup / setsid / disown detach a
+    // process at the shell level (the tool call returns immediately) and
+    // orphan it: nothing watches it, so MARVIN narrates "I'll be notified"
+    // and forgets. Deny those and steer to `run_background_job`, which has a
+    // real completion wakeup. The negative lookbehind spares `&&` and `&>`.
+    if (SHELL_BACKGROUND_RE.test(cmd)) {
+      return {
+        class: "deny",
+        reason:
+          "Shell backgrounding (`&` / nohup / setsid / disown) is disabled " +
+          "(ADR-0038): a detached process is orphaned — nothing fires a turn " +
+          "when it finishes, so you'd never hear back. Use the " +
+          "`run_background_job` tool instead — it tracks the process and starts " +
+          "a real follow-up turn on exit. For a short command, run it foreground.",
+      };
+    }
     if (BASH_HARD_DENY.some((r) => r.test(cmd))) {
       return { class: "deny", reason: "Matches a hard-deny pattern (destructive)." };
     }
