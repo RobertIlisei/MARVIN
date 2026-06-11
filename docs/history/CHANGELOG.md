@@ -9,6 +9,29 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-11 — v0.1.24: Plan mode decoupled (advisor plans, executor
+  executes) + the chat strip tray.**
+  - **Plan mode redesigned (ADR-0036 rev).** Live use of the SDK's coupled
+    plan mode exposed three faults: approval popped a **modal window** (not
+    inline like Cursor); approving/continuing **re-planned** instead of
+    executing (a second plan appeared); and plan + execute couldn't use
+    **different models**. New design: Plan mode is a **read-only planning
+    turn** (same `readOnly` gate as Ask) that presents a numbered plan
+    **inline in the chat and stops** — no ExitPlanMode, no modal,
+    `permissionMode` back to `default`. The plan turn runs on the chosen
+    **advisor** model; an inline **"Approve & execute"** chip switches to
+    **Agent** mode and runs the plan in a **separate turn on the executor**.
+    Models are routed by ROLE, never hardcoded — with executor=Opus /
+    advisor=Fable you plan on Fable and execute on Opus exactly as selected.
+    Re-planning can't happen because execution isn't plan mode.
+  - **Chat strip tray.** The plan/changes/session strips read as floating *in
+    front of* the message log and blurred together. The log now owns the
+    flexible height (no overflow), and every contextual strip lives in one
+    **opaque, divider-separated tray** with a hard top border — the plan
+    checklist, "Save to memory / Start fresh", and the files-changed Review
+    are distinct rows, clearly separated from the log.
+  - **Verification.** runtime + web tsc clean; `swift build` clean; ask-mode
+    read-only test green.
 - **2026-06-11 — v0.1.23: event-based background jobs, fetch skills from Git,
   Plan-mode follow-through, Skills-pane reorg.**
   - **Background jobs with completion wakeups (ADR-0038).** "I'll be notified
