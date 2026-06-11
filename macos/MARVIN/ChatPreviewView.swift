@@ -376,16 +376,28 @@ final class ChatPreviewModel {
         sendInternal(message: lastSentMessage, cwd: cwd)
     }
 
-    private func sendInternal(message: String, cwd: String?) {
+    /// Send an instruction to the agent WITHOUT it appearing as a user-typed
+    /// message (Cursor-style control action). The agent receives `instruction`
+    /// (it needs it for context), but the chat shows the compact `display`
+    /// control row instead of an un-editable fake user bubble. Used by
+    /// Approve & execute / Continue. No-op while a turn is running.
+    func sendControl(instruction: String, display: String, cwd: String?) {
+        guard !isSending, !instruction.isEmpty else { return }
+        planAwaitingApproval = false
+        sendInternal(message: instruction, cwd: cwd, display: .system(text: display))
+    }
+
+    private func sendInternal(message: String, cwd: String?, display: ChatMessage? = nil) {
         isSending = true
         currentActivity = "Thinking…"
         lastError = nil
         lastSentMessage = message
-        // Optimistic user echo. The wire never sends a `user` event
-        // for what we just typed (the SDK's `user` cli.events carry
-        // tool_results, not user inputs), so we have to add it
-        // ourselves before the assistant starts streaming.
-        messages.append(.userText(message))
+        // Optimistic echo. The wire never sends a `user` event for what we
+        // just submitted (SDK `user` cli.events carry tool_results, not user
+        // inputs), so we add it ourselves before the assistant streams. A
+        // `display` override (control actions) shows a system control row
+        // instead of a user bubble.
+        messages.append(display ?? .userText(message))
 
         // Phase 2g.1 — read permission strategy from UserDefaults
         // instead of hardcoding gated. The user picks via the
@@ -1377,11 +1389,14 @@ struct ChatPreviewView: View {
     }
 
     private func continuePlan() {
-        guard !model.isSending else { return }
-        model.draft = "Continue with the remaining plan steps. First re-emit your "
-            + "TodoWrite checklist with current statuses, then proceed and keep it "
-            + "updated as you complete each item."
-        model.send(cwd: bridge.projectWorkDir)
+        // Cursor-style: a control action, not a fake user message.
+        model.sendControl(
+            instruction: "Continue with the remaining plan steps. First re-emit your "
+                + "TodoWrite checklist with current statuses, then proceed and keep it "
+                + "updated as you complete each item.",
+            display: "▶ Continuing",
+            cwd: bridge.projectWorkDir
+        )
     }
 
     /// ADR-0036 (revised) — inline "Approve & execute" after a plan turn.
@@ -1419,11 +1434,16 @@ struct ChatPreviewView: View {
     private func approvePlan() {
         guard !model.isSending else { return }
         NativePrefs.shared.setMode("agent")
-        model.draft = "The plan you just presented is approved — execute it now. "
-            + "Work through it in order, and maintain a TodoWrite checklist (one item "
-            + "per plan step) updated as you complete each step. Pause and ask if you "
-            + "hit a real decision."
-        model.send(cwd: bridge.projectWorkDir)
+        // Cursor-style: approval is a control action. The agent gets the
+        // execute instruction (hidden); the chat shows a compact control row.
+        model.sendControl(
+            instruction: "The plan you just presented is approved — execute it now. "
+                + "Work through it in order, and maintain a TodoWrite checklist (one item "
+                + "per plan step) updated as you complete each step. Pause and ask if you "
+                + "hit a real decision.",
+            display: "▶ Plan approved — executing",
+            cwd: bridge.projectWorkDir
+        )
     }
 
     /// One opaque, clearly-separated tray for every contextual strip, docked
