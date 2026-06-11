@@ -129,8 +129,14 @@ export async function POST(req: NextRequest) {
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
   const resolved = await resolveRuntimeMode(runtimeMode);
-  const model = body.model?.trim() || resolved.model || defaultModel();
+  const executorModel = body.model?.trim() || resolved.model || defaultModel();
   const advisorModel = body.advisorModel?.trim() || resolved.advisorModel;
+  // ADR-0036 (revised): planning runs on the chosen ADVISOR model, execution
+  // on the EXECUTOR model — routed by ROLE, never hardcoded. In Plan mode the
+  // turn's model is the advisor (when one is configured); Agent/Ask turns use
+  // the executor. So with executor=Opus / advisor=Fable, you plan on Fable
+  // and execute on Opus exactly as selected.
+  const model = mode === "plan" && advisorModel ? advisorModel : executorModel;
   const firstMessage = !body.marvinSessionId;
 
   const systemPrompt = buildSystemPrompt(personality);
