@@ -516,6 +516,17 @@ final class ChatPreviewModel {
         loadedProjectId = nil
         loadedSessionId = nil
         isHydrating = false
+        resetSessionStrips()
+    }
+
+    /// Plan / to-do / changed-files state is SESSION-scoped — clear it when a
+    /// session is left (new chat, switch). Otherwise the previous session's
+    /// "Plan 7/7" + "N files changed" strips linger in a fresh chat.
+    private func resetSessionStrips() {
+        todos = []
+        currentPlanText = nil
+        planAwaitingApproval = false
+        agentChangedFiles = []
     }
 
     /// Phase 2h — fetch the transcript for `(projectId, sessionId)`,
@@ -558,6 +569,9 @@ final class ChatPreviewModel {
         resolvedConfirms.removeAll()
         marvinSessionId = sessionId
         lastSentMessage = nil
+        // Plan / todo / changed-files strips are per-session — clear the
+        // leaving session's before the new one's changed set refreshes below.
+        resetSessionStrips()
         // Persist the choice so a relaunch returns here.
         NativePrefs.shared.setLastSessionId(sessionId, forProject: projectId)
 
