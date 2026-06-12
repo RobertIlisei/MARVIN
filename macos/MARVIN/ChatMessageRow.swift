@@ -121,7 +121,15 @@ struct ChatMessageRow: View {
     private func blockView(for block: ChatBlock) -> some View {
         switch block {
         case .text(_, let text):
-            TextBlockView(text: text, role: message.role)
+            // ADR-0036 (revised) — a Plan-mode plan opens with the
+            // `# Plan` heading (prompt contract); render it as the
+            // structured Cursor-style plan card instead of prose.
+            // Content-shaped, so it also fires on transcript replay.
+            if message.role == .assistant, PlanCard.isPlan(text) {
+                PlanCardView(text: text)
+            } else {
+                TextBlockView(text: text, role: message.role)
+            }
         case .toolCall(_, let name, let input, let result):
             ToolCallBlockView(name: name, input: input, result: result)
         case .orphanToolResult(_, let toolUseId, let output, let isError):
