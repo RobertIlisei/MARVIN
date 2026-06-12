@@ -269,7 +269,9 @@ docs/
 
 ## Status
 
-**v0.1.25 — Plan-mode UX polish (current).** Session-scoped strips (no stale plan in a new chat); Approve/Continue as hidden control actions (no fake user message in the chat); **Save plan** to a Markdown file you can follow alongside the chat; collapse/dismiss the checklist (auto-collapses when done); and the checklist relabeled **"To-dos"** — it's the task tracker (used in any mode), while the plan stays a distinct inline message + file.
+**v0.1.26 — The plan card (current).** Plan-mode plans render as a structured, collapsible Cursor-style **plan card** (title, step count, styled headings/steps/code) instead of a plain-text bubble — the plan-mode prompt mandates a `# Plan — <title>` opening heading, detected live and on transcript replay. Approving seeds the To-dos checklist from the plan's steps, and the paused chip now names the next step and what there concretely is to review (the stopping error, or the changed-file count).
+
+**v0.1.25 — Plan-mode UX polish.** Session-scoped strips (no stale plan in a new chat); Approve/Continue as hidden control actions (no fake user message in the chat); **Save plan** to a Markdown file you can follow alongside the chat; collapse/dismiss the checklist (auto-collapses when done); and the checklist relabeled **"To-dos"** — it's the task tracker (used in any mode), while the plan stays a distinct inline message + file.
 
 **v0.1.24 — Plan mode decoupled, chat strip tray.**
 
