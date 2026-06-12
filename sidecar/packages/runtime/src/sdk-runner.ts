@@ -558,6 +558,11 @@ function modeGuidance(mode: AgentMode): string {
       "graph), then present ONE clear, ordered, **numbered** plan as your " +
       "reply — and STOP.\n" +
       "Hard rules:\n" +
+      "- The plan MUST be your final message, and that message MUST start " +
+      "with the exact line `# Plan — <short title>` (a level-1 Markdown " +
+      "heading). The native UI detects that heading to render the plan as a " +
+      "structured plan card; without it the plan shows as plain prose. Put " +
+      "any preamble/findings in earlier messages, not above the heading.\n" +
       "- Do NOT call ExitPlanMode. Do NOT start executing. Do NOT call " +
       "`TodoWrite` yet. Just present the numbered plan and end the turn.\n" +
       "- The user reviews the plan in the chat and clicks Approve, which " +

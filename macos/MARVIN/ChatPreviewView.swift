@@ -1385,16 +1385,36 @@ struct ChatPreviewView: View {
     }
 
     /// One-click resume for a paused plan. The freeform input still works for
-    /// a "continue + adjust" reply (what the user did manually).
+    /// a "continue + adjust" reply (what the user did manually). The chip is
+    /// SPECIFIC — it names the next unfinished step and what there actually
+    /// is to review (changed files / an error), instead of a bare "Review,
+    /// then continue" that points at nothing.
     private var continuePlanChip: some View {
         let done = model.todos.filter { $0.status == "completed" }.count
-        return HStack(spacing: 8) {
+        let next = model.todos.first { $0.status == "in_progress" }
+            ?? model.todos.first { $0.status == "pending" }
+        return HStack(alignment: .top, spacing: 8) {
             Image(systemName: "pause.circle.fill")
                 .font(.system(size: 11))
                 .foregroundStyle(.purple)
-            Text("Paused — \(done)/\(model.todos.count) steps done. Review, then continue.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Paused — \(done)/\(model.todos.count) steps done")
+                    .font(.system(size: 11, weight: .semibold))
+                if let next {
+                    Text("Next: \(next.status == "in_progress" ? (next.activeForm ?? next.content) : next.content)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let detail = pauseReviewDetail {
+                    Text(detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Spacer()
             Button {
                 continuePlan()
@@ -1409,6 +1429,20 @@ struct ChatPreviewView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.purple.opacity(0.07))
+    }
+
+    /// What there is to review while paused, concretely. Error beats
+    /// changed-files (it explains WHY the run stopped); nil when there's
+    /// genuinely nothing to inspect — the chip then just offers Continue.
+    private var pauseReviewDetail: String? {
+        if model.lastError != nil {
+            return "The turn stopped on an error (see above). Continue resumes from the last finished step."
+        }
+        let changed = model.agentChangedFiles.count
+        if changed > 0 {
+            return "\(changed) file\(changed == 1 ? "" : "s") changed so far — inspect via Review below, or just continue."
+        }
+        return nil
     }
 
     private func continuePlan() {
@@ -1487,6 +1521,13 @@ struct ChatPreviewView: View {
 
     private func approvePlan() {
         guard !model.isSending else { return }
+        // Seed the To-dos strip from the plan's steps so execution starts
+        // tracked immediately (Cursor-style); the executor's own TodoWrite
+        // calls then refine the statuses.
+        if let plan = model.currentPlanText, !plan.isEmpty {
+            let seeded = PlanParser.todos(from: plan)
+            if !seeded.isEmpty { model.todos = seeded }
+        }
         NativePrefs.shared.setMode("agent")
         // Cursor-style: approval is a control action. The agent gets the
         // execute instruction (hidden); the chat shows a compact control row.
