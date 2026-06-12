@@ -15,6 +15,15 @@
 > models you selected for each role, and re-planning can't happen because
 > execution isn't plan mode. The old ExitPlanMode/`ConfirmSheet` plan path
 > and SDK `permissionMode: "plan"` are retired.
+>
+> **Addendum 2026-06-12 — the plan card.** Decoupling left the plan as a
+> plain-text bubble. The plan-mode prompt now mandates the reply open with
+> `# Plan — <title>`; the native renderer detects that heading and shows the
+> message as a structured, collapsible **plan card** (`PlanCardView` —
+> title, step count, styled steps), Cursor-style. Detection is
+> content-shaped, so it also applies on transcript replay; a plan missing
+> the heading degrades to the plain bubble. Approve seeds the To-dos strip
+> from the plan's steps.
 
 **Status:** Accepted — 2026-06-11
 **Touches:** `sdk-runner.ts` (new `mode` axis, read-only gate, plan

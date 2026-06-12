@@ -17,12 +17,13 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.25** — Plan-mode UX polish from live use: session-scoped strips (no
-stale plan in a new chat), Approve/Continue as hidden control actions (no
-fake user message), **Save plan** to a Markdown file, collapse/dismiss the
-checklist (auto-collapse when done), and the checklist relabeled **"To-dos"**
-(it's the task tracker, used in any mode — the plan stays a distinct artifact).
-Builds on v0.1.24's decoupled Plan mode (advisor plans inline, executor
+**v0.1.26** — The plan card: Plan-mode plans render as a structured,
+collapsible Cursor-style card (title, step count, styled steps) instead of a
+plain-text bubble — the prompt mandates a `# Plan — <title>` opening heading
+and the renderer detects it, live and on transcript replay. Approving seeds
+the To-dos checklist from the plan's steps, and the paused chip now names
+the next step + what there concretely is to review (error / changed files).
+Builds on v0.1.24–25's decoupled Plan mode (advisor plans inline, executor
 executes, no modal). Install via
 `brew tap RobertIlisei/marvin && brew install --cask marvin-ai`. Earlier
 tags v0.1.0–v0.1.5 carried pre-scrub code and have been deleted from
@@ -33,6 +34,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-12 — v0.1.26 plan card (Cursor-style structured plan rendering)** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) rev). The decoupled Plan mode had left the plan as a plain-text assistant bubble. The plan-mode prompt now mandates the reply open with `# Plan — <title>`; `ChatMessageRow` detects that heading and renders the message as a collapsible `PlanCardView` (title, step count, line-styled markdown: headings / numbered steps / bullets / code fences) — content-shaped detection, so it also fires on transcript replay. Approving the plan seeds the To-dos strip from the plan's steps so execution starts tracked.
 - **2026-06-11 — v0.1.25 Plan-mode UX polish** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Session-scoped plan/changes strips; Approve/Continue as hidden control actions (no fake user message); Save plan to a Markdown file; collapse/dismiss + auto-collapse the checklist; relabel "Plan" → "To-dos" (the task tracker; the plan is a distinct inline message + file).
 - **2026-06-11 — v0.1.24 Plan mode decoupled + strip tray** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) rev). Plan mode is a read-only planning turn on the chosen advisor model that presents the plan inline (no modal); an "Approve & execute" chip runs it in a separate Agent turn on the executor — role-routed models, no re-planning. The chat's contextual strips moved into one opaque divider-separated tray so they no longer overlap the message log.
 - **2026-06-11 — v0.1.23 background jobs + fetch skills + plan follow-through** ([ADR-0038](./decisions/0038-background-jobs-event-wakeups.md), [ADR-0039](./decisions/0039-fetch-skills-from-git.md)). `run_background_job` fires a real follow-up turn on process exit (event-based wakeup); shell backgrounding denied at the gate. "Add from GitHub" fetches skills from a repo / sub-path / plugin marketplace. Plan mode: the plan persists in the chat + seeds the tracked to-do checklist; prompt requires live `TodoWrite` updates. Skills pane reorganised by state (active / available / recommended).

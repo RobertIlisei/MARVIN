@@ -9,6 +9,31 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-12 — v0.1.26: the plan card (Cursor-style structured plan) +
+  a specific pause chip.**
+  - **Diagnosis.** The v0.1.24 decoupling fixed the modal/re-plan/model-split
+    faults but left the plan as a plain-text assistant bubble (the native
+    chat renders text blocks unstyled — no markdown at all). And the paused
+    checklist chip said "Review, then continue" without saying *what* to
+    review.
+  - **Plan card (ADR-0036 addendum).** The plan-mode prompt now mandates the
+    reply open with `# Plan — <short title>`; `ChatMessageRow` detects that
+    heading on assistant text blocks and renders the message as a new
+    collapsible `PlanCardView` — title + step count in the header, body
+    line-styled (section headings, numbered steps, indented bullets, fenced
+    code, inline bold/italic/code via `AttributedString(markdown:)`).
+    Detection is content-shaped, so it fires live (while the plan streams)
+    AND on transcript replay; a plan missing the heading degrades to the
+    plain bubble. Approval actions stay in the tray chip; **Approve &
+    execute** now seeds the To-dos strip from the plan's steps (via
+    `PlanParser`) so execution starts tracked before the executor's first
+    `TodoWrite`.
+  - **Specific pause chip.** `continuePlanChip` now names the next
+    unfinished step (present-tense `activeForm` when in-progress) and what
+    there concretely is to review — the error that stopped the turn, or the
+    changed-file count pointing at the Review strip — instead of the bare
+    "Review, then continue".
+  - **Verification.** `swift build` + runtime `tsc --noEmit` clean.
 - **2026-06-11 — v0.1.25: Plan-mode UX polish (from live use).** Five fixes
   to the decoupled Plan flow:
   - **Session-scoped strips.** The plan checklist + "N files changed" were
