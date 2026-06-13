@@ -24,6 +24,32 @@
 > content-shaped, so it also applies on transcript replay; a plan missing
 > the heading degrades to the plain bubble. Approve seeds the To-dos strip
 > from the plan's steps.
+>
+> **Addendum 2026-06-13 — two-tier to-do/plan + plan file in the editor.**
+> Live use surfaced that the plan card (in the chat scroll) and the to-do
+> strip (above the input) read as *two artifacts that replace each other* —
+> approving a plan made the card scroll away and a separate, identical-looking
+> "To-dos" strip take its place. Cursor actually keeps **two distinct tiers**,
+> and they coexist:
+>
+> - **Tier 1 — Task list.** A bare `TodoWrite` checklist the agent emits for
+>   any multi-step Agent-mode task. Ephemeral, *no plan behind it*. Neutral
+>   styling ("Task list", blue, `checklist` icon).
+> - **Tier 2 — Plan.** A plan-backed checklist (Plan mode, approved). The plan
+>   *is* the to-do list — it persists and ticks off in place. Purple, titled
+>   from the `# Plan — <title>` heading, `map` icon, with an "Open plan"
+>   affordance.
+>
+> The `TodoListStrip` now forks on `planTitle != nil` (driven by
+> `currentPlanText != nil` in `ChatPreviewView`) to render the right tier, so
+> a bare task list never reads as a plan and vice-versa. And, matching Cursor,
+> a presented plan is **auto-written to `<workDir>/.marvin/plans/<slug>.md`
+> and opened in the editor pane** (`persistAndOpenPlan` → `setSelectedFile`),
+> so the user can actually see the plan file; the strip's "Open plan" button
+> re-focuses it. The plan-mode prompt contract in `personality.ts` is updated
+> to match the revised inline-`# Plan` / stop model (the stale `ExitPlanMode`
+> wording is removed) and to make Agent mode open a tier-1 task list for 3+
+> step work.
 
 **Status:** Accepted — 2026-06-11
 **Touches:** `sdk-runner.ts` (new `mode` axis, read-only gate, plan

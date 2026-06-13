@@ -93,9 +93,41 @@ enum PlanParser {
     }
 }
 
+/// Filesystem helpers for the saved plan markdown (ADR-0036 two-tier
+/// addendum). The plan is written to `<workDir>/.marvin/plans/<slug>.md`
+/// and opened in the editor pane so the user can see the plan file.
+enum PlanFile {
+    /// Turn a plan title into a stable, filesystem-safe slug. Re-presenting
+    /// the same-titled plan re-uses the file (no dated-clutter pile-up).
+    static func slug(_ title: String) -> String {
+        let lowered = title.lowercased()
+        let mapped = lowered.map { ch -> Character in
+            (ch.isLetter || ch.isNumber) ? ch : "-"
+        }
+        let collapsed = String(mapped)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        let trimmed = String(collapsed.prefix(60))
+        return trimmed.isEmpty ? "plan" : trimmed
+    }
+}
+
 /// The checklist strip, hosted above the chat input by ChatPreviewView.
+///
+/// ADR-0036 (two-tier addendum) — Cursor keeps two distinct things:
+///   • **Tier 1 — Task list**: a bare `TodoWrite` checklist the agent emits
+///     for any multi-step Agent-mode task. Ephemeral, no plan behind it,
+///     neutral styling.
+///   • **Tier 2 — Plan**: a plan-backed checklist (Plan mode, approved). The
+///     plan IS the to-do list — it persists, ticks off in place, and links to
+///     the saved plan file. Purple, titled, with an "Open plan" affordance.
+/// `planTitle != nil` selects tier 2; otherwise the strip is tier 1.
 struct TodoListStrip: View {
     let todos: [TodoItem]
+    /// Non-nil => tier 2 (plan-backed). The plan's title, shown in the header.
+    var planTitle: String? = nil
+    /// Re-open the saved plan markdown in the editor pane (tier 2 only).
+    var onOpenPlanFile: (() -> Void)? = nil
     /// Dismiss the plan checklist entirely (the ✕). nil hides the close button.
     var onClose: (() -> Void)? = nil
 
@@ -107,6 +139,22 @@ struct TodoListStrip: View {
     private var done: Int { todos.filter { $0.status == "completed" }.count }
     private var allDone: Bool { !todos.isEmpty && done == todos.count }
 
+    /// Tier 2 (plan-backed) vs tier 1 (bare task list). Drives every
+    /// styling fork below so the two never read as the same artifact.
+    private var isPlan: Bool { planTitle != nil }
+    private var tint: Color { isPlan ? .purple : .blue }
+
+    private var headerIcon: String {
+        if allDone { return "checkmark.seal.fill" }
+        return isPlan ? "map" : "checklist"
+    }
+    private var headerLabel: String {
+        if isPlan {
+            return allDone ? "Plan complete" : (planTitle ?? "Plan")
+        }
+        return allDone ? "Tasks complete" : "Task list"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
@@ -117,19 +165,27 @@ struct TodoListStrip: View {
                         .frame(width: 14)
                 }
                 .buttonStyle(.plain)
-                Image(systemName: allDone ? "checkmark.seal.fill" : "checklist")
+                Image(systemName: headerIcon)
                     .font(.system(size: 10))
-                    .foregroundStyle(allDone ? .green : .purple)
-                // It's the model's TodoWrite task tracker — used in BOTH Agent
-                // and Plan mode. Calling it "Plan" made Agent-mode work look
-                // like planning, so it's "To-dos" (the Cursor term), neutral
-                // to the mode.
-                Text(allDone ? "To-dos complete" : "To-dos")
+                    .foregroundStyle(allDone ? .green : tint)
+                Text(headerLabel)
                     .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("\(done)/\(todos.count)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
+                // Tier 2 only — re-focus the saved plan file in the editor.
+                if isPlan, let onOpenPlanFile {
+                    Button(action: onOpenPlanFile) {
+                        Label("Open plan", systemImage: "doc.text")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(tint)
+                    .help("Open the saved plan file in the editor")
+                }
                 if let onClose {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
@@ -139,7 +195,7 @@ struct TodoListStrip: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss the to-do list")
+                    .help(isPlan ? "Dismiss the plan" : "Dismiss the task list")
                 }
             }
             // Plans are short; cap the height and scroll if a long one
@@ -157,7 +213,7 @@ struct TodoListStrip: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background((allDone ? Color.green : Color.purple).opacity(0.06))
+        .background((allDone ? Color.green : tint).opacity(0.06))
         .onChange(of: allDone) { _, done in
             if done { withAnimation(.easeInOut(duration: 0.15)) { collapsed = true } }
         }
@@ -190,7 +246,7 @@ struct TodoListStrip: View {
     private func statusColour(_ s: String) -> Color {
         switch s {
         case "completed": return .green
-        case "in_progress": return .purple
+        case "in_progress": return tint
         default: return .secondary
         }
     }
