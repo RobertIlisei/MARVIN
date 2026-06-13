@@ -135,10 +135,60 @@ final class ChatPreviewModel {
     /// fresh SDK session.
     var todos: [TodoItem] = []
 
-    /// ADR-0036 — the most recent Plan-mode plan (from ExitPlanMode). Kept so
-    /// the plan persists in the chat + seeds the checklist even after the
-    /// approval window is dismissed. Cleared on a fresh SDK session.
+    /// ADR-0036 — the most recent Plan-mode plan. Kept so the plan persists in
+    /// the chat + seeds the checklist even after the approval window is
+    /// dismissed, and so the to-do strip can render as the tier-2 *Plan*
+    /// (vs a bare tier-1 task list). Cleared on a fresh SDK session.
     var currentPlanText: String? = nil
+
+    /// ADR-0036 (two-tier addendum) — filesystem path of the auto-saved plan
+    /// markdown (`<workDir>/.marvin/plans/<slug>.md`). Written when a plan is
+    /// presented and opened in the editor pane (Cursor-style), so the user can
+    /// actually see the plan file. nil until a plan is written this session.
+    var currentPlanPath: String? = nil
+
+    /// Title pulled from the plan's opening `# Plan — <title>` heading (the
+    /// plan-mode prompt contract). Drives the tier-2 strip header + the saved
+    /// file's slug. Falls back to "Plan" when the heading is absent.
+    var planTitle: String? {
+        guard let text = currentPlanText else { return nil }
+        let first = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n", maxSplits: 1)
+            .first.map(String.init) ?? ""
+        let stripped = first.drop(while: { $0 == "#" || $0 == " " })
+            .trimmingCharacters(in: .whitespaces)
+        return stripped.isEmpty ? "Plan" : stripped
+    }
+
+    /// Write the presented plan to `<workDir>/.marvin/plans/<slug>.md` and
+    /// open it in the editor pane (Cursor opens the plan file in the preview).
+    /// Idempotent per plan text — re-presenting the same plan re-uses the path.
+    /// Best-effort: a write failure leaves `currentPlanPath` nil (the inline
+    /// card + strip still work) rather than surfacing an error mid-plan.
+    func persistAndOpenPlan() {
+        guard let plan = currentPlanText, !plan.isEmpty,
+              let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }
+        let dir = (wd as NSString).appendingPathComponent(".marvin/plans")
+        let slug = PlanFile.slug(planTitle ?? "plan")
+        let path = (dir as NSString).appendingPathComponent("\(slug).md")
+        do {
+            try FileManager.default.createDirectory(
+                atPath: dir, withIntermediateDirectories: true)
+            try plan.write(toFile: path, atomically: true, encoding: .utf8)
+            currentPlanPath = path
+            MarvinBridge.shared.setSelectedFile(path)
+        } catch {
+            // Non-fatal — the plan card + strip don't depend on the file.
+        }
+    }
+
+    /// Re-focus the saved plan file in the editor pane (the strip's "Open
+    /// plan" button). No-op if the plan was never written.
+    func openPlanInEditor() {
+        guard let path = currentPlanPath else { return }
+        MarvinBridge.shared.setSelectedFile(path)
+    }
 
     /// ADR-0036 (revised) — a Plan-mode turn just finished presenting a plan
     /// (read-only), so we're waiting on the user to Approve & execute. Drives
@@ -362,6 +412,16 @@ final class ChatPreviewModel {
         draft = ""
         attachments = []
         planAwaitingApproval = false  // any send clears the plan-approval chip
+        // A finished plan must not shadow the next task. Once every plan step
+        // is done, a fresh user-typed message starts new (tier-1) work, so
+        // drop the plan — otherwise the next TodoWrite would render under the
+        // old "Plan — <title>" header. Control actions (approve / continue)
+        // use sendControl and bypass this, so mid-plan continues are safe.
+        if !todos.isEmpty, todos.allSatisfy({ $0.status == "completed" }) {
+            todos = []
+            currentPlanText = nil
+            currentPlanPath = nil
+        }
         if isSending {
             // Turn already running — queue for after it completes.
             // turn.completed pops the head of this list and dispatches
@@ -548,6 +608,7 @@ final class ChatPreviewModel {
     func dismissPlan() {
         todos = []
         currentPlanText = nil
+        currentPlanPath = nil
         planAwaitingApproval = false
     }
 
@@ -557,6 +618,7 @@ final class ChatPreviewModel {
     private func resetSessionStrips() {
         todos = []
         currentPlanText = nil
+        currentPlanPath = nil
         planAwaitingApproval = false
         agentChangedFiles = []
     }
@@ -833,6 +895,7 @@ final class ChatPreviewModel {
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
                 currentPlanText = nil
+                currentPlanPath = nil
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
@@ -892,6 +955,8 @@ final class ChatPreviewModel {
                     messages.append(.system(text: "📋 Plan\n\n\(plan)"))
                     let seeded = PlanParser.todos(from: plan)
                     if !seeded.isEmpty { todos = seeded }
+                    // Write + open the plan file (Cursor-style preview).
+                    persistAndOpenPlan()
                 }
             }
         case .turnCompleted:
@@ -916,7 +981,12 @@ final class ChatPreviewModel {
             // and capture the plan text (the turn's final assistant reply) so it
             // can be saved to a file + followed alongside the chat.
             planAwaitingApproval = (b.mode == "plan")
-            if planAwaitingApproval { currentPlanText = lastAssistantText() }
+            if planAwaitingApproval {
+                currentPlanText = lastAssistantText()
+                // Cursor-style — write the plan to a file and open it in the
+                // editor pane so the user can actually see the plan file.
+                persistAndOpenPlan()
+            }
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
@@ -1467,15 +1537,22 @@ struct ChatPreviewView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            // The plan is auto-written to .marvin/plans and opened in the
+            // editor when it's presented; this button re-focuses that file.
+            // If the auto-write failed (no path), fall back to a Save-As.
             Button {
-                savePlan()
+                if model.currentPlanPath != nil { model.openPlanInEditor() }
+                else { savePlan() }
             } label: {
-                Label("Save plan", systemImage: "square.and.arrow.down")
+                Label(model.currentPlanPath != nil ? "Open plan" : "Save plan",
+                      systemImage: model.currentPlanPath != nil ? "doc.text" : "square.and.arrow.down")
                     .font(.system(size: 11))
             }
             .controlSize(.small)
             .disabled(model.currentPlanText?.isEmpty ?? true)
-            .help("Save this plan to a Markdown file so you can follow it outside the chat.")
+            .help(model.currentPlanPath != nil
+                  ? "Open the saved plan file in the editor."
+                  : "Save this plan to a Markdown file so you can follow it outside the chat.")
             Button("Revise") {
                 // Stay in Plan mode; just nudge a revised plan.
                 model.draft = "Revise the plan — "
@@ -1571,7 +1648,16 @@ struct ChatPreviewView: View {
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
         if !model.todos.isEmpty {
-            rows.append(AnyView(TodoListStrip(todos: model.todos, onClose: { model.dismissPlan() })))
+            // Two-tier (ADR-0036 addendum): a plan-backed checklist (Plan mode)
+            // renders as the tier-2 *Plan* — purple, titled, with "Open plan";
+            // a bare TodoWrite list renders as the tier-1 neutral *Task list*.
+            let planBacked = model.currentPlanText != nil
+            rows.append(AnyView(TodoListStrip(
+                todos: model.todos,
+                planTitle: planBacked ? model.planTitle : nil,
+                onOpenPlanFile: planBacked ? { model.openPlanInEditor() } : nil,
+                onClose: { model.dismissPlan() }
+            )))
         }
         if model.planAwaitingApproval && !model.isSending {
             rows.append(AnyView(approvePlanChip))

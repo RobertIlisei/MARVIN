@@ -9,6 +9,38 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-13 — v0.1.27: two-tier to-do / plan + plan file in the editor
+  (Cursor parity).**
+  - **Diagnosis.** Live use surfaced that the plan card (in the chat scroll)
+    and the to-do strip (above the input) read as *two artifacts that replace
+    each other*: approving a plan scrolled the card away and a separate,
+    identical-looking "To-dos" strip took its place. Inspecting Cursor showed
+    it keeps **two distinct tiers** that coexist — a lightweight *task list*
+    (the agent's `TodoWrite` for any multi-step run, no plan behind it) and a
+    *plan* (Plan mode, persistent, ticks off in place). MARVIN rendered both
+    through one identical strip, blurring them; and the plan, unlike Cursor's,
+    was never opened as a file the user could see.
+  - **Two-tier strip (ADR-0036 two-tier addendum).** `TodoListStrip` now forks
+    on `planTitle != nil` (driven by `currentPlanText != nil`): tier 1 renders
+    as a neutral blue **"Task list"** (`checklist` icon, no plan affordances);
+    tier 2 renders as a purple **"Plan — <title>"** (`map` icon, titled from
+    the `# Plan` heading) with an **"Open plan"** button. A bare task list no
+    longer reads as a plan, and an approved plan persists as the tracked
+    checklist that ticks off in place instead of being swapped for a
+    disconnected list.
+  - **Plan file in the editor (Cursor parity).** When a plan is presented
+    (`turnCompleted` in Plan mode, or the legacy `ExitPlanMode` path), MARVIN
+    writes it to `<workDir>/.marvin/plans/<slug>.md` and opens it in the editor
+    pane via `setSelectedFile` (`persistAndOpenPlan`), so the user can actually
+    see the plan file. The approval chip's button becomes **Open plan**
+    (re-focus the saved file), falling back to Save-As if the auto-write
+    failed. `currentPlanPath` is session-scoped — cleared on dismiss / reset /
+    fresh SDK session alongside `currentPlanText`.
+  - **Prompt contract.** `personality.ts` plan-mode stanza updated to the
+    revised inline-`# Plan — <title>` / STOP model (the stale `ExitPlanMode`
+    wording removed), and Agent mode now opens a tier-1 `TodoWrite` task list
+    for any 3+ step task.
+  - **Verification.** `swift build` clean (pre-existing warnings only).
 - **2026-06-12 — v0.1.26: the plan card (Cursor-style structured plan) +
   a specific pause chip.**
   - **Diagnosis.** The v0.1.24 decoupling fixed the modal/re-plan/model-split
