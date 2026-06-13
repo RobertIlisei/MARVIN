@@ -107,7 +107,10 @@ enum PlanFile {
         let collapsed = String(mapped)
             .split(separator: "-", omittingEmptySubsequences: true)
             .joined(separator: "-")
+        // Cap length, then trim any hyphen the cut left dangling at the edge
+        // so we get "parcele-…-archive", not "parcele-…-archive-".
         let trimmed = String(collapsed.prefix(60))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return trimmed.isEmpty ? "plan" : trimmed
     }
 }

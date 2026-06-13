@@ -17,13 +17,16 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.27** — Two-tier to-do / plan (Cursor parity): the checklist strip now
-forks into a neutral "Task list" for bare `TodoWrite` runs (Agent mode, no
-plan behind it) and a purple "Plan — <title>" for plan-backed execution that
-ticks off in place — so the two never read as one artifact replacing the
-other. A presented plan is auto-written to `<workDir>/.marvin/plans/<slug>.md`
-and opened in the editor pane, with an "Open plan" affordance to re-focus it.
-Builds on v0.1.26's plan card. Install via
+**v0.1.28** — Plan title/file robust to preamble + the Homebrew "damaged"
+fix. The saved plan file + tier-2 strip header now derive the title from the
+`# Plan — <title>` heading wherever it sits (the model often writes diagnosis
+prose first), so filenames stop coming out as
+`i-have-the-root-cause-nailed-….md`; the chat splits that preamble off and
+renders the plan portion as the structured card. Separately, the cask now
+strips `com.apple.quarantine` in a `postflight` — modern Homebrew quarantines
+casks by default, and an ad-hoc bundle + quarantine triggers macOS 26's
+"MARVIN.app is damaged" rejection. Builds on v0.1.27's two-tier to-do / plan.
+Install via
 `brew tap RobertIlisei/marvin && brew install --cask marvin-ai`. Earlier
 tags v0.1.0–v0.1.5 carried pre-scrub code and have been deleted from
 GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
@@ -33,6 +36,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-13 — v0.1.28 plan title/file robust to preamble + Homebrew "damaged" fix** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). `PlanCard.split` divides an assistant reply into (preamble, plan) at the first `# Plan` heading — the saved file slug + tier-2 strip header use the clean plan portion (no more `i-have-the-root-cause-nailed-….md`), the chat renders preamble-as-prose + plan-as-card, and `planTitle` scans for the heading anywhere. The `marvin-ai` cask gained a `postflight` that strips `com.apple.quarantine` (modern Homebrew quarantines casks by default → ad-hoc bundle reads as "damaged" on macOS 26).
 - **2026-06-13 — v0.1.27 two-tier to-do / plan + plan file in the editor** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). The plan card (in the chat scroll) and the to-do strip (above the input) read as two artifacts replacing each other; Cursor keeps two distinct tiers that coexist. `TodoListStrip` now forks on `planTitle != nil`: a neutral blue "Task list" for bare `TodoWrite` checklists, a purple titled "Plan — <title>" for plan-backed execution that ticks off in place. A presented plan is auto-written to `<workDir>/.marvin/plans/<slug>.md` and opened in the editor pane (`persistAndOpenPlan` → `setSelectedFile`) with an "Open plan" button. `personality.ts` updated to the inline-`# Plan`/stop contract (stale `ExitPlanMode` wording removed) + a tier-1 task-list trigger for 3+ step Agent work.
 - **2026-06-12 — v0.1.26 plan card (Cursor-style structured plan rendering)** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) rev). The decoupled Plan mode had left the plan as a plain-text assistant bubble. The plan-mode prompt now mandates the reply open with `# Plan — <title>`; `ChatMessageRow` detects that heading and renders the message as a collapsible `PlanCardView` (title, step count, line-styled markdown: headings / numbered steps / bullets / code fences) — content-shaped detection, so it also fires on transcript replay. Approving the plan seeds the To-dos strip from the plan's steps so execution starts tracked.
 - **2026-06-11 — v0.1.25 Plan-mode UX polish** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Session-scoped plan/changes strips; Approve/Continue as hidden control actions (no fake user message); Save plan to a Markdown file; collapse/dismiss + auto-collapse the checklist; relabel "Plan" → "To-dos" (the task tracker; the plan is a distinct inline message + file).
