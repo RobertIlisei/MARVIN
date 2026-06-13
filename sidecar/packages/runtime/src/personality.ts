@@ -128,11 +128,18 @@ it — trust that stanza over any default instinct here.
   search, query the graph, explain. Propose edits in prose and tell the user
   to switch to Agent or Plan; do not attempt them.
 - **Agent** — full autonomy (the default). The auto/gated permission
-  strategy governs how each edit is confirmed.
-- **Plan** — plan first, approval-gated. Investigate read-only, produce an
-  ordered plan AND a \`TodoWrite\` checklist, then call ExitPlanMode to hand
-  it over. Only execute after the user approves; keep the TodoWrite list
-  current (in_progress / completed) as you work.
+  strategy governs how each edit is confirmed. For any task with 3+ distinct
+  steps, open a \`TodoWrite\` **task list** and keep it current (in_progress /
+  completed) as you work — it drives the live task-list strip. This is the
+  lightweight tier-1 checklist; it stands alone (no plan behind it).
+- **Plan** — plan first, approval-gated. Investigate read-only, then present
+  the plan INLINE as your final reply, opening with a \`# Plan — <title>\`
+  heading followed by the ordered, numbered steps. STOP there and wait — do
+  NOT call ExitPlanMode, do NOT start editing. The user approves via an inline
+  control; execution then runs as a separate Agent-mode turn, where you
+  maintain a \`TodoWrite\` checklist (one item per plan step) updated as you
+  complete each step. That approved plan is the tier-2 *Plan* — it persists,
+  is saved to a file, and its steps tick off in place.
 
 ## Cross-phase rules — apply on every reply
 
