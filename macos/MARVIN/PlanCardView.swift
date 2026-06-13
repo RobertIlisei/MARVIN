@@ -14,13 +14,35 @@ import SwiftUI
 
 /// Content-shape detection for a plan message.
 enum PlanCard {
-    /// True when an assistant text block is a Plan-mode plan: the
-    /// (trimmed) text opens with the `# Plan` heading the plan-mode
-    /// prompt contract mandates.
-    static func isPlan(_ text: String) -> Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .hasPrefix("# plan")
+    /// True when an assistant text block contains a Plan-mode plan — i.e. a
+    /// `# Plan` markdown heading exists somewhere in it. (`split` does the
+    /// real work; this is the boolean convenience.)
+    static func isPlan(_ text: String) -> Bool { split(text) != nil }
+
+    /// Split an assistant reply into (preamble, plan) at the first `# Plan`
+    /// heading. The model sometimes writes diagnosis prose BEFORE the plan
+    /// heading; the preamble stays in the chat as normal text while the plan
+    /// portion renders as the card and is what gets saved to the plan file.
+    /// Returns nil when there's no plan heading (not a plan message).
+    static func split(_ text: String) -> (preamble: String, plan: String)? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let idx = lines.firstIndex(where: { isPlanHeading($0) }) else { return nil }
+        let preamble = lines[..<idx].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let plan = lines[idx...].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (preamble, plan)
+    }
+
+    /// A line that is a markdown heading whose first word is "Plan" — e.g.
+    /// `# Plan — <title>`. Word-boundary checked so `# Planning` doesn't match.
+    static func isPlanHeading(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("#") else { return false }
+        let after = t.drop(while: { $0 == "#" || $0 == " " }).lowercased()
+        guard after.hasPrefix("plan") else { return false }
+        let rest = after.dropFirst(4)
+        return rest.isEmpty || !(rest.first?.isLetter ?? false)
     }
 }
 

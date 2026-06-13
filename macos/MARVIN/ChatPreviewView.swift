@@ -147,18 +147,26 @@ final class ChatPreviewModel {
     /// actually see the plan file. nil until a plan is written this session.
     var currentPlanPath: String? = nil
 
-    /// Title pulled from the plan's opening `# Plan — <title>` heading (the
-    /// plan-mode prompt contract). Drives the tier-2 strip header + the saved
-    /// file's slug. Falls back to "Plan" when the heading is absent.
+    /// Title pulled from the plan's `# Plan — <title>` heading (the plan-mode
+    /// prompt contract). Drives the tier-2 strip header + the saved file's
+    /// slug. The model often writes preamble BEFORE the heading, so we scan
+    /// for the `# Plan` line anywhere — not just line 1 — and parse the title
+    /// after the `Plan` word + its separator (— / - / :). Falls back to "Plan".
     var planTitle: String? {
         guard let text = currentPlanText else { return nil }
-        let first = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n", maxSplits: 1)
-            .first.map(String.init) ?? ""
-        let stripped = first.drop(while: { $0 == "#" || $0 == " " })
-            .trimmingCharacters(in: .whitespaces)
-        return stripped.isEmpty ? "Plan" : stripped
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Heading line: starts with `#`(s) then the word "Plan".
+            guard line.hasPrefix("#") else { continue }
+            let afterHashes = line.drop(while: { $0 == "#" || $0 == " " })
+            guard afterHashes.lowercased().hasPrefix("plan") else { continue }
+            // Drop "Plan" + any separator/space that follows it.
+            let afterPlan = afterHashes.dropFirst(4)
+                .drop(while: { $0 == " " || $0 == "—" || $0 == "–" || $0 == "-" || $0 == ":" })
+                .trimmingCharacters(in: .whitespaces)
+            return afterPlan.isEmpty ? "Plan" : afterPlan
+        }
+        return "Plan"
     }
 
     /// Write the presented plan to `<workDir>/.marvin/plans/<slug>.md` and
@@ -950,10 +958,11 @@ final class ChatPreviewModel {
             // model's own TodoWrite calls then refine the statuses.
             if c.toolName == "ExitPlanMode", let plan = planText(from: c),
                !plan.isEmpty {
-                if currentPlanText != plan {
-                    currentPlanText = plan
-                    messages.append(.system(text: "📋 Plan\n\n\(plan)"))
-                    let seeded = PlanParser.todos(from: plan)
+                let planBody = PlanCard.split(plan)?.plan ?? plan
+                if currentPlanText != planBody {
+                    currentPlanText = planBody
+                    messages.append(.system(text: "📋 Plan\n\n\(planBody)"))
+                    let seeded = PlanParser.todos(from: planBody)
                     if !seeded.isEmpty { todos = seeded }
                     // Write + open the plan file (Cursor-style preview).
                     persistAndOpenPlan()
@@ -982,7 +991,10 @@ final class ChatPreviewModel {
             // can be saved to a file + followed alongside the chat.
             planAwaitingApproval = (b.mode == "plan")
             if planAwaitingApproval {
-                currentPlanText = lastAssistantText()
+                // Save the plan portion only — if the model wrote diagnosis
+                // prose before the `# Plan` heading, that preamble stays in the
+                // chat reply; the file + strip get the clean plan.
+                currentPlanText = lastAssistantText().map { PlanCard.split($0)?.plan ?? $0 }
                 // Cursor-style — write the plan to a file and open it in the
                 // editor pane so the user can actually see the plan file.
                 persistAndOpenPlan()
