@@ -989,7 +989,11 @@ final class ChatPreviewModel {
             // plan (read-only). Surface the inline Approve & execute affordance,
             // and capture the plan text (the turn's final assistant reply) so it
             // can be saved to a file + followed alongside the chat.
-            planAwaitingApproval = (b.mode == "plan")
+            // A plan turn just finished — offer approval, UNLESS the plan's
+            // todos are already all complete (the plan was executed; offering
+            // "approve & execute" then would contradict "Plan complete N/N").
+            let planDone = !todos.isEmpty && todos.allSatisfy { $0.status == "completed" }
+            planAwaitingApproval = (b.mode == "plan") && !planDone
             if planAwaitingApproval {
                 // Save the plan portion only — if the model wrote diagnosis
                 // prose before the `# Plan` heading, that preamble stays in the
@@ -1671,7 +1675,11 @@ struct ChatPreviewView: View {
                 onClose: { model.dismissPlan() }
             )))
         }
-        if model.planAwaitingApproval && !model.isSending {
+        // Don't offer "Approve & execute" once the plan is already done —
+        // a "Plan complete 10/10" strip + an approve chip is a contradiction.
+        // (planPausedWaiting already excludes the all-complete case.)
+        let planComplete = !model.todos.isEmpty && model.todos.allSatisfy { $0.status == "completed" }
+        if model.planAwaitingApproval && !model.isSending && !planComplete {
             rows.append(AnyView(approvePlanChip))
         } else if planPausedWaiting {
             rows.append(AnyView(continuePlanChip))

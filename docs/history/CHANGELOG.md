@@ -9,6 +9,21 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-13 — v0.1.29: no "Approve & execute" on an already-complete plan.**
+  - **Diagnosis.** A finished plan showed *both* the "Plan complete 10/10"
+    strip *and* the "Plan ready — approve to execute" chip — a contradiction.
+    `planAwaitingApproval` is set on every plan-mode `turnCompleted`, and the
+    tray rendered the approve chip whenever that flag was true, regardless of
+    whether the plan's todos were already all `completed`.
+  - **Fix.** The tray now gates the approve chip on `!planComplete` (todos
+    non-empty AND all completed), and `turnCompleted` clears
+    `planAwaitingApproval` when the plan is already done
+    (`planAwaitingApproval = mode == "plan" && !planDone`). A completed plan
+    now shows only the collapsed "Plan complete" strip with its dismiss ✕ —
+    no approve/continue chip. (Stale todos from a prior plan are already
+    cleared on the next user-typed message, so a fresh plan still gets its
+    approve chip.)
+  - **Verification.** `swift build` clean.
 - **2026-06-13 — v0.1.28: plan title/file robust to preamble + the cask
   "damaged" fix.**
   - **Diagnosis (plan file).** v0.1.27 named the saved plan file from the
