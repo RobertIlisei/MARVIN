@@ -9,6 +9,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-13 — v0.1.28: plan title/file robust to preamble + the cask
+  "damaged" fix.**
+  - **Diagnosis (plan file).** v0.1.27 named the saved plan file from the
+    reply's *first line*. When the model wrote diagnosis prose before its
+    `# Plan — <title>` heading (contract violation, but it happens), the slug
+    became garbage — e.g. `i-have-the-root-cause-nailed-and-it-s-more-….md` —
+    and the tier-2 strip header showed the same prose. The chat also didn't
+    render the structured plan card, because `PlanCard.isPlan` only fired when
+    the reply *opened* with `# Plan`.
+  - **Fix.** `PlanCard.split(_:)` now splits an assistant reply into
+    (preamble, plan) at the first `# Plan` heading (word-boundary checked, so
+    `# Planning` doesn't match). `ChatMessageRow` renders the preamble as
+    normal text and the plan portion as the card; the saved plan file +
+    `planTitle` + the strip header all use the clean plan portion. `planTitle`
+    scans for the heading anywhere (not just line 1) and parses the title
+    after the `Plan` + separator; `PlanFile.slug` trims any hyphen the 60-char
+    cut leaves dangling.
+  - **Cask "damaged" fix (tap repo).** Modern Homebrew quarantines casks by
+    default — it does NOT strip `com.apple.quarantine` (the cask's old comment
+    was wrong). An ad-hoc-signed bundle + quarantine = macOS 26's
+    "“MARVIN.app” is damaged" rejection, even though the signature is valid
+    (`codesign --verify` → satisfies its DR). Added a `postflight` to the
+    `marvin-ai` cask that runs `xattr -dr com.apple.quarantine` on the
+    installed app (`must_succeed: false` — dangling `sharp` optional-dep
+    symlinks make `xattr -r` exit non-zero). Verified via `brew reinstall`.
+  - **Verification.** `swift build` clean; split/title/slug unit-checked
+    against the real preamble+heading plan shape.
 - **2026-06-13 — v0.1.27: two-tier to-do / plan + plan file in the editor
   (Cursor parity).**
   - **Diagnosis.** Live use surfaced that the plan card (in the chat scroll)
