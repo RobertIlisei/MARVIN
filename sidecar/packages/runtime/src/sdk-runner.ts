@@ -673,6 +673,51 @@ function maybePlanApproval(_args: {
 }
 
 /**
+ * Interactive AskUserQuestion (ADR-0040). The model's built-in
+ * `AskUserQuestion` tool arrives here through `canUseTool`; the answer is
+ * returned to the model as `{ behavior: "allow", updatedInput }` where
+ * `updatedInput` is the AskUserQuestionOutput the SDK hands back as the tool
+ * result. Unlike a normal tool, it can NEVER be auto-answered — there's no
+ * sensible default for "which option does the user want" — so we route it
+ * through the same confirm registry as gated confirms in EVERY mode (auto /
+ * gated / plan / ask). The native UI renders the options and POSTs
+ * `/api/confirm` with `{ decision: "allow", updatedInput: { questions, answers } }`.
+ *
+ * Returns null when this isn't AskUserQuestion (callers fall through to normal
+ * classification). When there's no UI wired to answer (e.g. a headless wakeup
+ * turn), denies rather than hanging — the 5-min confirm timeout would do the
+ * same, but failing fast is clearer to the model.
+ */
+const ASK_USER_TOOL = "AskUserQuestion";
+function maybeAskUserQuestion(args: {
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | null {
+  const { toolName, turnId, toolUseID, input, onConfirmRequest } = args;
+  if (toolName !== ASK_USER_TOOL) return null;
+  if (!onConfirmRequest) {
+    return Promise.resolve({
+      behavior: "deny",
+      message: "AskUserQuestion can't be answered here (no interactive UI). Proceed with your own recommendation instead.",
+      interrupt: false,
+    } as PermissionResult);
+  }
+  return new Promise<PermissionResult>((resolve) => {
+    registerPendingConfirm(turnId, toolUseID, resolve, input);
+    onConfirmRequest({
+      turnId,
+      toolUseId: toolUseID,
+      toolName: ASK_USER_TOOL,
+      input,
+      reason: "MARVIN needs you to choose.",
+    });
+  });
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -699,6 +744,9 @@ export function makeAutoModeLogger(args: {
     // for the user (ADR-0036).
     const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (planApproval) return planApproval;
+    // AskUserQuestion always reaches the user, even in auto mode (ADR-0040).
+    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    if (ask) return ask;
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
     if (cls.decision !== "deny") {
       maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
@@ -746,6 +794,9 @@ export function makeGatedCanUseTool(args: {
     // Plan approval gate first (ADR-0036).
     const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (planApproval) return planApproval;
+    // AskUserQuestion routes to the same confirm channel (ADR-0040).
+    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    if (ask) return ask;
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
     if (cls.decision !== "deny") {
       // Pre-image BEFORE the confirm round-trip too: if the user allows,

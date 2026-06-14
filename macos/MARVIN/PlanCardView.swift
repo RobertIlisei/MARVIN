@@ -46,6 +46,27 @@ enum PlanCard {
     }
 }
 
+/// Detects when a paused plan turn is actually ASKING the user to decide
+/// between options (vs just pausing between steps). The plan-mode contract
+/// tells MARVIN to "pause and ask if you hit a real decision" — when it does,
+/// the right affordance is "answer in the box / use the recommendation", NOT a
+/// generic "Continue" (which sends a canned resume and ignores the question).
+enum PlanDecision {
+    /// True when `text` reads like a decision prompt: it contains a question
+    /// mark AND a decision marker. Both conditions keep false-positives low
+    /// (a step description with a stray "?" won't trip it).
+    static func isAsking(_ text: String) -> Bool {
+        let t = text.lowercased()
+        guard t.contains("?") else { return false }
+        let markers = [
+            "decision", "which way", "which option", "(a)", "(b)",
+            "option a", "option b", "should i", "let me know", "your call",
+            "recommend", "choose", "pick one", "go with",
+        ]
+        return markers.contains { t.contains($0) }
+    }
+}
+
 /// The structured plan card: header (title + step count + collapse),
 /// body (the plan markdown, line-styled). Approval actions stay in the
 /// status-tray chip — the card is the readable artifact.

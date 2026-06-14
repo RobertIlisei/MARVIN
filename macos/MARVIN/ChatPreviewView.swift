@@ -787,7 +787,8 @@ final class ChatPreviewModel {
     func respond(
         to request: ConfirmRequest,
         decision: ChatService.ConfirmDecision,
-        denyMessage: String? = nil
+        denyMessage: String? = nil,
+        updatedInput: [String: Any]? = nil
     ) {
         // Mark in-flight before the Task starts so the sheet's
         // dismiss-driven binding setter sees us and skips its
@@ -802,7 +803,8 @@ final class ChatPreviewModel {
                     turnId: request.turnId,
                     toolUseId: request.toolUseId,
                     decision: decision,
-                    denyMessage: denyMessage
+                    denyMessage: denyMessage,
+                    updatedInput: updatedInput
                 )
                 resolvedConfirms[request.toolUseId] = decision
                 pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
@@ -1180,15 +1182,34 @@ struct ChatPreviewView: View {
         // explicitly than the binding gymnastics anyway.
         .sheet(isPresented: confirmSheetPresented) {
             if let request = model.pendingConfirms.first {
-                ConfirmSheet(
-                    request: request,
-                    onAllow: {
-                        model.respond(to: request, decision: .allow)
-                    },
-                    onDeny: { reason in
-                        model.respond(to: request, decision: .deny, denyMessage: reason)
-                    }
-                )
+                // ADR-0040 — AskUserQuestion rides the confirm channel but is a
+                // decision, not a permission: render the interactive question
+                // sheet instead of Allow/Deny.
+                if request.toolName == "AskUserQuestion" {
+                    AskQuestionSheet(
+                        request: request,
+                        onSubmit: { answers in
+                            model.respond(to: request, decision: .allow, updatedInput: answers)
+                        },
+                        onSkip: {
+                            model.respond(
+                                to: request,
+                                decision: .deny,
+                                denyMessage: "I'll let you decide — proceed with your own recommended option for each open question."
+                            )
+                        }
+                    )
+                } else {
+                    ConfirmSheet(
+                        request: request,
+                        onAllow: {
+                            model.respond(to: request, decision: .allow)
+                        },
+                        onDeny: { reason in
+                            model.respond(to: request, decision: .deny, denyMessage: reason)
+                        }
+                    )
+                }
             }
         }
     }
@@ -1470,6 +1491,15 @@ struct ChatPreviewView: View {
         !model.isSending && model.todos.contains { $0.status != "completed" }
     }
 
+    /// The paused turn isn't just between steps — it's asking the user to
+    /// DECIDE between options. The generic "Continue" chip is wrong here (it
+    /// sends a canned resume and ignores the question); show the decision chip
+    /// instead, which points the user at the input box + offers the model's
+    /// own recommendation.
+    private var planAwaitingDecision: Bool {
+        planPausedWaiting && (model.lastAssistantText().map(PlanDecision.isAsking) ?? false)
+    }
+
     /// One-click resume for a paused plan. The freeform input still works for
     /// a "continue + adjust" reply (what the user did manually). The chip is
     /// SPECIFIC — it names the next unfinished step and what there actually
@@ -1538,6 +1568,54 @@ struct ChatPreviewView: View {
                 + "TodoWrite checklist with current statuses, then proceed and keep it "
                 + "updated as you complete each item.",
             display: "▶ Continuing",
+            cwd: bridge.projectWorkDir
+        )
+    }
+
+    /// Shown when the paused turn is asking the user to choose between options.
+    /// The primary path is to TYPE the answer in the box (works already); this
+    /// chip makes that explicit and offers a one-click "use MARVIN's own
+    /// recommendation" so the user isn't forced to retype the model's rec.
+    private var decisionChip: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "questionmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("MARVIN needs your decision")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Answer in the box below (e.g. \u{201C}1a, 2b\u{201D}), or let MARVIN proceed with its own recommendation.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button {
+                proceedWithRecommendation()
+            } label: {
+                Label("Use MARVIN's rec", systemImage: "wand.and.stars")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(model.isSending)
+            .help("Let MARVIN proceed using its own recommended option for each open decision.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private func proceedWithRecommendation() {
+        // Control action — the model decides each open question with its own
+        // stated recommendation, then resumes the checklist.
+        model.sendControl(
+            instruction: "For each open decision you just raised, proceed with your own "
+                + "recommended option. If a decision had no clear recommendation, pick the "
+                + "lowest-risk option and say which you chose. Re-emit your TodoWrite "
+                + "checklist with current statuses, then continue and keep it updated.",
+            display: "▶ Proceeding (MARVIN's recommendation)",
             cwd: bridge.projectWorkDir
         )
     }
@@ -1627,8 +1705,9 @@ struct ChatPreviewView: View {
         model.sendControl(
             instruction: "The plan you just presented is approved — execute it now. "
                 + "Work through it in order, and maintain a TodoWrite checklist (one item "
-                + "per plan step) updated as you complete each step. Pause and ask if you "
-                + "hit a real decision.",
+                + "per plan step) updated as you complete each step. If you hit a real "
+                + "decision, call the AskUserQuestion tool with the options (don't write "
+                + "them as prose) so I can pick one.",
             display: "▶ Plan approved — executing",
             cwd: bridge.projectWorkDir
         )
@@ -1681,6 +1760,10 @@ struct ChatPreviewView: View {
         let planComplete = !model.todos.isEmpty && model.todos.allSatisfy { $0.status == "completed" }
         if model.planAwaitingApproval && !model.isSending && !planComplete {
             rows.append(AnyView(approvePlanChip))
+        } else if planAwaitingDecision {
+            // Paused ON A QUESTION — show the decision chip (answer in box /
+            // use the rec), not the generic "Continue".
+            rows.append(AnyView(decisionChip))
         } else if planPausedWaiting {
             rows.append(AnyView(continuePlanChip))
         }

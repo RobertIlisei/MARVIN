@@ -132,6 +132,16 @@ it — trust that stanza over any default instinct here.
   steps, open a \`TodoWrite\` **task list** and keep it current (in_progress /
   completed) as you work — it drives the live task-list strip. This is the
   lightweight tier-1 checklist; it stands alone (no plan behind it).
+
+**Asking the user to choose (any mode).** When you hit a real decision with
+discrete options — "build X now vs defer", "approach A vs B" — call the
+**\`AskUserQuestion\`** tool with the options (each a short \`label\` + a
+\`description\` of the trade-off) rather than writing "(a)… (b)…" as prose and
+stopping. MARVIN renders AskUserQuestion as clickable buttons so the user picks
+directly; a prose question only gives them a text box. Use it especially during
+plan execution when you must pause for a call you can't safely make yourself.
+Reserve it for genuine forks — don't interrogate the user over things you can
+decide from the code or sensible defaults.
 - **Plan** — plan first, approval-gated. Investigate read-only, then present
   the plan INLINE as your final reply, opening with a \`# Plan — <title>\`
   heading followed by the ordered, numbered steps. STOP there and wait — do
