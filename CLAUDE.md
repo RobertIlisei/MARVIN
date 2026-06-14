@@ -257,12 +257,12 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 1691 nodes · 3051 edges · 117 communities (2026-05-21 rebuild
-  after [`.graphifyignore`](./.graphifyignore) landed).
+  files. 2011 nodes · 3904 edges · 124 communities (2026-06-14 rebuild;
+  honours [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 971 nodes · 1178 edges · 72 communities (built
-  2026-05-21).
+  `.marvin/memory.md`. 1085 nodes · 1305 edges · 84 communities (built
+  2026-06-14, 81 files).
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
@@ -331,18 +331,13 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-05-21 rebuild: `GET()` (92 edges), `POST()` (88),
-`trim()` (41) are the real architectural anchors. Language primitives
-also bubble to the top — `string`, `text`, `View`, `font`, `Kind`,
-`data`, `.push()` — those are AST-noise from the tree-sitter pass,
-not concepts; treat them as background. The `.graphifyignore` filters
-files, not node kinds; a follow-up to filter language primitives from
-the AST extractor would need to live in graphify itself.
-
-Pre-2026-05-21 stale list, kept for reference:
-`GET()` (61 edges), `POST()` (58), `trim()` (29), `ADR-0015 — Auto-mode
-policy floor + audit log` (17), `/api/git/* third mutation channel` (17),
-`ADR index` (15), `8-phase senior-engineer workflow` (15), `Changelog
-(docs/history/CHANGELOG.md)` (15), `projects.ts` (13), `resolve()` (13).
+After the 2026-06-14 rebuild: `POST()` (116 edges), `GET()` (112),
+`.push()` (62), `trim()` (52), `.split()` (49), `.append()` (43) are the
+real architectural anchors. Language primitives also bubble to the top —
+`string`, `text`, `font`, `View`, `data`, `Kind`, `Equatable`, `Codable` —
+those are AST-noise from the tree-sitter pass, not concepts; treat them as
+background. The `.graphifyignore` filters files, not node kinds; a follow-up
+to filter language primitives from the AST extractor would need to live in
+graphify itself.
 
 _Refresh this list with `/graphify . --update` when it drifts._
