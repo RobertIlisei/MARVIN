@@ -9,6 +9,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-14 — v0.1.30: interactive AskUserQuestion + Node-24 CI bumps.**
+  - **Diagnosis.** When the model paused mid-plan to ask the user to choose
+    between options, it wrote them as prose ("Decision 1 — (a)… (b)…") and
+    stopped. The only affordances were the generic **Continue** chip (canned
+    resume, ignores the question) or a freeform text box — no way to *pick* an
+    option, unlike Cursor / Claude Code.
+  - **Interactive AskUserQuestion (ADR-0040).** The SDK exposes
+    `AskUserQuestion` as a built-in tool surfaced through `canUseTool`, with the
+    answer returned as `{ behavior: "allow", updatedInput: { questions, answers } }`
+    — the same `PermissionResult` shape `confirm-registry` already round-trips.
+    `sdk-runner` now routes `AskUserQuestion` through the confirm channel in
+    EVERY mode (it can never be auto-answered); a new native `AskQuestionSheet`
+    renders each question's options as clickable rows (label + description +
+    optional preview, single/multi-select, plus an auto-added "Other"
+    free-text), and "Send choice" returns the answer as the tool result. "Skip
+    — you decide" denies with a nudge to proceed on the model's recommendation,
+    so the turn never hangs. `personality.ts` + the plan-execution instruction
+    now tell the model to use the tool for genuine forks instead of prose.
+  - **Fallback chip.** For turns where the model still asks in prose, a
+    `PlanDecision` heuristic swaps the "Continue" chip for a "MARVIN needs your
+    decision — answer in the box, or use its recommendation" chip.
+  - **CI.** Bumped every GitHub Action in `release.yml` to its Node-24 major
+    (checkout v6, setup-node v6, pnpm/action-setup v6, cache v5,
+    action-gh-release v3) ahead of GitHub's 2026-06-16 Node-20 cutoff (#105).
+  - **Verification.** runtime `tsc` clean; `swift build` clean. The
+    `updatedInput → tool result` mapping follows the SDK type defs but isn't yet
+    exercised against a live turn (noted in ADR-0040's Scope of Done).
 - **2026-06-13 — v0.1.29: no "Approve & execute" on an already-complete plan.**
   - **Diagnosis.** A finished plan showed *both* the "Plan complete 10/10"
     strip *and* the "Plan ready — approve to execute" chip — a contradiction.
