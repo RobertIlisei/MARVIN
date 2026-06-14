@@ -248,8 +248,11 @@ export async function buildProjectContext(
         : "";
       sections.push(
         `## Project memory (\`${memoryFile}\`)${clipped ? " — recent tail" : ""}\n\n` +
-          `Running log of decisions, invariants, and gotchas accumulated across ` +
-          `sessions. Append to it on Ship; read it on Intake.${note}\n\n${text}`,
+          `Curated index of DURABLE FACTS (invariants, gotchas, constraints, ` +
+          `external facts). Each links to \`.marvin/memory/<slug>.md\` — use the ` +
+          `\`recall\` tool (or Read the file) for detail. Write ONLY via the ` +
+          `\`remember\` tool; never echo activity/decisions/status here (ADR-0042).` +
+          `${note}\n\n${text}`,
       );
     }
   } catch {

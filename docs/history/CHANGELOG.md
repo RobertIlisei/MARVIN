@@ -9,6 +9,31 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-14 — v0.1.32: memory.md as a curated durable-facts layer (ADR-0042).**
+  - **Diagnosis.** A real project's `.marvin/memory.md` had grown to 419 KB /
+    196 entries in ~9 days, ~99% redundant with ADRs/git/changelog (194/196
+    referenced an ADR; 108 carried ephemeral status like `vitest 374/374` /
+    `NOT committed`). The model ignored the prose "one-line" guidance and
+    mirrored its verbose Ship summaries into memory; the file-per-fact + index
+    pattern at the top had been abandoned (5/6 links dangling). This is what
+    overflowed the context window in ADR-0041.
+  - **New model.** memory holds ONLY what the next session can't re-derive from
+    ADRs/git/changelog (invariants, gotchas, constraints, external facts). New
+    in-process **`marvin-memory` MCP** (`remember`/`recall`) is the enforced
+    write path: one fact → `.marvin/memory/<slug>.md` + a one-line index entry,
+    supersede-by-name, hook/body caps, and content-class guards that REJECT
+    activity/status payloads. `personality.ts` gained a MUST/MUST-NOT firm
+    surface routing facts through `remember` and banning direct memory.md edits;
+    `buildProjectContext` injects the index with `recall`/Read guidance.
+  - **Migration.** New `/memory-compact` command distills an existing log →
+    fact files + archives the rest (run it on a bloated project to reclaim the
+    bulk). Not auto-run on user projects.
+  - **Native.** The Scope-met chip is made safe — retargeted to
+    `.marvin/session-notes.md` ("Save session note") so it no longer pollutes /
+    gets clobbered by the index; a first-class native "remember a fact" UI is a
+    follow-up.
+  - **Verification.** runtime / project-context / web-route `tsc` clean;
+    `marvin-memory` constructs cleanly; `swift build` clean.
 - **2026-06-14 — v0.1.31: fix "Prompt is too long" — project-graph lifecycle
   + first-message context budget (ADR-0041).**
   - **Diagnosis.** A new chat's first prompt on a mature project threw
