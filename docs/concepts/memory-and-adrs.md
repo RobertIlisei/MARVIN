@@ -100,26 +100,44 @@ MARVIN's own ADRs are at [`docs/decisions/`](../decisions/). MARVIN's decisions-
 
 ## Per-project memory
 
-### What memory is
+### What memory is (ADR-0042)
 
-A single file: `<workDir>/.marvin/memory.md`. Append-only. One line per entry. Plain Markdown.
+A **curated durable-facts layer**: `<workDir>/.marvin/memory.md` is a
+one-line-per-fact **index**, and each fact is a small file under
+`<workDir>/.marvin/memory/<slug>.md` (frontmatter `name` / `description` /
+`type`). Plain Markdown. It is written **only through the `remember` tool**, not
+by editing the file — `remember` writes the fact file, rebuilds the index,
+**supersedes by name** (not blind append), caps length, and **rejects
+activity/status content**. `recall` searches it.
 
-Memory captures **gotchas, invariants, "we decided Y because Z was broken" items** that don't warrant a full ADR but would be painful to re-derive.
+Memory captures **gotchas, invariants, hard constraints, "we decided Y because
+Z was broken" items, and external facts of record** that the next session can't
+re-derive from ADRs, git, or the changelog. It does NOT hold what you
+implemented (→ git/changelog), decisions (→ ADR), or verification/commit status
+(ephemeral). An earlier append-everything model let a real project's memory.md
+balloon to 419 KB / ~99 % redundant — the cause of the [context-budget
+fix](../decisions/0041-project-graph-lifecycle-and-context-budget.md).
 
 ### Format
 
 ```markdown
-# <Project Name> — MARVIN memory
+# Project Memory Index
 
-Running log, appended at Phase 8 (Ship). Newest at bottom.
+- [Tenant id is realm not org](memory/tenant-id-is-realm-not-org.md) — carried over from 2023 migration, too expensive to rename
+- [Webhook retries handled by the queue](memory/webhook-retries-handled-by-the-queue.md) — don't add retry logic inside the handler
+```
 
-## 2026-04-17
-- Tenant id is `realm` not `org` — carried over from 2023 migration, too expensive to rename.
-- Webhook retries are handled by the queue, not the handler. Don't add retry logic inside the handler.
+…with `memory/tenant-id-is-realm-not-org.md`:
 
-## 2026-04-18
-- Feature flag `USE_NEW_AUTH` is a rollout flag, not a permanent toggle. Target removal: 2026-06-01.
-- `lib/pdf/fonts/` is checked in despite being binary; CI assumes this.
+```markdown
+---
+name: Tenant id is realm not org
+description: carried over from 2023 migration, too expensive to rename
+type: project
+---
+
+Tenant id is `realm`, not `org` — a 2023-migration carryover that's too
+expensive to rename now. Anything keying on tenant must use `realm`.
 ```
 
 ### What belongs in memory vs an ADR
@@ -135,9 +153,14 @@ Heuristic: if a 6-months-later reader would ask "why" and the answer is long, wr
 
 ### MARVIN's behavior on memory
 
-- **Phase 2 Discovery** — reads `<workDir>/.marvin/memory.md`. Includes it verbatim in the project context block.
-- **Phase 8 Ship** — appends one line summarizing anything surprising from this session.
-- **Never rewrites history.** New entries append; old entries stay as-is.
+- **Phase 2 Discovery / Intake** — the memory **index** is injected in the
+  project-context block; MARVIN pulls a specific fact's detail on demand with
+  `recall` (or by reading the `.marvin/memory/` file).
+- **Phase 8 Ship** — if the turn surfaced a *durable fact*, MARVIN records it
+  with `remember`. It does NOT log what it implemented or its status.
+- **Supersede, don't pile up.** Re-using a fact's `name` updates it in place;
+  the index is rebuilt from the fact files, so it never drifts. Run
+  `/memory-compact` to distill a memory.md that has bloated into a log.
 
 ## Why these live in the user's repo, not MARVIN's data dir
 
