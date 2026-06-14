@@ -14,3 +14,7 @@ export {
 } from "./read-graph";
 export { type RefreshDocsResult, refreshDocs } from "./refresh-docs";
 export { type GraphifyRefreshResult, maybeRefreshGraphify } from "./watchdog";
+export {
+  type KnowledgeGraphRefreshResult,
+  maybeRefreshKnowledgeGraph,
+} from "./knowledge-watchdog";
