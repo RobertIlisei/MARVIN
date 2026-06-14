@@ -1888,12 +1888,12 @@ struct ChatPreviewView: View {
                     MemoryLog.append(workDir: cwd, line: summary)
                 }
             } label: {
-                Label("Save to memory.md", systemImage: "tray.and.arrow.down")
+                Label("Save session note", systemImage: "tray.and.arrow.down")
                     .font(.caption)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Append a one-line summary of the just-completed scope to .marvin/memory.md")
+            .help("Append a one-line summary of the just-completed scope to .marvin/session-notes.md. Durable facts (invariants/gotchas/constraints) are recorded by MARVIN via the remember tool into memory.md (ADR-0042).")
             Button {
                 model.clear()
             } label: {

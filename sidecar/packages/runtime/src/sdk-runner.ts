@@ -24,6 +24,7 @@
 
 import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
+import { createMemoryMcpServer } from "./memory-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { createWakeupMcpServer } from "./wakeup-tools";
 import { recordPreImage } from "./change-checkpoints";
@@ -911,6 +912,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // that instead of failing the turn.
   const graphMcp = createGraphMcpServer(cwd);
 
+  // In-process MCP server for the curated durable-facts memory (ADR-0042).
+  // The enforced write path for `.marvin/memory.md` — `remember` caps + rejects
+  // activity/status content so the log can't bloat back to a redundant blob.
+  // Scoped to the active project's workDir (never MARVIN's own repo).
+  const memoryMcp = createMemoryMcpServer(cwd);
+
   // In-process MCP server exposing the self-wakeup tools (ADR-0031). Only
   // wired when we know which session to resume — a wakeup turn must be able
   // to re-enter THIS marvinSession. Captures the turn's config so the fired
@@ -981,6 +988,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     },
     mcpServers: {
       "marvin-graph": graphMcp,
+      "marvin-memory": memoryMcp,
       ...(wakeupMcp ? { "marvin-control": wakeupMcp } : {}),
     },
     // Project-local skills (ADR-0024). When `<workDir>/.marvin/skills/`
