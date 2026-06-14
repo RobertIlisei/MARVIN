@@ -10,7 +10,7 @@ You say "let's build the login page." MARVIN reads the codebase, proposes the sc
 
 - A **single-assistant** desktop application built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview). One Claude session in a user ↔ MARVIN loop. See [ADR-0001](../decisions/0001-single-assistant.md) for why.
 - A **native macOS app** (`macos/`, SwiftUI / AppKit / MetalKit) + a **Next.js 16 sidecar** (`sidecar/`) on `localhost:3030`. The Swift app is the entire UI — chat, file tree, source control, terminal, diff viewer, brain visualisation. The sidecar is the backend it talks to over HTTP/SSE. See [Architecture](./architecture.md).
-- A **per-project** workspace. Each project has its own knowledge graph (`<workDir>/graphify-out/`), its own ADRs (`<workDir>/docs/adr/*.md`), and its own memory log (`<workDir>/.marvin/memory.md`). MARVIN holds zero cross-session state about past projects.
+- A **per-project** workspace. Each project has its own knowledge graph (`<workDir>/graphify-out/`, which MARVIN builds + keeps current itself), its own ADRs (`<workDir>/docs/adr/*.md`), and its own durable-facts memory (`<workDir>/.marvin/memory.md` + `.marvin/memory/`). MARVIN holds zero cross-session state about past projects.
 - An **operating model**, not just a chat frontend. MARVIN runs an 8-phase dialog on every change request: intake → discovery → impact analysis → architecture → plan → implement → verify → ship. See [The 8-phase workflow](../concepts/eight-phase-workflow.md).
 - A **tool-permission layer**. Every tool call is classified as auto-allowed, confirm-before-act, or hard-denied. Structural gate lives in `sidecar/packages/runtime/src/sdk-runner.ts`'s `canUseTool` callback. See [Tool policy](../security/tool-policy.md).
 
