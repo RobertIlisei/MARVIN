@@ -17,6 +17,14 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.31** — Fixes "Prompt is too long" on the first message of a mature
+project. Two layers (ADR-0041): MARVIN now **builds/maintains the active
+project's graphs** (code + knowledge, AST-only/free, cwd-scoped — never its own
+repo), and the **first-message context is budgeted** — ADRs inject as a titles
+index (details via the knowledge graph + targeted reads), memory.md as a recent
+tail, curated docs stay whole. agri-saas-platform's first-message context drops
+from ~566K to ~13.4K tokens. Builds on v0.1.30.
+
 **v0.1.30** — Interactive AskUserQuestion: when the model hits a real
 decision it can call `AskUserQuestion` and MARVIN renders the options as
 clickable buttons (single/multi-select + "Other"), returning your pick to the
@@ -50,6 +58,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-14 — v0.1.31 project-graph lifecycle + context budget** ([ADR-0041](./decisions/0041-project-graph-lifecycle-and-context-budget.md)). Fixed "Prompt is too long": `buildProjectContext` injected all ADRs + full memory (~566K tok vs 200K). Now MARVIN auto-builds the active project's code+knowledge graphs (cwd-scoped, free) and the first-message context is budgeted — ADR titles index + memory tail + whole curated docs (~13.4K tok measured).
 - **2026-06-14 — v0.1.30 interactive AskUserQuestion** ([ADR-0040](./decisions/0040-interactive-ask-user-question.md)). The model's built-in `AskUserQuestion` tool (surfaced via `canUseTool`, answered via `{behavior:"allow", updatedInput:{questions,answers}}`) now routes through MARVIN's confirm channel in every mode; a native `AskQuestionSheet` renders the options as clickable buttons (single/multi + "Other") and returns the pick as the tool result. The prose `PlanDecision` chip stays as a fallback. CI actions bumped to Node-24 majors (#105).
 - **2026-06-13 — v0.1.29 no approve chip on a completed plan** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). A finished plan showed both "Plan complete 10/10" and "Approve & execute". The tray gates the approve chip on `!planComplete` and `turnCompleted` clears `planAwaitingApproval` once the plan's todos are all complete.
 - **2026-06-13 — v0.1.28 plan title/file robust to preamble + Homebrew "damaged" fix** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). `PlanCard.split` divides an assistant reply into (preamble, plan) at the first `# Plan` heading — the saved file slug + tier-2 strip header use the clean plan portion (no more `i-have-the-root-cause-nailed-….md`), the chat renders preamble-as-prose + plan-as-card, and `planTitle` scans for the heading anywhere. The `marvin-ai` cask gained a `postflight` that strips `com.apple.quarantine` (modern Homebrew quarantines casks by default → ad-hoc bundle reads as "damaged" on macOS 26).

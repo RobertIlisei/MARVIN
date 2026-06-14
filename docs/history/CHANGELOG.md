@@ -9,6 +9,31 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-14 — v0.1.31: fix "Prompt is too long" — project-graph lifecycle
+  + first-message context budget (ADR-0041).**
+  - **Diagnosis.** A new chat's first prompt on a mature project threw
+    **"Prompt is too long"** before the prompt was read. `buildProjectContext`
+    injected the first-message context with no token budget: every ADR in full
+    + `memory.md` whole. Measured on agri-saas-platform: **139 ADRs ≈ 462K tok
+    + 417 KB memory ≈ 104K tok ≈ 566K tokens** vs the executor's **200K**
+    window (`claude-opus-4-8`). Also found: MARVIN *reads* only the active
+    project's graph (already cwd-scoped, can't fall back to its own repo) but
+    never *builds/maintains* it — the code watchdog had zero callers and the
+    knowledge graph (ADR/doc/memory index) was manual + absent.
+  - **Layer 1 — project-graph lifecycle.** New `maybeRefreshKnowledgeGraph`
+    (AST-only, free) mirrors the code watchdog; `/api/chat` now fires BOTH
+    refreshers fire-and-forget against the validated active-project `cwd`
+    (debounced, non-blocking, never MARVIN's own repo). `bin/marvin start`
+    exports `MARVIN_KNOWLEDGE_GRAPH_SCRIPT` so the builder resolves in dev. The
+    semantic `/graphify` pass stays manual.
+  - **Layer 2 — context budget.** ADRs inject as a **titles index** (find via
+    knowledge graph `scope:"knowledge"` → Read the file), memory.md as a
+    **recent tail** (8K tokens) + pointer, curated docs stay **whole** (golden
+    rule 5), with a 90K-token backstop note. Result: agri-saas-platform
+    first-message context **566K → ~13.4K tokens** (measured).
+  - **Verification.** project-context / graphify-bridge / runtime / web-route
+    `tsc` clean; size verified via `buildProjectContext`. Open: confirm the
+    Python knowledge-builder ships in the bundled .app (code graph unaffected).
 - **2026-06-14 — v0.1.30: interactive AskUserQuestion + Node-24 CI bumps.**
   - **Diagnosis.** When the model paused mid-plan to ask the user to choose
     between options, it wrote them as prose ("Decision 1 — (a)… (b)…") and

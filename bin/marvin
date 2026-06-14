@@ -390,7 +390,12 @@ cmd_start() {
   info "spawning '$run_cmd' (output → $LOG_FILE)"
   # nohup so the server keeps running if this shell exits.
   # setsid keeps it in a new process group so `stop` can kill cleanly.
-  nohup env MARVIN_PORT="$PORT" $run_cmd >"$LOG_FILE" 2>&1 &
+  # MARVIN_KNOWLEDGE_GRAPH_SCRIPT lets the running sidecar auto-build the
+  # ACTIVE PROJECT's knowledge graph (ADR-0041) — the graphify-bridge resolves
+  # the builder reliably instead of guessing from cwd.
+  nohup env MARVIN_PORT="$PORT" \
+    MARVIN_KNOWLEDGE_GRAPH_SCRIPT="$REPO_ROOT/scripts/build-knowledge-graph.py" \
+    $run_cmd >"$LOG_FILE" 2>&1 &
   local pid=$!
   echo "$pid" >"$PID_FILE"
   ok "spawned pid $pid"
