@@ -195,11 +195,13 @@ MARVIN's SDK sessions inherit the user's Claude Code skills from
 bash scripts/install-skills.sh
 ```
 
-The repo ships a pinned mirror of the Anthropic skill set at
-`.claude/skills/`. The install script copies from that bundle into
-`~/.claude/skills/` (idempotent — existing user-level skills are left
-alone) and only falls back to a GitHub clone when a skill is missing
-from the bundle:
+Only the four **MARVIN-adopted** skills (ports with no upstream source —
+`pr-review`, `security-audit`, `systematic-debugging`,
+`test-driven-development`) are vendored at `.claude/skills/`. The upstream
+Anthropic skills are **not committed** (they're ~10 MB; open-source tidy
+2026-06-15) — `install-skills.sh` shallow-clones them from `anthropics/skills`
+on demand and copies all of them into `~/.claude/skills/` (idempotent — existing
+user-level skills are left alone):
 
 | Category | Skill |
 |---|---|

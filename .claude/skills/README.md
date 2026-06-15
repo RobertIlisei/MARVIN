@@ -1,60 +1,43 @@
-# Bundled Anthropic skills
+# Vendored skills
 
-This directory mirrors the subset of
-[anthropics/skills](https://github.com/anthropics/skills) that MARVIN's
-personality prompt expects to be available on the user's machine.
+Only the **MARVIN-adopted** skills are vendored here — ports of third-party
+open-source skills that have **no upstream `anthropics/skills` source**, so the
+repo is their only home:
 
-Shipping them in-repo means:
+| Skill | Source |
+|---|---|
+| `pr-review` | adapted from Garry Tan's gstack (`garrytan/gstack`) |
+| `security-audit` | adapted from gstack |
+| `systematic-debugging` | merges Jesse Vincent's Superpowers (`obra/superpowers`) + gstack |
+| `test-driven-development` | ported from Superpowers |
 
-- A fresh clone of MARVIN works offline — `scripts/install-skills.sh`
-  copies from here into `~/.claude/skills/` without any network call.
-- When Claude Code is run inside the MARVIN repo itself (i.e. you
-  working on MARVIN), these project-local skills are picked up too.
-- The version shipped with MARVIN is a pinned, reviewable checkpoint —
-  no silent upstream drift between clones.
+Attribution lives at the bottom of each `SKILL.md`.
 
-To install into your user-level skills dir:
+## Upstream Anthropic skills are NOT vendored
+
+The upstream skills MARVIN also uses (`frontend-design`, `canvas-design`,
+`theme-factory`, `brand-guidelines`, `doc-coauthoring`, `docx`, `pdf`, `pptx`,
+`xlsx`, `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`,
+`skill-creator`, `internal-comms`) are **not committed** — they're ~10 MB and
+belong to [anthropics/skills](https://github.com/anthropics/skills). They're
+`.gitignore`d here and **fetched on demand** by `scripts/install-skills.sh`,
+which shallow-clones `anthropics/skills` for any skill missing from this
+directory. (Open-source tidy, 2026-06-15.)
+
+If you want the upstream copies present locally — e.g. to pick them up while
+running Claude Code *inside* the MARVIN repo, or for an offline install — drop
+them into this directory; they'll be ignored by git but used by the install
+script's fast path.
+
+## Install into your user-level skills dir
 
 ```bash
 bash scripts/install-skills.sh
 ```
 
-The script is idempotent; existing skills in `~/.claude/skills/` are
-left alone.
+Idempotent — existing skills in `~/.claude/skills/` are left alone; missing
+upstream ones are cloned.
 
-## What's here
-
-| Category | Skills |
-|---|---|
-| Design | `frontend-design`, `canvas-design`, `theme-factory`, `brand-guidelines` |
-| Productivity — docs | `doc-coauthoring`, `docx`, `pdf`, `pptx` |
-| Data | `xlsx` |
-| Engineering | `claude-api`, `mcp-builder`, `webapp-testing`, `web-artifacts-builder`, `skill-creator` |
-| Operations / PM | `internal-comms` |
-
-`graphify` ships from `~/.claude/skills/graphify/` separately (it's a
-local authored skill, not from the Anthropic bundle).
-
-`honeycomb:*` ships via the `honeycomb@honeycomb-plugins` Claude Code
-plugin — install with `/plugin install honeycomb` inside Claude Code.
-
-## When to refresh
-
-When upstream `anthropics/skills` publishes meaningful updates. To
-refresh the bundle:
-
-```bash
-# inside the marvin repo
-rm -rf /tmp/anthropic-skills-refresh
-git clone --depth=1 https://github.com/anthropics/skills.git /tmp/anthropic-skills-refresh
-for name in brand-guidelines canvas-design claude-api doc-coauthoring docx \
-            frontend-design internal-comms mcp-builder pdf pptx \
-            skill-creator theme-factory web-artifacts-builder \
-            webapp-testing xlsx; do
-  rm -rf ".claude/skills/$name"
-  cp -R "/tmp/anthropic-skills-refresh/skills/$name" ".claude/skills/$name"
-done
-rm -rf /tmp/anthropic-skills-refresh
-```
-
-Then commit the diff and run `/graphify . --update`.
+`graphify` ships from `~/.claude/skills/graphify/` separately (a local authored
+skill, not from the Anthropic bundle). `honeycomb:*` ships via the
+`honeycomb@honeycomb-plugins` Claude Code plugin — `/plugin install honeycomb`.

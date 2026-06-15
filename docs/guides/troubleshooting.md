@@ -201,7 +201,7 @@ Or if you're inside a MARVIN chat, just say "build the graph" and MARVIN will ru
 2. Try advisor mode ([ADR-0003](../decisions/0003-advisor-strategy.md)) — Sonnet executor + Opus advisor, 30-40% savings.
 3. Run `/graphify . --update` to keep the graph fresh so MARVIN orients via graph instead of re-reading files.
 
-See [Cost model → cost controls](../business/cost-model.md#cost-controls).
+See [Cost tracking](../operations/cost-tracking.md).
 
 ## Something else
 
@@ -217,4 +217,4 @@ Open an issue at github.com/RobertIlisei/MARVIN/issues with:
 - [Credentials](../security/credentials.md)
 - [Health checks](../operations/health.md)
 - [Sessions](../operations/sessions.md)
-- [Cost model](../business/cost-model.md)
+- [Cost tracking](../operations/cost-tracking.md)

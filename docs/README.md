@@ -54,9 +54,7 @@ If you just want to run MARVIN, start with [Quickstart](./getting-started/quicks
 - [ADR-0006 — light-first theme cascade](./decisions/0006-light-first-theme-cascade.md)
 
 ## Business
-- [Vision](./business/vision.md)
-- [Cost model](./business/cost-model.md)
-- [Licensing](./business/licensing.md)
+- [Vision](./business/vision.md) — what MARVIN is trying to be
 
 ## Roadmap + history
 - [Roadmap](./roadmap.md) — current state (in flight, shipped, deferred, not planned)

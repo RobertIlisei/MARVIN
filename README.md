@@ -120,7 +120,7 @@ After `claude auth login`, also visit [claude.ai](https://claude.ai) once with t
 ```bash
 pnpm install                    # once — installs deps across all packages
 bash scripts/setup.sh           # once — prompts for optional deps (Playwright, graphify)
-bash scripts/install-skills.sh  # once — mirrors skills bundle to ~/.claude/skills/
+bash scripts/install-skills.sh  # once — installs skills to ~/.claude/skills/ (clones upstream on demand)
 
 bin/marvin start                # production mode (builds if stale, then starts)
 bin/marvin stop
@@ -254,7 +254,7 @@ scripts/
   install.sh                 # Remote one-liner installer (curl | bash)
   uninstall.sh               # Remote one-liner uninstaller
   setup.sh                   # Interactive optional-dep prompts
-  install-skills.sh          # Mirror skills bundle to ~/.claude/skills/
+  install-skills.sh          # Install skills to ~/.claude/skills/ (clones upstream on demand)
 docs/
   decisions/                 # ADRs
   roadmap.md                 # In-flight + shipped features

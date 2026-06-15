@@ -78,8 +78,9 @@ important signal.
 - **`graphify-out/*` regeneration.** The graph + report are checked-in
   artefacts. Flagging churn on `graph.json` / `GRAPH_REPORT.md` from a
   `/graphify . --update` run is noise.
-- **`.claude/skills/` contents.** That's a pinned mirror of upstream
-  Anthropic skills. Flagging their internal style is out of scope.
+- **`.claude/skills/` contents.** Only the 4 MARVIN-adopted skills are
+  vendored (upstream skills are fetched on demand by `install-skills.sh`, not
+  committed). Flagging their internal style is out of scope.
 - **Monaco / xterm colour literals.** The theme-awareness is
   deliberate — `data-theme="dark"` switches registered themes. See
   [ADR-0006](./docs/decisions/0006-light-first-theme-cascade.md).

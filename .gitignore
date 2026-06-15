@@ -38,3 +38,19 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .marvin/
+
+# Skills — only the 4 MARVIN-adopted skills (ports with no upstream source)
+# are vendored at .claude/skills/. The upstream anthropics/skills are large
+# (~10 MB) and fetched on demand by scripts/install-skills.sh — not committed
+# (open-source tidy 2026-06-15). New skill dirs are ignored by default; add a
+# `!` negation here only for ones with no upstream clone source.
+.claude/skills/*/
+!.claude/skills/pr-review/
+!.claude/skills/security-audit/
+!.claude/skills/systematic-debugging/
+!.claude/skills/test-driven-development/
+
+# Commercial strategy docs — kept local, out of the public repo. vision.md
+# stays public (project ethos); these two are private.
+docs/business/cost-model.md
+docs/business/licensing.md
