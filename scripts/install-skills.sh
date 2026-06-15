@@ -4,10 +4,12 @@
 # Install the Anthropic skills MARVIN leans on at user-level
 # (~/.claude/skills/). Idempotent — skips anything already present.
 #
-# Fast path: copies from the bundled mirror at `.claude/skills/` in this
-# repo. No network needed. Fall-back path: when the repo bundle is
-# missing a skill for any reason, shallow-clones `anthropics/skills` from
-# GitHub to fetch just that one.
+# The repo vendors ONLY the 4 MARVIN-adopted skills (no upstream source) at
+# `.claude/skills/` — those copy straight across, no network. The upstream
+# Anthropic skills are NOT committed (too big for the public repo; open-source
+# tidy 2026-06-15); this script shallow-clones `anthropics/skills` from GitHub
+# to fetch them on demand. (Drop the upstream copies into `.claude/skills/`
+# locally to restore the offline fast path for them.)
 #
 # Skills cover: design (frontend-design, canvas-design, theme-factory,
 # brand-guidelines), productivity (doc-coauthoring, docx, pdf, pptx),
