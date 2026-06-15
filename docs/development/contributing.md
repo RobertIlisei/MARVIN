@@ -99,4 +99,4 @@ Solo project → solo reviewer (for now). When reviewing:
 
 ## License
 
-Not yet specified (see [Licensing](../business/licensing.md)). Pending — contributions assume the same license MARVIN eventually ships under.
+See [`LICENSE`](../../LICENSE) at the repo root; contributions are assumed to be under the same license MARVIN ships under.
