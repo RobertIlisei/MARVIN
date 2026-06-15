@@ -58,11 +58,29 @@ const DEFAULT_FILES = ["PROJECT_STATUS.md", "BUSINESS_OVERVIEW.md", "README.md"]
 const DEFAULT_ADR_DIRS = ["docs/adr", "docs/adrs", "docs/decisions"];
 const DEFAULT_MEMORY_FILE = ".marvin/memory.md";
 
-async function readAdrs(
+/** How much of a long memory.md to inject (recent tail). ADR-0041. */
+const MEMORY_TAIL_TOKENS = 8000;
+/**
+ * Soft ceiling for the whole first-message context (ADR-0041). The curated
+ * project docs are kept whole (golden rule 5) and ADRs are already titles-only,
+ * so this is a backstop: when the assembled context still exceeds it (usually
+ * because the curated docs themselves are large), we surface a note rather than
+ * silently truncating the user's chosen docs.
+ */
+const CONTEXT_TOKEN_BUDGET = 90000;
+
+/**
+ * Read ADR TITLES only (ADR-0041). Injecting every ADR in full overflowed the
+ * context window on mature projects (139 ADRs ≈ 462K tokens vs a 200K window).
+ * The first-message context now lists titles; MARVIN pulls a specific ADR's
+ * full text on demand (knowledge graph → Read the file). Reads just the head of
+ * each file to find its `#`/`##` heading.
+ */
+async function readAdrTitles(
   workDir: string,
   dirs: string[],
-): Promise<Array<{ rel: string; content: string }>> {
-  const out: Array<{ rel: string; content: string; mtime: number }> = [];
+): Promise<Array<{ rel: string; title: string }>> {
+  const out: Array<{ rel: string; title: string; mtime: number }> = [];
   for (const dir of dirs) {
     const full = join(workDir, dir);
     let entries: string[];
@@ -81,22 +99,44 @@ async function readAdrs(
           readFile(path, "utf-8"),
           stat(path),
         ]);
-        if (content.trim()) {
-          out.push({
-            rel: `${dir}/${name}`,
-            content: content.trim(),
-            mtime: fileStat.mtimeMs,
-          });
-        }
+        out.push({
+          rel: `${dir}/${name}`,
+          title: extractHeading(content) ?? name.replace(/\.md$/, ""),
+          mtime: fileStat.mtimeMs,
+        });
       } catch {
         /* skip unreadable */
       }
     }
   }
-  // Newest ADRs last — readers expect chronological order.
   return out
     .sort((a, b) => a.mtime - b.mtime)
-    .map(({ rel, content }) => ({ rel, content }));
+    .map(({ rel, title }) => ({ rel, title }));
+}
+
+/** First markdown heading (`#`/`##`/`###`) in the file's first 40 lines. */
+function extractHeading(content: string): string | null {
+  const lines = content.split("\n", 40);
+  for (const raw of lines) {
+    const m = /^#{1,3}\s+(.+\S)\s*$/.exec(raw.trim());
+    if (m) return m[1] ?? null;
+  }
+  return null;
+}
+
+/** Cheap token estimate — ~4 chars/token. Good enough for budgeting. */
+function approxTokens(s: string): number {
+  return Math.ceil(s.length / 4);
+}
+
+/**
+ * Keep the most-recent `maxTokens` worth of `s` (tail), since the newest
+ * entries matter most for a running log. Returns whether it was clipped.
+ */
+function tailByTokens(s: string, maxTokens: number): { text: string; clipped: boolean } {
+  const maxChars = maxTokens * 4;
+  if (s.length <= maxChars) return { text: s, clipped: false };
+  return { text: s.slice(s.length - maxChars), clipped: true };
 }
 
 /**
@@ -172,30 +212,47 @@ export async function buildProjectContext(
     }
   }
 
-  // Architecture Decision Records — binding past decisions that must still
-  // be honored. Injected chronologically so context reads like a log.
-  const adrs = await readAdrs(options.workDir, adrDirs).catch(() => []);
-  if (adrs.length > 0) {
-    const adrBlocks = adrs
-      .map(({ rel, content }) => `### ${rel}\n\n${content}`)
-      .join("\n\n---\n\n");
+  // Architecture Decision Records — binding past decisions. TITLES ONLY
+  // (ADR-0041): the full text of every ADR overflowed the context window on
+  // mature projects. MARVIN pulls a specific ADR on demand via the knowledge
+  // graph (`scope:"knowledge"`) → Read the file.
+  const adrTitles = await readAdrTitles(options.workDir, adrDirs).catch(() => []);
+  if (adrTitles.length > 0) {
+    const index = adrTitles.map(({ rel, title }) => `- \`${rel}\` — ${title}`).join("\n");
     sections.push(
-      `## Architecture Decision Records\n\n` +
-        `These decisions bind current work. If a proposed change contradicts ` +
-        `an ADR, flag it explicitly and either refine the plan or write a new ` +
-        `ADR superseding the old one.\n\n---\n\n${adrBlocks}`,
+      `## Architecture Decision Records (${adrTitles.length} — titles only)\n\n` +
+        `These decisions bind current work. Only titles are listed to keep ` +
+        `context lean. To use one:\n` +
+        `1. Find the relevant ADR(s) — query the knowledge graph ` +
+        `(\`graph_search\` / \`graph_neighbors\`, \`scope:"knowledge"\`) by topic, ` +
+        `or scan this list;\n` +
+        `2. **Read the specific ADR file** for its full text before relying on it.\n\n` +
+        `If a proposed change contradicts an ADR, flag it explicitly and either ` +
+        `refine the plan or write a new ADR superseding the old one.\n\n${index}`,
     );
   }
 
-  // Project memory — MARVIN's running log across sessions.
+  // Project memory — MARVIN's running log across sessions. Bounded to its
+  // recent tail (ADR-0041): a long-lived log can grow to hundreds of KB, which
+  // alone can blow the window. Newest entries matter most; older ones stay in
+  // the file and are indexed in the knowledge graph.
   try {
     const memPath = join(options.workDir, memoryFile);
     const memContent = (await readFile(memPath, "utf-8")).trim();
     if (memContent) {
+      const { text, clipped } = tailByTokens(memContent, MEMORY_TAIL_TOKENS);
+      const note = clipped
+        ? `\n\n_Showing the most recent ~${MEMORY_TAIL_TOKENS / 1000}k tokens of a ` +
+          `larger log. Older entries are in \`${memoryFile}\` and indexed in the ` +
+          `knowledge graph (\`scope:"knowledge"\`) — query or Read the file for them._\n`
+        : "";
       sections.push(
-        `## Project memory (\`${memoryFile}\`)\n\n` +
-          `Running log of decisions, invariants, and gotchas accumulated across ` +
-          `sessions. Append to it on Ship; read it on Intake.\n\n${memContent}`,
+        `## Project memory (\`${memoryFile}\`)${clipped ? " — recent tail" : ""}\n\n` +
+          `Curated index of DURABLE FACTS (invariants, gotchas, constraints, ` +
+          `external facts). Each links to \`.marvin/memory/<slug>.md\` — use the ` +
+          `\`recall\` tool (or Read the file) for detail. Write ONLY via the ` +
+          `\`remember\` tool; never echo activity/decisions/status here (ADR-0042).` +
+          `${note}\n\n${text}`,
       );
     }
   } catch {
@@ -282,7 +339,22 @@ export async function buildProjectContext(
   if (sections.length > 0) parts.push(sections.join("\n\n---\n\n"));
   const body = parts.join("\n\n---\n\n");
   const probe = probeBlock ? `\n\n---\n\n${probeBlock}` : "";
-  return `${header}${body}${probe}`;
+  const assembled = `${header}${body}${probe}`;
+
+  // Backstop (ADR-0041): if the context is still very large, it's the curated
+  // docs (kept whole per golden rule 5) — don't truncate them silently; tell
+  // MARVIN so it can lean on the graph + targeted reads instead of assuming
+  // everything's in context.
+  if (approxTokens(assembled) > CONTEXT_TOKEN_BUDGET) {
+    const note =
+      `> **Note:** this project's context is large ` +
+      `(~${Math.round(approxTokens(assembled) / 1000)}k tokens). ADRs are listed ` +
+      `as titles only and memory is the recent tail — pull detail on demand via ` +
+      `the knowledge graph (\`scope:"knowledge"\`) and targeted file reads rather ` +
+      `than assuming the full corpus is in context.\n\n`;
+    return `${header}${note}${body}${probe}`;
+  }
+  return assembled;
 }
 
 export type { InfraProbe } from "./infra-probes";

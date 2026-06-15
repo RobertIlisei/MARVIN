@@ -179,9 +179,17 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
   then verify. In-flight + shipped work tracked in [`docs/roadmap.md`](./docs/roadmap.md).
 - **Per-project isolation.** MARVIN holds zero cross-session knowledge about
   other projects. Memory, ADRs, and knowledge graph live inside each user
-  project, not in MARVIN's own data dir.
-- **Built on a knowledge graph.** Queries [graphify](https://github.com/safishamsi/graphify)
-  first on architecture/impact questions — ~36× cheaper than reading raw files.
+  project, not in MARVIN's own data dir — and the running IDE only ever reads
+  or builds the *active project's* graph, never its own source.
+- **Built on a knowledge graph it maintains for you.** Queries
+  [graphify](https://github.com/safishamsi/graphify) first on
+  architecture/impact questions (~36× cheaper than reading raw files), and
+  builds/refreshes the active project's code + knowledge graphs itself
+  (AST-only, free) so they're always current (ADR-0041).
+- **Memory is durable facts, not a log.** `.marvin/memory.md` is a curated,
+  one-line-per-fact index written only through the `remember` tool — invariants
+  and gotchas the next session can't re-derive from ADRs, git, or the changelog
+  (ADR-0042).
 
 ---
 
@@ -204,6 +212,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - ✅ Agent change review — VS Code / Cursor-style: a live "N files changed" strip while MARVIN edits opens its own resizable window with a side-by-side (original │ modified) diff, line numbers, and a Split/Inline toggle. Per-hunk / per-file accept-reject against pre-agent baselines (rejecting restores *your* uncommitted state, not git HEAD); committing a change clears it from the review the way it leaves VS Code's Source Control list (ADR-0034)
 - 🎚️ Per-role reasoning effort — independent Low→Max effort pickers for the executor and the advisor (ADR-0033)
 - 🧭 Ask · Agent · Plan modes — read-only Ask (enforced at the gate), full-autonomy Agent, and plan-first Plan that drafts a plan + live to-do checklist and waits for your approval before executing (ADR-0036). Cursor-style controls live in the input box; chat tabs open/close and persist per project
+- 🗂️ Two-tier to-do / plan — a neutral **Task list** for bare `TodoWrite` runs vs a purple **Plan — <title>** that persists, ticks off in place, and saves to `.marvin/plans/<slug>.md` opened in the editor ("Open plan"); a completed plan collapses instead of re-prompting to approve (ADR-0036 two-tier addendum)
+- ❓ Clickable decisions — when the model hits a real fork it calls **AskUserQuestion** and you pick from native option buttons (single/multi-select + "Other"); your choice returns to the model as the tool result, in every mode (ADR-0040)
 - 🧩 Per-project skill enablement — the fingerprint picks the installed skills relevant to *this* project and tells MARVIN to ignore the rest; per-skill toggles in the Skills pane (ADR-0037)
 - ⬇️ Fetch skills from Git — "Add from GitHub" pulls a skill from any repo, a `…/tree/…` sub-path, or a plugin marketplace (ADR-0039); clone-and-copy only, never executes the repo
 - 🛰️ Event-based background jobs — `run_background_job` runs a build/test/deploy past the turn and fires a real follow-up turn when it exits (no more orphaned "I'll be notified" promises); shell `&`/`nohup` denied at the gate (ADR-0038)
@@ -216,7 +226,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🧰 Model picker — executor + advisor slots, live model list from Anthropic
 - 🌐 Playwright via Bash — MARVIN drives real browsers against `localhost` / LAN URLs by shelling out to `npx playwright`
 - 🔄 Resume across reloads — closing the window doesn't kill a running turn
-- 📊 Graph-aware chat — in-process MCP exposes `graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`
+- 📊 Graph-aware chat — in-process MCP exposes `graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`; MARVIN builds + refreshes the active project's code and knowledge graphs itself (AST-only, free) so they stay current (ADR-0041)
+- 🧠 Durable-facts memory — a `marvin-memory` MCP (`remember` / `recall`) is the enforced write path for `.marvin/memory.md`: one fact per file + a one-line index, with caps + content-class guards so it can't bloat into a redundant log; `/memory-compact` distills an existing one (ADR-0042)
 
 ---
 
@@ -269,7 +280,15 @@ docs/
 
 ## Status
 
-**v0.1.26 — The plan card (current).** Plan-mode plans render as a structured, collapsible Cursor-style **plan card** (title, step count, styled headings/steps/code) instead of a plain-text bubble — the plan-mode prompt mandates a `# Plan — <title>` opening heading, detected live and on transcript replay. Approving seeds the To-dos checklist from the plan's steps, and the paused chip now names the next step and what there concretely is to review (the stopping error, or the changed-file count).
+**v0.1.32 — memory as a curated durable-facts layer (current).** A real project's `.marvin/memory.md` had bloated to 419 KB / ~99 % redundant with ADRs, git, and the changelog (the model mirrored its Ship summaries into it). memory now holds ONLY what the next session can't re-derive from those — invariants, gotchas, constraints, external facts. A new in-process **`marvin-memory`** MCP (`remember` / `recall`) is the *enforced* write path: one fact → `.marvin/memory/<slug>.md` + a one-line index, supersede-by-name, with length caps + content-class guards that reject activity/status. `personality.ts` carries a MUST/MUST-NOT firm surface; a **`/memory-compact`** command distills an existing log. The Scope-met chip is retargeted to `.marvin/session-notes.md` so it can't pollute the index. ADR-0042.
+
+**v0.1.31 — "Prompt is too long" fixed.** On a mature project the first message overflowed the model's 200 K window — `buildProjectContext` injected every ADR in full + the whole memory.md (~566 K tokens measured). Two layers (ADR-0041): MARVIN now **builds/maintains the active project's graphs** (code + knowledge, AST-only/free, scoped to the project — never its own repo), and the first-message context is **budgeted** — ADRs as a titles index (details via the knowledge graph + targeted reads), memory as a recent tail, curated docs whole. Measured 566 K → ~13 K tokens.
+
+**v0.1.30 — interactive AskUserQuestion + Node-24 CI.** When the model hits a real decision it calls **AskUserQuestion** and MARVIN renders the options as clickable buttons (single/multi-select + "Other"), returning your pick to the model as the tool result — instead of prose "(a)/(b)" you could only answer by typing. Routed through the existing confirm channel in every mode (ADR-0040). Also bumped every release-workflow action to its Node-24 major ahead of GitHub's cutoff.
+
+**v0.1.27–29 — two-tier to-do / plan polish.** The checklist strip splits into a neutral **"Task list"** (bare `TodoWrite`, no plan) and a purple **"Plan — <title>"** (plan-backed, ticks off in place); a presented plan is auto-written to `.marvin/plans/<slug>.md` and opened in the editor pane ("Open plan"); the plan title/filename derive from the `# Plan` heading wherever it sits (no more garbage slugs); and a completed plan no longer shows a contradictory "Approve & execute" chip. ADR-0036 (two-tier addendum). Plus the Homebrew "MARVIN.app is damaged" fix — the cask now strips `com.apple.quarantine` in a `postflight` (modern Homebrew quarantines casks by default; ad-hoc bundle + quarantine reads as "damaged" on macOS 26).
+
+**v0.1.26 — The plan card.** Plan-mode plans render as a structured, collapsible Cursor-style **plan card** (title, step count, styled headings/steps/code) instead of a plain-text bubble — the plan-mode prompt mandates a `# Plan — <title>` opening heading, detected live and on transcript replay. Approving seeds the To-dos checklist from the plan's steps, and the paused chip now names the next step and what there concretely is to review (the stopping error, or the changed-file count).
 
 **v0.1.25 — Plan-mode UX polish.** Session-scoped strips (no stale plan in a new chat); Approve/Continue as hidden control actions (no fake user message in the chat); **Save plan** to a Markdown file you can follow alongside the chat; collapse/dismiss the checklist (auto-collapses when done); and the checklist relabeled **"To-dos"** — it's the task tracker (used in any mode), while the plan stays a distinct inline message + file.
 

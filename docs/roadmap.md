@@ -17,14 +17,47 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.26** — The plan card: Plan-mode plans render as a structured,
-collapsible Cursor-style card (title, step count, styled steps) instead of a
-plain-text bubble — the prompt mandates a `# Plan — <title>` opening heading
-and the renderer detects it, live and on transcript replay. Approving seeds
-the To-dos checklist from the plan's steps, and the paused chip now names
-the next step + what there concretely is to review (error / changed files).
-Builds on v0.1.24–25's decoupled Plan mode (advisor plans inline, executor
-executes, no modal). Install via
+**v0.1.32** — memory.md becomes a curated durable-facts layer (ADR-0042). A
+real project's `.marvin/memory.md` had bloated to 419 KB / ~99% redundant with
+ADRs/git/changelog. Now a `marvin-memory` MCP tool (`remember`/`recall`) is the
+enforced write path — one fact → `.marvin/memory/<slug>.md` + a one-line index,
+with caps + content-class guards that reject activity/status. `personality.ts`
+firm surface routes facts through `remember`; a `/memory-compact` command
+distills existing logs. The native Scope-met chip is retargeted to
+`session-notes.md` so it no longer pollutes the index. Builds on v0.1.31.
+
+**v0.1.31** — Fixes "Prompt is too long" on the first message of a mature
+project. Two layers (ADR-0041): MARVIN now **builds/maintains the active
+project's graphs** (code + knowledge, AST-only/free, cwd-scoped — never its own
+repo), and the **first-message context is budgeted** — ADRs inject as a titles
+index (details via the knowledge graph + targeted reads), memory.md as a recent
+tail, curated docs stay whole. agri-saas-platform's first-message context drops
+from ~566K to ~13.4K tokens. Builds on v0.1.30.
+
+**v0.1.30** — Interactive AskUserQuestion: when the model hits a real
+decision it can call `AskUserQuestion` and MARVIN renders the options as
+clickable buttons (single/multi-select + "Other"), returning your pick to the
+model as the tool result — instead of prose "(a)/(b)" you could only answer by
+typing. Routed through the existing confirm channel in every mode (ADR-0040);
+a fallback chip still handles prose questions. Also bumped CI actions to their
+Node-24 majors ahead of GitHub's June 16 cutoff. Builds on v0.1.29.
+
+**v0.1.29** — No "Approve & execute" chip on an already-complete plan: a
+finished plan showed both "Plan complete 10/10" and the approve chip. The
+tray now gates the approve chip on `!planComplete` and clears
+`planAwaitingApproval` at turn-end when the plan is done, so a completed plan
+shows only the collapsed "Plan complete" strip. Builds on v0.1.28.
+
+**v0.1.28** — Plan title/file robust to preamble + the Homebrew "damaged"
+fix. The saved plan file + tier-2 strip header now derive the title from the
+`# Plan — <title>` heading wherever it sits (the model often writes diagnosis
+prose first), so filenames stop coming out as
+`i-have-the-root-cause-nailed-….md`; the chat splits that preamble off and
+renders the plan portion as the structured card. Separately, the cask now
+strips `com.apple.quarantine` in a `postflight` — modern Homebrew quarantines
+casks by default, and an ad-hoc bundle + quarantine triggers macOS 26's
+"MARVIN.app is damaged" rejection. Builds on v0.1.27's two-tier to-do / plan.
+Install via
 `brew tap RobertIlisei/marvin && brew install --cask marvin-ai`. Earlier
 tags v0.1.0–v0.1.5 carried pre-scrub code and have been deleted from
 GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
@@ -34,6 +67,12 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-14 — v0.1.32 memory as a curated durable-facts layer** ([ADR-0042](./decisions/0042-memory-as-durable-facts.md)). `.marvin/memory.md` had bloated to 419 KB / ~99% redundant with ADRs/git/changelog. New `marvin-memory` MCP (`remember`/`recall`) is the enforced write path (file-per-fact + one-line index, caps + content-class guards); `personality.ts` firm surface; `buildProjectContext` injects the index; `/memory-compact` migration; native Scope-met chip retargeted to `session-notes.md`.
+- **2026-06-14 — v0.1.31 project-graph lifecycle + context budget** ([ADR-0041](./decisions/0041-project-graph-lifecycle-and-context-budget.md)). Fixed "Prompt is too long": `buildProjectContext` injected all ADRs + full memory (~566K tok vs 200K). Now MARVIN auto-builds the active project's code+knowledge graphs (cwd-scoped, free) and the first-message context is budgeted — ADR titles index + memory tail + whole curated docs (~13.4K tok measured).
+- **2026-06-14 — v0.1.30 interactive AskUserQuestion** ([ADR-0040](./decisions/0040-interactive-ask-user-question.md)). The model's built-in `AskUserQuestion` tool (surfaced via `canUseTool`, answered via `{behavior:"allow", updatedInput:{questions,answers}}`) now routes through MARVIN's confirm channel in every mode; a native `AskQuestionSheet` renders the options as clickable buttons (single/multi + "Other") and returns the pick as the tool result. The prose `PlanDecision` chip stays as a fallback. CI actions bumped to Node-24 majors (#105).
+- **2026-06-13 — v0.1.29 no approve chip on a completed plan** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). A finished plan showed both "Plan complete 10/10" and "Approve & execute". The tray gates the approve chip on `!planComplete` and `turnCompleted` clears `planAwaitingApproval` once the plan's todos are all complete.
+- **2026-06-13 — v0.1.28 plan title/file robust to preamble + Homebrew "damaged" fix** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). `PlanCard.split` divides an assistant reply into (preamble, plan) at the first `# Plan` heading — the saved file slug + tier-2 strip header use the clean plan portion (no more `i-have-the-root-cause-nailed-….md`), the chat renders preamble-as-prose + plan-as-card, and `planTitle` scans for the heading anywhere. The `marvin-ai` cask gained a `postflight` that strips `com.apple.quarantine` (modern Homebrew quarantines casks by default → ad-hoc bundle reads as "damaged" on macOS 26).
+- **2026-06-13 — v0.1.27 two-tier to-do / plan + plan file in the editor** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) two-tier addendum). The plan card (in the chat scroll) and the to-do strip (above the input) read as two artifacts replacing each other; Cursor keeps two distinct tiers that coexist. `TodoListStrip` now forks on `planTitle != nil`: a neutral blue "Task list" for bare `TodoWrite` checklists, a purple titled "Plan — <title>" for plan-backed execution that ticks off in place. A presented plan is auto-written to `<workDir>/.marvin/plans/<slug>.md` and opened in the editor pane (`persistAndOpenPlan` → `setSelectedFile`) with an "Open plan" button. `personality.ts` updated to the inline-`# Plan`/stop contract (stale `ExitPlanMode` wording removed) + a tier-1 task-list trigger for 3+ step Agent work.
 - **2026-06-12 — v0.1.26 plan card (Cursor-style structured plan rendering)** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) rev). The decoupled Plan mode had left the plan as a plain-text assistant bubble. The plan-mode prompt now mandates the reply open with `# Plan — <title>`; `ChatMessageRow` detects that heading and renders the message as a collapsible `PlanCardView` (title, step count, line-styled markdown: headings / numbered steps / bullets / code fences) — content-shaped detection, so it also fires on transcript replay. Approving the plan seeds the To-dos strip from the plan's steps so execution starts tracked.
 - **2026-06-11 — v0.1.25 Plan-mode UX polish** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Session-scoped plan/changes strips; Approve/Continue as hidden control actions (no fake user message); Save plan to a Markdown file; collapse/dismiss + auto-collapse the checklist; relabel "Plan" → "To-dos" (the task tracker; the plan is a distinct inline message + file).
 - **2026-06-11 — v0.1.24 Plan mode decoupled + strip tray** ([ADR-0036](./decisions/0036-ask-agent-plan-modes.md) rev). Plan mode is a read-only planning turn on the chosen advisor model that presents the plan inline (no modal); an "Approve & execute" chip runs it in a separate Agent turn on the executor — role-routed models, no re-planning. The chat's contextual strips moved into one opaque divider-separated tray so they no longer overlap the message log.
