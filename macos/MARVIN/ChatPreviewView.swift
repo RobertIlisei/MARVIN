@@ -135,10 +135,68 @@ final class ChatPreviewModel {
     /// fresh SDK session.
     var todos: [TodoItem] = []
 
-    /// ADR-0036 — the most recent Plan-mode plan (from ExitPlanMode). Kept so
-    /// the plan persists in the chat + seeds the checklist even after the
-    /// approval window is dismissed. Cleared on a fresh SDK session.
+    /// ADR-0036 — the most recent Plan-mode plan. Kept so the plan persists in
+    /// the chat + seeds the checklist even after the approval window is
+    /// dismissed, and so the to-do strip can render as the tier-2 *Plan*
+    /// (vs a bare tier-1 task list). Cleared on a fresh SDK session.
     var currentPlanText: String? = nil
+
+    /// ADR-0036 (two-tier addendum) — filesystem path of the auto-saved plan
+    /// markdown (`<workDir>/.marvin/plans/<slug>.md`). Written when a plan is
+    /// presented and opened in the editor pane (Cursor-style), so the user can
+    /// actually see the plan file. nil until a plan is written this session.
+    var currentPlanPath: String? = nil
+
+    /// Title pulled from the plan's `# Plan — <title>` heading (the plan-mode
+    /// prompt contract). Drives the tier-2 strip header + the saved file's
+    /// slug. The model often writes preamble BEFORE the heading, so we scan
+    /// for the `# Plan` line anywhere — not just line 1 — and parse the title
+    /// after the `Plan` word + its separator (— / - / :). Falls back to "Plan".
+    var planTitle: String? {
+        guard let text = currentPlanText else { return nil }
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            // Heading line: starts with `#`(s) then the word "Plan".
+            guard line.hasPrefix("#") else { continue }
+            let afterHashes = line.drop(while: { $0 == "#" || $0 == " " })
+            guard afterHashes.lowercased().hasPrefix("plan") else { continue }
+            // Drop "Plan" + any separator/space that follows it.
+            let afterPlan = afterHashes.dropFirst(4)
+                .drop(while: { $0 == " " || $0 == "—" || $0 == "–" || $0 == "-" || $0 == ":" })
+                .trimmingCharacters(in: .whitespaces)
+            return afterPlan.isEmpty ? "Plan" : afterPlan
+        }
+        return "Plan"
+    }
+
+    /// Write the presented plan to `<workDir>/.marvin/plans/<slug>.md` and
+    /// open it in the editor pane (Cursor opens the plan file in the preview).
+    /// Idempotent per plan text — re-presenting the same plan re-uses the path.
+    /// Best-effort: a write failure leaves `currentPlanPath` nil (the inline
+    /// card + strip still work) rather than surfacing an error mid-plan.
+    func persistAndOpenPlan() {
+        guard let plan = currentPlanText, !plan.isEmpty,
+              let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }
+        let dir = (wd as NSString).appendingPathComponent(".marvin/plans")
+        let slug = PlanFile.slug(planTitle ?? "plan")
+        let path = (dir as NSString).appendingPathComponent("\(slug).md")
+        do {
+            try FileManager.default.createDirectory(
+                atPath: dir, withIntermediateDirectories: true)
+            try plan.write(toFile: path, atomically: true, encoding: .utf8)
+            currentPlanPath = path
+            MarvinBridge.shared.setSelectedFile(path)
+        } catch {
+            // Non-fatal — the plan card + strip don't depend on the file.
+        }
+    }
+
+    /// Re-focus the saved plan file in the editor pane (the strip's "Open
+    /// plan" button). No-op if the plan was never written.
+    func openPlanInEditor() {
+        guard let path = currentPlanPath else { return }
+        MarvinBridge.shared.setSelectedFile(path)
+    }
 
     /// ADR-0036 (revised) — a Plan-mode turn just finished presenting a plan
     /// (read-only), so we're waiting on the user to Approve & execute. Drives
@@ -362,6 +420,16 @@ final class ChatPreviewModel {
         draft = ""
         attachments = []
         planAwaitingApproval = false  // any send clears the plan-approval chip
+        // A finished plan must not shadow the next task. Once every plan step
+        // is done, a fresh user-typed message starts new (tier-1) work, so
+        // drop the plan — otherwise the next TodoWrite would render under the
+        // old "Plan — <title>" header. Control actions (approve / continue)
+        // use sendControl and bypass this, so mid-plan continues are safe.
+        if !todos.isEmpty, todos.allSatisfy({ $0.status == "completed" }) {
+            todos = []
+            currentPlanText = nil
+            currentPlanPath = nil
+        }
         if isSending {
             // Turn already running — queue for after it completes.
             // turn.completed pops the head of this list and dispatches
@@ -548,6 +616,7 @@ final class ChatPreviewModel {
     func dismissPlan() {
         todos = []
         currentPlanText = nil
+        currentPlanPath = nil
         planAwaitingApproval = false
     }
 
@@ -557,6 +626,7 @@ final class ChatPreviewModel {
     private func resetSessionStrips() {
         todos = []
         currentPlanText = nil
+        currentPlanPath = nil
         planAwaitingApproval = false
         agentChangedFiles = []
     }
@@ -717,7 +787,8 @@ final class ChatPreviewModel {
     func respond(
         to request: ConfirmRequest,
         decision: ChatService.ConfirmDecision,
-        denyMessage: String? = nil
+        denyMessage: String? = nil,
+        updatedInput: [String: Any]? = nil
     ) {
         // Mark in-flight before the Task starts so the sheet's
         // dismiss-driven binding setter sees us and skips its
@@ -732,7 +803,8 @@ final class ChatPreviewModel {
                     turnId: request.turnId,
                     toolUseId: request.toolUseId,
                     decision: decision,
-                    denyMessage: denyMessage
+                    denyMessage: denyMessage,
+                    updatedInput: updatedInput
                 )
                 resolvedConfirms[request.toolUseId] = decision
                 pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
@@ -833,6 +905,7 @@ final class ChatPreviewModel {
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
                 currentPlanText = nil
+                currentPlanPath = nil
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
@@ -887,11 +960,14 @@ final class ChatPreviewModel {
             // model's own TodoWrite calls then refine the statuses.
             if c.toolName == "ExitPlanMode", let plan = planText(from: c),
                !plan.isEmpty {
-                if currentPlanText != plan {
-                    currentPlanText = plan
-                    messages.append(.system(text: "📋 Plan\n\n\(plan)"))
-                    let seeded = PlanParser.todos(from: plan)
+                let planBody = PlanCard.split(plan)?.plan ?? plan
+                if currentPlanText != planBody {
+                    currentPlanText = planBody
+                    messages.append(.system(text: "📋 Plan\n\n\(planBody)"))
+                    let seeded = PlanParser.todos(from: planBody)
                     if !seeded.isEmpty { todos = seeded }
+                    // Write + open the plan file (Cursor-style preview).
+                    persistAndOpenPlan()
                 }
             }
         case .turnCompleted:
@@ -915,8 +991,20 @@ final class ChatPreviewModel {
             // plan (read-only). Surface the inline Approve & execute affordance,
             // and capture the plan text (the turn's final assistant reply) so it
             // can be saved to a file + followed alongside the chat.
-            planAwaitingApproval = (b.mode == "plan")
-            if planAwaitingApproval { currentPlanText = lastAssistantText() }
+            // A plan turn just finished — offer approval, UNLESS the plan's
+            // todos are already all complete (the plan was executed; offering
+            // "approve & execute" then would contradict "Plan complete N/N").
+            let planDone = !todos.isEmpty && todos.allSatisfy { $0.status == "completed" }
+            planAwaitingApproval = (b.mode == "plan") && !planDone
+            if planAwaitingApproval {
+                // Save the plan portion only — if the model wrote diagnosis
+                // prose before the `# Plan` heading, that preamble stays in the
+                // chat reply; the file + strip get the clean plan.
+                currentPlanText = lastAssistantText().map { PlanCard.split($0)?.plan ?? $0 }
+                // Cursor-style — write the plan to a file and open it in the
+                // editor pane so the user can actually see the plan file.
+                persistAndOpenPlan()
+            }
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
@@ -1094,15 +1182,34 @@ struct ChatPreviewView: View {
         // explicitly than the binding gymnastics anyway.
         .sheet(isPresented: confirmSheetPresented) {
             if let request = model.pendingConfirms.first {
-                ConfirmSheet(
-                    request: request,
-                    onAllow: {
-                        model.respond(to: request, decision: .allow)
-                    },
-                    onDeny: { reason in
-                        model.respond(to: request, decision: .deny, denyMessage: reason)
-                    }
-                )
+                // ADR-0040 — AskUserQuestion rides the confirm channel but is a
+                // decision, not a permission: render the interactive question
+                // sheet instead of Allow/Deny.
+                if request.toolName == "AskUserQuestion" {
+                    AskQuestionSheet(
+                        request: request,
+                        onSubmit: { answers in
+                            model.respond(to: request, decision: .allow, updatedInput: answers)
+                        },
+                        onSkip: {
+                            model.respond(
+                                to: request,
+                                decision: .deny,
+                                denyMessage: "I'll let you decide — proceed with your own recommended option for each open question."
+                            )
+                        }
+                    )
+                } else {
+                    ConfirmSheet(
+                        request: request,
+                        onAllow: {
+                            model.respond(to: request, decision: .allow)
+                        },
+                        onDeny: { reason in
+                            model.respond(to: request, decision: .deny, denyMessage: reason)
+                        }
+                    )
+                }
             }
         }
     }
@@ -1384,6 +1491,15 @@ struct ChatPreviewView: View {
         !model.isSending && model.todos.contains { $0.status != "completed" }
     }
 
+    /// The paused turn isn't just between steps — it's asking the user to
+    /// DECIDE between options. The generic "Continue" chip is wrong here (it
+    /// sends a canned resume and ignores the question); show the decision chip
+    /// instead, which points the user at the input box + offers the model's
+    /// own recommendation.
+    private var planAwaitingDecision: Bool {
+        planPausedWaiting && (model.lastAssistantText().map(PlanDecision.isAsking) ?? false)
+    }
+
     /// One-click resume for a paused plan. The freeform input still works for
     /// a "continue + adjust" reply (what the user did manually). The chip is
     /// SPECIFIC — it names the next unfinished step and what there actually
@@ -1456,6 +1572,54 @@ struct ChatPreviewView: View {
         )
     }
 
+    /// Shown when the paused turn is asking the user to choose between options.
+    /// The primary path is to TYPE the answer in the box (works already); this
+    /// chip makes that explicit and offers a one-click "use MARVIN's own
+    /// recommendation" so the user isn't forced to retype the model's rec.
+    private var decisionChip: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "questionmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("MARVIN needs your decision")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Answer in the box below (e.g. \u{201C}1a, 2b\u{201D}), or let MARVIN proceed with its own recommendation.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button {
+                proceedWithRecommendation()
+            } label: {
+                Label("Use MARVIN's rec", systemImage: "wand.and.stars")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(model.isSending)
+            .help("Let MARVIN proceed using its own recommended option for each open decision.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private func proceedWithRecommendation() {
+        // Control action — the model decides each open question with its own
+        // stated recommendation, then resumes the checklist.
+        model.sendControl(
+            instruction: "For each open decision you just raised, proceed with your own "
+                + "recommended option. If a decision had no clear recommendation, pick the "
+                + "lowest-risk option and say which you chose. Re-emit your TodoWrite "
+                + "checklist with current statuses, then continue and keep it updated.",
+            display: "▶ Proceeding (MARVIN's recommendation)",
+            cwd: bridge.projectWorkDir
+        )
+    }
+
     /// ADR-0036 (revised) — inline "Approve & execute" after a plan turn.
     private var approvePlanChip: some View {
         HStack(spacing: 8) {
@@ -1467,15 +1631,22 @@ struct ChatPreviewView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            // The plan is auto-written to .marvin/plans and opened in the
+            // editor when it's presented; this button re-focuses that file.
+            // If the auto-write failed (no path), fall back to a Save-As.
             Button {
-                savePlan()
+                if model.currentPlanPath != nil { model.openPlanInEditor() }
+                else { savePlan() }
             } label: {
-                Label("Save plan", systemImage: "square.and.arrow.down")
+                Label(model.currentPlanPath != nil ? "Open plan" : "Save plan",
+                      systemImage: model.currentPlanPath != nil ? "doc.text" : "square.and.arrow.down")
                     .font(.system(size: 11))
             }
             .controlSize(.small)
             .disabled(model.currentPlanText?.isEmpty ?? true)
-            .help("Save this plan to a Markdown file so you can follow it outside the chat.")
+            .help(model.currentPlanPath != nil
+                  ? "Open the saved plan file in the editor."
+                  : "Save this plan to a Markdown file so you can follow it outside the chat.")
             Button("Revise") {
                 // Stay in Plan mode; just nudge a revised plan.
                 model.draft = "Revise the plan — "
@@ -1534,8 +1705,9 @@ struct ChatPreviewView: View {
         model.sendControl(
             instruction: "The plan you just presented is approved — execute it now. "
                 + "Work through it in order, and maintain a TodoWrite checklist (one item "
-                + "per plan step) updated as you complete each step. Pause and ask if you "
-                + "hit a real decision.",
+                + "per plan step) updated as you complete each step. If you hit a real "
+                + "decision, call the AskUserQuestion tool with the options (don't write "
+                + "them as prose) so I can pick one.",
             display: "▶ Plan approved — executing",
             cwd: bridge.projectWorkDir
         )
@@ -1571,10 +1743,27 @@ struct ChatPreviewView: View {
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
         if !model.todos.isEmpty {
-            rows.append(AnyView(TodoListStrip(todos: model.todos, onClose: { model.dismissPlan() })))
+            // Two-tier (ADR-0036 addendum): a plan-backed checklist (Plan mode)
+            // renders as the tier-2 *Plan* — purple, titled, with "Open plan";
+            // a bare TodoWrite list renders as the tier-1 neutral *Task list*.
+            let planBacked = model.currentPlanText != nil
+            rows.append(AnyView(TodoListStrip(
+                todos: model.todos,
+                planTitle: planBacked ? model.planTitle : nil,
+                onOpenPlanFile: planBacked ? { model.openPlanInEditor() } : nil,
+                onClose: { model.dismissPlan() }
+            )))
         }
-        if model.planAwaitingApproval && !model.isSending {
+        // Don't offer "Approve & execute" once the plan is already done —
+        // a "Plan complete 10/10" strip + an approve chip is a contradiction.
+        // (planPausedWaiting already excludes the all-complete case.)
+        let planComplete = !model.todos.isEmpty && model.todos.allSatisfy { $0.status == "completed" }
+        if model.planAwaitingApproval && !model.isSending && !planComplete {
             rows.append(AnyView(approvePlanChip))
+        } else if planAwaitingDecision {
+            // Paused ON A QUESTION — show the decision chip (answer in box /
+            // use the rec), not the generic "Continue".
+            rows.append(AnyView(decisionChip))
         } else if planPausedWaiting {
             rows.append(AnyView(continuePlanChip))
         }
@@ -1699,12 +1888,12 @@ struct ChatPreviewView: View {
                     MemoryLog.append(workDir: cwd, line: summary)
                 }
             } label: {
-                Label("Save to memory.md", systemImage: "tray.and.arrow.down")
+                Label("Save session note", systemImage: "tray.and.arrow.down")
                     .font(.caption)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Append a one-line summary of the just-completed scope to .marvin/memory.md")
+            .help("Append a one-line summary of the just-completed scope to .marvin/session-notes.md. Durable facts (invariants/gotchas/constraints) are recorded by MARVIN via the remember tool into memory.md (ADR-0042).")
             Button {
                 model.clear()
             } label: {

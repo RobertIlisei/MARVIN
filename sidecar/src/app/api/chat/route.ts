@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { buildProjectContext } from "@marvin/project-context";
+import {
+  maybeRefreshGraphify,
+  maybeRefreshKnowledgeGraph,
+} from "@marvin/graphify-bridge";
 import { defaultModel } from "@marvin/runtime/claude-cli";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
 import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
@@ -113,6 +117,17 @@ export async function POST(req: NextRequest) {
     );
   }
   const cwd = rawCwd as string;
+
+  // ADR-0041 — MARVIN owns the ACTIVE PROJECT's graph lifecycle. Fire-and-
+  // forget a refresh of both graphs for this project's workDir (never MARVIN's
+  // own repo — `cwd` is the validated project dir). Both builds are AST-only
+  // (no LLM cost) and internally debounced (HEAD-change + 10-min interval), so
+  // calling per-turn is cheap and usually a no-op. Non-blocking: the turn
+  // proceeds immediately; an out-of-date graph just means this turn reads
+  // files and the next turn has the fresh graph.
+  void maybeRefreshGraphify(cwd, { source: "chat-turn" }).catch(() => {});
+  void maybeRefreshKnowledgeGraph(cwd, { source: "chat-turn" }).catch(() => {});
+
   const projectId = body.projectId?.trim() || slugifyWorkDir(cwd);
   const marvinSessionId = body.marvinSessionId?.trim() || randomUUID();
   const turnId = randomUUID();
