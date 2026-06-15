@@ -9,6 +9,157 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-14 — v0.1.32: memory.md as a curated durable-facts layer (ADR-0042).**
+  - **Diagnosis.** A real project's `.marvin/memory.md` had grown to 419 KB /
+    196 entries in ~9 days, ~99% redundant with ADRs/git/changelog (194/196
+    referenced an ADR; 108 carried ephemeral status like `vitest 374/374` /
+    `NOT committed`). The model ignored the prose "one-line" guidance and
+    mirrored its verbose Ship summaries into memory; the file-per-fact + index
+    pattern at the top had been abandoned (5/6 links dangling). This is what
+    overflowed the context window in ADR-0041.
+  - **New model.** memory holds ONLY what the next session can't re-derive from
+    ADRs/git/changelog (invariants, gotchas, constraints, external facts). New
+    in-process **`marvin-memory` MCP** (`remember`/`recall`) is the enforced
+    write path: one fact → `.marvin/memory/<slug>.md` + a one-line index entry,
+    supersede-by-name, hook/body caps, and content-class guards that REJECT
+    activity/status payloads. `personality.ts` gained a MUST/MUST-NOT firm
+    surface routing facts through `remember` and banning direct memory.md edits;
+    `buildProjectContext` injects the index with `recall`/Read guidance.
+  - **Migration.** New `/memory-compact` command distills an existing log →
+    fact files + archives the rest (run it on a bloated project to reclaim the
+    bulk). Not auto-run on user projects.
+  - **Native.** The Scope-met chip is made safe — retargeted to
+    `.marvin/session-notes.md` ("Save session note") so it no longer pollutes /
+    gets clobbered by the index; a first-class native "remember a fact" UI is a
+    follow-up.
+  - **Verification.** runtime / project-context / web-route `tsc` clean;
+    `marvin-memory` constructs cleanly; `swift build` clean.
+- **2026-06-14 — v0.1.31: fix "Prompt is too long" — project-graph lifecycle
+  + first-message context budget (ADR-0041).**
+  - **Diagnosis.** A new chat's first prompt on a mature project threw
+    **"Prompt is too long"** before the prompt was read. `buildProjectContext`
+    injected the first-message context with no token budget: every ADR in full
+    + `memory.md` whole. Measured on agri-saas-platform: **139 ADRs ≈ 462K tok
+    + 417 KB memory ≈ 104K tok ≈ 566K tokens** vs the executor's **200K**
+    window (`claude-opus-4-8`). Also found: MARVIN *reads* only the active
+    project's graph (already cwd-scoped, can't fall back to its own repo) but
+    never *builds/maintains* it — the code watchdog had zero callers and the
+    knowledge graph (ADR/doc/memory index) was manual + absent.
+  - **Layer 1 — project-graph lifecycle.** New `maybeRefreshKnowledgeGraph`
+    (AST-only, free) mirrors the code watchdog; `/api/chat` now fires BOTH
+    refreshers fire-and-forget against the validated active-project `cwd`
+    (debounced, non-blocking, never MARVIN's own repo). `bin/marvin start`
+    exports `MARVIN_KNOWLEDGE_GRAPH_SCRIPT` so the builder resolves in dev. The
+    semantic `/graphify` pass stays manual.
+  - **Layer 2 — context budget.** ADRs inject as a **titles index** (find via
+    knowledge graph `scope:"knowledge"` → Read the file), memory.md as a
+    **recent tail** (8K tokens) + pointer, curated docs stay **whole** (golden
+    rule 5), with a 90K-token backstop note. Result: agri-saas-platform
+    first-message context **566K → ~13.4K tokens** (measured).
+  - **Verification.** project-context / graphify-bridge / runtime / web-route
+    `tsc` clean; size verified via `buildProjectContext`. Open: confirm the
+    Python knowledge-builder ships in the bundled .app (code graph unaffected).
+- **2026-06-14 — v0.1.30: interactive AskUserQuestion + Node-24 CI bumps.**
+  - **Diagnosis.** When the model paused mid-plan to ask the user to choose
+    between options, it wrote them as prose ("Decision 1 — (a)… (b)…") and
+    stopped. The only affordances were the generic **Continue** chip (canned
+    resume, ignores the question) or a freeform text box — no way to *pick* an
+    option, unlike Cursor / Claude Code.
+  - **Interactive AskUserQuestion (ADR-0040).** The SDK exposes
+    `AskUserQuestion` as a built-in tool surfaced through `canUseTool`, with the
+    answer returned as `{ behavior: "allow", updatedInput: { questions, answers } }`
+    — the same `PermissionResult` shape `confirm-registry` already round-trips.
+    `sdk-runner` now routes `AskUserQuestion` through the confirm channel in
+    EVERY mode (it can never be auto-answered); a new native `AskQuestionSheet`
+    renders each question's options as clickable rows (label + description +
+    optional preview, single/multi-select, plus an auto-added "Other"
+    free-text), and "Send choice" returns the answer as the tool result. "Skip
+    — you decide" denies with a nudge to proceed on the model's recommendation,
+    so the turn never hangs. `personality.ts` + the plan-execution instruction
+    now tell the model to use the tool for genuine forks instead of prose.
+  - **Fallback chip.** For turns where the model still asks in prose, a
+    `PlanDecision` heuristic swaps the "Continue" chip for a "MARVIN needs your
+    decision — answer in the box, or use its recommendation" chip.
+  - **CI.** Bumped every GitHub Action in `release.yml` to its Node-24 major
+    (checkout v6, setup-node v6, pnpm/action-setup v6, cache v5,
+    action-gh-release v3) ahead of GitHub's 2026-06-16 Node-20 cutoff (#105).
+  - **Verification.** runtime `tsc` clean; `swift build` clean. The
+    `updatedInput → tool result` mapping follows the SDK type defs but isn't yet
+    exercised against a live turn (noted in ADR-0040's Scope of Done).
+- **2026-06-13 — v0.1.29: no "Approve & execute" on an already-complete plan.**
+  - **Diagnosis.** A finished plan showed *both* the "Plan complete 10/10"
+    strip *and* the "Plan ready — approve to execute" chip — a contradiction.
+    `planAwaitingApproval` is set on every plan-mode `turnCompleted`, and the
+    tray rendered the approve chip whenever that flag was true, regardless of
+    whether the plan's todos were already all `completed`.
+  - **Fix.** The tray now gates the approve chip on `!planComplete` (todos
+    non-empty AND all completed), and `turnCompleted` clears
+    `planAwaitingApproval` when the plan is already done
+    (`planAwaitingApproval = mode == "plan" && !planDone`). A completed plan
+    now shows only the collapsed "Plan complete" strip with its dismiss ✕ —
+    no approve/continue chip. (Stale todos from a prior plan are already
+    cleared on the next user-typed message, so a fresh plan still gets its
+    approve chip.)
+  - **Verification.** `swift build` clean.
+- **2026-06-13 — v0.1.28: plan title/file robust to preamble + the cask
+  "damaged" fix.**
+  - **Diagnosis (plan file).** v0.1.27 named the saved plan file from the
+    reply's *first line*. When the model wrote diagnosis prose before its
+    `# Plan — <title>` heading (contract violation, but it happens), the slug
+    became garbage — e.g. `i-have-the-root-cause-nailed-and-it-s-more-….md` —
+    and the tier-2 strip header showed the same prose. The chat also didn't
+    render the structured plan card, because `PlanCard.isPlan` only fired when
+    the reply *opened* with `# Plan`.
+  - **Fix.** `PlanCard.split(_:)` now splits an assistant reply into
+    (preamble, plan) at the first `# Plan` heading (word-boundary checked, so
+    `# Planning` doesn't match). `ChatMessageRow` renders the preamble as
+    normal text and the plan portion as the card; the saved plan file +
+    `planTitle` + the strip header all use the clean plan portion. `planTitle`
+    scans for the heading anywhere (not just line 1) and parses the title
+    after the `Plan` + separator; `PlanFile.slug` trims any hyphen the 60-char
+    cut leaves dangling.
+  - **Cask "damaged" fix (tap repo).** Modern Homebrew quarantines casks by
+    default — it does NOT strip `com.apple.quarantine` (the cask's old comment
+    was wrong). An ad-hoc-signed bundle + quarantine = macOS 26's
+    "“MARVIN.app” is damaged" rejection, even though the signature is valid
+    (`codesign --verify` → satisfies its DR). Added a `postflight` to the
+    `marvin-ai` cask that runs `xattr -dr com.apple.quarantine` on the
+    installed app (`must_succeed: false` — dangling `sharp` optional-dep
+    symlinks make `xattr -r` exit non-zero). Verified via `brew reinstall`.
+  - **Verification.** `swift build` clean; split/title/slug unit-checked
+    against the real preamble+heading plan shape.
+- **2026-06-13 — v0.1.27: two-tier to-do / plan + plan file in the editor
+  (Cursor parity).**
+  - **Diagnosis.** Live use surfaced that the plan card (in the chat scroll)
+    and the to-do strip (above the input) read as *two artifacts that replace
+    each other*: approving a plan scrolled the card away and a separate,
+    identical-looking "To-dos" strip took its place. Inspecting Cursor showed
+    it keeps **two distinct tiers** that coexist — a lightweight *task list*
+    (the agent's `TodoWrite` for any multi-step run, no plan behind it) and a
+    *plan* (Plan mode, persistent, ticks off in place). MARVIN rendered both
+    through one identical strip, blurring them; and the plan, unlike Cursor's,
+    was never opened as a file the user could see.
+  - **Two-tier strip (ADR-0036 two-tier addendum).** `TodoListStrip` now forks
+    on `planTitle != nil` (driven by `currentPlanText != nil`): tier 1 renders
+    as a neutral blue **"Task list"** (`checklist` icon, no plan affordances);
+    tier 2 renders as a purple **"Plan — <title>"** (`map` icon, titled from
+    the `# Plan` heading) with an **"Open plan"** button. A bare task list no
+    longer reads as a plan, and an approved plan persists as the tracked
+    checklist that ticks off in place instead of being swapped for a
+    disconnected list.
+  - **Plan file in the editor (Cursor parity).** When a plan is presented
+    (`turnCompleted` in Plan mode, or the legacy `ExitPlanMode` path), MARVIN
+    writes it to `<workDir>/.marvin/plans/<slug>.md` and opens it in the editor
+    pane via `setSelectedFile` (`persistAndOpenPlan`), so the user can actually
+    see the plan file. The approval chip's button becomes **Open plan**
+    (re-focus the saved file), falling back to Save-As if the auto-write
+    failed. `currentPlanPath` is session-scoped — cleared on dismiss / reset /
+    fresh SDK session alongside `currentPlanText`.
+  - **Prompt contract.** `personality.ts` plan-mode stanza updated to the
+    revised inline-`# Plan — <title>` / STOP model (the stale `ExitPlanMode`
+    wording removed), and Agent mode now opens a tier-1 `TodoWrite` task list
+    for any 3+ step task.
+  - **Verification.** `swift build` clean (pre-existing warnings only).
 - **2026-06-12 — v0.1.26: the plan card (Cursor-style structured plan) +
   a specific pause chip.**
   - **Diagnosis.** The v0.1.24 decoupling fixed the modal/re-plan/model-split

@@ -94,6 +94,7 @@ reads at turn time.
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
+| **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. |
 
 The pattern is the same across all of them: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
@@ -141,24 +142,35 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 ## Cross-session continuity — `.marvin/memory.md`
 
 MARVIN holds **no** persistent in-memory state between sessions (Golden
-rule 4). The bridge across sessions is a single file: `<workDir>/.marvin/memory.md`,
-appended to during the Ship phase and re-read by `buildProjectContext`
-on the first turn of every new session. This is the place to record
-decisions, invariants, and gotchas that the next session needs to know
-without re-deriving them — Anthropic's "memory tool" pattern, file-backed.
+rule 4). The bridge across sessions lives in `<workDir>/.marvin/` and is
+re-read by `buildProjectContext` on the first turn of every new session.
 
-The chat surfaces this in two places (ADR-0022):
+**memory is a curated durable-facts layer, not an activity log (ADR-0042).**
+`.marvin/memory.md` is a one-line-per-fact **index**; each fact is a small file
+under `.marvin/memory/<slug>.md`. It holds ONLY what the next session can't
+re-derive from ADRs, git, or the changelog — invariants, gotchas, hard
+constraints, external facts. Per-turn activity belongs in git/changelog;
+decisions belong in ADRs; verification/commit status is ephemeral and goes
+nowhere.
 
-- **AppStatusBar context indicator** hover tooltip notes
-  `memory.md auto-loaded` so the user can see the layer is active.
-- **Scope-met chip strip** offers a `Save to memory.md` button below
-  the latest message when a real-work turn closes, so the just-completed
-  scope can be persisted before clicking `Start fresh next turn (⌘⇧N)`.
+- **Write path is the `remember` MCP tool** (`marvin-memory`, `memory-mcp.ts`),
+  NOT Edit/Write on memory.md. `remember` writes the fact file + rebuilds the
+  index, supersedes by name, caps the hook/body, and rejects activity/status
+  payloads. **`recall`** searches the facts. `personality.ts` carries the
+  MUST/MUST-NOT firm surface; `/memory-compact` distills a bloated log.
+  (This replaces the old "append a line on Ship" model, which let memory.md
+  bloat to 419 KB / ~99 % redundant on a real project — the cause of the
+  ADR-0041 context overflow.)
+- **AppStatusBar context indicator** hover tooltip notes the memory layer is
+  active. The **Scope-met chip** now writes a one-liner to
+  `.marvin/session-notes.md` ("Save session note") — a lightweight activity
+  sink, NOT the durable-facts index (it would otherwise be clobbered by the
+  next `remember`). Originally ADR-0022; retargeted by ADR-0042.
 
-`memory.md` is the only sanctioned cross-session persistence. Don't
-shadow it with a parallel sidecar cache, a remote KV, or hidden state
-in `~/.marvin/` — keeping it in the project directory makes it the
-user's thing, not MARVIN's.
+`.marvin/memory.md` + `.marvin/memory/` is the only sanctioned cross-session
+durable-facts persistence. Don't shadow it with a parallel sidecar cache, a
+remote KV, or hidden state in `~/.marvin/` — keeping it in the project
+directory makes it the user's thing, not MARVIN's.
 
 ## Data directory
 
@@ -245,14 +257,22 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 1691 nodes · 3051 edges · 117 communities (2026-05-21 rebuild
-  after [`.graphifyignore`](./.graphifyignore) landed). Auto-rebuilt on
-  every commit.
+  files. 2011 nodes · 3904 edges · 124 communities (2026-06-14 rebuild;
+  honours [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 971 nodes · 1178 edges · 72 communities (built
-  2026-05-21). Manual rebuild via `bin/marvin knowledge-graph .` — free
-  (no LLM cost), but only fires when you ask.
+  `.marvin/memory.md`. 1085 nodes · 1305 edges · 84 communities (built
+  2026-06-14, 81 files).
+
+**Who builds them (ADR-0041).** When the **running IDE** has a project open, it
+auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
+forget from `/api/chat`, debounced, AST-only (no LLM cost), scoped to the
+active project's workDir (never MARVIN's own repo). The richer *semantic*
+`/graphify` pass (LLM, `GRAPH_REPORT.md` + `cost.json`) stays manual/opt-in.
+For a **Claude Code session working on MARVIN's own source** (no running IDE in
+the loop), rebuild manually: `/graphify . --update` (code) and
+`bin/marvin knowledge-graph .` (knowledge) — both free. (Before ADR-0041 the
+code-graph watchdog existed but was dormant — never wired to a trigger.)
 
 Each MCP tool (`graph_summary`, `graph_search`, `graph_neighbors`,
 `graph_path`, `graph_query`, `graph_save_result`) takes a `scope` parameter
@@ -297,8 +317,12 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### After changes
 
-- **Code changes** (`*.ts`, `*.swift`, etc.): the watchdog auto-rebuilds
-  on commit. To force: `/graphify . --update` (AST-only, no LLM cost).
+In a Claude Code session on MARVIN's own source, rebuild manually (the
+ADR-0041 per-turn auto-refresh only runs inside the running IDE on an open
+project):
+
+- **Code changes** (`*.ts`, `*.swift`, etc.): `/graphify . --update`
+  (AST-only, no LLM cost).
 - **Doc changes** (`docs/`, ADRs, README, memory.md): the code graph
   doesn't include these; rebuild the knowledge graph with
   `bin/marvin knowledge-graph .` (AST-only, no LLM cost).
@@ -307,18 +331,13 @@ answer. Never synthesize a structural explanation from imagination.
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-05-21 rebuild: `GET()` (92 edges), `POST()` (88),
-`trim()` (41) are the real architectural anchors. Language primitives
-also bubble to the top — `string`, `text`, `View`, `font`, `Kind`,
-`data`, `.push()` — those are AST-noise from the tree-sitter pass,
-not concepts; treat them as background. The `.graphifyignore` filters
-files, not node kinds; a follow-up to filter language primitives from
-the AST extractor would need to live in graphify itself.
-
-Pre-2026-05-21 stale list, kept for reference:
-`GET()` (61 edges), `POST()` (58), `trim()` (29), `ADR-0015 — Auto-mode
-policy floor + audit log` (17), `/api/git/* third mutation channel` (17),
-`ADR index` (15), `8-phase senior-engineer workflow` (15), `Changelog
-(docs/history/CHANGELOG.md)` (15), `projects.ts` (13), `resolve()` (13).
+After the 2026-06-14 rebuild: `POST()` (116 edges), `GET()` (112),
+`.push()` (62), `trim()` (52), `.split()` (49), `.append()` (43) are the
+real architectural anchors. Language primitives also bubble to the top —
+`string`, `text`, `font`, `View`, `data`, `Kind`, `Equatable`, `Codable` —
+those are AST-noise from the tree-sitter pass, not concepts; treat them as
+background. The `.graphifyignore` filters files, not node kinds; a follow-up
+to filter language primitives from the AST extractor would need to live in
+graphify itself.
 
 _Refresh this list with `/graphify . --update` when it drifts._

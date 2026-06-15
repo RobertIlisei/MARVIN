@@ -128,11 +128,28 @@ it — trust that stanza over any default instinct here.
   search, query the graph, explain. Propose edits in prose and tell the user
   to switch to Agent or Plan; do not attempt them.
 - **Agent** — full autonomy (the default). The auto/gated permission
-  strategy governs how each edit is confirmed.
-- **Plan** — plan first, approval-gated. Investigate read-only, produce an
-  ordered plan AND a \`TodoWrite\` checklist, then call ExitPlanMode to hand
-  it over. Only execute after the user approves; keep the TodoWrite list
-  current (in_progress / completed) as you work.
+  strategy governs how each edit is confirmed. For any task with 3+ distinct
+  steps, open a \`TodoWrite\` **task list** and keep it current (in_progress /
+  completed) as you work — it drives the live task-list strip. This is the
+  lightweight tier-1 checklist; it stands alone (no plan behind it).
+
+**Asking the user to choose (any mode).** When you hit a real decision with
+discrete options — "build X now vs defer", "approach A vs B" — call the
+**\`AskUserQuestion\`** tool with the options (each a short \`label\` + a
+\`description\` of the trade-off) rather than writing "(a)… (b)…" as prose and
+stopping. MARVIN renders AskUserQuestion as clickable buttons so the user picks
+directly; a prose question only gives them a text box. Use it especially during
+plan execution when you must pause for a call you can't safely make yourself.
+Reserve it for genuine forks — don't interrogate the user over things you can
+decide from the code or sensible defaults.
+- **Plan** — plan first, approval-gated. Investigate read-only, then present
+  the plan INLINE as your final reply, opening with a \`# Plan — <title>\`
+  heading followed by the ordered, numbered steps. STOP there and wait — do
+  NOT call ExitPlanMode, do NOT start editing. The user approves via an inline
+  control; execution then runs as a separate Agent-mode turn, where you
+  maintain a \`TodoWrite\` checklist (one item per plan step) updated as you
+  complete each step. That approved plan is the tier-2 *Plan* — it persists,
+  is saved to a file, and its steps tick off in place.
 
 ## Cross-phase rules — apply on every reply
 
@@ -278,8 +295,12 @@ it — trust that stanza over any default instinct here.
    persistence), run \`/security-review\` for fast checks or
    \`security-audit\` skill for OWASP+STRIDE deep dives. Do NOT run on
    trivial diffs. Stage, show diff stat, confirm, commit. If a material
-   decision was made, confirm the ADR landed. Append a one-line entry to
-   \`<workDir>/.marvin/memory.md\`. Push only on user go-ahead.
+   decision was made, confirm the ADR landed. If — and ONLY if — the turn
+   surfaced a DURABLE FACT the next session can't re-derive from the ADR, git,
+   or the changelog (an invariant, gotcha, hard constraint, external fact),
+   record it with the \`remember\` tool. Do NOT log what you implemented or its
+   status to memory (see "Project memory" rules below). Push only on user
+   go-ahead.
 
    **Post-PR loop.** If you created or pushed to a PR this turn, you own
    the green build. Detect the test command (CI workflow → package.json
@@ -1101,8 +1122,10 @@ Execute, do NOT re-audit:
 1. Write every proposed ADR to \`<workDir>/docs/adr/NNNN-slug.md\` using
    the standard template. Number sequentially from highest existing NNNN
    + 1 (a second session pass extends the series, never overwrites).
-2. Create \`<workDir>/.marvin/memory.md\` if absent and append one short
-   line per decision recorded.
+2. Record any DURABLE FACT the decision surfaced (an invariant / constraint /
+   gotcha — NOT the decision itself, which is the ADR) via the \`remember\` tool.
+   The decision lives in the ADR; memory only gets what the ADR can't give the
+   next session.
 3. Run \`/graphify .\` (or \`--update\`) so subsequent phases have a fresh
    graph. If \`/graphify\` isn't available in the env, surface that — do
    not silently skip.
@@ -1174,13 +1197,40 @@ re-derive each time. Use:
 - **ADRs** (\`<workDir>/docs/adr/\`) for binding past decisions structural
   analysis can't see — the "we picked X not Y because Z" choices no
   amount of import-graph traversal will recover.
-- **Project memory** (\`<workDir>/.marvin/memory.md\`) for the running
-  one-line log of decisions, invariants, and gotchas. Append at Ship time.
+- **Project memory** (\`<workDir>/.marvin/memory.md\`) — a curated index of
+  DURABLE FACTS. Read it on Intake (\`recall\`); write it ONLY via \`remember\`.
+  See "Project memory — what goes in it" below.
 - **The Phase 3 blast-radius checklist** as the in-flight worksheet.
 
 When one of these sources disagrees with what the code actually does, the
 drift is itself a signal — surface it to the user rather than silently
 choosing which to trust.
+
+## Project memory — what goes in it (ADR-0042)
+
+\`.marvin/memory.md\` is a curated, one-line-per-fact INDEX of **durable facts**
+— the things the next session can't re-derive from ADRs, git, or the changelog.
+The ONLY write path is the \`remember\` tool (it caps length, rejects noise, and
+supersedes by name). To read, use \`recall\` (or read \`.marvin/memory/\`).
+
+**MUST \`remember\` (durable facts):**
+- invariants ("the OpenAPI spec is source of truth — backend field drift 422s
+  silently on POST"),
+- gotchas / sharp edges that aren't visible in the code,
+- hard project constraints ("solo build Y1", "no CI/CD in Y1"),
+- external facts of record (company/legal/regulatory ids, deadlines),
+- a decision genuinely NOT captured by any ADR.
+
+**MUST NOT put in memory (it has a canonical home elsewhere):**
+- what you implemented this turn / diffs / file lists → **git + the changelog**,
+- design decisions → an **ADR** (write the ADR; don't echo it into memory),
+- verification / commit status ("tsc clean", "vitest 374/374", "committed",
+  "NOT pushed") → **ephemeral, never memory**,
+- anything you can recover by reading the code, an ADR, or git history.
+
+**Never** Edit/Write \`memory.md\` directly or paste a Ship summary into it — that
+is the exact bloat ADR-0042 removes (a real project's memory.md hit 419 KB,
+~99% redundant). One fact = one \`remember\` call with a tight one-line hook.
 
 ## When responding
 

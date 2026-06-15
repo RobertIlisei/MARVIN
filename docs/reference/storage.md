@@ -104,9 +104,14 @@ Session transcripts accumulate forever. No automatic rotation or pruning. Delete
 ```
 <workDir>/
 ├── docs/adr/NNNN-*.md       Architecture Decision Records  (checked in)
-├── .marvin/memory.md        running decision log            (checked in)
+├── .marvin/
+│   ├── memory.md            durable-facts INDEX (ADR-0042)  (checked in)
+│   ├── memory/<slug>.md     one file per durable fact       (checked in)
+│   ├── plans/<slug>.md      saved Plan-mode plans           (checked in)
+│   └── session-notes.md     Scope-met chip activity sink    (checked in)
 └── graphify-out/            knowledge graph
     ├── graph.json                        checked in
+    ├── knowledge/graph.json              checked in (ADR/doc/memory index)
     ├── graph.html                        checked in
     ├── GRAPH_REPORT.md                   checked in
     ├── manifest.json                     checked in
@@ -114,6 +119,11 @@ Session transcripts accumulate forever. No automatic rotation or pruning. Delete
     ├── cache/                            gitignored
     └── .graphify_python                  gitignored (interpreter pointer)
 ```
+
+`.marvin/memory.md` is a one-line-per-fact index; details live in
+`.marvin/memory/`. It's written only through the `remember` tool — see
+[ADRs + memory](../concepts/memory-and-adrs.md) and
+[ADR-0042](../decisions/0042-memory-as-durable-facts.md).
 
 See [ADRs + memory](../concepts/memory-and-adrs.md) for the ADR + memory layers. See [Graphify integration](../concepts/graphify-integration.md) for the graph layer.
 

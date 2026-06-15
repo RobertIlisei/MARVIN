@@ -121,12 +121,16 @@ struct ChatMessageRow: View {
     private func blockView(for block: ChatBlock) -> some View {
         switch block {
         case .text(_, let text):
-            // ADR-0036 (revised) — a Plan-mode plan opens with the
-            // `# Plan` heading (prompt contract); render it as the
-            // structured Cursor-style plan card instead of prose.
-            // Content-shaped, so it also fires on transcript replay.
-            if message.role == .assistant, PlanCard.isPlan(text) {
-                PlanCardView(text: text)
+            // ADR-0036 — a Plan-mode plan contains a `# Plan` heading
+            // (prompt contract). Render the plan portion as the structured
+            // Cursor-style card; any diagnosis prose the model wrote BEFORE
+            // the heading stays as normal text above it. Content-shaped, so
+            // it also fires on transcript replay.
+            if message.role == .assistant, let parts = PlanCard.split(text) {
+                if !parts.preamble.isEmpty {
+                    TextBlockView(text: parts.preamble, role: message.role)
+                }
+                PlanCardView(text: parts.plan)
             } else {
                 TextBlockView(text: text, role: message.role)
             }

@@ -124,7 +124,8 @@ final class ChatService {
         turnId: String,
         toolUseId: String,
         decision: ConfirmDecision,
-        denyMessage: String? = nil
+        denyMessage: String? = nil,
+        updatedInput: [String: Any]? = nil
     ) async throws {
         let url = baseURL.appendingPathComponent("api/confirm")
         var req = URLRequest(url: url)
@@ -139,6 +140,12 @@ final class ChatService {
         ]
         if decision == .deny, let denyMessage, !denyMessage.isEmpty {
             body["message"] = denyMessage
+        }
+        // ADR-0040 — AskUserQuestion returns the chosen answer as the tool
+        // result via `updatedInput` (the AskUserQuestionOutput). The route
+        // forwards it straight to the SDK's PermissionResult.
+        if decision == .allow, let updatedInput {
+            body["updatedInput"] = updatedInput
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
