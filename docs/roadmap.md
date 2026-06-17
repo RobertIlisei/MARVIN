@@ -17,6 +17,13 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.33** — One live turn per session. `POST /api/chat` now returns
+`409 turn-in-progress` instead of silently evicting a running turn, and turn
+eviction `abort()`s the displaced agent rather than just disconnecting it —
+fixing the "replaced by a newer turn on the same session" stream error that
+froze heavy multi-step turns mid-plan and left an orphaned agent still mutating
+the workspace. Regression test in `turn-registry.test.ts`. Builds on v0.1.32.
+
 **v0.1.32** — memory.md becomes a curated durable-facts layer (ADR-0042). A
 real project's `.marvin/memory.md` had bloated to 419 KB / ~99% redundant with
 ADRs/git/changelog. Now a `marvin-memory` MCP tool (`remember`/`recall`) is the
