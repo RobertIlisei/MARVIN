@@ -25,15 +25,29 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { ensureDir, marvinPaths } from "./paths";
+import { getLiveTurn } from "./turn-registry";
 
 export const MIN_DELAY_SECONDS = 60;
 export const MAX_DELAY_SECONDS = 86_400; // 24 h
 export const MAX_PENDING_PER_SESSION = 5;
 /** Max self-reschedule chain length before a wakeup is dropped as runaway. */
 export const MAX_CHAIN_DEPTH = 8;
+/**
+ * When a wakeup fires but the session already has a live turn, it YIELDS:
+ * re-arms itself this far in the future rather than evicting the live turn.
+ * Short enough to feel responsive once the turn ends; long enough not to spin.
+ */
+export const FIRE_DEFER_BACKOFF_MS = 20_000;
+/**
+ * Give up deferring after this many yields (~20 min at the backoff above) and
+ * drop the wakeup. A session live continuously for that long is pathological
+ * (a wedged turn — clearable via Stop, ADR-0034); dropping the background
+ * wakeup is the lesser evil versus barging in and killing the live turn.
+ */
+export const MAX_FIRE_DEFERRALS = 60;
 /** A wakeup more than this far past its fire time at boot is stale, dropped. */
 const STALE_AFTER_MS = MAX_DELAY_SECONDS * 1000;
 
@@ -65,6 +79,13 @@ export interface WakeupRecord {
   fireAt: number;
   /** Position in a self-reschedule chain (0 = scheduled by a human turn). */
   depth: number;
+  /**
+   * How many times this wakeup has been deferred because the session had a
+   * live turn at fire time (see {@link MAX_FIRE_DEFERRALS}). Absent / 0 on a
+   * freshly scheduled wakeup. NOT a capability — purely a yield counter so a
+   * background wakeup never evicts an interactive turn.
+   */
+  deferrals?: number;
 }
 
 interface WakeupFile {
@@ -310,8 +331,41 @@ function arm(record: WakeupRecord): void {
   state.timers.set(record.id, t);
 }
 
+/**
+ * If the session already has a live (non-ended) turn, YIELD: re-arm this
+ * wakeup for a short retry instead of dispatching it. A fired wakeup must
+ * never evict an interactive turn — that surfaced to the user as the
+ * "replaced by a newer turn on the same session" stream error and aborted
+ * their in-flight work (the `/api/chat` 409 guard never covered this path).
+ * Returns `true` when the wakeup was deferred (or dropped at the cap), meaning
+ * the caller must NOT dispatch it.
+ */
+function deferIfSessionBusy(record: WakeupRecord): boolean {
+  const live = getLiveTurn(record.marvinSessionId);
+  if (!live || live.ended) return false;
+  const deferrals = (record.deferrals ?? 0) + 1;
+  if (deferrals > MAX_FIRE_DEFERRALS) {
+    unpersist(record.projectId, record.id);
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[wakeup-scheduler] dropping wakeup ${record.id} (${record.reason}) — session ${record.marvinSessionId} stayed busy through ${MAX_FIRE_DEFERRALS} deferrals.`,
+    );
+    return true;
+  }
+  const deferred: WakeupRecord = {
+    ...record,
+    deferrals,
+    fireAt: Date.now() + FIRE_DEFER_BACKOFF_MS,
+  };
+  persist(deferred);
+  arm(deferred);
+  return true;
+}
+
 async function fire(record: WakeupRecord): Promise<void> {
   state.timers.delete(record.id);
+  // Yield to a live turn rather than evicting it (re-arms + re-persists).
+  if (deferIfSessionBusy(record)) return;
   // Remove from disk BEFORE dispatching so a handler crash can't cause the
   // same wakeup to fire twice on the next boot.
   unpersist(record.projectId, record.id);
@@ -340,6 +394,10 @@ async function fire(record: WakeupRecord): Promise<void> {
  * wakeups — they just trigger on a process exit instead of a clock.
  */
 export async function fireNow(record: WakeupRecord): Promise<void> {
+  // Same yield-to-live-turn guard as the timed `fire` path: an event-driven
+  // wakeup must not evict an interactive turn either. When busy it re-arms on
+  // a short timer (becomes a deferred wakeup) rather than dispatching now.
+  if (deferIfSessionBusy(record)) return;
   if (!state.fireHandler) {
     // eslint-disable-next-line no-console
     console.error(
