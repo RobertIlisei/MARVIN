@@ -17,6 +17,18 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.35** — Context-usage panel. The status-bar `ctx` chip is now a
+click-to-open popover (`ContextDetailPopover`): exact resident/window % from
+live SDK usage with window-relative colour bands (a 1M `[1m]` model no longer
+reads "critical" at 140K), plus an estimated per-category breakdown (system
+prompt · tools+MCP · project-context sub-sections · derived transcript · free).
+New `GET /api/context`; `buildProjectContext` now returns `{ text, breakdown }`.
+Builds on v0.1.34.
+
+**v0.1.34** — "Stop" is authoritative. `cancelLiveTurn` now force-ends the turn
+(abort + synchronous `endLiveTurn`) so a wedged agent can't lock the session
+behind the 409 guard with no in-app recovery. Builds on v0.1.33.
+
 **v0.1.33** — One live turn per session. `POST /api/chat` now returns
 `409 turn-in-progress` instead of silently evicting a running turn, and turn
 eviction `abort()`s the displaced agent rather than just disconnecting it —

@@ -182,10 +182,12 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
   const systemPrompt = buildSystemPrompt(record.personality);
-  const projectContext = await buildProjectContext({
-    workDir: cwd,
-    firstMessage: false,
-  }).catch(() => "");
+  const projectContext = (
+    await buildProjectContext({
+      workDir: cwd,
+      firstMessage: false,
+    }).catch(() => ({ text: "", breakdown: [] }))
+  ).text;
   const appendSystemPrompt = projectContext
     ? `${systemPrompt}\n\n${projectContext}`
     : systemPrompt;

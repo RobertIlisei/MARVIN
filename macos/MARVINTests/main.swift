@@ -147,6 +147,25 @@ runner.suite("context-band") {
         runner.expect(ContextUsageReader.band(forTokens: 200_000) == .critical, "200_000 → critical")
     }
 
+    runner.test("window-relative band scales to the model's window") {
+        // 200K window — fractions land on the legacy 40K/80K/140K marks.
+        runner.expect(ContextUsageReader.band(forTokens: 39_999, window: 200_000) == .healthy, "200K: 39_999 → healthy")
+        runner.expect(ContextUsageReader.band(forTokens: 80_000, window: 200_000) == .high, "200K: 80_000 → high")
+        runner.expect(ContextUsageReader.band(forTokens: 140_000, window: 200_000) == .critical, "200K: 140_000 → critical")
+        // 1M window — 140K is now only 14%, comfortably healthy.
+        runner.expect(ContextUsageReader.band(forTokens: 140_000, window: 1_000_000) == .healthy, "1M: 140_000 → healthy")
+        runner.expect(ContextUsageReader.band(forTokens: 450_000, window: 1_000_000) == .high, "1M: 450K → high")
+        runner.expect(ContextUsageReader.band(forTokens: 750_000, window: 1_000_000) == .critical, "1M: 750K → critical")
+        // Degenerate window falls back to 200K.
+        runner.expect(ContextUsageReader.band(forTokens: 150_000, window: 0) == .critical, "0 window → 200K fallback")
+    }
+
+    runner.test("contextWindow resolves the [1m] marker") {
+        runner.expect(ContextUsageReader.contextWindow(forModelId: "claude-opus-4-8[1m]") == 1_000_000, "[1m] → 1M")
+        runner.expect(ContextUsageReader.contextWindow(forModelId: "claude-opus-4-8") == 200_000, "plain → 200K")
+        runner.expect(ContextUsageReader.contextWindow(forModelId: nil) == 200_000, "nil → 200K")
+    }
+
     runner.test("band hint copy is stable") {
         runner.expect(ContextBand.healthy.hint, equals: "Context healthy", "healthy hint")
         runner.expect(ContextBand.climbing.hint, equals: "Climbing — long sessions slow", "climbing hint")

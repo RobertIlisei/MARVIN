@@ -9,6 +9,39 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-17 — v0.1.35: context-usage panel — a `/context`-style breakdown
+  behind the status-bar `ctx` chip.**
+  - **Motivation.** The status-bar `ctx NNK` chip already showed live resident
+    tokens with a 4-band colour ramp, but (a) it was a bare menu, not a real
+    "check on context" view, and (b) its bands were hardcoded for a 200K window
+    — so an Opus 4.8 `[1m]` session (1M window) was flagged "critical" at 140K,
+    which is only 14 % of its real capacity.
+  - **What shipped.** The chip is now a click-to-open popover
+    (`ContextDetailPopover`). Headline = EXACT resident/window % from the live
+    SDK usage, with a colour bar; bands are now window-relative
+    (`ContextUsageReader.band(forTokens:window:)` + `contextWindow(forModelId:)`,
+    mirrored server-side by `contextWindowFor`), so a 1M model bands at
+    200K/400K/700K. Below it, an ESTIMATED per-category grid: system prompt /
+    tools+MCP / project-context sub-sections (docs · ADR titles · memory · graph
+    · fingerprint) / transcript (derived = resident − prefix) / free. Tool-use
+    counts + the existing SDK-reset button move into the popover.
+  - **How.** New `GET /api/context?workDir&model&personality` composes the
+    server-side estimate (`buildSystemPrompt` size + a documented tools constant
+    + the project-context breakdown), validated against the project registry.
+    `buildProjectContext` refactored to return `{ text, breakdown }` — `text` is
+    byte-identical to before (both callers updated), and `breakdown` reflects
+    exactly what's injected (no parallel estimator that could drift). The
+    headline is exact; category rows are labeled `~chars÷4` estimates that may
+    not perfectly sum to the resident total — a trade-off chosen deliberately
+    over reading the bloated transcript JSONL.
+  - **Verification.** New tests: `contextWindowFor` (TS) + `band(forTokens:window:)`
+    / `contextWindow(forModelId:)` (Swift, 78 assertions total) + a
+    `buildProjectContext` breakdown-reconciliation test. `/api/context` verified
+    live against a real project through the running bundled sidecar: `[1m]`→1M,
+    plain→200K, system 14,952 · tools 11,000 · project 6,026 (4 sub-sections),
+    403/400 on bad/missing workDir. Typecheck adds zero new errors; biome clean
+    on new files.
+
 - **2026-06-17 — v0.1.34: make "Stop" authoritative — a wedged turn can no
   longer permanently lock the session behind the 409 guard.**
   - **Diagnosis.** The v0.1.33 one-live-turn guard (`409 turn-in-progress`)

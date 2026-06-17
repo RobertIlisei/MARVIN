@@ -315,6 +315,31 @@ export function __clearModelCacheForTests(): void {
   modelCache = null;
 }
 
+/** Default context-window size when a model carries no explicit hint. */
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+/** The extended-window variant size, opted in via the `[1m]` / `-1m` suffix. */
+const EXTENDED_CONTEXT_WINDOW = 1_000_000;
+
+/**
+ * Resolve a model id to its context-window size in tokens.
+ *
+ * The Anthropic `/v1/models` API does not report window size, so this is a
+ * lookup, not a fetch. The only signal we get for free is the extended-context
+ * marker the runtime appends to a model id when the 1M window is enabled —
+ * `claude-opus-4-8[1m]` (and the `-1m` spelling some surfaces use). Everything
+ * else is the standard 200K window. Used by `GET /api/context` to compute the
+ * usage percentage and the colour-band thresholds, so a 1M session isn't
+ * flagged "critical" at 140K (which would be 14% of its real capacity).
+ */
+export function contextWindowFor(modelId: string | null | undefined): number {
+  if (!modelId) return DEFAULT_CONTEXT_WINDOW;
+  const lower = modelId.toLowerCase();
+  if (lower.includes("[1m]") || lower.includes("-1m") || lower.includes("1m]")) {
+    return EXTENDED_CONTEXT_WINDOW;
+  }
+  return DEFAULT_CONTEXT_WINDOW;
+}
+
 /**
  * Synchronous newest-of-tier over the static fallback list only. No
  * network, no Keychain — the last-resort default when discovery can't

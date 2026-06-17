@@ -55,6 +55,35 @@ public enum ContextUsageReader {
         return .critical
     }
 
+    /// Window-relative band: classify resident tokens as a FRACTION of the
+    /// model's actual context window. The fractions match the legacy 200K
+    /// thresholds (40K/80K/140K → 20%/40%/70%) so existing sessions are
+    /// unchanged, but a 1M `[1m]` model now bands at 200K/400K/700K instead
+    /// of being flagged "critical" at 140K (14% of its real capacity).
+    /// Pinned by `context-band-window` test.
+    public static func band(forTokens tokens: Int, window: Int) -> ContextBand {
+        let w = window > 0 ? window : 200_000
+        let frac = Double(tokens) / Double(w)
+        if frac < 0.20 { return .healthy }
+        if frac < 0.40 { return .climbing }
+        if frac < 0.70 { return .high }
+        return .critical
+    }
+
+    /// Resolve a model id to its context-window size, mirroring the sidecar's
+    /// `contextWindowFor`. The only free signal is the extended-window marker
+    /// the runtime appends (`claude-opus-4-8[1m]`); everything else is the
+    /// standard 200K window. Lets the status-bar chip colour itself correctly
+    /// without waiting on the /api/context fetch. Pinned by `context-window` test.
+    public static func contextWindow(forModelId id: String?) -> Int {
+        guard let id else { return 200_000 }
+        let l = id.lowercased()
+        if l.contains("[1m]") || l.contains("-1m") || l.contains("1m]") {
+            return 1_000_000
+        }
+        return 200_000
+    }
+
     /// Read the `usage` block from a cli.event payload and return
     /// `(resident, billable)` token counts. `resident` drives the
     /// status-bar colour ramp; `billable` is shown in the hover
