@@ -171,6 +171,19 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         // 4xx invalid-cwd (audit fix #7) is non-retryable — the user
         // needs to pick a project. Other 5xx are worth retrying.
         const canRetry = response.status >= 500;
+        // 409 turn-in-progress: a turn is already live on this session
+        // (a second tab / double-submit). Show a clean message, not the
+        // raw JSON, and don't offer Retry — retrying just 409s again
+        // until the running turn ends. Cancel-then-send to interrupt.
+        let message = `HTTP ${response.status}: ${errText.slice(0, 200) || response.statusText}`;
+        if (response.status === 409) {
+          try {
+            const parsed = JSON.parse(errText) as { error?: string };
+            if (parsed?.error) message = parsed.error;
+          } catch {
+            /* fall back to the raw message above */
+          }
+        }
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -179,7 +192,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
                   blocks: [
                     {
                       type: "error",
-                      message: `HTTP ${response.status}: ${errText.slice(0, 200) || response.statusText}`,
+                      message,
                       canRetry,
                     },
                   ],

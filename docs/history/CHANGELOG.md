@@ -9,6 +9,31 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-17 — v0.1.33: one live turn per session — fix the "replaced by a
+  newer turn on the same session" stream error.**
+  - **Diagnosis.** A heavy multi-step turn froze mid-plan with a "Stream error:
+    replaced by a newer turn on the same session" card. The message is MARVIN's
+    own (`turn-registry.ts`): `registerLiveTurn` evicts a prior live turn on the
+    same `marvinSessionId`. Root cause — `POST /api/chat` registered every turn
+    **unconditionally** (no concurrency guard), so a second POST (double-submit,
+    a second tab, or a reconnect that POSTed instead of subscribing to
+    `/api/chat/resume`) silently displaced the running turn. Worse, eviction only
+    `removeAllListeners()`'d the old bus — it never called `abortController.abort()`,
+    so the orphaned SDK agent kept running detached and mutating the workspace
+    while the UI believed it had stopped (consistent with "26 files changed"
+    after a frozen 2/9-step plan).
+  - **Fix.** `POST /api/chat` now refuses a second turn while one is live —
+    returns `409 turn-in-progress` (before any transcript write / context build);
+    to interrupt, the client must `POST /api/chat/cancel` first, to re-attach,
+    `GET /api/chat/resume`. Eviction in `registerLiveTurn` now `abort()`s the
+    displaced turn and marks it `ended`, so no orphaned agent survives the rare
+    bypass path. The client renders the 409 as a clean, non-retryable message
+    instead of a raw JSON blob.
+  - **Verification.** New `turn-registry.test.ts` (4 tests) pins the
+    single-live-turn invariant, the route's `getLiveTurn && !ended` 409 predicate,
+    abort-on-evict, and no-double-abort once ended; provably fails against the old
+    registry (RED→GREEN). Full suite introduces no new failures; changed files
+    add zero new typecheck errors.
 - **2026-06-14 — v0.1.32: memory.md as a curated durable-facts layer (ADR-0042).**
   - **Diagnosis.** A real project's `.marvin/memory.md` had grown to 419 KB /
     196 entries in ~9 days, ~99% redundant with ADRs/git/changelog (194/196
