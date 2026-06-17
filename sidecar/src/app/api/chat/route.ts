@@ -184,7 +184,12 @@ export async function POST(req: NextRequest) {
   const systemPrompt = buildSystemPrompt(personality);
   const projectContext = body.skipProjectContext
     ? ""
-    : await buildProjectContext({ workDir: cwd, firstMessage }).catch(() => "");
+    : (
+        await buildProjectContext({ workDir: cwd, firstMessage }).catch(() => ({
+          text: "",
+          breakdown: [],
+        }))
+      ).text;
   // ADR-0037 — name the skills ACTIVE for this project so the model stops
   // reaching for the (always-loaded) irrelevant ones. Default from the
   // fingerprint; overridable in the Skills pane (.marvin/skills.json).
