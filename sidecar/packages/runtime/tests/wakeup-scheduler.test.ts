@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -7,15 +6,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { marvinPaths } from "../src/paths";
 import {
-  MAX_CHAIN_DEPTH,
-  MAX_PENDING_PER_SESSION,
-  type WakeupRecord,
+  endLiveTurn,
+  getLiveTurn,
+  registerLiveTurn,
+} from "../src/turn-registry";
+import {
   __resetSchedulerForTests,
   armAll,
   cancelWakeup,
+  fireNow,
   listWakeups,
+  MAX_CHAIN_DEPTH,
+  MAX_PENDING_PER_SESSION,
   scheduleWakeup,
   setWakeupFireHandler,
+  type WakeupRecord,
 } from "../src/wakeup-scheduler";
 
 // The scheduler is the mechanism that makes MARVIN's "I'll check back"
@@ -205,5 +210,63 @@ describe("armAll — boot re-arm", () => {
     armAll();
     const second = armAll();
     expect(second).toEqual({ armed: 0, firedImmediately: 0, dropped: 0 });
+  });
+});
+
+describe("fired wakeup yields to a live turn", () => {
+  // Regression: a fired wakeup used to register a turn unconditionally on the
+  // session, which `registerLiveTurn` resolves by EVICTING any live turn —
+  // surfacing to the user's interactive turn as the "replaced by a newer turn
+  // on the same session" stream error and aborting their work. The 409 guard
+  // only covers `POST /api/chat`; the wakeup dispatch path bypassed it. A
+  // fired wakeup must now DEFER (re-arm) while a turn is live, never evict it.
+
+  const BUSY = "sess-busy";
+
+  it("does not fire (no handler call) while a turn is live; defers and re-arms", async () => {
+    const live = registerLiveTurn({
+      turnId: "t-live",
+      marvinSessionId: BUSY,
+      projectId: PROJECT,
+    });
+    const evicted: unknown[] = [];
+    live.bus.on("event", (e: { event: string }) => {
+      if (e.event === "turn.error") evicted.push(e);
+    });
+
+    const fired: WakeupRecord[] = [];
+    setWakeupFireHandler((r) => void fired.push(r));
+
+    await fireNow(record({ id: "w-busy", marvinSessionId: BUSY }));
+
+    // The live turn was NOT evicted and the wakeup did NOT dispatch.
+    expect(fired).toHaveLength(0);
+    expect(evicted).toHaveLength(0);
+    expect(getLiveTurn(BUSY)).toBe(live);
+    expect(live.ended).toBe(false);
+
+    // It was deferred: re-persisted with a bumped deferral counter + future fireAt.
+    const pending = listWakeups({ marvinSessionId: BUSY });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.deferrals).toBe(1);
+    expect(pending[0]?.fireAt).toBeGreaterThan(Date.now());
+
+    endLiveTurn(live, { event: "turn.completed", data: {} });
+  });
+
+  it("fires normally once the session is idle", async () => {
+    const live = registerLiveTurn({
+      turnId: "t-live2",
+      marvinSessionId: BUSY,
+      projectId: PROJECT,
+    });
+    endLiveTurn(live, { event: "turn.completed", data: {} });
+    // ended === true → session is idle as far as the guard is concerned.
+
+    const fired: WakeupRecord[] = [];
+    setWakeupFireHandler((r) => void fired.push(r));
+
+    await fireNow(record({ id: "w-idle", marvinSessionId: BUSY }));
+    expect(fired).toHaveLength(1);
   });
 });

@@ -9,6 +9,35 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-17 — v0.1.36: a fired wakeup no longer evicts a live interactive
+  turn ("replaced by a newer turn on the same session", constantly).**
+  - **Symptom.** The user hit "replaced by a newer turn on the same session"
+    constantly, with interactive turns aborted mid-flight.
+  - **Diagnosis (systematic-debugging, evidence-first).** The message is only
+    emitted by `registerLiveTurn` when it evicts a still-live turn. Reading the
+    session transcript chronologically showed the signature: a user turn starts
+    (`Restart the api`, turnId cc3f05a3 @ 18:57:01), then 16 s later a
+    **scheduled/event-driven wakeup** turn starts on the SAME `marvinSessionId`
+    (9ab52f07 @ 18:57:17) and the user's turn immediately logs `turn.error
+    "Claude Code process aborted by user"` — the eviction abort. Root cause:
+    the v0.1.33 one-live-turn 409 guard lives ONLY in `POST /api/chat`. The
+    wakeup dispatch path (`startScheduledTurn` → `registerLiveTurn`, via the
+    scheduler's `fire`/`fireNow`) bypassed it, so a fired wakeup barged onto a
+    busy session and evicted the interactive turn. (No persisted-wakeup pile;
+    the firings were event-driven ADR-0038 background-job-completion wakeups.)
+  - **Fix.** `wakeup-scheduler` now checks `getLiveTurn` at the fire boundary
+    (`deferIfSessionBusy`, applied in both `fire` and `fireNow`): if a turn is
+    live, the wakeup YIELDS — re-arms itself `FIRE_DEFER_BACKOFF_MS` (20 s)
+    later via persist + arm — instead of dispatching. It retries until the
+    session goes idle, capped at `MAX_FIRE_DEFERRALS` (60 ≈ 20 min) after which
+    it drops with a loud log rather than ever evicting. A background wakeup can
+    no longer kill interactive work.
+  - **Verification.** Two regression tests in `wakeup-scheduler.test.ts`: a
+    fired wakeup on a session with a live turn does not call the handler, does
+    not evict, and re-persists with `deferrals: 1`; once the turn ends it fires
+    normally. All 13 scheduler + 6 turn-registry tests pass; typecheck adds zero
+    new errors; biome clean.
+
 - **2026-06-17 — v0.1.35: context-usage panel — a `/context`-style breakdown
   behind the status-bar `ctx` chip.**
   - **Motivation.** The status-bar `ctx NNK` chip already showed live resident
