@@ -55,9 +55,17 @@ export function registerLiveTurn(input: {
   projectId: string;
 }): LiveTurn {
   // If a prior turn was registered under this session but never ended
-  // cleanly (rare — server crash, etc.), evict it so the new turn wins.
+  // cleanly (rare — server crash, or an explicit replace), evict it so
+  // the new turn wins. The `/api/chat` POST route now refuses a second
+  // turn while one is live (409 turn-in-progress), so reaching this
+  // branch means something bypassed that guard — abort the evicted
+  // turn's agent rather than merely disconnecting it. Removing the bus
+  // listeners alone left the old SDK turn running detached, still
+  // mutating the workspace while the UI believed it had stopped.
   const existing = live.get(input.marvinSessionId);
   if (existing && !existing.ended) {
+    existing.ended = true;
+    existing.abortController.abort();
     existing.bus.emit("event", {
       event: "turn.error",
       data: { error: "replaced by a newer turn on the same session" },

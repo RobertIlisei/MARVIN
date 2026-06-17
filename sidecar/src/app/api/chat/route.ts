@@ -17,7 +17,11 @@ import {
   resolveRuntimeMode,
 } from "@marvin/runtime/sdk-runner";
 import { appendSessionTurn, lastSdkSessionId } from "@marvin/runtime/session";
-import { emitTurnEvent, registerLiveTurn } from "@marvin/runtime/turn-registry";
+import {
+  emitTurnEvent,
+  getLiveTurn,
+  registerLiveTurn,
+} from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -131,6 +135,29 @@ export async function POST(req: NextRequest) {
   const projectId = body.projectId?.trim() || slugifyWorkDir(cwd);
   const marvinSessionId = body.marvinSessionId?.trim() || randomUUID();
   const turnId = randomUUID();
+
+  // Concurrency guard: one live turn per `marvinSessionId`. A second
+  // POST arriving while a turn is still running — double-submit, a
+  // second tab, or a reconnect that POSTed instead of subscribing to
+  // `/api/chat/resume` — would otherwise evict the running turn and
+  // surface to it as the "replaced by a newer turn on the same session"
+  // stream error, silently orphaning a possibly-heavy in-flight turn.
+  // Refuse instead: to interrupt, the client must POST `/api/chat/cancel`
+  // first; to re-attach, GET `/api/chat/resume`. A fresh session (no
+  // `marvinSessionId` sent) generates a random id above and can't
+  // collide. Ended turns sitting in their 60s grace window have
+  // `ended === true` and never block.
+  const inflight = getLiveTurn(marvinSessionId);
+  if (inflight && !inflight.ended) {
+    return new Response(
+      JSON.stringify({
+        error: "A turn is already in progress for this session.",
+        code: "turn-in-progress",
+        turnId: inflight.turnId,
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  }
   const personality: PersonalityMode = body.personality ?? "marvin";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
