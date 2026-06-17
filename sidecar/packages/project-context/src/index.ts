@@ -125,8 +125,28 @@ function extractHeading(content: string): string | null {
 }
 
 /** Cheap token estimate — ~4 chars/token. Good enough for budgeting. */
-function approxTokens(s: string): number {
+export function approxTokens(s: string): number {
   return Math.ceil(s.length / 4);
+}
+
+/** One measured category of the injected first-message context. */
+export interface ProjectContextSection {
+  /** Stable category key, e.g. "Project docs", "ADR titles". */
+  label: string;
+  /** ~length/4 estimate of this category's contribution. */
+  approxTokens: number;
+}
+
+/**
+ * Result of `buildProjectContext`. `text` is the exact block prepended to the
+ * system prompt (unchanged from the historical string return). `breakdown` is
+ * the per-category size estimate that powers the `/context` panel — its rows
+ * sum to slightly LESS than `approxTokens(text)` because the markdown scaffold
+ * (header + `---` separators) is not attributed to any category.
+ */
+export interface ProjectContextResult {
+  text: string;
+  breakdown: ProjectContextSection[];
 }
 
 /**
@@ -156,7 +176,7 @@ function tailByTokens(s: string, maxTokens: number): { text: string; clipped: bo
  */
 export async function buildProjectContext(
   options: ProjectContextOptions,
-): Promise<string> {
+): Promise<ProjectContextResult> {
   // Workflow-health runs every turn — cheap, high-signal, and self-
   // expiring. Done first so even an early-return path still includes it.
   let workflowHealthBlock = "";
@@ -185,16 +205,30 @@ export async function buildProjectContext(
   // keeps seeing them. Skip the expensive doc/ADR/memory/graph/fingerprint
   // re-injection — those already landed on turn 1.
   if (!options.firstMessage) {
-    if (!workflowHealthBlock && !skillAuditBlock) return "";
+    if (!workflowHealthBlock && !skillAuditBlock)
+      return { text: "", breakdown: [] };
     const header =
       "# Project context (ongoing turn)\n\n" +
       "Standing reminders below. They persist every turn until the " +
       "underlying signal (workflow gaps, skill audit) is closed on " +
       "disk.\n\n---\n\n";
     const parts: string[] = [];
-    if (workflowHealthBlock) parts.push(workflowHealthBlock);
-    if (skillAuditBlock) parts.push(skillAuditBlock);
-    return `${header}${parts.join("\n\n---\n\n")}`;
+    const breakdown: ProjectContextSection[] = [];
+    if (workflowHealthBlock) {
+      parts.push(workflowHealthBlock);
+      breakdown.push({
+        label: "Workflow health",
+        approxTokens: approxTokens(workflowHealthBlock),
+      });
+    }
+    if (skillAuditBlock) {
+      parts.push(skillAuditBlock);
+      breakdown.push({
+        label: "Skill audit",
+        approxTokens: approxTokens(skillAuditBlock),
+      });
+    }
+    return { text: `${header}${parts.join("\n\n---\n\n")}`, breakdown };
   }
 
   const files = options.files ?? DEFAULT_FILES;
@@ -202,11 +236,21 @@ export async function buildProjectContext(
   const memoryFile = options.memoryFile ?? DEFAULT_MEMORY_FILE;
 
   const sections: string[] = [];
+  // Per-category size accumulators for the /context breakdown. They track the
+  // same strings pushed into `sections`, so the panel's estimate reflects
+  // exactly what's injected.
+  let docTokens = 0;
+  let adrTokens = 0;
+  let memoryTokens = 0;
   for (const rel of files) {
     const full = join(options.workDir, rel);
     try {
       const content = (await readFile(full, "utf-8")).trim();
-      if (content) sections.push(`## ${rel}\n\n${content}`);
+      if (content) {
+        const block = `## ${rel}\n\n${content}`;
+        sections.push(block);
+        docTokens += approxTokens(block);
+      }
     } catch {
       // File missing is not an error — projects opt in by creating the file.
     }
@@ -219,17 +263,18 @@ export async function buildProjectContext(
   const adrTitles = await readAdrTitles(options.workDir, adrDirs).catch(() => []);
   if (adrTitles.length > 0) {
     const index = adrTitles.map(({ rel, title }) => `- \`${rel}\` — ${title}`).join("\n");
-    sections.push(
+    const adrBlock =
       `## Architecture Decision Records (${adrTitles.length} — titles only)\n\n` +
-        `These decisions bind current work. Only titles are listed to keep ` +
-        `context lean. To use one:\n` +
-        `1. Find the relevant ADR(s) — query the knowledge graph ` +
-        `(\`graph_search\` / \`graph_neighbors\`, \`scope:"knowledge"\`) by topic, ` +
-        `or scan this list;\n` +
-        `2. **Read the specific ADR file** for its full text before relying on it.\n\n` +
-        `If a proposed change contradicts an ADR, flag it explicitly and either ` +
-        `refine the plan or write a new ADR superseding the old one.\n\n${index}`,
-    );
+      `These decisions bind current work. Only titles are listed to keep ` +
+      `context lean. To use one:\n` +
+      `1. Find the relevant ADR(s) — query the knowledge graph ` +
+      `(\`graph_search\` / \`graph_neighbors\`, \`scope:"knowledge"\`) by topic, ` +
+      `or scan this list;\n` +
+      `2. **Read the specific ADR file** for its full text before relying on it.\n\n` +
+      `If a proposed change contradicts an ADR, flag it explicitly and either ` +
+      `refine the plan or write a new ADR superseding the old one.\n\n${index}`;
+    sections.push(adrBlock);
+    adrTokens = approxTokens(adrBlock);
   }
 
   // Project memory — MARVIN's running log across sessions. Bounded to its
@@ -246,14 +291,15 @@ export async function buildProjectContext(
           `larger log. Older entries are in \`${memoryFile}\` and indexed in the ` +
           `knowledge graph (\`scope:"knowledge"\`) — query or Read the file for them._\n`
         : "";
-      sections.push(
+      const memBlock =
         `## Project memory (\`${memoryFile}\`)${clipped ? " — recent tail" : ""}\n\n` +
-          `Curated index of DURABLE FACTS (invariants, gotchas, constraints, ` +
-          `external facts). Each links to \`.marvin/memory/<slug>.md\` — use the ` +
-          `\`recall\` tool (or Read the file) for detail. Write ONLY via the ` +
-          `\`remember\` tool; never echo activity/decisions/status here (ADR-0042).` +
-          `${note}\n\n${text}`,
-      );
+        `Curated index of DURABLE FACTS (invariants, gotchas, constraints, ` +
+        `external facts). Each links to \`.marvin/memory/<slug>.md\` — use the ` +
+        `\`recall\` tool (or Read the file) for detail. Write ONLY via the ` +
+        `\`remember\` tool; never echo activity/decisions/status here (ADR-0042).` +
+        `${note}\n\n${text}`;
+      sections.push(memBlock);
+      memoryTokens = approxTokens(memBlock);
     }
   } catch {
     // No memory file yet — fine; MARVIN will create it at first Ship.
@@ -318,7 +364,7 @@ export async function buildProjectContext(
     !graphBlock &&
     !workflowHealthBlock
   ) {
-    return "";
+    return { text: "", breakdown: [] };
   }
 
   const header =
@@ -341,6 +387,22 @@ export async function buildProjectContext(
   const probe = probeBlock ? `\n\n---\n\n${probeBlock}` : "";
   const assembled = `${header}${body}${probe}`;
 
+  // Per-category breakdown for the /context panel. Rows are listed in the same
+  // order they appear in the block; sizes are the ~length/4 estimate of each
+  // category's own text (the markdown scaffold is intentionally unattributed).
+  const breakdown: ProjectContextSection[] = [];
+  const add = (label: string, tokens: number) => {
+    if (tokens > 0) breakdown.push({ label, approxTokens: tokens });
+  };
+  add("Workflow health", approxTokens(workflowHealthBlock));
+  add("Skill audit", approxTokens(skillAuditBlock));
+  add("Project fingerprint", approxTokens(fingerprintBlock));
+  add("Knowledge graph", approxTokens(graphBlock));
+  add("Project docs", docTokens);
+  add("ADR titles", adrTokens);
+  add("Project memory", memoryTokens);
+  add("Infra probes", approxTokens(probeBlock));
+
   // Backstop (ADR-0041): if the context is still very large, it's the curated
   // docs (kept whole per golden rule 5) — don't truncate them silently; tell
   // MARVIN so it can lean on the graph + targeted reads instead of assuming
@@ -352,9 +414,9 @@ export async function buildProjectContext(
       `as titles only and memory is the recent tail — pull detail on demand via ` +
       `the knowledge graph (\`scope:"knowledge"\`) and targeted file reads rather ` +
       `than assuming the full corpus is in context.\n\n`;
-    return `${header}${note}${body}${probe}`;
+    return { text: `${header}${note}${body}${probe}`, breakdown };
   }
-  return assembled;
+  return { text: assembled, breakdown };
 }
 
 export type { InfraProbe } from "./infra-probes";

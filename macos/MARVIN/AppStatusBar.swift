@@ -36,6 +36,7 @@ struct AppStatusBar: View {
 
     @State private var costPopoverOpen = false
     @State private var bellPopoverOpen = false
+    @State private var contextPopoverOpen = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -231,30 +232,22 @@ struct AppStatusBar: View {
     /// session for the next logical task. Clicking the segment opens
     /// a menu with the reset affordance (§3 follow-up). Hidden until
     /// at least one assistant turn has reported usage.
+    /// The resolved running model id, preferring what the sidecar actually
+    /// reports (carries the `[1m]` marker) over the user's picker selection.
+    private var currentModelId: String? {
+        if case .online(let h) = health.state, let m = h.model { return m }
+        return bridge.executorModel
+    }
+
     @ViewBuilder
     private var contextSegment: some View {
         if let resident = bridge.residentContextTokens {
-            let band = ContextUsageReader.band(forTokens: resident)
+            let window = ContextUsageReader.contextWindow(forModelId: currentModelId)
+            let band = ContextUsageReader.band(forTokens: resident, window: window)
             let kCtx = (Double(resident) / 1000.0).rounded()
             let billable = bridge.billableThisTurn
-            Menu {
-                Section("Context — \(Int(kCtx))K resident") {
-                    Text(band.hint)
-                    if let b = billable {
-                        Text("\(Int((Double(b) / 1000.0).rounded()))K new this turn (billable)")
-                    }
-                    Text("memory.md auto-loads on every fresh session")
-                }
-                Divider()
-                Button {
-                    NotificationCenter.default.post(
-                        name: .marvinRequestSdkReset,
-                        object: nil
-                    )
-                } label: {
-                    Label("Reset context for next message", systemImage: "arrow.counterclockwise")
-                }
-                .help("Drops the SDK cache that's making decisions slow. The visible chat stays intact; only the next turn starts fresh.")
+            Button {
+                contextPopoverOpen.toggle()
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "gauge.with.dots.needle.50percent")
@@ -263,10 +256,19 @@ struct AppStatusBar: View {
                 }
                 .foregroundStyle(colour(for: band))
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            .buttonStyle(.plain)
             .help(hoverText(resident: resident, billable: billable, band: band))
+            .popover(isPresented: $contextPopoverOpen, arrowEdge: .bottom) {
+                ContextDetailPopover(
+                    resident: resident,
+                    billable: billable,
+                    workDir: bridge.projectWorkDir,
+                    model: currentModelId,
+                    personality: bridge.personality,
+                    graphCalls: bridge.sessionGraphCalls,
+                    fileReadCalls: bridge.sessionFileReadCalls
+                )
+            }
             Divider().frame(height: 10)
         }
     }
