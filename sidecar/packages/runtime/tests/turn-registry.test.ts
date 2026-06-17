@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  cancelLiveTurn,
   endLiveTurn,
   getLiveTurn,
   registerLiveTurn,
@@ -78,6 +79,52 @@ describe("turn-registry — concurrency contract", () => {
     expect(getLiveTurn(sid)).toBe(second);
     expect(second.abortController.signal.aborted).toBe(false);
     endLiveTurn(second, { event: "turn.completed", data: {} });
+  });
+
+  it("cancel force-ends the turn synchronously, unblocking the session even if the agent never unwinds", () => {
+    const sid = `sess-${Math.random()}`;
+    const turn = registerLiveTurn({
+      turnId: "t1",
+      marvinSessionId: sid,
+      projectId: "p",
+    });
+
+    const terminals: unknown[] = [];
+    turn.bus.on("event", (e: { event: string; data: unknown }) => {
+      if (e.event === "turn.error" || e.event === "turn.completed")
+        terminals.push(e.data);
+    });
+
+    expect(cancelLiveTurn(sid)).toBe(true);
+
+    // The agent is asked to stop AND the turn is forced terminal now — we
+    // do not wait for the (possibly wedged) agent to unwind.
+    expect(turn.abortController.signal.aborted).toBe(true);
+    expect(turn.ended).toBe(true);
+
+    // 409 predicate is now false → a fresh POST /api/chat proceeds.
+    const after = getLiveTurn(sid);
+    expect(Boolean(after && !after.ended)).toBe(false);
+
+    // Exactly one terminal event, carrying the cancel marker.
+    expect(terminals).toEqual([{ error: "cancelled by user", cancelled: true }]);
+
+    // A late agent unwind calling endLiveTurn must NOT emit a second terminal.
+    endLiveTurn(turn, { event: "turn.completed", data: {} });
+    expect(terminals).toEqual([{ error: "cancelled by user", cancelled: true }]);
+  });
+
+  it("cancel returns false for an unknown or already-ended session", () => {
+    expect(cancelLiveTurn(`sess-${Math.random()}`)).toBe(false);
+
+    const sid = `sess-${Math.random()}`;
+    const turn = registerLiveTurn({
+      turnId: "t1",
+      marvinSessionId: sid,
+      projectId: "p",
+    });
+    endLiveTurn(turn, { event: "turn.completed", data: {} });
+    expect(cancelLiveTurn(sid)).toBe(false);
   });
 
   it("does not re-abort or re-emit when the prior turn already ended", () => {

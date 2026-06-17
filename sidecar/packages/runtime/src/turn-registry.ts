@@ -130,10 +130,21 @@ export function endLiveTurn(
   }, 60_000).unref?.();
 }
 
-/** Explicit user cancel. Returns true when a live turn was aborted. */
+/** Explicit user cancel. Returns true when a live turn was force-ended. */
 export function cancelLiveTurn(marvinSessionId: string): boolean {
   const turn = live.get(marvinSessionId);
   if (!turn || turn.ended) return false;
+  // Ask the agent to stop gracefully...
   turn.abortController.abort();
+  // ...but do NOT wait for it. Force the turn terminal now so the session
+  // unblocks even if the agent ignores the abort (hung model stream, wedged
+  // subprocess) — otherwise the 409 turn-in-progress guard would lock the
+  // user out with no in-app recovery. A still-running orphan is left to be
+  // reaped; if it later unwinds, `endLiveTurn`'s `ended` guard no-ops the
+  // duplicate terminal.
+  endLiveTurn(turn, {
+    event: "turn.error",
+    data: { error: "cancelled by user", cancelled: true },
+  });
   return true;
 }
