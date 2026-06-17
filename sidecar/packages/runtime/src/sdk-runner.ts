@@ -53,10 +53,12 @@ export type RuntimeMode = "opus" | "advisor";
  *
  *  - `opus`: the newest live Opus everywhere — the default, highest quality.
  *  - `advisor`: the newest live Sonnet drives the turn loop (cheap, fast),
- *    the newest live Opus is registered as `advisorModel` so the executor
- *    can call it through the server-side advisor tool on hard steps. Per
- *    Anthropic's launch data (advisor_20260301), this saves ~30-40% on
- *    routine code work with minimal quality loss.
+ *    the newest live Opus is the `advisorModel` — wired as the registered
+ *    `advisor` *subagent* (ADR-0033), MARVIN's Task-dispatched second opinion
+ *    on hard steps. (The binary's *server-side* advisor tool would auto-escalate
+ *    instead, but it's experimental + model-allowlisted and stays unwired — see
+ *    ADR-0033 addendum.) Cheap Sonnet loop + Opus only on hard consults is the
+ *    cost win.
  *
  *  Tier-resolved via `latestForTier` (ADR-0029) so a newly-shipped model
  *  (e.g. Opus 4.8) becomes the default automatically — no hardcoded
@@ -106,9 +108,11 @@ export type PermissionStrategy = "auto" | "gated";
  *               graph still work. Like Cursor's Ask.
  *   - `agent` — full autonomy (the default; pre-ADR-0036 behaviour). The
  *               `auto`/`gated` strategy governs confirmation.
- *   - `plan`  — the SDK's native `permissionMode: "plan"`: MARVIN drafts a
- *               plan + to-do list, makes no edits, and surfaces an approval
- *               step (ExitPlanMode) before executing.
+ *   - `plan`  — read-only planning turn (ADR-0036 revised). Runs under
+ *               `permissionMode: "default"` + the `readOnly` gate (NOT the
+ *               SDK's coupled plan permissionMode, which was retired): it
+ *               investigates, presents the plan inline, and stops. Execution
+ *               is a SEPARATE Agent-mode turn the user starts by approving.
  */
 export type AgentMode = "ask" | "agent" | "plan";
 
@@ -197,11 +201,16 @@ export interface RunAgentInput {
   cwd: string;
   model: string;
   /**
-   * Optional advisor model. Carried by the registered `advisor` agent
-   * definition (ADR-0033) — the SDK `advisorModel` Option is typed but
-   * NOT forwarded by sdk.mjs 0.2.113, so the agents-map registration is
-   * the wiring that actually works. Still passed as an Option for
-   * forward-compat with SDK versions that wire it.
+   * Optional advisor model. The ONE wired consumer is the registered
+   * `advisor` *subagent* (the `agents` map, ADR-0033) — MARVIN's
+   * Task-dispatched second opinion.
+   *
+   * It is NOT passed as `options.advisorModel`: that is a Claude Code
+   * *settings* field, not a `query()` option, so `sdk.mjs` 0.2.113 drops it.
+   * The binary's *server-side* advisor tool (`--advisor <model>`, the
+   * auto-escalate-on-hard-steps mechanism behind runtime "advisor" mode) is
+   * real but EXPERIMENTAL + model-allowlisted server-side (the current default
+   * Opus is rejected), so it is deliberately not wired. See ADR-0033 addendum.
    */
   advisorModel?: string | undefined;
   /**
@@ -218,8 +227,9 @@ export interface RunAgentInput {
   /** Permission strategy. Defaults to `auto` when omitted. */
   permissionStrategy?: PermissionStrategy;
   /** Autonomy mode (ADR-0036). Defaults to `agent` when omitted —
-   *  preserving pre-0.1.22 behaviour. `ask` makes the turn read-only at
-   *  the gate; `plan` runs under the SDK's plan permissionMode. */
+   *  preserving pre-0.1.22 behaviour. Both `ask` and `plan` are read-only
+   *  at the gate (see the `readOnly` wiring, L905/L967-969); `plan` adds the
+   *  inline plan-then-stop contract. Neither uses the SDK plan permissionMode. */
   mode?: AgentMode;
   /**
    * User-facing reasoning-effort selection. A {@link ReasoningEffort}
@@ -378,7 +388,9 @@ export const SCOUT_AGENT: AgentDefinition = {
  * plan; it does not touch the workspace.
  */
 export function buildAdvisorAgent(args: {
-  /** Full model id for the advisor; falls back to inheriting the executor. */
+  /** Full model id for the advisor. Callers resolve the default to the latest
+   *  Opus tier (see `advisorModelResolved` in `runAgent`); `"inherit"` only if
+   *  an undefined model somehow reaches here. */
   model?: string | undefined;
   /** Resolved SDK effort for the advisor. */
   effort: ReasoningEffort;
@@ -857,6 +869,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     signal,
   } = input;
   const permissionStrategy: PermissionStrategy = input.permissionStrategy ?? "auto";
+  // The advisor subagent (ADR-0033) defaults to the latest Opus tier
+  // (claude-opus-4-8 today) rather than inheriting the executor — a second
+  // opinion should always come from the strongest model, even when a cheaper
+  // model drives the loop (e.g. runtime "advisor" mode). Tier-resolved per
+  // ADR-0029 (no hardcoded version id); `defaultModel()` is the last resort.
+  const advisorModelResolved = advisorModel ?? (await latestForTier("opus")) ?? defaultModel();
 
   // Wire Honeycomb telemetry per-turn. `computeHoneycombTelemetryEnv`
   // is the pure form — it reads the saved config at
@@ -1008,12 +1026,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     agents: {
       scout: SCOUT_AGENT,
       advisor: buildAdvisorAgent({
-        model: advisorModel,
+        model: advisorModelResolved,
         // Default the advisor to the EXECUTOR's effort when no separate
         // advisor effort was picked — exactly the pre-ADR-0033 behaviour.
         effort: resolveEffort(
           input.advisorThinkingMode ?? input.thinkingMode,
-          advisorModel ?? model,
+          advisorModelResolved,
         ),
       }),
     },
@@ -1024,7 +1042,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // `resolveEffort`. Defaults to `high` (the SDK default), so existing
     // sessions keep their current responsiveness.
     effort: resolveEffort(input.thinkingMode, model),
-    ...(advisorModel ? { advisorModel } : {}),
+    // Server-side advisor (`--advisor <model>`) is intentionally NOT wired
+    // here. The old inert `options.advisorModel` (a Claude Code *settings*
+    // field the SDK wrapper drops — not a `query()` option) is removed.
+    // Verified against the 0.2.113 binary (2026-06-18): the flag is
+    // EXPERIMENTAL (gated behind `CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL`)
+    // AND the advisor model is allowlisted server-side — the current default
+    // Opus is rejected, so passing it unconditionally would error the turn.
+    // The advisor MODEL still reaches its real consumer: the `agents.advisor`
+    // subagent registered above (ADR-0033). See ADR-0033 addendum.
     ...(sessionId ? { resume: sessionId } : {}),
   } as Options;
 

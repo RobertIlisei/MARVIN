@@ -7,6 +7,34 @@
 **Touches:** `sdk-runner.ts`, `tools/policy.ts`, `personality.ts`, chat route,
 turn-orchestrator, wakeup records, native effort picker (`ChatAgentsFooter.swift`)
 
+> **Addendum 2026-06-18 — corrects Context point 2, and explains why the
+> server-side advisor stays unwired.** A later audit clarified the mechanics and
+> tested them live against the 0.2.113 binary:
+>
+> - `advisorModel` is NOT a `query()` option — it's a field in the SDK's
+>   *settings* schema (`sdk.d.ts:4575`), so `sdk.mjs` was never going to forward
+>   it as a flag. The old `options.advisorModel` was therefore inert; it is now
+>   removed (it did nothing — the advisor *subagent* model flows through the
+>   `agents` map, which works).
+> - The binary DOES have a real *server-side* advisor — `--advisor <model>`
+>   (feature `advisor-tool-2026-03-01`), a cheap executor auto-escalating to a
+>   stronger advisor on hard steps — reachable from `query()` via the
+>   **`extraArgs`** escape hatch.
+> - **But it is not usable as-is.** Live verification: the `--advisor` flag is
+>   EXPERIMENTAL (an "unknown option" unless `CLAUDE_CODE_ENABLE_EXPERIMENTAL_
+>   ADVISOR_TOOL=1`), AND the advisor model is allowlisted server-side. The
+>   current default Opus (`claude-opus-4-8`) is REJECTED ("cannot be used as an
+>   advisor"); only specific older ids pass (`opus-4-1`, `opus-4-6`,
+>   `sonnet-4-6`), while `opus-4-5`/`haiku-4-5`/`opus-4-8` fail. Wiring it
+>   naively with the default model would error the whole turn.
+>
+> Decision: **do not wire the server-side advisor** (experimental flag + a
+> drifting, un-owned model allowlist = exactly the fragile dependency we avoid).
+> Runtime "advisor" mode keeps the `agents`-map advisor *subagent* (a distinct,
+> Task-dispatched mechanism that works). If revisited, it must be gated: enable
+> the experimental env var AND pass `--advisor` only for an eligibility-checked
+> advisor id, falling back to no-flag otherwise so a turn never breaks.
+
 ## Context
 
 The user can set reasoning effort for the executor (`thinkingMode` →
