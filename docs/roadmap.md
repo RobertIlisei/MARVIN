@@ -17,6 +17,13 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.36** — A fired wakeup no longer evicts a live interactive turn. The
+v0.1.33 one-live-turn 409 guard only covered `POST /api/chat`; the wakeup
+dispatch path bypassed it, so a scheduled/event-driven wakeup firing during an
+interactive turn evicted it ("replaced by a newer turn on the same session",
+aborting the user's work). `wakeup-scheduler` now yields — defers + re-arms —
+while a turn is live (`deferIfSessionBusy` in `fire`/`fireNow`). Builds on v0.1.35.
+
 **v0.1.35** — Context-usage panel. The status-bar `ctx` chip is now a
 click-to-open popover (`ContextDetailPopover`): exact resident/window % from
 live SDK usage with window-relative colour bands (a 1M `[1m]` model no longer
