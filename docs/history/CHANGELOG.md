@@ -9,6 +9,35 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-17 — v0.1.34: make "Stop" authoritative — a wedged turn can no
+  longer permanently lock the session behind the 409 guard.**
+  - **Diagnosis.** The v0.1.33 one-live-turn guard (`409 turn-in-progress`)
+    only releases when a turn flips to `ended === true`, which — until now —
+    happened *only* when the agent itself unwound and the orchestrator called
+    `endLiveTurn()`. `cancelLiveTurn` merely fired `abortController.abort()` and
+    trusted the agent to honour it. If the agent was genuinely wedged (a hung
+    model stream that never reaches `result`, a stuck subprocess), `abort()` did
+    nothing observable, `ended` stayed `false`, and the user was permanently
+    409-locked with no in-app escape — the only recovery was restarting the
+    sidecar (the turn registry is an in-memory `Map`). There is no
+    max-turn-duration watchdog; the existing watchdog (`sdk-runner.ts`) arms only
+    *after* a successful `result`.
+  - **Fix.** `cancelLiveTurn` now force-ends the turn: it fires `abort()` (a
+    best-effort graceful stop) and then immediately calls `endLiveTurn(...,
+    { event: "turn.error", data: { cancelled: true } })`, setting `ended = true`
+    and emitting one terminal event synchronously. The session unblocks the
+    instant Stop is pressed, regardless of whether the agent unwinds; a
+    still-running orphan is left to be reaped. `endLiveTurn`'s `if (turn.ended)
+    return` guard makes any later real terminal a harmless no-op (no duplicate
+    event). One function changed in `turn-registry.ts`; the macOS/web Stop
+    buttons and `/api/chat/cancel` already wire to it.
+  - **Verification.** Two regression tests added to `turn-registry.test.ts`
+    (RED→GREEN): cancel sets `aborted` + `ended` synchronously, leaves the 409
+    predicate false, emits exactly one `{ cancelled: true }` terminal, and a late
+    `endLiveTurn` emits no second terminal; cancel returns `false` for an unknown
+    or already-ended session. All 6 turn-registry tests pass; typecheck adds zero
+    new errors over the clean tree (14 pre-existing, unrelated); biome clean.
+
 - **2026-06-17 — v0.1.33: one live turn per session — fix the "replaced by a
   newer turn on the same session" stream error.**
   - **Diagnosis.** A heavy multi-step turn froze mid-plan with a "Stream error:
