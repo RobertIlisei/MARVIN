@@ -9,6 +9,43 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-18 — v0.1.37: server-initiated turns now reach an idle client
+  ("I'll tell you when the job's done" → and it actually appears).**
+  - **Symptom.** MARVIN starts a background job (ADR-0038) or arms a timed
+    wakeup (ADR-0031), says "I'll report when it's done", the job finishes — and
+    the user sees *nothing*, left waiting with no idea whether it failed,
+    finished, or is still running.
+  - **Diagnosis (graphify-first, then read).** The server half works: a job exit
+    fires `fireNow → startScheduledTurn → runDetachedTurn`, a real turn runs and
+    emits to the in-memory bus + the on-disk transcript. The break is the last
+    hop. The macOS app attaches to a turn's live bus via `attachLive()` →
+    `GET /api/chat/resume`, and `attachLive()` has **exactly one caller**: the
+    session-*hydrate* path. There is no always-on sidecar→app channel. So once an
+    interactive turn ends the app sits idle holding no stream; a later
+    job-completion / wakeup turn registers and emits into the bus with **no
+    listener**, visible only on the next session switch / relaunch (which
+    re-hydrates and replays the transcript). Pull-based delivery can't surface a
+    push-shaped event.
+  - **Fix (ADR-0043).** A thin announcement channel. `registerLiveTurn` now
+    emits a `turn.registered` for every new turn (`subscribeTurnAnnouncements`);
+    a new always-on `GET /api/chat/announce?projectId=` SSE (25 s heartbeat,
+    read-only) forwards them. The idle macOS app holds that stream open per
+    loaded project (auto-reconnecting, armed from hydrate / first-turn /
+    cold-start) and, on an announcement for the open session **while it has no
+    live stream of its own**, calls the existing `attachLive` — so the server
+    turn renders with no switch. Dedup against a self-started turn is `!isSending`
+    plus the server-side `deferIfSessionBusy` (a wakeup/job turn only registers
+    once the live turn ends). A `run_background_job` tool_use lights a
+    "background job running" chip until the completion turn settles, so in-flight
+    is visibly distinct from done.
+  - **Verification.** 3 new announcer tests in `turn-announcements.test.ts`; the
+    6 existing `turn-registry` tests still pass (the emit doesn't perturb the
+    concurrency contract) — 26 runtime tests green. Sidecar tsc clean for every
+    touched file (the pre-existing `can-use-tool-dispatch.test.ts` SDK-type drift
+    is unrelated — confirmed on the stashed clean tree). `swift build` of the
+    MARVIN target succeeds. **Live end-to-end (rebuild + drive a real job while
+    idle) deferred to post-ship by the user's request.**
+
 - **2026-06-17 — v0.1.36: a fired wakeup no longer evicts a live interactive
   turn ("replaced by a newer turn on the same session", constantly).**
   - **Symptom.** The user hit "replaced by a newer turn on the same session"

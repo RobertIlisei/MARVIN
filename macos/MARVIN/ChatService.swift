@@ -45,6 +45,17 @@ enum ChatServiceError: Error {
     case transport(underlying: Error)
 }
 
+/// A new turn was registered server-side (`GET /api/chat/announce`, ADR-0043).
+/// Mirrors the `TurnAnnouncement` shape in `turn-registry.ts`. The client uses
+/// it only to decide whether to re-attach to a server-initiated turn — the turn
+/// itself renders through the existing resume path, not from this payload.
+struct TurnAnnouncement: Decodable, Sendable {
+    let marvinSessionId: String
+    let projectId: String
+    let turnId: String
+    let startedAt: Double
+}
+
 /// Singleton service. Sidecar URL comes from ServerConfig (MARVIN_PORT env var,
 /// default 3030) — Phase 2 inherits Phase 1's "the sidecar is the trust
 /// boundary, accessed via loopback" choice from ADR-0016.
@@ -383,6 +394,111 @@ final class ChatService {
         if !lineBuffer.isEmpty {
             let line = String(data: lineBuffer, encoding: .utf8) ?? ""
             try? emitLine(line)
+        }
+    }
+
+    /// Hold the per-project announce stream open (`GET /api/chat/announce`)
+    /// and yield each `turn.registered` announcement. ADR-0043: lets an idle
+    /// client learn a turn it did NOT start has begun (a background-job
+    /// completion or a timed wakeup) so it can re-attach via `attachLive`.
+    ///
+    /// Read-only and long-lived — it never terminates on its own; the consumer
+    /// cancels (project closed) or the server closes. The caller is expected to
+    /// reconnect on a clean finish (the heartbeat-reaped server side, or a
+    /// dropped loopback connection).
+    func announceStream(
+        projectId: String
+    ) -> AsyncThrowingStream<TurnAnnouncement, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await runAnnounce(
+                        projectId: projectId,
+                        continuation: continuation
+                    )
+                    continuation.finish()
+                } catch {
+                    if !(error is CancellationError) {
+                        continuation.finish(throwing: error)
+                    } else {
+                        continuation.finish()
+                    }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func runAnnounce(
+        projectId: String,
+        continuation: AsyncThrowingStream<TurnAnnouncement, Error>.Continuation
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/chat/announce")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "projectId", value: projectId)]
+        guard let composed = comps.url else {
+            throw ChatServiceError.transport(underlying: URLError(.badURL))
+        }
+        var req = URLRequest(url: composed)
+        req.httpMethod = "GET"
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+
+        let (bytes, response) = try await session.bytes(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var body = ""
+            var read = 0
+            for try await line in bytes.lines {
+                body += line + "\n"
+                read += line.utf8.count + 1
+                if read > 1024 { break }
+            }
+            throw ChatServiceError.httpStatus(http.statusCode, body: body)
+        }
+
+        // Minimal SSE parse — we only care about `turn.registered` frames,
+        // whose `data:` is a TurnAnnouncement JSON. `announce.attached` and
+        // `: ping` heartbeats are ignored (they keep the stream warm).
+        var lineBuffer = Data()
+        var currentName: String? = nil
+        var currentData = ""
+        let decoder = JSONDecoder()
+
+        func emitLine(_ line: String) {
+            if line.isEmpty {
+                if currentName == "turn.registered",
+                   let ann = try? decoder.decode(
+                       TurnAnnouncement.self,
+                       from: Data(currentData.utf8)
+                   ) {
+                    continuation.yield(ann)
+                }
+                currentName = nil
+                currentData = ""
+                return
+            }
+            if line.hasPrefix(":") { return }
+            if let value = parseField(prefix: "event: ", line: line) {
+                currentName = value
+            } else if let value = parseField(prefix: "data: ", line: line) {
+                currentData = currentData.isEmpty ? value : currentData + "\n" + value
+            }
+        }
+
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if byte == 0x0A {
+                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+                lineBuffer.removeAll(keepingCapacity: true)
+                emitLine(line)
+            } else if byte != 0x0D {
+                lineBuffer.append(byte)
+            }
         }
     }
 
