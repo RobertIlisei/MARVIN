@@ -17,6 +17,18 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.37** — Server-initiated turns reach an idle client ([ADR-0043](./decisions/0043-server-turn-announcements.md)).
+ADR-0038's background-job completion (and ADR-0031 wakeups) fire a real turn
+server-side, but the idle macOS app only attached to a turn's stream on session
+*hydrate* (`attachLive` had one caller) — so a job-completion / wakeup turn ran
+into the bus with no listener and was invisible until the next session switch.
+A new per-project always-on SSE (`GET /api/chat/announce`) forwards a
+`turn.registered` emitted from `registerLiveTurn`; the idle client, when it has
+no live stream of its own, calls the existing `attachLive` and the turn renders.
+Plus a "background job running" chip so in-flight ≠ done. Completes the ADR-0038
+loop on the client axis. 3 new announcer tests (26 runtime green); `swift build`
+clean. Builds on v0.1.36.
+
 **v0.1.36** — A fired wakeup no longer evicts a live interactive turn. The
 v0.1.33 one-live-turn 409 guard only covered `POST /api/chat`; the wakeup
 dispatch path bypassed it, so a scheduled/event-driven wakeup firing during an

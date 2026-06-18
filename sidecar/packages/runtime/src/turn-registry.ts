@@ -47,7 +47,45 @@ export interface LiveTurn {
   ended: boolean;
 }
 
+/**
+ * Emitted by {@link registerLiveTurn} for EVERY new turn — human POST, timed
+ * wakeup (ADR-0031), or background-job completion (ADR-0038). The
+ * `/api/chat/announce` SSE route forwards these so an idle client can learn a
+ * turn it did NOT start has begun and re-attach via `/api/chat/resume`
+ * (ADR-0043). Carries no payload beyond identity — the client renders the turn
+ * through the existing resume path, not from the announcement.
+ */
+export interface TurnAnnouncement {
+  marvinSessionId: string;
+  projectId: string;
+  turnId: string;
+  /** Epoch ms the turn was registered. */
+  startedAt: number;
+}
+
 const live = new Map<string, LiveTurn>();
+
+// Single, process-wide announcer. Same single-process assumption as `live`
+// above (MARVIN is one Node process); it rides the same module instance shared
+// across the POST / resume / announce route chunks. NOT pinned to globalThis —
+// unlike `wakeup-scheduler`, this module is never imported from
+// `instrumentation.ts`, so there is no second module copy to reconcile.
+const announcer = new EventEmitter();
+// Tab/app reconnect churn can briefly stack listeners; don't warn.
+announcer.setMaxListeners(0);
+
+/**
+ * Subscribe to new-turn announcements. Returns an unsubscribe fn. Used by the
+ * `/api/chat/announce` SSE route; one subscription per connected client.
+ */
+export function subscribeTurnAnnouncements(
+  listener: (announcement: TurnAnnouncement) => void,
+): () => void {
+  announcer.on("turn", listener);
+  return () => {
+    announcer.off("turn", listener);
+  };
+}
 
 export function registerLiveTurn(input: {
   turnId: string;
@@ -86,6 +124,14 @@ export function registerLiveTurn(input: {
     ended: false,
   };
   live.set(input.marvinSessionId, turn);
+  // Announce AFTER the turn is in the map, so any listener that reacts by
+  // calling getLiveTurn / resume finds it. ADR-0043.
+  announcer.emit("turn", {
+    marvinSessionId: turn.marvinSessionId,
+    projectId: turn.projectId,
+    turnId: turn.turnId,
+    startedAt: turn.startedAt,
+  } satisfies TurnAnnouncement);
   return turn;
 }
 

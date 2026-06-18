@@ -262,6 +262,26 @@ final class ChatPreviewModel {
     /// just listening to whatever the sidecar's bus emits.
     private var resumeTask: Task<Void, Never>?
 
+    /// ADR-0043 — the per-project announce subscription. Held open the whole
+    /// time a project is loaded so an idle session catches a server-initiated
+    /// turn (background-job completion / timed wakeup) it did NOT start. The
+    /// existing `resumeTask`/`attachLive` only ran on hydrate, so those turns
+    /// streamed into the bus with no listener and were invisible until a
+    /// session switch. This closes that gap.
+    private var announceTask: Task<Void, Never>?
+    private var announceProjectId: String?
+
+    /// ADR-0043 — true while the live tail is following a turn the client did
+    /// NOT start (attached via the announce path). Lets its terminal clear the
+    /// background-job affordance below.
+    private var tailingServerTurn: Bool = false
+
+    /// ADR-0043 — true while a background job MARVIN started is in flight, so
+    /// the UI distinguishes "still running" from "done". Best-effort: set when
+    /// a `run_background_job` tool_use lands in the stream, cleared when the
+    /// next server-initiated turn completes.
+    private(set) var backgroundJobRunning: Bool = false
+
     /// Phase 2h — true while we're fetching the transcript JSON.
     /// Surfaces a thin "loading" affordance so the user doesn't
     /// see an empty list and assume the project has no history.
@@ -599,6 +619,13 @@ final class ChatPreviewModel {
         cancel()
         resumeTask?.cancel()
         resumeTask = nil
+        // ADR-0043 — drop the announce subscription; a fresh hydrate / first
+        // turn re-arms it for whatever project loads next.
+        announceTask?.cancel()
+        announceTask = nil
+        announceProjectId = nil
+        tailingServerTurn = false
+        backgroundJobRunning = false
         messages.removeAll()
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
@@ -659,6 +686,9 @@ final class ChatPreviewModel {
 
         loadedProjectId = projectId
         loadedSessionId = sessionId
+        // ADR-0043 — keep the announce stream live for this project so an idle
+        // session catches server-initiated turns it didn't start.
+        ensureAnnounceLoop(projectId: projectId)
         openTab(sessionId)  // hydrated session is an open tab (Cursor-style)
         isHydrating = true
         lastError = nil
@@ -779,6 +809,71 @@ final class ChatPreviewModel {
         }
     }
 
+    /// ADR-0043 — hold the per-project announce stream open (auto-reconnecting)
+    /// while a project is loaded. Each `turn.registered` for a turn the client
+    /// did NOT start (fired server-side while idle) triggers a re-attach via the
+    /// existing `attachLive`, so a background-job completion / wakeup renders
+    /// without a session switch. Idempotent per project.
+    func ensureAnnounceLoop(projectId: String) {
+        if announceProjectId == projectId, announceTask != nil { return }
+        announceProjectId = projectId
+        announceTask?.cancel()
+        announceTask = Task { @MainActor in
+            // The stream is long-lived but can drop (heartbeat reap, sidecar
+            // restart). Re-attach with a short backoff until the project
+            // changes or the task is cancelled.
+            while !Task.isCancelled, announceProjectId == projectId {
+                do {
+                    let stream = ChatService.shared.announceStream(projectId: projectId)
+                    for try await ann in stream {
+                        guard announceProjectId == projectId else { break }
+                        onAnnouncement(ann)
+                    }
+                } catch {
+                    NSLog("[ChatPreview] announce stream error: \(error)")
+                }
+                if Task.isCancelled || announceProjectId != projectId { break }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+        }
+    }
+
+    /// React to a server-side turn registration. Only the session on screen is
+    /// relevant, and only when we're idle: a turn we started ourselves is
+    /// already streaming over our POST, and the sidecar DEFERS wakeup/job turns
+    /// while a turn is live (`deferIfSessionBusy`), so an announcement that
+    /// reaches us at idle is genuinely server-initiated.
+    private func onAnnouncement(_ ann: TurnAnnouncement) {
+        guard ann.marvinSessionId == loadedSessionId else { return }
+        guard !isSending else { return }
+        tailingServerTurn = true
+        attachLive(marvinSessionId: ann.marvinSessionId)
+    }
+
+    /// True when an SSE `cli.event` carries a `run_background_job` tool_use —
+    /// i.e. MARVIN just started a tracked background job (ADR-0038). Same wire
+    /// shape `peekCLIEvent` reads.
+    private func cliEventStartsBackgroundJob(_ data: Data) -> Bool {
+        struct Wire: Decodable {
+            let type: String
+            struct Msg: Decodable {
+                struct Block: Decodable {
+                    let type: String
+                    let name: String?
+                }
+                let content: [Block]?
+            }
+            let message: Msg?
+        }
+        guard let env = try? JSONDecoder().decode(Wire.self, from: data),
+              env.type == "assistant",
+              let blocks = env.message?.content
+        else { return false }
+        return blocks.contains {
+            $0.type == "tool_use" && $0.name == "run_background_job"
+        }
+    }
+
     /// Respond to the head of the pending-confirms queue. Called
     /// from the ConfirmSheet view's button actions. Best-effort —
     /// network failure is logged + the confirm stays pending so the
@@ -880,6 +975,9 @@ final class ChatPreviewModel {
                 NativePrefs.shared.setLastSessionId(s.marvinSessionId, forProject: pid)
                 // The just-started chat becomes an open tab (Cursor-style).
                 openTab(s.marvinSessionId)
+                // ADR-0043 — a brand-new chat has no hydrate; arm the announce
+                // loop now so this session catches its own background-job turns.
+                ensureAnnounceLoop(projectId: pid)
             }
             // ADR-0021 M4: drive brain profile natively from SSE.
             b.marvinState = "thinking"
@@ -912,6 +1010,11 @@ final class ChatPreviewModel {
             // list IS the rendered surface, so the SwiftUI commit
             // that follows is what the user actually sees on screen.
             messages = ChatStreamReducer.apply(messages, cliEventData: data)
+            // ADR-0043 — MARVIN just started a tracked background job; light the
+            // "running" affordance until its completion turn lands.
+            if cliEventStartsBackgroundJob(data) {
+                backgroundJobRunning = true
+            }
             // ADR-0036 — capture the latest TodoWrite list (Plan/Agent
             // to-do checklist). Synchronous like the message reducer; the
             // model write is cheap and drives the TodoListStrip.
@@ -1005,6 +1108,13 @@ final class ChatPreviewModel {
                 // editor pane so the user can actually see the plan file.
                 persistAndOpenPlan()
             }
+            // ADR-0043 — a server-initiated turn (background-job completion /
+            // wakeup) just finished rendering; settle the in-flight affordance
+            // and the server-tail flag.
+            if tailingServerTurn {
+                tailingServerTurn = false
+                backgroundJobRunning = false
+            }
             // ADR-0021 M3: kick BranchService for dirty-count refresh.
             NotificationCenter.default.post(name: .marvinTurnCompleted, object: nil)
             // ADR-0034 — settle the changed-set strip at the turn boundary.
@@ -1028,6 +1138,12 @@ final class ChatPreviewModel {
         case .turnError(let e):
             lastError = e.error
             currentActivity = nil
+            // ADR-0043 — a server-initiated turn errored; settle the affordance
+            // so the chip doesn't linger as a phantom "running" forever.
+            if tailingServerTurn {
+                tailingServerTurn = false
+                backgroundJobRunning = false
+            }
             // Seal every still-streaming row — without this a turn
             // that errors before the SDK emits its final `result`
             // event leaves the latest assistant message stuck on a
@@ -1741,6 +1857,7 @@ struct ChatPreviewView: View {
     private var trayRows: [AnyView] {
         var rows: [AnyView] = []
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
+        if model.backgroundJobRunning { rows.append(AnyView(backgroundJobChip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
         if !model.todos.isEmpty {
             // Two-tier (ADR-0036 addendum): a plan-backed checklist (Plan mode)
@@ -1917,6 +2034,24 @@ struct ChatPreviewView: View {
     /// segment but hasn't sent the message yet. Communicates that the
     /// reset is armed and lets them un-arm it before sending. The
     /// chip clears automatically after the next send dispatches.
+    /// ADR-0043 — visible while a background job MARVIN started is in flight,
+    /// so "still running" is distinct from "done". Clears when the job's
+    /// completion turn renders (pushed via the announce channel).
+    private var backgroundJobChip: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+            Text("Background job running — I'll report here when it finishes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.blue.opacity(0.08))
+    }
+
     private var resetArmedChip: some View {
         HStack(spacing: 8) {
             Image(systemName: "arrow.counterclockwise")
