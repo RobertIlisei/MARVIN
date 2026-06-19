@@ -60,6 +60,9 @@ const DEFAULT_MEMORY_FILE = ".marvin/memory.md";
 
 /** How much of a long memory.md to inject (recent tail). ADR-0041. */
 const MEMORY_TAIL_TOKENS = 8000;
+/** How much of the backlog index to inject (open items are small). ADR-0044. */
+const BACKLOG_TAIL_TOKENS = 4000;
+const DEFAULT_BACKLOG_FILE = ".marvin/backlog.md";
 /**
  * Soft ceiling for the whole first-message context (ADR-0041). The curated
  * project docs are kept whole (golden rule 5) and ADRs are already titles-only,
@@ -242,6 +245,7 @@ export async function buildProjectContext(
   let docTokens = 0;
   let adrTokens = 0;
   let memoryTokens = 0;
+  let backlogTokens = 0;
   for (const rel of files) {
     const full = join(options.workDir, rel);
     try {
@@ -303,6 +307,30 @@ export async function buildProjectContext(
     }
   } catch {
     // No memory file yet — fine; MARVIN will create it at first Ship.
+  }
+
+  // Project backlog — open deferred-work items parked across sessions (ADR-0044).
+  // Surfaced so MARVIN re-discovers its own "noticed in flight" follow-ups; it
+  // is a PARKING LOT it may PROPOSE resuming, NOT an auto-queue to drain.
+  try {
+    const backlogPath = join(options.workDir, DEFAULT_BACKLOG_FILE);
+    const backlogContent = (await readFile(backlogPath, "utf-8")).trim();
+    // Only inject when there's actually open work (the index header alone, with
+    // "_No open backlog items._", isn't worth context budget).
+    if (backlogContent && !/_No open backlog items\._/.test(backlogContent)) {
+      const { text, clipped } = tailByTokens(backlogContent, BACKLOG_TAIL_TOKENS);
+      const backlogBlock =
+        `## Project backlog (\`${DEFAULT_BACKLOG_FILE}\`)${clipped ? " — recent tail" : ""}\n\n` +
+        `Parked, OUT-OF-SCOPE follow-ups from past sessions — work the user chose ` +
+        `to defer, not a to-do list to drain. You may PROPOSE resuming one when ` +
+        `relevant; never act on it unprompted (it is a parking lot, not a queue — ` +
+        `ADR-0044). Add via \`backlog_add\` (with the user's go-ahead), resolve via ` +
+        `\`backlog_resolve\`.\n\n${text}`;
+      sections.push(backlogBlock);
+      backlogTokens = approxTokens(backlogBlock);
+    }
+  } catch {
+    // No backlog file yet — fine.
   }
 
   let probeBlock = "";
@@ -401,6 +429,7 @@ export async function buildProjectContext(
   add("Project docs", docTokens);
   add("ADR titles", adrTokens);
   add("Project memory", memoryTokens);
+  add("Project backlog", backlogTokens);
   add("Infra probes", approxTokens(probeBlock));
 
   // Backstop (ADR-0041): if the context is still very large, it's the curated

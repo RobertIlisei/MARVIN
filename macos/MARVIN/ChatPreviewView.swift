@@ -282,6 +282,19 @@ final class ChatPreviewModel {
     /// next server-initiated turn completes.
     private(set) var backgroundJobRunning: Bool = false
 
+    /// ADR-0044 — count of open+doing backlog items; drives the tray chip.
+    /// Refreshed on session load + turn completion (cheap GET).
+    private(set) var backlogOpenCount: Int = 0
+    func refreshBacklogCount() {
+        guard let wd = MarvinBridge.shared.projectWorkDir else {
+            backlogOpenCount = 0
+            return
+        }
+        Task { @MainActor in
+            backlogOpenCount = await BacklogService.shared.openCount(workDir: wd)
+        }
+    }
+
     /// Phase 2h — true while we're fetching the transcript JSON.
     /// Surfaces a thin "loading" affordance so the user doesn't
     /// see an empty list and assume the project has no history.
@@ -626,6 +639,7 @@ final class ChatPreviewModel {
         announceProjectId = nil
         tailingServerTurn = false
         backgroundJobRunning = false
+        backlogOpenCount = 0  // ADR-0044
         messages.removeAll()
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
@@ -689,6 +703,7 @@ final class ChatPreviewModel {
         // ADR-0043 — keep the announce stream live for this project so an idle
         // session catches server-initiated turns it didn't start.
         ensureAnnounceLoop(projectId: projectId)
+        refreshBacklogCount()  // ADR-0044 — light the tray chip if items are parked
         openTab(sessionId)  // hydrated session is an open tab (Cursor-style)
         isHydrating = true
         lastError = nil
@@ -1124,6 +1139,8 @@ final class ChatPreviewModel {
             if let pid = loadedProjectId ?? b.activeProjectId {
                 refreshSessions(projectId: pid)
             }
+            // ADR-0044 — a turn may have parked a backlog item; refresh the chip.
+            refreshBacklogCount()
             // Drain one queued message into the next turn. The activeTask
             // chain set isSending=false in its `defer` before this event
             // fires, so sendInternal() will start a fresh stream cleanly.
@@ -1190,6 +1207,8 @@ struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.openWindow) private var openWindow
     @State private var model = ChatPreviewModel()
+    /// ADR-0044 — backlog browser sheet.
+    @State private var backlogPanelOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1327,6 +1346,31 @@ struct ChatPreviewView: View {
                     )
                 }
             }
+        }
+        // ADR-0044 — the backlog browser.
+        .sheet(isPresented: $backlogPanelOpen) {
+            if let wd = bridge.projectWorkDir {
+                BacklogPanel(
+                    workDir: wd,
+                    onPromote: { item in promoteBacklog(item, workDir: wd) },
+                    onClose: { backlogPanelOpen = false },
+                    onChanged: { model.refreshBacklogCount() }
+                )
+            }
+        }
+    }
+
+    /// ADR-0044 — seed a turn from a backlog item and mark it in-progress.
+    /// Promotion is always a user action — the backlog never self-executes.
+    private func promoteBacklog(_ item: BacklogItem, workDir: String) {
+        model.sendControl(
+            instruction: "Implement this backlog item:\n\n**\(item.title)**\n\n\(item.body)",
+            display: "⬆ Promoted from backlog: \(item.title)",
+            cwd: workDir
+        )
+        Task {
+            try? await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "doing")
+            model.refreshBacklogCount()
         }
     }
 
@@ -1858,6 +1902,7 @@ struct ChatPreviewView: View {
         var rows: [AnyView] = []
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
         if model.backgroundJobRunning { rows.append(AnyView(backgroundJobChip)) }
+        if model.backlogOpenCount > 0 { rows.append(AnyView(backlogChip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
         if !model.todos.isEmpty {
             // Two-tier (ADR-0036 addendum): a plan-backed checklist (Plan mode)
@@ -2050,6 +2095,24 @@ struct ChatPreviewView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.blue.opacity(0.08))
+    }
+
+    /// ADR-0044 — open backlog items parked for this project; opens the panel.
+    private var backlogChip: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.full")
+                .font(.system(size: 10))
+                .foregroundStyle(.blue)
+            Text("\(model.backlogOpenCount) backlog item\(model.backlogOpenCount == 1 ? "" : "s") parked")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Open") { backlogPanelOpen = true }
+                .font(.system(size: 11))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.blue.opacity(0.06))
     }
 
     private var resetArmedChip: some View {
