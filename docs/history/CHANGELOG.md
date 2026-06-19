@@ -9,6 +9,35 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-19 — v0.1.38: project backlog — a durable parking lot for deferred
+  work (ADR-0044).**
+  - **Need.** MARVIN's scope-met handoff makes it list "noticed in flight, not
+    in scope" follow-ups and ask — but those lived only in chat scrollback, and
+    MARVIN holds no state between sessions (Golden Rule 4), so they evaporated.
+    No existing surface fit: `memory` rejects task payloads by design
+    (ADR-0042), `plans/` is the current task, `session-notes` is unstructured
+    activity, `roadmap` is MARVIN's own repo.
+  - **Decision (ADR-0044).** A per-project, *actionable* backlog — a
+    consent-gated PARKING LOT, never a Kanban board agents pull from (Golden
+    Rule 1), bounded at the write boundary (the ADR-0042 bloat lesson).
+  - **Shape.** Shared `backlog.ts` store (one item → `.marvin/backlog/<slug>.md`
+    + a `.marvin/backlog.md` index of open+doing; mirrors the memory layer) is
+    written by BOTH the `marvin-backlog` MCP tool (`backlog_add`/`list`/
+    `resolve`, with `classifyBacklogText` rejecting fact/status/decision
+    payloads + length/count caps) AND the `GET/POST/PATCH /api/backlog` routes
+    (the macOS UI). `buildProjectContext` re-injects open items (capped) on the
+    first message so next session re-discovers them; `personality.ts` proposes
+    parking at the scope-met handoff (never auto-parks) and carries the
+    firm-surface MUST/MUST-NOT + the anti-Kanban invariant. macOS `BacklogPanel`
+    (sheet) + a tray count chip give Done / Dismiss / Promote-to-plan (seeds a
+    turn via `sendControl`, flips the item to `doing`) / optional GitHub-issue
+    export.
+  - **Verification.** 13 store/classifier unit tests green; the rest of the
+    runtime suite passes (the `fs-sandbox.test.ts` failure is pre-existing —
+    confirmed on the stashed clean tree). Sidecar tsc clean for every touched
+    file; macOS `swift build` exit 0. Live end-to-end (park → resurface → panel
+    → promote) deferred to post-ship.
+
 - **2026-06-18 — v0.1.37: server-initiated turns now reach an idle client
   ("I'll tell you when the job's done" → and it actually appears).**
   - **Symptom.** MARVIN starts a background job (ADR-0038) or arms a timed
