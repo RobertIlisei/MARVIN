@@ -9,6 +9,37 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-19 — v0.1.39: Playwright MCP — opt-in, gated browser automation
+  (ADR-0045).**
+  - **Need.** MARVIN could drive a browser only via the Playwright CLI over
+    `Bash` — fine for one-shot captures, not for stateful, tool-driven browsing.
+    The official Playwright MCP exposes that as first-class tools.
+  - **Blocker.** `classifyToolCall` blanket-allows any tool not in
+    `KNOWN_TOOL_NAMES` — safe for the in-process servers (graph/memory/backlog),
+    but Playwright's `browser_run_code_unsafe` / `browser_evaluate` /
+    `browser_navigate` would run **ungated even in `gated` mode**, and the
+    ADR-0030 subagent read-only invariant (also `KNOWN_TOOL_NAMES`-only) wouldn't
+    stop a scout from driving a browser.
+  - **Decision (ADR-0045).** Add it **opt-in (off by default)** + **gated**.
+    `policy.ts` gains `mcpToolPolicy(name)` classifying `mcp__playwright__browser_*`
+    (observation `auto` · interaction/navigation/egress `confirm` ·
+    `browser_run_code_unsafe` `deny`; returns `null` for in-process servers so
+    they keep their blanket-allow). `classifyToolCall` consults it before the
+    blanket-allow and **reuses** the existing subagent + Ask-mode collapse, so a
+    sub-agent gets only the observational browser tools. The server
+    (`{type:"stdio", command:"npx", args:["@playwright/mcp@latest"]}`) is
+    registered conditionally on a `playwrightEnabled` flag threaded end-to-end
+    (web Setup-popover toggle + macOS Settings ▸ Browser; off by default) and
+    through the wakeup path.
+  - **Verification.** New `mcpToolPolicy` + `classifyToolCall` gating tests green
+    (allow snapshot / confirm click / **deny** run_code_unsafe / subagent
+    collapse / in-process still allowed). Sidecar tsc clean for touched files;
+    macOS `swift build` exit 0. The 3 pre-existing `policy.test.ts` failures
+    (WebFetch/WebSearch/backgrounded) are stale assertions, unrelated —
+    confirmed on the stashed clean tree. Live end-to-end (toggle on → navigate +
+    snapshot; deny run_code_unsafe; scout collapse) deferred to post-ship; first
+    enable fetches `@playwright/mcp` + needs `npx playwright install chromium`.
+
 - **2026-06-19 — v0.1.38: project backlog — a durable parking lot for deferred
   work (ADR-0044).**
   - **Need.** MARVIN's scope-met handoff makes it list "noticed in flight, not

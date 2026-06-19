@@ -28,6 +28,8 @@ final class NativePrefs {
     private(set) var executorModel: String? = nil
     private(set) var advisorModel: String? = nil
     private(set) var permissionStrategy: String = "auto"
+    /// Opt-in Playwright MCP browser server (ADR-0045). Off by default.
+    private(set) var playwrightEnabled: Bool = false
     /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Orthogonal to
     /// permissionStrategy. Defaults to "agent" so existing behaviour is
     /// unchanged until the user picks Ask or Plan.
@@ -92,6 +94,13 @@ final class NativePrefs {
         permissionStrategy = v
         UserDefaults.standard.set(v, forKey: "marvin.permissionStrategy")
         MarvinBridge.shared.permissionStrategy = v
+    }
+
+    /// Opt-in Playwright MCP browser server (ADR-0045).
+    func setPlaywrightEnabled(_ v: Bool) {
+        playwrightEnabled = v
+        UserDefaults.standard.set(v, forKey: "marvin.playwrightEnabled")
+        MarvinBridge.shared.playwrightEnabled = v
     }
 
     /// Autonomy mode (ADR-0036): ask | agent | plan.
@@ -308,6 +317,7 @@ final class NativePrefs {
         if let perm = d.string(forKey: "marvin.permissionStrategy"), perm == "auto" || perm == "gated" {
             permissionStrategy = perm
         }
+        playwrightEnabled = d.bool(forKey: "marvin.playwrightEnabled")
         if let m = d.string(forKey: "marvin.mode"), m == "ask" || m == "agent" || m == "plan" {
             mode = m
         }
@@ -361,6 +371,7 @@ final class NativePrefs {
         b.executorModel       = executorModel
         b.advisorModel        = advisorModel
         b.permissionStrategy  = permissionStrategy
+        b.playwrightEnabled   = playwrightEnabled
         b.mode                = mode
         b.thinkingMode        = thinkingMode
         b.advisorThinkingMode = advisorThinkingMode

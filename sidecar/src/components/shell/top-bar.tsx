@@ -72,6 +72,8 @@ export interface TopBarProps {
   // Permissions / models / voice / theme
   permissionStrategy: PermissionStrategy;
   onPermissionStrategyChange(s: PermissionStrategy): void;
+  playwrightEnabled: boolean;
+  onPlaywrightEnabledChange(v: boolean): void;
   /** Read-only summary in the Setup popover. Mutation routes
    *  through the dedicated `<ModelsDialog>` mounted by page.tsx
    *  (opened via `onOpenModelsDialog` below). */
@@ -109,6 +111,8 @@ export function TopBar({
   sessionRefreshKey,
   permissionStrategy,
   onPermissionStrategyChange,
+  playwrightEnabled,
+  onPlaywrightEnabledChange,
   executorModel,
   advisorModel,
   personality,
@@ -208,6 +212,8 @@ export function TopBar({
           <SetupPopover
             permissionStrategy={permissionStrategy}
             onPermissionStrategyChange={onPermissionStrategyChange}
+            playwrightEnabled={playwrightEnabled}
+            onPlaywrightEnabledChange={onPlaywrightEnabledChange}
             executorModel={executorModel}
             advisorModel={advisorModel}
             onOpenModelsDialog={onOpenModelsDialog}

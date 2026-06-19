@@ -56,6 +56,8 @@ export interface MarvinPrefs {
   executorModel: string | null;
   advisorModel: string | null;
   permissionStrategy: PermissionStrategy;
+  /** Opt-in Playwright MCP browser server (ADR-0045). Off by default. */
+  playwrightEnabled: boolean;
   panes: PaneState;
   /**
    * Audit finding #2: the `auto` permission default is a silent
@@ -80,6 +82,7 @@ export const DEFAULT_PREFS: MarvinPrefs = {
   executorModel: null,
   advisorModel: null,
   permissionStrategy: "auto",
+  playwrightEnabled: false,
   panes: {
     files: true,
     brain: true,
@@ -102,6 +105,7 @@ export const PREFS_LS_KEYS = [
   "marvin.model.executor",
   "marvin.model.advisor",
   "marvin.permissionStrategy",
+  "marvin.playwrightEnabled",
   "marvin.panes",
 ] as const;
 
@@ -131,6 +135,9 @@ function readPrefs(): MarvinPrefs {
     if (am) next.advisorModel = am;
     const perm = window.localStorage.getItem("marvin.permissionStrategy");
     if (perm === "auto" || perm === "gated") next.permissionStrategy = perm;
+    if (window.localStorage.getItem("marvin.playwrightEnabled") === "true") {
+      next.playwrightEnabled = true;
+    }
     const rawPanes = window.localStorage.getItem("marvin.panes");
     if (rawPanes) {
       try {
@@ -157,6 +164,7 @@ interface PrefsContextValue {
   setExecutorModel(v: string | null): void;
   setAdvisorModel(v: string | null): void;
   setPermissionStrategy(v: PermissionStrategy): void;
+  setPlaywrightEnabled(v: boolean): void;
   setPanes(updater: (prev: PaneState) => PaneState): void;
   togglePane(key: keyof PaneState): void;
   /** Set executor + advisor in one call — matches ModelPicker's onChange shape. */
@@ -238,6 +246,13 @@ export function MarvinPrefsProvider({ children }: { children: ReactNode }) {
     },
     [persist],
   );
+  const setPlaywrightEnabled = useCallback(
+    (v: boolean) => {
+      setPrefs((p) => ({ ...p, playwrightEnabled: v }));
+      persist("marvin.playwrightEnabled", String(v));
+    },
+    [persist],
+  );
   const setPanes = useCallback(
     (updater: (prev: PaneState) => PaneState) => {
       setPrefs((p) => {
@@ -301,6 +316,7 @@ export function MarvinPrefsProvider({ children }: { children: ReactNode }) {
       setExecutorModel,
       setAdvisorModel,
       setPermissionStrategy,
+      setPlaywrightEnabled,
       setPanes,
       togglePane,
       setModels,
@@ -313,6 +329,7 @@ export function MarvinPrefsProvider({ children }: { children: ReactNode }) {
       setExecutorModel,
       setAdvisorModel,
       setPermissionStrategy,
+      setPlaywrightEnabled,
       setPanes,
       togglePane,
       setModels,

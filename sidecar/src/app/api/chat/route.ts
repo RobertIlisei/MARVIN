@@ -51,6 +51,8 @@ interface ChatRequestBody {
   /** Permission strategy. `auto` (default) = full bypass, no confirm gate.
    *  `gated` = Edit/Write/unsafe Bash render a confirm card. */
   permissionStrategy?: PermissionStrategy;
+  /** Opt-in Playwright MCP browser server for this turn (ADR-0045). */
+  playwrightEnabled?: boolean;
   /** Autonomy mode (ADR-0036). `agent` (default) = full autonomy; `ask` =
    *  read-only; `plan` = plan-first, approval-gated. */
   mode?: AgentMode;
@@ -161,6 +163,7 @@ export async function POST(req: NextRequest) {
   const personality: PersonalityMode = body.personality ?? "marvin";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
+  const playwrightEnabled: boolean = body.playwrightEnabled ?? false;
   const mode: AgentMode = body.mode ?? "agent";
   const thinkingMode: string = body.thinkingMode ?? "high";
   // Advisor effort intentionally has NO "high" fallback here — undefined
@@ -247,6 +250,7 @@ export async function POST(req: NextRequest) {
     runtimeMode,
     personality,
     permissionStrategy,
+    playwrightEnabled,
     mode,
     thinkingMode,
     advisorThinkingMode: advisorThinkingMode ?? null,
@@ -276,6 +280,7 @@ export async function POST(req: NextRequest) {
     model,
     advisorModel,
     permissionStrategy,
+    playwrightEnabled,
     mode,
     thinkingMode,
     advisorThinkingMode,

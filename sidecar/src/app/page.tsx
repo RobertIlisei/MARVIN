@@ -106,6 +106,7 @@ export default function Home() {
     prefs,
     setPersonality,
     setPermissionStrategy,
+    setPlaywrightEnabled,
     setModels,
     setPanes,
     togglePane,
@@ -116,6 +117,7 @@ export default function Home() {
     executorModel,
     advisorModel,
     permissionStrategy,
+    playwrightEnabled,
     panes,
     showAutoModeBanner,
   } = prefs;
@@ -443,11 +445,12 @@ export default function Home() {
       send(text, cwd, {
         personality,
         permissionStrategy,
+        playwrightEnabled,
         model: executorModel,
         advisorModel,
       });
     },
-    [send, cwd, personality, permissionStrategy, executorModel, advisorModel],
+    [send, cwd, personality, permissionStrategy, playwrightEnabled, executorModel, advisorModel],
   );
 
   // `togglePane` comes from the prefs context above; the previous
@@ -627,6 +630,8 @@ export default function Home() {
       sessionRefreshKey={sessionRefreshKey}
       permissionStrategy={permissionStrategy}
       onPermissionStrategyChange={setPermissionStrategy}
+      playwrightEnabled={playwrightEnabled}
+      onPlaywrightEnabledChange={setPlaywrightEnabled}
       executorModel={executorModel}
       advisorModel={advisorModel}
       onOpenModelsDialog={() => setModelsDialogOpen(true)}

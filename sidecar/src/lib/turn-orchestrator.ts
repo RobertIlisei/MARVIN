@@ -50,6 +50,8 @@ export interface DetachedTurnParams {
   model: string;
   advisorModel?: string | undefined;
   permissionStrategy: PermissionStrategy;
+  /** Opt-in Playwright MCP browser server for this turn (ADR-0045). */
+  playwrightEnabled?: boolean;
   /** Autonomy mode (ADR-0036); defaults to `agent` in runAgent when omitted. */
   mode?: AgentMode | undefined;
   thinkingMode: string;
@@ -78,6 +80,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     model,
     advisorModel,
     permissionStrategy,
+    playwrightEnabled,
     mode,
     thinkingMode,
     advisorThinkingMode,
@@ -93,6 +96,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     model,
     ...(advisorModel ? { advisorModel } : {}),
     permissionStrategy,
+    ...(playwrightEnabled !== undefined ? { playwrightEnabled } : {}),
     ...(mode ? { mode } : {}),
     thinkingMode,
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
@@ -232,6 +236,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     model: record.model,
     advisorModel: record.advisorModel ?? undefined,
     permissionStrategy: record.permissionStrategy,
+    playwrightEnabled: record.playwrightEnabled,
     thinkingMode: record.thinkingMode,
     advisorThinkingMode: record.advisorThinkingMode,
     sessionId: sdkResumeId,

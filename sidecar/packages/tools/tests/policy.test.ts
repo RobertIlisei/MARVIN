@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_TOOL_NAMES, toolPolicy } from "../src/policy";
+import { KNOWN_TOOL_NAMES, mcpToolPolicy, toolPolicy } from "../src/policy";
 
 describe("toolPolicy — Bash hard-deny coverage", () => {
   // Audit finding #2: `\brm\s+-rf\s+\/` only matched a literal `/` after
@@ -205,5 +205,31 @@ describe("KNOWN_TOOL_NAMES export (audit finding #21)", () => {
   it("does not contain a stray Spawn / NotebookRead / etc.", () => {
     expect(KNOWN_TOOL_NAMES.has("Spawn" as never)).toBe(false);
     expect(KNOWN_TOOL_NAMES.has("NotebookRead" as never)).toBe(false);
+  });
+});
+
+describe("mcpToolPolicy — Playwright MCP classification (ADR-0045)", () => {
+  const pw = (t: string) => `mcp__playwright__${t}`;
+
+  it("returns null for non-Playwright MCP names (trusted servers stay blanket-allowed)", () => {
+    expect(mcpToolPolicy("mcp__marvin-graph__graph_search")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-memory__remember")).toBeNull();
+    expect(mcpToolPolicy("Read")).toBeNull();
+  });
+
+  it("auto for observational browser tools", () => {
+    for (const t of ["browser_snapshot", "browser_take_screenshot", "browser_console_messages", "browser_network_requests", "browser_wait_for", "browser_tabs"]) {
+      expect(mcpToolPolicy(pw(t))).toBe("auto");
+    }
+  });
+
+  it("deny for the arbitrary-code tool", () => {
+    expect(mcpToolPolicy(pw("browser_run_code_unsafe"))).toBe("deny");
+  });
+
+  it("confirm for state-changing / egress / interaction tools (incl. unknown playwright tools)", () => {
+    for (const t of ["browser_navigate", "browser_click", "browser_type", "browser_evaluate", "browser_file_upload", "browser_close", "browser_some_future_tool"]) {
+      expect(mcpToolPolicy(pw(t))).toBe("confirm");
+    }
   });
 });

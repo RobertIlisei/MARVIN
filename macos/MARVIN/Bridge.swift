@@ -153,6 +153,8 @@ final class MarvinBridge {
     /// localStorage-persisted pref.
     /// ADR-0021 M1: writable by NativePrefs directly.
     var permissionStrategy: String = "auto"
+    /// ADR-0045: opt-in Playwright MCP browser server. Writable by NativePrefs.
+    var playwrightEnabled: Bool = false
 
     /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Orthogonal to
     /// permissionStrategy. ChatPreviewView reads it when minting a turn.
