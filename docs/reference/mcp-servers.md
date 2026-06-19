@@ -76,7 +76,9 @@ Use case: "how does the chat input reach the Agent SDK?" — surface the interme
 
 ## Browser automation
 
-Browser automation is not an MCP. When MARVIN needs Playwright, it shells out via `Bash` to the Playwright CLI — `npx playwright` is on PATH. See [browser tools in `personality.ts`](../../sidecar/packages/runtime/src/personality.ts) for the patterns the executor reaches for (one-shot screenshot, scripted `node /tmp/check.mjs`, full `npx playwright test` suite).
+The Playwright CLI (default) is not an MCP — MARVIN shells out via `Bash` (`npx playwright` is on PATH) for one-shot captures + full `npx playwright test` suites. See [browser tools in `personality.ts`](../../sidecar/packages/runtime/src/personality.ts).
+
+**Opt-in Playwright MCP (ADR-0045).** An external stdio server (`npx @playwright/mcp@latest`, key `playwright` ⇒ `mcp__playwright__browser_*`) for interactive, stateful browsing. **Off by default**; enabled per-turn via the `playwrightEnabled` setting (header Setup popover / macOS Settings ▸ Browser). Unlike the in-process servers above (blanket-allowed), it is **gated** in `classifyToolCall`: observation auto, interaction/navigation confirm, `browser_run_code_unsafe` denied, and the ADR-0030 subagent invariant restricts sub-agents to the observational tools.
 
 One-time setup on a fresh machine:
 

@@ -34,6 +34,8 @@ export interface WakeupToolContext {
   advisorModel: string | null;
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
+  /** Opt-in Playwright MCP (ADR-0045); the fired turn inherits this turn's toggle. */
+  playwrightEnabled?: boolean | undefined;
   thinkingMode: string;
   /** Advisor-specific effort (ADR-0033); undefined = follow the executor. */
   advisorThinkingMode?: string | undefined;
@@ -81,6 +83,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         advisorModel: ctx.advisorModel,
         personality: ctx.personality,
         permissionStrategy: ctx.permissionStrategy,
+        ...(ctx.playwrightEnabled !== undefined ? { playwrightEnabled: ctx.playwrightEnabled } : {}),
         thinkingMode: ctx.thinkingMode,
         advisorThinkingMode: ctx.advisorThinkingMode,
         delaySeconds,

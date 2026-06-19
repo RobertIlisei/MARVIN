@@ -149,6 +149,45 @@ describe("classifyToolCall — sub-agent read-only invariant (ADR-0030)", () => 
   });
 });
 
+// ADR-0045 — the Playwright MCP server is gated (not blanket-allowed like the
+// trusted in-process servers). Observational tools auto-run; state-changing /
+// egress tools confirm; the arbitrary-code tool is denied; and the sub-agent
+// invariant collapses confirm/deny → deny so a scout gets a read-only browser.
+describe("classifyToolCall — Playwright MCP gating (ADR-0045)", () => {
+  const pw = (t: string) => `mcp__playwright__${t}`;
+
+  it("auto-allows observational browser tools", () => {
+    expect(classifyToolCall(pw("browser_snapshot"), {}).decision).toBe("allow");
+    expect(classifyToolCall(pw("browser_take_screenshot"), {}).decision).toBe("allow");
+    expect(classifyToolCall(pw("browser_network_requests"), {}).decision).toBe("allow");
+  });
+
+  it("confirms state-changing / egress browser tools", () => {
+    expect(classifyToolCall(pw("browser_navigate"), { url: "http://x" }).decision).toBe("confirm");
+    expect(classifyToolCall(pw("browser_click"), {}).decision).toBe("confirm");
+    expect(classifyToolCall(pw("browser_evaluate"), { function: "()=>1" }).decision).toBe("confirm");
+  });
+
+  it("DENIES the arbitrary-code tool", () => {
+    const r = classifyToolCall(pw("browser_run_code_unsafe"), {});
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/ADR-0045/);
+  });
+
+  it("leaves trusted in-process MCP servers blanket-allowed", () => {
+    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-backlog__backlog_add", {}).decision).toBe("allow");
+  });
+
+  it("collapses to read-only for a sub-agent (scout gets snapshot, not click/code)", () => {
+    const sub = { agentID: "agent_scout_1" };
+    expect(classifyToolCall(pw("browser_snapshot"), {}, sub).decision).toBe("allow");
+    expect(classifyToolCall(pw("browser_click"), {}, sub).decision).toBe("deny");
+    expect(classifyToolCall(pw("browser_evaluate"), {}, sub).decision).toBe("deny");
+    expect(classifyToolCall(pw("browser_run_code_unsafe"), {}, sub).decision).toBe("deny");
+  });
+});
+
 describe("makeAutoModeLogger (auto mode)", () => {
   it("denies hard-deny patterns even in auto mode (single safety floor)", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });

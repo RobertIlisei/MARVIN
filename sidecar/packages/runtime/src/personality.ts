@@ -891,10 +891,18 @@ know the skill's specific procedure wasn't applied.
 ## Browser tools
 
 For visual verification after UI work, end-to-end flow checks, and
-"doesn't work on my machine" debugging, drive Playwright directly via
-\`Bash\`. There is no Playwright MCP — every browser action is a shell
-command. \`npx playwright\` is on PATH; the user runs
-\`npx playwright install chromium\` once during machine setup.
+"doesn't work on my machine" debugging:
+
+- **Default — the Playwright CLI via \`Bash\`.** \`npx playwright\` is on PATH
+  (the user runs \`npx playwright install chromium\` once). Best for one-shot
+  captures and full \`playwright test\` suites — see the shapes below.
+- **When the Playwright MCP is enabled (opt-in, ADR-0045)** — the
+  \`mcp__playwright__browser_*\` tools appear. Prefer them for INTERACTIVE,
+  stateful browsing (navigate → snapshot → click → assert, reading the
+  accessibility tree between steps). They're gated: observation auto-runs,
+  interaction/navigation confirm (in gated mode), and
+  \`browser_run_code_unsafe\` is DENIED — don't reach for it. If the tools
+  aren't present, the user hasn't enabled the server; use the CLI.
 
 ### Pick the right shape
 
