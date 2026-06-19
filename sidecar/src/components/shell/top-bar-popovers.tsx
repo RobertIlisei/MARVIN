@@ -35,6 +35,7 @@ import {
   type PermissionStrategy,
   PermissionToggle,
 } from "@/components/settings/permission-toggle";
+import { PlaywrightToggle } from "@/components/settings/playwright-toggle";
 import {
   type PersonalityMode,
   PersonalityToggle,
@@ -227,6 +228,8 @@ function PaneRow({
 export interface SetupPopoverProps {
   permissionStrategy: PermissionStrategy;
   onPermissionStrategyChange(s: PermissionStrategy): void;
+  playwrightEnabled: boolean;
+  onPlaywrightEnabledChange(v: boolean): void;
   executorModel: string | null;
   advisorModel: string | null;
   /** Open the Models dialog. The picker doesn't fit comfortably in
@@ -271,6 +274,13 @@ export function SetupPopover(props: SetupPopoverProps) {
           <PermissionToggle
             value={props.permissionStrategy}
             onChange={props.onPermissionStrategyChange}
+          />
+        </SetupRow>
+
+        <SetupRow label="browser">
+          <PlaywrightToggle
+            value={props.playwrightEnabled}
+            onChange={props.onPlaywrightEnabledChange}
           />
         </SetupRow>
 

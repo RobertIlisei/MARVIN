@@ -154,6 +154,9 @@ struct ChatRequest: Codable {
     let advisorModel: String?
     let runtimeMode: String?
     let permissionStrategy: String?
+    /// Opt-in Playwright MCP browser server (ADR-0045). Optional — sidecar
+    /// defaults to false (off) when absent.
+    let playwrightEnabled: Bool?
     /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Optional —
     /// sidecar defaults to "agent" when absent, so old clients are
     /// unchanged.
@@ -184,6 +187,7 @@ struct ChatRequest: Codable {
         advisorModel: String? = nil,
         runtimeMode: String? = nil,
         permissionStrategy: String? = nil,
+        playwrightEnabled: Bool? = nil,
         mode: String? = nil,
         thinkingMode: String? = nil,
         advisorThinkingMode: String? = nil,
@@ -199,6 +203,7 @@ struct ChatRequest: Codable {
         self.advisorModel = advisorModel
         self.runtimeMode = runtimeMode
         self.permissionStrategy = permissionStrategy
+        self.playwrightEnabled = playwrightEnabled
         self.mode = mode
         self.thinkingMode = thinkingMode
         self.advisorThinkingMode = advisorThinkingMode

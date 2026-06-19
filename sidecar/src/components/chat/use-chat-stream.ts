@@ -85,6 +85,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       personality?: "marvin" | "neutral";
       runtimeMode?: "opus" | "advisor";
       permissionStrategy?: "auto" | "gated";
+      playwrightEnabled?: boolean;
       model?: string | null;
       advisorModel?: string | null;
     };
@@ -98,6 +99,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
         personality?: "marvin" | "neutral";
         runtimeMode?: "opus" | "advisor";
         permissionStrategy?: "auto" | "gated";
+        playwrightEnabled?: boolean;
         model?: string | null;
         advisorModel?: string | null;
       } = {},
@@ -139,6 +141,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             ...(options.personality ? { personality: options.personality } : {}),
             ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
             ...(options.permissionStrategy ? { permissionStrategy: options.permissionStrategy } : {}),
+            ...(options.playwrightEnabled ? { playwrightEnabled: true } : {}),
             ...(options.model ? { model: options.model } : {}),
             ...(options.advisorModel ? { advisorModel: options.advisorModel } : {}),
           }),

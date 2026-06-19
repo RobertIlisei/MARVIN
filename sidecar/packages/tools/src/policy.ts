@@ -238,3 +238,47 @@ function defaultReason(name: ToolName, cls: ToolPolicyClass): string {
   if (cls === "confirm") return `${name} mutates files — confirm required.`;
   return `${name} is not permitted.`;
 }
+
+// ── External MCP server classification (ADR-0045) ────────────────────────────
+//
+// The gate auto-allows any tool NOT in KNOWN_TOOL_NAMES — safe for MARVIN's
+// in-process servers (graph/memory/backlog/control, all read-only), but NOT for
+// an external server like Playwright MCP, whose tools navigate to arbitrary URLs
+// (egress) and execute code (`browser_evaluate`, `browser_run_code_unsafe`).
+// `classifyToolCall` consults this BEFORE the blanket-allow so those go through
+// the normal ladder (incl. the subagent read-only collapse). Returns null for
+// any MCP name this policy doesn't own, so trusted in-process servers keep their
+// blanket-allow.
+
+/** The mcpServers key MARVIN registers Playwright under → tools arrive as
+ *  `mcp__playwright__browser_*`. Shared with sdk-runner's registration. */
+export const PLAYWRIGHT_SERVER_KEY = "playwright";
+const PLAYWRIGHT_PREFIX = `mcp__${PLAYWRIGHT_SERVER_KEY}__`;
+
+// Observational / read-only — safe to auto-run (and the only browser tools a
+// read-only sub-agent gets).
+const PLAYWRIGHT_AUTO: ReadonlySet<string> = new Set([
+  "browser_snapshot",
+  "browser_take_screenshot",
+  "browser_console_messages",
+  "browser_network_requests",
+  "browser_wait_for",
+  "browser_tabs",
+]);
+
+// Arbitrary host-code execution — never without an explicit per-call override.
+const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]);
+
+/**
+ * Classify an external MCP tool name. Returns `null` when the name isn't an
+ * external server this policy governs (caller then keeps the blanket-allow).
+ * Everything Playwright that isn't explicitly auto/deny falls to `confirm`
+ * (state-changing / egress / interaction — e.g. navigate, click, evaluate).
+ */
+export function mcpToolPolicy(name: string): ToolPolicyClass | null {
+  if (!name.startsWith(PLAYWRIGHT_PREFIX)) return null;
+  const tool = name.slice(PLAYWRIGHT_PREFIX.length);
+  if (PLAYWRIGHT_DENY.has(tool)) return "deny";
+  if (PLAYWRIGHT_AUTO.has(tool)) return "auto";
+  return "confirm";
+}

@@ -65,6 +65,9 @@ export interface WakeupRecord {
   advisorModel: string | null;
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
+  /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
+   *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */
+  playwrightEnabled?: boolean;
   thinkingMode: string;
   /** Advisor-specific effort (ADR-0033); absent = follow the executor.
    *  Optional so pre-0033 persisted records keep parsing. */
@@ -100,6 +103,9 @@ export interface ScheduleWakeupInput {
   advisorModel: string | null;
   personality: "marvin" | "neutral";
   permissionStrategy: "auto" | "gated";
+  /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
+   *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */
+  playwrightEnabled?: boolean;
   thinkingMode: string;
   advisorThinkingMode?: string | undefined;
   delaySeconds: number;
@@ -242,6 +248,7 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
     advisorModel: input.advisorModel,
     personality: input.personality,
     permissionStrategy: input.permissionStrategy,
+    ...(input.playwrightEnabled !== undefined ? { playwrightEnabled: input.playwrightEnabled } : {}),
     thinkingMode: input.thinkingMode,
     ...(input.advisorThinkingMode
       ? { advisorThinkingMode: input.advisorThinkingMode }

@@ -523,6 +523,9 @@ final class ChatPreviewModel {
         let strategy = UserDefaults.standard.string(
             forKey: "marvin.permissionStrategy"
         ) ?? NativePermissionStrategy.auto.rawValue
+        // ADR-0045 — read fresh from UserDefaults (like `strategy`) so the
+        // Settings toggle is honored without NativePrefs in-memory staleness.
+        let playwrightOn = UserDefaults.standard.bool(forKey: "marvin.playwrightEnabled")
         // Pull executor / advisor / personality from NativePrefs.
         // These are configured via the agents bar (the pills above
         // the messages) and must be sent in the request body — the
@@ -552,6 +555,7 @@ final class ChatPreviewModel {
             model: prefs.executorModel,
             advisorModel: prefs.advisorModel,
             permissionStrategy: strategy,
+            playwrightEnabled: playwrightOn,
             mode: prefs.mode,
             thinkingMode: prefs.thinkingMode,
             advisorThinkingMode: prefs.advisorThinkingMode,

@@ -230,7 +230,17 @@ user-level skills are left alone):
 If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
 reach for" section so MARVIN knows the trigger conditions.
 
-## Browser automation — Playwright CLI via Bash
+## Browser automation — Playwright CLI (default) + opt-in MCP (ADR-0045)
+
+Two paths. **Default:** the Playwright **CLI** via `Bash` — one-shot captures and
+full `playwright test` suites (below). **Opt-in:** the Playwright **MCP** server
+([ADR-0045](./docs/decisions/0045-playwright-mcp-gated.md)) — first-class,
+stateful `mcp__playwright__browser_*` tools for interactive navigate→snapshot→
+click→assert flows. It's **off by default** (a browser subprocess per turn is
+heavy); toggle it in the header Setup popover (web) / Settings ▸ Browser (macOS).
+It's **gated** — observation auto-runs, interaction/navigation confirm in gated
+mode, and `browser_run_code_unsafe` is **denied**; the subagent read-only
+invariant gives scouts only the observational tools.
 
 When MARVIN needs a browser (visual verification after UI work, end-to-end checks, "doesn't work on my machine" debugging), it shells out via `Bash` to the Playwright CLI directly. `npx playwright` is on PATH after the one-time setup:
 

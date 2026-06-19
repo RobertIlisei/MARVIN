@@ -29,6 +29,11 @@ struct SettingsView: View {
     /// unsafe Bash) raise the confirm sheet from Phase 2e.
     @AppStorage("marvin.permissionStrategy") private var permissionStrategy: String = "auto"
 
+    /// ADR-0045 — opt-in Playwright MCP browser server. Off by default
+    /// (a browser subprocess per turn is heavy). When on, MARVIN gets
+    /// gated browser tools; `browser_run_code_unsafe` stays denied.
+    @AppStorage("marvin.playwrightEnabled") private var playwrightEnabled: Bool = false
+
     /// Phase 1d.36 — Launch-at-login toggle. The actual registration
     /// lives in SMAppService.mainApp; the @AppStorage value mirrors
     /// it so the Toggle has reactive state. We resync on appear in
@@ -88,6 +93,13 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.inline)
                 Text("Gated mode raises a confirm sheet on Edit / Write / unsafe Bash. Auto mode bypasses with an audit log entry per ADR-0015.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Browser") {
+                Toggle("Playwright MCP browser tools", isOn: $playwrightEnabled)
+                Text("On gives MARVIN gated, first-class browser tools (navigate / snapshot / click). Off (default) uses the Playwright CLI via Bash for one-shot captures. `browser_run_code_unsafe` is always denied. ADR-0045.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

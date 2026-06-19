@@ -7,6 +7,7 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
 
+
 - **Multi-graph architecture — code + knowledge** ([ADR-0028](./decisions/0028-multi-graph-architecture.md), development branch only). Two graphs per project: `graphify-out/graph.json` (code, auto-rebuild on commit, unchanged) and `graphify-out/knowledge/graph.json` (docs / ADRs / memory, manual rebuild via `bin/marvin knowledge-graph`, AST-only, no LLM cost). All six MCP graph tools accept a new `scope: "code" | "knowledge" | "all"` parameter, default `"code"` for backwards compatibility. Stable v0.1.13 cask + main branch unchanged — rollback is `git checkout main` or `brew install --cask marvin-ai`. Cross-graph joins, tool-history graph, semantic doc extraction deferred per the ADR.
 - **macOS 26 Gatekeeper fix — install to `~/Applications`** ([ADR-0027](./decisions/0027-macos-26-gatekeeper-user-applications.md)). macOS 26 (Tahoe) kernel-kills ad-hoc-signed bundles in `/Applications` regardless of signature state; the same `.app` runs cleanly from `~/Applications`. `bin/marvin install-macos-app` and the Homebrew cask both retarget to `~/Applications/MARVIN.app`; uninstall cleans up the legacy `/Applications` path. New users still hit the user-space Privacy & Security popup on first Finder launch (one-time whitelist via "Open Anyway"). README + cask `caveats` document the click-through.
 - **Syntax-highlighter coverage — YAML.** Add `tree-sitter-yaml` SPM dep + `Resources/Queries/yaml.scm`. Trivial; every project has compose / workflow / kubeconfig files. ~15 min.
@@ -17,6 +18,17 @@ _Active work. Add a one-line entry when a piece of work starts; move it out (to 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.39** — Playwright MCP, opt-in + gated ([ADR-0045](./decisions/0045-playwright-mcp-gated.md)).
+MARVIN's first EXTERNAL (stdio) MCP server (`npx @playwright/mcp@latest`), **off
+by default**. The gate previously blanket-allowed every MCP tool — safe for the
+in-process graph/memory/backlog servers, unsafe for Playwright's code-exec/egress
+tools. `policy.ts mcpToolPolicy` now classifies the `playwright` tools
+(observation auto · interaction/navigation confirm · `browser_run_code_unsafe`
+deny) and `classifyToolCall` consults it before the blanket-allow, reusing the
+ADR-0030 subagent collapse so scouts get only observational tools. The
+`playwrightEnabled` toggle is threaded end-to-end (web Setup popover + macOS
+Settings ▸ Browser). Builds on v0.1.38.
 
 **v0.1.38** — Project backlog ([ADR-0044](./decisions/0044-project-backlog.md)). A
 durable, per-project parking lot for *actionable* "noticed in flight, not in

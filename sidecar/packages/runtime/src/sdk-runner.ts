@@ -29,7 +29,7 @@ import { createBacklogMcpServer } from "./backlog-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { createWakeupMcpServer } from "./wakeup-tools";
 import { recordPreImage } from "./change-checkpoints";
-import { KNOWN_TOOL_NAMES, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
@@ -227,6 +227,9 @@ export interface RunAgentInput {
   sessionId?: string | undefined;
   /** Permission strategy. Defaults to `auto` when omitted. */
   permissionStrategy?: PermissionStrategy;
+  /** Opt-in: register the gated Playwright MCP browser server for this turn
+   *  (ADR-0045). Off by default — a browser subprocess is heavy. */
+  playwrightEnabled?: boolean;
   /** Autonomy mode (ADR-0036). Defaults to `agent` when omitted —
    *  preserving pre-0.1.22 behaviour. Both `ask` and `plan` are read-only
    *  at the gate (see the `readOnly` wiring, L905/L967-969); `plan` adds the
@@ -497,15 +500,33 @@ export function classifyToolCall(
     readOnly?: boolean;
   },
 ): { decision: "allow" | "confirm" | "deny"; reason: string } {
-  // Tools outside our named set (Task, NotebookEdit, MCP, etc.) are
-  // auto-allowed by default — they're sandboxed or delegate back to tools
-  // we already gate.
+  // Resolve a base decision + reason from EITHER the named-tool policy OR an
+  // external-MCP classifier, then share the collapse + mapping tail below.
+  let baseDecision: "allow" | "confirm" | "deny";
+  let policyReason: string;
+
   if (!KNOWN_TOOL_NAMES.has(name as ToolName)) {
-    return { decision: "allow", reason: `${name} is not in the gated set.` };
+    // Tools outside our named set are auto-allowed by default — they're
+    // sandboxed or delegate back to tools we already gate. EXCEPTION (ADR-0045):
+    // a classified external MCP server (Playwright) goes through the ladder so
+    // its code-exec/egress tools are gated and the subagent invariant applies.
+    const mcpClass = mcpToolPolicy(name);
+    if (mcpClass === null) {
+      return { decision: "allow", reason: `${name} is not in the gated set.` };
+    }
+    baseDecision = mcpClass === "auto" ? "allow" : mcpClass === "deny" ? "deny" : "confirm";
+    policyReason =
+      mcpClass === "deny"
+        ? `${name} executes arbitrary code — denied (ADR-0045).`
+        : mcpClass === "confirm"
+          ? `${name} changes browser state or reaches the network — confirm (ADR-0045).`
+          : `${name} is a read-only browser tool.`;
+  } else {
+    const policy = toolPolicy(name as ToolName, input);
+    baseDecision =
+      policy.class === "auto" ? "allow" : policy.class === "deny" ? "deny" : "confirm";
+    policyReason = policy.reason;
   }
-  const policy = toolPolicy(name as ToolName, input);
-  const baseDecision: "allow" | "confirm" | "deny" =
-    policy.class === "auto" ? "allow" : policy.class === "deny" ? "deny" : "confirm";
 
   // SUBAGENT READ-ONLY INVARIANT (ADR-0030, Golden Rule 1).
   // No MARVIN subagent — scout, advisor, or dynamic-workflow child —
@@ -542,9 +563,9 @@ export function classifyToolCall(
     };
   }
 
-  if (baseDecision === "allow") return { decision: "allow", reason: policy.reason };
-  if (baseDecision === "deny") return { decision: "deny", reason: policy.reason };
-  return { decision: "confirm", reason: policy.reason };
+  if (baseDecision === "allow") return { decision: "allow", reason: policyReason };
+  if (baseDecision === "deny") return { decision: "deny", reason: policyReason };
+  return { decision: "confirm", reason: policyReason };
 }
 
 /** Mode-specific system-prompt stanza (ADR-0036). Empty for `agent` so
@@ -957,6 +978,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           advisorModel: advisorModel ?? null,
           personality: input.personality ?? "marvin",
           permissionStrategy,
+          playwrightEnabled: input.playwrightEnabled,
           thinkingMode: input.thinkingMode ?? "high",
           advisorThinkingMode: input.advisorThinkingMode,
           depth: input.wakeupDepth ?? 0,
@@ -1016,6 +1038,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       "marvin-memory": memoryMcp,
       "marvin-backlog": backlogMcp,
       ...(wakeupMcp ? { "marvin-control": wakeupMcp } : {}),
+      // Opt-in external (stdio) browser server (ADR-0045). Off by default; its
+      // tools are gated in `classifyToolCall` (code-exec denied, interaction
+      // confirmed, observation auto) — NOT blanket-allowed like the in-process
+      // servers above.
+      ...(input.playwrightEnabled
+        ? {
+            [PLAYWRIGHT_SERVER_KEY]: {
+              type: "stdio" as const,
+              command: "npx",
+              args: ["@playwright/mcp@latest"],
+            },
+          }
+        : {}),
     },
     // Project-local skills (ADR-0024). When `<workDir>/.marvin/skills/`
     // contains at least one SKILL.md, the SDK loads the synthesised
