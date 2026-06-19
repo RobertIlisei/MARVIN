@@ -18,6 +18,7 @@
     "./projects": "./src/projects.ts",
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
+    "./backlog": "./src/backlog.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",
     "./models": "./src/models.ts",

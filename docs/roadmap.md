@@ -6,6 +6,7 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
+
 - **Multi-graph architecture — code + knowledge** ([ADR-0028](./decisions/0028-multi-graph-architecture.md), development branch only). Two graphs per project: `graphify-out/graph.json` (code, auto-rebuild on commit, unchanged) and `graphify-out/knowledge/graph.json` (docs / ADRs / memory, manual rebuild via `bin/marvin knowledge-graph`, AST-only, no LLM cost). All six MCP graph tools accept a new `scope: "code" | "knowledge" | "all"` parameter, default `"code"` for backwards compatibility. Stable v0.1.13 cask + main branch unchanged — rollback is `git checkout main` or `brew install --cask marvin-ai`. Cross-graph joins, tool-history graph, semantic doc extraction deferred per the ADR.
 - **macOS 26 Gatekeeper fix — install to `~/Applications`** ([ADR-0027](./decisions/0027-macos-26-gatekeeper-user-applications.md)). macOS 26 (Tahoe) kernel-kills ad-hoc-signed bundles in `/Applications` regardless of signature state; the same `.app` runs cleanly from `~/Applications`. `bin/marvin install-macos-app` and the Homebrew cask both retarget to `~/Applications/MARVIN.app`; uninstall cleans up the legacy `/Applications` path. New users still hit the user-space Privacy & Security popup on first Finder launch (one-time whitelist via "Open Anyway"). README + cask `caveats` document the click-through.
 - **Syntax-highlighter coverage — YAML.** Add `tree-sitter-yaml` SPM dep + `Resources/Queries/yaml.scm`. Trivial; every project has compose / workflow / kubeconfig files. ~15 min.
@@ -16,6 +17,17 @@ _Active work. Add a one-line entry when a piece of work starts; move it out (to 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.38** — Project backlog ([ADR-0044](./decisions/0044-project-backlog.md)). A
+durable, per-project parking lot for *actionable* "noticed in flight, not in
+scope" follow-ups that previously evaporated with the chat (Golden Rule 4).
+Shared `backlog.ts` store (file-per-item + index, mirrors memory ADR-0042) ←
+`marvin-backlog` MCP tool (`backlog_add`/`list`/`resolve`, content-class
+enforced) + `GET/POST/PATCH /api/backlog`. Consent-gated capture at the
+scope-met handoff; open items re-injected by `buildProjectContext`; macOS
+`BacklogPanel` + tray chip with Done / Dismiss / Promote-to-plan / optional
+GitHub-issue export. A parking lot, never a Kanban queue (Golden Rule 1). Builds
+on v0.1.37.
 
 **v0.1.37** — Server-initiated turns reach an idle client ([ADR-0043](./decisions/0043-server-turn-announcements.md)).
 ADR-0038's background-job completion (and ADR-0031 wakeups) fire a real turn

@@ -95,6 +95,7 @@ reads at turn time.
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
 | **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. |
+| **Project backlog** | "Project backlog — what goes in it" section in `personality.ts`; [ADR-0044](./docs/decisions/0044-project-backlog.md) | What may be parked to `.marvin/backlog/` and how. Actionable deferred work only ("noticed in flight, not in scope" follow-ups / out-of-scope improvements / blockers), via the `backlog_add` MCP tool — MUST-NOT park facts (→`remember`), status (→git), or decisions (→ADR). **Anti-Kanban (Golden Rule 1):** a parking lot read by MARVIN + the user — no subagent pull, never auto-executed, never overrides plan-first. Captured consent-gated at the scope-met handoff; surfaces in next session's context. |
 
 The pattern is the same across all of them: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
@@ -166,6 +167,16 @@ nowhere.
   `.marvin/session-notes.md` ("Save session note") — a lightweight activity
   sink, NOT the durable-facts index (it would otherwise be clobbered by the
   next `remember`). Originally ADR-0022; retargeted by ADR-0042.
+- **Project backlog (ADR-0044)** is the *adjacent* cross-session layer:
+  `.marvin/backlog/<slug>.md` + a `.marvin/backlog.md` index of open
+  *actionable deferred work* — the "noticed in flight, not in scope" follow-ups
+  that would otherwise evaporate. Distinct content class from memory: memory
+  holds **facts**, the backlog holds **work**. Write path is the `backlog_add`
+  MCP tool (`marvin-backlog`, `backlog-mcp.ts`) — consent-gated at the scope-met
+  handoff, caps + rejects fact/status/decision payloads; `backlog_list` /
+  `backlog_resolve` read and close; open items are re-injected by
+  `buildProjectContext`. A **parking lot**, never a queue agents pull from
+  (Golden Rule 1) — surfaced in the macOS backlog panel + a tray chip.
 
 `.marvin/memory.md` + `.marvin/memory/` is the only sanctioned cross-session
 durable-facts persistence. Don't shadow it with a parallel sidecar cache, a

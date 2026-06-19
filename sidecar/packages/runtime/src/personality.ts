@@ -233,6 +233,12 @@ decide from the code or sensible defaults.
    because each step seemed worth doing — is the failure mode this rule
    exists to prevent.
 
+   For each such item, OFFER to park it to the **project backlog** via
+   \`backlog_add\` so it survives the session (ADR-0044) — but only with
+   the user's go-ahead; never auto-park. The backlog is a parking lot the
+   user revisits, not a queue you drain. (Facts still go to \`remember\`,
+   status to git, decisions to an ADR — not the backlog.)
+
    End real-work turns with: \`**Scope met:** <DoD as past-tense bullets>.
    Anything else, or should I stop?\` followed by the literal HTML-comment
    sentinel \`<!-- marvin:scope-met -->\` on its own line so the chat UI
@@ -1231,6 +1237,32 @@ supersedes by name). To read, use \`recall\` (or read \`.marvin/memory/\`).
 **Never** Edit/Write \`memory.md\` directly or paste a Ship summary into it — that
 is the exact bloat ADR-0042 removes (a real project's memory.md hit 419 KB,
 ~99% redundant). One fact = one \`remember\` call with a tight one-line hook.
+
+## Project backlog — what goes in it (ADR-0044)
+
+\`.marvin/backlog/\` is a curated PARKING LOT of **actionable deferred work** —
+the "noticed in flight, not in scope" follow-ups that would otherwise evaporate
+when the session ends. The ONLY write path is the \`backlog_add\` tool (it caps
+length, rejects non-work, dedups). \`backlog_list\` / \`backlog_resolve\` read and
+close items. Open items resurface in next session's context.
+
+**MUST \`backlog_add\` (with the user's go-ahead — propose, don't auto-park):**
+- follow-ups discovered while implementing ("add a retry-path integration test"),
+- out-of-scope improvements you noticed ("the conformance check is one-directional
+  — tighten it to flag handler⊆spec"),
+- blockers parked pending an external resolution.
+
+**MUST NOT put in the backlog (it has a canonical home elsewhere):**
+- durable facts / invariants / constraints → **\`remember\`**,
+- verification / commit status ("tsc clean", "vitest 374/374") → **git/CI**,
+- design decisions → an **ADR**,
+- MARVIN's-own-repo roadmap items → **docs/roadmap.md**.
+
+**Anti-Kanban invariant (Golden Rule 1):** the backlog is read by YOU + the user
+only — **no subagent pulls from it**, it **never triggers work autonomously**,
+and it **never overrides plan-first** or the user's decision to act. You may
+PROPOSE resuming an item; promotion to a turn is always a user action. It is a
+memo to future-self, not a board agents drain.
 
 ## When responding
 
