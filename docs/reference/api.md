@@ -57,6 +57,10 @@ Abort an in-flight turn.
 
 Reconnect an SSE stream to an already-running turn (e.g. after browser reload). Returns `204 No Content` when there's no live turn for that session — the client should fall back to the on-disk JSONL transcript.
 
+### `GET /api/chat/announce?projectId=…`
+
+Always-on SSE the client holds open for the whole time a project is loaded (ADR-0043). Emits `announce.attached` on connect, then a `turn.registered` `{ marvinSessionId, projectId, turnId, startedAt }` event for **every** turn registered in that project — including server-initiated ones (background-job completion, ADR-0038; timed wakeups, ADR-0031). An idle client that holds no live stream uses this to learn a turn it didn't start has begun and re-attach via `/api/chat/resume`, so the result renders without a session switch. A ~25 s heartbeat keeps the connection warm; read-only — it never starts/cancels/mutates a turn.
+
 ## Confirm gate
 
 ### `POST /api/confirm`
@@ -67,6 +71,28 @@ Resolve a pending confirm card.
 **Response:** `{ ok: true }` or `{ ok: false, reason: string }`
 
 The server looks up the pending resolver in [`confirm-registry`](../../../sidecar/packages/runtime/src/confirm-registry.ts) and resolves it — the SDK's `canUseTool` promise returns `{ behavior: decision, message: denyMessage }`.
+
+For an **AskUserQuestion** decision (ADR-0040) the `allow` reply carries `updatedInput` (the `{ answers, questions }` the user chose) which becomes the tool result. Such confirms register with **no** auto-deny timeout — a decision waits for the human (fixed in v0.1.40; the 5-min default used to silently deny a slow decision).
+
+## Backlog
+
+The project backlog (ADR-0044) — actionable deferred work parked under `<workDir>/.marvin/backlog/`. All verbs delegate to the shared `backlog.ts` store, the same code the `marvin-backlog` MCP tool writes through. Mutating verbs are CSRF-guarded and validate `workDir` against the registered-project set.
+
+### `GET /api/backlog?workDir=…&status=…`
+
+List backlog items, optionally filtered by `status` (`open` | `doing` | `done` | `dismissed`). **Response:** `{ workDir, items: BacklogItem[] }`.
+
+### `POST /api/backlog`
+
+Add an item (manual UI add — the model path is the MCP tool). **Body:** `{ workDir, title, body?, severity? }`. **Response:** `{ ok: true, item, created }` or `400 { error }`.
+
+### `PATCH /api/backlog/[id]`
+
+Set an item's status (`done` / `dismissed` / `doing` / `open`). **Body:** `{ workDir, status, note? }`. **Response:** `{ ok: true, item }` or `404`.
+
+### `POST /api/backlog/promote-issue`
+
+Optional export — file an item as a GitHub issue via `gh` (needs an `origin` remote). The backlog stays the source of truth. **Body:** `{ workDir, id }`. **Response:** `{ ok: true, url }` or `409` (no remote) / `502` (gh failed).
 
 ## Projects
 
