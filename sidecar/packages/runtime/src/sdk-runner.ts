@@ -720,8 +720,10 @@ function maybePlanApproval(_args: {
  *
  * Returns null when this isn't AskUserQuestion (callers fall through to normal
  * classification). When there's no UI wired to answer (e.g. a headless wakeup
- * turn), denies rather than hanging — the 5-min confirm timeout would do the
- * same, but failing fast is clearer to the model.
+ * turn), denies immediately rather than hanging. When a UI IS wired, the
+ * confirm is registered with NO auto-deny timeout — a decision waits for the
+ * human (see the `timeoutMs: 0` note below); the turn's `finally`
+ * (clearTurnConfirms) and Stop unwind an abandoned one.
  */
 const ASK_USER_TOOL = "AskUserQuestion";
 function maybeAskUserQuestion(args: {
@@ -741,7 +743,14 @@ function maybeAskUserQuestion(args: {
     } as PermissionResult);
   }
   return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(turnId, toolUseID, resolve, input);
+    // NO auto-deny timer (timeoutMs = 0). AskUserQuestion is the model
+    // explicitly blocking on a human DECISION — a person can legitimately take
+    // far longer than the 5-minute permission-confirm default to weigh detailed
+    // options. The old default auto-DENIED after 5 min, silently discarding the
+    // user's pending answer and making a later "Send choice" click hit a
+    // resolved/gone confirm (404 → "nothing happens"). It now waits for the
+    // human; the turn's `finally` (clearTurnConfirms) + Stop are the escapes.
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0);
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
