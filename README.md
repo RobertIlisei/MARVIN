@@ -29,7 +29,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.21**). `main` and `development` are fast-forwarded together at each
+> **v0.1.40**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -216,7 +216,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - ❓ Clickable decisions — when the model hits a real fork it calls **AskUserQuestion** and you pick from native option buttons (single/multi-select + "Other"); your choice returns to the model as the tool result, in every mode (ADR-0040)
 - 🧩 Per-project skill enablement — the fingerprint picks the installed skills relevant to *this* project and tells MARVIN to ignore the rest; per-skill toggles in the Skills pane (ADR-0037)
 - ⬇️ Fetch skills from Git — "Add from GitHub" pulls a skill from any repo, a `…/tree/…` sub-path, or a plugin marketplace (ADR-0039); clone-and-copy only, never executes the repo
-- 🛰️ Event-based background jobs — `run_background_job` runs a build/test/deploy past the turn and fires a real follow-up turn when it exits (no more orphaned "I'll be notified" promises); shell `&`/`nohup` denied at the gate (ADR-0038)
+- 🛰️ Event-based background jobs — `run_background_job` runs a build/test/deploy past the turn and fires a real follow-up turn when it exits (no more orphaned "I'll be notified" promises); shell `&`/`nohup` denied at the gate (ADR-0038). The completion turn now renders in an **idle** session without a switch/relaunch — a per-project announce channel re-attaches the app to any server-initiated turn (ADR-0043), with a "background job running" chip so in-flight is distinct from done
+- 📋 Project backlog — a durable parking lot for the "noticed in flight, not in scope" follow-ups that used to evaporate with the chat: `backlog_add` parks them (consent-gated at the scope-met handoff), they resurface in next session's context, and a macOS panel + tray chip lets you browse / Done / Dismiss / **Promote to plan**. A parking lot the user revisits — never a queue agents pull from (ADR-0044)
 
 **Web sidecar**
 - 🔒 Structural confirm gate — every Edit/Write/Bash pre-flight, auto-mode audit log
@@ -224,7 +225,7 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 💸 Cost tracker — daily/weekly/lifetime spend per project
 - 🔀 Monaco diff viewer — see exactly what MARVIN is about to do before allowing
 - 🧰 Model picker — executor + advisor slots, live model list from Anthropic
-- 🌐 Playwright via Bash — MARVIN drives real browsers against `localhost` / LAN URLs by shelling out to `npx playwright`
+- 🌐 Browser automation — by default MARVIN drives real browsers against `localhost` / LAN URLs by shelling out to `npx playwright` (one-shot captures + full `playwright test`). Opt-in, **off by default**: a gated Playwright **MCP** server (ADR-0045) for first-class, stateful `browser_*` tools (navigate → snapshot → click → assert) — observation auto-runs, interaction/navigation confirm, and `browser_run_code_unsafe` is denied
 - 🔄 Resume across reloads — closing the window doesn't kill a running turn
 - 📊 Graph-aware chat — in-process MCP exposes `graph_summary`, `graph_search`, `graph_neighbors`, `graph_path`; MARVIN builds + refreshes the active project's code and knowledge graphs itself (AST-only, free) so they stay current (ADR-0041)
 - 🧠 Durable-facts memory — a `marvin-memory` MCP (`remember` / `recall`) is the enforced write path for `.marvin/memory.md`: one fact per file + a one-line index, with caps + content-class guards so it can't bloat into a redundant log; `/memory-compact` distills an existing one (ADR-0042)
@@ -280,7 +281,17 @@ docs/
 
 ## Status
 
-**v0.1.32 — memory as a curated durable-facts layer (current).** A real project's `.marvin/memory.md` had bloated to 419 KB / ~99 % redundant with ADRs, git, and the changelog (the model mirrored its Ship summaries into it). memory now holds ONLY what the next session can't re-derive from those — invariants, gotchas, constraints, external facts. A new in-process **`marvin-memory`** MCP (`remember` / `recall`) is the *enforced* write path: one fact → `.marvin/memory/<slug>.md` + a one-line index, supersede-by-name, with length caps + content-class guards that reject activity/status. `personality.ts` carries a MUST/MUST-NOT firm surface; a **`/memory-compact`** command distills an existing log. The Scope-met chip is retargeted to `.marvin/session-notes.md` so it can't pollute the index. ADR-0042.
+**v0.1.40 — fix: AskUserQuestion's "Send choice" did nothing (current).** The interactive decision sheet (ADR-0040) registered its confirm with the default **5-minute** auto-deny timeout — the one meant for permission confirms. A human weighing detailed options for >5 min was silently auto-DENIED (the turn proceeded ignoring the choice; the registry entry was deleted), so a later "Send choice" click hit a dead confirm and did nothing. AskUserQuestion is the model explicitly blocking on a human decision, so it now registers with NO auto-deny timer — it waits for you; the turn's `finally` (`clearTurnConfirms`) + Stop unwind an abandoned one. Regression test in `confirm-registry-timeout.test.ts`.
+
+**v0.1.39 — Playwright MCP, opt-in + gated.** MARVIN's first EXTERNAL (stdio) MCP server (`npx @playwright/mcp@latest`), off by default. The gate previously blanket-allowed every MCP tool — safe for the in-process graph/memory/backlog servers, unsafe for Playwright's code-exec/egress tools. A `mcpToolPolicy` now classifies the `playwright` tools (observation auto · interaction/navigation confirm · `browser_run_code_unsafe` deny), the subagent read-only invariant restricts scouts to observation, and a `playwrightEnabled` toggle is threaded to the web Setup popover + macOS Settings ▸ Browser (ADR-0045).
+
+**v0.1.38 — Project backlog.** A durable, per-project parking lot for *actionable* "noticed in flight, not in scope" follow-ups that used to evaporate with the chat. A `marvin-backlog` MCP (`backlog_add` / `list` / `resolve`, content-class enforced) + `GET/POST/PATCH /api/backlog` share one store (file-per-item + index, mirroring memory); open items re-inject into next session's context; a macOS panel + tray chip gives Done / Dismiss / Promote-to-plan. Consent-gated capture; a parking lot, never a queue agents pull from (ADR-0044).
+
+**v0.1.37 — server-initiated turns reach an idle client.** Background-job completion (ADR-0038) and timed wakeups (ADR-0031) fire a real turn server-side, but the idle app only attached to a turn's stream on session hydrate — so the completion turn ran into the bus with no listener and was invisible until a session switch. A per-project always-on SSE (`/api/chat/announce`) now re-attaches the idle app to any server-started turn, with a "background job running" chip (ADR-0043).
+
+**v0.1.33–0.1.36 — turn-lifecycle hardening + context panel.** One live turn per session (`POST /api/chat` returns `409` instead of evicting a running turn, and eviction aborts the displaced agent — v0.1.33); **Stop** is authoritative (`cancelLiveTurn` force-ends a wedged turn so the session can't lock — v0.1.34); a click-to-open **context-usage panel** on the status-bar `ctx` chip with a per-category breakdown from live SDK usage (v0.1.35); and a fired wakeup yields to a live interactive turn instead of evicting it (v0.1.36). (v0.1.34 also ended a stray-tag version divergence, resetting the line to 0.1.x.)
+
+**v0.1.32 — memory as a curated durable-facts layer.** A real project's `.marvin/memory.md` had bloated to 419 KB / ~99 % redundant with ADRs, git, and the changelog (the model mirrored its Ship summaries into it). memory now holds ONLY what the next session can't re-derive from those — invariants, gotchas, constraints, external facts. A new in-process **`marvin-memory`** MCP (`remember` / `recall`) is the *enforced* write path: one fact → `.marvin/memory/<slug>.md` + a one-line index, supersede-by-name, with length caps + content-class guards that reject activity/status. `personality.ts` carries a MUST/MUST-NOT firm surface; a **`/memory-compact`** command distills an existing log. The Scope-met chip is retargeted to `.marvin/session-notes.md` so it can't pollute the index. ADR-0042.
 
 **v0.1.31 — "Prompt is too long" fixed.** On a mature project the first message overflowed the model's 200 K window — `buildProjectContext` injected every ADR in full + the whole memory.md (~566 K tokens measured). Two layers (ADR-0041): MARVIN now **builds/maintains the active project's graphs** (code + knowledge, AST-only/free, scoped to the project — never its own repo), and the first-message context is **budgeted** — ADRs as a titles index (details via the knowledge graph + targeted reads), memory as a recent tail, curated docs whole. Measured 566 K → ~13 K tokens.
 
