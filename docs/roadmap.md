@@ -19,6 +19,17 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.40** — Fix: AskUserQuestion's "Send choice" silently doing nothing. The
+interactive decision sheet (ADR-0040) registered its confirm with the default
+**5-minute** auto-deny timeout — the same one used for permission confirms. A
+human weighing detailed options for >5 min was silently auto-DENIED (the turn
+proceeded ignoring the choice; the registry entry was deleted), so a later
+"Send choice" click hit a dead confirm (404) and did nothing. AskUserQuestion is
+the model explicitly blocking on a human decision, so it now registers with NO
+auto-deny timer (`timeoutMs: 0`) — it waits for the human; the turn's `finally`
+(`clearTurnConfirms`) + Stop unwind an abandoned one. Regression test in
+`confirm-registry-timeout.test.ts`. Builds on v0.1.39.
+
 **v0.1.39** — Playwright MCP, opt-in + gated ([ADR-0045](./decisions/0045-playwright-mcp-gated.md)).
 MARVIN's first EXTERNAL (stdio) MCP server (`npx @playwright/mcp@latest`), **off
 by default**. The gate previously blanket-allowed every MCP tool — safe for the

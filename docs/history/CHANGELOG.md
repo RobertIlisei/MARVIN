@@ -9,6 +9,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-20 — v0.1.40: fix — AskUserQuestion's "Send choice" silently did
+  nothing (ADR-0040 regression).**
+  - **Symptom.** The interactive AskUserQuestion decision sheet showed; the user
+    picked an option and clicked "Send choice" — and nothing happened. The sheet
+    stayed, the turn moved on without their answer.
+  - **Diagnosis (systematic-debugging, evidence-first).** Read the running
+    session transcript: the AskUserQuestion appeared in the turn-result's
+    `permission_denials` **~6m23s** after its `confirm.request` — past the
+    **5-minute** `DEFAULT_CONFIRM_TIMEOUT_MS`. `maybeAskUserQuestion` registered
+    the decision confirm via `registerPendingConfirm` with the DEFAULT timeout —
+    the 5-min auto-deny meant for *permission* confirms (Bash/Edit), where
+    deny-on-walk-away is a safe default. A human weighing detailed options for
+    >5 min was silently AUTO-DENIED: the turn proceeded ignoring the choice and
+    the registry entry was deleted, so the later "Send choice" POST hit a
+    resolved/gone confirm (`resolvePendingConfirm` → false → 404 / turn already
+    ended) and did nothing.
+  - **Fix.** AskUserQuestion is the model explicitly blocking on a human
+    DECISION — there is no sensible auto-default. It now registers with NO
+    auto-deny timer (`registerPendingConfirm(..., 0)`): it waits for the human.
+    The turn's `finally` (`clearTurnConfirms`) and the Stop button remain the
+    escape hatches that unwind an abandoned confirm, so the SDK loop can't pin
+    forever. (The headless / no-UI path still denies immediately, unchanged.)
+  - **Verification.** New `confirm-registry-timeout.test.ts` pins the contract:
+    timeout fires when `timeoutMs > 0`, never when `0`, and a late timer after an
+    explicit resolve is a no-op. 28 tests green across the timeout + dispatch
+    suites; runtime tsc clean. Sidecar fix — ships in the bundled app.
+
 - **2026-06-19 — v0.1.39: Playwright MCP — opt-in, gated browser automation
   (ADR-0045).**
   - **Need.** MARVIN could drive a browser only via the Playwright CLI over
