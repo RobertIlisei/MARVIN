@@ -19,6 +19,20 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.41** — Plan as the durable spine ([ADR-0046](./decisions/0046-plan-as-durable-spine.md),
+revising [ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Fixes two
+plan-tracking bugs: a `TodoWrite` emitted mid-plan wholesale-replaced the
+checklist (sub-tasks erased the plan's steps + fired a false "Plan complete"),
+and a second plan overwrote the single plan slot (the original became
+untrackable). The active plan now owns hierarchical `PlanStep`s; incoming
+`TodoWrite`s **reconcile** into them via `PlanProgress` (matched step → status
+update, unmatched item → nested sub-task) instead of replacing the list;
+completion is computed over top-level steps only; plans live in a revision-aware
+session list (`plans` + `activePlanId`) with a `TodoListStrip` picker so prior
+plans stay navigable. `personality.ts` + the approve-to-execute instruction now
+require a full carry-forward `TodoWrite`. `swift build` + runtime `tsc` clean.
+Builds on v0.1.40.
+
 **v0.1.40** — Fix: AskUserQuestion's "Send choice" silently doing nothing. The
 interactive decision sheet (ADR-0040) registered its confirm with the default
 **5-minute** auto-deny timeout — the same one used for permission confirms. A

@@ -29,7 +29,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.40**). `main` and `development` are fast-forwarded together at each
+> **v0.1.41**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -281,7 +281,9 @@ docs/
 
 ## Status
 
-**v0.1.40 — fix: AskUserQuestion's "Send choice" did nothing (current).** The interactive decision sheet (ADR-0040) registered its confirm with the default **5-minute** auto-deny timeout — the one meant for permission confirms. A human weighing detailed options for >5 min was silently auto-DENIED (the turn proceeded ignoring the choice; the registry entry was deleted), so a later "Send choice" click hit a dead confirm and did nothing. AskUserQuestion is the model explicitly blocking on a human decision, so it now registers with NO auto-deny timer — it waits for you; the turn's `finally` (`clearTurnConfirms`) + Stop unwind an abandoned one. Regression test in `confirm-registry-timeout.test.ts`.
+**v0.1.41 — plan as the durable spine (current).** Two plan-tracking bugs: a `TodoWrite` emitted mid-plan wholesale-replaced the checklist, so sub-tasks erased the plan's steps and a sub-task-only list fired a false "Plan complete"; and a second plan overwrote the single plan slot, making the original untrackable. The active plan now owns hierarchical steps — incoming `TodoWrite`s **reconcile** into them (matched step → status update, unmatched item → nested sub-task) instead of replacing the list, completion is computed over top-level steps only, and plans live in a revision-aware session list with a strip picker so prior plans stay navigable. `personality.ts` + the approve-to-execute instruction now require a full carry-forward `TodoWrite` (never a partial list). ADR-0046, revising ADR-0036.
+
+**v0.1.40 — fix: AskUserQuestion's "Send choice" did nothing.** The interactive decision sheet (ADR-0040) registered its confirm with the default **5-minute** auto-deny timeout — the one meant for permission confirms. A human weighing detailed options for >5 min was silently auto-DENIED (the turn proceeded ignoring the choice; the registry entry was deleted), so a later "Send choice" click hit a dead confirm and did nothing. AskUserQuestion is the model explicitly blocking on a human decision, so it now registers with NO auto-deny timer — it waits for you; the turn's `finally` (`clearTurnConfirms`) + Stop unwind an abandoned one. Regression test in `confirm-registry-timeout.test.ts`.
 
 **v0.1.39 — Playwright MCP, opt-in + gated.** MARVIN's first EXTERNAL (stdio) MCP server (`npx @playwright/mcp@latest`), off by default. The gate previously blanket-allowed every MCP tool — safe for the in-process graph/memory/backlog servers, unsafe for Playwright's code-exec/egress tools. A `mcpToolPolicy` now classifies the `playwright` tools (observation auto · interaction/navigation confirm · `browser_run_code_unsafe` deny), the subagent read-only invariant restricts scouts to observation, and a `playwrightEnabled` toggle is threaded to the web Setup popover + macOS Settings ▸ Browser (ADR-0045).
 
