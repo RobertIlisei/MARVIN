@@ -1,5 +1,14 @@
 # ADR-0036 — Ask / Agent / Plan modes + live to-do list
 
+> **Revised by [ADR-0046](./0046-plan-as-durable-spine.md) (2026-06-22) — plan
+> as the durable spine.** The two-tier model below kept a single flat
+> `todos` array + one plan slot, both wholesale-replaced; a mid-plan
+> `TodoWrite` erased the plan and a second plan clobbered the first. ADR-0046
+> makes the active plan own hierarchical steps, reconciles incoming
+> `TodoWrite`s into them, computes completion over top-level steps only, and
+> keeps prior plans in a navigable session list. The tier-1 / tier-2
+> distinction below is unchanged.
+>
 > **Revision 2026-06-11 (v0.1.24) — Plan mode decoupled.** The first cut used
 > the SDK's coupled plan permissionMode (plan → ExitPlanMode modal → execute
 > in the same turn, same model). Live use exposed three faults: (1) approval
