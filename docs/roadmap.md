@@ -19,6 +19,25 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.42** — Plan persistence + review-window fixes + backlog capture-at-discovery.
+Three changes shipped together. **(1) Plan persists across chat switches**
+([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up): the plan
+strip was in-memory/session-scoped, so switching chats or relaunching lost it;
+`replay` now reconstructs the plan + checklist from the transcript on session
+load (last `# Plan` reply + latest `TodoWrite` for step progress), and a later
+`TodoWrite` reconciles into the restored plan instead of orphaning as a tier-1
+task list. **(2) Review window** ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md)
+bugfix): a newly-written file (one all-added hunk) rendered a half-empty
+side-by-side and hung the window — added/deleted files now render single-column
+with a banner, the diff flattens to a virtualised row-level `LazyVStack`, and a
+>1500-line diff is gated behind "Show anyway" (mirrors GitHub/VS Code). **(3)
+Backlog capture-at-discovery** ([ADR-0047](./decisions/0047-backlog-capture-at-discovery.md),
+revises [ADR-0044](./decisions/0044-project-backlog.md)): a new `provisional`
+status + `backlog_add … provisional:true` auto-park a "noticed in flight" item
+the instant it's seen (no go-ahead), with a keep/dismiss review at the handoff,
+so discoveries survive a turn that never reaches the handoff. `swift build` +
+runtime `tsc`/tests clean. Builds on v0.1.41.
+
 **v0.1.41** — Plan as the durable spine ([ADR-0046](./decisions/0046-plan-as-durable-spine.md),
 revising [ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Fixes two
 plan-tracking bugs: a `TodoWrite` emitted mid-plan wholesale-replaced the
@@ -154,6 +173,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-22 — v0.1.42 plan persistence + review-window + backlog capture-at-discovery.** Plan now survives chat switches/relaunch ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up — `replay` rebuilds it from the transcript); the review window renders added/deleted files single-column + virtualises the diff + gates large diffs ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md) bugfix); and the backlog auto-captures "noticed in flight" items as `provisional` the instant they're seen, reviewed keep/dismiss at the handoff ([ADR-0047](./decisions/0047-backlog-capture-at-discovery.md)).
 - **2026-06-22 — plan as the durable spine: reconcile, don't clobber** ([ADR-0046](./decisions/0046-plan-as-durable-spine.md), revises [ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Fixed two plan-tracking bugs: a mid-plan `TodoWrite` wholesale-replaced the checklist (sub-tasks erased the plan + fired a false "Plan complete"), and a second plan overwrote the single plan slot (the original became untrackable). The active plan now owns hierarchical `PlanStep`s; incoming `TodoWrite`s **reconcile** into them (match → update, unmatched → nested sub-task) via `PlanProgress`; completion is computed over top-level steps only; plans live in a session list (`plans` + `activePlanId`, revision-aware by slug) with a strip picker so prior plans stay navigable. `personality.ts` + the approve instruction now require a full carry-forward `TodoWrite`.
 - **2026-06-14 — v0.1.32 memory as a curated durable-facts layer** ([ADR-0042](./decisions/0042-memory-as-durable-facts.md)). `.marvin/memory.md` had bloated to 419 KB / ~99% redundant with ADRs/git/changelog. New `marvin-memory` MCP (`remember`/`recall`) is the enforced write path (file-per-fact + one-line index, caps + content-class guards); `personality.ts` firm surface; `buildProjectContext` injects the index; `/memory-compact` migration; native Scope-met chip retargeted to `session-notes.md`.
 - **2026-06-14 — v0.1.31 project-graph lifecycle + context budget** ([ADR-0041](./decisions/0041-project-graph-lifecycle-and-context-budget.md)). Fixed "Prompt is too long": `buildProjectContext` injected all ADRs + full memory (~566K tok vs 200K). Now MARVIN auto-builds the active project's code+knowledge graphs (cwd-scoped, free) and the first-message context is budgeted — ADR titles index + memory tail + whole curated docs (~13.4K tok measured).
