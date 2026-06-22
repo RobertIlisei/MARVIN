@@ -19,6 +19,20 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.43** — Full session history via incremental paging
+([ADR-0048](./decisions/0048-full-session-history-tail-first.md)). Cold-start
+restore loaded only the last 200 `cli.event` lines (`hydrate(tail:200)` + the
+server's `turns.slice(-tail)`), so a restored session showed truncated history
+with no signal it was clipped — only auto-restore was affected (manual
+history-pick already loaded full). The server now returns `truncated` +
+`totalTurns`; the client paints the last 200 lines instantly, then a
+top-of-list control loads the **next 200** (`loadNextHistoryPage`) or jumps to
+the **full log** (`loadFullHistory`) on demand, with a live "N of M lines"
+count. Loads decode off-main and replay into the lazy `LazyVStack`, are guarded
+(same session, not mid-send), and reset on session switch. Fast first paint +
+user-controlled completeness, never auto-paying the 120 MB worst case.
+`swift build` + sidecar `tsc` clean. Builds on v0.1.42.
+
 **v0.1.42** — Plan persistence + review-window fixes + backlog capture-at-discovery.
 Three changes shipped together. **(1) Plan persists across chat switches**
 ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up): the plan
@@ -173,6 +187,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-06-22 — v0.1.43 full session history via incremental paging** ([ADR-0048](./decisions/0048-full-session-history-tail-first.md)). Cold-start restore was tail-capped to 200 `cli.event` lines with no signal it clipped; the server now reports `truncated`/`totalTurns` and the client pages older lines in on demand (next 200 / full log) with an "N of M" count — fast first paint, full history always reachable.
 - **2026-06-22 — v0.1.42 plan persistence + review-window + backlog capture-at-discovery.** Plan now survives chat switches/relaunch ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up — `replay` rebuilds it from the transcript); the review window renders added/deleted files single-column + virtualises the diff + gates large diffs ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md) bugfix); and the backlog auto-captures "noticed in flight" items as `provisional` the instant they're seen, reviewed keep/dismiss at the handoff ([ADR-0047](./decisions/0047-backlog-capture-at-discovery.md)).
 - **2026-06-22 — plan as the durable spine: reconcile, don't clobber** ([ADR-0046](./decisions/0046-plan-as-durable-spine.md), revises [ADR-0036](./decisions/0036-ask-agent-plan-modes.md)). Fixed two plan-tracking bugs: a mid-plan `TodoWrite` wholesale-replaced the checklist (sub-tasks erased the plan + fired a false "Plan complete"), and a second plan overwrote the single plan slot (the original became untrackable). The active plan now owns hierarchical `PlanStep`s; incoming `TodoWrite`s **reconcile** into them (match → update, unmatched → nested sub-task) via `PlanProgress`; completion is computed over top-level steps only; plans live in a session list (`plans` + `activePlanId`, revision-aware by slug) with a strip picker so prior plans stay navigable. `personality.ts` + the approve instruction now require a full carry-forward `TodoWrite`.
 - **2026-06-14 — v0.1.32 memory as a curated durable-facts layer** ([ADR-0042](./decisions/0042-memory-as-durable-facts.md)). `.marvin/memory.md` had bloated to 419 KB / ~99% redundant with ADRs/git/changelog. New `marvin-memory` MCP (`remember`/`recall`) is the enforced write path (file-per-fact + one-line index, caps + content-class guards); `personality.ts` firm surface; `buildProjectContext` injects the index; `/memory-compact` migration; native Scope-met chip retargeted to `session-notes.md`.

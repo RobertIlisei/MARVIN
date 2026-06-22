@@ -9,6 +9,32 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-22 — v0.1.43: full session history via incremental paging
+  (ADR-0048).**
+  - **Symptom.** A restored session showed only a fraction of its history —
+    "the current session history seems truncated."
+  - **Cause.** Cold-start auto-hydrate calls `hydrate(tail: 200)` and the
+    server (`/api/sessions/[sessionId]`) honours it with `record.turns.slice(-tail)`.
+    `record.turns` is one entry **per `cli.event`** (a single exchange is many
+    events), so 200 lines is just the last few turns — and the response gave
+    the client no signal it had been clipped, so it couldn't recover. Manual
+    history-pick (`selectSession`, no tail) already loaded full, so only the
+    auto-restored session was affected.
+  - **Fix.** The server now returns `truncated` + `totalTurns` alongside the
+    (clipped) turns. The client keeps the fast 200-line first paint, then a
+    top-of-list control pages older lines in on demand: "Show 200 earlier
+    lines" (`loadNextHistoryPage` re-fetches `tail = window + 200`) and "Show
+    full log" (`loadFullHistory`, `tail = nil`), with a live "N of M lines"
+    count. Each load decodes off-main (`Task.detached`) and replays through the
+    same reducer into the virtualised `LazyVStack`; guarded to the same session
+    and not mid-send; paging state resets on session switch. Chosen over an
+    auto background full-load so a 120 MB session is never re-pulled on every
+    cold start — the user pulls exactly as much as they want.
+  - **Verification.** `swift build` clean; sidecar `tsc` clean for the change
+    (pre-existing `honeycomb-telemetry` / `can-use-tool-dispatch` test
+    type-drift untouched). Deferred: a `before`-cursor (fetch only the new
+    slice) and exact scroll-offset preservation across a page load.
+
 - **2026-06-22 — v0.1.42: plan persistence across chats + review-window
   fixes + backlog capture-at-discovery.** Three changes, all from live use.
   - **Plan persistence (ADR-0046 follow-up).** Symptom: switching chats (or
