@@ -26,9 +26,15 @@ export async function GET(
   if (!record) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
-  const out =
-    tail !== undefined && Number.isFinite(tail) && record.turns.length > tail
-      ? { ...record, turns: record.turns.slice(-tail) }
-      : record;
+  // Report whether we clipped + the true total so the client can fetch the
+  // rest (it can't tell "exactly `tail` turns" from "clipped at `tail`"
+  // otherwise). The native client paints this tail instantly on cold start,
+  // then background-loads the full transcript when `truncated` (ADR-0048).
+  const totalTurns = record.turns.length;
+  const truncated =
+    tail !== undefined && Number.isFinite(tail) && totalTurns > tail;
+  const out = truncated
+    ? { ...record, turns: record.turns.slice(-tail), truncated, totalTurns }
+    : { ...record, truncated: false, totalTurns };
   return NextResponse.json(out, { headers: { "Cache-Control": "no-store" } });
 }

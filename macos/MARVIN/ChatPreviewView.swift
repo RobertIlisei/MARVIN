@@ -405,6 +405,17 @@ final class ChatPreviewModel {
     /// see an empty list and assume the project has no history.
     private(set) var isHydrating: Bool = false
 
+    /// ADR-0048 — incremental history paging. Cold start paints the last
+    /// `HISTORY_PAGE` lines; a top-of-list control loads the next page (and so
+    /// on, up to the full log). `historyWindow` is how many lines are currently
+    /// shown; `historyTotalTurns` the total on disk; `historyTruncated` true
+    /// while more remain to load.
+    static let historyPage = 200
+    private(set) var isLoadingEarlierHistory: Bool = false
+    private(set) var historyWindow: Int = 0
+    private(set) var historyTotalTurns: Int? = nil
+    private(set) var historyTruncated: Bool = false
+
     /// Past sessions for the active project — drives the header's
     /// Sessions menu. Sourced from GET /api/sessions and refreshed
     /// when the user opens the menu (so newly-completed turns from
@@ -787,6 +798,10 @@ final class ChatPreviewModel {
         clearPlans()
         planAwaitingApproval = false
         agentChangedFiles = []
+        // ADR-0048 — reset the history paging window for the new session.
+        historyWindow = 0
+        historyTotalTurns = nil
+        historyTruncated = false
     }
 
     /// Phase 2h — fetch the transcript for `(projectId, sessionId)`,
@@ -853,6 +868,12 @@ final class ChatPreviewModel {
                 guard loadedSessionId == sessionId else { return }
                 if let record {
                     replay(record: record)
+                    // ADR-0048 — record the paging window. The cold-start paint
+                    // is tail-capped for speed; a top-of-list control loads the
+                    // next page on demand (no auto full-load → no 120 MB hit).
+                    historyWindow = record.turns.count
+                    historyTotalTurns = record.totalTurns
+                    historyTruncated = record.truncated ?? false
                 }
                 // Whether we hydrated or not, attempt to tail any
                 // live turn. 204 → harmless no-op.
@@ -862,6 +883,33 @@ final class ChatPreviewModel {
             }
         }
     }
+
+    /// ADR-0048 — load a larger history window on demand (the top-of-list
+    /// "show earlier" control). `turns` is the new tail size to fetch; `nil`
+    /// loads the FULL log. Decodes off-main, replays into the lazy list.
+    /// Guards: only swaps if we're still on this session and not mid-send (a
+    /// streaming turn's events aren't on disk yet, so replacing would drop
+    /// them). Best-effort: a failure leaves the current window in place.
+    func loadMoreHistory(turns: Int?) {
+        guard let projectId = loadedProjectId, let sessionId = loadedSessionId,
+              !isLoadingEarlierHistory else { return }
+        isLoadingEarlierHistory = true
+        Task { @MainActor in
+            defer { isLoadingEarlierHistory = false }
+            let rec = try? await ChatService.shared.fetchSession(
+                projectId: projectId, sessionId: sessionId, tail: turns)
+            guard let rec, loadedSessionId == sessionId, !isSending else { return }
+            replay(record: rec)
+            historyWindow = rec.turns.count
+            historyTotalTurns = rec.totalTurns
+            historyTruncated = rec.truncated ?? false
+        }
+    }
+
+    /// Load the next page of older lines (`HISTORY_PAGE` more).
+    func loadNextHistoryPage() { loadMoreHistory(turns: historyWindow + Self.historyPage) }
+    /// Jump straight to the complete log.
+    func loadFullHistory() { loadMoreHistory(turns: nil) }
 
     /// Replay a stored SessionRecord into the message list using
     /// the same reducer the live stream uses. Phase 2h.
@@ -2104,12 +2152,51 @@ struct ChatPreviewView: View {
         .padding(12)
     }
 
+    /// ADR-0048 — top-of-list history paging control: load the next page of
+    /// older lines, or jump to the full log, with a live "N of M" count.
+    private var historyPagingRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            if model.isLoadingEarlierHistory {
+                ProgressView().controlSize(.small)
+                Text("Loading earlier lines…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Show \(ChatPreviewModel.historyPage) earlier lines") {
+                    model.loadNextHistoryPage()
+                }
+                .controlSize(.small)
+                Button("Show full log") { model.loadFullHistory() }
+                    .controlSize(.small)
+                if let total = model.historyTotalTurns {
+                    Text("\(model.historyWindow) of \(total) lines")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+    }
+
     private var messagesPane: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if model.messages.isEmpty {
                     emptyState
                 } else {
+                    // ADR-0048 — incremental history paging. When older lines
+                    // remain, a top-of-list control loads the next page (or the
+                    // full log). The list is bottom-anchored, so newly-loaded
+                    // older lines appear above — scroll up to read them.
+                    if model.historyTruncated || model.isLoadingEarlierHistory {
+                        historyPagingRow
+                    }
                     ForEach(model.messages) { msg in
                         ChatMessageRow(message: msg)
                             .padding(.horizontal, 12)
