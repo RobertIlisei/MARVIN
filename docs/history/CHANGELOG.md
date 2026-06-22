@@ -9,6 +9,39 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-22 — v0.1.42: plan persistence across chats + review-window
+  fixes + backlog capture-at-discovery.** Three changes, all from live use.
+  - **Plan persistence (ADR-0046 follow-up).** Symptom: switching chats (or
+    relaunching) lost the plan strip — the `.marvin/plans/<slug>.md` file
+    survived but the UI didn't restore it, and a fresh `TodoWrite` then showed
+    as an orphan tier-1 task list ("a tasks list appears and the plan
+    vanishes"). Cause: `hydrate` cleared plan state (`resetSessionStrips`) and
+    `replay` only rebuilt messages — it never re-ran the plan/TodoWrite logic.
+    Fix: `replay` reconstructs the plan + checklist from the transcript (the
+    last `# Plan` reply or `📋 Plan` row → `ingestPlan(openFile:false)`, and
+    the latest `TodoWrite` → `applyTodoWrite` to restore step progress).
+    `persistAndOpenPlan` is now idempotent so rehydration doesn't churn the
+    file. The active plan being restored means a later `TodoWrite` reconciles
+    into it instead of orphaning.
+  - **Review window (ADR-0034 bugfix).** Symptom: a file written from scratch
+    showed a half-empty side-by-side (blank "Original") and the window went
+    unresponsive. Cause: an empty baseline yields one all-added hunk, which
+    rendered as a non-lazy `VStack` of every row inside a bidirectional
+    ScrollView (the outer `LazyVStack` only virtualised across hunks). Fix
+    (mirrors GitHub/VS Code): added/deleted files render single-column with a
+    banner; the diff flattens to one row-level `LazyVStack` (virtualises even a
+    one-hunk file); diffs over 1500 lines gate behind "Show anyway".
+  - **Backlog capture-at-discovery (ADR-0047, revising ADR-0044).** Symptom:
+    "noticed in flight" items were lost when a turn ended without reaching the
+    scope-met handoff (long turn, redirect, error). Fix: a new `provisional`
+    status + `backlog_add … provisional:true` auto-park a discovery the instant
+    it's noticed (no go-ahead, bypasses the open-count cap); the handoff is a
+    keep/dismiss batch review (`backlog_resolve … keep`); the macOS panel grows
+    a provisional review section. 18/18 store tests (5 new).
+  - **Verification.** `swift build` clean; runtime `tsc` clean for the change
+    (pre-existing `can-use-tool-dispatch` test type-drift untouched); backlog
+    tests 18/18.
+
 - **2026-06-22 — v0.1.41: plan as the durable spine — reconcile TodoWrite,
   don't clobber (ADR-0046, revising ADR-0036).**
   - **Symptom.** Two plan-tracking bugs reported in live use. (1) While MARVIN
