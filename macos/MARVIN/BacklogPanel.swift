@@ -22,6 +22,10 @@ struct BacklogPanel: View {
     private var active: [BacklogItem] {
         items.filter { $0.status == "open" || $0.status == "doing" }
     }
+    /// ADR-0047 — auto-captured items awaiting the user's keep/dismiss.
+    private var provisional: [BacklogItem] {
+        items.filter { $0.status == "provisional" }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -60,7 +64,7 @@ struct BacklogPanel: View {
     }
 
     @ViewBuilder private var content: some View {
-        if active.isEmpty {
+        if active.isEmpty && provisional.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
                 Text("No open backlog items.").font(.callout).foregroundStyle(.secondary)
@@ -71,11 +75,63 @@ struct BacklogPanel: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
+                    if !provisional.isEmpty { provisionalSection }
                     ForEach(active) { item in row(item) }
                 }
                 .padding(12)
             }
         }
+    }
+
+    /// ADR-0047 — items auto-captured this/last session, surfaced for a quick
+    /// keep/dismiss pass so the parking lot doesn't accrete unreviewed noise.
+    private var provisionalSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.circle").foregroundStyle(.purple)
+                Text("Auto-captured — review").font(.subheadline.weight(.semibold))
+                Text("\(provisional.count)")
+                    .font(.caption.monospacedDigit())
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Color.purple.opacity(0.15), in: Capsule())
+                Spacer()
+                Button("Keep all") {
+                    Task { await mutate { for i in provisional { try await BacklogService.shared.setStatus(workDir: workDir, id: i.id, status: "open") } } }
+                }
+                .controlSize(.small)
+                Button("Dismiss all") {
+                    Task { await mutate { for i in provisional { try await BacklogService.shared.setStatus(workDir: workDir, id: i.id, status: "dismissed") } } }
+                }
+                .controlSize(.small)
+            }
+            ForEach(provisional) { item in provisionalRow(item) }
+            Divider().padding(.vertical, 2)
+        }
+    }
+
+    private func provisionalRow(_ item: BacklogItem) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: severityIcon(item.severity))
+                .foregroundStyle(severityColor(item.severity))
+                .help("severity: \(item.severity)")
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title).font(.body.weight(.semibold))
+                if !item.body.isEmpty {
+                    Text(item.body).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(3).textSelection(.enabled)
+                }
+                HStack(spacing: 8) {
+                    Button("Keep") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "open") } } }
+                        .controlSize(.small)
+                    Button("Dismiss") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "dismissed") } } }
+                        .controlSize(.small)
+                }
+                .padding(.top, 2)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func row(_ item: BacklogItem) -> some View {

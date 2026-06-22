@@ -10,7 +10,7 @@ struct BacklogItem: Codable, Identifiable, Equatable {
     let id: String
     let title: String
     let body: String
-    let status: String     // open | doing | done | dismissed
+    let status: String     // provisional | open | doing | done | dismissed
     let severity: String   // low | med | high
     let created: String
 }
@@ -47,10 +47,11 @@ final class BacklogService {
         return try JSONDecoder().decode(ListResponse.self, from: data).items
     }
 
-    /// Count of active (open + doing) items — drives the tray chip.
+    /// Count of active items — drives the tray chip. Includes `provisional`
+    /// (ADR-0047) so auto-captured items nudge the user to review them.
     func openCount(workDir: String) async -> Int {
         guard let items = try? await fetch(workDir: workDir) else { return 0 }
-        return items.filter { $0.status == "open" || $0.status == "doing" }.count
+        return items.filter { $0.status == "provisional" || $0.status == "open" || $0.status == "doing" }.count
     }
 
     /// Manually add an item from the panel.

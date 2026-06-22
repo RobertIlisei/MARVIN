@@ -115,6 +115,59 @@ describe("backlog store — add / list / resolve", () => {
   });
 });
 
+describe("backlog store — provisional capture (ADR-0047)", () => {
+  it("provisional add stores status=provisional and shows [?] in the index", async () => {
+    const r = await addBacklogItem(workDir, { title: "Noticed a one-directional check", provisional: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.item.status).toBe("provisional");
+    const index = await readFile(indexPath(), "utf-8");
+    expect(index).toContain("[?]"); // resurfaces, marked needs-review
+    expect(index).toContain("Noticed a one-directional check");
+  });
+
+  it("confirming a provisional item (provisional:false) promotes it to open", async () => {
+    const a = await addBacklogItem(workDir, { title: "Tighten the retry path", provisional: true });
+    if (!a.ok) return;
+    expect(a.item.status).toBe("provisional");
+    const b = await addBacklogItem(workDir, { title: "Tighten the retry path" });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    expect(b.item.status).toBe("open");
+  });
+
+  it("a provisional re-add never downgrades an already-open item", async () => {
+    const a = await addBacklogItem(workDir, { title: "Add an integration test" });
+    if (!a.ok) return;
+    expect(a.item.status).toBe("open");
+    const b = await addBacklogItem(workDir, { title: "Add an integration test", provisional: true });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    expect(b.item.status).toBe("open"); // stays open
+  });
+
+  it("keep (setBacklogStatus → open) promotes a provisional item", async () => {
+    const a = await addBacklogItem(workDir, { title: "Maybe cache this", provisional: true });
+    if (!a.ok) return;
+    const r = await setBacklogStatus(workDir, a.item.id, "open");
+    expect(r.ok && r.item.status === "open").toBe(true);
+  });
+
+  it("provisional auto-capture bypasses the open-count rail (never silently dropped)", async () => {
+    for (let i = 0; i < MAX_OPEN_ITEMS; i++) {
+      const r = await addBacklogItem(workDir, { title: `open item ${i}` });
+      expect(r.ok).toBe(true);
+    }
+    // A confirmed add is now blocked…
+    expect((await addBacklogItem(workDir, { title: "confirmed overflow" })).ok).toBe(false);
+    // …but a provisional discovery is still captured.
+    const prov = await addBacklogItem(workDir, { title: "noticed past the cap", provisional: true });
+    expect(prov.ok).toBe(true);
+    if (!prov.ok) return;
+    expect(prov.item.status).toBe("provisional");
+  });
+});
+
 describe("backlog store — caps", () => {
   it("rejects an over-length title", async () => {
     const r = await addBacklogItem(workDir, { title: "x".repeat(MAX_TITLE_CHARS + 1) });
