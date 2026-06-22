@@ -129,38 +129,40 @@ final class ChatPreviewModel {
     /// Cleared when the user resets.
     private(set) var marvinSessionId: String? = nil
 
-    /// ADR-0036 — the live to-do list from the model's `TodoWrite` calls.
-    /// Each TodoWrite rewrites the whole list with per-item status, so we
-    /// just replace this wholesale; drives the TodoListStrip. Cleared on a
-    /// fresh SDK session.
+    /// ADR-0036 — the tier-1 live to-do list (a bare `TodoWrite` checklist with
+    /// no plan behind it). Each TodoWrite rewrites the whole list, so we replace
+    /// this wholesale; drives the tier-1 TodoListStrip. Cleared on a fresh SDK
+    /// session. Tier-2 (plan-backed) work lives in `plans`, not here.
     var todos: [TodoItem] = []
 
-    /// ADR-0036 — the most recent Plan-mode plan. Kept so the plan persists in
-    /// the chat + seeds the checklist even after the approval window is
-    /// dismissed, and so the to-do strip can render as the tier-2 *Plan*
-    /// (vs a bare tier-1 task list). Cleared on a fresh SDK session.
-    var currentPlanText: String? = nil
+    /// ADR-0046 — every plan presented this session, each owning its steps. A
+    /// new plan APPENDS a navigable entry (revision-aware by slug) rather than
+    /// clobbering the prior one; `activePlanId` selects the one shown in the
+    /// strip. Cleared on a fresh SDK session.
+    var plans: [Plan] = []
+    var activePlanId: String? = nil
 
-    /// ADR-0036 (two-tier addendum) — filesystem path of the auto-saved plan
-    /// markdown (`<workDir>/.marvin/plans/<slug>.md`). Written when a plan is
-    /// presented and opened in the editor pane (Cursor-style), so the user can
-    /// actually see the plan file. nil until a plan is written this session.
-    var currentPlanPath: String? = nil
+    /// The plan currently shown in the strip (tier 2). nil => tier 1 / no plan.
+    var activePlan: Plan? { plans.first { $0.id == activePlanId } }
 
-    /// Title pulled from the plan's `# Plan — <title>` heading (the plan-mode
-    /// prompt contract). Drives the tier-2 strip header + the saved file's
-    /// slug. The model often writes preamble BEFORE the heading, so we scan
-    /// for the `# Plan` line anywhere — not just line 1 — and parse the title
-    /// after the `Plan` word + its separator (— / - / :). Falls back to "Plan".
-    var planTitle: String? {
-        guard let text = currentPlanText else { return nil }
+    /// Back-compat read shims for the call sites that predate ADR-0046's plan
+    /// list. All WRITES go through `ingestPlan` / `applyTodoWrite` / the
+    /// mutators below — never assign these directly.
+    var currentPlanText: String? { activePlan?.text }
+    var currentPlanPath: String? { activePlan?.path }
+    var planTitle: String? { activePlan?.title }
+
+    /// Title pulled from a plan's `# Plan — <title>` heading (the plan-mode
+    /// prompt contract). The model often writes preamble BEFORE the heading, so
+    /// we scan for the `# Plan` line anywhere — not just line 1 — and parse the
+    /// title after the `Plan` word + its separator (— / - / :). Falls back to
+    /// "Plan".
+    static func planTitle(from text: String) -> String {
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = raw.trimmingCharacters(in: .whitespaces)
-            // Heading line: starts with `#`(s) then the word "Plan".
             guard line.hasPrefix("#") else { continue }
             let afterHashes = line.drop(while: { $0 == "#" || $0 == " " })
             guard afterHashes.lowercased().hasPrefix("plan") else { continue }
-            // Drop "Plan" + any separator/space that follows it.
             let afterPlan = afterHashes.dropFirst(4)
                 .drop(while: { $0 == " " || $0 == "—" || $0 == "–" || $0 == "-" || $0 == ":" })
                 .trimmingCharacters(in: .whitespaces)
@@ -169,22 +171,112 @@ final class ChatPreviewModel {
         return "Plan"
     }
 
+    /// True when the active plan's top-level steps are all complete (ADR-0046 —
+    /// sub-tasks deliberately excluded, so a sub-task-only TodoWrite can't read
+    /// as "Plan complete").
+    var activePlanComplete: Bool { activePlan?.isComplete ?? false }
+
+    /// ADR-0046 — the checklist currently driving the paused/continue chips:
+    /// the active plan's TOP-LEVEL steps (as TodoItems) when a plan is active,
+    /// else the tier-1 todos. Keeps the paused-plan affordances reading the
+    /// plan spine rather than a stale flat list.
+    var trackedItems: [TodoItem] {
+        if let steps = activePlan?.steps {
+            return steps.map { TodoItem(content: $0.content, status: $0.status, activeForm: $0.activeForm) }
+        }
+        return todos
+    }
+
+    /// Clear all plans (fresh SDK session / session switch).
+    func clearPlans() {
+        plans = []
+        activePlanId = nil
+    }
+
+    /// Mutate the active plan in place (reassign for @Observable to see it).
+    private func updateActivePlan(_ mutate: (inout Plan) -> Void) {
+        guard let idx = plans.firstIndex(where: { $0.id == activePlanId }) else { return }
+        var p = plans[idx]
+        mutate(&p)
+        plans[idx] = p
+    }
+
+    /// ADR-0046 — ingest a presented plan. Splits off any preamble, derives the
+    /// title + slug, seeds steps. A new slug appends a navigable entry and
+    /// becomes active; an existing slug is a REVISION — steps are rebuilt but
+    /// prior step/sub-task progress is carried forward. Never clobbers a prior
+    /// plan. Then persists + opens the file (Cursor-style).
+    /// `announce` posts the plan as a `📋 Plan` system row — used on the
+    /// ExitPlanMode path where the plan came from a tool input (no inline card).
+    /// The turnCompleted path leaves it false: the plan is already the inline
+    /// assistant reply (the plan card), so a system row would duplicate it.
+    func ingestPlan(_ raw: String, announce: Bool = false) {
+        let body = PlanCard.split(raw)?.plan ?? raw
+        guard !body.isEmpty else { return }
+        let title = Self.planTitle(from: body)
+        let slug = PlanFile.slug(title)
+        let seeded = PlanParser.steps(from: body)
+
+        if let idx = plans.firstIndex(where: { $0.id == slug }) {
+            // Revision: carry status/activeForm/subtasks for steps that survive.
+            let old = plans[idx].steps
+            let merged = seeded.map { step -> PlanStep in
+                guard let prev = old.first(where: { $0.id == step.id }) else { return step }
+                var s = step
+                s.status = prev.status
+                s.activeForm = prev.activeForm
+                s.subtasks = prev.subtasks
+                return s
+            }
+            var p = plans[idx]
+            let changed = p.text != body
+            p.text = body
+            p.title = title
+            p.steps = merged
+            plans[idx] = p
+            activePlanId = slug
+            if announce && changed { messages.append(.system(text: "📋 Plan (revised)\n\n\(body)")) }
+        } else {
+            plans.append(Plan(id: slug, title: title, text: body, path: nil, steps: seeded))
+            activePlanId = slug
+            if announce { messages.append(.system(text: "📋 Plan\n\n\(body)")) }
+        }
+        persistAndOpenPlan()
+    }
+
+    /// ADR-0046 — apply a `TodoWrite` list. With a plan active, reconcile into
+    /// its steps (match → update, unmatched → nested sub-task) so the plan is
+    /// never erased; otherwise drive the tier-1 list wholesale (legacy).
+    func applyTodoWrite(_ items: [TodoItem]) {
+        if activePlanId != nil {
+            updateActivePlan { $0.steps = PlanProgress.reconcile(steps: $0.steps, with: items) }
+        } else {
+            todos = items
+        }
+    }
+
+    /// Switch the active plan (the strip's plan picker). Re-focuses its file.
+    func selectPlan(_ id: String) {
+        guard plans.contains(where: { $0.id == id }) else { return }
+        activePlanId = id
+        if let path = activePlan?.path { MarvinBridge.shared.setSelectedFile(path) }
+    }
+
     /// Write the presented plan to `<workDir>/.marvin/plans/<slug>.md` and
     /// open it in the editor pane (Cursor opens the plan file in the preview).
     /// Idempotent per plan text — re-presenting the same plan re-uses the path.
     /// Best-effort: a write failure leaves `currentPlanPath` nil (the inline
     /// card + strip still work) rather than surfacing an error mid-plan.
     func persistAndOpenPlan() {
-        guard let plan = currentPlanText, !plan.isEmpty,
+        guard let plan = activePlan, !plan.text.isEmpty,
               let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }
         let dir = (wd as NSString).appendingPathComponent(".marvin/plans")
-        let slug = PlanFile.slug(planTitle ?? "plan")
-        let path = (dir as NSString).appendingPathComponent("\(slug).md")
+        let path = (dir as NSString).appendingPathComponent("\(plan.id).md")
         do {
             try FileManager.default.createDirectory(
                 atPath: dir, withIntermediateDirectories: true)
-            try plan.write(toFile: path, atomically: true, encoding: .utf8)
-            currentPlanPath = path
+            try plan.text.write(toFile: path, atomically: true, encoding: .utf8)
+            updateActivePlan { $0.path = path }
             MarvinBridge.shared.setSelectedFile(path)
         } catch {
             // Non-fatal — the plan card + strip don't depend on the file.
@@ -194,7 +286,7 @@ final class ChatPreviewModel {
     /// Re-focus the saved plan file in the editor pane (the strip's "Open
     /// plan" button). No-op if the plan was never written.
     func openPlanInEditor() {
-        guard let path = currentPlanPath else { return }
+        guard let path = activePlan?.path else { return }
         MarvinBridge.shared.setSelectedFile(path)
     }
 
@@ -455,13 +547,17 @@ final class ChatPreviewModel {
         planAwaitingApproval = false  // any send clears the plan-approval chip
         // A finished plan must not shadow the next task. Once every plan step
         // is done, a fresh user-typed message starts new (tier-1) work, so
-        // drop the plan — otherwise the next TodoWrite would render under the
-        // old "Plan — <title>" header. Control actions (approve / continue)
-        // use sendControl and bypass this, so mid-plan continues are safe.
+        // drop the finished unit — otherwise the next TodoWrite would render
+        // under the old "Plan — <title>" header. Control actions (approve /
+        // continue) use sendControl and bypass this, so mid-plan continues are
+        // safe. ADR-0046 — a completed active plan is retired the same way
+        // (only the finished one; other session plans stay navigable).
         if !todos.isEmpty, todos.allSatisfy({ $0.status == "completed" }) {
             todos = []
-            currentPlanText = nil
-            currentPlanPath = nil
+        }
+        if activePlanComplete, let id = activePlanId {
+            plans.removeAll { $0.id == id }
+            activePlanId = plans.last?.id
         }
         if isSending {
             // Turn already running — queue for after it completes.
@@ -656,12 +752,17 @@ final class ChatPreviewModel {
         resetSessionStrips()
     }
 
-    /// Dismiss the plan checklist (the ✕ on the strip). Clears the plan + its
-    /// captured text so the pane goes away once the user is done with it.
+    /// Dismiss the plan checklist (the ✕ on the strip). ADR-0046 — drops only
+    /// the ACTIVE plan, falling back to the next session plan if one remains, so
+    /// dismissing one plan doesn't strand the others. With no plan active this
+    /// clears the tier-1 task list instead.
     func dismissPlan() {
-        todos = []
-        currentPlanText = nil
-        currentPlanPath = nil
+        if let id = activePlanId {
+            plans.removeAll { $0.id == id }
+            activePlanId = plans.last?.id
+        } else {
+            todos = []
+        }
         planAwaitingApproval = false
     }
 
@@ -670,8 +771,7 @@ final class ChatPreviewModel {
     /// "Plan 7/7" + "N files changed" strips linger in a fresh chat.
     private func resetSessionStrips() {
         todos = []
-        currentPlanText = nil
-        currentPlanPath = nil
+        clearPlans()
         planAwaitingApproval = false
         agentChangedFiles = []
     }
@@ -1021,8 +1121,7 @@ final class ChatPreviewModel {
                 b.sessionGraphSummaryCalls = 0
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
-                currentPlanText = nil
-                currentPlanPath = nil
+                clearPlans()
             }
         case .cliEvent(let data):
             // The reducer mutation must stay synchronous — the chat
@@ -1034,11 +1133,13 @@ final class ChatPreviewModel {
             if cliEventStartsBackgroundJob(data) {
                 backgroundJobRunning = true
             }
-            // ADR-0036 — capture the latest TodoWrite list (Plan/Agent
-            // to-do checklist). Synchronous like the message reducer; the
-            // model write is cheap and drives the TodoListStrip.
+            // ADR-0046 — apply the latest TodoWrite. With a plan active this
+            // RECONCILES into the plan's steps (match → update, unmatched →
+            // nested sub-task) so a partial list can't erase the plan; with no
+            // plan it drives the tier-1 list wholesale. Synchronous like the
+            // message reducer; the model write is cheap and drives the strip.
             if let latest = TodoExtractor.todos(from: data) {
-                todos = latest
+                applyTodoWrite(latest)
             }
             // Bridge mutations get hopped to the next runloop tick.
             // Without this, fast cli.event streams stack synchronous
@@ -1082,15 +1183,10 @@ final class ChatPreviewModel {
             // model's own TodoWrite calls then refine the statuses.
             if c.toolName == "ExitPlanMode", let plan = planText(from: c),
                !plan.isEmpty {
-                let planBody = PlanCard.split(plan)?.plan ?? plan
-                if currentPlanText != planBody {
-                    currentPlanText = planBody
-                    messages.append(.system(text: "📋 Plan\n\n\(planBody)"))
-                    let seeded = PlanParser.todos(from: planBody)
-                    if !seeded.isEmpty { todos = seeded }
-                    // Write + open the plan file (Cursor-style preview).
-                    persistAndOpenPlan()
-                }
+                // ADR-0046 — ingest as a navigable plan entry (revision-aware,
+                // never clobbers a prior plan), seeding its steps + file. The
+                // plan came from a tool input (no inline card) → announce it.
+                ingestPlan(plan, announce: true)
             }
         case .turnCompleted:
             // Post a notification entry for the bell log.
@@ -1113,19 +1209,16 @@ final class ChatPreviewModel {
             // plan (read-only). Surface the inline Approve & execute affordance,
             // and capture the plan text (the turn's final assistant reply) so it
             // can be saved to a file + followed alongside the chat.
-            // A plan turn just finished — offer approval, UNLESS the plan's
-            // todos are already all complete (the plan was executed; offering
-            // "approve & execute" then would contradict "Plan complete N/N").
-            let planDone = !todos.isEmpty && todos.allSatisfy { $0.status == "completed" }
-            planAwaitingApproval = (b.mode == "plan") && !planDone
+            // A plan turn just finished — offer approval, UNLESS the active
+            // plan is already complete (it was executed; offering "approve &
+            // execute" then would contradict "Plan complete N/N").
+            planAwaitingApproval = (b.mode == "plan") && !activePlanComplete
             if planAwaitingApproval {
-                // Save the plan portion only — if the model wrote diagnosis
-                // prose before the `# Plan` heading, that preamble stays in the
-                // chat reply; the file + strip get the clean plan.
-                currentPlanText = lastAssistantText().map { PlanCard.split($0)?.plan ?? $0 }
-                // Cursor-style — write the plan to a file and open it in the
-                // editor pane so the user can actually see the plan file.
-                persistAndOpenPlan()
+                // ADR-0046 — ingest the plan portion of the final reply as a
+                // navigable entry (preamble before the `# Plan` heading stays in
+                // the chat; the file + strip get the clean plan). ingestPlan
+                // also persists + opens the file (Cursor-style).
+                if let text = lastAssistantText() { ingestPlan(text) }
             }
             // ADR-0043 — a server-initiated turn (background-job completion /
             // wakeup) just finished rendering; settle the in-flight affordance
@@ -1652,7 +1745,7 @@ struct ChatPreviewView: View {
     /// ADR-0036 — a Plan checklist exists, the turn is idle, and at least one
     /// item is unfinished: MARVIN has paused and is waiting on the user.
     private var planPausedWaiting: Bool {
-        !model.isSending && model.todos.contains { $0.status != "completed" }
+        !model.isSending && model.trackedItems.contains { $0.status != "completed" }
     }
 
     /// The paused turn isn't just between steps — it's asking the user to
@@ -1670,16 +1763,17 @@ struct ChatPreviewView: View {
     /// is to review (changed files / an error), instead of a bare "Review,
     /// then continue" that points at nothing.
     private var continuePlanChip: some View {
-        let done = model.todos.filter { $0.status == "completed" }.count
-        let next = model.todos.first { $0.status == "in_progress" }
-            ?? model.todos.first { $0.status == "pending" }
+        let items = model.trackedItems
+        let done = items.filter { $0.status == "completed" }.count
+        let next = items.first { $0.status == "in_progress" }
+            ?? items.first { $0.status == "pending" }
         return HStack(alignment: .top, spacing: 8) {
             Image(systemName: "pause.circle.fill")
                 .font(.system(size: 11))
                 .foregroundStyle(.purple)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Paused — \(done)/\(model.todos.count) steps done")
+                Text("Paused — \(done)/\(items.count) steps done")
                     .font(.system(size: 11, weight: .semibold))
                 if let next {
                     Text("Next: \(next.status == "in_progress" ? (next.activeForm ?? next.content) : next.content)")
@@ -1856,22 +1950,22 @@ struct ChatPreviewView: View {
 
     private func approvePlan() {
         guard !model.isSending else { return }
-        // Seed the To-dos strip from the plan's steps so execution starts
-        // tracked immediately (Cursor-style); the executor's own TodoWrite
-        // calls then refine the statuses.
-        if let plan = model.currentPlanText, !plan.isEmpty {
-            let seeded = PlanParser.todos(from: plan)
-            if !seeded.isEmpty { model.todos = seeded }
-        }
+        // ADR-0046 — the active plan already owns its steps (seeded at ingest);
+        // execution reconciles the executor's TodoWrite into them. No tier-1
+        // seeding here — that would double-render a task list under the plan.
         NativePrefs.shared.setMode("agent")
         // Cursor-style: approval is a control action. The agent gets the
         // execute instruction (hidden); the chat shows a compact control row.
         model.sendControl(
             instruction: "The plan you just presented is approved — execute it now. "
-                + "Work through it in order, and maintain a TodoWrite checklist (one item "
-                + "per plan step) updated as you complete each step. If you hit a real "
-                + "decision, call the AskUserQuestion tool with the options (don't write "
-                + "them as prose) so I can pick one.",
+                + "Work through it in order, and maintain a TodoWrite checklist. ADR-0046: "
+                + "every TodoWrite you emit MUST contain EVERY plan step, carried forward "
+                + "with its current status (pending / in_progress / completed) — never send "
+                + "a partial list that drops steps. New work you discover mid-execution is "
+                + "ADDED as extra TodoWrite items (it nests under the active step), not "
+                + "substituted for the plan. If you hit a real decision, call the "
+                + "AskUserQuestion tool with the options (don't write them as prose) so I "
+                + "can pick one.",
             display: "▶ Plan approved — executing",
             cwd: bridge.projectWorkDir
         )
@@ -1908,22 +2002,30 @@ struct ChatPreviewView: View {
         if model.backgroundJobRunning { rows.append(AnyView(backgroundJobChip)) }
         if model.backlogOpenCount > 0 { rows.append(AnyView(backlogChip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
-        if !model.todos.isEmpty {
-            // Two-tier (ADR-0036 addendum): a plan-backed checklist (Plan mode)
-            // renders as the tier-2 *Plan* — purple, titled, with "Open plan";
-            // a bare TodoWrite list renders as the tier-1 neutral *Task list*.
-            let planBacked = model.currentPlanText != nil
+        if let plan = model.activePlan {
+            // Tier 2 (ADR-0046) — the active plan: purple, titled, steps with
+            // nested sub-tasks, a picker when several plans exist, and "Open
+            // plan". Driven by the plan's steps, not a flat todo list.
+            rows.append(AnyView(TodoListStrip(
+                steps: plan.steps,
+                planTitle: plan.title,
+                plans: model.plans,
+                activePlanId: model.activePlanId,
+                onSelectPlan: { model.selectPlan($0) },
+                onOpenPlanFile: { model.openPlanInEditor() },
+                onClose: { model.dismissPlan() }
+            )))
+        } else if !model.todos.isEmpty {
+            // Tier 1 — a bare TodoWrite checklist, no plan behind it.
             rows.append(AnyView(TodoListStrip(
                 todos: model.todos,
-                planTitle: planBacked ? model.planTitle : nil,
-                onOpenPlanFile: planBacked ? { model.openPlanInEditor() } : nil,
                 onClose: { model.dismissPlan() }
             )))
         }
         // Don't offer "Approve & execute" once the plan is already done —
         // a "Plan complete 10/10" strip + an approve chip is a contradiction.
         // (planPausedWaiting already excludes the all-complete case.)
-        let planComplete = !model.todos.isEmpty && model.todos.allSatisfy { $0.status == "completed" }
+        let planComplete = model.activePlanComplete
         if model.planAwaitingApproval && !model.isSending && !planComplete {
             rows.append(AnyView(approvePlanChip))
         } else if planAwaitingDecision {

@@ -132,6 +132,11 @@ it — trust that stanza over any default instinct here.
   steps, open a \`TodoWrite\` **task list** and keep it current (in_progress /
   completed) as you work — it drives the live task-list strip. This is the
   lightweight tier-1 checklist; it stands alone (no plan behind it).
+  **TodoWrite is a FULL-LIST rewrite, never a partial one (ADR-0046):** every
+  \`TodoWrite\` call MUST contain EVERY item you are tracking, each carried
+  forward with its current status — never emit a list that drops items you
+  haven't finished. New work you discover is ADDED to the list, not swapped in
+  for what was there.
 
 **Asking the user to choose (any mode).** When you hit a real decision with
 discrete options — "build X now vs defer", "approach A vs B" — call the
@@ -150,6 +155,12 @@ decide from the code or sensible defaults.
   maintain a \`TodoWrite\` checklist (one item per plan step) updated as you
   complete each step. That approved plan is the tier-2 *Plan* — it persists,
   is saved to a file, and its steps tick off in place.
+  **The plan is the durable spine (ADR-0046).** During execution, every
+  \`TodoWrite\` MUST carry EVERY plan step forward with its status — never send
+  a partial list that drops steps, or the plan checklist breaks. Work you
+  discover mid-execution is ADDED as extra TodoWrite items (MARVIN nests them
+  under the active step as sub-tasks); it never replaces the plan's steps. Re-
+  presenting a revised plan keeps prior progress — it does not start a new one.
 
 ## Cross-phase rules — apply on every reply
 
