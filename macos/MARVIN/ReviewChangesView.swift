@@ -301,6 +301,14 @@ struct ReviewChangesWindow: View {
 struct ReviewChangesScreen: View {
     @State var model: ReviewChangesModel
 
+    /// Paths the user chose to render despite the large-diff guard (fix 3).
+    /// Keyed by path so switching files re-applies the guard.
+    @State private var expandedLarge: Set<String> = []
+
+    /// Above this many diff lines a file is held behind a "Show anyway"
+    /// placeholder (GitHub's "Large diffs are not rendered by default").
+    private let largeDiffLineCap = 1500
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
@@ -422,27 +430,40 @@ struct ReviewChangesScreen: View {
                 .zIndex(1)
                 Divider()
                     .zIndex(1)
-                if model.viewMode == .split {
-                    columnHeader
-                        .zIndex(1)
-                    Divider()
-                        .zIndex(1)
+                // Fix 1 — an added/deleted file has no counterpart side, so it
+                // renders single-column (like GitHub) regardless of the toggle;
+                // a banner says why. The Original/Modified header only makes
+                // sense for a real two-column (modified-file split) view.
+                let unified = isUnified(diff)
+                if diff.status == "added" || diff.status == "deleted" {
+                    addedDeletedBanner(diff.status).zIndex(1)
+                    Divider().zIndex(1)
+                } else if model.viewMode == .split {
+                    columnHeader.zIndex(1)
+                    Divider().zIndex(1)
                 }
-                ScrollView([.vertical, .horizontal]) {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(diff.hunks) { hunk in
-                            if model.viewMode == .split {
-                                splitHunkBlock(hunk, path: diff.path)
-                            } else {
-                                inlineHunkBlock(hunk, path: diff.path)
+                // Fix 3 — hold a very large diff behind a "Show anyway" gate so
+                // a huge generated file can't lock the window on open.
+                let lineCount = diff.hunks.reduce(0) { $0 + $1.lines.count }
+                if lineCount > largeDiffLineCap && !expandedLarge.contains(diff.path) {
+                    largeDiffPlaceholder(path: diff.path, lines: lineCount).zIndex(0)
+                } else {
+                    // Fix 2 — one flat LazyVStack over EVERY row (hunk headers
+                    // interleaved) so the rows virtualise even when the file is
+                    // a single all-added hunk; the old per-hunk VStack realised
+                    // every row up front and hung the window on a new file.
+                    ScrollView([.vertical, .horizontal]) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(rowItems(for: diff, unified: unified)) { item in
+                                rowView(item)
                             }
                         }
+                        .padding(12)
+                        .frame(minWidth: unified ? 480 : 760, alignment: .leading)
                     }
-                    .padding(12)
-                    .frame(minWidth: model.viewMode == .split ? 760 : 480, alignment: .leading)
+                    .zIndex(0)
+                    .clipped()
                 }
-                .zIndex(0)
-                .clipped()
             } else if let err = model.loadError {
                 Text(err)
                     .font(.system(size: 12))
@@ -475,28 +496,97 @@ struct ReviewChangesScreen: View {
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
-    // MARK: Split (side-by-side) rendering
+    // MARK: Flattened row model (fix 2 — virtualisable)
 
-    private func splitHunkBlock(_ hunk: AgentDiffHunk, path: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            hunkHeaderBar(hunk, path: path)
-            Divider()
-            let rows = sideBySideRows(hunk)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(rows) { row in
-                    HStack(spacing: 0) {
-                        sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind))
-                        Divider()
-                        sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind))
-                    }
+    /// A single renderable line of the diff: a hunk header, an inline line, or
+    /// a side-by-side row. Flattening every hunk into one list of these lets a
+    /// single `LazyVStack` virtualise the whole file — including a new file
+    /// that arrives as one all-added hunk (the case that hung the window).
+    private struct DiffRowItem: Identifiable {
+        let id: String
+        let content: Content
+        enum Content {
+            case header(AgentDiffHunk, path: String)
+            case inline(AgentDiffLine)
+            case split(SBRow)
+        }
+    }
+
+    /// Unified single column when the toggle says inline, OR when the file is
+    /// added/deleted (no counterpart side to show — fix 1).
+    private func isUnified(_ diff: AgentFileDiff) -> Bool {
+        model.viewMode == .inline || diff.status == "added" || diff.status == "deleted"
+    }
+
+    private func rowItems(for diff: AgentFileDiff, unified: Bool) -> [DiffRowItem] {
+        var items: [DiffRowItem] = []
+        for hunk in diff.hunks {
+            items.append(.init(id: "h\(hunk.index)", content: .header(hunk, path: diff.path)))
+            if unified {
+                for (i, line) in hunk.lines.enumerated() {
+                    items.append(.init(id: "h\(hunk.index)-l\(i)", content: .inline(line)))
+                }
+            } else {
+                for row in sideBySideRows(hunk) {
+                    items.append(.init(id: "h\(hunk.index)-s\(row.id)", content: .split(row)))
                 }
             }
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        return items
+    }
+
+    @ViewBuilder
+    private func rowView(_ item: DiffRowItem) -> some View {
+        switch item.content {
+        case let .header(hunk, path): hunkHeaderBar(hunk, path: path)
+        case let .inline(line): diffLineRow(line)
+        case let .split(row): splitRowView(row)
+        }
+    }
+
+    private func splitRowView(_ row: SBRow) -> some View {
+        HStack(spacing: 0) {
+            sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind))
+            Divider()
+            sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind))
+        }
+    }
+
+    /// Banner for an added/deleted file shown above its single-column diff.
+    private func addedDeletedBanner(_ status: String) -> some View {
+        let added = status == "added"
+        return HStack(spacing: 6) {
+            Image(systemName: added ? "plus.circle" : "minus.circle")
+                .foregroundStyle(added ? .green : .red)
+            Text(added
+                 ? "New file — showing the full added contents (no original to compare)."
+                 : "Deleted file — showing the removed contents (no modified version).")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    /// Fix 3 — a large diff is held behind a click so it can't hang the window.
+    private func largeDiffPlaceholder(path: String, lines: Int) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 26))
+                .foregroundStyle(.secondary)
+            Text("Large diff — \(lines) lines")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Not rendered by default to keep the window responsive.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Button("Show anyway") { expandedLarge.insert(path) }
+                .controlSize(.large)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
     }
 
     private func sbCell(num: Int?, text: String?, tint: Color) -> some View {
@@ -535,23 +625,6 @@ struct ReviewChangesScreen: View {
     }
 
     // MARK: Inline (unified) rendering
-
-    private func inlineHunkBlock(_ hunk: AgentDiffHunk, path: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            hunkHeaderBar(hunk, path: path)
-            Divider()
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                    diffLineRow(line)
-                }
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
 
     private func diffLineRow(_ line: AgentDiffLine) -> some View {
         HStack(alignment: .top, spacing: 0) {
