@@ -252,6 +252,12 @@ struct SessionRecord: Codable {
     let sessionId: String
     let projectId: String
     let turns: [SessionTurn]
+    /// ADR-0048 — true when the server clipped to the `tail` window; the
+    /// client then background-loads the full transcript. nil on older
+    /// servers / the full (untailed) response.
+    let truncated: Bool?
+    /// Total turns on disk (before any tail clip).
+    let totalTurns: Int?
 }
 
 /// One stored turn from the on-disk JSONL transcript. The set
