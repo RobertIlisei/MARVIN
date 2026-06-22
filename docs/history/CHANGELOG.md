@@ -9,6 +9,41 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-22 — v0.1.41: plan as the durable spine — reconcile TodoWrite,
+  don't clobber (ADR-0046, revising ADR-0036).**
+  - **Symptom.** Two plan-tracking bugs reported in live use. (1) While MARVIN
+    worked a plan, a fresh plan would sometimes appear and the original
+    vanished from the UI — untrackable. (2) When new tasks surfaced mid-plan,
+    MARVIN tracked only those and the plan disappeared, then flipped to "Plan
+    complete" while the real plan was unfinished.
+  - **Diagnosis (graph-first, then read).** The graph pointed at
+    `PlanCardView.swift` / `TodoListView.swift` / `ChatPreviewView.swift`. Both
+    bugs trace to one design choice: plan/todo state was a single flat
+    `todos: [TodoItem]` array + one `currentPlanText` slot, both
+    **wholesale-replaced**. Every `TodoWrite` event did `todos = latest`
+    (`ChatPreviewView.swift:1040`), so a partial list (the model focusing on
+    sub-tasks) erased the plan's steps — and `allDone` over that list fired a
+    false "Plan complete". A new plan overwrote the single slot
+    (`:1086`, `:1120`) with no list to navigate back to. The design assumed the
+    model always re-sends the whole list; nothing enforced or merged it.
+  - **Fix.** The active plan is now the durable spine. New `PlanStep` (with
+    `subtasks`) + `Plan { slug, title, text, path, steps }`. `PlanProgress`
+    reconciles an incoming `TodoWrite` into the active plan's steps — matched
+    step → status update, unmatched item → nested sub-task under the active
+    step (or a derived "Additional work" bucket) — so a partial list can never
+    erase the plan. Completion is computed over top-level steps only. Plans
+    live in a session list (`plans` + `activePlanId`) keyed by slug:
+    `ingestPlan` appends a new plan or merges a revision (carrying progress),
+    and a `TodoListStrip` picker switches the active plan. `personality.ts` +
+    the `approvePlan()` control instruction now mandate a full carry-forward
+    `TodoWrite` (defense-in-depth — prompt + UI).
+  - **Verification.** `swift build` clean (no warnings on the changed files);
+    runtime `tsc` clean for the change (pre-existing `can-use-tool-dispatch`
+    test type-drift untouched). Reasoned through the bug-1/bug-2 scenarios +
+    the false-complete guard. macOS + sidecar change — ships in the bundled
+    app. Follow-ups parked in the ADR (disk rehydration of the plan list;
+    promote a sub-task to a step).
+
 - **2026-06-20 — v0.1.40: fix — AskUserQuestion's "Send choice" silently did
   nothing (ADR-0040 regression).**
   - **Symptom.** The interactive AskUserQuestion decision sheet showed; the user
