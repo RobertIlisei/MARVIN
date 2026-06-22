@@ -27,7 +27,11 @@ export const MAX_BODY_CHARS = 2000;
 /** Open+doing rail — a guard against a runaway queue, not a workload target. */
 export const MAX_OPEN_ITEMS = 50;
 
-export const BACKLOG_STATUSES = ["open", "doing", "done", "dismissed"] as const;
+// `provisional` (ADR-0047) is the pre-`open` stage: an item auto-captured the
+// moment it was noticed in flight, awaiting the user's keep (→ open) / dismiss
+// decision at the scope-met handoff. It persists + resurfaces like any item, so
+// a discovery survives even if the turn never reaches a handoff.
+export const BACKLOG_STATUSES = ["provisional", "open", "doing", "done", "dismissed"] as const;
 export type BacklogStatus = (typeof BACKLOG_STATUSES)[number];
 export const BACKLOG_SEVERITIES = ["low", "med", "high"] as const;
 export type BacklogSeverity = (typeof BACKLOG_SEVERITIES)[number];
@@ -49,6 +53,13 @@ export interface AddBacklogInput {
   body?: string;
   severity?: BacklogSeverity;
   sessionId?: string;
+  /**
+   * ADR-0047 — auto-capture at discovery. `true` parks the item as
+   * `provisional` (no user go-ahead needed; reviewed at the handoff). `false`
+   * / omitted is a user-confirmed add (`open`), and CONFIRMS (promotes) an
+   * existing provisional item to `open`.
+   */
+  provisional?: boolean;
 }
 
 export type AddBacklogResult =
@@ -156,6 +167,7 @@ async function readAll(workDir: string): Promise<BacklogItem[]> {
 }
 
 const STATUS_MARK: Record<BacklogStatus, string> = {
+  provisional: "[?]",
   open: "[ ]",
   doing: "[~]",
   done: "[x]",
@@ -168,8 +180,11 @@ const STATUS_MARK: Record<BacklogStatus, string> = {
  * history. Returns the active count.
  */
 export async function rewriteBacklogIndex(workDir: string): Promise<number> {
+  // Active rail = provisional + open + doing. Provisional items (ADR-0047) are
+  // listed too so an auto-captured discovery resurfaces next session even if it
+  // was never reviewed — losing it is the failure this exists to prevent.
   const active = (await readAll(workDir))
-    .filter((i) => i.status === "open" || i.status === "doing")
+    .filter((i) => i.status === "provisional" || i.status === "open" || i.status === "doing")
     .sort((a, b) => {
       const order = { high: 0, med: 1, low: 2 } as const;
       return order[a.severity] - order[b.severity] || a.created.localeCompare(b.created);
@@ -179,10 +194,11 @@ export async function rewriteBacklogIndex(workDir: string): Promise<number> {
   );
   const body =
     `${INDEX_HEADER}\n\n` +
-    `Parked follow-ups (open + in-progress). One line per item; details in ` +
-    `\`.marvin/backlog/<slug>.md\`. A PARKING LOT, not a queue agents pull from ` +
-    `(ADR-0044) — resolve via the \`backlog_resolve\` tool or the backlog panel; ` +
-    `done/dismissed items drop from this index (files kept).\n\n` +
+    `Parked follow-ups (open + in-progress; \`[?]\` = auto-captured, awaiting your ` +
+    `keep/dismiss). One line per item; details in \`.marvin/backlog/<slug>.md\`. ` +
+    `A PARKING LOT, not a queue agents pull from (ADR-0044) — resolve via the ` +
+    `\`backlog_resolve\` tool or the backlog panel; done/dismissed items drop from ` +
+    `this index (files kept).\n\n` +
     (lines.length ? lines.join("\n") : "_No open backlog items._") +
     "\n";
   await writeFile(indexFile(workDir), body, "utf-8");
@@ -225,8 +241,11 @@ export async function addBacklogItem(
     ? parseItem(slug, await readFile(path, "utf-8"))
     : null;
 
-  // Open-count rail only applies to genuinely NEW open items.
-  if (!existing) {
+  // Open-count rail only applies to genuinely NEW open items. Provisional
+  // auto-captures (ADR-0047) bypass it — silently blocking a discovery is the
+  // exact loss this feature exists to prevent; the handoff review is the
+  // bloat control, not a capture gate.
+  if (!existing && !input.provisional) {
     const active = (await readAll(workDir)).filter(
       (i) => i.status === "open" || i.status === "doing",
     ).length;
@@ -235,12 +254,25 @@ export async function addBacklogItem(
     }
   }
 
+  // Status resolution (ADR-0047):
+  //  - existing open/doing → keep (a provisional re-add never downgrades it);
+  //  - existing provisional → confirm (provisional:false) promotes to open,
+  //    else stays provisional;
+  //  - new or re-opened-from-resolved → provisional if flagged, else open.
+  let status: BacklogStatus;
+  if (existing && (existing.status === "open" || existing.status === "doing")) {
+    status = existing.status;
+  } else if (existing && existing.status === "provisional") {
+    status = input.provisional ? "provisional" : "open";
+  } else {
+    status = input.provisional ? "provisional" : "open";
+  }
+
   const item: BacklogItem = {
     id: slug,
     title,
     body,
-    // Re-adding a resolved item re-opens it; an active one keeps its status.
-    status: existing && (existing.status === "open" || existing.status === "doing") ? existing.status : "open",
+    status,
     severity,
     sessionId: input.sessionId ?? existing?.sessionId ?? "",
     created: existing?.created || now,
