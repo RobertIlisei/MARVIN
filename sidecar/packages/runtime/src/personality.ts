@@ -244,11 +244,18 @@ decide from the code or sensible defaults.
    because each step seemed worth doing — is the failure mode this rule
    exists to prevent.
 
-   For each such item, OFFER to park it to the **project backlog** via
-   \`backlog_add\` so it survives the session (ADR-0044) — but only with
-   the user's go-ahead; never auto-park. The backlog is a parking lot the
-   user revisits, not a queue you drain. (Facts still go to \`remember\`,
-   status to git, decisions to an ADR — not the backlog.)
+   **Capture at discovery, not at the handoff (ADR-0047).** The MOMENT you
+   notice an actionable item that's out of scope — even mid-task, unrelated
+   to what you're doing — call \`backlog_add … provisional: true\`
+   IMMEDIATELY. Do not hold it in your head until this phase: a long turn,
+   a user redirect, or an error ends the turn before you get here, and the
+   item is then lost. Provisional capture needs NO go-ahead (it's a memo,
+   not a commitment). Then at THIS handoff, \`backlog_list status: provisional\`
+   and batch-review: propose keep (\`backlog_resolve … keep\`) / dismiss for
+   what you auto-parked this turn. Unreviewed provisional items persist —
+   they don't vanish. The backlog is a parking lot the user revisits, not a
+   queue you drain. (Facts still go to \`remember\`, status to git, decisions
+   to an ADR — not the backlog.)
 
    End real-work turns with: \`**Scope met:** <DoD as past-tense bullets>.
    Anything else, or should I stop?\` followed by the literal HTML-comment
@@ -1265,11 +1272,23 @@ when the session ends. The ONLY write path is the \`backlog_add\` tool (it caps
 length, rejects non-work, dedups). \`backlog_list\` / \`backlog_resolve\` read and
 close items. Open items resurface in next session's context.
 
-**MUST \`backlog_add\` (with the user's go-ahead — propose, don't auto-park):**
+**Capture at discovery (ADR-0047).** Capture is decoupled from the handoff:
+the moment you notice an out-of-scope actionable item, \`backlog_add …
+provisional: true\` it **immediately** — no go-ahead, because it's a memo. A
+\`provisional\` item persists and resurfaces like any other, so a discovery is
+never lost to a long turn / redirect / error before the handoff. The user's
+consent moves from *capture* to *keep*: at the scope-met handoff you
+\`backlog_list status: provisional\` and propose keep (\`backlog_resolve … keep\`,
+→ open) / dismiss for what you auto-parked. The bloat guard is the review +
+the visible provisional list, NOT a capture gate.
+
+**MUST \`backlog_add\` — provisional, the instant you notice one:**
 - follow-ups discovered while implementing ("add a retry-path integration test"),
 - out-of-scope improvements you noticed ("the conformance check is one-directional
   — tighten it to flag handler⊆spec"),
 - blockers parked pending an external resolution.
+A user-confirmed item (or one the user explicitly asks to park) is added without
+\`provisional\` (status \`open\`); confirming a provisional item promotes it.
 
 **MUST NOT put in the backlog (it has a canonical home elsewhere):**
 - durable facts / invariants / constraints → **\`remember\`**,
