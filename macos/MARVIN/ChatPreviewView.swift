@@ -210,7 +210,7 @@ final class ChatPreviewModel {
     /// ExitPlanMode path where the plan came from a tool input (no inline card).
     /// The turnCompleted path leaves it false: the plan is already the inline
     /// assistant reply (the plan card), so a system row would duplicate it.
-    func ingestPlan(_ raw: String, announce: Bool = false) {
+    func ingestPlan(_ raw: String, announce: Bool = false, openFile: Bool = true) {
         let body = PlanCard.split(raw)?.plan ?? raw
         guard !body.isEmpty else { return }
         let title = Self.planTitle(from: body)
@@ -241,7 +241,7 @@ final class ChatPreviewModel {
             activePlanId = slug
             if announce { messages.append(.system(text: "📋 Plan\n\n\(body)")) }
         }
-        persistAndOpenPlan()
+        persistAndOpenPlan(open: openFile)
     }
 
     /// ADR-0046 — apply a `TodoWrite` list. With a plan active, reconcile into
@@ -267,17 +267,25 @@ final class ChatPreviewModel {
     /// Idempotent per plan text — re-presenting the same plan re-uses the path.
     /// Best-effort: a write failure leaves `currentPlanPath` nil (the inline
     /// card + strip still work) rather than surfacing an error mid-plan.
-    func persistAndOpenPlan() {
+    /// `open` focuses the plan file in the editor pane (the live-ingest
+    /// behaviour). Rehydration on session switch passes `open: false` — it
+    /// just needs the path set so "Open plan" works, without stealing the
+    /// editor on every chat switch. The write is idempotent (skipped when the
+    /// file already matches) so rehydrating doesn't churn the file / watcher.
+    func persistAndOpenPlan(open: Bool = true) {
         guard let plan = activePlan, !plan.text.isEmpty,
               let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }
         let dir = (wd as NSString).appendingPathComponent(".marvin/plans")
         let path = (dir as NSString).appendingPathComponent("\(plan.id).md")
         do {
-            try FileManager.default.createDirectory(
-                atPath: dir, withIntermediateDirectories: true)
-            try plan.text.write(toFile: path, atomically: true, encoding: .utf8)
+            let onDisk = try? String(contentsOfFile: path, encoding: .utf8)
+            if onDisk != plan.text {
+                try FileManager.default.createDirectory(
+                    atPath: dir, withIntermediateDirectories: true)
+                try plan.text.write(toFile: path, atomically: true, encoding: .utf8)
+            }
             updateActivePlan { $0.path = path }
-            MarvinBridge.shared.setSelectedFile(path)
+            if open { MarvinBridge.shared.setSelectedFile(path) }
         } catch {
             // Non-fatal — the plan card + strip don't depend on the file.
         }
@@ -306,12 +314,17 @@ final class ChatPreviewModel {
     /// a Plan-mode turn just finished. Skips tool-call / non-text blocks.
     func lastAssistantText() -> String? {
         guard let msg = messages.last(where: { $0.role == .assistant }) else { return nil }
-        let parts = msg.blocks.compactMap { block -> String? in
-            if case let .text(_, text) = block { return text }
-            return nil
-        }
-        let joined = parts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        let joined = Self.messageText(msg)
         return joined.isEmpty ? nil : joined
+    }
+
+    /// Concatenated text of a message's text blocks. Shared by
+    /// `lastAssistantText` and the replay plan-reconstruction (ADR-0047).
+    static func messageText(_ msg: ChatMessage) -> String {
+        msg.blocks
+            .compactMap { if case let .text(_, text) = $0 { return text } else { return nil } }
+            .joined(separator: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// ADR-0034 — the agent's pending changed set (Cursor-style review).
@@ -855,6 +868,9 @@ final class ChatPreviewModel {
     private func replay(record: SessionRecord) {
         let encoder = JSONEncoder()
         var rebuilt: [ChatMessage] = []
+        // ADR-0047 — the latest TodoWrite in the transcript carries the plan's
+        // step statuses; captured here to restore progress after replay.
+        var replayTodos: [TodoItem]? = nil
 
         for turn in record.turns {
             switch turn {
@@ -871,6 +887,7 @@ final class ChatPreviewModel {
                 // pipeline.
                 if let data = try? encoder.encode(event) {
                     rebuilt = ChatStreamReducer.apply(rebuilt, cliEventData: data)
+                    if let todos = TodoExtractor.todos(from: data) { replayTodos = todos }
                 }
             case let .turnError(_, err):
                 // Match the live path's surface: a banner on the
@@ -903,6 +920,18 @@ final class ChatPreviewModel {
         }
 
         messages = rebuilt
+
+        // ADR-0047 — restore the session's PLAN + checklist from the transcript
+        // so switching chats (or relaunching) doesn't lose it. The plan is the
+        // last assistant `# Plan` reply (decoupled mode) or "📋 Plan" system
+        // row (ExitPlanMode path); the last TodoWrite restores step progress.
+        // openFile:false so rehydration doesn't yank the editor on every switch.
+        if let planMsg = rebuilt.last(where: {
+            ($0.role == .assistant || $0.role == .system) && PlanCard.isPlan(Self.messageText($0))
+        }) {
+            ingestPlan(Self.messageText(planMsg), announce: false, openFile: false)
+        }
+        if let replayTodos { applyTodoWrite(replayTodos) }
     }
 
     /// Phase 2h — attach to a live turn's event bus via
