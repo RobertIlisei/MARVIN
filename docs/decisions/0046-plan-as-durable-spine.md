@@ -81,9 +81,12 @@ backstop for when it does.
   its step in place. Acceptable: it never *loses* the work, and the next full
   `TodoWrite` re-matches. The plan list is session-scoped (in-memory); it is
   not rehydrated from `.marvin/plans/` on session load.
-- Follow-ups created: (a) optionally rehydrate the session plan list by
-  scanning `.marvin/plans/*.md`; (b) let the user reorder / promote a sub-task
-  to a top-level step. Both deferred — not required to fix the reported bugs.
+- Follow-ups created: (a) ~~rehydrate the session plan on load~~ **done
+  2026-06-22** — `replay` reconstructs the plan + checklist from the transcript
+  (last `# Plan` reply + latest `TodoWrite` for step progress), so switching
+  chats / relaunching no longer loses the plan and a later `TodoWrite`
+  reconciles into the restored plan instead of orphaning as a tier-1 list;
+  (b) let the user reorder / promote a sub-task to a top-level step (deferred).
 
 ## Alternatives considered
 
