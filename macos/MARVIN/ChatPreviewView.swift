@@ -1908,12 +1908,53 @@ struct ChatPreviewView: View {
         return nil
     }
 
+    /// ADR-0050 — render the ACTIVE plan (or the tier-1 task list) as a tagged
+    /// checklist string, so the Continue / Proceed controls resume against the
+    /// CONCRETE current plan instead of re-deriving "what's left" by scanning
+    /// the project. Mirrors the `[N]` / `[N.M]` contract (ADR-0049). Empty
+    /// string when there's nothing tracked.
+    private func resumeChecklistBlock() -> String {
+        if let plan = model.activePlan {
+            var lines = ["Active plan — \(plan.title):"]
+            for (i, step) in plan.steps.enumerated() {
+                lines.append("[\(i + 1)] \(step.content) — \(step.status)")
+                for (j, sub) in step.subtasks.enumerated() {
+                    lines.append("  [\(i + 1).\(j + 1)] \(sub.content) — \(sub.status)")
+                }
+            }
+            return lines.joined(separator: "\n")
+        }
+        let items = model.todos
+        guard !items.isEmpty else { return "" }
+        var lines = ["Active task list:"]
+        for (i, item) in items.enumerated() {
+            lines.append("[\(i + 1)] \(item.content) — \(item.status)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private func continuePlan() {
-        // Cursor-style: a control action, not a fake user message.
+        // Cursor-style: a control action, not a fake user message. ADR-0050 —
+        // anchor the resume on the active plan's actual steps + forbid a
+        // project-wide re-audit, so "Continue" resumes THIS plan instead of
+        // scanning the repo for other open work.
+        let checklist = resumeChecklistBlock()
+        let instruction = """
+        Resume the ACTIVE plan below — and ONLY this plan. Do NOT start a new \
+        audit, do NOT scan the project for other open work, do NOT read \
+        unrelated files (no grepping PLAN.md / listing ADRs / reading INDEX): \
+        just continue this checklist from its first unfinished step.
+
+        \(checklist.isEmpty ? "(no tracked checklist — if there is genuinely nothing left to do, say so and stop)" : checklist)
+
+        Re-emit your TodoWrite checklist first (every step carried forward, \
+        tagged [N] / [N.M] to match the statuses above), then work the next \
+        unfinished step and keep it updated. If every step above is already \
+        complete, do NOT invent new work or audit anything — say the plan is \
+        complete and stop.
+        """
         model.sendControl(
-            instruction: "Continue with the remaining plan steps. First re-emit your "
-                + "TodoWrite checklist with current statuses, then proceed and keep it "
-                + "updated as you complete each item.",
+            instruction: instruction,
             display: "▶ Continuing",
             cwd: bridge.projectWorkDir
         )
@@ -1956,12 +1997,24 @@ struct ChatPreviewView: View {
 
     private func proceedWithRecommendation() {
         // Control action — the model decides each open question with its own
-        // stated recommendation, then resumes the checklist.
+        // stated recommendation, then resumes the checklist. ADR-0050 — same
+        // anchoring as continuePlan: resume the active plan, don't re-audit.
+        let checklist = resumeChecklistBlock()
+        let instruction = """
+        For each open decision you just raised, proceed with your own \
+        recommended option. If a decision had no clear recommendation, pick the \
+        lowest-risk option and say which you chose. Then resume the ACTIVE plan \
+        below — and ONLY this plan: do NOT start a new audit or scan the \
+        project for other open work.
+
+        \(checklist.isEmpty ? "(no tracked checklist — resume the work you just described)" : checklist)
+
+        Re-emit your TodoWrite checklist first (tagged [N] / [N.M] to match the \
+        statuses above), then continue the next unfinished step and keep it \
+        updated.
+        """
         model.sendControl(
-            instruction: "For each open decision you just raised, proceed with your own "
-                + "recommended option. If a decision had no clear recommendation, pick the "
-                + "lowest-risk option and say which you chose. Re-emit your TodoWrite "
-                + "checklist with current statuses, then continue and keep it updated.",
+            instruction: instruction,
             display: "▶ Proceeding (MARVIN's recommendation)",
             cwd: bridge.projectWorkDir
         )
