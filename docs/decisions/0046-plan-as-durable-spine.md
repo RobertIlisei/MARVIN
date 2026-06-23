@@ -86,7 +86,18 @@ backstop for when it does.
   (last `# Plan` reply + latest `TodoWrite` for step progress), so switching
   chats / relaunching no longer loses the plan and a later `TodoWrite`
   reconciles into the restored plan instead of orphaning as a tier-1 list;
-  (b) let the user reorder / promote a sub-task to a top-level step (deferred).
+  (b) let the user reorder / promote a sub-task to a top-level step (deferred);
+  (c) ~~the saved plan file mirrors live progress~~ **done 2026-06-23** — the
+  file at `.marvin/plans/<slug>.md` is now a live *projection* of
+  `plan.text` + `steps` (`PlanFile.render`), not the raw presented markdown:
+  completed steps render a `[x]` checkbox overlaid on their original line
+  (marker / numbering / prose preserved), discovered sub-tasks appear nested
+  beneath their step, and a step with no source line (the "Additional work"
+  bucket) is appended. `applyTodoWrite` re-persists (`open: false`) on every
+  reconcile so progress + additions reach disk, where before only `ingestPlan`
+  wrote — and it wrote the static text with no checkbox state. The render is
+  idempotent (always from `plan.text`, never re-checkboxing its own output);
+  `PlanParser.stepText(of:)` is shared by parse + render so the two can't drift.
 
 ## Alternatives considered
 
