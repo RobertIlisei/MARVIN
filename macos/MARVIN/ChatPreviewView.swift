@@ -250,6 +250,10 @@ final class ChatPreviewModel {
     func applyTodoWrite(_ items: [TodoItem]) {
         if activePlanId != nil {
             updateActivePlan { $0.steps = PlanProgress.reconcile(steps: $0.steps, with: items) }
+            // Mirror the updated progress + any discovered sub-tasks into the
+            // saved plan file (ADR-0046 follow-up). open: false so a progress
+            // tick never steals the editor focus.
+            persistAndOpenPlan(open: false)
         } else {
             todos = items
         }
@@ -277,12 +281,15 @@ final class ChatPreviewModel {
               let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }
         let dir = (wd as NSString).appendingPathComponent(".marvin/plans")
         let path = (dir as NSString).appendingPathComponent("\(plan.id).md")
+        // The file is a live projection of the plan text + step progress
+        // (checkboxes + nested sub-tasks), not the raw presented markdown.
+        let rendered = PlanFile.render(plan)
         do {
             let onDisk = try? String(contentsOfFile: path, encoding: .utf8)
-            if onDisk != plan.text {
+            if onDisk != rendered {
                 try FileManager.default.createDirectory(
                     atPath: dir, withIntermediateDirectories: true)
-                try plan.text.write(toFile: path, atomically: true, encoding: .utf8)
+                try rendered.write(toFile: path, atomically: true, encoding: .utf8)
             }
             updateActivePlan { $0.path = path }
             if open { MarvinBridge.shared.setSelectedFile(path) }

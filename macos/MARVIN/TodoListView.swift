@@ -106,20 +106,30 @@ enum TodoExtractor {
 /// bulleted (`-` / `*` / `•`) steps; ignores headings and prose. Falls back to
 /// non-empty lines, then to a single "Execute the plan" item.
 enum PlanParser {
+    /// Matches a numbered (`1.` / `1)`) or bulleted (`-` / `*` / `•`) step line.
+    private static let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+
+    /// The step content of a single line — the marker stripped, emphasis /
+    /// inline code removed — or nil if the line isn't a step. Shared by
+    /// `todos(from:)` and `PlanFile.render` so parsing and rendering of the
+    /// same line can never drift apart.
+    static func stepText(of line: String) -> String? {
+        guard let re = stepRE else { return nil }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard let m = re.firstMatch(in: line, range: range),
+              let r = Range(m.range(at: 1), in: line) else { return nil }
+        let content = String(line[r])
+            // strip markdown emphasis / inline code / trailing colons
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+        return content.count > 1 ? content : nil
+    }
+
     static func todos(from plan: String) -> [TodoItem] {
         let lines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         var items: [String] = []
-        let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
         for line in lines {
-            let range = NSRange(line.startIndex..<line.endIndex, in: line)
-            if let re = stepRE, let m = re.firstMatch(in: line, range: range),
-               let r = Range(m.range(at: 1), in: line) {
-                let content = String(line[r])
-                    // strip markdown emphasis / inline code / trailing colons
-                    .replacingOccurrences(of: "**", with: "")
-                    .replacingOccurrences(of: "`", with: "")
-                if content.count > 1 { items.append(content) }
-            }
+            if let content = stepText(of: line) { items.append(content) }
         }
         if items.isEmpty {
             // No list markers — take substantive non-heading lines.
@@ -247,6 +257,82 @@ enum PlanFile {
         let trimmed = String(collapsed.prefix(60))
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return trimmed.isEmpty ? "plan" : trimmed
+    }
+
+    /// ADR-0046 (follow-up) — project the plan's live progress onto its saved
+    /// markdown so the file mirrors the chat strip: completed steps get a `[x]`
+    /// checkbox, discovered sub-tasks appear nested under their step, and any
+    /// step with no source line (the synthetic "Additional work" bucket, or a
+    /// step the model rephrased past matching) is appended at the end.
+    ///
+    /// The overlay is anchored to each step's ORIGINAL line — the marker /
+    /// numbering and prose are preserved (so the plan card and the file stay
+    /// structurally aligned); only a `[ ]` / `[x]` box is inserted after the
+    /// marker. Always rendered from `plan.text` (never from already-checkboxed
+    /// output) and existing boxes are stripped before re-inserting, so the
+    /// render is idempotent.
+    static func render(_ plan: Plan) -> String {
+        guard !plan.steps.isEmpty else { return plan.text }
+
+        var byId: [String: PlanStep] = [:]
+        for s in plan.steps { byId[s.id] = s }
+        var emitted = Set<String>()
+
+        // indent · marker (1. / - / •) · gap · rest-of-line
+        let markerRE = try? NSRegularExpression(pattern: #"^(\s*)(\d+[.)]|[-*•])(\s+)(.*)$"#)
+        // a leading checkbox already on the content (defensive idempotency)
+        let boxRE = try? NSRegularExpression(pattern: #"^\[[ xX]\]\s*"#)
+
+        func box(_ status: String) -> String { status == "completed" ? "[x] " : "[ ] " }
+
+        func overlay(_ line: String, _ status: String) -> String {
+            guard let re = markerRE else { return line }
+            let range = NSRange(line.startIndex..<line.endIndex, in: line)
+            guard let m = re.firstMatch(in: line, range: range),
+                  let ri = Range(m.range(at: 1), in: line),
+                  let rm = Range(m.range(at: 2), in: line),
+                  let rg = Range(m.range(at: 3), in: line),
+                  let rr = Range(m.range(at: 4), in: line) else { return line }
+            var rest = String(line[rr])
+            if let bre = boxRE {
+                let rrange = NSRange(rest.startIndex..<rest.endIndex, in: rest)
+                rest = bre.stringByReplacingMatches(in: rest, range: rrange, withTemplate: "")
+            }
+            return "\(line[ri])\(line[rm])\(line[rg])\(box(status))\(rest)"
+        }
+
+        func subLine(_ indent: String, _ item: TodoItem) -> String {
+            "\(indent)  - \(box(item.status))\(item.content)"
+        }
+
+        var out: [String] = []
+        let lines = plan.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        for line in lines {
+            if let content = PlanParser.stepText(of: line) {
+                let id = PlanProgress.normalize(content)
+                if let step = byId[id], !emitted.contains(id) {
+                    out.append(overlay(line, step.status))
+                    let indent = line.prefix { $0 == " " || $0 == "\t" }
+                    for sub in step.subtasks { out.append(subLine(String(indent), sub)) }
+                    emitted.insert(id)
+                    continue
+                }
+            }
+            out.append(line)
+        }
+
+        // Steps with no source line (e.g. "Additional work") — append as a
+        // checklist so discovered work still lands in the file.
+        let leftovers = plan.steps.filter { !emitted.contains($0.id) }
+        if !leftovers.isEmpty {
+            if out.last?.isEmpty == false { out.append("") }
+            for step in leftovers {
+                out.append("- \(box(step.status))\(step.content)")
+                for sub in step.subtasks { out.append(subLine("", sub)) }
+            }
+        }
+
+        return out.joined(separator: "\n")
     }
 }
 
