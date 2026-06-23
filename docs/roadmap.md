@@ -19,6 +19,22 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.45** — Continue control anchors on the active plan
+([ADR-0050](./decisions/0050-continue-control-anchors-active-plan.md)). The plan
+strip's **Continue** chip sent an *unscoped* resume instruction — "continue with
+the remaining plan steps" — that never told the model what the plan was, so on a
+long audit-heavy session it re-derived "what's left" by scanning the whole
+project (grepping `PLAN.md`, `ls`-ing every ADR, reading `INDEX.md`) instead of
+resuming the current plan. v0.1.45 makes the resume controls **inject the active
+plan's concrete steps + statuses** (a `[N]`/`[N.M]` tagged checklist via
+`resumeChecklistBlock`) and adds a hard guardrail: resume ONLY this plan — do not
+start a new audit, scan the project, or list ADRs; if every step is already
+complete, say so and stop. Applied to both `continuePlan()` and
+`proceedWithRecommendation()`. Complements [ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md):
+0049 stops a finished plan from showing the chip at all; 0050 bounds a genuine
+mid-plan resume. Pure control-instruction change in `ChatPreviewView.swift` — no
+`personality.ts` or data-model edit. `swift build` clean. Builds on v0.1.44.
+
 **v0.1.44** — Plan-step join key + subtask roll-up
 ([ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md), revising
 [ADR-0046](./decisions/0046-plan-as-durable-spine.md)). Plan tracking linked
