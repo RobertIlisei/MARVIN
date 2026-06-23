@@ -9,6 +9,37 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-23 — plan file mirrors live progress (ADR-0046 follow-up).**
+  - **Symptom.** Completed-task checkmarks showed in the plan chat strip but
+    not in the saved plan file; sub-tasks discovered mid-execution and added to
+    the strip never reached the file either.
+  - **Cause.** The file at `.marvin/plans/<slug>.md` was written only by
+    `ingestPlan → persistAndOpenPlan`, and it wrote the raw `plan.text` — the
+    *static* presented markdown. Live progress lives in `Plan.steps[].status` +
+    nested `subtasks`, updated by `applyTodoWrite → PlanProgress.reconcile`, but
+    `applyTodoWrite` never re-wrote the file, and even when written the file
+    carried no checkbox state. The chat strip reads `steps`, so checkmarks only
+    appeared there.
+  - **Fix.** New `PlanFile.render(_:)` projects `plan.text` + `steps` onto the
+    file: a `[x]`/`[ ]` checkbox is overlaid on each step's **original** line
+    (marker/numbering and prose preserved, so the plan card and file stay
+    structurally aligned), discovered sub-tasks render nested beneath their
+    step, and any step with no source line (the synthetic "Additional work"
+    bucket, or a model-rephrased step) is appended as a checklist.
+    `persistAndOpenPlan` now writes the rendered string (idempotency compares
+    against it); `applyTodoWrite` calls `persistAndOpenPlan(open: false)` on
+    every reconcile when a plan is active, so progress + additions reach disk
+    without stealing editor focus. `PlanParser.stepText(of:)` is factored out
+    and shared by parse + render so the two can't drift; the render is
+    idempotent (always from `plan.text`, never re-checkboxing its own output).
+  - **Verification.** Compiled `TodoListView.swift` against a driver exercising
+    `PlanFile.render`: checkbox overlay (numbering kept), nested sub-tasks,
+    idempotency / no double-checkbox, leftover-bucket append, and empty-steps →
+    raw-text passthrough all pass. `swift build` clean.
+  - **Files.** `macos/MARVIN/TodoListView.swift` (`PlanParser.stepText`,
+    `PlanFile.render`), `macos/MARVIN/ChatPreviewView.swift`
+    (`persistAndOpenPlan`, `applyTodoWrite`).
+
 - **2026-06-22 — v0.1.43: full session history via incremental paging
   (ADR-0048).**
   - **Symptom.** A restored session showed only a fraction of its history —
