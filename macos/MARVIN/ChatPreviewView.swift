@@ -255,7 +255,12 @@ final class ChatPreviewModel {
             // tick never steals the editor focus.
             persistAndOpenPlan(open: false)
         } else {
-            todos = items
+            // Tier 1 — no plan. Items shouldn't carry `[N]` tags here, but strip
+            // any the model emits so the bare task-list strip stays clean
+            // (ADR-0049).
+            todos = items.map {
+                TodoItem(content: PlanTag.strip($0.content), status: $0.status, activeForm: $0.activeForm)
+            }
         }
     }
 
@@ -2042,14 +2047,18 @@ struct ChatPreviewView: View {
         // execute instruction (hidden); the chat shows a compact control row.
         model.sendControl(
             instruction: "The plan you just presented is approved — execute it now. "
-                + "Work through it in order, and maintain a TodoWrite checklist. ADR-0046: "
-                + "every TodoWrite you emit MUST contain EVERY plan step, carried forward "
-                + "with its current status (pending / in_progress / completed) — never send "
-                + "a partial list that drops steps. New work you discover mid-execution is "
-                + "ADDED as extra TodoWrite items (it nests under the active step), not "
-                + "substituted for the plan. If you hit a real decision, call the "
-                + "AskUserQuestion tool with the options (don't write them as prose) so I "
-                + "can pick one.",
+                + "Work through it in order, and maintain a TodoWrite checklist. ADR-0049 "
+                + "TAGGING CONTRACT: prefix every TodoWrite item with its plan-step tag — "
+                + "`[N]` for plan step N (1-based, in the order you presented them), and "
+                + "`[N.M]` for the Mth sub-task of step N (work you break out or discover "
+                + "under that step). Example: `[2] Wire the gate`, `[2.1] Add the agentID "
+                + "check`, `[2.2] Cover it with a test`. A step auto-completes when all its "
+                + "`[N.M]` sub-tasks are completed, so drive the sub-tasks and the parent "
+                + "rolls up. Every TodoWrite you emit MUST still contain EVERY plan step "
+                + "(each `[N]` carried forward with its status) plus all live sub-tasks — "
+                + "never send a partial list that drops steps. If you hit a real decision, "
+                + "call the AskUserQuestion tool with the options (don't write them as "
+                + "prose) so I can pick one.",
             display: "▶ Plan approved — executing",
             cwd: bridge.projectWorkDir
         )

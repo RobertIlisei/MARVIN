@@ -15,6 +15,44 @@ struct TodoItem: Equatable {
     /// Present-tense label the model uses while the item is active
     /// (e.g. "Wiring the gate"); shown in place of `content` when running.
     let activeForm: String?
+    /// ADR-0049 — the stable join key parsed from a `[N.M]` tag (sub-task M of
+    /// plan step N). nil for tier-1 items and untagged backstop matches. Lets a
+    /// sub-task re-match its own row across successive `TodoWrite`s by key
+    /// rather than by fuzzy content, so rephrasing never duplicates it.
+    var key: String? = nil
+}
+
+/// ADR-0049 — parses the stable plan-step tag the executor prefixes onto each
+/// `TodoWrite` item: `[N]` is plan step N (1-based), `[N.M]` is sub-task M of
+/// step N. The tag is the *join key* that replaces ADR-0046's fuzzy content
+/// matching — the model references a step by its ordinal, not by reproducing
+/// its exact prose. Returns the parsed ordinals plus the content with the tag
+/// stripped (so the tag never reaches the UI or the saved plan file).
+enum PlanTag {
+    private static let re = try? NSRegularExpression(pattern: #"^\s*\[(\d+)(?:\.(\d+))?\]\s*(.*)$"#)
+
+    /// (step, sub, text). `step`/`sub` are nil when absent; `text` is the
+    /// content with any leading tag removed (falls back to the original string
+    /// when no tag is present).
+    static func parse(_ s: String) -> (step: Int?, sub: Int?, text: String) {
+        guard let re else { return (nil, nil, s) }
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        guard let m = re.firstMatch(in: s, range: range),
+              let rs = Range(m.range(at: 1), in: s),
+              let rt = Range(m.range(at: 3), in: s) else { return (nil, nil, s) }
+        let step = Int(s[rs])
+        var sub: Int? = nil
+        if m.range(at: 2).location != NSNotFound, let rm = Range(m.range(at: 2), in: s) {
+            sub = Int(s[rm])
+        }
+        let text = String(s[rt]).trimmingCharacters(in: .whitespaces)
+        return (step, sub, text.isEmpty ? s : text)
+    }
+
+    /// Strip a leading `[N]` / `[N.M]` tag from content for display. Tier-1
+    /// items shouldn't carry tags, but if the model emits one anyway we don't
+    /// want it leaking into the bare task-list strip.
+    static func strip(_ s: String) -> String { parse(s).text }
 }
 
 /// ADR-0046 — one top-level step of a plan. The plan owns its steps; a step
@@ -149,11 +187,12 @@ enum PlanParser {
     }
 }
 
-/// ADR-0046 — reconciles an incoming `TodoWrite` list into a plan's steps
-/// instead of wholesale-replacing them. The contract is "carry every plan step
-/// forward"; this is the backstop for when the model sends a partial list:
-/// items that match a step update its status; items that match nothing become
-/// nested sub-tasks under the active step, so the plan can never be erased.
+/// ADR-0049 — reconciles an incoming `TodoWrite` list into a plan's steps via a
+/// stable join key (the `[N]` / `[N.M]` tag) rather than fuzzy content matching.
+/// `[N]` updates plan step N in place; `[N.M]` nests as sub-task M of step N;
+/// untagged items fall back to ADR-0046 content matching, then to nested
+/// sub-tasks — so the plan can never be erased, and a step with sub-tasks
+/// completes automatically when all of them do (upward propagation).
 enum PlanProgress {
     /// Lowercase, fold every non-alphanumeric run to a single space, trim.
     /// Used both as the stable `PlanStep.id` and as the match key.
@@ -181,31 +220,59 @@ enum PlanProgress {
         return a.contains(b) || b.contains(a)
     }
 
-    /// Merge unmatched items into a step's existing sub-tasks: update a sub-task
-    /// in place when its content matches, else append. Keeps sub-task statuses
-    /// live across successive `TodoWrite`s without duplicating rows.
+    /// Merge incoming sub-tasks into a step's existing ones: match by stable
+    /// `key` first (ADR-0049 — survives rephrasing), else by normalized content
+    /// (ADR-0046 backstop), updating in place or appending. Keeps sub-task
+    /// statuses live across successive `TodoWrite`s without duplicating rows.
     static func mergeSubtasks(_ existing: [TodoItem], _ incoming: [TodoItem]) -> [TodoItem] {
         var out = existing
         for item in incoming {
-            let ni = normalize(item.content)
-            if let idx = out.firstIndex(where: { matches(normalize($0.content), ni) }) {
-                out[idx] = item
+            let idx: Int?
+            if let k = item.key {
+                idx = out.firstIndex(where: { $0.key == k })
+                    ?? out.firstIndex(where: { $0.key == nil && matches(normalize($0.content), normalize(item.content)) })
             } else {
-                out.append(item)
+                let ni = normalize(item.content)
+                idx = out.firstIndex(where: { matches(normalize($0.content), ni) })
             }
+            if let i = idx { out[i] = item } else { out.append(item) }
         }
         return out
     }
 
-    /// Reconcile `incoming` (a fresh `TodoWrite` list) into `steps`. Matches
-    /// update step status/activeForm; unmatched items nest under the active
-    /// step (in_progress → else last incomplete → else a trailing
-    /// "Additional work" bucket created on demand).
+    /// Reconcile `incoming` (a fresh `TodoWrite` list) into `steps` (ADR-0049).
+    /// Tagged items link by ordinal: `[N]` updates step N's status/activeForm,
+    /// `[N.M]` nests as sub-task M of step N. Untagged items fall back to
+    /// ADR-0046 content matching, then nest under the active step / a trailing
+    /// "Additional work" bucket. Finally, every step that owns sub-tasks has its
+    /// status DERIVED from them (all complete → complete) — the upward roll-up.
     static func reconcile(steps: [PlanStep], with incoming: [TodoItem]) -> [PlanStep] {
         var steps = steps
         var used = Set<Int>()
+        var fuzzy: [TodoItem] = []   // untagged / out-of-range → content backstop
+
+        for raw in incoming {
+            let tag = PlanTag.parse(raw.content)
+            if let s = tag.step, s >= 1, s <= steps.count {
+                let idx = s - 1
+                if let sub = tag.sub {
+                    let keyed = TodoItem(content: tag.text, status: raw.status,
+                                         activeForm: raw.activeForm, key: "\(s).\(sub)")
+                    steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, [keyed])
+                } else {
+                    steps[idx].status = raw.status
+                    steps[idx].activeForm = raw.activeForm
+                    used.insert(idx)
+                }
+            } else {
+                fuzzy.append(TodoItem(content: tag.text, status: raw.status, activeForm: raw.activeForm))
+            }
+        }
+
+        // ADR-0046 backstop for untagged items: match a step by normalized
+        // content, else collect for nesting.
         var unmatched: [TodoItem] = []
-        for item in incoming {
+        for item in fuzzy {
             let ni = normalize(item.content)
             if let idx = steps.indices.first(where: { !used.contains($0) && matches(steps[$0].id, ni) }) {
                 steps[idx].status = item.status
@@ -215,24 +282,35 @@ enum PlanProgress {
                 unmatched.append(item)
             }
         }
-        guard !unmatched.isEmpty else { return steps }
+
         let bucketId = normalize("Additional work")
-        if let idx = steps.firstIndex(where: { $0.status == "in_progress" })
-            ?? steps.lastIndex(where: { $0.status != "completed" && $0.id != bucketId }) {
-            steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
-        } else if let idx = steps.firstIndex(where: { $0.id == bucketId }) {
-            steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
-        } else {
-            var bucket = PlanStep(content: "Additional work", status: "in_progress")
-            bucket.subtasks = unmatched
-            steps.append(bucket)
+        if !unmatched.isEmpty {
+            if let idx = steps.firstIndex(where: { $0.status == "in_progress" })
+                ?? steps.lastIndex(where: { $0.status != "completed" && $0.id != bucketId }) {
+                steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
+            } else if let idx = steps.firstIndex(where: { $0.id == bucketId }) {
+                steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
+            } else {
+                var bucket = PlanStep(content: "Additional work", status: "in_progress")
+                bucket.subtasks = unmatched
+                steps.append(bucket)
+            }
         }
-        // The synthetic bucket has no model-driven status of its own — derive it
-        // from its sub-tasks so a finished bucket doesn't pin the plan open.
-        if let idx = steps.firstIndex(where: { $0.id == bucketId }) {
+
+        // ADR-0049 — upward completion propagation. A step that owns sub-tasks
+        // derives its status from them: all complete → the step completes; any
+        // in flight, or the parent already marked in_progress → in_progress;
+        // else leave the model-set status. This is the "subtasks done → main
+        // task done" roll-up the user asked for. Steps with no sub-tasks keep
+        // their model-driven status untouched.
+        for idx in steps.indices where !steps[idx].subtasks.isEmpty {
             let subs = steps[idx].subtasks
-            steps[idx].status = subs.allSatisfy { $0.status == "completed" } ? "completed"
-                : (subs.contains { $0.status == "in_progress" } ? "in_progress" : "pending")
+            if subs.allSatisfy({ $0.status == "completed" }) {
+                steps[idx].status = "completed"
+            } else if subs.contains(where: { $0.status == "in_progress" || $0.status == "completed" })
+                        || steps[idx].status == "in_progress" {
+                steps[idx].status = "in_progress"
+            }
         }
         return steps
     }
