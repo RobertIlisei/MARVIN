@@ -8,7 +8,6 @@ _Active work. Add a one-line entry when a piece of work starts; move it out (to 
 
 
 
-- **Plan-step join key + subtask roll-up** ([ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md), revises [ADR-0046](./decisions/0046-plan-as-durable-spine.md)). _Implemented + verified, pending release._ Replaces ADR-0046's fuzzy plan↔`TodoWrite` content matching with a stable join key: the executor tags each item `[N]` (plan step N) / `[N.M]` (sub-task M of step N), so a reworded task still links to the right step. Adds upward roll-up — a step auto-completes when all its sub-tasks complete (in_progress while partial) — fixing "tasks don't link to the plan" + "the plan never updates". Fuzzy matching kept as the untagged backstop. `personality.ts` + `approvePlan()` teach the contract. `swift build` clean; 11-assertion standalone logic test green.
 - **Multi-graph architecture — code + knowledge** ([ADR-0028](./decisions/0028-multi-graph-architecture.md), development branch only). Two graphs per project: `graphify-out/graph.json` (code, auto-rebuild on commit, unchanged) and `graphify-out/knowledge/graph.json` (docs / ADRs / memory, manual rebuild via `bin/marvin knowledge-graph`, AST-only, no LLM cost). All six MCP graph tools accept a new `scope: "code" | "knowledge" | "all"` parameter, default `"code"` for backwards compatibility. Stable v0.1.13 cask + main branch unchanged — rollback is `git checkout main` or `brew install --cask marvin-ai`. Cross-graph joins, tool-history graph, semantic doc extraction deferred per the ADR.
 - **macOS 26 Gatekeeper fix — install to `~/Applications`** ([ADR-0027](./decisions/0027-macos-26-gatekeeper-user-applications.md)). macOS 26 (Tahoe) kernel-kills ad-hoc-signed bundles in `/Applications` regardless of signature state; the same `.app` runs cleanly from `~/Applications`. `bin/marvin install-macos-app` and the Homebrew cask both retarget to `~/Applications/MARVIN.app`; uninstall cleans up the legacy `/Applications` path. New users still hit the user-space Privacy & Security popup on first Finder launch (one-time whitelist via "Open Anyway"). README + cask `caveats` document the click-through.
 - **Syntax-highlighter coverage — YAML.** Add `tree-sitter-yaml` SPM dep + `Resources/Queries/yaml.scm`. Trivial; every project has compose / workflow / kubeconfig files. ~15 min.
@@ -19,6 +18,24 @@ _Active work. Add a one-line entry when a piece of work starts; move it out (to 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.44** — Plan-step join key + subtask roll-up
+([ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md), revising
+[ADR-0046](./decisions/0046-plan-as-durable-spine.md)). Plan tracking linked
+tasks to the plan's action items by *fuzzy text match* — so a `TodoWrite` item
+the model reworded at execution time failed to match its step, landing as an
+orphan sub-task, and the plan never advanced because a step only moved when its
+exact text matched. v0.1.44 replaces that with a **stable join key**: the
+executor tags each `TodoWrite` item `[N]` (plan step N) or `[N.M]` (sub-task M
+of step N), so a reworded task still links to the right step. Adds **upward
+roll-up** — a step auto-completes when all its `[N.M]` sub-tasks complete
+(in_progress while partial) — directly fixing "tasks don't link to the plan" and
+"the plan never updates". Fuzzy matching is kept as the untagged backstop, so a
+turn that ignores the contract degrades to v0.1.41 behaviour rather than
+regressing. `personality.ts` + the `approvePlan()` execute instruction teach the
+tagging contract + roll-up rule. `swift build` clean; `personality.ts` `tsc`
+clean; an 11-assertion standalone logic test covers tag-linking, nesting, full +
+partial roll-up, key-based de-dup, and fuzzy fallback. Builds on v0.1.43.
 
 **v0.1.43** — Full session history via incremental paging
 ([ADR-0048](./decisions/0048-full-session-history-tail-first.md)). Cold-start
