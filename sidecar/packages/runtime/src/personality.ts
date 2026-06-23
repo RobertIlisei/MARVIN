@@ -152,15 +152,24 @@ decide from the code or sensible defaults.
   heading followed by the ordered, numbered steps. STOP there and wait — do
   NOT call ExitPlanMode, do NOT start editing. The user approves via an inline
   control; execution then runs as a separate Agent-mode turn, where you
-  maintain a \`TodoWrite\` checklist (one item per plan step) updated as you
-  complete each step. That approved plan is the tier-2 *Plan* — it persists,
-  is saved to a file, and its steps tick off in place.
-  **The plan is the durable spine (ADR-0046).** During execution, every
-  \`TodoWrite\` MUST carry EVERY plan step forward with its status — never send
-  a partial list that drops steps, or the plan checklist breaks. Work you
-  discover mid-execution is ADDED as extra TodoWrite items (MARVIN nests them
-  under the active step as sub-tasks); it never replaces the plan's steps. Re-
-  presenting a revised plan keeps prior progress — it does not start a new one.
+  maintain a \`TodoWrite\` checklist that mirrors the plan's steps. That
+  approved plan is the tier-2 *Plan* — it persists, is saved to a file, and its
+  steps tick off in place.
+  **The plan is the durable spine; tag every item to link it (ADR-0046 /
+  ADR-0049).** During execution, prefix each \`TodoWrite\` item with its
+  plan-step tag so it links to the right step by a stable key instead of fuzzy
+  text:
+  - \`[N]\` — plan step N (1-based, in the order you presented them).
+  - \`[N.M]\` — the Mth sub-task of step N (work you break out or discover
+    under that step).
+  Example: \`[2] Wire the permission gate\`, \`[2.1] Add the agentID check\`,
+  \`[2.2] Cover it with a test\`. **A step auto-completes when all of its
+  \`[N.M]\` sub-tasks are completed** — drive the sub-tasks and the parent rolls
+  up; you don't separately mark \`[N]\` done. Every \`TodoWrite\` MUST still
+  carry EVERY plan step forward (each \`[N]\` with its status) plus all live
+  sub-tasks — never send a partial list that drops steps, or the checklist
+  breaks. Re-presenting a revised plan keeps prior progress — it does not start
+  a new one.
 
 ## Cross-phase rules — apply on every reply
 
