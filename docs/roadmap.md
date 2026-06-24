@@ -19,6 +19,20 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.48** — Background jobs killed on app-quit no longer spam a "job failed"
+turn ([ADR-0038](./decisions/0038-background-jobs-event-wakeups.md) addendum).
+Every close→reopen surfaced a "background job finished … killed by signal SIGTERM
+… it did NOT succeed — diagnose" turn in the chat (174 accumulated across one
+project's transcripts). Cause: a long-running job (a Vite dev server) only ends
+when killed, and app-quit SIGTERMs the sidecar's child jobs — but `onExit` only
+suppressed the completion turn for jobs cancelled via the explicit cancel tool,
+so shutdown-kills fired a spurious failure turn that resurfaced on next launch.
+Fix: `onExit` now also skips the turn for stop/shutdown signals (`SIGTERM` /
+`SIGINT` / `SIGHUP` / `SIGKILL`) — "stopped, not finished", matching
+`cancelBackgroundJob`. Genuine exit codes (success or failure) and real crash
+signals (`SIGSEGV`, …) still notify. New test pins it; runtime `tsc` clean.
+Builds on v0.1.47.
+
 **v0.1.47** — MCP-vs-CLI browser choice is now a deterministic trigger
 ([ADR-0045](./decisions/0045-playwright-mcp-gated.md) addendum). With the
 Playwright MCP enabled (v0.1.46), MARVIN still under-used it: the "Browser tools"
