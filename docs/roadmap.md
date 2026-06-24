@@ -19,6 +19,19 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.47** — MCP-vs-CLI browser choice is now a deterministic trigger
+([ADR-0045](./decisions/0045-playwright-mcp-gated.md) addendum). With the
+Playwright MCP enabled (v0.1.46), MARVIN still under-used it: the "Browser tools"
+guidance made the CLI the *default* and only *"preferred the MCP for
+interactive"* — a soft nudge that, by the same logic as the 2026-05-22 skills
+audit, fires ~0× in practice. Converted the section in `personality.ts` into a
+firm surface: a **MUST** list (any interaction / asserting post-interaction
+state / multi-step read-between-steps / interaction-failure debugging → use the
+`browser_*` MCP) + a **MUST-NOT** list (single static screenshot or a pre-written
+`@playwright/test` suite, or the server being off → CLI) + a fallback test
+(stateful-across-actions → MCP; fire-and-forget → CLI; torn → MCP). Prompt-only;
+no data-model change. Builds on v0.1.46.
+
 **v0.1.46** — Playwright MCP server now actually starts (GUI-launch PATH fix,
 [ADR-0045](./decisions/0045-playwright-mcp-gated.md) addendum). With the
 Playwright toggle ON, MARVIN still couldn't see the
