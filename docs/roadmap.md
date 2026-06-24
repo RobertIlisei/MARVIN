@@ -19,6 +19,20 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.49** — A 529 (or any non-plan reply) can no longer hijack the active plan
+([ADR-0046](./decisions/0046-plan-as-durable-spine.md) addendum). A user's real
+plan stopped being tracked, ignored "continue / close the remaining items", and
+opening `plan.md` showed `API Error: 529 Overloaded`. Cause: every Plan-mode
+`turnCompleted` ingested `lastAssistantText()` as a plan **without checking it
+was one** (the replay path guards with `PlanCard.isPlan`; the live path didn't).
+A Plan-mode turn that hit a 529 streamed the error as its reply → `ingestPlan`
+found no `# Plan` heading, fell back to the title "Plan" → slug `plan` →
+`plan.md`, turned the error line into a step, and set it as the **active** plan,
+stranding the real one. Fix: gate the live ingest **and** the Approve chip on
+`PlanCard.isPlan(finalReply)`, so a non-plan reply (error or prose) ingests
+nothing. `swift build` clean. Pairs with ADR-0049 (tracking) + ADR-0050 (resume).
+Builds on v0.1.48.
+
 **v0.1.48** — Background jobs killed on app-quit no longer spam a "job failed"
 turn ([ADR-0038](./decisions/0038-background-jobs-event-wakeups.md) addendum).
 Every close→reopen surfaced a "background job finished … killed by signal SIGTERM

@@ -131,3 +131,37 @@ backstop for when it does.
 - Files: `macos/MARVIN/TodoListView.swift`, `macos/MARVIN/ChatPreviewView.swift`,
   `macos/MARVIN/PlanCardView.swift`, `sidecar/packages/runtime/src/personality.ts`
 - Supersedes / superseded by: revises ADR-0036 (two-tier to-do/plan model)
+
+## Addendum — 2026-06-24: an errored / non-plan reply must not become the active plan
+
+**Symptom.** A user's real plan (`apia-bloc-fizic-…`) "stopped being tracked" —
+MARVIN ignored "continue / close the remaining items", the plan "looked
+modified", and opening `plan.md` showed `API Error: 529 Overloaded`. On disk a
+290-byte `.marvin/plans/plan.md` existed whose entire content was the 529 error,
+rendered as a checkbox step.
+
+**Root cause.** On every Plan-mode `turnCompleted`, `ChatPreviewView` ingested
+`lastAssistantText()` as a plan **without checking it was one** — unlike the
+replay path, which guards with `PlanCard.isPlan`. When a Plan-mode turn hit a
+529 (the error text was streamed as the assistant reply, then the turn
+completed), `ingestPlan` ran on the error: `PlanCard.split` found no `# Plan`
+heading, fell back to `?? raw`, `planTitle` defaulted to "Plan" → slug `plan` →
+`plan.md`, and `PlanParser` turned the error line into a step. Worse, `ingestPlan`
+sets `activePlanId = slug`, so the garbage "plan" became the **active** plan,
+stranding the real one (still navigable via the picker, but no longer driving the
+strip or "continue"). Any non-plan final reply in Plan mode (an error, a prose
+answer) hit this.
+
+**Fix.** Gate the `turnCompleted` ingest **and** `planAwaitingApproval` on
+`PlanCard.isPlan(finalReply)` (presence of a `# Plan` heading), mirroring the
+replay guard. A Plan-mode turn whose final reply isn't a plan no longer ingests
+anything and no longer offers "Approve & execute". The ExitPlanMode path is
+inherently safe — an API error is never an `ExitPlanMode` tool call.
+
+**Consequences.** Existing stray `plan.md` files (and the active-plan they
+hijacked) are not auto-repaired — the user re-selects the real plan via the strip
+picker and may delete the `plan.md` artifact; the fix prevents recurrence.
+Pairs with [ADR-0049](./0049-plan-step-join-key-and-rollup.md) /
+[ADR-0050](./0050-continue-control-anchors-active-plan.md): those fixed plan
+*tracking* and *resume*; this stops a transient API error from destroying the
+active plan in the first place.
