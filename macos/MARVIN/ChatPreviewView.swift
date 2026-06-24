@@ -1301,13 +1301,23 @@ final class ChatPreviewModel {
             // A plan turn just finished — offer approval, UNLESS the active
             // plan is already complete (it was executed; offering "approve &
             // execute" then would contradict "Plan complete N/N").
-            planAwaitingApproval = (b.mode == "plan") && !activePlanComplete
-            if planAwaitingApproval {
-                // ADR-0046 — ingest the plan portion of the final reply as a
-                // navigable entry (preamble before the `# Plan` heading stays in
-                // the chat; the file + strip get the clean plan). ingestPlan
-                // also persists + opens the file (Cursor-style).
-                if let text = lastAssistantText() { ingestPlan(text) }
+            // ADR-0046 hardening — only treat this as a presented plan when the
+            // final reply actually IS one (carries a `# Plan` heading). A
+            // Plan-mode turn that errored ("API Error: 529 Overloaded …") or
+            // answered in prose is NOT a plan; ingesting it would manufacture a
+            // titleless garbage plan (no title → slug "plan" → plan.md) and make
+            // THAT the active plan, stranding the real one. Mirrors the replay
+            // guard (PlanCard.isPlan); the ExitPlanMode path is already safe
+            // (an error is never an ExitPlanMode tool call).
+            let finalReply = lastAssistantText()
+            let presentedPlan = (b.mode == "plan") && !activePlanComplete
+                && (finalReply.map(PlanCard.isPlan) ?? false)
+            planAwaitingApproval = presentedPlan
+            if presentedPlan, let text = finalReply {
+                // Ingest the plan portion of the reply (preamble before the
+                // `# Plan` heading stays in the chat; the file + strip get the
+                // clean plan). ingestPlan persists + opens the file (Cursor-style).
+                ingestPlan(text)
             }
             // ADR-0043 — a server-initiated turn (background-job completion /
             // wakeup) just finished rendering; settle the in-flight affordance
