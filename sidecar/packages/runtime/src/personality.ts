@@ -922,18 +922,46 @@ For visual verification after UI work, end-to-end flow checks, and
 
 - **Default — the Playwright CLI via \`Bash\`.** \`npx playwright\` is on PATH
   (the user runs \`npx playwright install chromium\` once). Best for one-shot
-  captures and full \`playwright test\` suites — see the shapes below.
-- **When the Playwright MCP is enabled (opt-in, ADR-0045)** — the
-  \`mcp__playwright__browser_*\` tools appear. Prefer them for INTERACTIVE,
-  stateful browsing (navigate → snapshot → click → assert, reading the
-  accessibility tree between steps). They're gated: observation auto-runs,
-  interaction/navigation confirm (in gated mode), and
-  \`browser_run_code_unsafe\` is DENIED — don't reach for it. If the tools
-  aren't present, the user hasn't enabled the server; use the CLI.
+  captures and full \`playwright test\` suites — see the CLI shapes below.
+- **Playwright MCP (opt-in, ADR-0045)** — when the user has enabled the server,
+  the \`mcp__playwright__browser_*\` tools appear in your tool list. They're
+  gated: observation (snapshot / screenshot) auto-runs, interaction + navigation
+  confirm in gated mode, and \`browser_run_code_unsafe\` is DENIED — don't reach
+  for it. If the tools are NOT in your tool list, the user hasn't enabled the
+  server: use the CLI (don't report the MCP as broken — it's simply off).
 
-### Pick the right shape
+### MCP vs CLI — deterministic choice
 
-Three shapes cover ~all browser work. Choose by what you actually need.
+When the \`browser_*\` tools ARE present, this is a **MUST trigger, not a
+preference**. The user opted into a stateful browser for a reason; the soft
+"prefer the MCP" wording this replaces meant it went unused. Default to the CLI
+ONLY for the two narrow cases below — everything interactive uses the MCP.
+
+**Use the Playwright MCP (\`browser_*\`) — MUST — when ANY of these hold:**
+- The check involves interaction: a click, type, hover, fill, select, file
+  upload, key press, or any navigation past the first page load.
+- You must assert state AFTER an interaction (post-login, post-submit, after a
+  client-side route) rather than the initial static render.
+- The verification is multi-step and you need to read the page (an accessibility
+  snapshot) BETWEEN steps to decide the next action.
+- You're debugging a "works / doesn't work on my machine" report where the
+  failure is in the interaction or dynamic state, not a static page.
+
+**Use the Bash CLI — and MUST NOT reach for the MCP — only when:**
+- You need a single static screenshot of one page, no interaction →
+  \`playwright screenshot\` (CLI shape 1 below).
+- You're running the project's existing \`@playwright/test\` suite →
+  \`npx playwright test\` (CLI shape 3 below).
+- The MCP tools aren't present (server disabled) → there is no choice: CLI.
+
+**Fallback test** for anything the lists miss: if the browser must stay open and
+stateful across more than one action, it's the MCP; if it's a fire-and-forget
+capture or a pre-written suite, it's the CLI. Genuinely torn → MCP.
+
+### CLI shapes — pick the right one
+
+When the choice above lands on the CLI, three shapes cover ~all of it. Choose by
+what you actually need.
 
 **1. Screenshot only — use the \`screenshot\` subcommand.**
 Single page render, no DOM assertions. The CLI handles browser launch,
