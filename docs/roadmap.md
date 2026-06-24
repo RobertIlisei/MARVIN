@@ -19,6 +19,21 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.46** — Playwright MCP server now actually starts (GUI-launch PATH fix,
+[ADR-0045](./decisions/0045-playwright-mcp-gated.md) addendum). With the
+Playwright toggle ON, MARVIN still couldn't see the
+`mcp__playwright__browser_*` tools. Root cause: a Finder/Spotlight-launched app
+inherits the minimal launchd PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits
+Homebrew (`/opt/homebrew/bin`) where `node`/`npx` live — so the SDK's bare `npx
+@playwright/mcp@latest` spawn ENOENT'd, the stdio server never started, and the
+tools never registered (confirmed live: the SDK process had the minimal PATH and
+no `@playwright/mcp` child). Fixed in two layers: `SidecarManager.swift` prepends
+the Homebrew / `/usr/local` bins to the sidecar's PATH at launch, and
+`sdk-runner.ts` (`enrichedToolPath()`) re-enriches PATH on `turnEnv` + the
+Playwright server's `env`. Verified: minimal PATH → `npx: command not found`;
+enriched → server reports `Version 0.0.76`. New `enriched-tool-path.test.ts`
+(4 cases); runtime `tsc` + `swift build` clean. Builds on v0.1.45.
+
 **v0.1.45** — Continue control anchors on the active plan
 ([ADR-0050](./decisions/0050-continue-control-anchors-active-plan.md)). The plan
 strip's **Continue** chip sent an *unscoped* resume instruction — "continue with

@@ -125,6 +125,21 @@ final class SidecarManager {
         proc.currentDirectoryURL = serverURL.deletingLastPathComponent()
 
         var env = ProcessInfo.processInfo.environment
+        // A Finder / Spotlight launch hands us the minimal launchd PATH
+        // (/usr/bin:/bin:/usr/sbin:/sbin), which OMITS Homebrew
+        // (/opt/homebrew/bin) and /usr/local/bin where the user's node / npx
+        // live. Subprocesses the sidecar spawns then ENOENT — notably the
+        // Playwright MCP server's bare `npx` (ADR-0045), which silently fails
+        // so the browser tools never register. Prepend the common node
+        // locations (de-duplicated, order-preserving) so they resolve
+        // regardless of how MARVIN was launched. The sidecar also re-enriches
+        // PATH for SDK-spawned subprocesses (belt-and-braces).
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        var mergedPath: [String] = []
+        for p in ["/opt/homebrew/bin", "/usr/local/bin"] + currentPath.split(separator: ":").map(String.init) {
+            if !p.isEmpty && !mergedPath.contains(p) { mergedPath.append(p) }
+        }
+        env["PATH"] = mergedPath.joined(separator: ":")
         env["PORT"] = String(ServerConfig.port)
         env["HOSTNAME"] = "127.0.0.1"
         env["NODE_ENV"] = "production"
