@@ -168,3 +168,17 @@ shell that sources the user's profile.)
 found`; under the enriched PATH → `Version 0.0.76`. Unit test
 `enriched-tool-path.test.ts` (4 cases) pins the prepend/dedup/empty-drop
 contract; runtime `tsc` + `swift build` clean.
+
+## Addendum — 2026-06-24: MCP-vs-CLI made a deterministic trigger
+
+The original "Browser tools" guidance made the **CLI the default** and only
+**"preferred the MCP for interactive"** browsing — a soft nudge. By the same
+logic as the 2026-05-22 skills audit (soft-nudge language fired ~0× across
+thousands of qualifying contexts), an autonomous MARVIN would keep reaching for
+the Bash CLI even on stateful click-through verification, leaving an
+*enabled* Playwright MCP unused. Converted the section into a firm surface: a
+**MUST** list (interaction / post-interaction assertion / multi-step
+read-between-steps / interaction-failure debugging → MCP), a **MUST-NOT** list
+(single static screenshot or a pre-written `@playwright/test` suite, or the
+server being off → CLI), and a fallback test (stateful-across-actions → MCP,
+fire-and-forget → CLI; torn → MCP). `personality.ts` only; no data-model change.
