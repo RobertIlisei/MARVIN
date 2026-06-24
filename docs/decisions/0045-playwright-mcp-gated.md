@@ -137,3 +137,34 @@ denied.
 - [x] `personality.ts` "Browser tools", `CLAUDE.md`, and
       `docs/reference/mcp-servers.md` document CLI-vs-MCP + the `run_code_unsafe`
       deny + the opt-in toggle.
+
+## Addendum — 2026-06-24: GUI-launch PATH bug (the server never spawned)
+
+**Symptom.** With the toggle ON, MARVIN still didn't see the
+`mcp__playwright__browser_*` tools — "doesn't know about it".
+
+**Root cause.** A macOS app launched from Finder / Spotlight inherits the
+minimal launchd PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits Homebrew
+(`/opt/homebrew/bin`) where the user's `node` / `npx` live. `SidecarManager`
+spawned the sidecar with `ProcessInfo.processInfo.environment` unmodified, so
+`process.env.PATH` (→ `turnEnv` → the SDK → the MCP subprocess) lacked it. The
+server config used a bare `command: "npx"`, which therefore **ENOENT'd**; the
+stdio server never started and the tools never registered. Verified live: the
+running SDK process had `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and no
+`@playwright/mcp` child, while `npx` resolved only at `/opt/homebrew/bin/npx`.
+(`npx playwright` via the `Bash` tool worked because that runs through a login
+shell that sources the user's profile.)
+
+**Fix (two layers, belt-and-braces).**
+- `SidecarManager.swift` prepends `/opt/homebrew/bin` + `/usr/local/bin` to the
+  sidecar's `PATH` at launch (de-duplicated, order-preserving) — so *every*
+  sidecar subprocess resolves Homebrew node regardless of launch method.
+- `sdk-runner.ts` adds `enrichedToolPath()` (prepends `dirname(process.execPath)`
+  + Homebrew + `/usr/local`), applied to `turnEnv.PATH` and to the Playwright
+  server config's `env`, so the exact `npx` spawn resolves even if the sidecar's
+  own PATH is minimal.
+
+**Verified.** Under the minimal PATH `npx @playwright/mcp@latest` → `command not
+found`; under the enriched PATH → `Version 0.0.76`. Unit test
+`enriched-tool-path.test.ts` (4 cases) pins the prepend/dedup/empty-drop
+contract; runtime `tsc` + `swift build` clean.

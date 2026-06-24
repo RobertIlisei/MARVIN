@@ -47,8 +47,47 @@ import {
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { latestForTier } from "./models";
 import { defaultModel } from "./claude-cli";
+import { dirname } from "node:path";
 
 export type RuntimeMode = "opus" | "advisor";
+
+/**
+ * GUI-launch PATH fix (ADR-0045 follow-up). A macOS app launched from Finder /
+ * Spotlight inherits the minimal launchd PATH (`/usr/bin:/bin:/usr/sbin:/sbin`),
+ * which OMITS Homebrew (`/opt/homebrew/bin`) and `/usr/local/bin` where the
+ * user's `node` / `npx` actually live. The SDK spawns the Playwright MCP server
+ * via bare `npx @playwright/mcp@latest`, so under that PATH it ENOENTs, the
+ * stdio server never starts, and the `mcp__playwright__browser_*` tools never
+ * register — MARVIN genuinely can't see them. (A `Bash` `npx` works because it
+ * runs through a login shell that sources the user's profile.) Prepend the
+ * running node's own bin dir + the common Homebrew / `/usr/local` locations so
+ * `npx` (and the `node` it re-spawns) resolve regardless of how MARVIN was
+ * launched. Order-preserving + de-duplicated; existing PATH entries win ties
+ * after the prepended ones.
+ */
+export function enrichedToolPath(base: string = process.env.PATH ?? ""): string {
+  const prepend = [dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of [...prepend, ...base.split(":")]) {
+    if (p && !seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out.join(":");
+}
+
+/** Sanitized copy of `process.env` (drops `undefined` values) with PATH
+ *  enriched — suitable as a stdio MCP server's `env`. */
+function browserServerEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) env[k] = v;
+  }
+  env.PATH = enrichedToolPath();
+  return env;
+}
 
 /** Map a user-facing runtime mode to the SDK's model + advisorModel pair.
  *
@@ -918,6 +957,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const turnEnv: Record<string, string | undefined> = {
     ...process.env,
     ...honeycombEnv,
+    // Enrich PATH so the SDK + every subprocess it spawns (notably the
+    // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
+    // when MARVIN was launched from Finder with the minimal launchd PATH.
+    PATH: enrichedToolPath(),
   };
 
   const abortController = new AbortController();
@@ -1057,6 +1100,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               type: "stdio" as const,
               command: "npx",
               args: ["@playwright/mcp@latest"],
+              // Belt-and-braces with turnEnv: spawn the server with an enriched
+              // PATH so bare `npx` resolves under a Finder-launched app's
+              // minimal PATH (ADR-0045 follow-up). Without this the server
+              // ENOENTs and the browser tools silently never register.
+              env: browserServerEnv(),
             },
           }
         : {}),
