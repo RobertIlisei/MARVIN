@@ -88,3 +88,34 @@ honest (no false "it'll resume" promise). Documented, not hidden.
       fires no turn.
 - [x] `personality.ts` updated; 4 unit tests (exit→turn, failure framing,
       cancel-no-fire, concurrency cap); tools + runtime tsc clean.
+
+## Addendum — 2026-06-24: don't fire a completion turn for shutdown/stop kills
+
+**Symptom.** Every time the user quit and reopened MARVIN, the chat showed a
+"A background job you started earlier has finished … Result: killed by signal
+SIGTERM … It did NOT succeed — diagnose…" turn. One project had **174** of these
+accumulated across its session transcripts.
+
+**Root cause.** A long-running job (a Vite dev server) never exits on its own —
+it only ends when killed. On app quit the macOS app SIGTERMs the sidecar, which
+kills its child jobs (this module's documented contract: the job "dies if the
+app quits"). `onExit` only suppressed the completion turn for jobs cancelled via
+the explicit cancel tool (`rec.cancelled`), so a shutdown-SIGTERM'd job fell
+through, fired a "did NOT succeed" turn, and that prompt resurfaced in the chat
+on the next launch — regenerated every close→open cycle because the dev server
+restarts each session.
+
+**Fix.** `onExit` now also returns without firing when the job was killed by a
+**stop/shutdown signal** (`SIGTERM` / `SIGINT` / `SIGHUP` / `SIGKILL`) — these
+mean "stopped," not "finished," matching what `cancelBackgroundJob` already does
+(SIGTERM → no turn). A job that exits with a numeric **code** (success or
+failure) still fires, and genuine **crash** signals (`SIGSEGV` / `SIGABRT` /
+`SIGBUS` / `SIGFPE`) are deliberately NOT in the set, so real crashes still
+notify. Chosen over a process-level shutdown flag (which races the children's
+exit events and entangles Next's exit semantics); the signal is a robust,
+race-free proxy for "killed, not finished".
+
+**Verified.** New test: a job killed by an external `SIGTERM` (not via the cancel
+tool) fires no completion turn, while the existing exit-code-0 / exit-code-3
+tests confirm genuine completions still fire. Existing transcript noise is left
+as-is (the user's session history); the fix only stops new occurrences.

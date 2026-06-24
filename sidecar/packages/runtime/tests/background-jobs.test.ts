@@ -77,6 +77,27 @@ describe("background-job completion wakeup", () => {
     expect(listBackgroundJobs("sess")).toHaveLength(0);
   });
 
+  it("a job killed by SIGTERM (app shutdown, NOT the cancel tool) fires NO completion turn", async () => {
+    // ADR-0038 follow-up: when the app quits, the sidecar is SIGTERM'd and its
+    // child jobs die by signal — but `cancelled` is false (no one called the
+    // cancel tool). Without the STOP_SIGNALS guard this fired a spurious
+    // "killed by signal SIGTERM — did NOT succeed" turn that resurfaced on
+    // every relaunch.
+    let fired = false;
+    setWakeupFireHandler(() => {
+      fired = true;
+    });
+    const res = startBackgroundJob({ command: "sleep 5", reason: "dev server", ctx });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      // Kill the job directly, the way an OS/app shutdown would — NOT via
+      // cancelBackgroundJob (which sets `cancelled`).
+      process.kill(res.pid, "SIGTERM");
+    }
+    await new Promise((r) => setTimeout(r, 800));
+    expect(fired).toBe(false);
+  });
+
   it("enforces the per-session concurrency cap", () => {
     const ok = [1, 2, 3].map((n) =>
       startBackgroundJob({ command: "sleep 5", reason: `${n}`, ctx }),

@@ -27,6 +27,24 @@ export const MAX_JOBS_PER_SESSION = 3;
 /** Output tail kept in memory for the completion turn (bytes). */
 const TAIL_BYTES = 8 * 1024;
 
+/**
+ * Signals that mean the job was STOPPED, not that it finished (ADR-0038
+ * follow-up). A long-running job (a dev server) never exits on its own — it
+ * only ends when killed, and the dominant case is the sidecar being torn down
+ * on app quit, which SIGTERMs its child jobs (this module's own contract:
+ * "dies if the app quits"). Firing a "job did NOT succeed — diagnose" turn for
+ * that is noise that resurfaces in the chat on every relaunch. A job that
+ * finishes on its own exits with a numeric code (success OR failure) and still
+ * earns a turn; a genuine crash (SIGSEGV / SIGABRT / SIGBUS / SIGFPE) is NOT in
+ * this set, so real crashes still notify.
+ */
+const STOP_SIGNALS = new Set<NodeJS.Signals>([
+  "SIGTERM",
+  "SIGINT",
+  "SIGHUP",
+  "SIGKILL",
+]);
+
 /** Per-turn identity + config the completion turn inherits — same shape
  *  as the wakeup tool context (no capability elevation). */
 export interface BackgroundJobContext {
@@ -136,6 +154,13 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
   state.jobs.delete(rec.id);
   // A user-cancelled job doesn't earn a "diagnose the failure" turn.
   if (rec.cancelled) return;
+  // Neither does a job that was STOPPED by a shutdown/stop signal rather than
+  // finishing — overwhelmingly the sidecar being SIGTERM'd on app quit, which
+  // kills its child jobs. Without this, every app quit fires a spurious
+  // "killed by signal SIGTERM — it did NOT succeed" turn that resurfaces in the
+  // chat on the next launch (ADR-0038 follow-up). A real exit code, or a crash
+  // signal, still fires below.
+  if (signal != null && STOP_SIGNALS.has(signal)) return;
 
   const failed = signal != null || (code ?? 1) !== 0;
   const status = signal ? `killed by signal ${signal}` : `exit code ${code ?? "unknown"}`;
