@@ -134,3 +134,30 @@ backstop.
   (`applyTodoWrite`, `approvePlan`), `sidecar/packages/runtime/src/personality.ts`.
 - Supersedes / superseded by: revises ADR-0046 (plan as the durable spine) —
   replaces its fuzzy-only join with a tag join key + adds upward roll-up.
+
+## Addendum — 2026-06-25: a step with sub-tasks can't complete while any sub-task is open
+
+**Symptom.** A plan step (step [10], "Operator console panel") showed **completed**
+(green ✓, struck through) while all eight of its DoD/Tests/Docs/Verify sub-items
+were still unchecked — an action item "finished" with its sub-tasks undone.
+
+**Root cause.** The original roll-up handled "all sub-tasks done → complete" and
+"some activity → in_progress", but had an implicit `else` that left the
+**model-set** status untouched. So when the model emitted `[10] completed` while
+every `[10.x]` sub-task was still `pending`, neither branch fired: not all
+complete (false), no sub-task in_progress/completed and the parent wasn't
+in_progress (it was *completed*) — so the parent kept its model-declared
+"completed". The roll-up could downgrade a parent on *partial* progress but not
+when the model over-claimed completion over all-pending sub-tasks.
+
+**Fix.** Make completion a hard invariant: a step that owns sub-tasks is
+`completed` **iff every sub-task is completed**. Otherwise it's `in_progress`
+when there's any activity (a sub-task started/done, or the model marked the
+parent in_progress/completed) and `pending` when nothing has started. A parent
+can no longer read as done while a leaf is open, regardless of what the model
+declares for the parent — the sub-tasks ARE the remaining work.
+
+**Verified.** Standalone test: `[1] completed` + `[1.1]/[1.2] pending` →
+parent `in_progress` (not completed); once both sub-tasks complete → parent
+completes; a leaf step with no sub-tasks still completes on the model's signal.
+`swift build` clean.
