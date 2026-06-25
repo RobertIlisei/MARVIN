@@ -238,6 +238,16 @@ export function effortForThinkingMode(
 
 export interface RunAgentInput {
   message: string;
+  /**
+   * ADR-0051 — a compact snapshot of the ACTIVE plan + live per-step status,
+   * sent by the client each turn so the model (not just the UI strip) stays
+   * aware of where it is in the plan. Appended to the user turn wrapped in a
+   * `<system-reminder>` — a VOLATILE SUFFIX on the latest message, never part
+   * of the cached system prefix (prompt-cache-safe per Anthropic's caching
+   * rules), and never persisted to the transcript (the clean `message` is what
+   * `turn.user` records). Absent when no plan is active.
+   */
+  planContext?: string | undefined;
   cwd: string;
   model: string;
   /**
@@ -1180,7 +1190,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   })();
 
   try {
-    const q = query({ prompt: message, options });
+    // ADR-0051 — inject the live active-plan snapshot as a `<system-reminder>`
+    // suffix on THIS user turn. It rides the new message (the uncached volatile
+    // tail), so it never invalidates the cached system prefix even as step
+    // statuses change; and it's only on the SDK prompt, not the persisted
+    // `turn.user`, so reloads show the clean message.
+    const turnPrompt = input.planContext
+      ? `${message}\n\n<system-reminder>\n${input.planContext}\n</system-reminder>`
+      : message;
+    const q = query({ prompt: turnPrompt, options });
     for await (const ev of q) {
       onEvent(ev);
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {

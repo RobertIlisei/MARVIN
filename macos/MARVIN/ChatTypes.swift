@@ -157,6 +157,11 @@ struct ChatRequest: Codable {
     /// Opt-in Playwright MCP browser server (ADR-0045). Optional — sidecar
     /// defaults to false (off) when absent.
     let playwrightEnabled: Bool?
+    /// ADR-0051 — compact snapshot of the active plan + live per-step status.
+    /// The sidecar injects it into the SDK prompt as a `<system-reminder>`
+    /// suffix so the model stays aware of the plan (the strip alone never
+    /// reached the model). nil when no plan is active.
+    let planContext: String?
     /// Autonomy mode (ADR-0036): "ask" | "agent" | "plan". Optional —
     /// sidecar defaults to "agent" when absent, so old clients are
     /// unchanged.
@@ -188,6 +193,7 @@ struct ChatRequest: Codable {
         runtimeMode: String? = nil,
         permissionStrategy: String? = nil,
         playwrightEnabled: Bool? = nil,
+        planContext: String? = nil,
         mode: String? = nil,
         thinkingMode: String? = nil,
         advisorThinkingMode: String? = nil,
@@ -204,6 +210,7 @@ struct ChatRequest: Codable {
         self.runtimeMode = runtimeMode
         self.permissionStrategy = permissionStrategy
         self.playwrightEnabled = playwrightEnabled
+        self.planContext = planContext
         self.mode = mode
         self.thinkingMode = thinkingMode
         self.advisorThinkingMode = advisorThinkingMode
