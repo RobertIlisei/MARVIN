@@ -53,6 +53,11 @@ interface ChatRequestBody {
   permissionStrategy?: PermissionStrategy;
   /** Opt-in Playwright MCP browser server for this turn (ADR-0045). */
   playwrightEnabled?: boolean;
+  /** ADR-0051 — compact snapshot of the active plan + live per-step status,
+   *  built client-side from the plan strip. Injected into the SDK prompt as a
+   *  `<system-reminder>` suffix so the model stays plan-aware; never persisted
+   *  to `turn.user`. Absent when no plan is active. */
+  planContext?: string;
   /** Autonomy mode (ADR-0036). `agent` (default) = full autonomy; `ask` =
    *  read-only; `plan` = plan-first, approval-gated. */
   mode?: AgentMode;
@@ -287,6 +292,9 @@ export async function POST(req: NextRequest) {
     sessionId: sdkResumeId,
     appendSystemPrompt,
     personality,
+    // ADR-0051 — pass the live plan snapshot to the SDK prompt only; `message`
+    // (persisted above as turn.user) stays clean.
+    planContext: body.planContext,
   });
 
   const encoder = new TextEncoder();
