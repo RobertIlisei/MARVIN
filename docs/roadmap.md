@@ -19,6 +19,18 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.50** — A plan step can't read "done" while its sub-tasks are open
+([ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md) addendum). A step
+(step [10], "Operator console panel") showed completed with all eight of its
+DoD/Tests/Verify sub-items still unchecked. The ADR-0049 roll-up downgraded a
+parent on *partial* progress, but had an implicit `else` that kept the
+model-declared status — so `[10] completed` over all-`pending` sub-tasks survived
+(neither "all done" nor "any activity" fired). Fix: completion is now a hard
+invariant — a step that owns sub-tasks is `completed` **iff every sub-task is
+completed**; otherwise `in_progress` (any activity) or `pending`. A parent can no
+longer read as finished while a leaf is open, regardless of what the model
+declares. Standalone test pins it; `swift build` clean. Builds on v0.1.49.
+
 **v0.1.49** — A 529 (or any non-plan reply) can no longer hijack the active plan
 ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) addendum). A user's real
 plan stopped being tracked, ignored "continue / close the remaining items", and

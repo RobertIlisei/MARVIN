@@ -297,19 +297,23 @@ enum PlanProgress {
             }
         }
 
-        // ADR-0049 — upward completion propagation. A step that owns sub-tasks
-        // derives its status from them: all complete → the step completes; any
-        // in flight, or the parent already marked in_progress → in_progress;
-        // else leave the model-set status. This is the "subtasks done → main
-        // task done" roll-up the user asked for. Steps with no sub-tasks keep
-        // their model-driven status untouched.
+        // ADR-0049 — upward completion propagation, with a HARD invariant
+        // (ADR-0049 addendum): a step that owns sub-tasks is "completed" if and
+        // ONLY IF every sub-task is completed. It can never read as done while a
+        // sub-task is still open — even if the model marked the parent done —
+        // because the sub-tasks ARE the remaining work (the user saw step [10]
+        // ticked with all its DoD/Tests sub-items unchecked). When not all are
+        // done it's in_progress if there's ANY activity (a sub-task started/done,
+        // or the model marked the parent in_progress/completed), else pending.
+        // Steps with no sub-tasks keep their model-driven status untouched.
         for idx in steps.indices where !steps[idx].subtasks.isEmpty {
             let subs = steps[idx].subtasks
             if subs.allSatisfy({ $0.status == "completed" }) {
                 steps[idx].status = "completed"
-            } else if subs.contains(where: { $0.status == "in_progress" || $0.status == "completed" })
-                        || steps[idx].status == "in_progress" {
-                steps[idx].status = "in_progress"
+            } else {
+                let anyActivity = subs.contains { $0.status != "pending" }
+                    || steps[idx].status != "pending"
+                steps[idx].status = anyActivity ? "in_progress" : "pending"
             }
         }
         return steps
