@@ -187,6 +187,32 @@ final class ChatPreviewModel {
         return todos
     }
 
+    /// ADR-0051 — a compact, authoritative snapshot of the ACTIVE plan + live
+    /// per-step status, sent with every turn so the MODEL (not just the UI
+    /// strip) stays aware of where it is in the plan. The sidecar wraps this in
+    /// `<system-reminder>` and appends it to the user turn — a volatile suffix
+    /// that never enters the cached prompt prefix and is never persisted to
+    /// `turn.user`. nil when no plan is active (then nothing is injected).
+    func activePlanContextBlock() -> String? {
+        guard let plan = activePlan, !plan.steps.isEmpty else { return nil }
+        func glyph(_ s: String) -> String {
+            s == "completed" ? "[x]" : (s == "in_progress" ? "[~]" : "[ ]")
+        }
+        var lines = [
+            "Active plan — \"\(plan.title)\" · current status (authoritative; "
+                + "supersedes any earlier TodoWrite/tool statuses in this transcript). "
+                + "You are mid-execution on this plan — continue it and keep its "
+                + "checklist updated; a step is done only when all its sub-tasks are.",
+        ]
+        for (i, step) in plan.steps.enumerated() {
+            lines.append("\(glyph(step.status)) \(i + 1). \(step.content)")
+            for (j, sub) in step.subtasks.enumerated() {
+                lines.append("    \(glyph(sub.status)) \(i + 1).\(j + 1) \(sub.content)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Clear all plans (fresh SDK session / session switch).
     func clearPlans() {
         plans = []
@@ -688,6 +714,10 @@ final class ChatPreviewModel {
             advisorModel: prefs.advisorModel,
             permissionStrategy: strategy,
             playwrightEnabled: playwrightOn,
+            // ADR-0051 — inject the active plan's live status into the model's
+            // context this turn (the strip alone never reached the model). nil
+            // when no plan is active. `message` (the persisted bubble) stays clean.
+            planContext: activePlanContextBlock(),
             mode: prefs.mode,
             thinkingMode: prefs.thinkingMode,
             advisorThinkingMode: prefs.advisorThinkingMode,

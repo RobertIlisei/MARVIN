@@ -19,6 +19,23 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.51** — Plan-in-context: the model is now aware of the active plan every
+turn ([ADR-0051](./decisions/0051-plan-in-context-injection.md)). The plan was
+**UI-only state** — a strip rehydrated from the transcript, never injected into
+the model's prompt (`buildProjectContext` injects docs/ADRs/memory/graph, never
+the plan). So the model only knew the plan if it survived in conversation
+history, which a chat switch or context compaction drops — hence "MARVIN stopped
+tracking / won't continue the plan" while the strip still shows it. Now the
+client sends a compact `planContext` snapshot (title + `[x]/[~]/[ ]` steps +
+sub-tasks, marked authoritative) each turn, and the runtime appends it as a
+`<system-reminder>` **suffix on the user message** — the uncached volatile tail,
+so it's prompt-cache-safe (per Anthropic's caching rules), and it's never
+persisted to `turn.user` (clean reloads, no display strip). Mirrors how Claude
+Code re-injects its todo list every turn. Threaded macOS→route→orchestrator→
+sdk-runner like `playwrightEnabled`. The missing half of the plan story:
+ADR-0049 fixed tracking, ADR-0050 fixed resume, this fixes **awareness**.
+`swift build` + `tsc` clean. Builds on v0.1.50.
+
 **v0.1.50** — A plan step can't read "done" while its sub-tasks are open
 ([ADR-0049](./decisions/0049-plan-step-join-key-and-rollup.md) addendum). A step
 (step [10], "Operator console panel") showed completed with all eight of its

@@ -60,6 +60,9 @@ export interface DetachedTurnParams {
   sessionId?: string | undefined;
   appendSystemPrompt: string;
   personality: "marvin" | "neutral";
+  /** ADR-0051 — live active-plan snapshot, injected into the SDK prompt as a
+   *  `<system-reminder>` suffix so the model stays plan-aware. Not persisted. */
+  planContext?: string | undefined;
   /** Depth of this turn in a wakeup chain (0 = human-started). ADR-0031. */
   wakeupDepth?: number;
 }
@@ -87,6 +90,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     sessionId,
     appendSystemPrompt,
     personality,
+    planContext,
     wakeupDepth,
   } = params;
 
@@ -100,6 +104,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     ...(mode ? { mode } : {}),
     thinkingMode,
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
+    ...(planContext ? { planContext } : {}),
     turnId,
     sessionId,
     appendSystemPrompt,
