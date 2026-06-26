@@ -748,6 +748,17 @@ private extension FileNode {
     var outlineChildren: [FileNode]? {
         guard isDirectory else { return nil }
         let kids = children ?? []
+        // CRASH FIX — SwiftUI's `OutlineGroup` / `List(children:)` traps
+        // (EXC_BREAKPOINT in `OutlineListCoordinator.recursivelyDiffRows` →
+        // `collapseItem` → `_assertionFailure`) when this keypath returns a
+        // NON-NIL EMPTY array: an "expandable but empty" directory. The
+        // coordinator expects nil (leaf) or a NON-EMPTY array. An agent
+        // mutating files mid-session (a dir emptied/created, then a tree
+        // re-fetch) flips a node into the `[]` shape, and the next row diff
+        // crashes the whole app. Collapse an empty directory to a LEAF (no
+        // disclosure triangle — it simply doesn't expand into nothing); the
+        // folder icon still comes from `isDirectory`, so it reads correctly.
+        guard !kids.isEmpty else { return nil }
         // Defensive: OutlineGroup requires IDs unique across the WHOLE tree
         // and asserts (crash) on a duplicate. `id` is the absolute path, so
         // a symlink loop or a case-folding collision could produce dupes —

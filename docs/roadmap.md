@@ -19,6 +19,19 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.52** — Fix file-tree crash (`OutlineGroup` empty-directory trap). The app
+crashed (`EXC_BREAKPOINT` / `SIGTRAP` in `OutlineListCoordinator.recursivelyDiffRows`
+→ `collapseItem` → `_assertionFailure`) during a file-tree row diff. Cause:
+`FileNode.outlineChildren` returned a **non-nil empty array `[]`** for empty
+directories ("expandable but empty"), but SwiftUI's `OutlineGroup` /
+`List(children:)` traps when the children keypath returns `[]` (it expects `nil`
+for a leaf or a non-empty array). An agent mutating files mid-session (a dir
+emptied/created → tree re-fetch) flips a node into that shape and the next diff
+crashes the whole app. Fix: return `nil` for empty directories (leaf, no
+disclosure triangle; the folder icon still comes from `isDirectory`). Confirmed
+from the crash report (`MARVIN-2026-06-26-214203.ips`, app 0.1.51). `swift build`
+clean. Builds on v0.1.51.
+
 **v0.1.51** — Plan-in-context: the model is now aware of the active plan every
 turn ([ADR-0051](./decisions/0051-plan-in-context-injection.md)). The plan was
 **UI-only state** — a strip rehydrated from the transcript, never injected into
