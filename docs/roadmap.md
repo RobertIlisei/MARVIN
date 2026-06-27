@@ -19,6 +19,18 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.53** — Backlog "Promote to plan" now actually plans (and never silently
+drops). Promoting a backlog item did nothing and didn't start a plan. Two bugs:
+(1) `promoteBacklog` sent `"Implement this backlog item…"` in whatever mode was
+active and **never switched to Plan mode** — but the turnCompleted ingest only
+mints a tier-2 Plan + approval chip when `mode == "plan"`, so MARVIN never
+"treated it as a plan" (Ask mode did nothing; Agent mode just started editing).
+(2) If a turn was in flight, `sendControl`'s `!isSending` guard **silently
+dropped** the promote while the panel closed anyway → "nothing happens". Fix:
+`promoteBacklog` switches to Plan mode and asks MARVIN to present a plan inline
+(read-only first, no edits), and when busy it **queues** the request (dispatches
+as the next turn) instead of dropping it. `swift build` clean. Builds on v0.1.52.
+
 **v0.1.52** — Fix file-tree crash (`OutlineGroup` empty-directory trap). The app
 crashed (`EXC_BREAKPOINT` / `SIGTRAP` in `OutlineListCoordinator.recursivelyDiffRows`
 → `collapseItem` → `_assertionFailure`) during a file-tree row diff. Cause:
