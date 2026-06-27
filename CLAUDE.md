@@ -280,12 +280,11 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 2011 nodes · 3904 edges · 124 communities (2026-06-14 rebuild;
+  files. 2143 nodes · 4024 edges (2026-06-27 rebuild;
   honours [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1085 nodes · 1305 edges · 84 communities (built
-  2026-06-14, 81 files).
+  `.marvin/memory.md`. 1155 nodes · 1378 edges (built 2026-06-27).
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
