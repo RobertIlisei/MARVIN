@@ -9,6 +9,148 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-06-27 — v0.1.53: backlog "Promote to plan" actually plans.**
+  - **Symptom.** Promoting a backlog item did nothing — MARVIN neither treated
+    it as a plan nor started working.
+  - **Cause.** `promoteBacklog` sent `"Implement this backlog item…"` in
+    whatever mode was active and never switched to Plan mode — but the
+    turn-completed ingest only mints a tier-2 Plan + approval chip when
+    `mode == "plan"` (Ask mode did nothing; Agent mode just started editing).
+    And when a turn was in flight, `sendControl`'s `!isSending` guard silently
+    dropped the request while the panel closed regardless.
+  - **Fix.** `promoteBacklog` now `setMode("plan")` + asks MARVIN to present a
+    plan inline (read-only first, no edits yet), and **queues** the request when
+    busy instead of dropping it. `swift build` clean.
+
+- **2026-06-27 — v0.1.52: file-tree crash + install orphan-sidecar leak.**
+  - **Symptom (crash).** The app trapped (`EXC_BREAKPOINT`/`SIGTRAP` in
+    `OutlineListCoordinator.recursivelyDiffRows → collapseItem`) during a
+    file-tree row diff, confirmed from `MARVIN-2026-06-26-214203.ips`.
+  - **Cause.** `FileNode.outlineChildren` returned a **non-nil empty array
+    `[]`** for empty directories, but SwiftUI's `OutlineGroup` / `List(children:)`
+    expects `nil` (leaf) or a non-empty array; an agent mutating files mid-session
+    (a dir emptied/created → tree re-fetch) flipped a node into the `[]` shape and
+    the next diff crashed the whole app.
+  - **Fix.** Empty dirs return `nil` (leaf, no disclosure triangle). Companion
+    build fix in `scripts/bundle-sidecar.sh`: the install smoke-probe killed only
+    the parent `server.js`, but Next's standalone server forks a `next-server`
+    worker that binds the probe port — killing the parent orphaned the worker
+    (→ PPID 1), leaking one sidecar per `install-macos-app` run (~150 MB each, 7
+    found / ~1 GB, a plausible jetsam-kill trigger). The probe now reaps the
+    port-bound worker too, escalating to SIGKILL.
+
+- **2026-06-26 — v0.1.51: plan-in-context — the model is aware of the active
+  plan every turn (ADR-0051).**
+  - **Symptom.** "MARVIN stopped tracking the plan / won't continue it" while
+    the strip still showed it.
+  - **Cause.** The plan was **UI-only state** — a strip rehydrated from the
+    transcript, never injected into the model's prompt (`buildProjectContext`
+    injects docs/ADRs/memory/graph, never the plan). So the model only knew the
+    plan if it survived conversation history, which a chat switch (different
+    session) or context compaction drops.
+  - **Fix.** The client sends a compact `planContext` snapshot (title +
+    `[x]/[~]/[ ]` steps + sub-tasks, marked authoritative) each turn; the runtime
+    appends it as a `<system-reminder>` **suffix on the user message** — the
+    uncached volatile tail, so it's prompt-cache-safe (per Anthropic's caching
+    rules: changing the system prefix cascades invalidation) and never persisted
+    to `turn.user` (clean reloads, no display strip). Mirrors Claude Code's
+    per-turn todo re-injection. Threaded macOS→route→orchestrator→sdk-runner.
+    `swift build` + `tsc` clean.
+
+- **2026-06-25 — v0.1.50: a plan step can't read "done" while a sub-task is open
+  (ADR-0049 addendum).**
+  - **Symptom.** A step (e.g. "Operator console panel") showed completed while
+    all its DoD/Tests sub-items were unchecked.
+  - **Cause.** The roll-up downgraded a parent on *partial* progress but had an
+    implicit `else` that kept the model-declared status — so `[N] completed` over
+    all-`pending` sub-tasks survived.
+  - **Fix.** Completion is now a hard invariant: a step that owns sub-tasks is
+    `completed` **iff every sub-task is completed**; otherwise `in_progress` (any
+    activity) or `pending`. Standalone logic test green.
+
+- **2026-06-24 — v0.1.49: a 529 (or any non-plan reply) can't hijack the active
+  plan (ADR-0046 addendum).**
+  - **Symptom.** A real plan stopped being tracked; opening `plan.md` showed
+    `API Error: 529 Overloaded`.
+  - **Cause.** Every Plan-mode `turnCompleted` ingested `lastAssistantText()` as
+    a plan **without checking it was one** (the replay path guards with
+    `PlanCard.isPlan`; the live path didn't). A 529 streamed as the assistant
+    reply → `ingestPlan` found no `# Plan` heading → fallback title "Plan" → slug
+    `plan` → `plan.md`, turned the error into a step, and set it as the **active**
+    plan, stranding the real one.
+  - **Fix.** Gate the live ingest **and** the Approve chip on
+    `PlanCard.isPlan(finalReply)`. The ExitPlanMode path is inherently safe (an
+    error is never an ExitPlanMode tool call).
+
+- **2026-06-24 — v0.1.48: background jobs killed on app-quit no longer spam a
+  "job failed" turn (ADR-0038 addendum).**
+  - **Symptom.** Every close→reopen surfaced a "background job finished … killed
+    by signal SIGTERM … did NOT succeed — diagnose" turn (174 accumulated across
+    one project's transcripts).
+  - **Cause.** A long-running job (a Vite dev server) only ends when killed, and
+    app-quit SIGTERMs the sidecar's child jobs — but `onExit` only suppressed the
+    completion turn for jobs cancelled via the explicit cancel tool, so
+    shutdown-kills fired a spurious failure turn that resurfaced on next launch.
+  - **Fix.** `onExit` also skips the turn for stop/shutdown signals
+    (`SIGTERM`/`SIGINT`/`SIGHUP`/`SIGKILL`) — "stopped, not finished", matching
+    `cancelBackgroundJob`. Genuine exit codes and real crash signals still notify.
+    New test pins it.
+
+- **2026-06-24 — v0.1.47: MCP-vs-CLI browser choice is a deterministic trigger
+  (ADR-0045 addendum).**
+  - With the Playwright MCP enabled, MARVIN still under-used it: the guidance
+    made the CLI the default and only *"preferred the MCP for interactive"* — a
+    soft nudge that, like the 2026-05-22 skills audit, fires ~0×. Converted to a
+    firm surface: **MUST** use `browser_*` for interaction / post-interaction
+    assertion / multi-step read-between-steps / interaction-failure debugging;
+    **MUST-NOT** for a single static screenshot or a pre-written `@playwright/test`
+    suite; fallback test (stateful → MCP; fire-and-forget → CLI; torn → MCP).
+    Prompt-only.
+
+- **2026-06-24 — v0.1.46: Playwright MCP server now actually starts
+  (GUI-launch PATH fix, ADR-0045 addendum).**
+  - **Symptom.** With the toggle ON, the `mcp__playwright__browser_*` tools never
+    appeared.
+  - **Cause.** A Finder/Spotlight-launched app inherits the minimal launchd PATH
+    (`/usr/bin:/bin:/usr/sbin:/sbin`), which omits Homebrew where `node`/`npx`
+    live, so the SDK's bare `npx @playwright/mcp@latest` spawn ENOENT'd — the
+    stdio server never started (confirmed live: SDK process had the minimal PATH,
+    no `@playwright/mcp` child).
+  - **Fix.** `SidecarManager.swift` prepends `/opt/homebrew/bin` + `/usr/local/bin`
+    to the sidecar's PATH at launch, and `sdk-runner.ts` (`enrichedToolPath()`)
+    re-enriches PATH on `turnEnv` + the Playwright server's `env`. Verified:
+    minimal PATH → `npx: command not found`; enriched → server reports a version.
+    Unit test `enriched-tool-path.test.ts`.
+
+- **2026-06-23 — v0.1.45: the Continue control anchors on the active plan
+  (ADR-0050).**
+  - **Symptom.** Pressing **Continue** after a plan's items finished made MARVIN
+    re-audit the whole project (grep `PLAN.md`, `ls` every ADR, read `INDEX.md`)
+    instead of resuming the current plan.
+  - **Cause.** `continuePlan()` sent an *unscoped* "continue with the remaining
+    plan steps" that never named the plan, so on a long audit-heavy session the
+    model re-derived "what's left" project-wide.
+  - **Fix.** `resumeChecklistBlock()` renders the active plan's actual steps +
+    statuses, and the instruction now forbids a project re-audit ("resume ONLY
+    this plan … if complete, say so and stop"). Applied to `continuePlan()` +
+    `proceedWithRecommendation()`.
+
+- **2026-06-23 — v0.1.44: plan-step join key + sub-task roll-up (ADR-0049,
+  revising ADR-0046).**
+  - **Symptom.** Tasks created during execution weren't linked to the plan's
+    action items; the plan went stale and never advanced.
+  - **Cause.** The plan and the `TodoWrite` list were two model-authored
+    structures joined post-hoc by **fuzzy content matching** — the weakest of the
+    joins the field uses (Claude Code collapses to one list; Copilot/Cursor use a
+    structural join key). When the model reworded a step at execution time the
+    match failed, so work landed as an orphan sub-task and the parent step never
+    flipped.
+  - **Fix.** A stable join key: the executor tags each `TodoWrite` item `[N]`
+    (plan step N) / `[N.M]` (sub-task M of step N); `PlanProgress.reconcile` links
+    by ordinal (fuzzy matching kept only as the untagged backstop), with upward
+    completion roll-up. Researched against Claude Code / Cursor / Copilot
+    Workspace first. `swift build` clean; 11-assertion standalone logic test.
+
 - **2026-06-23 — plan file mirrors live progress (ADR-0046 follow-up).**
   - **Symptom.** Completed-task checkmarks showed in the plan chat strip but
     not in the saved plan file; sub-tasks discovered mid-execution and added to
