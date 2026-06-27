@@ -175,7 +175,23 @@ if [ -z "${MARVIN_BUNDLE_NO_SMOKE:-}" ]; then
     PORT="$PROBE_PORT" HOSTNAME=127.0.0.1 NODE_ENV=production \
     "$TARGET/node" server.js >"$log" 2>&1 ) &
   smoke_pid=$!
-  trap 'kill "$smoke_pid" 2>/dev/null || true; wait "$smoke_pid" 2>/dev/null || true' EXIT
+  # Reap the WHOLE probe tree, not just the parent. Next's standalone
+  # `server.js` forks a `next-server` WORKER that binds PROBE_PORT; killing
+  # only $smoke_pid (the parent node) orphans that worker (→ reparented to
+  # launchd, PPID 1), leaking one sidecar process per probe run — they pile up
+  # over many `install-macos-app` runs (~150 MB each) and starve the machine.
+  # Kill the parent AND whatever is still bound to PROBE_PORT, escalating to
+  # SIGKILL if the worker lingers.
+  reap_probe() {
+    kill "$smoke_pid" 2>/dev/null || true
+    local l; l="$(lsof -ti tcp:"$PROBE_PORT" 2>/dev/null || true)"
+    [ -n "$l" ] && kill $l 2>/dev/null || true
+    sleep 0.3
+    l="$(lsof -ti tcp:"$PROBE_PORT" 2>/dev/null || true)"
+    [ -n "$l" ] && kill -9 $l 2>/dev/null || true
+    wait "$smoke_pid" 2>/dev/null || true
+  }
+  trap reap_probe EXIT
   ok=0
   for _ in $(seq 1 30); do
     if curl -sf -m 1 "http://127.0.0.1:$PROBE_PORT/api/health" >/dev/null 2>&1; then
@@ -184,8 +200,7 @@ if [ -z "${MARVIN_BUNDLE_NO_SMOKE:-}" ]; then
     fi
     sleep 0.5
   done
-  kill "$smoke_pid" 2>/dev/null || true
-  wait "$smoke_pid" 2>/dev/null || true
+  reap_probe
   trap - EXIT
   if [ "$ok" -ne 1 ]; then
     echo "bundle-sidecar: ✗ smoke probe failed — bundled sidecar did not respond on /api/health" >&2
