@@ -1589,11 +1589,32 @@ struct ChatPreviewView: View {
     /// ADR-0044 — seed a turn from a backlog item and mark it in-progress.
     /// Promotion is always a user action — the backlog never self-executes.
     private func promoteBacklog(_ item: BacklogItem, workDir: String) {
-        model.sendControl(
-            instruction: "Implement this backlog item:\n\n**\(item.title)**\n\n\(item.body)",
-            display: "⬆ Promoted from backlog: \(item.title)",
-            cwd: workDir
-        )
+        // "Promote to PLAN" → plan-first, not a silent "implement". Two fixes:
+        //   1. Switch to Plan mode (mirrors approvePlan's setMode precedent) and
+        //      ask MARVIN to PRESENT a plan. The turnCompleted ingest only mints
+        //      a tier-2 Plan + approval chip when `mode == "plan"`, so the mode
+        //      switch is load-bearing — without it MARVIN never "treats it as a
+        //      plan" (the old instruction said "Implement…" in whatever mode was
+        //      active, so Ask mode did nothing and Agent mode just started editing).
+        //   2. If a turn is in flight, `sendControl` SILENTLY DROPS the message
+        //      (its `!isSending` guard) while the panel still closes — so the
+        //      promote vanished with no feedback ("nothing happens"). Queue it
+        //      instead so it dispatches as the next turn.
+        NativePrefs.shared.setMode("plan")
+        let instruction =
+            "Plan the implementation of this backlog item, then present the plan "
+            + "inline (open with a `# Plan — <title>` heading + numbered steps) for "
+            + "approval. Investigate read-only first; do NOT start editing yet."
+            + "\n\n**\(item.title)**\n\n\(item.body)"
+        if model.isSending {
+            model.queuedMessages.append(.init(text: instruction, cwd: workDir))
+        } else {
+            model.sendControl(
+                instruction: instruction,
+                display: "⬆ Promoted from backlog (planning): \(item.title)",
+                cwd: workDir
+            )
+        }
         Task {
             try? await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "doing")
             model.refreshBacklogCount()
