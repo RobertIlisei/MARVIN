@@ -72,6 +72,19 @@ final class HealthMonitor {
 
     private var pollTask: Task<Void, Never>?
 
+    /// Consecutive failed polls since the last success. Drives offline
+    /// HYSTERESIS: `ContentView` switches its WHOLE view tree on `state`, so a
+    /// single slow `/api/health` (the single-threaded sidecar busy on a turn,
+    /// or a per-turn AST graph rebuild blocking the Node event loop) flipping us
+    /// to `.offline` tears down + rebuilds the entire IDE — pane layout,
+    /// file-tree expansion, terminal, editor all reset. We only demote an
+    /// established `.online`/`.connecting` after {@link offlineThreshold}
+    /// consecutive misses; the loop polls fast while misses are pending so a
+    /// genuine outage still surfaces within a few seconds.
+    private var consecutiveFailures = 0
+    /// Misses required before tearing the IDE down to the offline view.
+    private let offlineThreshold = 3
+
     func start() async {
         // Start polling. If already started, no-op (start() is also
         // called on relaunch via the SwiftUI .task modifier — idempotent).
@@ -97,29 +110,45 @@ final class HealthMonitor {
             // Adaptive cadence: shorter while disconnected, longer
             // once we're up and just keeping watch. Using
             // Task.sleep so cancellation interrupts immediately.
+            // Fast cadence while disconnected OR while we have unconfirmed
+            // misses (so a real outage is still detected within a few seconds
+            // despite the offline-hysteresis); slow once steadily healthy.
             let interval: Duration =
-                switch state {
-                case .online: .seconds(15)
-                default: .seconds(2)
-                }
+                (consecutiveFailures > 0 || state.isOffline) ? .seconds(2) : .seconds(15)
             try? await Task.sleep(for: interval)
         }
     }
 
+    /// Record a failed poll. Only flips an established `.online`/`.connecting`
+    /// to `.offline` once `offlineThreshold` misses pile up in a row — until
+    /// then we HOLD the current state so a transient blip can't reset the IDE.
+    /// An already-offline state keeps refreshing its reason.
+    private func recordMiss(_ reason: String) {
+        consecutiveFailures += 1
+        if consecutiveFailures >= offlineThreshold || state.isOffline {
+            state = .offline(reason: reason)
+        }
+        // else: under threshold + currently connecting/online → hold, no reset.
+    }
+
     private func pollOnce() async {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 3
+        // A healthy-but-busy sidecar (mid-turn, or a per-turn AST graph rebuild)
+        // can take a couple of seconds to answer; give it headroom so a slow
+        // response isn't counted as a miss. Hysteresis covers the rest.
+        request.timeoutInterval = 5
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                state = .offline(reason: "Sidecar returned a non-HTTP response.")
+                recordMiss("Sidecar returned a non-HTTP response.")
                 return
             }
             guard http.statusCode == 200 else {
-                state = .offline(reason: "Sidecar returned HTTP \(http.statusCode).")
+                recordMiss("Sidecar returned HTTP \(http.statusCode).")
                 return
             }
             let health = try JSONDecoder().decode(SidecarHealth.self, from: data)
+            consecutiveFailures = 0
             state = .online(health)
         } catch let urlError as URLError {
             // Specific URLError codes get specific messages — the
@@ -136,9 +165,9 @@ final class HealthMonitor {
                 default:
                     "Connection failed: \(urlError.localizedDescription)."
                 }
-            state = .offline(reason: reason)
+            recordMiss(reason)
         } catch {
-            state = .offline(reason: "Couldn't parse /api/health response: \(error.localizedDescription).")
+            recordMiss("Couldn't parse /api/health response: \(error.localizedDescription).")
         }
     }
 }

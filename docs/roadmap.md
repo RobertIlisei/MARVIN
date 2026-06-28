@@ -19,6 +19,20 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.54** — The IDE no longer resets on a transient health blip. The window
+"kept resetting" mid-work — pane layout, file-tree expansion, terminal, editor,
+chat scroll all snapping to default. Cause: `ContentView.mainContent` **switches
+its whole view tree on `health.state`** (`.connecting`/`.online`/`.offline`), and
+`HealthMonitor.pollOnce` flipped to `.offline` on **any single failed
+`/api/health` poll** (3 s timeout, no hysteresis). A healthy-but-busy
+single-threaded sidecar (mid-turn, or a per-turn AST graph rebuild blocking the
+Node event loop) occasionally answered slowly → one timeout → `.offline` → the
+entire IDE torn down → next poll succeeded → `.online` → IDE rebuilt from
+scratch. Fix: demote to `.offline` only after **3 consecutive** misses (holding
+`.online`/`.connecting` through blips), poll fast while misses are pending so a
+genuine outage still surfaces in a few seconds, and bump the poll timeout to 5 s.
+`swift build` clean. Builds on v0.1.53.
+
 **v0.1.53** — Backlog "Promote to plan" now actually plans (and never silently
 drops). Promoting a backlog item did nothing and didn't start a plan. Two bugs:
 (1) `promoteBacklog` sent `"Implement this backlog item…"` in whatever mode was
