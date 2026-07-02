@@ -15,18 +15,20 @@ AI coding assistants perform impressively in demos and degrade steadily on
 real projects. The causes are structural, not model-quality: context that
 evaporates between sessions, agent architectures that amplify errors instead
 of containing them, and guardrails written as prompt suggestions the model is
-free to skim past. MARVIN is a working counter-proposal, built and used daily
-on production work. It makes four bets that run against the current grain:
-**one** assistant moving through enforced phases instead of a team of agents;
-a **knowledge graph** consulted before any file is read; behavioral rules
-compiled into **deterministic contracts** enforced at the tool gate rather
-than requested in the prompt; and a strictly **local-first** architecture
-with no backend, no telemetry by default, and credentials that never leave
-the machine. This paper describes the design, the reasoning, the enforcement
-mechanisms, and the measured results — including a 97% reduction in
-first-message context on a mature project (566K → ~13.4K tokens) and
-multi-day plans that survive session boundaries. MARVIN is open source and
-installs with two Homebrew commands.
+free to skim past. MARVIN is a working counter-proposal, built and used
+daily by its author on real production projects. It makes four bets that run
+against the current grain: **one** assistant moving through enforced phases
+instead of a team of agents; a **knowledge graph** consulted before any file
+is read; behavioral rules hardened into **enumerated contracts** — the most
+load-bearing of them enforced at the tool gate, below the prompt; and a
+strictly **local-first** architecture with no backend, no telemetry by
+default, and credentials stored nowhere but your own machine. This paper
+describes the design, the reasoning, the enforcement mechanisms, and the
+results — each labeled measured, estimated, or design property — including
+first-message context cut from ~566K tokens (an amount that no longer fit
+the model's window) to ~13.4K on the same mature project, and multi-day
+plans that survive session boundaries. MARVIN is open source and installs
+via Homebrew.
 
 ---
 
@@ -63,8 +65,8 @@ first.* Long prompts thin a model's attention; a rule stated on page three
 of a system prompt fires unreliably, and "use your judgement" degrades to
 "do whatever the sampling temperature suggests." When MARVIN's own
 development audited its prompt-only rules, a test-driven-development
-directive had fired **zero times across roughly 3,000 qualifying
-contexts**.² A rule that cannot be enforced is a hope, not a rule.
+directive had fired **approximately zero times across thousands of
+qualifying turns**.² A rule that cannot be enforced is a hope, not a rule.
 
 There is also a quieter fourth problem: **trust**. An agent with shell
 access on a developer's machine, talking to a cloud service, is a serious
@@ -94,7 +96,7 @@ seams and no 17× error amplification.³
 flowchart TD
   A["1 · Intake"] --> B["2 · Discovery — graph first"]
   B --> C["3 · Impact analysis — blast radius"]
-  C --> D["4 · Architecture — ADR if triggered"]
+  C --> D["4 · Architecture — decision record (ADR) if triggered"]
   D --> E["5 · Plan — Definition of Done"]
   E -->|"user approves"| F["6 · Implement — milestone by milestone"]
   F --> V{"verification passes?"}
@@ -111,14 +113,15 @@ bounded: mechanical failures self-remediate at most three times (with an
 early stop when consecutive attempts produce identical errors), and
 scope-level gaps route through the user — never around them.*
 
-The exceptions prove the rule. Exactly three kinds of subagent are
-sanctioned — an **advisor** (a second opinion that stress-tests plans and
-ADRs), a **scout** (breadth-first read-only research), and read-only
-**audit fan-outs** — and all three are **structurally incapable of writing**:
+The exceptions are narrow, and read-only. Exactly three kinds of subagent
+are sanctioned — an **advisor** (a second opinion that stress-tests plans
+and architecture decision records), a **scout** (breadth-first read-only
+research), and read-only **audit fan-outs** — and all three are **unable to
+write**: the file-editing tools are denied to them at the SDK level, and
 the permission gate hard-denies any mutating tool call carrying a subagent
-ID.⁴ Parallel *reading* scales fine. Parallel *implementation* is the
-failure mode the literature documents, and MARVIN forbids it at the gate,
-not in prose.
+ID — including shell commands its classifier judges mutating.⁴ Parallel
+*reading* scales fine. Parallel *implementation* is the failure mode the
+literature documents, and MARVIN forbids it at the gate, not in prose.
 
 ### Bet 2 — The knowledge graph comes before the file read
 
@@ -126,8 +129,8 @@ For any structural question — *how does X work, who calls Y, what breaks
 if I change Z* — MARVIN queries a per-project knowledge graph **before**
 reading source files. Two graphs, actually: an AST-derived code graph
 (functions, types, calls, imports) and a knowledge graph of the project's
-documentation, architecture decisions, and memory. Both are rebuilt
-automatically as the project changes, at zero LLM cost.⁵
+documentation, architecture decisions, and memory. Both are rebuilt as you
+work — per turn, debounced, while the project is open — at zero LLM cost.⁵
 
 The economics are the point. A graph query answering "what depends on this
 service" costs a fraction of the tokens of opening a dozen candidate files
@@ -136,7 +139,7 @@ catches couplings a keyword grep cannot see, because the graph encodes
 *edges*, not text matches. The discipline is graph-to-locate, files-to-
 verify: the graph points at two files out of hundreds; the assistant reads
 exactly those and cites `file:line`. "Grep and pray" is the failure mode
-this kills.
+this exists to eliminate.
 
 ### Bet 3 — Deterministic contracts, not "use judgement"
 
@@ -145,8 +148,7 @@ enumerated contract: a MUST-trigger list, a MUST-NOT list, and a narrow
 judgement test only for cases the lists don't cover. When to consult the
 graph. When a decision requires a written architecture record. When to
 spawn the advisor. When a skill fires. What may be written to memory. Each
-of these is a **firm surface** — auditable, testable, and boring in the
-best way.⁶
+of these is a **firm surface** — auditable and testable.⁶
 
 The novel step is pushing two of these contracts below the prompt entirely,
 into the runtime: MARVIN's tool gate can **deny a blind source-file read**
@@ -154,7 +156,16 @@ when the graph should have been consulted first, and **deny an edit in
 security-sensitive paths** until an advisor consult has happened. The
 prompt asks; the gate *enforces*. This "design hooks" layer exists because
 measurement showed prompt-only rules decay with prompt length — so the two
-most load-bearing rules stopped being prompt rules.⁷
+most load-bearing rules stopped being prompt rules.
+
+Honesty about the ladder: most of the contract families are still
+prompt-level. The enumerated MUST/MUST-NOT form measurably outperforms the
+soft language it replaced — that is what the zero-fires audit forced — but
+only gate-level rules are truly deterministic, which is why the direction
+of travel is downward: when a prompt contract proves load-bearing, it earns
+a runtime hook. The hooks themselves are configurable (enforce by default,
+measure-only, off); the hard-deny floor and the subagent invariant are not
+— no configuration weakens those two.⁷
 
 The same philosophy governs scope. Before non-trivial work, MARVIN states a
 falsifiable **Definition of Done** (3–5 bullets an observer could mark
@@ -171,10 +182,15 @@ agentic tools.⁸
 
 MARVIN has no backend. The app and its sidecar run on `localhost`;
 inference goes directly from the user's machine to Anthropic via the Claude
-Agent SDK. Credentials are either the user's existing `claude login` (read
-from the OS keychain, never copied) or an API key stored in a `0600` file
-on the user's own disk, displayed only as its last four characters, and
-sent nowhere except Anthropic.⁹ There is no telemetry by default; the
+Agent SDK. Precision matters here: inference necessarily carries prompt
+context — including the code MARVIN reads — to Anthropic, and that is the
+one network egress MARVIN *itself* makes. Tools acting on your behalf can
+create others, each passing through the gate: a `git push` to your own
+remotes, a shell command you allow, the opt-in browser. Credentials are
+either the user's existing `claude login` (read from the OS keychain, never
+copied) or an API key stored in a `0600` file on the user's own disk,
+displayed only as its last four characters, and sent nowhere except
+Anthropic.⁹ There is no telemetry by default; the
 optional observability integration exports traces to the *user's own*
 Honeycomb account, configured by the user. Release artifacts are signed
 (minisign, with the public key pinned in three places across two
@@ -203,12 +219,15 @@ flowchart LR
     cred -.->|"read-only"| sidecar
   end
   anthropic["Anthropic API"]
-  sidecar <-->|"inference only — nothing else leaves"| anthropic
+  sidecar <-->|"inference — the only egress MARVIN itself makes"| anthropic
 ```
 
-*Figure 2 — there is no server. The only network egress is the inference
-call to Anthropic; credentials are read in place, never copied or
-forwarded; all project knowledge lives in the project's own repo.*
+*Figure 2 — there is no server. The only egress MARVIN itself makes is the
+inference call to Anthropic (which carries prompt context, including code
+it reads); tool-driven egress — a `git push` to your remotes, an approved
+shell command, the opt-in browser — happens on your behalf, through the
+gate. Credentials are read in place, never copied or forwarded; all
+project knowledge lives in the project's own repo.*
 
 ---
 
@@ -221,17 +240,22 @@ production transcripts, anonymized.¹¹
 **Modes set autonomy; the gate confirms edits.** Two orthogonal dials:
 *mode* (what MARVIN may attempt — read-only **Ask**, autonomous **Agent**,
 approval-gated **Plan**) and *permission strategy* (how each edit is
-confirmed — full-bypass **auto** or per-diff **gated**). Ask mode's
-read-only promise is enforced at the gate, not requested; hand MARVIN a
-production repo in Ask mode and it structurally cannot modify it. Even in
-full-bypass auto mode, a hard-deny floor (destructive shell patterns,
-force-pushes to main, credential-file writes) short-circuits without
-asking, and every mutating call is classified and written to an audit log.
+confirmed — **auto** or per-diff **gated**). The out-of-the-box defaults
+are **Agent + auto** — near-full bypass, stated plainly because a
+security-minded reader should know it — with the hard-deny floor
+(destructive shell patterns, force-pushes to main, credential-file writes)
+short-circuiting in both strategies and every mutating call classified and
+written to an audit log regardless. Ask mode's read-only promise is
+enforced at the gate, not requested: the file-editing tools are denied
+outright, and shell commands pass the same mutating-or-not classifier that
+polices everything else.
 
 **Plan mode splits strategy from execution.** A Plan turn runs read-only on
 the user's chosen *planner* model, presents a numbered plan grounded in the
 project's own decision history, and stops. An explicit approval runs it as
-a separate turn on the *executor* model. The approved plan becomes a
+a separate turn on the *executor* model. (Routing turns to different
+models does not add agents: the conversation stays one thread with one
+writer — "single assistant" is about loop topology, not model count.) The approved plan becomes a
 durable spine: it persists to a file, ticks off step by step, survives chat
 switches and app relaunches, and is re-injected into the model's context
 every turn so context compaction cannot make the assistant forget what it
@@ -298,30 +322,40 @@ explicit stop — *"Anything else, or should I stop?"*
 
 ## 4. What it delivers
 
-The design goals are measurable, and several have been measured on MARVIN's
-own development and on the production projects it is used with daily.
+Each result below is labeled for what it is — **measured** (a number with
+a date and a method), **estimated** (engineering arithmetic, not a
+benchmark), or a **design property** (verifiable in source, not in a
+chart). All measurements are the author's own, on the author's projects;
+n=1 developer is the honest sample size, and the reader's evaluation
+should rest on the mechanisms, which are open source.
 
-**Context that no longer overflows.** On a mature project, first-message
-context injection dropped from ~566K tokens (every decision record plus a
-bloated memory file — an amount that simply failed to fit the model's
-window) to **~13.4K tokens** — a ~97% reduction — by injecting the ADR
-*index* instead of ADR bodies, the memory *tail* instead of the log, and
-letting the knowledge graph serve details on demand.¹³
+**Context that no longer overflows (measured — and honest about its
+origin).** The baseline was MARVIN's own earlier design: it injected every
+decision record plus an unbounded memory log, which on one mature
+production project reached ~566K tokens (139 ADRs plus a 419KB memory
+file) and simply failed to fit the model's window. The redesign — ADR
+*index* instead of bodies, memory *tail* instead of log, knowledge graph
+serving details on demand — brought the same project to **~13.4K
+tokens**.¹³ Fixing a self-inflicted failure, yes; the claim is that the
+*fix is architectural* — an index-plus-graph design whose context stays
+budgeted as a project grows, instead of one that degrades back.
 
-**Structural questions at graph prices.** The graph-first rule replaces
-open-ended file exploration with one ranked query plus two targeted reads —
-internally estimated at ~36× cheaper per structural question, with the
-qualitative benefit that answers arrive with `file:line` citations instead
-of synthesized guesses.⁵
+**Structural questions at graph prices (estimated).** The graph-first rule
+replaces open-ended file exploration with one ranked query plus targeted
+reads. Our internal token-cost estimate is ~36× per structural question —
+an engineering heuristic, not a benchmark⁵ — but the qualitative property
+holds regardless of the multiplier: answers arrive with `file:line`
+citations instead of synthesized guesses.
 
-**Plans that survive days, not turns.** The durable-plan spine is the
-difference between "the assistant forgot the plan after lunch" and a
-multi-day, dozens-of-turns execution that resumes itself on every
-Continue. This is MARVIN's most visible end-result in daily use: long work
-stays on rails.¹¹
+**Plans that survive days, not turns (design property, with transcripts).**
+The durable-plan spine is the difference between "the assistant forgot the
+plan after lunch" and a multi-day, dozens-of-turns execution that resumes
+itself on every Continue. This is MARVIN's most visible end-result in
+daily use, and the anonymized transcripts show it running on real work.¹¹
 
-**Decisions that bind.** Architecture decision records written at decision
-time are re-read at the start of every future session and cross-checked
+**Decisions that bind (design property).** Architecture decision records
+written at decision time are re-read at the start of every future session
+and cross-checked
 during impact analysis. Month-eight work is confronted with month-two
 constraints mechanically, not by luck. Fifty-one ADRs govern MARVIN's own
 development — the tool is built under its own discipline, and several of
@@ -329,10 +363,12 @@ its subsystems (the memory redesign, the context budget, the verify-then-
 remediate contract) exist because that discipline surfaced a real failure
 and forced a recorded fix.
 
-**A safety floor that held.** The subagent read-only invariant, the
-hard-deny floor, checkpoint-based change review with revert, and the
-audit log together mean the blast radius of any single bad model decision
-is bounded — and every mutation is attributable afterward.
+**A safety floor (design property, with one documented gap).** The
+subagent read-only invariant, the hard-deny floor, checkpoint-based change
+review with revert, and the audit log together bound the blast radius of a
+single bad model decision — and every tool-channel mutation is attributable
+afterward. The gap is stated in §5: mutations made through shell commands
+are not checkpoint-snapshotted.
 
 ---
 
@@ -360,10 +396,15 @@ the security architecture is the evaluation. MARVIN's, in one place:
   flag-injection vectors, and hard-denies force-pushes to main. Credential
   handling is inherited from the user's own helpers — MARVIN never
   prompts for, stores, or transforms git credentials.
-- **Changes are reviewable and reversible.** The gate snapshots each
-  file's pre-image before the session first touches it; the review UI
-  diffs against that snapshot, and reject reverse-applies — restoring the
-  user's uncommitted state, which `git checkout` could not.
+- **Changes are reviewable and reversible — with one documented limit.**
+  The gate snapshots each file's pre-image before the session first
+  touches it; the review UI diffs against that snapshot, and reject
+  reverse-applies — restoring the user's uncommitted state, which
+  `git checkout` could not. The v1 limit, stated in the ADR and worth
+  stating here: only tool-channel edits are pre-imaged. A mutation made
+  *through a shell command* (`sed -i`, a codemod script) is not
+  checkpoint-revertible — it is visible through git, but the snapshot
+  mechanism does not cover it.
 - **Signed releases.** Every release zip carries a minisign signature;
   the public key is pinned in the app repo, the tap repo, and the cask,
   so tampering with any one surface is visibly inconsistent with the
@@ -383,12 +424,15 @@ flowchart TD
 ```
 
 *Figure 5 — the decision ladder every tool call descends. The deny floor
-and the subagent invariant sit above the auto/gated fork, so no
-configuration weakens them.*
+and the subagent invariant sit above the auto/gated fork; no configuration
+weakens those two. The Bet-3 design hooks (graph-first, advisor-on-trigger)
+run inside the classification step and can turn an otherwise-allowed call
+into a deny — they are the one layer with an off switch.*
 
 None of this makes an LLM infallible. It makes the *consequences* of
-fallibility bounded, visible, and reversible — which is the correct
-engineering target.
+fallibility bounded, visible, and — where the tool channel is used —
+reversible, and it documents the places it falls short instead of
+papering over them.
 
 ---
 
@@ -412,14 +456,20 @@ Honest positioning, category by category:
   SDK and inherits its tool-use discipline; it routes different *roles*
   (planner vs. executor vs. advisor) to different Claude models, but it
   is not a thin wrapper over arbitrary LLM APIs.
+- **Not free.** The discipline costs tokens: planning turns, advisor
+  consults, and an 8-phase loop spend more per task than a bare CLI
+  one-shot. The graph economics and the budgeted context are what claw
+  the spend back; whether the trade nets out for you depends on how long
+  your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
   51 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
-*more discipline* — and encodes the discipline in mechanisms that don't
-depend on the model having a good day.
+*more discipline* — encoded, wherever it has proven load-bearing, in
+mechanisms that don't depend on the model having a good day, and honestly
+labeled prompt-level where it hasn't yet.
 
 ---
 
@@ -448,15 +498,19 @@ ad-hoc signed — no paid developer program — and installs to
 
 ## Notes
 
-1. Multi-agent degradation figures (≈70% on sequential code work; ≈17×
-   error amplification in flat topologies) are from the 2026 multi-agent
-   coding evaluation literature, as adopted in
-   [ADR-0001](../decisions/0001-single-assistant.md) — the founding
-   decision this design is built on.
-2. Internal audit, 2026-05-22: five of six behavioral skills with
-   "soft-nudge" prompt language fired ~0 times across thousands of
-   qualifying contexts; the finding drove the deterministic-trigger
-   redesign.
+1. The ≈70% / ≈17× figures come from a 2026 research pass across published
+   multi-agent coding evaluations (work from Google, UIUC, Microsoft, and
+   Anthropic Research), recorded in
+   [ADR-0001](../decisions/0001-single-assistant.md) as the project's
+   founding design input — together with a failed multi-agent prototype of
+   MARVIN itself. This paper reproduces them as the numbers the design bet
+   on, not as results it independently verifies; the primary evidence
+   offered here is the design and its source, not these figures.
+2. Internal transcript audit, 2026-05-22: MARVIN session transcripts were
+   scanned for turns matching each behavioral skill's own trigger
+   conditions; five of six skills with "soft-nudge" prompt language had
+   fired approximately zero times across thousands of qualifying turns.
+   The finding drove the deterministic-trigger redesign.
 3. The 8-phase workflow: [`docs/concepts/eight-phase-workflow.md`](../concepts/eight-phase-workflow.md).
 4. Subagent read-only invariant:
    [ADR-0030](../decisions/0030-dynamic-workflows-read-only-fan-out.md);
@@ -485,9 +539,11 @@ ad-hoc signed — no paid developer program — and installs to
     [ADR-0042](../decisions/0042-memory-as-durable-facts.md); backlog:
     [ADR-0044](../decisions/0044-project-backlog.md).
 13. Context budget measurement:
-    [ADR-0041](../decisions/0041-project-graph-lifecycle-and-context-budget.md)
-    (566K → ~13.4K tokens, measured on a production project,
-    2026-06-14).
+    [ADR-0041](../decisions/0041-project-graph-lifecycle-and-context-budget.md).
+    Measured 2026-06-14 on one mature production project — not MARVIN's own
+    repo — whose context comprised 139 ADRs plus a 419KB memory log
+    (~566K tokens before the redesign; ~13.4K after). n=1; the mechanism,
+    not the multiplier, is the claim.
 
 ---
 
