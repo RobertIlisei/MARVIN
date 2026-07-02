@@ -577,6 +577,45 @@ export function classifyToolCall(
     policyReason = policy.reason;
   }
 
+  // PLAN-FILE OWNERSHIP (ADR-0052). Files under `.marvin/plans/` are the
+  // app's rendered projection of the tracked plan spine — checkbox overlays,
+  // reconciled sub-tasks, live status. When the MODEL writes them directly
+  // (observed 2026-07-02: a plan created via the Write tool in agent mode),
+  // the plan never enters the spine: no tracking, no plan-context injection,
+  // a file that silently freezes. Deny the direct write and steer the model
+  // to the contract: present the plan as a `# Plan — <title>` reply and let
+  // TodoWrite drive progress; the app owns the file.
+  {
+    // Defensive: one auto-mode caller passes a runtime-undefined input
+    // before its own `?? {}` normalisation — never dereference `input` raw.
+    const inp: Record<string, unknown> = input ?? {};
+    const target =
+      typeof inp.file_path === "string"
+        ? inp.file_path
+        : typeof inp.notebook_path === "string"
+          ? inp.notebook_path
+          : "";
+    const mutatesPlanFile =
+      ((name === "Edit" || name === "Write" || name === "NotebookEdit") &&
+        target.includes("/.marvin/plans/")) ||
+      (name === "Bash" &&
+        typeof inp.command === "string" &&
+        inp.command.includes(".marvin/plans/") &&
+        /(?:>>?|\btee\b|\bsed\s+-i\b|\brm\b|\bmv\b|\bcp\b|\btruncate\b)/.test(inp.command));
+    if (mutatesPlanFile) {
+      return {
+        decision: "deny",
+        reason:
+          `${name} targets a file under .marvin/plans/ — that directory is ` +
+          `MARVIN's app-owned projection of the tracked plan (ADR-0052). ` +
+          `Never write plan files directly. To create or revise a plan, ` +
+          `reply with a message starting \`# Plan — <title>\`; to record ` +
+          `progress, keep TodoWrite updated with [N]/[N.M]-tagged items. ` +
+          `The app renders both into the file.`,
+      };
+    }
+  }
+
   // SUBAGENT READ-ONLY INVARIANT (ADR-0030, Golden Rule 1).
   // No MARVIN subagent — scout, advisor, or dynamic-workflow child —
   // may mutate the workspace. Scouts are already write-denied via

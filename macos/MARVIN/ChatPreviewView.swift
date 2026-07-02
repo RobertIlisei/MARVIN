@@ -213,10 +213,29 @@ final class ChatPreviewModel {
         return lines.joined(separator: "\n")
     }
 
-    /// Clear all plans (fresh SDK session / session switch).
+    /// Clear all plans (fresh SDK session / session switch). In-memory only —
+    /// the ADR-0052 server-side spine is deliberately NOT touched, so a
+    /// switch-away + switch-back (or relaunch) restores the plan on hydrate.
     func clearPlans() {
         plans = []
         activePlanId = nil
+    }
+
+    // ADR-0052 — durable plan spine. Debounced PUT of {plans, activePlanId}
+    // whenever the spine mutates; hydrate() GETs it back and treats it as
+    // authoritative over transcript scraping (whose 200-event tail loses
+    // long-running plans — the 2026-07-02 degradation).
+    private var planStateSaveTask: Task<Void, Never>? = nil
+
+    func schedulePlanStateSave() {
+        guard let pid = loadedProjectId, let sid = loadedSessionId else { return }
+        let snapshot = PlanStateWire(plans: plans, activePlanId: activePlanId)
+        planStateSaveTask?.cancel()
+        planStateSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            await PlanStateService.save(projectId: pid, sessionId: sid, state: snapshot)
+        }
     }
 
     /// Mutate the active plan in place (reassign for @Observable to see it).
@@ -268,6 +287,7 @@ final class ChatPreviewModel {
             if announce { messages.append(.system(text: "📋 Plan\n\n\(body)")) }
         }
         persistAndOpenPlan(open: openFile)
+        schedulePlanStateSave()
     }
 
     /// ADR-0046 — apply a `TodoWrite` list. With a plan active, reconcile into
@@ -280,6 +300,7 @@ final class ChatPreviewModel {
             // saved plan file (ADR-0046 follow-up). open: false so a progress
             // tick never steals the editor focus.
             persistAndOpenPlan(open: false)
+            schedulePlanStateSave()
         } else {
             // Tier 1 — no plan. Items shouldn't carry `[N]` tags here, but strip
             // any the model emits so the bare task-list strip stays clean
@@ -295,6 +316,7 @@ final class ChatPreviewModel {
         guard plans.contains(where: { $0.id == id }) else { return }
         activePlanId = id
         if let path = activePlan?.path { MarvinBridge.shared.setSelectedFile(path) }
+        schedulePlanStateSave()
     }
 
     /// Write the presented plan to `<workDir>/.marvin/plans/<slug>.md` and
@@ -826,6 +848,9 @@ final class ChatPreviewModel {
         if let id = activePlanId {
             plans.removeAll { $0.id == id }
             activePlanId = plans.last?.id
+            // ADR-0052 — an explicit dismissal IS a spine mutation the user
+            // chose; persist it (unlike clearPlans, which is a view reset).
+            schedulePlanStateSave()
         } else {
             todos = []
         }
@@ -916,6 +941,23 @@ final class ChatPreviewModel {
                     historyWindow = record.turns.count
                     historyTotalTurns = record.totalTurns
                     historyTruncated = record.truncated ?? false
+                }
+                // ADR-0052 — the durable spine is authoritative over replay's
+                // transcript scrape: the scrape only sees the hydrated tail
+                // (200 events), so a plan presented hours ago is invisible to
+                // it — the exact 2026-07-02 "plan degraded to a task list"
+                // failure. Stored state carries full step/sub-task statuses;
+                // apply it AFTER replay so it wins. Scrape remains the
+                // fallback for sessions that predate the store.
+                if let stored = await PlanStateService.load(
+                    projectId: projectId, sessionId: sessionId),
+                    !stored.plans.isEmpty,
+                    loadedSessionId == sessionId {
+                    plans = stored.plans
+                    activePlanId = stored.activePlanId ?? stored.plans.last?.id
+                    // Refresh the plan file to the stored truth + set `path`
+                    // so "Open plan" works. Idempotent write; no focus steal.
+                    persistAndOpenPlan(open: false)
                 }
                 // Whether we hydrated or not, attempt to tail any
                 // live turn. 204 → harmless no-op.
@@ -1340,13 +1382,25 @@ final class ChatPreviewModel {
             // guard (PlanCard.isPlan); the ExitPlanMode path is already safe
             // (an error is never an ExitPlanMode tool call).
             let finalReply = lastAssistantText()
-            let presentedPlan = (b.mode == "plan") && !activePlanComplete
-                && (finalReply.map(PlanCard.isPlan) ?? false)
+            let isPlanReply = finalReply.map(PlanCard.isPlan) ?? false
+            let presentedPlan = (b.mode == "plan") && !activePlanComplete && isPlanReply
             planAwaitingApproval = presentedPlan
             if presentedPlan, let text = finalReply {
                 // Ingest the plan portion of the reply (preamble before the
                 // `# Plan` heading stays in the chat; the file + strip get the
                 // clean plan). ingestPlan persists + opens the file (Cursor-style).
+                ingestPlan(text)
+            } else if isPlanReply, let text = finalReply {
+                // ADR-0052 — a `# Plan — <title>` reply in AGENT mode is a plan
+                // too ("add a plan for X and start working"). Before this, only
+                // plan-mode presentations entered the spine; an agent-mode plan
+                // lived solely as prose (or a model-written file, now gate-
+                // denied) — untracked, unpersisted, invisible to the ADR-0051
+                // context injection. Adopt it: same ingest, NO approval chip
+                // (agent mode is already executing — approval is plan mode's
+                // read-only/execute boundary, which doesn't exist here). This
+                // also makes the live path consistent with replay's mode-
+                // ungated reconstruction.
                 ingestPlan(text)
             }
             // ADR-0043 — a server-initiated turn (background-job completion /

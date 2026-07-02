@@ -9,6 +9,41 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-02 — durable plan spine: plans survive switches, files stay owned, tags can't corrupt ([ADR-0052](../decisions/0052-durable-plan-spine-and-plan-file-ownership.md)).**
+  - **Symptom.** "MARVIN stops marking tasks done in the plan file; after I
+    stop him or reply manually, the plan turns into a to-do list and tracking
+    stops." Observed live: a 13-step plan file with ZERO checkbox overlays
+    after a full working day; no plan file re-persisted after 11:12 while
+    TodoWrites flowed until 18:56.
+  - **Causes (four, interacting).** (1) The live plan-adoption gate required
+    `mode == "plan"` — an agent-mode "add to a plan…" made the model Write
+    the plan file itself: untracked orphan, no spine entry, no ADR-0051
+    injection. (2) Plan reconstruction after a chat switch scraped the
+    hydrated transcript, which ADR-0048 tail-caps at 200 events — a plan
+    presented hours earlier was invisible, so `activePlanId` stayed nil and
+    every TodoWrite fell to the tier-1 bare list. (3) ADR-0049's `[N]` tags
+    carry no plan identity — after interruptions the model re-based numbering
+    to its private micro-list (`[19]…`, then `[1]…[18]`), overwriting the
+    active plan's step statuses with unrelated work. (4) Replay ingest was
+    mode-ungated while live ingest was gated — adoption depended on whether a
+    rehydrate happened to run.
+  - **Fixes.** `# Plan — <title>` replies adopt into the spine in EVERY mode
+    (approval chip remains plan-mode-only); the spine persists per session at
+    `<dataDir>/sessions/<pid>/<sid>.plans.json` via `PUT/GET
+    /api/sessions/plans` (debounced client saves, authoritative on hydrate,
+    scrape kept as legacy fallback); `classifyToolCall` denies model
+    Write/Edit/NotebookEdit + mutating Bash under `.marvin/plans/` with a
+    reason steering to the `# Plan` contract, now a `personality.ts` firm
+    surface; `PlanRebaseGuard` (MARVINLogic) distrusts a tag batch only when
+    it looks like a self-contained foreign list (≥3 items, tags exactly 1..K,
+    K ≠ step count, ≤⅓ text match) — stripped tags route through the
+    ADR-0046 content backstop, so work nests instead of corrupting statuses.
+  - **Verification.** `swift build` clean; `swift run MARVINTests` 88
+    assertions (7 new re-base-guard tests incl. the exact 2026-07-02
+    corruption shape); runtime vitest 36/36 on dispatch + plan-state; `tsc`
+    clean. (Pre-existing, unrelated: 13 fs-sandbox test failures on this
+    machine — environment-specific, tracked separately.)
+
 - **2026-07-02 — v0.1.55: verify-then-remediate contract (bounded self-fix, gated scope-fix).**
   - **Motivation.** MARVIN's plan loop already verified against the Definition
     of Done (Phase 7), but had no explicit contract for what happens when a

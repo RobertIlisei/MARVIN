@@ -5,10 +5,12 @@
 // items move pending → in_progress → completed. Most visible in Plan mode
 // (the plan's steps) but works in Agent mode too.
 
+import MARVINLogic
 import SwiftUI
 
 /// One checklist item, mirroring the `TodoWrite` tool input shape.
-struct TodoItem: Equatable {
+/// Codable — the plan spine persists server-side per session (ADR-0052).
+struct TodoItem: Equatable, Codable {
     let content: String
     /// "pending" | "in_progress" | "completed".
     let status: String
@@ -60,7 +62,7 @@ enum PlanTag {
 /// to no existing step gets nested under the active step rather than replacing
 /// the plan). Top-level completion is computed over step `status` only —
 /// sub-tasks never drive "Plan complete".
-struct PlanStep: Equatable, Identifiable {
+struct PlanStep: Equatable, Identifiable, Codable {
     /// Stable key derived from the (normalised) step content, so successive
     /// `TodoWrite`s reconcile against the same step.
     let id: String
@@ -83,7 +85,7 @@ struct PlanStep: Equatable, Identifiable {
 /// ordered steps, and is one navigable entry in `ChatPreviewView.plans` (a new
 /// plan never clobbers a prior one). `id` is the filesystem slug, so
 /// re-presenting a same-titled plan reconciles into the same entry.
-struct Plan: Equatable, Identifiable {
+struct Plan: Equatable, Identifiable, Codable {
     let id: String          // PlanFile.slug(title)
     var title: String
     var text: String        // full plan markdown (saved to the file)
@@ -196,29 +198,14 @@ enum PlanParser {
 enum PlanProgress {
     /// Lowercase, fold every non-alphanumeric run to a single space, trim.
     /// Used both as the stable `PlanStep.id` and as the match key.
-    static func normalize(_ s: String) -> String {
-        var out = ""
-        var lastSpace = false
-        for scalar in s.lowercased().unicodeScalars {
-            if CharacterSet.alphanumerics.contains(scalar) {
-                out.unicodeScalars.append(scalar)
-                lastSpace = false
-            } else if !lastSpace {
-                out.append(" ")
-                lastSpace = true
-            }
-        }
-        return out.trimmingCharacters(in: .whitespaces)
-    }
+    /// Canonical implementation lives in MARVINLogic so the test runner
+    /// and the re-base guard share it (ADR-0052).
+    static func normalize(_ s: String) -> String { PlanTextMatch.normalize(s) }
 
     /// Two normalised strings "match" on exact equality, or when one contains
     /// the other and both are long enough that the containment isn't accidental
     /// (guards against a 2-char step swallowing everything).
-    static func matches(_ a: String, _ b: String) -> Bool {
-        if a == b { return true }
-        guard a.count >= 6, b.count >= 6 else { return false }
-        return a.contains(b) || b.contains(a)
-    }
+    static func matches(_ a: String, _ b: String) -> Bool { PlanTextMatch.matches(a, b) }
 
     /// Merge incoming sub-tasks into a step's existing ones: match by stable
     /// `key` first (ADR-0049 — survives rephrasing), else by normalized content
@@ -251,8 +238,33 @@ enum PlanProgress {
         var used = Set<Int>()
         var fuzzy: [TodoItem] = []   // untagged / out-of-range → content backstop
 
+        // ADR-0052 — re-base guard. When the batch's `[N]` tags look like a
+        // self-contained foreign list (tags exactly 1..K, K ≠ step count,
+        // texts unrelated to the steps they address), the ordinals are lies:
+        // the model re-based its numbering after an interruption. Trusting
+        // them would overwrite step statuses with unrelated work (observed
+        // 2026-07-02). Distrust the whole batch's tags and let the ADR-0046
+        // content backstop place the items instead.
+        var distrustTags = false
+        do {
+            var taggedSteps: [Int] = []
+            var taggedTexts: [String] = []
+            for raw in incoming {
+                let tag = PlanTag.parse(raw.content)
+                if let s = tag.step, tag.sub == nil {
+                    taggedSteps.append(s)
+                    taggedTexts.append(tag.text)
+                }
+            }
+            distrustTags = PlanRebaseGuard.looksRebased(
+                taggedSteps: taggedSteps,
+                taggedTexts: taggedTexts,
+                stepIds: steps.map(\.id))
+        }
+
         for raw in incoming {
-            let tag = PlanTag.parse(raw.content)
+            var tag = PlanTag.parse(raw.content)
+            if distrustTags { tag = (nil, nil, tag.text) }
             if let s = tag.step, s >= 1, s <= steps.count {
                 let idx = s - 1
                 if let sub = tag.sub {
