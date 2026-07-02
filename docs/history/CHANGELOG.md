@@ -9,6 +9,48 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-02 — audit truth pass: claimed-vs-implemented findings fixed across tests, gate, and docs.**
+  - **Trigger.** A full claimed-vs-implemented audit (six parallel read-only
+    auditors over ~75 documented claims + live test runs). ~85-90% of claims
+    verified with file:line evidence — including every security-critical one —
+    but the rest was real drift.
+  - **Findings.** (1) The vitest suite was RED: 17 failures across 3 files,
+    all stale tests trailing deliberate source changes (the `checkFsPath`
+    registered-project hardening, the WebFetch/WebSearch auto→confirm
+    demotion, the ADR-0038 deny-reason rewrite, the opus fallback bump) —
+    invisible because no CI workflow ran tests at all. (2) Two
+    roadmap-claimed tests never existed (v0.1.44's "11-assertion standalone
+    logic test", v0.1.50's "standalone test pins it") and COULD not exist:
+    the reconcile logic lived in the app target, unreachable from
+    `MARVINTests`. (3) memory-mcp's "sanctioned, ENFORCED write path" was
+    prompt-only — nothing at the gate stopped a direct Edit/Write to
+    `.marvin/memory.md`, unlike `.marvin/plans/` (ADR-0052). (4) The
+    roadmap's whole "In flight" section had shipped ~6 weeks earlier
+    (multi-graph, Gatekeeper fix, YAML/Markdown/Python grammars, ANSI
+    passthrough). (5) A tail of stale strings/comments (HealthMonitor "3 s"
+    vs the 5 s timeout, personality.ts "~330 lines" header, WebView-era
+    comments, the TodoListStrip tier-fork comment) and doc-count drift.
+  - **Fixes.** Stale suites unbroken (442/442 green); NEW
+    `.github/workflows/test.yml` runs vitest + turbo typecheck on push/PR
+    (also surfaced and fixed a latent `@marvin/web` typecheck failure in
+    `honeycomb-telemetry.test.ts`). Plan model types (`TodoItem`, `PlanTag`,
+    `PlanStep`, `Plan`, `TodoExtractor`, `PlanParser`, `PlanProgress`,
+    `PlanFile`) moved from `TodoListView.swift` into
+    `MARVINLogic/PlanModel.swift` (pure move, public API, hand-written
+    inits); NEW `plan-reconcile` (13 assertions) + `plan-completion-invariant`
+    suites make the once-false claims true — `MARVINTests` now 105
+    assertions (was 88). `.marvin/memory.md` + `.marvin/memory/` writes are
+    gate-denied with a steering reason to `remember`
+    ([ADR-0042](../decisions/0042-memory-as-durable-facts.md) enforcement
+    addendum; shared `mutatesProtectedPath` helper with the plans deny;
+    `memory.archive.md` / `session-notes.md` / in-process MCP tools
+    deliberately unaffected, six dispatch tests pin it). A SIGSEGV
+    still-notifies test pins the ADR-0038 STOP_SIGNALS boundary. Roadmap,
+    CLAUDE.md, and stale comments corrected.
+  - **Verification.** `npx vitest run` 442/442; `pnpm typecheck` 8/8
+    packages; `swift build` clean; `swift run MARVINTests` 105 assertions
+    green.
+
 - **2026-07-02 — durable plan spine: plans survive switches, files stay owned, tags can't corrupt ([ADR-0052](../decisions/0052-durable-plan-spine-and-plan-file-ownership.md)).**
   - **Symptom.** "MARVIN stops marking tasks done in the plan file; after I
     stop him or reply manually, the plan turns into a to-do list and tracking
@@ -34,7 +76,8 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
     scrape kept as legacy fallback); `classifyToolCall` denies model
     Write/Edit/NotebookEdit + mutating Bash under `.marvin/plans/` with a
     reason steering to the `# Plan` contract, now a `personality.ts` firm
-    surface; `PlanRebaseGuard` (MARVINLogic) distrusts a tag batch only when
+    surface; `PlanRebaseGuard` (MARVINLogic, in `PlanReconcileGuard.swift`)
+    distrusts a tag batch only when
     it looks like a self-contained foreign list (≥3 items, tags exactly 1..K,
     K ≠ step count, ≤⅓ text match) — stripped tags route through the
     ADR-0046 content backstop, so work nests instead of corrupting statuses.

@@ -36,6 +36,9 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Placeholder values only — the release workflow stamps the real
+	     version via plutil at build time (.github/workflows/release.yml
+	     "Stamp version into Info.plist"). Do not read these as current. -->
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.13+6502fd0</string>
 	<key>CFBundleVersion</key>

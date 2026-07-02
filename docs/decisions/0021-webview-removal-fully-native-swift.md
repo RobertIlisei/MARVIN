@@ -51,6 +51,11 @@ the Swift app. Port each of the six remaining web responsibilities to a Swift se
 calls the sidecar API directly via `URLSession`. `MarvinBridge` retains its `@Observable`
 fields but they are written by Swift services rather than bridge messages.
 
+**Scope note (2026-07-02 audit):** "WebView removal" means the app-chrome WebView — the
+ghost that rendered MARVIN's own UI. The preview pane (`PreviewPaneView.swift`) hosts a
+`WKWebView` *deliberately*: it is a browser for the user's running project, not app
+chrome, and stays.
+
 **Milestone order (WebView stays mounted until M5):**
 
 - **M1 — NativePrefs + one-shot localStorage migration.** New `NativePrefs.swift`

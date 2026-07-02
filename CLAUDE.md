@@ -88,14 +88,14 @@ reads at turn time.
 | Rule | Location | Purpose |
 |---|---|---|
 | **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above; "Per-tool MUST triggers" section in `personality.ts` | When to consult the graph before reading source files. The 2026-05-27 audit found ~7:1 file-ops to graph-ops drift and that `graph_search` was overused as a glorified grep while `graph_summary` / `graph_query` / `graph_save_result` were near-zero. Each of the 6 graph_* MCP tools now has its own enumerated MUST trigger + MUST-NOT bypass list; AppStatusBar surfaces the live ratio. |
-| **Advisor triggers** | Cross-phase rule 7 + "Advisor consult — how to run one" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
-| **Scout triggers** | "Scout subagents — when to dispatch one" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3+ deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
+| **Advisor triggers** | Cross-phase rule 7 + "Advisor protocol — registered subagent on the Task tool" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
+| **Scout triggers** | "Scout protocol — read-only parallel research" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3 deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **Dynamic workflows** | "Dynamic workflows — read-only fan-out only" section in `personality.ts` | When `effort: xhigh` may fan out parallel subagents — read-only audit / research / discovery ONLY, opt-in, never parallel implementation. Enforced by the subagent read-only invariant in `classifyToolCall` (any `agentID` call that mutates is hard-denied). See [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md). |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
-| **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. |
-| **Project backlog** | "Project backlog — what goes in it" section in `personality.ts`; [ADR-0044](./docs/decisions/0044-project-backlog.md) | What may be parked to `.marvin/backlog/` and how. Actionable deferred work only ("noticed in flight, not in scope" follow-ups / out-of-scope improvements / blockers), via the `backlog_add` MCP tool — MUST-NOT park facts (→`remember`), status (→git), or decisions (→ADR). **Anti-Kanban (Golden Rule 1):** a parking lot read by MARVIN + the user — no subagent pull, never auto-executed, never overrides plan-first. Captured consent-gated at the scope-met handoff; surfaces in next session's context. |
+| **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. Since 2026-07-02 the gate also hard-denies direct model writes to `.marvin/memory.md` / `.marvin/memory/` (ADR-0042 enforcement addendum — same mechanism as the `.marvin/plans/` deny). |
+| **Project backlog** | "Project backlog — what goes in it" section in `personality.ts`; [ADR-0044](./docs/decisions/0044-project-backlog.md) | What may be parked to `.marvin/backlog/` and how. Actionable deferred work only ("noticed in flight, not in scope" follow-ups / out-of-scope improvements / blockers), via the `backlog_add` MCP tool — MUST-NOT park facts (→`remember`), status (→git), or decisions (→ADR). **Anti-Kanban (Golden Rule 1):** a parking lot read by MARVIN + the user — no subagent pull, never auto-executed, never overrides plan-first. Capture is un-gated at discovery (`provisional: true`, ADR-0047); consent moves to the keep/dismiss review at the scope-met handoff; open items surface in the next session's context. |
 
 The pattern is the same across all of them: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
@@ -172,8 +172,10 @@ nowhere.
   *actionable deferred work* — the "noticed in flight, not in scope" follow-ups
   that would otherwise evaporate. Distinct content class from memory: memory
   holds **facts**, the backlog holds **work**. Write path is the `backlog_add`
-  MCP tool (`marvin-backlog`, `backlog-mcp.ts`) — consent-gated at the scope-met
-  handoff, caps + rejects fact/status/decision payloads; `backlog_list` /
+  MCP tool (`marvin-backlog`, `backlog-mcp.ts`) — capture is un-gated at
+  discovery (`provisional: true`, ADR-0047), consent lands at the keep/dismiss
+  review at the scope-met handoff; caps + rejects fact/status/decision
+  payloads; `backlog_list` /
   `backlog_resolve` read and close; open items are re-injected by
   `buildProjectContext`. A **parking lot**, never a queue agents pull from
   (Golden Rule 1) — surfaced in the macOS backlog panel + a tray chip.
@@ -227,8 +229,9 @@ user-level skills are left alone):
 | Built-in Claude Code | `/review` (reviews a PR), `/security-review` (security pass on pending changes), `/init` (scaffolds CLAUDE.md) — no install step |
 
 `sidecar/packages/runtime/src/personality.ts` tells MARVIN when to invoke each.
-If you add a new skill, also add it to the `CORE_BEHAVIOR` "Skills to
-reach for" section so MARVIN knows the trigger conditions.
+If you add a new skill, also add it to the "Skill triggers — deterministic
+invocation" section (or its "Other skills available by name" list) so
+MARVIN knows the trigger conditions.
 
 ## Browser automation — Playwright CLI (default) + opt-in MCP (ADR-0045)
 
@@ -280,11 +283,11 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 2140 nodes · 4233 edges (2026-07-02 full rebuild;
+  files. 2196 nodes · 4402 edges (2026-07-02 post-audit rebuild;
   honours [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1155 nodes · 1378 edges (built 2026-07-02).
+  `.marvin/memory.md`. 1233 nodes · 1526 edges (built 2026-07-02).
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
