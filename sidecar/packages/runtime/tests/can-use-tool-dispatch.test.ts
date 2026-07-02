@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
+import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 // Disable the confirm-registry auto-deny timer so the gated-mode test
@@ -56,11 +57,11 @@ afterEach(() => {
 
 const TURN_ID = "turn_test_001";
 const TOOL_USE_ID = "toolu_test_001";
-const SDK_CTX = {
+const SDK_CTX: Parameters<CanUseTool>[2] = {
   signal: new AbortController().signal,
   suggestions: [],
   toolUseID: TOOL_USE_ID,
-} as const;
+};
 
 function readAuditLines(cwd: string): unknown[] {
   const p = path.join(cwd, ".marvin", "auto-audit.jsonl");

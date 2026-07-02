@@ -26,6 +26,9 @@
 DerivedData/
 .swiftpm/
 
+# swift build output bundle (built MARVIN.app + its Resources) — not source
+macos/build-spm/
+
 # Regenerated from project.yml by xcodegen — project.yml is the source of truth
 *.xcodeproj/
 *.xcworkspace/

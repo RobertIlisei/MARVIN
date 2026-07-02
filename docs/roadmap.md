@@ -19,6 +19,17 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.55** — Verify-then-remediate contract for the plan loop. Phase 6/7 walked
+the Definition of Done but had no explicit contract for a *failed* check. Now split
+by failure class: mechanical failures (typecheck/tests/build) self-remediate without
+asking — capped at 3 attempts per milestone with an early no-progress stop (identical
+errors twice = spinning → stop) — while scope-level gaps get surface-and-offer (state
+the gap + the one next step, then gate; "one gap, one gate"). A blind retry-until-DoD
+loop was deliberately not built (it institutionalizes the Golden-Rule-8 "helpful
+spiral"). Prompt-only change in `personality.ts`; also fixed 9 pre-existing typecheck
+errors in `can-use-tool-dispatch.test.ts` and added `macos/build-spm/` to
+`.graphifyignore`. `tsc` clean, 25/25 dispatch tests pass. Builds on v0.1.54.
+
 **v0.1.54** — The IDE no longer resets on a transient health blip. The window
 "kept resetting" mid-work — pane layout, file-tree expansion, terminal, editor,
 chat scroll all snapping to default. Cause: `ContentView.mainContent` **switches
@@ -345,6 +356,7 @@ GitHub; stray tags v1.2.0/v1.3.0 have no release. Per-release detail in the
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
 
+- **2026-07-02 — Phase 6/7 remediation contract: bounded self-fix, gated scope-fix.** `personality.ts` prompt-only change closing the "verify, then what?" gap. Phase 6: mechanical verification failures (typecheck/tests/build) now MUST self-remediate without asking — capped at 3 attempts per milestone with an early no-progress stop (identical errors twice = spinning → stop), then an honest failure report; MUST NOT claim landed, weaken the DoD, or skip the check. Phase 7: unmet DoD bullets get surface-and-offer — state the gap + the one concrete next step, then gate ("one gap, one gate"); MUST NOT loop back into Phase 6 unprompted. A fully autonomous retry-until-DoD mode was considered and deliberately not built (it institutionalizes the Golden Rule 8 "helpful spiral"); revisit only as an explicit opt-in with its own ADR, cost budget, and progress metric.
 - **2026-06-23 — plan file mirrors live progress** ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up). The saved plan at `.marvin/plans/<slug>.md` is now a live projection of the plan text + step status (`PlanFile.render`): completed steps get a `[x]` checkbox overlaid on their original line (numbering/prose preserved), discovered sub-tasks nest beneath their step, and the "Additional work" bucket is appended. `applyTodoWrite` re-persists on every reconcile (`open: false`), so checkmarks + additions reach the file — previously only the chat strip showed them.
 - **2026-06-22 — v0.1.43 full session history via incremental paging** ([ADR-0048](./decisions/0048-full-session-history-tail-first.md)). Cold-start restore was tail-capped to 200 `cli.event` lines with no signal it clipped; the server now reports `truncated`/`totalTurns` and the client pages older lines in on demand (next 200 / full log) with an "N of M" count — fast first paint, full history always reachable.
 - **2026-06-22 — v0.1.42 plan persistence + review-window + backlog capture-at-discovery.** Plan now survives chat switches/relaunch ([ADR-0046](./decisions/0046-plan-as-durable-spine.md) follow-up — `replay` rebuilds it from the transcript); the review window renders added/deleted files single-column + virtualises the diff + gates large diffs ([ADR-0034](./decisions/0034-agent-change-review-checkpoints.md) bugfix); and the backlog auto-captures "noticed in flight" items as `provisional` the instant they're seen, reviewed keep/dismiss at the handoff ([ADR-0047](./decisions/0047-backlog-capture-at-discovery.md)).

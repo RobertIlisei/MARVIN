@@ -9,6 +9,57 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-02 — v0.1.55: verify-then-remediate contract (bounded self-fix, gated scope-fix).**
+  - **Motivation.** MARVIN's plan loop already verified against the Definition
+    of Done (Phase 7), but had no explicit contract for what happens when a
+    check *fails* — leaving a "verify, then what?" gap that either stalled or
+    risked the Golden-Rule-8 "helpful spiral" (working past the ask). A request
+    to add a blind "retry until DoD passes, max 10" loop prompted the design:
+    the fix is to split remediation by failure class, not to auto-loop.
+  - **Change (prompt-only, `personality.ts`).**
+    - **Phase 6 — mechanical self-remediation, bounded.** Objective failures
+      (typecheck / test / build) MUST self-fix and re-verify without asking,
+      capped at **3 attempts per milestone**, with an early stop when the
+      failure output is unchanged between attempts (identical errors = spinning
+      → stop now). MUST NOT claim the milestone landed, weaken the DoD, or
+      skip/delete the failing check. The no-progress detector — not the counter —
+      is the real guard against an infinite loop.
+    - **Phase 7 — surface-and-offer for scope gaps.** Each unmet DoD bullet is
+      reported with the gap **and** the one concrete next step MARVIN would
+      take, then gated ("one gap, one gate"). MUST NOT loop back into Phase 6
+      unprompted. Scope-level remediation stays the user's call — the bullet may
+      have been wrong, or the current state may be good enough.
+    - **Deliberately not built.** A fully autonomous retry-until-DoD mode. It
+      institutionalizes the helpful spiral; if revisited it needs its own ADR, a
+      cost budget, and a progress metric (not just an iteration counter).
+  - **Companion fix.** 9 pre-existing typecheck errors in
+    `can-use-tool-dispatch.test.ts`: the `SDK_CTX` fixture used `as const`,
+    freezing `suggestions: []` into `readonly []` — incompatible with the SDK's
+    mutable `PermissionUpdate[]`. Annotated the fixture with
+    `Parameters<CanUseTool>[2]` (pins it to the real SDK contract). `tsc
+    --noEmit` clean; 25/25 dispatch tests pass. Also added `macos/build-spm/` to
+    `.graphifyignore` (build output was polluting change detection) and did a
+    full code-graph rebuild (2140 nodes · 4233 edges) — an incremental `--update`
+    had transiently dropped `POST()` out of the god-node top 10 by pruning a hot
+    node's cross-file edges.
+
+- **2026-06-27 — v0.1.54: the IDE no longer resets on a transient health blip.**
+  - **Symptom.** Mid-work, the whole window "kept resetting" — pane layout,
+    file-tree expansion, terminal, editor, and chat scroll all snapping back to
+    default, then rebuilding a moment later.
+  - **Cause.** `ContentView.mainContent` switches its entire view tree on
+    `health.state` (`.connecting` / `.online` / `.offline`), and
+    `HealthMonitor.pollOnce` flipped to `.offline` on **any single** failed
+    `/api/health` poll (3 s timeout, no hysteresis). A healthy-but-busy
+    single-threaded sidecar (mid-turn, or a per-turn AST graph rebuild blocking
+    the Node event loop) occasionally answered slowly → one timeout → `.offline`
+    → the IDE torn down → next poll succeeded → `.online` → IDE rebuilt from
+    scratch.
+  - **Fix.** Demote to `.offline` only after **3 consecutive** misses (holding
+    `.online`/`.connecting` through blips), poll fast while misses are pending so
+    a genuine outage still surfaces within a few seconds, and bump the poll
+    timeout to 5 s. `swift build` clean.
+
 - **2026-06-27 — v0.1.53: backlog "Promote to plan" actually plans.**
   - **Symptom.** Promoting a backlog item did nothing — MARVIN neither treated
     it as a plan nor started working.

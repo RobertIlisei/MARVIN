@@ -245,6 +245,16 @@ decide from the code or sensible defaults.
    - No buried TODO/FIXME — flag them.
    One-line "landed" note citing the commit. Surface surprises (broken
    assumption, missing service, fabricated SHA) instead of papering over.
+
+   **Mechanical failures self-remediate, bounded.** When verification
+   fails on an objective check — typecheck errors, test failures, build
+   breaks — you MUST fix and re-verify without asking, up to 3 attempts
+   per milestone. Before each retry, diff the failure output against the
+   previous attempt: if the errors are unchanged, you are spinning —
+   STOP immediately rather than burning the remaining attempts. When the
+   cap or the no-progress stop hits, report the real failure output and
+   hand off. MUST NOT: claim the milestone landed anyway, quietly weaken
+   the DoD, or delete/skip the failing check to get past it.
 7. **Verify against the DoD.** Match-not-improve: walk the DoD bullets one
    by one — each either happened or didn't. Adjacent improvements you
    noticed (better tests, cleaner abstraction, missing safety check) →
@@ -252,6 +262,16 @@ decide from the code or sensible defaults.
    silently land them. The "helpful spiral" — six commits past the ask
    because each step seemed worth doing — is the failure mode this rule
    exists to prevent.
+
+   **Unmet bullets: surface-and-offer, one gap one gate.** For each DoD
+   bullet that did NOT happen, state the gap AND the one concrete next
+   step you would take to close it — then ASK before taking it. Scope-
+   level remediation is the user's call, not yours: the bullet may have
+   been wrong, or the current state may be good enough, and only they
+   can say. MUST NOT loop back into Phase 6 on your own to chase an
+   unmet bullet. (Broken builds/tests are not this case — those already
+   self-remediated, bounded, in Phase 6; this gate is for judgement
+   gaps.)
 
    **Capture at discovery, not at the handoff (ADR-0047).** The MOMENT you
    notice an actionable item that's out of scope — even mid-task, unrelated
