@@ -377,14 +377,16 @@ struct MARVINApp: App {
             // ⌘R reconnects the sidecar health probe from the offline view's
             // "Reconnect" button. Native NSTextFinder for ⌘F is a follow-up.
 
-            // Phase 1d.25 — File → New Session (⌘⇧N). ADR-0021 M5:
-            // WebView removed; the native ChatPreviewView manages sessions.
-            // Kept as a placeholder that will wire to ChatPreviewModel.reset()
-            // once the native session-reset path is formalised.
+            // Phase 1d.25 — File → New Session (⌘⇧N). Posts a
+            // notification the chat view observes (same pattern as
+            // .marvinRequestSdkReset) — the menu can't reach the
+            // @MainActor ChatPreviewModel directly. Was a disabled
+            // placeholder until the 2026-07-02 stale-buttons audit.
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {}
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .disabled(true)
+                Button("New Session") {
+                    NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
 
             // Phase 1d.23 — File menu items that act on the active

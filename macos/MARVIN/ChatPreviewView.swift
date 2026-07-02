@@ -1579,6 +1579,20 @@ struct ChatPreviewView: View {
                     model.refreshAgentChanges(force: true)
                 }
             }
+            // File → New Session (⌘⇧N) from the app menu — same action
+            // as the in-view "New" buttons.
+            NotificationCenter.default.addObserver(
+                forName: .marvinRequestNewSession,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    model.clear()
+                    if let pid = MarvinBridge.shared.activeProjectId {
+                        model.refreshSessions(projectId: pid)
+                    }
+                }
+            }
         }
         .onChange(of: bridge.activeMarvinSessionId) { _, _ in
             syncHydrateFromBridge()

@@ -15,6 +15,9 @@ extension Notification.Name {
     /// "Reset context for next message". The chat preview model
     /// observes this and arms `resetSdkOnNextSend`. ADR-0022 §3 follow-up.
     static let marvinRequestSdkReset = Notification.Name("marvin.requestSdkReset")
+    /// Posted by File → New Session (⌘⇧N). The chat preview view
+    /// observes this and starts a fresh session (`model.clear()`).
+    static let marvinRequestNewSession = Notification.Name("marvin.requestNewSession")
 }
 
 @MainActor
