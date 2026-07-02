@@ -251,7 +251,7 @@ describe("applyHoneycombTelemetryEnv", () => {
  */
 describe("computeHoneycombTelemetryEnv (pure form)", () => {
   it("returns an empty env when no config is configured anywhere", () => {
-    const { env, status } = computeHoneycombTelemetryEnv(workDir, {});
+    const { env, status } = computeHoneycombTelemetryEnv(workDir, { NODE_ENV: "test" });
     expect(env).toEqual({});
     expect(status.active).toBe(false);
     expect(status.source).toBe("none");
@@ -263,7 +263,7 @@ describe("computeHoneycombTelemetryEnv (pure form)", () => {
       environment: "prod",
       dataset: "calls",
     });
-    const { env, status } = computeHoneycombTelemetryEnv(workDir, {});
+    const { env, status } = computeHoneycombTelemetryEnv(workDir, { NODE_ENV: "test" });
     expect(status.active).toBe(true);
     expect(status.dataset).toBe("calls");
     expect(env.CLAUDE_CODE_ENABLE_TELEMETRY).toBe("1");
@@ -278,6 +278,7 @@ describe("computeHoneycombTelemetryEnv (pure form)", () => {
     const { env, status } = computeHoneycombTelemetryEnv(workDir, {
       OTEL_EXPORTER_OTLP_HEADERS: "x-vendor-headers=user-set",
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://otel.user.example",
+      NODE_ENV: "test",
     });
     expect(env).toEqual({});
     expect(status.active).toBe(true);
@@ -301,8 +302,8 @@ describe("computeHoneycombTelemetryEnv (pure form)", () => {
       environment: "staging",
       dataset: "ds-B",
     });
-    const a = computeHoneycombTelemetryEnv(workDirA, {});
-    const b = computeHoneycombTelemetryEnv(workDirB, {});
+    const a = computeHoneycombTelemetryEnv(workDirA, { NODE_ENV: "test" });
+    const b = computeHoneycombTelemetryEnv(workDirB, { NODE_ENV: "test" });
     expect(a.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("hcbik_A");
     expect(a.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("ds-A");
     expect(b.env.OTEL_EXPORTER_OTLP_HEADERS).toContain("hcbik_B");

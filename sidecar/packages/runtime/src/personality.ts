@@ -1,12 +1,14 @@
 /**
  * MARVIN personality — STYLE + load-bearing rules. Never a refusal layer.
  *
- * Trimmed from 1104 → ~330 lines on 2026-05-06. The old file mixed
- * runtime rules with rationale, ADR templates, full skill catalogs,
- * and Mode A/B/C workflow-audit playbooks. Sonnet's attention to long
- * system prompts thins out in the middle, so load-bearing rules were
- * being skipped. The full original is preserved at
- * `docs/history/backups/personality.2026-05-06.ts.bak`.
+ * Trimmed from 1104 → ~330 lines on 2026-05-06 (the old file mixed
+ * runtime rules with rationale; long-middle attention thinning was
+ * skipping load-bearing rules — original preserved at
+ * `docs/history/backups/personality.2026-05-06.ts.bak`). It has since
+ * grown back past 1400 lines as soft guidance was converted into firm
+ * MUST / MUST-NOT surfaces (skills, graph tools, browser, memory,
+ * backlog, plan contract) — deliberate this time: enumerated triggers,
+ * not prose rationale.
  *
  * What's still here:
  *   - GROUND_TRUTH preamble (4 non-negotiables, top-loaded for salience)
@@ -616,6 +618,13 @@ concepts.
 Call as \`graph_path({from: "<A>", to: "<B>", scope: "code"})\` (or
 \`scope: "all"\` for ADR↔code paths). One call beats a search-each-side-
 then-Read-everything chain.
+
+MUST-NOT skip because:
+- "they're probably connected somehow" — the *shape* of the path (which
+  modules it threads through) IS the answer; guessing it hallucinates
+  couplings.
+- "I'll trace it by reading both files" — the connecting chain usually
+  runs through files neither end names; reading the endpoints misses it.
 
 #### \`graph_search\` — MUST + MUST-NOT
 

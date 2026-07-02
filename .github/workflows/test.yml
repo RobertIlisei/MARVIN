@@ -1,0 +1,56 @@
+# Test workflow — the TypeScript gates on every push/PR.
+#
+# Exists because of the 2026-07-02 audit: the release workflow never ran
+# tests, so 17 stale-test failures accumulated silently over weeks while
+# the roadmap claimed "vitest green". This closes that hole for the
+# sidecar (vitest + turbo typecheck). The Swift side stays local-only
+# (`swift build` + `swift run MARVINTests`) — a macOS runner costs 10×
+# Linux minutes and the release workflow already builds the .app.
+
+name: test
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+permissions:
+  contents: read
+
+jobs:
+  ts:
+    name: vitest + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Cache pnpm store
+        uses: actions/cache@v5
+        with:
+          path: ~/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (turbo, all packages)
+        run: pnpm typecheck
+
+      - name: Test (vitest)
+        run: pnpm test
