@@ -302,20 +302,17 @@ final class MarvinBridge {
         self.projectWorkDir = activeProj?.workDir
     }
 
-    /// Phase 5f — apply a project selection locally without waiting
-    /// for the WebView's React re-render to come back through
-    /// `project-changed`. The native surfaces (file tree, editor,
-    /// chat hydrate, file viewer) all observe `projectWorkDir` /
-    /// `projectName` / `activeProjectId`, so updating them
-    /// synchronously kicks the Swift-side fetches in parallel with
-    /// the WebView's heavier re-render pipeline. The web side
-    /// eventually echoes the same values via its own announcement;
-    /// because they match, the second update is a no-op.
+    /// Phase 5f — apply a project selection locally and synchronously.
+    /// The native surfaces (file tree, editor, chat hydrate, file
+    /// viewer) all observe `projectWorkDir` / `projectName` /
+    /// `activeProjectId`, so updating them here kicks the Swift-side
+    /// fetches immediately. (Historical: this originally raced the
+    /// removed WebView's React re-render; native-only since ADR-0021.)
     ///
     /// Returns false (and no-ops) when the id isn't in the known
-    /// project list — the WebView still owns project bookkeeping
-    /// for new projects we haven't seen yet, so we don't bypass
-    /// it for unknowns.
+    /// project list — the sidecar's project registry owns bookkeeping
+    /// for new projects we haven't seen yet, so we don't bypass it
+    /// for unknowns.
     @discardableResult
     func applyLocalProjectSelection(id: String) -> Bool {
         guard let proj = projects.first(where: { $0.id == id }) else {
@@ -375,11 +372,10 @@ final class MarvinBridge {
     /// Phase 5a — currently-selected file path in the native file
     /// tree. Drives the native file viewer's content. The native
     /// tree (FileTreeView.selectRow) writes via `setSelectedFile`;
-    /// the file viewer reads via @Observable. Kept distinct from
-    /// the web side's `select-file` dispatchWebCommand so the two
-    /// surfaces are independently driven during the Phase 5a→5c
-    /// promotion (the WebView's Monaco still consumes the
-    /// `select-file` event; the native viewer reads from here).
+    /// the file viewer reads via @Observable. (Historical: during
+    /// the Phase 5a→5c promotion this was kept distinct from the
+    /// removed WebView's `select-file` event; native-only since
+    /// ADR-0021.)
     private(set) var selectedFilePath: String? = nil
 
     /// Phase 5c — ordered list of open file tabs. `setSelectedFile`

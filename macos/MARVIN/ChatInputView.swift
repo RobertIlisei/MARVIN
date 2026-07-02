@@ -25,11 +25,11 @@
 //
 // ## Where this lives
 //
-// Phase 2b sits behind a separate "Native Chat (preview)" Window
-// scene that the user opens explicitly from the Window menu. The
-// main MARVIN window is unchanged — the WebView still renders the
-// existing web chat. The dev surface lets us iterate on the
-// native input without disturbing the working UI. Phase 2g
+// Phase 2b sat behind a separate "Native Chat (preview)" Window
+// scene opened explicitly from the Window menu, so the then-WebView
+// main window stayed undisturbed while the native input matured
+// (WebView removed end-to-end in ADR-0021; this IS the chat input
+// now). Phase 2g
 // promotes this into the main window once the message list,
 // tool-call cards, and confirm prompts are at parity.
 

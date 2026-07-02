@@ -98,6 +98,20 @@ describe("background-job completion wakeup", () => {
     expect(fired).toBe(false);
   });
 
+  it("a job killed by SIGSEGV (genuine crash) DOES fire a failure turn", async () => {
+    // The STOP_SIGNALS guard is scoped to shutdown-shaped signals; a real
+    // crash signal must still notify — the user needs to diagnose it.
+    const fired = onNextFire();
+    const res = startBackgroundJob({ command: "sleep 5", reason: "crasher", ctx });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      process.kill(res.pid, "SIGSEGV");
+    }
+    const rec = await fired;
+    expect(rec.prompt).toContain("killed by signal SIGSEGV");
+    expect(rec.prompt).toMatch(/did NOT succeed/i);
+  });
+
   it("enforces the per-session concurrency cap", () => {
     const ok = [1, 2, 3].map((n) =>
       startBackgroundJob({ command: "sleep 5", reason: `${n}`, ctx }),

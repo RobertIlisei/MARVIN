@@ -1,17 +1,16 @@
 // ChatPreviewView — Phase 2b/c dev surface for the native chat.
 //
-// A separate Window scene hosting the native ChatInputBar +
-// (Phase 2c) the structured message list. The main MARVIN window's
-// WebView keeps rendering the existing web chat independently;
-// Phase 2g promotes this content into the main window once the
-// remaining sub-phases (cards, confirms, cancel/retry) reach
-// parity.
+// The native chat surface: ChatInputBar + (Phase 2c) the structured
+// message list. Started life as a separate "preview" Window scene
+// beside the then-WebView main window; Phase 2g promoted it into the
+// main window and ADR-0021 removed the WebView entirely — this is THE
+// chat now (the file name is historical).
 //
-// ## Why a separate window during 2b/c
+// ## Why it began as a separate window during 2b/c
 //
-//   1. Decoupled iteration. The main window's WebView is a working
-//      surface the user actively uses. We don't want a half-built
-//      native chat panel cluttering it while we're still figuring
+//   1. Decoupled iteration. The main window's web chat was a working
+//      surface the user actively used. We didn't want a half-built
+//      native chat panel cluttering it while we were still figuring
 //      out streaming render shapes.
 //   2. Independent observation. The dev window can run alongside
 //      the web chat in the main window, so we can A/B parity
