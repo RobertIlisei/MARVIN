@@ -158,9 +158,18 @@ struct ContentView: View {
                 // pre-position the dividers but the user can drag
                 // freely within [minWidth … available].
                 HSplitView {
-                    LeftPane()
-                        .frame(minWidth: 200, idealWidth: 260)
-                        .background(SplitViewAutosave(name: "marvin.main"))
+                    // `files` / `brain` pane toggles (⌘B, layout
+                    // popover) gate their panes here — before
+                    // 2026-07-03 the flags were written but never
+                    // read (the stale-buttons audit finding).
+                    // Conditional removal resets the autosaved
+                    // divider on toggle; acceptable, and hiding the
+                    // brain actually stops its Metal render loop.
+                    if bridge.panes.files {
+                        LeftPane()
+                            .frame(minWidth: 200, idealWidth: 260)
+                            .background(SplitViewAutosave(name: "marvin.main"))
+                    }
                     webIsland
                         .frame(minWidth: 320)
                     // Right pane mirrors the web `side` aside —
@@ -170,9 +179,11 @@ struct ContentView: View {
                     // maxHeight cap — the user might want all
                     // brain or all chat).
                     VSplitView {
-                        BrainPaneView()
-                            .frame(minHeight: 120, idealHeight: 280)
-                            .background(SplitViewAutosave(name: "marvin.right"))
+                        if bridge.panes.brain {
+                            BrainPaneView()
+                                .frame(minHeight: 120, idealHeight: 280)
+                                .background(SplitViewAutosave(name: "marvin.right"))
+                        }
                         ChatPreviewView()
                             .frame(minHeight: 200)
                     }
@@ -291,7 +302,8 @@ struct ContentView: View {
     /// bottom child collapses to zero height; the system hides the
     /// divider automatically when a subview is collapsed.
     private var workPaneSplit: some View {
-        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal || bridge.panes.problems
+        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal
+            || bridge.panes.problems || bridge.panes.graph
         return VSplitView {
             editorArea
                 .frame(minHeight: 120)
@@ -327,9 +339,11 @@ struct ContentView: View {
         let showPreview  = bridge.panes.preview
         let showTerminal = bridge.panes.terminal
         let showProblems = bridge.panes.problems
+        let showGraph    = bridge.panes.graph
         // Collect visible panes; HSplitView splits them side-by-side.
         // Single pane: no split. Two+: HSplitView with autosave.
-        let count = (showPreview ? 1 : 0) + (showTerminal ? 1 : 0) + (showProblems ? 1 : 0)
+        let count = (showPreview ? 1 : 0) + (showTerminal ? 1 : 0)
+            + (showProblems ? 1 : 0) + (showGraph ? 1 : 0)
         if count >= 2 {
             HSplitView {
                 if showProblems {
@@ -337,6 +351,12 @@ struct ContentView: View {
                         .environment(bridge)
                         .frame(minWidth: 220)
                         .background(SplitViewAutosave(name: "marvin.bottom.problems"))
+                }
+                if showGraph {
+                    GraphPaneView()
+                        .environment(bridge)
+                        .frame(minWidth: 280)
+                        .background(SplitViewAutosave(name: "marvin.bottom.graph"))
                 }
                 if showPreview {
                     PreviewPaneView()
@@ -358,6 +378,9 @@ struct ContentView: View {
                 .environment(bridge)
         } else if showProblems {
             DiagnosticsPanelView()
+                .environment(bridge)
+        } else if showGraph {
+            GraphPaneView()
                 .environment(bridge)
         }
     }
