@@ -14,9 +14,17 @@ import WebKit
 struct GraphPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
 
-    /// nil = probing; true = graph.html served; false = missing (404 —
-    /// the project has no graphify-out/graph.html yet).
-    @State private var available: Bool? = nil
+    enum Availability: Equatable {
+        case probing
+        case ready
+        /// 404 — the project has no graphify-out/graph.html yet.
+        case missing
+        /// Any other failure (e.g. 413 html-too-large) — show the
+        /// route's message, never pretend the graph doesn't exist.
+        case failed(String)
+    }
+
+    @State private var availability: Availability = .probing
     /// Bump to force a WKWebView reload after a rebuild.
     @State private var reloadKey = 0
     @State private var probedWorkDir: String? = nil
@@ -66,10 +74,13 @@ struct GraphPaneView: View {
         if bridge.projectWorkDir == nil {
             emptyState("No project open",
                        hint: "Open a project to see its code graph.")
-        } else if available == false {
+        } else if availability == .missing {
             emptyState("No graph built yet",
                        hint: "Run /graphify . in this project to build graphify-out/graph.html, then reload.")
-        } else if let url = graphURL, available == true {
+        } else if case .failed(let message) = availability {
+            emptyState("Couldn't load the graph",
+                       hint: message)
+        } else if let url = graphURL, availability == .ready {
             GraphWebView(url: url, reloadKey: reloadKey)
         } else {
             ProgressView()
@@ -92,23 +103,33 @@ struct GraphPaneView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// HEAD-style availability probe so a missing graph shows a native
-    /// hint instead of the route's raw 404 JSON inside the web view.
+    /// Availability probe so a failing graph shows a native hint (with
+    /// the REAL failure — 404 missing vs 413 too-large vs other)
+    /// instead of the route's raw error JSON inside the web view.
     private func probe(force: Bool = false) async {
-        guard let url = graphURL else { available = nil; return }
-        if !force, probedWorkDir == bridge.projectWorkDir, available == true { return }
+        guard let url = graphURL else { availability = .probing; return }
+        if !force, probedWorkDir == bridge.projectWorkDir, availability == .ready { return }
         probedWorkDir = bridge.projectWorkDir
-        available = nil
+        availability = .probing
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 5
+        request.timeoutInterval = 10
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            let ok = (response as? HTTPURLResponse)?.statusCode == 200
-            available = ok
-            if ok, force { reloadKey += 1 }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            switch status {
+            case 200:
+                availability = .ready
+                if force { reloadKey += 1 }
+            case 404:
+                availability = .missing
+            default:
+                struct Wire: Codable { let error: String? }
+                let detail = (try? JSONDecoder().decode(Wire.self, from: data))?.error
+                availability = .failed("HTTP \(status)\(detail.map { " — \($0)" } ?? "")")
+            }
         } catch {
-            available = false
+            availability = .failed(error.localizedDescription)
         }
     }
 }
