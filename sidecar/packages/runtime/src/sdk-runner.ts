@@ -535,6 +535,40 @@ export function friendlyError(raw: string): string {
  * (no logging, no I/O) lets tests exercise the classifier without
  * touching the audit log or registering Promise resolvers.
  */
+/** Bash operators/commands that mutate a file mentioned in the command.
+ *  Shared by the app-owned-path denies below (plans ADR-0052, memory
+ *  ADR-0042) so the two blocks can't drift. Read-only access (grep, cat,
+ *  plain redirect-free commands) deliberately passes. */
+const BASH_MUTATING_OPS = /(?:>>?|\btee\b|\bsed\s+-i\b|\brm\b|\bmv\b|\bcp\b|\btruncate\b)/;
+
+/** True when `name`+`input` is a workspace mutation aimed at a path the
+ *  app owns: Edit/Write/NotebookEdit whose target matches `pathMatches`,
+ *  or a Bash command that mentions such a path alongside a mutating op. */
+function mutatesProtectedPath(
+  name: string,
+  input: Record<string, unknown> | undefined,
+  pathMatches: (path: string) => boolean,
+): boolean {
+  // Defensive: one auto-mode caller passes a runtime-undefined input
+  // before its own `?? {}` normalisation — never dereference `input` raw.
+  const inp: Record<string, unknown> = input ?? {};
+  const target =
+    typeof inp.file_path === "string"
+      ? inp.file_path
+      : typeof inp.notebook_path === "string"
+        ? inp.notebook_path
+        : "";
+  return (
+    ((name === "Edit" || name === "Write" || name === "NotebookEdit") &&
+      target !== "" &&
+      pathMatches(target)) ||
+    (name === "Bash" &&
+      typeof inp.command === "string" &&
+      pathMatches(inp.command) &&
+      BASH_MUTATING_OPS.test(inp.command))
+  );
+}
+
 export function classifyToolCall(
   name: string,
   input: Record<string, unknown>,
@@ -585,35 +619,45 @@ export function classifyToolCall(
   // a file that silently freezes. Deny the direct write and steer the model
   // to the contract: present the plan as a `# Plan — <title>` reply and let
   // TodoWrite drive progress; the app owns the file.
-  {
-    // Defensive: one auto-mode caller passes a runtime-undefined input
-    // before its own `?? {}` normalisation — never dereference `input` raw.
-    const inp: Record<string, unknown> = input ?? {};
-    const target =
-      typeof inp.file_path === "string"
-        ? inp.file_path
-        : typeof inp.notebook_path === "string"
-          ? inp.notebook_path
-          : "";
-    const mutatesPlanFile =
-      ((name === "Edit" || name === "Write" || name === "NotebookEdit") &&
-        target.includes("/.marvin/plans/")) ||
-      (name === "Bash" &&
-        typeof inp.command === "string" &&
-        inp.command.includes(".marvin/plans/") &&
-        /(?:>>?|\btee\b|\bsed\s+-i\b|\brm\b|\bmv\b|\bcp\b|\btruncate\b)/.test(inp.command));
-    if (mutatesPlanFile) {
-      return {
-        decision: "deny",
-        reason:
-          `${name} targets a file under .marvin/plans/ — that directory is ` +
-          `MARVIN's app-owned projection of the tracked plan (ADR-0052). ` +
-          `Never write plan files directly. To create or revise a plan, ` +
-          `reply with a message starting \`# Plan — <title>\`; to record ` +
-          `progress, keep TodoWrite updated with [N]/[N.M]-tagged items. ` +
-          `The app renders both into the file.`,
-      };
-    }
+  if (
+    mutatesProtectedPath(name, input, (p) => p.includes(".marvin/plans/"))
+  ) {
+    return {
+      decision: "deny",
+      reason:
+        `${name} targets a file under .marvin/plans/ — that directory is ` +
+        `MARVIN's app-owned projection of the tracked plan (ADR-0052). ` +
+        `Never write plan files directly. To create or revise a plan, ` +
+        `reply with a message starting \`# Plan — <title>\`; to record ` +
+        `progress, keep TodoWrite updated with [N]/[N.M]-tagged items. ` +
+        `The app renders both into the file.`,
+    };
+  }
+
+  // MEMORY OWNERSHIP (ADR-0042 enforcement addendum). `.marvin/memory.md`
+  // (the index) and `.marvin/memory/` (the fact files) belong to the
+  // `remember` tool — the caps + content-class guards live there, and a
+  // direct edit bypasses them exactly the way the 419 KB append-log did.
+  // The match is deliberately precise: `.marvin/memory.archive.md` (the
+  // /memory-compact archive) and `.marvin/session-notes.md` stay writable.
+  // `mcp__marvin-memory__remember` never reaches this block (non-Playwright
+  // MCP short-circuits to allow above); its writes are server-side fs calls.
+  if (
+    mutatesProtectedPath(
+      name,
+      input,
+      (p) => p.includes(".marvin/memory.md") || p.includes(".marvin/memory/"),
+    )
+  ) {
+    return {
+      decision: "deny",
+      reason:
+        `${name} targets MARVIN's memory layer (.marvin/memory.md / ` +
+        `.marvin/memory/) — the enforced write path is the \`remember\` ` +
+        `MCP tool (ADR-0042). Call remember with a name, a one-line hook, ` +
+        `and the durable fact; it writes the fact file and rebuilds the ` +
+        `index. Use \`recall\` to read facts.`,
+    };
   }
 
   // SUBAGENT READ-ONLY INVARIANT (ADR-0030, Golden Rule 1).

@@ -26,10 +26,14 @@ Steps:
      (`tsc clean`, `vitest N/N`, `committed`/`NOT pushed`) — these are noise.
    - When unsure whether an entry is a durable fact, it almost always isn't.
 
-3. **Archive the remainder.** Move the original append-log to
+3. **Archive the remainder.** Copy the original append-log to
    `.marvin/memory.archive.md` (create it, append the old entries with a dated
    header). Every archived entry is reconstructable from ADRs/git, so this is
    safe — but archive rather than delete on the first pass so nothing is lost.
+   Do NOT Edit `memory.md` itself — the gate denies direct writes to it
+   (ADR-0042 enforcement addendum); `remember` rebuilds it as the clean index
+   on every call. If zero durable facts qualify, say so and stop: leave
+   `memory.md` as-is rather than editing it directly.
 
 4. **Verify.** `.marvin/memory.md` is now the clean `# Project Memory Index`
    that `remember` maintains (one line per fact). Report: facts kept, entries
