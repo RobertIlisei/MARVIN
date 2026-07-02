@@ -13,6 +13,25 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 
 ---
 
+## 📄 The white paper
+
+> **[One assistant, enforced discipline — a design for AI pair-programming that survives real projects](./docs/whitepaper/WHITEPAPER.md)**
+>
+> Why AI coding assistance decays on real projects, and the four bets MARVIN
+> makes against the current grain:
+>
+> 1. **One assistant with enforced phases** — not an agent team; subagents are structurally unable to write
+> 2. **The knowledge graph before the file read** — structural answers at ~1/36th the token cost, with `file:line` citations
+> 3. **Deterministic contracts at the tool gate** — enforced, not politely requested in the prompt
+> 4. **Local-first, no backend** — inference straight to Anthropic; credentials never leave your machine
+>
+> With measured results (first-message context: 566K → ~13.4K tokens), five
+> architecture diagrams, and anonymized transcripts from real production
+> sessions. The exhaustive companion — every subsystem down to the code — is
+> the [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md) *(in progress)*.
+
+---
+
 ## Architecture overview
 
 MARVIN has two components that work together:
@@ -411,6 +430,7 @@ bin/marvin logs     # tail .marvin/dev.log
 
 ## Documentation
 
+- [White paper](./docs/whitepaper/WHITEPAPER.md) — the design position, the evidence, and the results; [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md) is the exhaustive companion (in progress)
 - [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
 - [Modes & workflows](./docs/guides/workflows.md) — Ask / Agent / Plan with worked examples, and how MARVIN takes decisions
