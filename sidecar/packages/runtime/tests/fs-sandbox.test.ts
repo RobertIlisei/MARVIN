@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { checkFsPath } from "../src/fs-sandbox";
+import { addProject } from "../src/projects";
 
 // Hits real fs — fast tmp-dir tests. The sandbox is the single security
 // surface between user-supplied paths and disk; each rule gets coverage
@@ -19,16 +20,26 @@ async function mkTmp(): Promise<string> {
 }
 
 let tmp: string;
+let dataDir: string;
 
 beforeEach(async () => {
+  // Audit 🟠 #9: checkFsPath now requires cwd to be a registered project.
+  // Isolate the registry under a throwaway MARVIN_DATA_DIR and register the
+  // cwds the tests use — `tmp` and `tmp/sub` (the `..`-escape case).
+  dataDir = await fs.mkdtemp(path.join(tmpdir(), "marvin-sandbox-data-"));
+  process.env.MARVIN_DATA_DIR = dataDir;
   tmp = await mkTmp();
   await fs.writeFile(path.join(tmp, "hello.txt"), "hi");
   await fs.mkdir(path.join(tmp, "sub"));
   await fs.writeFile(path.join(tmp, "sub", "nested.txt"), "nested");
+  addProject({ workDir: tmp });
+  addProject({ workDir: path.join(tmp, "sub") });
 });
 
 afterEach(async () => {
+  delete process.env.MARVIN_DATA_DIR;
   await fs.rm(tmp, { recursive: true, force: true });
+  await fs.rm(dataDir, { recursive: true, force: true });
 });
 
 describe("checkFsPath — happy paths", () => {
