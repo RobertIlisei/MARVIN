@@ -14,6 +14,7 @@ import {
   listBacklog,
   resolveBacklogItem,
   setBacklogStatus,
+  updateBacklogItem,
 } from "../src/backlog";
 
 // ADR-0044 — the per-project backlog store. A durable parking lot for deferred
@@ -86,6 +87,37 @@ describe("backlog store — add / list / resolve", () => {
     expect(index).not.toContain("Resolve me"); // dropped from index
     expect(index).toContain("_No open backlog items._");
     expect(r.item.body).toContain("fixed"); // note appended
+  });
+
+  it("updateBacklogItem edits severity and replaces body by id (detail view)", async () => {
+    const add = await addBacklogItem(workDir, {
+      title: "Edit me",
+      body: "original body",
+      severity: "low",
+    });
+    expect(add.ok).toBe(true);
+    if (!add.ok) return;
+
+    const sev = await updateBacklogItem(workDir, add.item.id, { severity: "high" });
+    expect(sev.ok && sev.item.severity === "high").toBe(true);
+    if (sev.ok) expect(sev.item.body).toBe("original body"); // body untouched
+
+    const bod = await updateBacklogItem(workDir, add.item.id, { body: "rewritten body" });
+    expect(bod.ok && bod.item.body === "rewritten body").toBe(true);
+    if (bod.ok) expect(bod.item.severity).toBe("high"); // severity preserved
+
+    const index = await readFile(indexPath(), "utf-8");
+    expect(index).toContain("(high)"); // index rewritten with new severity
+
+    const both = await updateBacklogItem(workDir, add.item.id, {
+      severity: "med",
+      body: `${"x".repeat(MAX_BODY_CHARS + 100)}`,
+    });
+    expect(both.ok).toBe(true);
+    if (both.ok) expect(both.item.body.length).toBeLessThanOrEqual(MAX_BODY_CHARS); // cap holds
+
+    const missing = await updateBacklogItem(workDir, "no-such-id", { severity: "low" });
+    expect(missing.ok).toBe(false);
   });
 
   it("setBacklogStatus → doing marks it in-progress in the index", async () => {

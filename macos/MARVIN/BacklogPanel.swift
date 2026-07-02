@@ -18,6 +18,9 @@ struct BacklogPanel: View {
     @State private var isLoading = false
     @State private var error: String?
     @State private var newTitle = ""
+    /// Item opened in the detail sheet (severity/body editing, resolve
+    /// with note). Nested sheet on the panel sheet — macOS stacks fine.
+    @State private var detailItem: BacklogItem?
 
     private var active: [BacklogItem] {
         items.filter { $0.status == "open" || $0.status == "doing" }
@@ -43,6 +46,17 @@ struct BacklogPanel: View {
         }
         .frame(minWidth: 560, idealWidth: 640, minHeight: 380, idealHeight: 520)
         .task { await refresh() }
+        .sheet(item: $detailItem) { item in
+            BacklogDetailView(
+                workDir: workDir,
+                item: item,
+                onPromote: { onPromote($0); detailItem = nil; onClose() },
+                onChanged: {
+                    Task { await refresh(); onChanged() }
+                },
+                onDismissSheet: { detailItem = nil }
+            )
+        }
     }
 
     private var header: some View {
@@ -148,12 +162,18 @@ struct BacklogPanel: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Color.orange.opacity(0.15), in: Capsule())
                     }
+                    Image(systemName: "chevron.right.circle")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .help("Open details")
                 }
                 if !item.body.isEmpty {
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
                 }
                 HStack(spacing: 8) {
+                    Button("Details") { detailItem = item }
+                        .controlSize(.small)
                     Button("Promote to plan") { onPromote(item); onClose() }
                         .controlSize(.small)
                     Button("Done") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "done") } } }
@@ -169,6 +189,8 @@ struct BacklogPanel: View {
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .onTapGesture { detailItem = item }
     }
 
     private var addRow: some View {
@@ -224,6 +246,174 @@ struct BacklogPanel: View {
         case "high": return .red
         case "low": return .secondary
         default: return .orange
+        }
+    }
+}
+
+/// Detail sheet for one backlog item: full body (editable), severity
+/// picker, resolve with an optional note, promote/export. Title stays
+/// read-only — the slug/id/filename derive from it, so a rename is a
+/// new item, not an edit (backlog.ts `updateBacklogItem`).
+struct BacklogDetailView: View {
+    let workDir: String
+    let item: BacklogItem
+    let onPromote: (BacklogItem) -> Void
+    /// Parent refreshes its list + the tray chip after any mutation.
+    let onChanged: () -> Void
+    let onDismissSheet: () -> Void
+
+    @State private var severity: String
+    @State private var bodyText: String
+    @State private var resolveNote = ""
+    @State private var error: String?
+    @State private var savedFlash = false
+
+    init(workDir: String, item: BacklogItem,
+         onPromote: @escaping (BacklogItem) -> Void,
+         onChanged: @escaping () -> Void,
+         onDismissSheet: @escaping () -> Void) {
+        self.workDir = workDir
+        self.item = item
+        self.onPromote = onPromote
+        self.onChanged = onChanged
+        self.onDismissSheet = onDismissSheet
+        _severity = State(initialValue: item.severity)
+        _bodyText = State(initialValue: item.body)
+    }
+
+    private var bodyDirty: Bool { bodyText != item.body }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    metaRow
+                    bodyEditor
+                    resolveSection
+                    if let error {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                .padding(14)
+            }
+        }
+        .frame(minWidth: 480, idealWidth: 540, minHeight: 360, idealHeight: 440)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.full")
+            Text(item.title)
+                .font(.headline)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .help("Titles are immutable — the item's id derives from the title.")
+            Spacer()
+            Button("Close") { onDismissSheet() }
+                .keyboardShortcut(.escape, modifiers: [])
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    private var metaRow: some View {
+        HStack(spacing: 12) {
+            Picker("Severity", selection: $severity) {
+                Text("low").tag("low")
+                Text("med").tag("med")
+                Text("high").tag("high")
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 220)
+            .onChange(of: severity) { _, next in
+                guard next != item.severity else { return }
+                Task { await save(severity: next) }
+            }
+            Text(item.status)
+                .font(.caption)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Color.blue.opacity(0.12), in: Capsule())
+            Spacer()
+            Text("added \(item.created.prefix(10))")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var bodyEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Details").font(.subheadline.weight(.semibold))
+                Spacer()
+                if savedFlash {
+                    Text("Saved").font(.caption).foregroundStyle(.green)
+                }
+                Button("Save details") { Task { await save(body: bodyText) } }
+                    .controlSize(.small)
+                    .disabled(!bodyDirty)
+            }
+            TextEditor(text: $bodyText)
+                .font(.system(size: 12))
+                .frame(minHeight: 140)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+        }
+    }
+
+    private var resolveSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Resolve").font(.subheadline.weight(.semibold))
+            TextField("Optional note (appended to the item)", text: $resolveNote)
+                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                Button("Promote to plan") { onPromote(item) }
+                Button("Done") { Task { await resolve("done") } }
+                Button("Dismiss") { Task { await resolve("dismissed") } }
+                if item.status == "doing" {
+                    Button("Back to open") { Task { await resolve("open") } }
+                }
+                Spacer()
+            }
+            .controlSize(.small)
+        }
+    }
+
+    // MARK: - Actions
+
+    private func save(severity: String? = nil, body: String? = nil) async {
+        do {
+            try await BacklogService.shared.update(
+                workDir: workDir, id: item.id, severity: severity, body: body)
+            onChanged()
+            if body != nil {
+                savedFlash = true
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                savedFlash = false
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func resolve(_ status: String) async {
+        do {
+            // Persist an unsaved body edit first so it isn't lost, then
+            // transition (the note appends to the just-saved body).
+            if bodyDirty {
+                try await BacklogService.shared.update(workDir: workDir, id: item.id, body: bodyText)
+            }
+            let note = resolveNote.trimmingCharacters(in: .whitespaces)
+            try await BacklogService.shared.setStatus(
+                workDir: workDir, id: item.id, status: status,
+                note: note.isEmpty ? nil : note)
+            onChanged()
+            onDismissSheet()
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 }

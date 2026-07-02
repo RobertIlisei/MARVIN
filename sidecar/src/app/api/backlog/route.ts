@@ -1,7 +1,8 @@
 /**
  * GET   /api/backlog?workDir=…&status=…  → { workDir, items: BacklogItem[] }
  * POST  /api/backlog  { workDir, title, body?, severity? }  → add (manual UI add)
- * PATCH /api/backlog  { workDir, id, status, note? }         → resolve / set status
+ * PATCH /api/backlog  { workDir, id, status?, note?, severity?, body? }
+ *       → resolve / set status and/or edit fields (detail view)
  *
  * The backlog UI read/write loop (ADR-0044). All verbs delegate to the shared
  * `backlog.ts` store — the same code the `marvin-backlog` MCP tool writes
@@ -21,6 +22,7 @@ import {
   addBacklogItem,
   listBacklog,
   setBacklogStatus,
+  updateBacklogItem,
   type BacklogSeverity,
   type BacklogStatus,
 } from "@marvin/runtime/backlog";
@@ -93,6 +95,10 @@ interface PatchBody {
   id?: string;
   status?: string;
   note?: string;
+  /** Field edits (backlog detail view) — severity/body REPLACE the
+   *  stored value; may be sent with or without a status change. */
+  severity?: string;
+  body?: string;
 }
 
 export async function PATCH(req: NextRequest) {
@@ -109,15 +115,44 @@ export async function PATCH(req: NextRequest) {
   if (!body.id?.trim()) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
-  if (!body.status || !(BACKLOG_STATUSES as readonly string[]).includes(body.status)) {
+  const hasStatus = body.status !== undefined;
+  const hasSeverity = body.severity !== undefined;
+  const hasBody = body.body !== undefined;
+  if (!hasStatus && !hasSeverity && !hasBody) {
+    return NextResponse.json(
+      { error: "nothing to change — send status, severity, and/or body" },
+      { status: 400 },
+    );
+  }
+  if (hasStatus && !(BACKLOG_STATUSES as readonly string[]).includes(body.status!)) {
     return NextResponse.json(
       { error: `status must be one of ${BACKLOG_STATUSES.join(", ")}` },
       { status: 400 },
     );
   }
+  if (hasSeverity && !(BACKLOG_SEVERITIES as readonly string[]).includes(body.severity!)) {
+    return NextResponse.json(
+      { error: `severity must be one of ${BACKLOG_SEVERITIES.join(", ")}` },
+      { status: 400 },
+    );
+  }
+  if (hasBody && body.body!.length > MAX_BODY_BYTES) {
+    return NextResponse.json({ error: "body too large" }, { status: 413 });
+  }
+  // Field edits first, then the status transition (which may append a
+  // note to the just-replaced body) — matches how the detail view
+  // batches "edit + resolve" into one PATCH.
+  if (hasSeverity || hasBody) {
+    const res = await updateBacklogItem(v.workDir, body.id, {
+      ...(hasSeverity ? { severity: body.severity as BacklogSeverity } : {}),
+      ...(hasBody ? { body: body.body } : {}),
+    });
+    if (!res.ok) return NextResponse.json({ error: res.error }, { status: 404 });
+    if (!hasStatus) return NextResponse.json({ ok: true, item: res.item });
+  }
   const res = await setBacklogStatus(
     v.workDir,
-    body.id,
+    body.id!,
     body.status as BacklogStatus,
     body.note,
   );

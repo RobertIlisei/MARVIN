@@ -296,6 +296,30 @@ export async function resolveBacklogItem(
   return setBacklogStatus(workDir, args.id, args.resolution, args.note);
 }
 
+/** Id-keyed field edit — severity and/or body REPLACE (unlike the
+ *  note-append in `setBacklogStatus`). Title is deliberately not
+ *  editable: the slug/id/filename derive from it, so a rename is a
+ *  new item, not an edit. Used by the UI's backlog detail view. */
+export async function updateBacklogItem(
+  workDir: string,
+  id: string,
+  fields: { severity?: BacklogSeverity; body?: string },
+): Promise<ResolveResult> {
+  const path = join(backlogDir(workDir), `${id}.md`);
+  if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(path, "utf-8"));
+  if (fields.severity !== undefined) item.severity = fields.severity;
+  if (fields.body !== undefined) item.body = fields.body.trim().slice(0, MAX_BODY_CHARS);
+  item.updated = new Date().toISOString();
+  try {
+    await writeFile(path, serialize(item), "utf-8");
+    await rewriteBacklogIndex(workDir);
+    return { ok: true, item };
+  } catch (err) {
+    return { ok: false, error: `failed to update backlog item: ${(err as Error).message}` };
+  }
+}
+
 /** Set any status (e.g. `doing` when promoted to a turn). Rewrites the index. */
 export async function setBacklogStatus(
   workDir: string,
