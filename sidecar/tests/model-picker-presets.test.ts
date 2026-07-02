@@ -116,7 +116,7 @@ describe("resolvePreset", () => {
     if (!preset) throw new Error("advisor preset missing");
     expect(resolvePreset(preset, [])).toEqual({
       executor: "claude-sonnet-4-6",
-      advisor: "claude-opus-4-6",
+      advisor: "claude-opus-4-8",
     });
   });
 });

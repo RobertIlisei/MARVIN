@@ -7,7 +7,7 @@
  *                   `git push -f`, `git clean -fd`, `chmod -R 777`,
  *                   `curl ... | sh`, etc.
  *   - finding #3  — `Task` requires confirm unless `subagent_type` is
- *                   sanctioned (`scout` | `general-purpose`).
+ *                   sanctioned (`scout` | `advisor` | `general-purpose`).
  *   - finding #21 — `KNOWN_TOOL_NAMES` is the canonical export.
  *
  * Each block is intentionally explicit — these regexes are a security
@@ -97,7 +97,7 @@ describe("toolPolicy — Bash run_in_background hard-deny (ADR-0032)", () => {
       run_in_background: true,
     });
     expect(result.class).toBe("deny");
-    expect(result.reason).toMatch(/schedule_wakeup|foreground/);
+    expect(result.reason).toMatch(/run_background_job/);
   });
 
   it("denies background even for an otherwise auto-allowed read", () => {
@@ -165,7 +165,7 @@ describe("toolPolicy — Task subagent gating (audit finding #3)", () => {
 });
 
 describe("toolPolicy — read-only tools auto-allow", () => {
-  for (const name of ["Read", "Grep", "Glob", "WebFetch", "WebSearch"] as const) {
+  for (const name of ["Read", "Grep", "Glob"] as const) {
     it(`auto-allows ${name}`, () => {
       const result = toolPolicy(name, {});
       expect(result.class).toBe("auto");
@@ -175,6 +175,16 @@ describe("toolPolicy — read-only tools auto-allow", () => {
 
 describe("toolPolicy — write tools require confirm", () => {
   for (const name of ["Edit", "Write", "NotebookEdit"] as const) {
+    it(`requires confirm for ${name}`, () => {
+      const result = toolPolicy(name, {});
+      expect(result.class).toBe("confirm");
+    });
+  }
+
+  // Audit 🟡 #16: WebFetch/WebSearch reach the public internet, so they
+  // were demoted from auto to confirm — an exfil vector shouldn't ride
+  // the read-only lane.
+  for (const name of ["WebFetch", "WebSearch"] as const) {
     it(`requires confirm for ${name}`, () => {
       const result = toolPolicy(name, {});
       expect(result.class).toBe("confirm");
