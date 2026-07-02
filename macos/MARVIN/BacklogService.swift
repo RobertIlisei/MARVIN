@@ -71,6 +71,16 @@ final class BacklogService {
         try await mutate(method: "PATCH", path: "api/backlog", payload: payload)
     }
 
+    /// Field edit from the detail view — severity and/or body REPLACE the
+    /// stored values (PATCH without a status change). Title is immutable:
+    /// the slug/id/filename derive from it.
+    func update(workDir: String, id: String, severity: String? = nil, body: String? = nil) async throws {
+        var payload: [String: String] = ["workDir": workDir, "id": id]
+        if let severity { payload["severity"] = severity }
+        if let body { payload["body"] = body }
+        try await mutate(method: "PATCH", path: "api/backlog", payload: payload)
+    }
+
     /// Optional export — file the item as a GitHub issue. Returns the issue URL.
     func promoteIssue(workDir: String, id: String) async throws -> String {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/backlog/promote-issue"))
