@@ -482,6 +482,119 @@ runner.suite("plan-text-match") {
     }
 }
 
+// MARK: - PlanProgress.reconcile (ADR-0049 — the roadmap-claimed logic test)
+
+runner.suite("plan-reconcile") {
+    func seedSteps() -> [PlanStep] {
+        [
+            PlanStep(content: "Design the gate policy for browser tools"),
+            PlanStep(content: "Implement the confirm registry timeout"),
+            PlanStep(content: "Verify the change end to end in the app"),
+        ]
+    }
+
+    runner.test("[N] tag links a reworded item to its step by ordinal") {
+        let out = PlanProgress.reconcile(
+            steps: seedSteps(),
+            with: [TodoItem(content: "[2] Registry timeout — totally reworded", status: "completed", activeForm: nil)])
+        runner.expect(out[1].status, equals: "completed", "step 2 completes via its tag despite rewording")
+        runner.expect(out[0].status, equals: "pending", "step 1 untouched")
+        runner.expect(out.count, equals: 3, "no step added or erased")
+    }
+
+    runner.test("[N.M] tag nests as a sub-task of step N") {
+        let out = PlanProgress.reconcile(
+            steps: seedSteps(),
+            with: [TodoItem(content: "[1.1] Enumerate the observational tools", status: "in_progress", activeForm: nil)])
+        runner.expect(out[0].subtasks.count, equals: 1, "sub-task nested under step 1")
+        runner.expect(out[0].subtasks.first?.key, equals: "1.1", "stable join key recorded")
+        runner.expect(out[0].status, equals: "in_progress", "parent reflects sub-task activity")
+    }
+
+    runner.test("keyed sub-task re-matches by key across rewording (de-dup)") {
+        var steps = PlanProgress.reconcile(
+            steps: seedSteps(),
+            with: [TodoItem(content: "[1.1] Enumerate the observational tools", status: "in_progress", activeForm: nil)])
+        steps = PlanProgress.reconcile(
+            steps: steps,
+            with: [TodoItem(content: "[1.1] Enumerate observation-only browser tools (reworded)", status: "completed", activeForm: nil)])
+        runner.expect(steps[0].subtasks.count, equals: 1, "rephrased keyed sub-task updates in place, no duplicate")
+        runner.expect(steps[0].subtasks.first?.status, equals: "completed", "status carried by key match")
+    }
+
+    runner.test("untagged item falls back to fuzzy content match") {
+        let out = PlanProgress.reconcile(
+            steps: seedSteps(),
+            with: [TodoItem(content: "Implement the confirm registry timeout", status: "in_progress", activeForm: nil)])
+        runner.expect(out[1].status, equals: "in_progress", "fuzzy backstop still links untagged items")
+    }
+
+    runner.test("unmatched untagged item nests instead of clobbering the plan") {
+        var steps = seedSteps()
+        steps[0].status = "in_progress"
+        let out = PlanProgress.reconcile(
+            steps: steps,
+            with: [TodoItem(content: "Chase a surprise dependency upgrade", status: "pending", activeForm: nil)])
+        runner.expect(out.count, equals: 3, "plan steps never erased by a foreign item")
+        runner.expect(out[0].subtasks.count, equals: 1, "unmatched work nests under the active step")
+    }
+
+    runner.test("full roll-up: all sub-tasks done completes the parent") {
+        var steps = seedSteps()
+        steps = PlanProgress.reconcile(steps: steps, with: [
+            TodoItem(content: "[3.1] Drive the flow in the app", status: "completed", activeForm: nil),
+            TodoItem(content: "[3.2] Capture the screenshot", status: "completed", activeForm: nil),
+        ])
+        runner.expect(steps[2].status, equals: "completed", "parent auto-completes when every sub-task is done")
+    }
+
+    runner.test("partial roll-up: mixed sub-tasks hold the parent at in_progress") {
+        let out = PlanProgress.reconcile(steps: seedSteps(), with: [
+            TodoItem(content: "[3.1] Drive the flow in the app", status: "completed", activeForm: nil),
+            TodoItem(content: "[3.2] Capture the screenshot", status: "pending", activeForm: nil),
+        ])
+        runner.expect(out[2].status, equals: "in_progress", "partial sub-task progress → in_progress, never completed")
+    }
+}
+
+// MARK: - Hard completion invariant (ADR-0049 addendum — v0.1.50 claim)
+
+runner.suite("plan-completion-invariant") {
+    runner.test("model-declared completed is overridden while a sub-task is open") {
+        var step = PlanStep(content: "Operator console panel", status: "pending")
+        step.subtasks = [TodoItem(content: "DoD sub-item", status: "pending", activeForm: nil, key: "1.1")]
+        let out = PlanProgress.reconcile(
+            steps: [step],
+            with: [TodoItem(content: "[1] Operator console panel", status: "completed", activeForm: nil)])
+        runner.expect(out[0].status, equals: "in_progress",
+                      "a step owning open sub-tasks can never read completed (the step-[10] bug)")
+    }
+
+    runner.test("completed iff EVERY sub-task completed") {
+        var step = PlanStep(content: "Operator console panel", status: "pending")
+        step.subtasks = [
+            TodoItem(content: "DoD sub-item", status: "completed", activeForm: nil, key: "1.1"),
+            TodoItem(content: "Tests sub-item", status: "completed", activeForm: nil, key: "1.2"),
+        ]
+        let out = PlanProgress.reconcile(steps: [step], with: [])
+        runner.expect(out[0].status, equals: "completed", "all sub-tasks done → parent completed")
+    }
+
+    runner.test("all-pending sub-tasks with a pending parent stay pending") {
+        var step = PlanStep(content: "Operator console panel", status: "pending")
+        step.subtasks = [TodoItem(content: "DoD sub-item", status: "pending", activeForm: nil, key: "1.1")]
+        let out = PlanProgress.reconcile(steps: [step], with: [])
+        runner.expect(out[0].status, equals: "pending", "no activity anywhere → pending, not in_progress")
+    }
+
+    runner.test("steps without sub-tasks keep their model-declared status") {
+        let out = PlanProgress.reconcile(
+            steps: [PlanStep(content: "A leaf step", status: "pending")],
+            with: [TodoItem(content: "[1] A leaf step", status: "completed", activeForm: nil)])
+        runner.expect(out[0].status, equals: "completed", "invariant only governs steps that own sub-tasks")
+    }
+}
+
 // MARK: - run + report
 
 if runner.failures.isEmpty {
