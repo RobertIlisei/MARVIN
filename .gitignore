@@ -54,3 +54,18 @@ pnpm-debug.log*
 # stays public (project ethos); these two are private.
 docs/business/cost-model.md
 docs/business/licensing.md
+
+# Private keys / secrets — never committed, no exceptions. The 2026-07-02
+# incident (an SSH private key swept into a commit by `git add -A`) is why
+# this section + the gitleaks pre-commit hook (scripts/hooks/pre-commit)
+# exist. Content-based scanning is the real guard; these patterns are the
+# cheap first line.
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.p12
+*.pfx
+*-prod
+*-prod.pub
