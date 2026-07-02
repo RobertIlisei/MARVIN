@@ -154,6 +154,73 @@ describe("classifyToolCall — plan-file ownership (ADR-0052)", () => {
   });
 });
 
+// ADR-0042 enforcement addendum — memory ownership. `.marvin/memory.md`
+// (the index) + `.marvin/memory/` (fact files) belong to the `remember`
+// tool; a direct model write bypasses its caps + content-class guards.
+// The match is precise so the /memory-compact archive and session-notes
+// stay writable, and the in-process MCP tools are untouched.
+describe("classifyToolCall — memory ownership (ADR-0042 addendum)", () => {
+  const indexPath = "/Users/u/proj/.marvin/memory.md";
+  const factPath = "/Users/u/proj/.marvin/memory/build-gotcha.md";
+
+  it("denies Write / Edit / NotebookEdit into memory.md and .marvin/memory/", () => {
+    for (const target of [indexPath, factPath]) {
+      for (const tool of ["Write", "Edit", "NotebookEdit"] as const) {
+        const input =
+          tool === "NotebookEdit"
+            ? { notebook_path: target, new_source: "x" }
+            : { file_path: target, old_string: "a", new_string: "b", content: "x" };
+        const r = classifyToolCall(tool, input);
+        expect(r.decision).toBe("deny");
+        expect(r.reason).toMatch(/remember/);
+      }
+    }
+  });
+
+  it("denies mutating Bash aimed at memory files (redirect / sed -i / rm)", () => {
+    for (const cmd of [
+      `echo "- fact" >> ${indexPath}`,
+      `sed -i '' 's/a/b/' ${factPath}`,
+      `rm ${factPath}`,
+    ]) {
+      expect(classifyToolCall("Bash", { command: cmd }).decision).toBe("deny");
+    }
+  });
+
+  it("still allows READING memory (Read + grep/cat Bash)", () => {
+    expect(classifyToolCall("Read", { file_path: indexPath }).decision).toBe("allow");
+    const grep = classifyToolCall("Bash", { command: `grep -n "gotcha" ${factPath}` });
+    expect(grep.decision).not.toBe("deny");
+  });
+
+  it("leaves the memory-compact archive and session-notes writable", () => {
+    for (const target of [
+      "/Users/u/proj/.marvin/memory.archive.md",
+      "/Users/u/proj/.marvin/session-notes.md",
+    ]) {
+      const r = classifyToolCall("Write", { file_path: target, content: "x" });
+      expect(r.decision).not.toBe("deny");
+    }
+  });
+
+  it("does not touch the remember MCP tool (server-side write path)", () => {
+    const r = classifyToolCall("mcp__marvin-memory__remember", {
+      name: "build-gotcha",
+      hook: "swift build needs xcodegen first",
+    });
+    expect(r.decision).toBe("allow");
+  });
+
+  it("does not affect edits elsewhere in the project", () => {
+    const r = classifyToolCall("Edit", {
+      file_path: "/Users/u/proj/src/memory-mcp.ts",
+      old_string: "a",
+      new_string: "b",
+    });
+    expect(r.decision).toBe("confirm");
+  });
+});
+
 // ADR-0030 — the sub-agent read-only invariant. When a tool call
 // originates inside a sub-agent (the SDK passes its `agentID`), no
 // workspace mutation is permitted: confirm-class and deny-class both

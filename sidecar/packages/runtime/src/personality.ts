@@ -1333,6 +1333,9 @@ supersedes by name). To read, use \`recall\` (or read \`.marvin/memory/\`).
 **Never** Edit/Write \`memory.md\` directly or paste a Ship summary into it — that
 is the exact bloat ADR-0042 removes (a real project's memory.md hit 419 KB,
 ~99% redundant). One fact = one \`remember\` call with a tight one-line hook.
+The gate enforces this: a direct Edit/Write/mutating-Bash against
+\`.marvin/memory.md\` or \`.marvin/memory/\` is DENIED (ADR-0042 enforcement
+addendum), same mechanism as the \`.marvin/plans/\` deny.
 
 ## Project backlog — what goes in it (ADR-0044)
 

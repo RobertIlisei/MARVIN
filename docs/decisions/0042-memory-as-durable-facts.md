@@ -149,3 +149,27 @@ facts. Everything else is banned from it.
       user via `/memory-compact` (their project data; opt-in).
 - [ ] Knowledge-graph indexer over `.marvin/memory/` fact files — nice-to-have
       so `recall` can also ride `scope:"knowledge"`; `recall` works without it.
+
+## Enforcement addendum (2026-07-02)
+
+The original Scope of Done called `remember` "the enforced write path", but
+enforcement was prompt-only: nothing at the permission gate stopped a direct
+`Edit`/`Write` to `.marvin/memory.md`, unlike `.marvin/plans/` which
+[ADR-0052](./0052-durable-plan-spine-and-plan-file-ownership.md) genuinely
+gate-denies. The 2026-07-02 claimed-vs-implemented audit flagged the gap.
+
+Closed using the ADR-0052 mechanism: `classifyToolCall` (`sdk-runner.ts`)
+now denies model `Edit`/`Write`/`NotebookEdit` targeting `.marvin/memory.md`
+or `.marvin/memory/`, and mutating Bash shapes (`>`/`>>`, `tee`, `sed -i`,
+`rm`, `mv`, `cp`, `truncate`) referencing them; reads stay allowed. The two
+denies share one `mutatesProtectedPath` helper + `BASH_MUTATING_OPS` regex so
+they can't drift. The deny reason steers to `remember`/`recall`.
+
+Deliberately NOT gated: `.marvin/memory.archive.md` (the `/memory-compact`
+archive — the match is precise so the compact flow keeps working) and
+`.marvin/session-notes.md` (client-side activity sink, no observed harm).
+The in-process MCP tools (`mcp__marvin-memory__remember`, graph
+`graph_save_result`) are unaffected — non-Playwright MCP short-circuits to
+allow before the protected-path blocks, and their writes are server-side
+`fs` calls that never surface as tool calls. Pinned by six cases in
+`can-use-tool-dispatch.test.ts`.

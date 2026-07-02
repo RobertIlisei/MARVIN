@@ -65,7 +65,9 @@ Four coordinated changes:
    states firmly: present/revise plans as `# Plan` replies, record progress
    via tagged `TodoWrite`, never touch the file. Tag numbers always refer
    to the ACTIVE plan's presented step numbers; finer-grained work is
-   `[N.M]` sub-tasks, never a re-based top-level list.
+   `[N.M]` sub-tasks, never a re-based top-level list. (The same
+   protected-path mechanism now also guards `.marvin/memory` — see the
+   [ADR-0042 enforcement addendum](./0042-memory-as-durable-facts.md).)
 4. **A batch-level re-base guard protects the join.**
    `PlanRebaseGuard.looksRebased` (MARVINLogic, test-covered) distrusts a
    batch's `[N]` tags only when all three signatures hold: ≥3 tagged items,
