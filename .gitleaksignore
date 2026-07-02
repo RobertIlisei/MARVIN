@@ -1,0 +1,5 @@
+# Known false positives, pinned by fingerprint (commit:file:rule:line).
+# A UserDefaults key NAME, not a secret:
+16da0533396c7591c0b277174ca7fd3dcef39934:macos/MARVIN/NativePrefs.swift:generic-api-key:234
+# A fake fixture key in a test that no longer exists at HEAD:
+ecd5ebd666fd6a8302caf7dd73d2eb5b4728075a:packages/runtime/tests/honeycomb-config.test.ts:generic-api-key:69

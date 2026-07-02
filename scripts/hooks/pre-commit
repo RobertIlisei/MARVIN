@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-commit secret scan — blocks any commit that stages a secret.
+#
+# Exists because of the 2026-07-02 incident: an SSH private key at the repo
+# root rode a `git add -A` into a public commit. Content-based scanning at
+# commit time is the guard that can't be dodged by a filename.
+#
+# Installed by: cp scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+# Fail-closed on missing gitleaks: a silent skip is how the last one got
+# through. `brew install gitleaks` takes ten seconds.
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks is not installed — refusing to commit unscanned." >&2
+  echo "pre-commit: install it with:  brew install gitleaks" >&2
+  exit 1
+fi
+
+exec gitleaks protect --staged --redact --no-banner
