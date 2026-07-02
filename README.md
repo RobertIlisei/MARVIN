@@ -28,7 +28,10 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 > With measured results (first-message context: 566K → ~13.4K tokens), five
 > architecture diagrams, and anonymized transcripts from real production
 > sessions. The exhaustive companion — every subsystem down to the code — is
-> the [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md) *(in progress)*.
+> the [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md).
+> Both are also available as PDFs:
+> [white paper](./docs/whitepaper/WHITEPAPER.pdf) ·
+> [technical reference](./docs/whitepaper/TECHNICAL-REFERENCE.pdf).
 
 ---
 
@@ -430,7 +433,7 @@ bin/marvin logs     # tail .marvin/dev.log
 
 ## Documentation
 
-- [White paper](./docs/whitepaper/WHITEPAPER.md) — the design position, the evidence, and the results; [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md) is the exhaustive companion (in progress)
+- [White paper](./docs/whitepaper/WHITEPAPER.md) — the design position, the evidence, and the results; [Technical Reference](./docs/whitepaper/TECHNICAL-REFERENCE.md) is the exhaustive companion (both also as [PDF](./docs/whitepaper/WHITEPAPER.pdf) / [PDF](./docs/whitepaper/TECHNICAL-REFERENCE.pdf))
 - [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
 - [Modes & workflows](./docs/guides/workflows.md) — Ask / Agent / Plan with worked examples, and how MARVIN takes decisions
