@@ -109,6 +109,51 @@ describe("classifyToolCall", () => {
   });
 });
 
+// ADR-0052 — plan-file ownership. `.marvin/plans/` is the app's rendered
+// projection of the tracked plan spine; a model that writes it directly
+// creates an untracked orphan plan (observed 2026-07-02). The gate denies
+// the direct write and the reason steers to the `# Plan` reply contract.
+describe("classifyToolCall — plan-file ownership (ADR-0052)", () => {
+  const plansPath = "/Users/u/proj/.marvin/plans/my-plan.md";
+
+  it("denies Write / Edit / NotebookEdit into .marvin/plans/", () => {
+    for (const tool of ["Write", "Edit", "NotebookEdit"] as const) {
+      const input =
+        tool === "NotebookEdit"
+          ? { notebook_path: plansPath, new_source: "x" }
+          : { file_path: plansPath, old_string: "a", new_string: "b", content: "x" };
+      const r = classifyToolCall(tool, input);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toMatch(/# Plan —/);
+    }
+  });
+
+  it("denies mutating Bash aimed at a plan file (redirect / sed -i / rm)", () => {
+    for (const cmd of [
+      `echo done >> ${plansPath}`,
+      `sed -i '' 's/a/b/' ${plansPath}`,
+      `rm ${plansPath}`,
+    ]) {
+      expect(classifyToolCall("Bash", { command: cmd }).decision).toBe("deny");
+    }
+  });
+
+  it("still allows READING plan files (Read + grep/cat Bash)", () => {
+    expect(classifyToolCall("Read", { file_path: plansPath }).decision).toBe("allow");
+    const grep = classifyToolCall("Bash", { command: `grep -n "step" ${plansPath}` });
+    expect(grep.decision).not.toBe("deny");
+  });
+
+  it("does not affect edits elsewhere in the project", () => {
+    const r = classifyToolCall("Edit", {
+      file_path: "/Users/u/proj/src/app.ts",
+      old_string: "a",
+      new_string: "b",
+    });
+    expect(r.decision).toBe("confirm");
+  });
+});
+
 // ADR-0030 — the sub-agent read-only invariant. When a tool call
 // originates inside a sub-agent (the SDK passes its `agentID`), no
 // workspace mutation is permitted: confirm-class and deny-class both

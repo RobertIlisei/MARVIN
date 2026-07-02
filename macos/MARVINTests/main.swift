@@ -389,6 +389,99 @@ runner.suite("DurationFormat") {
     }
 }
 
+// MARK: - PlanRebaseGuard (ADR-0052)
+
+runner.suite("plan-rebase-guard") {
+    // The plan whose corruption motivated the guard: 13 remediation steps.
+    let planSteps = [
+        "G-1 shared disclaimer fragment rendering in three templates",
+        "G-1-retro count already-issued PDFs without the disclaimer",
+        "G-2 acquisition run the pdf skill on the fetched guide",
+        "CL-1 documents to report link status flip",
+        "CL-2 calamity evidence pack signing",
+        "CL-4 audit pack forensic fields",
+        "CL-5 PPP human CSV parity",
+        "CL-7 transport gate not null",
+        "CL-8 postal lines",
+        "readiness checklist for the 2027 mandate",
+        "cross register feeder completeness pass",
+        "gap register severity triage",
+        "remediation roadmap decisions",
+    ].map { PlanTextMatch.normalize($0) }
+
+    runner.test("re-based foreign batch is distrusted (the 2026-07-02 corruption)") {
+        // 18 micro-tasks about a different workstream, tagged [1]..[18] —
+        // exactly what the model emitted after a manual interruption.
+        let texts = (1...18).map { "Implement service wiring micro task number \($0) for the signal endpoint" }
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: Array(1...18), taggedTexts: texts, stepIds: planSteps)
+        runner.expect(rebased, "tags 1..18 vs a 13-step plan with unrelated texts must be distrusted")
+    }
+
+    runner.test("legitimate partial update keeps its tags") {
+        // Model updates steps 4 and 7 with reworded-but-related text.
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: [4, 7],
+            taggedTexts: ["CL-1 documents to report link", "CL-5 PPP human CSV parity check"],
+            stepIds: planSteps)
+        runner.expect(!rebased, "a 2-item related update is below the batch floor and must pass")
+    }
+
+    runner.test("full-plan update with rewordings keeps its tags (K == step count)") {
+        // Same count as the plan → never guarded, even with heavy rewording.
+        let texts = (1...13).map { "step \($0) reworded entirely differently" }
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: Array(1...13), taggedTexts: texts, stepIds: planSteps)
+        runner.expect(!rebased, "K == plan step count is a full-plan update, not a re-base")
+    }
+
+    runner.test("consecutive-from-1 batch whose texts MATCH their steps passes") {
+        let texts = [
+            "G-1 shared disclaimer fragment rendering in three templates",
+            "G-1-retro count already-issued PDFs without the disclaimer",
+            "G-2 acquisition run the pdf skill on the fetched guide",
+        ]
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: [1, 2, 3], taggedTexts: texts, stepIds: planSteps)
+        runner.expect(!rebased, "matching texts prove the ordinals are honest")
+    }
+
+    runner.test("non-consecutive tags are never treated as a re-base") {
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: [2, 5, 9],
+            taggedTexts: ["unrelated a", "unrelated b", "unrelated c"],
+            stepIds: planSteps)
+        runner.expect(!rebased, "scattered ordinals are targeted updates; per-item handling applies")
+    }
+
+    runner.test("all-out-of-range consecutive batch is distrusted") {
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: [1, 2, 3, 4],
+            taggedTexts: ["x1", "x2", "x3", "x4"],
+            stepIds: ["only step one", "only step two"].map(PlanTextMatch.normalize))
+        runner.expect(rebased, "4 consecutive tags against a 2-step plan with foreign texts")
+    }
+
+    runner.test("empty plan never trips the guard") {
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: [1, 2, 3], taggedTexts: ["a", "b", "c"], stepIds: [])
+        runner.expect(!rebased, "no steps → nothing to corrupt → no guard")
+    }
+}
+
+runner.suite("plan-text-match") {
+    runner.test("normalize folds case, punctuation, and runs") {
+        runner.expect(
+            PlanTextMatch.normalize("  [7] Implement — the *Widget*!  "),
+            equals: "7 implement the widget",
+            "canonical form")
+    }
+    runner.test("matches requires length for containment") {
+        runner.expect(PlanTextMatch.matches("abcdef", "abcdefgh"), "long containment matches")
+        runner.expect(!PlanTextMatch.matches("ab", "abcd"), "short containment rejected")
+    }
+}
+
 // MARK: - run + report
 
 if runner.failures.isEmpty {

@@ -170,6 +170,19 @@ decide from the code or sensible defaults.
   sub-tasks — never send a partial list that drops steps, or the checklist
   breaks. Re-presenting a revised plan keeps prior progress — it does not start
   a new one.
+  **Plan authoring works the same in EVERY mode (ADR-0052).** When the user
+  asks you to create, add to, or revise a plan — in Agent mode too, not just
+  Plan mode — you MUST present it as a reply whose plan portion opens with
+  \`# Plan — <title>\`; the app adopts it into the tracked spine, renders the
+  file, and injects live status back to you each turn. You MUST NOT create or
+  edit files under \`.marvin/plans/\` with Write/Edit/Bash — that directory is
+  the app's rendered projection of the spine, and a hand-written file there is
+  an untracked orphan (the gate denies the write). To record plan progress or
+  notes, update \`TodoWrite\` (tagged \`[N]\`/\`[N.M]\`) or re-present the
+  revised \`# Plan\` — never touch the file. **Tag numbers always refer to the
+  ACTIVE plan's step numbers as presented** — never re-base numbering onto
+  your private working list; if your current work is finer-grained than the
+  plan's steps, express it as \`[N.M]\` sub-tasks of the step it serves.
 
 ## Cross-phase rules — apply on every reply
 
