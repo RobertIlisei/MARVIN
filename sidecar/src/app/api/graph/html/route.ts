@@ -50,7 +50,13 @@ import { type NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MAX_HTML_BYTES = 4 * 1024 * 1024; // 4 MB — pyvis/cytoscape outputs stay well under this
+// 32 MB. The original 4 MB cap assumed "pyvis outputs stay well under
+// this" — false in practice: a real project (agri-saas-platform,
+// 2026-07-03) ships a 4.8 MB graph.html because vis-network embeds the
+// full node/edge JSON inline, and MARVIN's own repo is 1.8 MB. The cap
+// is a local-DoS guardrail, not a size opinion; 32 MB keeps the
+// guardrail while fitting graphs an order of magnitude denser.
+const MAX_HTML_BYTES = 32 * 1024 * 1024;
 
 export async function GET(req: NextRequest) {
   const cwd = req.nextUrl.searchParams.get("cwd");
