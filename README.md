@@ -29,7 +29,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.53**). `main` and `development` are fast-forwarded together at each
+> **v0.1.55**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -281,7 +281,11 @@ docs/
 
 ## Status
 
-**v0.1.53 — backlog "Promote to plan" actually plans (current).** Promoting a backlog item did nothing: `promoteBacklog` sent "Implement this item…" in whatever mode was active and never switched to Plan mode — but the turn-completed ingest only mints a tier-2 Plan + approval chip when `mode == "plan"` — and if a turn was in flight `sendControl`'s `!isSending` guard silently dropped it while the panel closed anyway. Now it switches to Plan mode and asks MARVIN to present a plan inline (read-only first), and queues the request when busy instead of dropping it.
+**v0.1.55 — verify-then-remediate contract: bounded self-fix, gated scope-fix (current).** MARVIN's Phase 6/7 loop had a "verify, then what?" gap — it walked the Definition of Done but had no explicit contract for what to do when a check failed. Now split by failure class. **Phase 6 (mechanical):** typecheck / test / build failures MUST self-remediate without asking — capped at 3 attempts per milestone with an early **no-progress stop** (identical errors twice = spinning → stop), then an honest failure report; MUST NOT claim landed, weaken the DoD, or skip the failing check. **Phase 7 (scope):** an unmet DoD bullet gets **surface-and-offer** — state the gap plus the one concrete next step, then gate ("one gap, one gate"); MUST NOT loop back into Phase 6 unprompted. A fully autonomous retry-until-DoD mode was deliberately *not* built — it institutionalizes the Golden-Rule-8 "helpful spiral"; revisit only as an explicit opt-in with its own ADR, cost budget, and progress metric. Prompt-only change in `personality.ts`; also fixed 9 pre-existing typecheck errors in `can-use-tool-dispatch.test.ts` (readonly-array fixture vs the SDK's mutable `PermissionUpdate[]`).
+
+**v0.1.54 — the IDE no longer resets on a transient health blip.** The window "kept resetting" mid-work — pane layout, file-tree expansion, terminal, editor, chat scroll all snapping to default. `ContentView.mainContent` switches its whole view tree on `health.state`, and `HealthMonitor.pollOnce` flipped to `.offline` on any single failed `/api/health` poll (3 s timeout, no hysteresis) — a healthy-but-busy sidecar answering slowly tore down and rebuilt the entire IDE. Fix: demote to `.offline` only after **3 consecutive** misses (hold `.online`/`.connecting` through blips), poll fast while misses are pending so a genuine outage still surfaces in seconds, and bump the poll timeout to 5 s.
+
+**v0.1.53 — backlog "Promote to plan" actually plans.** Promoting a backlog item did nothing: `promoteBacklog` sent "Implement this item…" in whatever mode was active and never switched to Plan mode — but the turn-completed ingest only mints a tier-2 Plan + approval chip when `mode == "plan"` — and if a turn was in flight `sendControl`'s `!isSending` guard silently dropped it while the panel closed anyway. Now it switches to Plan mode and asks MARVIN to present a plan inline (read-only first), and queues the request when busy instead of dropping it.
 
 **v0.1.52 — file-tree crash fixed.** The app trapped (`EXC_BREAKPOINT` in `OutlineListCoordinator.recursivelyDiffRows`) during a file-tree row diff: `FileNode.outlineChildren` returned a non-nil empty array `[]` for empty directories, but SwiftUI's `OutlineGroup` expects `nil` (leaf) or a non-empty array — an agent mutating files mid-session flipped a node into the `[]` shape and the next diff crashed. Empty dirs now return `nil` (leaf). A companion build fix: the install smoke-probe now reaps the forked `next-server` worker (it bound the probe port and survived the parent kill) so installs stop leaking orphan sidecars.
 

@@ -280,11 +280,11 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 2143 nodes · 4024 edges (2026-06-27 rebuild;
+  files. 2140 nodes · 4233 edges (2026-07-02 full rebuild;
   honours [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1155 nodes · 1378 edges (built 2026-06-27).
+  `.marvin/memory.md`. 1155 nodes · 1378 edges (built 2026-07-02).
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
@@ -353,9 +353,12 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-06-14 rebuild: `POST()` (116 edges), `GET()` (112),
-`.push()` (62), `trim()` (52), `.split()` (49), `.append()` (43) are the
-real architectural anchors. Language primitives also bubble to the top —
+After the 2026-07-02 full rebuild: `POST()` (122 edges), `GET()` (118),
+`trim()` (58), `ChatPreviewModel` (43) are the real architectural
+anchors. (An incremental `--update` earlier that day had transiently
+dropped `POST()` out of the top 10 — re-extracting only some of a hot
+node's source files prunes its cross-file edges; a full rebuild restores
+them. Prefer a full rebuild when god-node counts look off.) Language primitives also bubble to the top —
 `string`, `text`, `font`, `View`, `data`, `Kind`, `Equatable`, `Codable` —
 those are AST-noise from the tree-sitter pass, not concepts; treat them as
 background. The `.graphifyignore` filters files, not node kinds; a follow-up
