@@ -15,6 +15,7 @@
 // scraping remains only as a fallback for sessions predating this store.
 
 import Foundation
+import MARVINLogic
 
 /// Wire shape for the stored spine. Mirrors the client model exactly —
 /// the server treats it as opaque JSON (identity hygiene + size cap only).
