@@ -856,6 +856,18 @@ final class ChatPreviewModel {
         planAwaitingApproval = false
     }
 
+    /// Remove ANY plan from the session list by id (Plans panel). Unlike
+    /// `dismissPlan` it isn't limited to the active plan. The saved
+    /// `.marvin/plans/<slug>.md` file is left on disk — this drops the
+    /// tracking entry, not the artifact.
+    func removePlan(_ id: String) {
+        guard plans.contains(where: { $0.id == id }) else { return }
+        plans.removeAll { $0.id == id }
+        if activePlanId == id { activePlanId = plans.last?.id }
+        schedulePlanStateSave()
+        if activePlanId == nil { planAwaitingApproval = false }
+    }
+
     /// Plan / to-do / changed-files state is SESSION-scoped — clear it when a
     /// session is left (new chat, switch). Otherwise the previous session's
     /// "Plan 7/7" + "N files changed" strips linger in a fresh chat.
@@ -1488,6 +1500,7 @@ struct ChatPreviewView: View {
     @State private var model = ChatPreviewModel()
     /// ADR-0044 — backlog browser sheet.
     @State private var backlogPanelOpen = false
+    @State private var plansPanelOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1650,6 +1663,18 @@ struct ChatPreviewView: View {
                     onChanged: { model.refreshBacklogCount() }
                 )
             }
+        }
+        // ADR-0046/0052 — browse every session plan with full steps.
+        .sheet(isPresented: $plansPanelOpen) {
+            PlansPanel(
+                plans: model.plans,
+                activePlanId: model.activePlanId,
+                onSelect: { model.selectPlan($0) },
+                onOpenFile: { model.openPlanInEditor() },
+                onContinue: { continuePlan() },
+                onRemove: { model.removePlan($0) },
+                onClose: { plansPanelOpen = false }
+            )
         }
     }
 
@@ -2287,6 +2312,7 @@ struct ChatPreviewView: View {
                 activePlanId: model.activePlanId,
                 onSelectPlan: { model.selectPlan($0) },
                 onOpenPlanFile: { model.openPlanInEditor() },
+                onOpenPlansPanel: { plansPanelOpen = true },
                 onClose: { model.dismissPlan() }
             )))
         } else if !model.todos.isEmpty {

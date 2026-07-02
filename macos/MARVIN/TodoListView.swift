@@ -34,6 +34,8 @@ struct TodoListStrip: View {
     var onSelectPlan: ((String) -> Void)? = nil
     /// Re-open the saved plan markdown in the editor pane (tier 2 only).
     var onOpenPlanFile: (() -> Void)? = nil
+    /// Open the session Plans panel (tier 2 only). nil hides the button.
+    var onOpenPlansPanel: (() -> Void)? = nil
     /// Dismiss the plan checklist entirely (the ✕). nil hides the close button.
     var onClose: (() -> Void)? = nil
 
@@ -112,6 +114,16 @@ struct TodoListStrip: View {
                     .help("Switch the active plan (\(plans.count) plans this session)")
                 }
                 Spacer()
+                // Tier 2 only — browse every session plan with full steps.
+                if isPlan, let onOpenPlansPanel {
+                    Button(action: onOpenPlansPanel) {
+                        Label("Plans", systemImage: "list.bullet.rectangle")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(tint)
+                    .help("Browse this session's plans (\(plans.count))")
+                }
                 // Tier 2 only — re-focus the saved plan file in the editor.
                 if isPlan, let onOpenPlanFile {
                     Button(action: onOpenPlanFile) {
