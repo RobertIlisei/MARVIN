@@ -37,6 +37,7 @@ struct AppStatusBar: View {
     @State private var costPopoverOpen = false
     @State private var bellPopoverOpen = false
     @State private var contextPopoverOpen = false
+    @State private var activityPopoverOpen = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -218,10 +219,35 @@ struct AppStatusBar: View {
                 fileTypeSegment
                 Divider().frame(height: 10)
             }
+            activitySegment
             contextSegment
             toolUseSegment
             costSegment
             bellSegment
+        }
+    }
+
+    /// Background activity — scheduled wakeups + running jobs + the
+    /// auto-audit tail, with cancel affordances (routes added 2026-07-03;
+    /// previously model-only state the UI couldn't see).
+    private var activitySegment: some View {
+        Button {
+            activityPopoverOpen.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "clock.arrow.2.circlepath")
+                    .font(.system(size: 10))
+                Text("activity")
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Background jobs, scheduled wakeups, and recent auto-allowed mutations")
+        .popover(isPresented: $activityPopoverOpen, arrowEdge: .bottom) {
+            ActivityPopover(
+                projectId: bridge.activeProjectId,
+                sessionId: bridge.activeMarvinSessionId,
+                workDir: bridge.projectWorkDir
+            )
         }
     }
 

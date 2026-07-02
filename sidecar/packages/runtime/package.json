@@ -21,6 +21,7 @@
     "./turn-registry": "./src/turn-registry.ts",
     "./backlog": "./src/backlog.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
+    "./background-jobs": "./src/background-jobs.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
