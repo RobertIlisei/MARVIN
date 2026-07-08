@@ -24,8 +24,11 @@ import { join } from "node:path";
 export const INDEX_HEADER = "# Project Backlog";
 export const MAX_TITLE_CHARS = 120;
 export const MAX_BODY_CHARS = 2000;
-/** Open+doing rail — a guard against a runaway queue, not a workload target. */
-export const MAX_OPEN_ITEMS = 50;
+/** Open+doing rail — a guard against a runaway queue, not a workload
+ *  target. Raised 50 → 200 (2026-07-08): a real project hit 50 through
+ *  ordinary capture-at-discovery use; the rail exists to stop a model
+ *  auto-parking in a loop, not to force curation on the user. */
+export const MAX_OPEN_ITEMS = 200;
 
 // `provisional` (ADR-0047) is the pre-`open` stage: an item auto-captured the
 // moment it was noticed in flight, awaiting the user's keep (→ open) / dismiss
