@@ -6,6 +6,33 @@
 
 import SwiftUI
 
+/// How the active list is ordered. Persisted via @AppStorage.
+enum BacklogSort: String, CaseIterable, Identifiable {
+    case severity, newest, oldest, title
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .severity: return "Severity"
+        case .newest:   return "Newest"
+        case .oldest:   return "Oldest"
+        case .title:    return "Title"
+        }
+    }
+}
+
+/// Optional banding of the active list.
+enum BacklogGroup: String, CaseIterable, Identifiable {
+    case none, severity, status
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .none:     return "None"
+        case .severity: return "Severity"
+        case .status:   return "Status"
+        }
+    }
+}
+
 struct BacklogPanel: View {
     let workDir: String
     /// Parent seeds a turn from the item (model.sendControl) + flips it to `doing`.
@@ -22,6 +49,16 @@ struct BacklogPanel: View {
     /// with note). Nested sheet on the panel sheet — macOS stacks fine.
     @State private var detailItem: BacklogItem?
 
+    // Sort / group / filter — persisted so the user's view survives a
+    // relaunch (mirrors the localStorage-backed prefs the web shell used).
+    @AppStorage("marvin.backlog.sort")  private var sort: BacklogSort = .severity
+    @AppStorage("marvin.backlog.group") private var group: BacklogGroup = .none
+    @AppStorage("marvin.backlog.showHigh")     private var showHigh = true
+    @AppStorage("marvin.backlog.showMed")      private var showMed = true
+    @AppStorage("marvin.backlog.showLow")      private var showLow = true
+    @AppStorage("marvin.backlog.showResolved") private var showResolved = false
+
+    /// Actionable items (open+doing), unfiltered — drives the header badge.
     private var active: [BacklogItem] {
         items.filter { $0.status == "open" || $0.status == "doing" }
     }
@@ -30,10 +67,54 @@ struct BacklogPanel: View {
         items.filter { $0.status == "provisional" }
     }
 
+    /// Any non-provisional item exists → the sort/group/filter strip is worth
+    /// showing (and an empty visible-set means "filtered out", not "empty").
+    private var hasControllable: Bool {
+        items.contains { ["open", "doing", "done", "dismissed"].contains($0.status) }
+    }
+
+    /// The active list after status-scope + severity filter + sort. Provisional
+    /// items are handled in their own review band and never appear here.
+    private var visible: [BacklogItem] {
+        items
+            .filter { item in
+                switch item.status {
+                case "open", "doing":     return true
+                case "done", "dismissed": return showResolved
+                default:                  return false
+                }
+            }
+            .filter { severityAllowed($0.severity) }
+            .sorted(by: sortComparator)
+    }
+
+    /// Grouped view of `visible`. `.none` collapses to a single untitled band.
+    private var groupedSections: [(title: String, items: [BacklogItem])] {
+        let v = visible
+        switch group {
+        case .none:
+            return [("", v)]
+        case .severity:
+            return ["high", "med", "low"].compactMap { sev in
+                let g = v.filter { $0.severity == sev }
+                return g.isEmpty ? nil : (severityLabel(sev), g)
+            }
+        case .status:
+            return ["doing", "open", "done", "dismissed"].compactMap { st in
+                let g = v.filter { $0.status == st }
+                return g.isEmpty ? nil : (statusLabel(st), g)
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            if hasControllable {
+                controlStrip
+                Divider()
+            }
             if let error {
                 Text(error)
                     .font(.caption)
@@ -77,24 +158,91 @@ struct BacklogPanel: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
+    /// Sort / group / filter menus. Compact borderless-button menus so the
+    /// strip reads as chrome, not primary content.
+    private var controlStrip: some View {
+        HStack(spacing: 14) {
+            Menu {
+                Picker("Sort", selection: $sort) {
+                    ForEach(BacklogSort.allCases) { Text($0.label).tag($0) }
+                }
+            } label: {
+                Label("Sort: \(sort.label)", systemImage: "arrow.up.arrow.down")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+
+            Menu {
+                Picker("Group", selection: $group) {
+                    ForEach(BacklogGroup.allCases) { Text($0.label).tag($0) }
+                }
+            } label: {
+                Label("Group: \(group.label)", systemImage: "square.stack.3d.up")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+
+            Menu {
+                Section("Severity") {
+                    Toggle("High", isOn: $showHigh)
+                    Toggle("Med",  isOn: $showMed)
+                    Toggle("Low",  isOn: $showLow)
+                }
+                Divider()
+                Toggle("Show resolved", isOn: $showResolved)
+            } label: {
+                Label(filterLabel, systemImage: "line.3.horizontal.decrease.circle")
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+
+            Spacer()
+        }
+        .font(.caption)
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
+    }
+
     @ViewBuilder private var content: some View {
-        if active.isEmpty && provisional.isEmpty {
+        if visible.isEmpty && provisional.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
-                Text("No open backlog items.").font(.callout).foregroundStyle(.secondary)
-                Text("Parked follow-ups appear here and resurface next session.")
-                    .font(.caption).foregroundStyle(.tertiary)
+                if hasControllable {
+                    // Items exist but the filter hides them all.
+                    Text("No items match the current filter.").font(.callout).foregroundStyle(.secondary)
+                    Text("Loosen the severity filter, or turn on “Show resolved”.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    Text("No open backlog items.").font(.callout).foregroundStyle(.secondary)
+                    Text("Parked follow-ups appear here and resurface next session.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if !provisional.isEmpty { provisionalSection }
-                    ForEach(active) { item in row(item) }
+                    ForEach(groupedSections, id: \.title) { section in
+                        if !section.title.isEmpty {
+                            groupHeader(section.title, count: section.items.count)
+                        }
+                        ForEach(section.items) { item in row(item) }
+                    }
                 }
                 .padding(12)
             }
         }
+    }
+
+    private func groupHeader(_ title: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.top, 4)
     }
 
     /// ADR-0047 — items auto-captured this/last session, surfaced for a quick
@@ -149,18 +297,19 @@ struct BacklogPanel: View {
     }
 
     private func row(_ item: BacklogItem) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        let resolved = item.status == "done" || item.status == "dismissed"
+        return HStack(alignment: .top, spacing: 10) {
             Image(systemName: severityIcon(item.severity))
                 .foregroundStyle(severityColor(item.severity))
                 .help("severity: \(item.severity)")
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(item.title).font(.body.weight(.semibold))
+                        .strikethrough(resolved, color: .secondary)
                     if item.status == "doing" {
-                        Text("in progress")
-                            .font(.caption2)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.orange.opacity(0.15), in: Capsule())
+                        statusBadge("in progress", .orange)
+                    } else if resolved {
+                        statusBadge(item.status, .secondary)
                     }
                     Image(systemName: "chevron.right.circle")
                         .font(.caption)
@@ -174,23 +323,36 @@ struct BacklogPanel: View {
                 HStack(spacing: 8) {
                     Button("Details") { detailItem = item }
                         .controlSize(.small)
-                    Button("Promote to plan") { onPromote(item); onClose() }
-                        .controlSize(.small)
-                    Button("Done") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "done") } } }
-                        .controlSize(.small)
-                    Button("Dismiss") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "dismissed") } } }
-                        .controlSize(.small)
-                    Button("Export to issue") { Task { await exportIssue(item) } }
-                        .controlSize(.small)
+                    if resolved {
+                        Button("Reopen") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "open") } } }
+                            .controlSize(.small)
+                    } else {
+                        Button("Promote to plan") { onPromote(item); onClose() }
+                            .controlSize(.small)
+                        Button("Done") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "done") } } }
+                            .controlSize(.small)
+                        Button("Dismiss") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "dismissed") } } }
+                            .controlSize(.small)
+                        Button("Export to issue") { Task { await exportIssue(item) } }
+                            .controlSize(.small)
+                    }
                 }
                 .padding(.top, 2)
             }
             Spacer()
         }
+        .opacity(resolved ? 0.6 : 1)
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture { detailItem = item }
+    }
+
+    private func statusBadge(_ text: String, _ tint: Color) -> some View {
+        Text(text)
+            .font(.caption2)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(tint.opacity(0.15), in: Capsule())
     }
 
     private var addRow: some View {
@@ -247,6 +409,54 @@ struct BacklogPanel: View {
         case "low": return .secondary
         default: return .orange
         }
+    }
+
+    // MARK: - Sort / group / filter helpers
+
+    private func sortComparator(_ a: BacklogItem, _ b: BacklogItem) -> Bool {
+        switch sort {
+        case .severity:
+            let ra = severityRank(a.severity), rb = severityRank(b.severity)
+            if ra != rb { return ra < rb }
+            return a.created > b.created          // tiebreak: newest first
+        case .newest: return a.created > b.created
+        case .oldest: return a.created < b.created
+        case .title:  return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+        }
+    }
+
+    private func severityRank(_ s: String) -> Int {
+        switch s { case "high": return 0; case "med": return 1; default: return 2 }
+    }
+
+    private func severityAllowed(_ s: String) -> Bool {
+        switch s { case "high": return showHigh; case "low": return showLow; default: return showMed }
+    }
+
+    private func severityLabel(_ s: String) -> String {
+        switch s { case "high": return "High"; case "med": return "Med"; case "low": return "Low"; default: return s.capitalized }
+    }
+
+    private func statusLabel(_ s: String) -> String {
+        switch s {
+        case "doing":     return "In progress"
+        case "open":      return "Open"
+        case "done":      return "Done"
+        case "dismissed": return "Dismissed"
+        default:          return s.capitalized
+        }
+    }
+
+    /// Menu label reflecting active filters, so a non-default filter is
+    /// visible without opening the menu.
+    private var filterLabel: String {
+        var parts: [String] = []
+        if !(showHigh && showMed && showLow) {
+            let on = ["high", "med", "low"].filter(severityAllowed)
+            parts.append(on.isEmpty ? "none" : on.map(severityLabel).joined(separator: "/"))
+        }
+        if showResolved { parts.append("+resolved") }
+        return parts.isEmpty ? "Filter" : "Filter: \(parts.joined(separator: " "))"
     }
 }
 
