@@ -12,6 +12,24 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.56** — Release roll-up: the frontend catches up + the backlog becomes
+usable. Everything landed since v0.1.55 (18 commits) shipped without a tag; this
+rolls it into one release. Two arcs. **Frontend catches up to the backend**
+(2026-07-03 milestone): pane toggles that actually toggle, a graph pane
+(WKWebView over `/api/graph/html`), File → New Session, a backlog **detail view**
+(severity/body editing + resolve-with-note), a session **Plans panel** (browse /
+switch / continue / remove), and an activity surface (wakeups + background jobs
+get HTTP routes + UI). **Backlog becomes usable**: the open-items rail raised
+50 → 200 (a real project hit 50 through ordinary capture); the graph HTML cap
+4 MB → 32 MB (real graphs were 413-rejected and the pane lied "no graph"); the
+parked-items list now shows **immediately in a fresh chat** (a new session's
+`clear()` re-fetches the count instead of waiting for the first turn to light the
+tray chip); and **sort / group / filter** controls over the panel (severity ·
+newest · oldest · title; group by severity/status; severity + show-resolved
+filter, all `@AppStorage`-persisted). Also: the eight `@marvin/*` workspace
+packages, stranded at the stray `1.2.0`, are aligned to the real lineage.
+`swift build` + vitest green. Builds on v0.1.55.
+
 **v0.1.55** — Verify-then-remediate contract for the plan loop. Phase 6/7 walked
 the Definition of Done but had no explicit contract for a *failed* check. Now split
 by failure class: mechanical failures (typecheck/tests/build) self-remediate without

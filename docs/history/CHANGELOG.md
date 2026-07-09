@@ -9,6 +9,42 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-09 — v0.1.56 release roll-up: frontend catches up + backlog becomes usable.**
+  - **Trigger.** 18 commits landed since the `v0.1.55` tag without a release —
+    the whole "frontend catches up to the backend" arc (2026-07-03 milestone)
+    plus a run of backlog fixes — and the eight `@marvin/*` workspace packages
+    were still stamped with the stray `1.2.0` (from the abandoned v1.2/v1.3
+    tags) while the product lineage was `0.1.55`. Cut one honest release.
+  - **Frontend catches up.** Pane toggles that toggle for real; a graph pane
+    (WKWebView over `/api/graph/html?cwd=`); File → New Session (⌘⇧N); a backlog
+    **detail view** (severity/body editing, resolve-with-note, title immutable
+    since the id derives from it); a session **Plans panel** (browse / switch /
+    continue / remove); an activity surface (wakeups + background jobs get GET/
+    DELETE routes + a status-bar popover).
+  - **Backlog becomes usable.** (1) Open-items rail 50 → 200 — a real project
+    hit 50 through ordinary capture-at-discovery; the rail guards a runaway
+    auto-park loop, not the user's workload. (2) Graph HTML cap 4 MB → 32 MB —
+    a 4.8 MB real graph was 413-rejected and the pane reported "no graph built
+    yet" instead of the true failure; the pane now distinguishes
+    probing/ready/missing/failed. (3) **Fresh-chat visibility**: the backlog is
+    project-scoped and survives a new chat, but `clear()` zeroed
+    `backlogOpenCount` and nothing re-fetched it — the tray chip (gated on
+    `> 0`) stayed dark until the first turn completed, so parked items were
+    invisible until you sent a message. `clear()` now re-fetches the count
+    immediately (covers all five New-Session entry points in one place).
+    (4) **Sort / group / filter** over the panel: sort by severity (high→low,
+    newest tiebreak) · newest · oldest · title; group by none/severity/status
+    (labeled bands); filter by severity (multi-select) + show-resolved (muted,
+    struck-through rows with Reopen) — all `@AppStorage`-persisted; empty state
+    distinguishes "no open items" from "nothing matches the filter".
+  - **Version alignment.** Root + eight workspace `package.json` moved to
+    `0.1.56`; Info.plist stays a placeholder (stamped from the git tag by
+    `bin/marvin` / `release.yml` at build). `swift build` clean; vitest green.
+  - **Verification.** `swift build` links; the bundled install
+    (`bin/marvin install-macos-app --bundled`) health-probed and installed to
+    `~/Applications/MARVIN.app`. Tag `v0.1.56` → `release.yml` builds the zip +
+    sha and the homebrew-marvin cask bump follows.
+
 - **2026-07-02 — audit truth pass: claimed-vs-implemented findings fixed across tests, gate, and docs.**
   - **Trigger.** A full claimed-vs-implemented audit (six parallel read-only
     auditors over ~75 documented claims + live test runs). ~85-90% of claims
