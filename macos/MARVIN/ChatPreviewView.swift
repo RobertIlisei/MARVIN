@@ -837,6 +837,13 @@ final class ChatPreviewModel {
         loadedSessionId = nil
         isHydrating = false
         resetSessionStrips()
+        // ADR-0044 — the backlog is PROJECT-scoped, not session-scoped: it
+        // survives a new chat. Zeroing the count above hides the tray chip; a
+        // new session isn't guaranteed to hydrate() (fresh chats have no
+        // transcript) and the turn-completion refresh only fires after the
+        // first message — so without this the parked items stay invisible
+        // until the user sends something. Re-light immediately.
+        refreshBacklogCount()
     }
 
     /// Dismiss the plan checklist (the ✕ on the strip). ADR-0046 — drops only
