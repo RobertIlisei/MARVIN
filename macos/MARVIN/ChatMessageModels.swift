@@ -206,6 +206,11 @@ enum ChatStreamReducer {
         let duration_ms: Int?
         let result: String?
         let session_id: String?
+        // Wall-clock the turn started / ended (ISO-8601), stamped by the
+        // sidecar onto the result event. Optional — old transcripts and
+        // error paths omit them; the footer degrades to duration-only.
+        let marvin_started_at: String?
+        let marvin_ended_at: String?
     }
 
     /// One inner content block. Tagged by `type`; we use ChatJSON
@@ -415,7 +420,15 @@ enum ChatStreamReducer {
         let success = env.is_error == false
         let text: String
         if success, let ms = env.duration_ms {
-            text = "completed in \(DurationFormat.humanize(ms: ms))"
+            var s = "completed in \(DurationFormat.humanize(ms: ms))"
+            // Append the wall-clock span when the sidecar stamped it, so
+            // "completed in 6m 9s" reads "… · 17:45:31 → 17:51:40" and lines
+            // up against logs. Both must resolve, else stay duration-only.
+            if let start = env.marvin_started_at.flatMap({ ClockFormat.time(iso: $0) }),
+               let end = env.marvin_ended_at.flatMap({ ClockFormat.time(iso: $0) }) {
+                s += " · \(start) → \(end)"
+            }
+            text = s
         } else if let r = env.result {
             text = "ended: \(r)"
         } else {

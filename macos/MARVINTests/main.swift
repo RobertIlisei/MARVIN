@@ -389,6 +389,35 @@ runner.suite("DurationFormat") {
     }
 }
 
+// Fixed zone so the assertions don't depend on the test machine's TZ.
+private let utc = TimeZone(identifier: "UTC")!
+
+runner.suite("ClockFormat") {
+    runner.test("ISO with fractional seconds renders HH:mm:ss") {
+        runner.expect(ClockFormat.time(iso: "2026-07-16T17:45:40.123Z", timeZone: utc),
+                      equals: "17:45:40", "Node toISOString() shape")
+    }
+
+    runner.test("ISO without fractional seconds also parses") {
+        runner.expect(ClockFormat.time(iso: "2026-07-16T17:45:40Z", timeZone: utc),
+                      equals: "17:45:40", "plain internet-date-time")
+    }
+
+    runner.test("zone offset is applied") {
+        // 17:45:40Z is 20:45:40 in +03:00.
+        let plus3 = TimeZone(secondsFromGMT: 3 * 3_600)!
+        runner.expect(ClockFormat.time(iso: "2026-07-16T17:45:40Z", timeZone: plus3),
+                      equals: "20:45:40", "shifted into +03:00")
+    }
+
+    runner.test("unparseable input returns nil (footer degrades to duration-only)") {
+        runner.expect(ClockFormat.time(iso: "not-a-timestamp", timeZone: utc) == nil,
+                      equals: true, "garbage → nil")
+        runner.expect(ClockFormat.time(iso: "", timeZone: utc) == nil,
+                      equals: true, "empty → nil")
+    }
+}
+
 // MARK: - PlanRebaseGuard (ADR-0052)
 
 runner.suite("plan-rebase-guard") {
