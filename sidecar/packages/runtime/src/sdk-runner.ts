@@ -1281,8 +1281,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     const turnPrompt = input.planContext
       ? `${message}\n\n<system-reminder>\n${input.planContext}\n</system-reminder>`
       : message;
+    // Wall-clock when the model turn began — stamped onto the terminal
+    // `result` event below so the chat footer can show "start → end"
+    // (the SDK's duration_ms alone can't say *when* it ran). These ride
+    // on the persisted result cli.event, so replay reconstructs the same
+    // timestamps — the ONLY seam that survives transcript reload (the
+    // client skips turn.completed on replay).
+    const turnStartedAtIso = new Date().toISOString();
     const q = query({ prompt: turnPrompt, options });
     for await (const ev of q) {
+      if (ev.type === "result") {
+        // Enrich BEFORE onEvent forwards + persists it, so the wire event
+        // and the on-disk cli.event both carry the timestamps.
+        Object.assign(ev, {
+          marvin_started_at: turnStartedAtIso,
+          marvin_ended_at: new Date().toISOString(),
+        });
+      }
       onEvent(ev);
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {
         lastSessionId = ev.session_id;
