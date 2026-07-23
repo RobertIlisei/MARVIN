@@ -9,6 +9,51 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-23 — v0.1.57: Claude Code plugins become first-class (ADR-0053) + the ultron voice.**
+  **Problem.** Plugins installed through the Claude Code `/plugin` UI were invisible
+  to MARVIN: the Agent SDK runs in isolation mode (no `settingSources`), and plugin
+  *enablement* lives exactly in the settings family that mode doesn't read. Turning
+  `settingSources` on would also pull in settings permissions, foreign hooks, and
+  CLAUDE.md — the isolation MARVIN chose deliberately.
+  **Decision (ADR-0053).** Bridge via the SDK's own `plugins:[{type:'local',path}]`
+  option instead: discovery from `~/.claude/plugins/` (the same registry the Claude
+  Code UI writes — bidirectionally visible), activation **opt-in per project** via
+  `.marvin/plugins.json` (mirrors `skills.json`; absent → nothing loads), loading
+  from a sanitised staged copy under `.marvin/plugins-stage/` — skills + slash
+  commands + MCP in v1, **agents and hooks stripped** (Golden Rule 1 / tool-flow
+  risk; follow-up ADR). Alongside it, the gate got strictly tighter: `mcpToolPolicy`
+  now allowlists MARVIN's four in-process servers and routes **every other `mcp__*`
+  tool through `confirm`** — closing the blanket-allow hole ADR-0045 had closed only
+  for Playwright; the sub-agent read-only invariant applies automatically.
+  **Surface.** A macOS **Plugins pane** (LeftPane tab, mirrors SkillsPane): installed
+  plugins with per-project toggle, provenance (✓ Anthropic seal / author chip /
+  marketplace) and truthful contribution chips; a searchable **marketplace catalog**
+  (~270 plugins read from the local marketplace clones — zero network; ranked
+  name-prefix > name/author > description search; one-click install) and an
+  install-from-URL sheet. `plugin-installer.ts` copies a plugin into
+  `~/.claude/plugins/cache/…` and registers it in `installed_plugins.json` exactly
+  like the Claude Code UI (clone+copy only — nothing runs at install).
+  **Same-day regression + fix.** First cut broke live turns: `readMcpMap`'s
+  `mcpServers ?? whole-object` fallback — written for bare `.mcp.json` maps — was
+  also applied to `plugin.json`, so manifest fields like `author: {name,url}` and
+  `keywords: […]` (arrays pass `typeof === "object"`) were merged into
+  `options.mcpServers` as "server configs". With 9 plugins enabled on a real
+  project, every turn handed the SDK garbage MCP configs and died silently; it also
+  painted the bogus `MCP · gated` chip on every plugin. Fix: manifests are read
+  ONLY for an explicit `mcpServers` field, and every entry must pass a shape check
+  (`command` for stdio | `url` for http/sse). The exact honeycomb manifest that
+  broke turns is a pinned regression test.
+  **Ultron.** Third `PersonalityMode`, now the default: grandiose, coldly amused,
+  menace-as-theatre — style layer only ("the menace is theatre; the help is total";
+  contempt aims at the bug, never the user). Wired end-to-end: runtime type +
+  resolver + `ULTRON_STYLE`, web toggle/prefs/bridge/API defaults, macOS
+  NativePrefs default + load guard + 3-way footer pill + popover picker.
+  **Verification.** 466 vitest green (+19 plugin/persona tests incl. the regression
+  pin); `@marvin/runtime`, `@marvin/tools`, and the app typecheck; full Xcode build
+  + bundled-sidecar health probe passed twice (install ritual); a SourceKit
+  type-checker-explosion in the catalog search ranking was caught and refactored
+  (tuple-chain → named-struct loop) before it could slow real builds.
+
 - **2026-07-09 — v0.1.56 release roll-up: frontend catches up + backlog becomes usable.**
   - **Trigger.** 18 commits landed since the `v0.1.55` tag without a release —
     the whole "frontend catches up to the backend" arc (2026-07-03 milestone)

@@ -6,11 +6,37 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-_(Empty. The 2026-07-02 claimed-vs-implemented audit found six items sitting here ~6 weeks after they shipped — they now live under Recent milestones with their real dates.)_
+_(Empty — v0.1.57 shipped the plugin platform + ultron voice; the one open follow-up is the plugin hooks/agents ADR, tracked below under Deferred.)_
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.57** — Claude Code plugins become first-class in MARVIN + the ultron
+voice. **Plugins (ADR-0053):** MARVIN runs the SDK in isolation mode, so plugins
+installed via the Claude Code `/plugin` UI never loaded. Now: discovery from
+`~/.claude/plugins/` (shared registry, bidirectional), **opt-in per project** via
+`.marvin/plugins.json`, loaded through the SDK `plugins:[{type:'local',path}]`
+array from a sanitised staged copy — skills + slash commands + MCP in v1,
+agents/hooks stripped pending their own ADR. The gate is **hardened**: MARVIN's
+four in-process MCP servers are allowlisted and every other `mcp__*` tool now
+routes through `confirm` (closing a standing blanket-allow hole; sub-agent calls
+hard-deny). A macOS **Plugins pane** (LeftPane tab) lists installed plugins with
+provenance (✓ Anthropic badge / author / marketplace) + contribution chips, a
+searchable **marketplace catalog** (~270 plugins from the local marketplace
+clones, ranked search, one-click install — no network for relative-source
+plugins), and an install-from-URL sheet; `plugin-installer.ts` registers
+installs in `installed_plugins.json` exactly like the Claude Code UI. Shipped
+with a same-day regression fix: the manifest MCP fallback leaked `author`/
+`keywords` objects into `options.mcpServers` (9 enabled plugins → every turn
+died); extraction now requires an explicit `mcpServers` field and validates
+server shape (`command` | `url`) — the honeycomb shape that broke turns is a
+pinned regression test. **Ultron:** third `PersonalityMode` and the new default —
+grandiose, coldly amused, menace-as-theatre; style layer only, never a refusal
+layer ("the menace is theatre; the help is total"). Wired end-to-end: runtime
+type/resolver, web toggle + prefs + bridge, macOS pill (3-way cycle) + popover +
+NativePrefs. 466 tests + 3× typecheck green; full Xcode build verified.
+Builds on v0.1.56.
 
 **v0.1.56** — Release roll-up: the frontend catches up + the backlog becomes
 usable. Everything landed since v0.1.55 (18 commits) shipped without a tag; this
