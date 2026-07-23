@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
       { status: 409, headers: { "Content-Type": "application/json" } },
     );
   }
-  const personality: PersonalityMode = body.personality ?? "marvin";
+  const personality: PersonalityMode = body.personality ?? "ultron";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
   const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
   const playwrightEnabled: boolean = body.playwrightEnabled ?? false;

@@ -33,8 +33,13 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const workDir = params.get("workDir")?.trim();
   const model = params.get("model")?.trim() || null;
+  const personalityParam = params.get("personality");
   const personality: PersonalityMode =
-    params.get("personality") === "neutral" ? "neutral" : "marvin";
+    personalityParam === "neutral"
+      ? "neutral"
+      : personalityParam === "marvin"
+        ? "marvin"
+        : "ultron";
 
   if (!workDir) {
     return NextResponse.json({ error: "workDir is required" }, { status: 400 });

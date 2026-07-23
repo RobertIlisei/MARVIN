@@ -372,9 +372,13 @@ export default function Home() {
     // events are just the cross-process intent signal.
     const onSetPersonality = (e: Event) => {
       const detail = (e as CustomEvent).detail as
-        | { value?: "marvin" | "neutral" }
+        | { value?: "marvin" | "neutral" | "ultron" }
         | undefined;
-      if (detail?.value === "marvin" || detail?.value === "neutral") {
+      if (
+        detail?.value === "marvin" ||
+        detail?.value === "neutral" ||
+        detail?.value === "ultron"
+      ) {
         setPersonality(detail.value);
       }
     };

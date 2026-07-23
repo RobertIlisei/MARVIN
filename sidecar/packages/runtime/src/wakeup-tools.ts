@@ -32,7 +32,7 @@ export interface WakeupToolContext {
   cwd: string;
   model: string;
   advisorModel: string | null;
-  personality: "marvin" | "neutral";
+  personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated";
   /** Opt-in Playwright MCP (ADR-0045); the fired turn inherits this turn's toggle. */
   playwrightEnabled?: boolean | undefined;

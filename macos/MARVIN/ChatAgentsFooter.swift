@@ -78,11 +78,11 @@ struct ChatAgentsFooter: View {
         .help("\(role): \(value) — click to configure")
     }
 
-    /// Voice / personality pill. Single click toggles between
-    /// "marvin" and "neutral" (only two options, like the web peer).
+    /// Voice / personality pill. Single click cycles the three voices
+    /// (ultron → marvin → neutral → ultron), matching the web peer.
     private var personalityPill: some View {
-        let active = bridge.personality ?? "marvin"
-        let next = active == "marvin" ? "neutral" : "marvin"
+        let active = bridge.personality ?? "ultron"
+        let next = active == "ultron" ? "marvin" : active == "marvin" ? "neutral" : "ultron"
         return Button {
             NativePrefs.shared.setPersonality(next)
         } label: {
@@ -94,7 +94,7 @@ struct ChatAgentsFooter: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .foregroundStyle(active == "marvin" ? Color.accentColor : .secondary)
+            .foregroundStyle(active == "neutral" ? Color.secondary : Color.accentColor)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color(nsColor: .underPageBackgroundColor))
@@ -105,7 +105,7 @@ struct ChatAgentsFooter: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Voice — click to switch between MARVIN and neutral")
+        .help("Voice — click to cycle ultron / marvin / neutral")
     }
 
     /// Permission-strategy badge. Auto = green; Gated = amber. Tap
