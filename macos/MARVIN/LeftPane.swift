@@ -16,6 +16,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
     case search
     case sourceControl
     case skills
+    case plugins
     var id: String { rawValue }
 
     var label: String {
@@ -24,6 +25,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .search: return "Search"
         case .sourceControl: return "Source Control"
         case .skills: return "Skills"
+        case .plugins: return "Plugins"
         }
     }
 
@@ -33,6 +35,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
         case .skills: return "sparkle"
+        case .plugins: return "puzzlepiece.extension"
         }
     }
 }
@@ -69,6 +72,9 @@ struct LeftPane: View {
                 SkillsPane()
                     .opacity(tab == .skills ? 1 : 0)
                     .allowsHitTesting(tab == .skills)
+                PluginsPane()
+                    .opacity(tab == .plugins ? 1 : 0)
+                    .allowsHitTesting(tab == .plugins)
             }
         }
     }

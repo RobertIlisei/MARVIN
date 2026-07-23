@@ -239,16 +239,30 @@ function defaultReason(name: ToolName, cls: ToolPolicyClass): string {
   return `${name} is not permitted.`;
 }
 
-// ── External MCP server classification (ADR-0045) ────────────────────────────
+// ── External MCP server classification (ADR-0045, generalized ADR-0053) ──────
 //
-// The gate auto-allows any tool NOT in KNOWN_TOOL_NAMES — safe for MARVIN's
-// in-process servers (graph/memory/backlog/control, all read-only), but NOT for
-// an external server like Playwright MCP, whose tools navigate to arbitrary URLs
-// (egress) and execute code (`browser_evaluate`, `browser_run_code_unsafe`).
-// `classifyToolCall` consults this BEFORE the blanket-allow so those go through
-// the normal ladder (incl. the subagent read-only collapse). Returns null for
-// any MCP name this policy doesn't own, so trusted in-process servers keep their
-// blanket-allow.
+// The gate auto-allows any tool NOT in KNOWN_TOOL_NAMES. That is safe ONLY for
+// MARVIN's own in-process servers (graph/memory/backlog/control — all read-only)
+// — NOT for an external server like Playwright MCP (egress + host-code exec) or
+// a Claude Code PLUGIN's MCP server (arbitrary, unknown-trust tools). So the
+// policy INVERTS the default: MARVIN's in-process servers are allowlisted (→
+// null → blanket-allow); every OTHER `mcp__*` tool goes through the ladder.
+// `classifyToolCall` consults this BEFORE the blanket-allow, so the subagent
+// read-only collapse applies to anything that resolves to confirm/deny.
+//
+// Before ADR-0053 this returned null for everything non-Playwright, which
+// blanket-allowed plugin MCP tools ungated even in gated mode. The inversion
+// closes that hole at the source rather than per-server.
+
+/** Prefixes of MARVIN's trusted, read-only, in-process MCP servers. Tools under
+ *  these keep the blanket-allow; nothing else does. Keep in lockstep with the
+ *  `mcpServers` MARVIN registers in `sdk-runner.ts`. */
+const TRUSTED_INPROCESS_MCP_PREFIXES: readonly string[] = [
+  "mcp__marvin-graph__",
+  "mcp__marvin-memory__",
+  "mcp__marvin-backlog__",
+  "mcp__marvin-control__",
+];
 
 /** The mcpServers key MARVIN registers Playwright under → tools arrive as
  *  `mcp__playwright__browser_*`. Shared with sdk-runner's registration. */
@@ -270,15 +284,27 @@ const PLAYWRIGHT_AUTO: ReadonlySet<string> = new Set([
 const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]);
 
 /**
- * Classify an external MCP tool name. Returns `null` when the name isn't an
- * external server this policy governs (caller then keeps the blanket-allow).
- * Everything Playwright that isn't explicitly auto/deny falls to `confirm`
- * (state-changing / egress / interaction — e.g. navigate, click, evaluate).
+ * Classify an MCP tool name.
+ *
+ * - Returns `null` for MARVIN's trusted in-process servers (graph/memory/
+ *   backlog/control) — the caller keeps the blanket-allow. Also `null` for a
+ *   non-MCP name (not our concern).
+ * - Playwright: the auto/deny/confirm ladder (ADR-0045).
+ * - Every OTHER `mcp__*` tool — i.e. a plugin-contributed MCP server
+ *   (ADR-0053) — falls to `confirm`: unknown trust, assume state-changing /
+ *   egress. The subagent read-only invariant then hard-denies it for any
+ *   `agentID` call (confirm ≠ allow).
  */
 export function mcpToolPolicy(name: string): ToolPolicyClass | null {
-  if (!name.startsWith(PLAYWRIGHT_PREFIX)) return null;
-  const tool = name.slice(PLAYWRIGHT_PREFIX.length);
-  if (PLAYWRIGHT_DENY.has(tool)) return "deny";
-  if (PLAYWRIGHT_AUTO.has(tool)) return "auto";
+  if (!name.startsWith("mcp__")) return null;
+  // MARVIN's own in-process servers stay blanket-allowed.
+  if (TRUSTED_INPROCESS_MCP_PREFIXES.some((p) => name.startsWith(p))) return null;
+  if (name.startsWith(PLAYWRIGHT_PREFIX)) {
+    const tool = name.slice(PLAYWRIGHT_PREFIX.length);
+    if (PLAYWRIGHT_DENY.has(tool)) return "deny";
+    if (PLAYWRIGHT_AUTO.has(tool)) return "auto";
+    return "confirm";
+  }
+  // Any other external MCP server (Claude Code plugin, etc.): gate by default.
   return "confirm";
 }

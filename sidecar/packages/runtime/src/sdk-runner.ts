@@ -22,11 +22,12 @@
  *      when the user clicks allow or deny.
  */
 
-import { type AgentDefinition, type CanUseTool, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import { loadEnabledPlugins } from "./plugin-loader";
 import { createWakeupMcpServer } from "./wakeup-tools";
 import { recordPreImage } from "./change-checkpoints";
 import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
@@ -303,7 +304,7 @@ export interface RunAgentInput {
    */
   marvinSessionId?: string;
   projectId?: string;
-  personality?: "marvin" | "neutral";
+  personality?: "marvin" | "neutral" | "ultron";
   /** Depth of this turn in a wakeup chain (0 = human-started). ADR-0031. */
   wakeupDepth?: number;
   onEvent: (event: SDKMessage) => void;
@@ -1139,6 +1140,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // option is omitted, the SDK runs with user-global skills only.
   const projectSkillsPlugin = projectSkillsPluginConfig(cwd);
 
+  // Installed Claude Code plugins, opt-in per project (ADR-0053). Discovered
+  // from `~/.claude/plugins/`, activated only when listed in
+  // `<workDir>/.marvin/plugins.json`. Returns empty for a non-project cwd or
+  // when nothing is enabled — so a session with no `plugins.json` is unchanged.
+  // v1 loads skills + commands via a sanitised staged copy (agents/hooks
+  // stripped); plugin-declared MCP servers are merged into `mcpServers` below,
+  // where the ADR-0053 gate routes their tools through `confirm`.
+  const enabledPlugins = loadEnabledPlugins(cwd);
+
   // Permission wiring. Both modes install a `canUseTool` callback so the
   // hard-deny floor (rm -rf /, force-push to main, etc.) and the auto-
   // audit log keep firing in either path. In `auto` mode the logger
@@ -1201,13 +1211,22 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             },
           }
         : {}),
+      // Plugin-declared MCP servers (ADR-0053). Namespaced by the plugin's own
+      // server name; their tools arrive as `mcp__<name>__*` and the gate routes
+      // them through `confirm` (never the blanket-allow the in-process servers
+      // above get). Empty unless a plugin is opted in via `.marvin/plugins.json`.
+      ...(enabledPlugins.mcpServers as Record<string, McpServerConfig>),
     },
     // Project-local skills (ADR-0024). When `<workDir>/.marvin/skills/`
     // contains at least one SKILL.md, the SDK loads the synthesised
     // plugin and the project's skills become callable from this turn.
     // Project-local skill names SHADOW user-global ones on conflict —
     // mirrors the per-project MCP override precedence rule.
-    ...(projectSkillsPlugin ? { plugins: [projectSkillsPlugin] } : {}),
+    // …plus any opt-in installed plugins (ADR-0053), loaded from their
+    // sanitised staged copies. Both sources share the one `plugins:` array.
+    ...((projectSkillsPlugin || enabledPlugins.plugins.length > 0)
+      ? { plugins: [...(projectSkillsPlugin ? [projectSkillsPlugin] : []), ...enabledPlugins.plugins] }
+      : {}),
     // ADR-0014: register the read-only `scout` subagent so MARVIN can
     // dispatch parallel research (graph-first, read-only, synthesis-
     // returning) via `Task` with `subagent_type: "scout"`.

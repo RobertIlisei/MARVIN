@@ -103,9 +103,19 @@ describe("classifyToolCall", () => {
     expect(r.decision).toBe("confirm");
   });
 
-  it("allows tools outside the gated set (Task, MCP, etc.)", () => {
+  it("allows MARVIN's own in-process MCP servers (graph/memory/backlog/control)", () => {
+    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-memory__recall", {}).decision).toBe("allow");
+  });
+
+  it("confirms an unknown/plugin MCP server — no longer blanket-allowed (ADR-0053)", () => {
     const r = classifyToolCall("mcp__some_server__some_tool", {});
-    expect(r.decision).toBe("allow");
+    expect(r.decision).toBe("confirm");
+  });
+
+  it("hard-denies a plugin MCP tool from a sub-agent (read-only invariant holds)", () => {
+    const r = classifyToolCall("mcp__some_plugin__mutate", {}, { agentID: "scout-1" });
+    expect(r.decision).toBe("deny");
   });
 });
 
