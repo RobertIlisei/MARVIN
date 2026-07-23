@@ -164,11 +164,21 @@ interface PluginEntry {
   name: string;
   displayName?: string;
   description?: string;
+  /** Marketplace catalog category (e.g. "development", "database"). */
+  category?: string;
+  /** Catalog author — a string or `{ name, email?, url? }`. The provenance
+   *  signal ("Anthropic" vs a third party). */
+  author?: string | { name?: string };
   source: string | Record<string, unknown>;
 }
 
-/** Read a `.claude-plugin/marketplace.json` if `dir` is a marketplace. */
-function readMarketplace(dir: string): { name: string; plugins: PluginEntry[] } | null {
+/** A resolved plugin entry from a marketplace manifest. Exported so the
+ *  full-plugin installer (ADR-0053 Phase 3) can reuse marketplace parsing. */
+export type { PluginEntry };
+
+/** Read a `.claude-plugin/marketplace.json` if `dir` is a marketplace.
+ *  Exported for the full-plugin installer (plugin-installer.ts). */
+export function readMarketplace(dir: string): { name: string; plugins: PluginEntry[] } | null {
   const p = join(dir, ".claude-plugin", "marketplace.json");
   if (!existsSync(p)) return null;
   try {
@@ -182,7 +192,10 @@ function readMarketplace(dir: string): { name: string; plugins: PluginEntry[] } 
   return null;
 }
 
-function cloneInto(cloneUrl: string, ref: string | undefined, tmps: string[]): string | null {
+/** Shallow-clone `cloneUrl` (optionally at `ref`) into a fresh temp dir,
+ *  tracked in `tmps` for the caller to clean up. Returns null on failure.
+ *  Exported for the full-plugin installer (plugin-installer.ts). */
+export function cloneInto(cloneUrl: string, ref: string | undefined, tmps: string[]): string | null {
   const t = mkdtempSync(join(tmpdir(), "marvin-plug-"));
   tmps.push(t);
   const args = ["clone", "--depth=1"];
@@ -197,8 +210,9 @@ function cloneInto(cloneUrl: string, ref: string | undefined, tmps: string[]): s
 }
 
 /** Resolve a plugin entry's `source` to a local directory, cloning a
- *  sub-repo if needed (tracked in `tmps` for cleanup). */
-function resolvePluginDir(
+ *  sub-repo if needed (tracked in `tmps` for cleanup). Exported for the
+ *  full-plugin installer (plugin-installer.ts). */
+export function resolvePluginDir(
   repoRoot: string,
   entry: PluginEntry,
   tmps: string[],

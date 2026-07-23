@@ -221,9 +221,11 @@ describe("KNOWN_TOOL_NAMES export (audit finding #21)", () => {
 describe("mcpToolPolicy — Playwright MCP classification (ADR-0045)", () => {
   const pw = (t: string) => `mcp__playwright__${t}`;
 
-  it("returns null for non-Playwright MCP names (trusted servers stay blanket-allowed)", () => {
+  it("returns null for MARVIN's trusted in-process servers + non-MCP names (blanket-allowed)", () => {
     expect(mcpToolPolicy("mcp__marvin-graph__graph_search")).toBeNull();
     expect(mcpToolPolicy("mcp__marvin-memory__remember")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-backlog__backlog_add")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-control__schedule_wakeup")).toBeNull();
     expect(mcpToolPolicy("Read")).toBeNull();
   });
 
@@ -241,5 +243,21 @@ describe("mcpToolPolicy — Playwright MCP classification (ADR-0045)", () => {
     for (const t of ["browser_navigate", "browser_click", "browser_type", "browser_evaluate", "browser_file_upload", "browser_close", "browser_some_future_tool"]) {
       expect(mcpToolPolicy(pw(t))).toBe("confirm");
     }
+  });
+});
+
+describe("mcpToolPolicy — plugin MCP servers gated by default (ADR-0053)", () => {
+  it("confirm for any non-trusted, non-Playwright MCP tool (plugin-contributed)", () => {
+    // The blanket-allow hole: before ADR-0053 these returned null → auto-run
+    // ungated even in gated mode. Now they route through confirm.
+    expect(mcpToolPolicy("mcp__honeycomb__run_query")).toBe("confirm");
+    expect(mcpToolPolicy("mcp__claude-security__scan")).toBe("confirm");
+    expect(mcpToolPolicy("mcp__some-plugin__any_tool")).toBe("confirm");
+  });
+
+  it("still blanket-allows MARVIN's own servers and ignores non-MCP names", () => {
+    expect(mcpToolPolicy("mcp__marvin-graph__graph_neighbors")).toBeNull();
+    expect(mcpToolPolicy("Bash")).toBeNull();
+    expect(mcpToolPolicy("TodoWrite")).toBeNull();
   });
 });

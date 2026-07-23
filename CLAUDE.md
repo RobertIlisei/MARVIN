@@ -233,6 +233,35 @@ If you add a new skill, also add it to the "Skill triggers — deterministic
 invocation" section (or its "Other skills available by name" list) so
 MARVIN knows the trigger conditions.
 
+## Claude Code plugins — opt-in per project (ADR-0053)
+
+MARVIN runs the Agent SDK in **isolation mode** (no `settingSources`), so
+plugins installed through the Claude Code `/plugin` UI don't load automatically —
+their *enablement* lives in the settings family MARVIN deliberately doesn't read.
+[ADR-0053](./docs/decisions/0053-plugins-as-local-plugin-loader.md) bridges that
+without the `settingSources` blast radius:
+
+- **Discovery** is from `~/.claude/plugins/` — the same registry the Claude Code
+  UI writes — so a plugin installed there is immediately *available* to MARVIN.
+- **Activation is opt-in, per project.** A plugin loads into a turn only when
+  listed in `<workDir>/.marvin/plugins.json` (`{ "enabled": ["honeycomb", …] }`,
+  mirroring `skills.json`). Empty/absent → nothing loads. Managed from the macOS
+  **Plugins pane** (`PluginsPane.swift`, a `LeftPane` tab) over the `/api/plugins`
+  route (`plugin-loader.ts`: `listInstalledPlugins` / `setEnabledPlugins`).
+- **Install from inside MARVIN** (Phase 3): the Plugins pane "Install" sheet →
+  `/api/plugins/install` → `plugin-installer.ts` clones a marketplace/plugin repo,
+  copies the plugin into `~/.claude/plugins/cache/…`, and registers it in
+  `installed_plugins.json` (same registry the Claude Code UI uses — installs are
+  bidirectionally visible). Clone+copy only; nothing runs at install.
+- **Loaded via the SDK `plugins:[{type:'local',path}]` array** (a sanitised
+  staged copy under `.marvin/plugins-stage/`). v1 loads **skills + slash
+  commands + MCP servers**; plugin **agents** (Golden Rule 1) and **hooks**
+  (tool-flow risk) are stripped, pending a follow-up ADR.
+- **Gate change:** `mcpToolPolicy` (`@marvin/tools/policy`) now allowlists
+  MARVIN's own in-process servers and routes **every other `mcp__*` tool through
+  `confirm`** — closing the prior blanket-allow of unknown MCP tools. Plugin MCP
+  tools are therefore confirm-gated, and the subagent read-only invariant applies.
+
 ## Browser automation — Playwright CLI (default) + opt-in MCP (ADR-0045)
 
 Two paths. **Default:** the Playwright **CLI** via `Bash` — one-shot captures and
