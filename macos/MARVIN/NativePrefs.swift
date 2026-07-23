@@ -24,7 +24,7 @@ final class NativePrefs {
 
     // MARK: - In-memory prefs (authoritative after init)
 
-    private(set) var personality: String = "marvin"
+    private(set) var personality: String = "ultron"
     private(set) var executorModel: String? = nil
     private(set) var advisorModel: String? = nil
     private(set) var permissionStrategy: String = "auto"
@@ -309,7 +309,7 @@ final class NativePrefs {
 
     private func loadFromDefaults() {
         let d = UserDefaults.standard
-        if let p = d.string(forKey: "marvin.personality"), p == "marvin" || p == "neutral" {
+        if let p = d.string(forKey: "marvin.personality"), p == "marvin" || p == "neutral" || p == "ultron" {
             personality = p
         }
         executorModel = d.string(forKey: "marvin.model.executor").flatMap { $0.isEmpty ? nil : $0 }

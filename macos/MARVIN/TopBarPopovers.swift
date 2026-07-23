@@ -16,7 +16,7 @@
 //     localStorage stays the source of truth.
 //
 // Wire shape (each setter):
-//   marvin:set-personality         { value: "marvin" | "neutral" }
+//   marvin:set-personality         { value: "ultron" | "marvin" | "neutral" }
 //   marvin:set-permission-strategy { value: "auto" | "gated" }
 //   marvin:set-models              { executor: string|null, advisor: string|null }
 //   marvin:toggle-pane             { key: "files"|"graph"|"brain"|"preview"|"terminal" }
@@ -218,8 +218,8 @@ struct SetupPopoverContent: View {
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 8)
                 segmented(
-                    options: [("marvin", "marvin"), ("neutral", "neutral")],
-                    active: bridge.personality ?? "marvin",
+                    options: [("ultron", "ultron"), ("marvin", "marvin"), ("neutral", "neutral")],
+                    active: bridge.personality ?? "ultron",
                     onSelect: { value in
                         NativePrefs.shared.setPersonality(value)
                     }

@@ -53,7 +53,7 @@ export interface BackgroundJobContext {
   cwd: string;
   model: string;
   advisorModel: string | null;
-  personality: "marvin" | "neutral";
+  personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated";
   thinkingMode: string;
   advisorThinkingMode?: string | undefined;

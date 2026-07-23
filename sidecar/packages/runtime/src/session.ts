@@ -36,7 +36,7 @@ export type SessionTurn =
       model: string;
       advisorModel: string | null;
       runtimeMode: "opus" | "advisor";
-      personality: "marvin" | "neutral";
+      personality: "marvin" | "neutral" | "ultron";
       permissionStrategy: "auto" | "gated";
       turnId: string;
     }

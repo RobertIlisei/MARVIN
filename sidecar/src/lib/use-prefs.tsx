@@ -75,10 +75,10 @@ export interface MarvinPrefs {
 /**
  * Default prefs used during SSR (and as the post-reset baseline).
  * Mirrors the historical defaults from page.tsx — files + brain on,
- * everything else off; auto permission strategy; marvin voice.
+ * everything else off; auto permission strategy; ultron voice.
  */
 export const DEFAULT_PREFS: MarvinPrefs = {
-  personality: "marvin",
+  personality: "ultron",
   executorModel: null,
   advisorModel: null,
   permissionStrategy: "auto",
@@ -126,7 +126,7 @@ function readPrefs(): MarvinPrefs {
   const next: MarvinPrefs = { ...DEFAULT_PREFS };
   try {
     const personality = window.localStorage.getItem("marvin.personality");
-    if (personality === "marvin" || personality === "neutral") {
+    if (personality === "marvin" || personality === "neutral" || personality === "ultron") {
       next.personality = personality;
     }
     const em = window.localStorage.getItem("marvin.model.executor");

@@ -59,7 +59,7 @@ export interface DetachedTurnParams {
   advisorThinkingMode?: string | undefined;
   sessionId?: string | undefined;
   appendSystemPrompt: string;
-  personality: "marvin" | "neutral";
+  personality: "marvin" | "neutral" | "ultron";
   /** ADR-0051 — live active-plan snapshot, injected into the SDK prompt as a
    *  `<system-reminder>` suffix so the model stays plan-aware. Not persisted. */
   planContext?: string | undefined;

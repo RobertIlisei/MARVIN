@@ -63,7 +63,7 @@ export interface WakeupRecord {
   cwd: string;
   model: string;
   advisorModel: string | null;
-  personality: "marvin" | "neutral";
+  personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated";
   /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
    *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */
@@ -101,7 +101,7 @@ export interface ScheduleWakeupInput {
   cwd: string;
   model: string;
   advisorModel: string | null;
-  personality: "marvin" | "neutral";
+  personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated";
   /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
    *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */

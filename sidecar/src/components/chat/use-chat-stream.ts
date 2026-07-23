@@ -82,7 +82,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
     text: string;
     cwd: string;
     options: {
-      personality?: "marvin" | "neutral";
+      personality?: "marvin" | "neutral" | "ultron";
       runtimeMode?: "opus" | "advisor";
       permissionStrategy?: "auto" | "gated";
       playwrightEnabled?: boolean;
@@ -96,7 +96,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
       text: string,
       cwd: string,
       options: {
-        personality?: "marvin" | "neutral";
+        personality?: "marvin" | "neutral" | "ultron";
         runtimeMode?: "opus" | "advisor";
         permissionStrategy?: "auto" | "gated";
         playwrightEnabled?: boolean;

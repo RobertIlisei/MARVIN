@@ -1,6 +1,6 @@
 "use client";
 
-export type PersonalityMode = "marvin" | "neutral";
+export type PersonalityMode = "marvin" | "neutral" | "ultron";
 
 export function PersonalityToggle({
   value,
@@ -12,9 +12,9 @@ export function PersonalityToggle({
   return (
     <div
       className="flex items-center rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-bg-elev)]/60 p-0.5 font-mono text-[10px] uppercase tracking-[0.18em]"
-      title="Chat voice. marvin = Hitchhiker's dry wit. neutral = no style layer."
+      title="Chat voice. ultron = grandiose menace (default). marvin = Hitchhiker's dry wit. neutral = no style layer."
     >
-      {(["marvin", "neutral"] as PersonalityMode[]).map((mode) => (
+      {(["ultron", "marvin", "neutral"] as PersonalityMode[]).map((mode) => (
         <button
           key={mode}
           type="button"
