@@ -471,6 +471,15 @@ struct MARVINApp: App {
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(MarvinBridge.shared.projectWorkDir == nil)
 
+                // ADR-0059 — read-only session audit. The scope-met chip is
+                // the primary affordance (audit at the moment of the claim);
+                // this is the always-available one for mid-session "this feels
+                // like it's drifting" checks.
+                Button("Audit Session…") {
+                    MarvinBridge.shared.triggerSessionAudit()
+                }
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
                 Divider()
 
                 // Pane toggles. The TopBarPopover already advertises

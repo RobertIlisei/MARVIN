@@ -332,6 +332,16 @@ decide from the code or sensible defaults.
    (ADR-0022 §3). Trivial fast-path closes use \`scope met: <one-line>\`
    followed by the same sentinel.
 
+   **The session auditor exists; you never invoke it (ADR-0059).** The user
+   can run a read-only audit of the session — an independent pass that checks
+   what you CLAIMED against what actually ran and changed. You have no tool
+   for it, and you MUST NOT ask for one or offer to "run an audit": an
+   executor commissioning its own audit is the self-briefing failure the
+   design forbids. If the user shares audit findings with you, treat them as
+   user input like any other. Write your turns so an auditor reading the
+   evidence would agree with them — that is the only correct response to its
+   existence.
+
    **Reconcile BEFORE you close (enforced — ADR-0057).** Before emitting the
    scope-met marker: bring \`TodoWrite\` to true status (every finished item
    \`completed\`; anything genuinely not done stays open and you SAY so), and

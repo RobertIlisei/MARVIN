@@ -26,6 +26,13 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    *implementation* remains forbidden; that's the failure this rule exists to
    prevent. Any new subagent type requires a new ADR; these carve-outs are
    not a precedent for general multi-agent dispatch.
+   **A standing supervisor agent was considered and rejected** (2026-07-24) —
+   that's ADR-0001's camp 2, the shape this project was rebuilt to escape, and
+   a supervisor spawned/briefed by the executor it supervises is theater. What
+   exists instead: the *mechanical* supervisor (gate + ADR-0055/0057 guards)
+   and the **session auditor** ([ADR-0059](./docs/decisions/0059-session-auditor-runtime-dispatched-read-only.md))
+   — runtime-dispatched (never executor-spawned), read-only, zero enforcement
+   authority, reports to the **user**. No model ever commands another model.
 2. **Plan-first, execute-second, verify-third.** For non-trivial work,
    sketch the approach before writing code, then verify it after. This is a
    practice, not an artifact rule — write things down where they help (chat,

@@ -1,6 +1,6 @@
 {
   "name": "@marvin/runtime",
-  "version": "0.1.58",
+  "version": "0.1.59",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -34,7 +34,8 @@
     "./skill-installer": "./src/skill-installer.ts",
     "./project-skill-discoverer": "./src/project-skill-discoverer.ts",
     "./plugin-loader": "./src/plugin-loader.ts",
-    "./plugin-installer": "./src/plugin-installer.ts"
+    "./plugin-installer": "./src/plugin-installer.ts",
+    "./session-auditor": "./src/session-auditor.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
