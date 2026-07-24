@@ -68,7 +68,29 @@ export interface DesignTurnContext {
    *  same target path? Same logic — first deny carries the steering
    *  signal, subsequent calls don't keep tripping. */
   advisorHookFiredForPaths: Set<string>;
+  /** ADR-0060 — source files ALREADY seen this turn. Re-reading one of
+   *  these is *work* (editing a file you already located), not exploration,
+   *  so it must never re-trip the graph rule. */
+  seenSourceFiles: Set<string>;
+  /** ADR-0060 — NOVEL source files opened since the last graph call. This is
+   *  the drift signal: reading files you've never touched, in areas the graph
+   *  could have pointed at. Reset to 0 by any graph call. */
+  novelFilesSinceGraph: number;
+  /** ADR-0060 — how many drift nudges have fired this turn (capped, so a long
+   *  legitimate implementation turn can't be nagged repeatedly). */
+  graphifyNudgeCount: number;
 }
+
+/** ADR-0060 — novel source files that may be opened after the last graph call
+ *  before the drift nudge fires. Tuned from measured sessions: real drift ran
+ *  15-40 unguided reads, while a legitimate implementation burst rarely opens
+ *  more than a handful of *previously unseen* files without re-orienting. */
+export const GRAPH_DRIFT_NOVEL_FILE_THRESHOLD = 7;
+
+/** ADR-0060 — max drift nudges per turn. The nudge is advisory and cheap, but
+ *  repeating it every 7 files in an 80-op turn would become noise the model
+ *  learns to skip. */
+export const GRAPH_DRIFT_MAX_NUDGES = 3;
 
 /** Resolve enforcement level from env, exported so tests can pin it. */
 export function readDesignHooksMode(): DesignHooksMode {
@@ -162,6 +184,9 @@ export function createTurnDesignContext(
     cwd,
     hasGraph: existsSync(graphPath),
     graphCallCount: 0,
+    seenSourceFiles: new Set<string>(),
+    novelFilesSinceGraph: 0,
+    graphifyNudgeCount: 0,
     advisorCallCount: 0,
     sourceFilesRead: 0,
     graphifyHookFired: false,
@@ -193,6 +218,9 @@ export function recordAllowedTool(
 ): void {
   if (toolName.startsWith("mcp__marvin-graph__")) {
     ctx.graphCallCount += 1;
+    // ADR-0060 — re-orienting clears the drift budget. The rule isn't "query
+    // the graph N times", it's "don't explore blind for long stretches".
+    ctx.novelFilesSinceGraph = 0;
     return;
   }
   if (toolName === "Task") {
@@ -207,6 +235,14 @@ export function recordAllowedTool(
     const target = pickPath(toolInput, ["file_path", "path"]);
     if (target && isSourceFile(target) && isInsideCwd(ctx.cwd, target)) {
       ctx.sourceFilesRead += 1;
+      // ADR-0060 — only a file we have NOT seen this turn counts as drift.
+      // Re-reading a file already in play is implementation work; charging it
+      // to the drift budget would nag during exactly the phase where reading
+      // is correct.
+      if (!ctx.seenSourceFiles.has(target)) {
+        ctx.seenSourceFiles.add(target);
+        ctx.novelFilesSinceGraph += 1;
+      }
     }
     return;
   }
@@ -219,8 +255,73 @@ export function recordAllowedTool(
       ctx.cwd;
     if (isInsideCwd(ctx.cwd, path)) {
       ctx.sourceFilesRead += 1;
+      // A project-tree Grep/Glob IS unguided exploration — the "grep and pray"
+      // the rule targets — so it always charges the drift budget. Keyed by
+      // pattern so repeating the same search doesn't double-charge.
+      const key = `${toolName}:${typeof toolInput.pattern === "string" ? toolInput.pattern : path}`;
+      if (!ctx.seenSourceFiles.has(key)) {
+        ctx.seenSourceFiles.add(key);
+        ctx.novelFilesSinceGraph += 1;
+      }
     }
   }
+}
+
+/**
+ * ADR-0060 — the graph-drift nudge.
+ *
+ * The graphify-first hook (`checkGraphifyFirst`) is a ONE-SHOT gate at the head
+ * of a turn: one graph call sets `graphCallCount > 0` and disarms it for the
+ * whole turn. Measured on four real sessions (2026-07-24), that meant graph
+ * calls clustered in the first half and the back 40-50 % of every session was
+ * pure grep-and-read — 1 graph call per 5-11 file ops, the exact "grep and
+ * pray" the rule exists to eliminate. The gate was designed when turns were
+ * short; agentic turns now run 30-80 tool calls.
+ *
+ * This re-arms enforcement WITHOUT the false-positive cost of blocking
+ * implementation. Two deliberate asymmetries:
+ *
+ *   - **Novel files only.** Re-reading a file already open this turn is work,
+ *     not exploration, and never counts. The graph helps you FIND code; it
+ *     doesn't help you WRITE it.
+ *   - **Nudge, not deny.** The turn's first violation still hard-denies
+ *     (`checkGraphifyFirst` — it demonstrably works, it's why early graph calls
+ *     exist at all). Everything after is advisory `additionalContext`, so a
+ *     false positive costs a sentence of context, never a blocked tool call.
+ *
+ * Returns the nudge text, or null when no nudge is due. Pure except for the
+ * nudge counter, which it bumps so the cap holds. Exported for tests.
+ */
+export function checkGraphDrift(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | null {
+  if (!ctx.hasGraph) return null;
+  if (ctx.graphifyNudgeCount >= GRAPH_DRIFT_MAX_NUDGES) return null;
+  if (ctx.novelFilesSinceGraph < GRAPH_DRIFT_NOVEL_FILE_THRESHOLD) return null;
+
+  // Only nudge on a structural tool — never interrupt an Edit/Write/Bash.
+  if (toolName !== "Read" && toolName !== "Grep" && toolName !== "Glob") return null;
+  if (toolName === "Read") {
+    const target = pickPath(toolInput, ["file_path", "path"]);
+    if (!target || !isSourceFile(target) || !isInsideCwd(ctx.cwd, target)) return null;
+    // A file already in play is work — don't nudge on it.
+    if (ctx.seenSourceFiles.has(target)) return null;
+  }
+
+  ctx.graphifyNudgeCount += 1;
+  const n = ctx.novelFilesSinceGraph;
+  return (
+    `[graphify drift — advisory, your call] You have opened ${n} previously ` +
+    `unseen source files/searches since your last graph query. If you are ` +
+    `IMPLEMENTING against files you already located, ignore this and carry on. ` +
+    `If you are still LOCATING things — asking where something lives, who calls ` +
+    `it, or what a change would touch — a \`mcp__marvin-graph__\` query ` +
+    `(graph_search / graph_neighbors / graph_query) answers that in a few ` +
+    `hundred tokens instead of thousands per file, and catches couplings a ` +
+    `grep cannot see. Golden Rule 7.`
+  );
 }
 
 /**
@@ -277,11 +378,25 @@ export function makeDesignHooksPreToolUse(args: {
         },
       } as HookJSONOutput;
     }
+    // ADR-0060 — graph-drift nudge. Checked BEFORE recording the tool so the
+    // count reflects the drift that led here, and emitted as non-blocking
+    // `additionalContext`: the call proceeds either way.
+    const drift = mode === "enforce" ? checkGraphDrift(designCtx, evt.tool_name, safeInput) : null;
+
     // No design-hook deny — record the tool as allowed-from-our-POV so
     // state advances. (canUseTool may still deny for safety reasons; if
     // it does, recordAllowedTool was a slight over-count, but that only
     // delays — never silences — a future hook firing.)
     recordAllowedTool(designCtx, evt.tool_name, safeInput);
+
+    if (drift) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          additionalContext: drift,
+        },
+      } as HookJSONOutput;
+    }
     return {} as HookJSONOutput;
   };
 }

@@ -13,6 +13,9 @@ import {
   matchAdrTrigger,
   recordAllowedTool,
   runDesignHooks,
+  checkGraphDrift,
+  GRAPH_DRIFT_MAX_NUDGES,
+  GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
 } from "../src/design-hooks";
 
 /**
@@ -468,3 +471,105 @@ describe("design-hooks · advisor-on-ADR-trigger", () => {
   });
 });
 
+
+// ADR-0060 — the graph-drift nudge. The graphify-first deny is one-shot per
+// turn (one graph call disarms it), which measured 1:5–1:11 graph:file ratios
+// with the back half of every session unguarded. These pin the re-arm AND the
+// false-positive protections that keep it from nagging during implementation.
+describe("graph drift nudge (ADR-0060)", () => {
+  let cleanup: () => void;
+  let cwd: string;
+  const turnId = "test-turn-drift";
+
+  beforeEach(() => {
+    ({ cwd, cleanup } = withTmpCwd());
+  });
+  afterEach(() => {
+    clearTurnDesignContext(turnId);
+    cleanup();
+  });
+
+  /** Read N distinct novel source files through the recorder. */
+  function readNovel(ctx: ReturnType<typeof createTurnDesignContext>, n: number, from = 0) {
+    for (let i = from; i < from + n; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `f${i}.ts`) });
+    }
+  }
+
+  it("nudges once the novel-file threshold is crossed", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "x" });
+    readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD);
+    const nudge = checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "new.ts") });
+    expect(nudge).toBeTruthy();
+    expect(nudge).toContain("graphify drift");
+    // Must tell the model it's free to ignore while implementing.
+    expect(nudge).toMatch(/IMPLEMENTING/);
+    expect(nudge).toContain("mcp__marvin-graph__");
+  });
+
+  it("does NOT nudge before the threshold", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD - 1);
+    expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "new.ts") })).toBeNull();
+  });
+
+  it("a graph call RESETS the drift budget", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD);
+    expect(ctx.novelFilesSinceGraph).toBe(GRAPH_DRIFT_NOVEL_FILE_THRESHOLD);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_neighbors", { node: "X" });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "new.ts") })).toBeNull();
+  });
+
+  // The load-bearing false-positive protection: implementation re-reads.
+  it("re-reading an ALREADY-SEEN file never charges drift or nudges", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const f = join(cwd, "src", "a.ts");
+    for (let i = 0; i < 30; i++) recordAllowedTool(ctx, "Read", { file_path: f });
+    expect(ctx.novelFilesSinceGraph).toBe(1); // counted once, not 30×
+    expect(checkGraphDrift(ctx, "Read", { file_path: f })).toBeNull();
+  });
+
+  it("never nudges on Edit/Write/Bash — implementation is never interrupted", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD + 5);
+    for (const t of ["Edit", "Write", "Bash", "TodoWrite"]) {
+      expect(checkGraphDrift(ctx, t, { file_path: join(cwd, "src", "x.ts") }), t).toBeNull();
+    }
+  });
+
+  it("is capped per turn so a long turn isn't nagged into noise", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    let fired = 0;
+    for (let i = 0; i < 200; i++) {
+      readNovel(ctx, 1, 100 + i);
+      if (checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", `probe${i}.ts`) })) fired++;
+    }
+    expect(fired).toBe(GRAPH_DRIFT_MAX_NUDGES);
+  });
+
+  it("charges project-tree Grep/Glob (the grep-and-pray path), deduped by pattern", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    for (let i = 0; i < 5; i++) recordAllowedTool(ctx, "Grep", { pattern: "sameThing", path: cwd });
+    expect(ctx.novelFilesSinceGraph).toBe(1); // same search doesn't double-charge
+    for (let i = 0; i < GRAPH_DRIFT_NOVEL_FILE_THRESHOLD; i++) {
+      recordAllowedTool(ctx, "Grep", { pattern: `distinct${i}`, path: cwd });
+    }
+    expect(checkGraphDrift(ctx, "Grep", { pattern: "another", path: cwd })).toBeTruthy();
+  });
+
+  it("does nothing when the project has no graph", () => {
+    const ctx = createTurnDesignContext(turnId, cwd); // no seedGraph
+    readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD + 3);
+    expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "new.ts") })).toBeNull();
+  });
+});
