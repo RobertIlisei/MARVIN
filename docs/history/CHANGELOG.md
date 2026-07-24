@@ -9,6 +9,68 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-25 — v0.1.60: graph drift (ADR-0060) + the red CI nobody saw.**
+  Two findings, both from measuring rather than assuming.
+  **ADR-0060 — graph drift.** User observation: MARVIN queries the graph during
+  a plan's first iterations, then just reads files. Measured across four real
+  session transcripts, exactly right — graph calls cluster in the first half of
+  a turn then flatline: 1:5 to 1:11 graph:file ops, with the back 40-50 % of
+  every session pure grep-and-read. In the 81-op session, deciles 7-10 held zero
+  graph calls against 19 reads and 14 grep/globs. A regression against the
+  2026-05-27 audit, which found ~7:1 and responded by hardening the prose; it is
+  now the same or worse. It also drives context exhaustion directly — a session
+  sitting at 166K/200K showed 121K of "transcript" against 42 file reads.
+  **Root cause, found in code.** `checkGraphifyFirst` has four short-circuits
+  (`!hasGraph`, `graphifyHookFired`, `graphCallCount > 0`, `sourceFilesRead > 0`)
+  making it a ONE-SHOT gate at the head of a turn: first Read → deny → the model
+  queries the graph → `graphCallCount = 1` → hook disarmed for the remaining 70+
+  tool calls. One graph call buys unlimited reads. The gate was written when
+  turns were short; agentic turns now run 30-80 tool calls.
+  **Fix — re-arm mid-turn, with two deliberate asymmetries.** (1) Drift counts
+  **novel files only**: a source file not yet opened this turn charges the
+  budget; re-reading one already in play never does, because that is
+  implementation work — the graph helps you FIND code, it does not help you
+  WRITE it. A naive "re-arm after N reads" would fire during exactly the phase
+  where reading is correct, produce false denials, and train the user to disable
+  the hook. Project-tree Grep/Glob always charges (pattern-keyed, no
+  double-charge) since that IS the grep-and-pray the rule targets; any graph
+  call resets the budget. (2) **Deny once, then nudge**: the turn's first
+  violation keeps its hard deny — it demonstrably works, it is why the early
+  graph calls exist at all — while every later firing is non-blocking
+  `additionalContext` and the tool call proceeds regardless. The force asymmetry
+  follows the cost asymmetry: a false-positive nudge costs a sentence of
+  context, a false-positive deny costs a blocked tool call mid-implementation.
+  The nudge text explicitly tells the model to ignore it if implementing. Also
+  why this should hold where prose didn't: same words, injected at the moment of
+  the action instead of sitting 20K tokens away in the system prompt — position
+  beats emphasis. Bounded: 7 novel files, ≤3 nudges/turn, never on
+  Edit/Write/Bash.
+  **Honest limitation, in the ADR.** Unlike ADR-0055/0057, this guard cannot
+  close its own loop — there is no deterministic way to know a read *should*
+  have been a graph query. Verification is empirical, so the DoD carries an
+  unticked item: re-measure the ratio over the next sessions and, if unmoved,
+  lower the threshold rather than restore the wall.
+  **Red CI (fix).** The `test` workflow had failed on every push since v0.1.56 —
+  four releases — while `release` stayed green, so nothing blocked and it went
+  unnoticed; every one of those releases shipped on a red build. Cause: two
+  backlog tests fill the open-items rail with `MAX_OPEN_ITEMS` sequential adds,
+  each a real file write + index rebuild (~400 filesystem ops per test). v0.1.56
+  raised that rail 50 → 200. They run in ~1.3 s on a local SSD but exceeded
+  vitest's 5 s default on GitHub's slower runners. Neither the test nor the
+  product was wrong — the default was simply tight for I/O of that size — so
+  both now carry an explicit 30 s timeout (headroom without masking a genuine
+  hang) plus a comment recording the history. Nothing broken had shipped (the
+  failures were pure timeouts and the suite was run locally before each
+  release), but the safety net was down for three weeks. Two follow-ups tracked:
+  gate `release.yml` on `test.yml` so a red build cannot ship, and add CI status
+  to the session auditor's evidence packet so "shipped on a red build" becomes a
+  detectable finding — notably the auditor did NOT catch this, because CI status
+  isn't in what it reads.
+  **Verification.** 550 vitest green (+9 pinning the drift re-arm and its
+  false-positive protections: re-reads never charge, Edit/Write/Bash never
+  nudged, graph call resets, per-turn cap, Grep dedup); runtime + app typecheck;
+  CI green for the first time since v0.1.55; app rebuilt and installed.
+
 - **2026-07-24 — v0.1.59: the session auditor (ADR-0059) — judgement-level oversight without the supervisor anti-pattern.**
   **The question.** "Should MARVIN get a supervisor agent overseeing the executor
   and advisor?" Answered **no**: that is ADR-0001's camp 2 — the supervisor →
