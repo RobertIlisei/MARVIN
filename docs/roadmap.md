@@ -6,11 +6,50 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-- **Graph drift nudge (ADR-0060)** — measured on 4 real sessions: graph calls cluster in the first half of a turn then flatline (1:5–1:11 graph:file ops; the back 40–50 % is pure grep-and-read). Root cause: the graphify-first hook is one-shot per turn — a single graph call disarms it for the remaining 70+ tool calls. Fix: re-arm mid-turn as a **non-blocking nudge** gated on *novel* files since the last graph call (re-reading a file already in play is implementation work and never counts; Edit/Write/Bash never interrupted; capped 3×/turn). First-read hard deny unchanged. **Empirical follow-up:** re-measure the ratio over the next sessions and re-tune the threshold if it hasn't moved.
+- **Re-measure graph:file ratio (ADR-0060 empirical follow-up)** — the drift nudge cannot self-verify (no deterministic way to know a read *should* have been a graph query). Re-run the transcript analysis over the next few real sessions; if the ratio hasn't moved off 1:5–1:11, lower `GRAPH_DRIFT_NOVEL_FILE_THRESHOLD` rather than restore the hard block.
+- **CI safety follow-ups** — (a) gate `release.yml` on `test.yml` so a red build can't ship (four releases went out red before the timeout fix); (b) add CI status to the session auditor's evidence packet so "shipped on a red build" becomes a detectable finding.
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.60** — Graph drift, and the red CI nobody saw. Two findings that both
+came from *measuring* rather than assuming. **Graph drift (ADR-0060):** the user
+observed that MARVIN queries the knowledge graph during a plan's first
+iterations and then just reads files. Measured across four real session
+transcripts, that is exactly right — graph calls cluster in the first half of a
+turn and then flatline, giving 1:5 to 1:11 graph:file ops with the back 40-50 %
+of every session pure grep-and-read (in an 81-op session, deciles 7-10 contained
+zero graph calls but 33 file ops). A regression against the 2026-05-27 audit
+that found ~7:1 drift and responded by hardening the *prose*. The root cause is
+structural, not model laziness: `checkGraphifyFirst` is a **one-shot gate at the
+head of a turn** — the first Read denies, the model queries the graph,
+`graphCallCount` hits 1, and the hook is disarmed for the remaining 70+ tool
+calls. One graph call at the top of a turn buys unlimited reads; the gate was
+written when turns were short, and agentic turns now run 30-80 calls. The fix
+re-arms enforcement mid-turn with two deliberate asymmetries. Drift is counted
+in **novel files only** — re-reading a file already open this turn is
+implementation work, not exploration, and never charges the budget, because the
+graph helps you FIND code and not WRITE it; a naive "re-arm after N reads" would
+fire during exactly the phase where reading is correct, produce false denials,
+and train the user to switch the hook off. And it **denies once, then nudges** —
+the turn's first violation keeps its hard deny (it demonstrably works; it is why
+the early graph calls exist at all) while every later firing is non-blocking
+`additionalContext`, because a false-positive nudge costs one sentence of
+context whereas a false-positive deny costs a blocked tool call mid-task.
+Bounded at 7 novel files since the last graph call, max 3 nudges per turn, never
+firing on Edit/Write/Bash. Recorded honestly: unlike ADR-0055/0057 this guard
+**cannot close its own loop** — there is no deterministic way to know a read
+should have been a graph query — so its DoD carries an unticked empirical item
+to re-measure the ratio. **Red CI (fix):** the `test` workflow had been failing
+on every push since v0.1.56 — four releases — while `release` stayed green, so
+nothing blocked and nobody noticed. Two backlog tests fill the open-items rail
+with `MAX_OPEN_ITEMS` sequential adds (~400 filesystem ops each); v0.1.56 raised
+that rail 50 → 200, and while they run in ~1.3 s on a local SSD they exceeded
+vitest's 5 s default on GitHub's slower runners. Neither test nor product was
+wrong — the default was tight for I/O of that size — so both now carry an
+explicit 30 s timeout with the history in a comment. CI is green for the first
+time since v0.1.55. 550 tests + typechecks green. Builds on v0.1.59.
 
 **v0.1.59** — The session auditor (ADR-0059): judgement-level oversight without
 the supervisor anti-pattern. The question that started it was "should MARVIN get
