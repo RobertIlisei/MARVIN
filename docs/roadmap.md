@@ -6,7 +6,7 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-_(Empty — v0.1.59 shipped the session auditor. Two deliberate follow-ups tracked below: audit progress streaming, and the automatic audit triggers.)_
+- **Graph drift nudge (ADR-0060)** — measured on 4 real sessions: graph calls cluster in the first half of a turn then flatline (1:5–1:11 graph:file ops; the back 40–50 % is pure grep-and-read). Root cause: the graphify-first hook is one-shot per turn — a single graph call disarms it for the remaining 70+ tool calls. Fix: re-arm mid-turn as a **non-blocking nudge** gated on *novel* files since the last graph call (re-reading a file already in play is implementation work and never counts; Edit/Write/Bash never interrupted; capped 3×/turn). First-read hard deny unchanged. **Empirical follow-up:** re-measure the ratio over the next sessions and re-tune the threshold if it hasn't moved.
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
