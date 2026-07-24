@@ -9,6 +9,76 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-24 — v0.1.59: the session auditor (ADR-0059) — judgement-level oversight without the supervisor anti-pattern.**
+  **The question.** "Should MARVIN get a supervisor agent overseeing the executor
+  and advisor?" Answered **no**: that is ADR-0001's camp 2 — the supervisor →
+  role-agents topology this project was rebuilt to escape after the prior
+  project's quality collapse — and a supervisor implemented as a `Task` subagent
+  would be theater regardless, since it is spawned by, briefed by, and lives
+  inside the turn of the very thing it supervises. Authority inversion, context
+  fragmentation, arbitration regress, doubled cost.
+  **The real gap it surfaced.** MARVIN's supervision is entirely *mechanical* —
+  the permission gate screens every call, ADR-0055 verifies check-back promises,
+  ADR-0057 verifies completion claims, the auto-audit JSONL records everything.
+  Deterministic code, immune to persuasion. What code cannot do is judgement:
+  drift across turns that each individually pass, a DoD whose bullets were
+  quietly reinterpreted, the same bug "fixed" twice, "verified end-to-end"
+  backed by a transcript showing only a typecheck.
+  **The decision.** An **auditor**, not a supervisor, with the direction of
+  authority as the entire design: *mechanical guards supervise the executor; the
+  auditor informs the user; the user supervises everything; no model ever
+  commands another model.* It is **runtime-dispatched** — its own SDK session
+  started from server-side state, NOT a `Task` subagent and NOT on the
+  executor's agents map, so the executor cannot start it, brief it, or see its
+  output. It is **read-only** at the SDK layer (`AUDITOR_DISALLOWED_TOOLS`
+  refuses every mutator, the web, and `Task` itself so it cannot spawn agents;
+  Read/Grep/Glob stay so it can verify claims against real files). It has **zero
+  enforcement authority** — it cannot block a turn, a commit, a scope-met, or a
+  release. It reasons over a runtime-assembled, byte-capped packet that
+  juxtaposes **claims** (transcript) against **evidence** (auto-audit tool log,
+  change checkpoints, plan spine) — that juxtaposition is the audit.
+  **Graph as structural evidence.** The read-only `marvin-graph` tools are wired
+  in, adding a `blast-radius` finding class: "the plan renamed X, the graph lists
+  12 callers, the change set touched 3 — the other 9 are the finding." Gated on
+  an explicit `GraphFreshness` (graph mtime vs newest change): the code graph
+  only AST-refreshes while the IDE has the project open (ADR-0041), so a graph
+  built before the session's edits describes the OLD code, and structural
+  findings are FORBIDDEN when it is stale — the auditor cannot distinguish "the
+  change is missing" from "the graph predates the change", and a confident
+  phantom finding is the worst output a review tool can produce. Even when
+  fresh, evidence is deliberately **asymmetric**: "the graph lists callers that
+  were not updated" is strong (warn/high); "the graph shows no callers, therefore
+  dead code" is weak (info, phrased as a question) because AST extraction misses
+  dynamic dispatch, string-keyed lookups, and config-driven wiring.
+  **Findings are actionable.** The first real audit (agri-saas) produced two
+  genuinely useful findings — a commit that had landed on an unrelated feature
+  branch, and a scope-met claim contradicted by the very next ADR-0057
+  reconciliation check — but shipped as a read-only popup, and useful findings
+  that cannot be acted on decay into noise. So the report now parses
+  (`parseFindings`, test-pinned against real audit output, since wrapped
+  multi-line fields are the normal case) into cards with **Park to backlog**
+  (reuses ADR-0044's entire pipeline: panel, sort/filter, promote-to-plan,
+  resolve; severity maps high→high, warn→med, info→low), **Work on it** (mirrors
+  `promoteBacklog` — Plan mode, present-a-plan-first, queue-if-busy — and
+  explicitly invites MARVIN to *refute* the finding with evidence rather than
+  plan busywork, because findings are prompts to look, not verdicts), and
+  **Dismiss**. Nothing auto-parks; the user triages. This does not weaken the
+  §5 MUST-NOTs: the *auditor* still never commands the executor — the *user*
+  does, which §4 always intended; the buttons only remove copy-paste.
+  **Surfaces.** An "Audit session" chip on the scope-met strip (the natural
+  moment, right beside ADR-0057's mechanical check) plus an always-available
+  "Audit Session…" menu item. Deliberately NOT an Ask-mode function: Ask mode is
+  the executor with writes disabled — same session, same context — and an
+  executor auditing its own narrative from inside that narrative is the
+  self-briefing failure the design exists to avoid.
+  **Verification.** 542 vitest green (+30 for the auditor: packet extraction,
+  the freshness state machine, all three prompt-gating branches, the findings
+  parser, the read-only deny-list in both directions); runtime + app typecheck;
+  full Xcode build; app rebuilt and installed. Two follow-ups deliberately left
+  open and tracked on the roadmap: audit **progress streaming** (v1 is a single
+  opaque await — a real 3-minute run looks like a hang) and the **automatic
+  triggers** (plan-completion + scheduled, default OFF).
+
 - **2026-07-24 — v0.1.58: reliability-guard arc — MARVIN starts enforcing its own workflow mechanically.**
   Five ADRs, one pattern: a prose MUST in `personality.ts` fired unreliably, so
   each moved the enforcement to the gate or the turn-end hook where prose

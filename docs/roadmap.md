@@ -6,11 +6,49 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-_(Empty — v0.1.58 shipped the reliability-guard arc below. Next up: whatever surfaces next.)_
+_(Empty — v0.1.59 shipped the session auditor. Two deliberate follow-ups tracked below: audit progress streaming, and the automatic audit triggers.)_
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.59** — The session auditor (ADR-0059): judgement-level oversight without
+the supervisor anti-pattern. The question that started it was "should MARVIN get
+a **supervisor** agent overseeing the executor and advisor?" — answered no, since
+that is precisely ADR-0001's camp 2, the topology this project was rebuilt to
+escape, and a supervisor spawned and briefed by the executor it supervises is
+theater. But the analysis surfaced a real gap: MARVIN's supervision is entirely
+**mechanical** (the permission gate, ADR-0055's check-back guard, ADR-0057's
+completion guard) and deterministic code cannot judge drift, quiet
+reinterpretation of a DoD, repetition, or a claim like "verified end-to-end"
+backed by a transcript showing only a typecheck. So: an **auditor**, not a
+supervisor. It is **runtime-dispatched** (never a `Task` subagent, never on the
+executor's agents map — the executor has no path to audit itself), **read-only**
+at the SDK layer, and it **reports to the user** with zero enforcement authority.
+Authority still runs user → executor; no model ever commands another model. It
+reasons over a runtime-assembled packet that juxtaposes **claims** (the
+transcript) against **evidence** (the auto-audit tool log, change checkpoints,
+the plan spine) — the juxtaposition is the audit. Shipped with the read-only
+`marvin-graph` tools wired in, so it can also check **blast radius**: "the plan
+renamed X, the graph lists 12 callers, the change set touched 3." That is gated
+on an explicit `GraphFreshness` computation — a graph older than the session's
+edits describes the old code, so structural findings are forbidden when it is
+stale (a confident phantom finding is worse than none), and even when fresh the
+evidence is treated asymmetrically: "callers not updated" is strong, "no callers,
+therefore dead" is weak, because AST extraction misses dynamic dispatch and
+config wiring. Findings are **actionable**, not a wall of text: the report parses
+into structured findings rendered as cards with **Park to backlog** (reusing
+ADR-0044's whole pipeline — panel, filters, promote-to-plan, resolve),
+**Work on it** (Plan mode + present-a-plan-first, mirroring `promoteBacklog`,
+and explicitly inviting MARVIN to refute the finding with evidence rather than
+plan busywork), and **Dismiss**. Triggered from the scope-met chip strip — the
+natural moment, right beside ADR-0057's mechanical check — or the always-available
+"Audit Session…" menu item; deliberately NOT from Ask mode, since Ask mode is the
+executor with writes disabled and an executor auditing its own narrative from
+inside that narrative is the self-briefing failure the design avoids. First real
+audit on a live project immediately caught a commit that had landed on an
+unrelated feature branch and a scope-met claim contradicted by the very next
+reconciliation check. 542 tests + typechecks green. Builds on v0.1.58.
 
 **v0.1.58** — Reliability-guard arc: MARVIN starts enforcing its own workflow
 mechanically instead of trusting prose. Five ADRs landed same-week, each
@@ -497,6 +535,10 @@ The high-water marks. Diagnostic detail per release in the [changelog](./history
 ### Test coverage beyond the write-channel security layer
 
 The Vitest harness covers `fs-sandbox` / `fs-write-policy` / `fs-constants` / `fs-write-confirm-registry` and the new Swift logic targets (`MARVINLogic`, `MARVINTests`). The Agent SDK interaction loop, the React/SwiftUI shells, and individual API routes remain uncovered — still opportunistic. See [Testing](./development/testing.md).
+
+### Session audit: progress streaming + automatic triggers (ADR-0059 follow-ups)
+
+Two known rough edges, both deliberate v1 cuts. **Progress streaming:** the audit runs as a single opaque `await` — the button spins for minutes with no feedback (a real ~3-minute run on agri-saas looked like a hang). The auditor session already streams events; `runSessionAudit` just discards everything but the final text. Fix is to emit tool-call/turn events to the UI plus an elapsed timer, a cancel button, and a guard against launching a second audit while one is in flight. **Automatic triggers:** plan-completion and scheduled audits behind default-OFF settings, held until manual use proves the audit is worth firing unattended.
 
 ### File tree: migrate OutlineGroup → NSOutlineView (ADR-0056 durable fix)
 
