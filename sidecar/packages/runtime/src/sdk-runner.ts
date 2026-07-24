@@ -28,7 +28,19 @@ import { createMemoryMcpServer } from "./memory-mcp";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { loadEnabledPlugins } from "./plugin-loader";
-import { createWakeupMcpServer } from "./wakeup-tools";
+import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
+import { scheduleWakeup } from "./wakeup-scheduler";
+import { buildCheckBackWakeup, detectUncoveredCheckBack } from "./checkback-guard";
+import {
+  buildReconcilePrompt,
+  hasScopeMet,
+  hasWorkflowGap,
+  openPlanSteps,
+  openTodos,
+  scopeOfDoneEntirelyUnticked,
+  type WorkflowGap,
+} from "./workflow-guard";
+import { readPlanState } from "./plan-state";
 import { recordPreImage } from "./change-checkpoints";
 import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
@@ -48,7 +60,8 @@ import {
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { latestForTier } from "./models";
 import { defaultModel } from "./claude-cli";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -426,6 +439,52 @@ export const SCOUT_AGENT: AgentDefinition = {
 };
 
 /**
+ * Build the registered `graph-extractor` agent (ADR-0058).
+ *
+ * The cheap, parallel vehicle for graphify's semantic pass. Two levers this
+ * gives us over graphify's default `general-purpose` fan-out:
+ *
+ * 1. **Model** — pinned to the Haiku tier (resolved live via `latestForTier`).
+ *    Chunk → nodes/edges extraction is mechanical; it doesn't need the
+ *    executor's frontier model, and the per-call saving is large on a big
+ *    corpus.
+ * 2. **Scoped write** — the subagent gate (`classifyToolCall`) permits its
+ *    file-writes ONLY under `graphify-out/`; every other mutation stays denied.
+ *    `WebFetch` is disallowed at the SDK layer (exfil, same as the scout).
+ *
+ * Not a general-purpose worker — dispatch it for graph EXTRACTION only.
+ */
+export function buildGraphExtractorAgent(args: {
+  /** Haiku-tier model id; `"inherit"` only if resolution somehow returns null. */
+  model?: string | undefined;
+}): AgentDefinition {
+  return {
+    description:
+      "Cheap, parallel graph-extraction subagent (ADR-0058). Reads the assigned " +
+      "files, extracts entities/relations, and writes chunk output UNDER " +
+      "graphify-out/ — nowhere else. Dispatch for graphify's semantic pass so it " +
+      "runs in parallel on a low-cost model. Not a general worker.",
+    // WebFetch blocked (exfil, per the scout). Write stays available — the gate
+    // scopes it to graphify-out/; a write elsewhere is hard-denied there.
+    disallowedTools: ["WebFetch"],
+    model: args.model ?? "inherit",
+    prompt: [
+      "You are a MARVIN graph-extraction subagent (ADR-0058) — a cheap,",
+      "read-mostly worker spawned to extract knowledge-graph structure from a",
+      "bounded set of files. You are not MARVIN; the user does not see you.",
+      "",
+      "# Contract",
+      "1. Read the files named in your brief; extract the entities and",
+      "   relations exactly as the graphify instructions specify.",
+      "2. Write your chunk/graph output ONLY under `graphify-out/`. Writes",
+      "   anywhere else are hard-denied by the gate — do not attempt them.",
+      "3. Do not edit source, run mutating shell, or fetch the web.",
+      "4. Return a one-line summary of what you extracted (counts) and stop.",
+    ].join("\n"),
+  };
+}
+
+/**
  * Build the registered `advisor` agent definition (ADR-0033).
  *
  * Why a registered agent instead of the old `general-purpose` + model-hint
@@ -570,6 +629,82 @@ function mutatesProtectedPath(
   );
 }
 
+/**
+ * Canonical graph artifacts a subagent may NEVER write, even inside the
+ * ADR-0058 slit (addendum): the merged graphs every later query reads
+ * (`graph.json` anywhere under graphify-out) and the curated Q&A memory
+ * stores (`memory/`). Chunk/cache writes remain allowed — a prompt-injected
+ * extractor can then only contribute chunk data that flows through the main
+ * loop's deterministic merge (the same exposure serial extraction already
+ * has), never overwrite the canonical query targets directly.
+ */
+const GRAPH_CANONICAL_WRITE_DENY =
+  /(^|\/)graphify-out\/(?:.*\/)?(?:graph\.json$|memory\/)/;
+
+/**
+ * True when a call is a FILE WRITE (Write/Edit/NotebookEdit — deliberately NOT
+ * Bash, which can't be path-scoped safely) whose target resolves under a
+ * `graphify-out/` directory AND is not a canonical artifact. The narrow write
+ * surface a graph-extraction subagent needs (ADR-0058): it emits chunk output
+ * there and nowhere else. `graphify-out/` is a distinctive generated cache
+ * name, matched the same relative way the plan/memory protected-path checks
+ * are. Exported for tests.
+ */
+export function writesUnderGraphOut(
+  name: string,
+  input: Record<string, unknown> | undefined,
+): boolean {
+  if (name !== "Write" && name !== "Edit" && name !== "NotebookEdit") return false;
+  const inp = input ?? {};
+  const target =
+    typeof inp.file_path === "string"
+      ? inp.file_path
+      : typeof inp.notebook_path === "string"
+        ? inp.notebook_path
+        : "";
+  return (
+    target !== "" &&
+    /(^|\/)graphify-out\//.test(target) &&
+    !GRAPH_CANONICAL_WRITE_DENY.test(target)
+  );
+}
+
+/**
+ * ADR-0058 addendum — make the Haiku saving UNCONDITIONAL, not a prose steer.
+ *
+ * graphify's stock skill hardcodes `subagent_type: "general-purpose"` for its
+ * extraction fan-out, so the model saving originally depended on the
+ * personality steer being followed (the ADR's own noted limit). The gate can
+ * close that itself: `canUseTool` may return `updatedInput`, so when a
+ * general-purpose Task is recognisably a graph-extraction dispatch we rewrite
+ * it to `graph-extractor` at the gate — mechanical, works with the stock skill.
+ *
+ * The signature is deliberately conservative (both conditions required):
+ *   1. the brief references a `graphify-out/` path (where extractors write
+ *      their chunk output), AND
+ *   2. it uses extraction vocabulary (extract/chunk/nodes/edges/semantic).
+ * A general-purpose Task that merely *mentions* graphify-out (e.g. "analyse
+ * the report in graphify-out/") lacks (2) and is left alone. A false positive
+ * costs only the model tier — the rewritten agent keeps the same read access,
+ * and the write scope is governed by the gate either way.
+ *
+ * Returns the rewritten input, or null to leave the dispatch untouched.
+ * Exported for tests.
+ */
+export function remapGraphExtractionDispatch(
+  toolName: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (toolName !== "Task") return null;
+  if (input.subagent_type !== "general-purpose") return null;
+  const brief = [input.prompt, input.description]
+    .filter((v): v is string => typeof v === "string")
+    .join("\n");
+  if (!/(^|\/|`|\s)graphify-out\//i.test(brief)) return null;
+  if (!/\b(extract\w*|chunk\w*|nodes|edges|hyperedges|semantic)\b/i.test(brief)) return null;
+  return { ...input, subagent_type: "graph-extractor" };
+}
+
 export function classifyToolCall(
   name: string,
   input: Record<string, unknown>,
@@ -658,6 +793,29 @@ export function classifyToolCall(
         `MCP tool (ADR-0042). Call remember with a name, a one-line hook, ` +
         `and the durable fact; it writes the fact file and rebuilds the ` +
         `index. Use \`recall\` to read facts.`,
+    };
+  }
+
+  // GRAPH-EXTRACTION WRITE EXCEPTION (ADR-0058). Building the knowledge graph
+  // is read-only *discovery* — the sanctioned fan-out pattern (scouts ADR-0014,
+  // dynamic workflows ADR-0030), NOT the forbidden parallel-implementation of
+  // Golden Rule 1. The only friction is that graphify's extractor subagents
+  // must write their chunk output under `graphify-out/`. Narrowly permit that:
+  // a sub-agent file-write whose target is under `graphify-out/` is allowed,
+  // so the extraction fan-out can run in parallel. Everything else a sub-agent
+  // writes stays hard-denied by the invariant below. NOT granted in Ask mode
+  // (readOnly) — that whole-turn constraint still wins.
+  if (
+    opts?.agentID &&
+    !opts?.readOnly &&
+    baseDecision !== "allow" &&
+    writesUnderGraphOut(name, input)
+  ) {
+    return {
+      decision: "allow",
+      reason:
+        `${name} writes graph-extraction output under graphify-out/ — permitted ` +
+        `for graph subagents (ADR-0058). Read-only discovery, scoped write.`,
     };
   }
 
@@ -935,14 +1093,21 @@ export function makeAutoModeLogger(args: {
         interrupt: false,
       } as PermissionResult;
     }
+    // ADR-0058 addendum: a general-purpose Task that is recognisably a
+    // graph-extraction dispatch is rewritten to the Haiku `graph-extractor`
+    // at the gate — the model saving no longer depends on the prose steer.
+    const remapped = remapGraphExtractionDispatch(toolName, safeInput);
+    const finalInput = remapped ?? safeInput;
     appendAutoAuditEntry(cwd, {
       tool: toolName as AutoAuditEntryKind,
-      reason: cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`,
-      input: safeInput,
+      reason:
+        (cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`) +
+        (remapped ? " [remapped → graph-extractor, ADR-0058]" : ""),
+      input: finalInput,
       turnId,
       toolUseId: toolUseID,
     });
-    return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
+    return { behavior: "allow", updatedInput: finalInput } as PermissionResult;
   };
 }
 
@@ -982,18 +1147,23 @@ export function makeGatedCanUseTool(args: {
     }
 
     if (cls.decision === "allow") {
+      // ADR-0058 addendum: same graph-extraction dispatch rewrite as auto
+      // mode — sanctioned Task dispatches auto-allow under gated too, so the
+      // remap must live here as well or gated sessions lose the Haiku saving.
+      const remapped = remapGraphExtractionDispatch(toolName, safeInput);
+      const finalInput = remapped ?? safeInput;
       // Audit-log mutators that auto-allow under `gated` too. Read /
       // Grep / Glob fall through `appendAutoAuditEntry`'s
       // TOOLS_WORTH_LOGGING filter, so only Edit / Write / Bash
       // actually land in the JSONL — no log explosion.
       appendAutoAuditEntry(cwd, {
         tool: toolName as AutoAuditEntryKind,
-        reason: cls.reason,
-        input: safeInput,
+        reason: cls.reason + (remapped ? " [remapped → graph-extractor, ADR-0058]" : ""),
+        input: finalInput,
         turnId,
         toolUseId: toolUseID,
       });
-      return { behavior: "allow", updatedInput: safeInput } as PermissionResult;
+      return { behavior: "allow", updatedInput: finalInput } as PermissionResult;
     }
     if (cls.decision === "deny") {
       return {
@@ -1039,6 +1209,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // model drives the loop (e.g. runtime "advisor" mode). Tier-resolved per
   // ADR-0029 (no hardcoded version id); `defaultModel()` is the last resort.
   const advisorModelResolved = advisorModel ?? (await latestForTier("opus")) ?? defaultModel();
+  // Haiku-tier model for the graph-extractor subagent (ADR-0058). Falls back to
+  // "inherit" (the parent tier) only if Haiku discovery is unavailable.
+  const graphExtractorModel = (await latestForTier("haiku")) ?? "inherit";
 
   // Wire Honeycomb telemetry per-turn. `computeHoneycombTelemetryEnv`
   // is the pure form — it reads the saved config at
@@ -1114,22 +1287,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // wired when we know which session to resume — a wakeup turn must be able
   // to re-enter THIS marvinSession. Captures the turn's config so the fired
   // turn inherits the same model / permission posture (no elevation).
-  const wakeupMcp =
+  const wakeupCtx: WakeupToolContext | null =
     input.marvinSessionId && input.projectId
-      ? createWakeupMcpServer({
+      ? {
           marvinSessionId: input.marvinSessionId,
           projectId: input.projectId,
           cwd,
           model,
           advisorModel: advisorModel ?? null,
-          personality: input.personality ?? "marvin",
+          personality: input.personality ?? "ultron",
           permissionStrategy,
           playwrightEnabled: input.playwrightEnabled,
           thinkingMode: input.thinkingMode ?? "high",
           advisorThinkingMode: input.advisorThinkingMode,
           depth: input.wakeupDepth ?? 0,
-        })
+        }
       : null;
+  const wakeupMcp = wakeupCtx ? createWakeupMcpServer(wakeupCtx) : null;
 
   // Project-local skills plugin (ADR-0024). When the project has
   // committed any `<workDir>/.marvin/skills/<name>/SKILL.md` files, we
@@ -1246,6 +1420,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           advisorModelResolved,
         ),
       }),
+      // ADR-0058: the cheap, parallel graph-extraction subagent (Haiku tier,
+      // writes scoped to graphify-out/ by the gate). Dispatched for graphify's
+      // semantic pass so it fans out on a low-cost model instead of running
+      // serially on the executor.
+      "graph-extractor": buildGraphExtractorAgent({ model: graphExtractorModel }),
     },
     includePartialMessages: false,
     // Reasoning-effort selection → SDK effort. Accepts the full ladder
@@ -1280,6 +1459,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // close its stdio). Observed in v0.2.113 when stdio MCP children
   // (e.g. Playwright) hold the parent open after `result`.
   let seenSuccessfulResult = false;
+  // Check-back guard state (ADR-0055). Track the LAST assistant message's text
+  // and whether any follow-through mechanism was armed during the turn, so at
+  // turn-end we can auto-arm a wakeup for an unbacked "I'll check back" promise.
+  let finalAssistantText = "";
+  let armedFollowThrough = false;
+  // Workflow-completion guard state (ADR-0057). Latest TodoWrite payload and the
+  // set of ADR files this turn edited, checked at turn-end against the scope-met
+  // marker to catch a premature "done".
+  let lastTodoPayload: unknown = undefined;
+  const editedAdrPaths = new Set<string>();
   let watchdogTimer: NodeJS.Timeout | null = null;
   // Watchdog window. Tunable via env in case a future SDK version
   // needs longer post-`result` cleanup; the default is generous
@@ -1318,6 +1507,45 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         });
       }
       onEvent(ev);
+      // Check-back guard bookkeeping (ADR-0055): capture the latest assistant
+      // text and note if a follow-through tool was called this turn.
+      if (ev.type === "assistant") {
+        const content = (ev as { message?: { content?: unknown } }).message?.content;
+        if (Array.isArray(content)) {
+          const texts: string[] = [];
+          for (const block of content) {
+            const b = block as {
+              type?: string;
+              text?: unknown;
+              name?: unknown;
+              input?: unknown;
+            };
+            if (b.type === "text" && typeof b.text === "string") texts.push(b.text);
+            if (b.type === "tool_use" && typeof b.name === "string") {
+              if (b.name.includes("schedule_wakeup") || b.name.includes("run_background_job")) {
+                armedFollowThrough = true;
+              }
+              // ADR-0057 — capture the latest TodoWrite payload and any ADR files
+              // edited this turn, for the turn-end workflow-completion guard.
+              const input = b.input as Record<string, unknown> | undefined;
+              if (b.name === "TodoWrite" && input && "todos" in input) {
+                lastTodoPayload = input.todos;
+              }
+              if (
+                (b.name === "Edit" || b.name === "Write" || b.name === "NotebookEdit") &&
+                input
+              ) {
+                const fp = input.file_path ?? input.notebook_path;
+                if (typeof fp === "string" && /docs\/decisions\/.*\.md$/.test(fp)) {
+                  editedAdrPaths.add(isAbsolute(fp) ? fp : resolve(cwd, fp));
+                }
+              }
+            }
+          }
+          // Last assistant message with text wins — that's the closing narration.
+          if (texts.length > 0) finalAssistantText = texts.join("\n");
+        }
+      }
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {
         lastSessionId = ev.session_id;
       } else if (ev.type === "result") {
@@ -1404,6 +1632,94 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
     clearTurnDesignContext(turnId);
+  }
+
+  // ── Check-back guard (ADR-0055) ────────────────────────────────────────
+  // If a successful turn ended on an "I'll check back" promise but armed NO
+  // follow-through mechanism, arm the wakeup ourselves so the promise becomes
+  // real (the model's firm-surface MUST fires unreliably — this is the
+  // mechanical backstop). No-op without a wakeup context (unknown session).
+  if (!resultError && wakeupCtx && !armedFollowThrough) {
+    const detected = detectUncoveredCheckBack(finalAssistantText);
+    if (detected) {
+      const { reason, prompt } = buildCheckBackWakeup(detected);
+      const res = scheduleWakeup({
+        ...wakeupCtx,
+        schedulingDepth: wakeupCtx.depth,
+        delaySeconds: detected.delaySeconds,
+        reason,
+        prompt,
+      });
+      try {
+        console.info(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "checkback.autoarm",
+              turnId,
+              armed: res.ok,
+              delaySeconds: detected.delaySeconds,
+              ...(res.ok ? { wakeupId: res.record.id } : { skipped: res.error }),
+              at: new Date().toISOString(),
+            }),
+        );
+      } catch {
+        /* never break the turn on a telemetry serialisation error */
+      }
+    }
+  }
+
+  // ── Workflow-completion guard (ADR-0057) ───────────────────────────────
+  // If a successful turn emitted the scope-met marker but left plan items open
+  // or an ADR's Scope of Done entirely unmarked, fire a corrective turn that
+  // forces an HONEST reconciliation (mark what's done; retract what isn't).
+  if (!resultError && wakeupCtx && hasScopeMet(finalAssistantText)) {
+    const untickedAdrs: string[] = [];
+    for (const p of editedAdrPaths) {
+      try {
+        if (scopeOfDoneEntirelyUnticked(readFileSync(p, "utf8"))) untickedAdrs.push(basename(p));
+      } catch {
+        /* unreadable (deleted / moved) — skip */
+      }
+    }
+    // Plan-item signal: trust THIS turn's TodoWrite when present (no lag). Only
+    // when the turn emitted no TodoWrite — so the plan didn't advance and the
+    // debounced-PUT plan-state can't be racily stale — fall back to the
+    // persisted spine (ADR-0057, closing the terminal-turn gap). readPlanState
+    // returns null on a mismatched key, so the fallback degrades to no-op.
+    let openPlanItems: string[];
+    if (lastTodoPayload !== undefined) {
+      openPlanItems = openTodos(lastTodoPayload);
+    } else {
+      const ps = readPlanState(wakeupCtx.projectId, wakeupCtx.marvinSessionId);
+      openPlanItems = ps.ok ? openPlanSteps(ps.state) : [];
+    }
+    const gap: WorkflowGap = { openTodos: openPlanItems, untickedAdrs };
+    if (hasWorkflowGap(gap)) {
+      const { reason, prompt } = buildReconcilePrompt(gap);
+      const res = scheduleWakeup({
+        ...wakeupCtx,
+        schedulingDepth: wakeupCtx.depth,
+        delaySeconds: 60,
+        reason,
+        prompt,
+      });
+      try {
+        console.info(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "workflow.reconcile",
+              turnId,
+              armed: res.ok,
+              openTodos: gap.openTodos.length,
+              untickedAdrs: gap.untickedAdrs.length,
+              ...(res.ok ? { wakeupId: res.record.id } : { skipped: res.error }),
+              at: new Date().toISOString(),
+            }),
+        );
+      } catch {
+        /* never break the turn on a telemetry serialisation error */
+      }
+    }
   }
 
   if (resultError) {

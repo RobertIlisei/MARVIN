@@ -8,8 +8,9 @@
 //   • install — fetch a full plugin from a marketplace/Git URL
 //               (POST /api/plugins/install) so the loader discovers it.
 //
-// v1 loads a plugin's skills + slash commands + (gated) MCP; its agents and
-// hooks are shown but NOT loaded (Golden Rule 1 / tool-flow safety). All data
+// Loads a plugin's skills + slash commands + (gated) MCP + agents — agents
+// run READ-ONLY under the subagent invariant, dispatch confirm-gated
+// (ADR-0054). Hooks are never loaded (tool-flow safety, ADR-0054 §2). All data
 // comes from `GET /api/plugins?workDir=…`; the pane re-fetches on project
 // change and after a mutation.
 
@@ -122,7 +123,7 @@ struct PluginsPane: View {
                         .background(Capsule().fill(Color.secondary.opacity(0.15)))
                     Spacer()
                 }
-                Text("Installed Claude Code plugins (from ~/.claude/plugins). Toggle one on to load its skills + commands + gated MCP for THIS project. Agents and hooks are shown but not loaded in v1 (ADR-0053).")
+                Text("Installed Claude Code plugins (from ~/.claude/plugins). Toggle one on to load its skills + commands + gated MCP + read-only agents for THIS project (ADR-0053/0054). Hooks are never loaded.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -202,7 +203,7 @@ struct PluginsPane: View {
             if !p.skills.isEmpty { chip("\(p.skills.count) skills", loaded: true) }
             if !p.commands.isEmpty { chip("\(p.commands.count) cmds", loaded: true) }
             if p.hasMcp { chip("MCP · gated", loaded: true) }
-            if !p.agents.isEmpty { chip("\(p.agents.count) agents · off", loaded: false) }
+            if !p.agents.isEmpty { chip("\(p.agents.count) agents · read-only", loaded: true) }
             if p.hasHooks { chip("hooks · off", loaded: false) }
         }
     }

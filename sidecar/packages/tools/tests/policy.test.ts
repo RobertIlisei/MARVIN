@@ -152,6 +152,11 @@ describe("toolPolicy — Task subagent gating (audit finding #3)", () => {
     expect(result.class).toBe("auto");
   });
 
+  it("auto-allows sanctioned `graph-extractor` subagent (ADR-0058)", () => {
+    const result = toolPolicy("Task", { subagent_type: "graph-extractor" });
+    expect(result.class).toBe("auto");
+  });
+
   it("requires confirm for an unknown subagent_type", () => {
     const result = toolPolicy("Task", { subagent_type: "rogue" });
     expect(result.class).toBe("confirm");

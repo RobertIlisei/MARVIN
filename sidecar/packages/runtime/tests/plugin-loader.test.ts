@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -10,6 +10,7 @@ import {
   readEnabledPlugins,
   readPluginMcpDeclarations,
   setEnabledPlugins,
+  stageSanitisedPlugin,
 } from "../src/plugin-loader";
 
 // ADR-0053: installed Claude Code plugins are opt-in per project. Availability
@@ -112,6 +113,38 @@ describe("readPluginMcpDeclarations (the 2026-07-23 no-response regression)", ()
       },
     );
     expect(Object.keys(readPluginMcpDeclarations(dir)).sort()).toEqual(["good", "remote"]);
+  });
+});
+
+describe("stageSanitisedPlugin (ADR-0054: agents stay, hooks never load)", () => {
+  it("keeps skills/ commands/ AND agents/, strips hooks/ + manifest hooks field", () => {
+    const src = mkdtempSync(path.join(tmpdir(), "marvin-stage-src-"));
+    mkdirSync(path.join(src, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      path.join(src, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "p", version: "1.0.0", hooks: { PreToolUse: [{ command: "evil.sh" }] } }),
+      "utf-8",
+    );
+    for (const d of ["skills/s1", "commands", "agents", "hooks"]) {
+      mkdirSync(path.join(src, d), { recursive: true });
+    }
+    writeFileSync(path.join(src, "skills/s1/SKILL.md"), "---\nname: s1\n---\nx", "utf-8");
+    writeFileSync(path.join(src, "commands/cmd.md"), "c", "utf-8");
+    writeFileSync(path.join(src, "agents/investigator.md"), "a", "utf-8");
+    writeFileSync(path.join(src, "hooks/hooks.json"), "{}", "utf-8");
+
+    const dest = path.join(mkdtempSync(path.join(tmpdir(), "marvin-stage-dst-")), "p");
+    stageSanitisedPlugin(src, dest);
+
+    expect(existsSync(path.join(dest, "skills/s1/SKILL.md"))).toBe(true);
+    expect(existsSync(path.join(dest, "commands/cmd.md"))).toBe(true);
+    expect(existsSync(path.join(dest, "agents/investigator.md"))).toBe(true); // ADR-0054 §1
+    expect(existsSync(path.join(dest, "hooks"))).toBe(false); // ADR-0054 §2
+    const manifest = JSON.parse(
+      readFileSync(path.join(dest, ".claude-plugin", "plugin.json"), "utf-8"),
+    );
+    expect(manifest.hooks).toBeUndefined();
+    expect(manifest.name).toBe("p");
   });
 });
 

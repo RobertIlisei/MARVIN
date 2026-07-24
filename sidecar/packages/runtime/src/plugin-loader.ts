@@ -14,16 +14,21 @@
  * plugin loads into a turn only when listed in `<workDir>/.marvin/plugins.json`
  * (mirrors ADR-0037's `skills.json`). Default empty → nothing auto-loads.
  *
- * v1 contribution scope (ADR-0053): skills + slash commands + MCP servers.
- * Plugin **agents** (Golden Rule 1) and **hooks** (can rewrite tool flow) are
- * deferred — because the SDK's local-plugin loader is all-or-nothing per dir,
- * we honour that cut by pointing the SDK at a SANITISED STAGED COPY of the
- * plugin under `<workDir>/.marvin/plugins-stage/<name>/` with `agents/` and
- * `hooks/` (and the manifest `hooks` field) stripped. Plugin MCP servers are
- * NOT loaded by the local-plugin path (the SDK loads commands/agents/skills/
- * hooks only), so we read the manifest's `mcpServers` and return them for the
- * caller to merge into `options.mcpServers` — where the ADR-0053 gate change
- * routes their tools through `confirm`.
+ * Contribution scope: skills + slash commands + MCP servers (ADR-0053) +
+ * **agents, read-only** (ADR-0054). Plugin **hooks** stay stripped — they
+ * interpose arbitrary code on MARVIN's tool flow and have no read-only
+ * containment (ADR-0054 §2, deliberately not "pending"). Because the SDK's
+ * local-plugin loader is all-or-nothing per dir, we honour that cut by
+ * pointing the SDK at a SANITISED STAGED COPY of the plugin under
+ * `<workDir>/.marvin/plugins-stage/<name>/` with `hooks/` (and the manifest
+ * `hooks` field) removed. Plugin agents are contained mechanically, not by
+ * staging: dispatch of an unknown `subagent_type` classifies `confirm`, and
+ * every call from a spawned agent carries an SDK `agentID` the gate collapses
+ * to read-only (ADR-0030 invariant). Plugin MCP servers are NOT loaded by the
+ * local-plugin path (the SDK loads commands/agents/skills/hooks only), so we
+ * read the manifest's `mcpServers` and return them for the caller to merge
+ * into `options.mcpServers` — where the ADR-0053 gate change routes their
+ * tools through `confirm`.
  */
 
 import {
@@ -121,11 +126,12 @@ export interface PluginSummary {
   skills: string[];
   /** Slash-command names bundled (loaded in v1). */
   commands: string[];
-  /** Subagent names bundled (NOT loaded in v1 — informational). */
+  /** Subagent names bundled — loaded READ-ONLY, dispatch confirm-gated
+   *  (ADR-0054). */
   agents: string[];
-  /** True if the plugin declares an MCP server (loaded + gated in v1). */
+  /** True if the plugin declares an MCP server (loaded + gated). */
   hasMcp: boolean;
-  /** True if the plugin ships hooks (NOT loaded in v1 — informational). */
+  /** True if the plugin ships hooks (never loaded — ADR-0054 §2). */
   hasHooks: boolean;
   /** True when this plugin is currently enabled for the project. */
   enabled: boolean;
@@ -250,9 +256,10 @@ export function discoverInstalledPlugins(): Map<string, string> {
   return out;
 }
 
-/** Directory names inside a plugin we refuse to load in v1 (Golden Rule 1 /
- *  tool-flow safety). Stripped from the staged copy. */
-const STRIPPED_DIRS = ["agents", "hooks"];
+/** Directory names inside a plugin we refuse to load (tool-flow safety —
+ *  ADR-0054 §2). Stripped from the staged copy. `agents/` is NOT stripped:
+ *  plugin agents load read-only under the ADR-0030 invariant (ADR-0054 §1). */
+const STRIPPED_DIRS = ["hooks"];
 
 /**
  * Resolve the plugins to load for a turn. Returns `EMPTY` for a non-project cwd
@@ -293,12 +300,13 @@ export function loadEnabledPlugins(workDir: string): LoadedPlugins {
 }
 
 /**
- * Copy `srcPath` → `dest`, minus `agents/` and `hooks/`, and with the manifest's
- * `hooks` field removed. Idempotent: the staged dir is rebuilt each call (plugin
- * updates flow through; stale files don't accumulate). The staged tree lives
- * under `.marvin/` so it's gitignore-adjacent project scratch, not committed.
+ * Copy `srcPath` → `dest`, minus `hooks/`, and with the manifest's `hooks`
+ * field removed (ADR-0054: agents stay, hooks never load). Idempotent: the
+ * staged dir is rebuilt each call (plugin updates flow through; stale files
+ * don't accumulate). The staged tree lives under `.marvin/` so it's
+ * gitignore-adjacent project scratch, not committed. Exported for tests.
  */
-function stageSanitisedPlugin(srcPath: string, dest: string): void {
+export function stageSanitisedPlugin(srcPath: string, dest: string): void {
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   cpSync(srcPath, dest, {
