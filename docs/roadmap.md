@@ -6,11 +6,62 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-_(Empty — v0.1.57 shipped the plugin platform + ultron voice; the one open follow-up is the plugin hooks/agents ADR, tracked below under Deferred.)_
+_(Empty — v0.1.58 shipped the reliability-guard arc below. Next up: whatever surfaces next.)_
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
 ## Current version
+
+**v0.1.58** — Reliability-guard arc: MARVIN starts enforcing its own workflow
+mechanically instead of trusting prose. Five ADRs landed same-week, each
+following the pattern "a prose MUST fired unreliably → close it at the gate."
+**Plugin agents (ADR-0054):** plugin-shipped subagents (claude-security's 7,
+code-modernization's 8, honeycomb's 2) now load and dispatch via `Task`
+read-only — confirm-gated dispatch, `agentID` invariant hard-denies any
+mutation, so they analyse/report while the main loop applies changes. Hooks
+stay stripped, deliberately not "pending." Supersedes the deferred bespoke
+Honeycomb-MCP roadmap item. **Check-back guard (ADR-0055):** the "I'll check
+back in ~7 minutes" failure — MARVIN narrating a promise while arming nothing,
+observed live on a real project turn (empty wakeups file, zero scheduler
+activity in the log) — now auto-arms a wakeup at turn-end when a promise is
+detected with no `schedule_wakeup`/`run_background_job` call; delay parsed
+from the message, prompt forces the fired turn to actually check status
+rather than re-promise. Also fixed wakeup turns defaulting to `marvin` voice
+instead of `ultron`. **File-tree crash fix (ADR-0056):** the app hard-crashed
+3× (SIGTRAP in SwiftUI's `OutlineGroup`/`ViewListTree.visitItem` — duplicate
+id in the file tree); root cause was that `OutlineGroup` needs ids unique
+across the WHOLE tree but only siblings were deduped, so a cross-branch path
+collision (an agent mutating files mid-refresh) traps the outline coordinator.
+Fixed by sanitising the fetched tree to whole-tree id-uniqueness
+(`deduplicatedTreeWide`) before it reaches the view — supersedes 3 prior
+failed per-symptom patches (animation-disable, empty-dir-collapse, sibling
+dedup). Durable fix (NSOutlineView migration) scoped on the roadmap with an
+explicit recurrence trigger. **Workflow-completion guard (ADR-0057):** the
+user-reported failure this arc responds to directly — MARVIN declaring a plan
+finished while TodoWrite items sit open and an ADR's `## Scope of Done` stays
+unticked. A scope-met close with a real gap now fires a corrective turn
+demanding honest reconciliation (mark what's genuinely done; retract what
+isn't — never tick-to-satisfy). Covers both the in-turn TodoWrite case and,
+via a defensively-parsed fallback into the persisted plan spine, the
+multi-turn case where the closing turn emits no TodoWrite at all. Conservative
+on the ADR check: a partially-ticked DoD (legitimate deferrals, e.g. this
+release's own ADR-0056) is never flagged — only a wholesale miss (zero `[x]`)
+trips it. **Parallel graph extraction (ADR-0058 + same-day addendum):** the
+semantic `/graphify` pass was serial-slow on a large project because
+graphify's extractor subagents need to write chunk files and the read-only
+invariant denied all subagent writes. Fixed with a narrow `graphify-out/`
+-scoped file-write exception (parallelism — works even with graphify's stock
+`general-purpose` dispatch) plus a Haiku-tier `graph-extractor` subagent
+(cost). The addendum closed both limits the ADR shipped with, mechanically:
+the gate now **rewrites** a stock general-purpose extraction dispatch to
+`graph-extractor` via `updatedInput` when the brief both names a
+`graphify-out/` path and uses extraction vocabulary (Haiku saving no longer
+depends on a prompt steer being followed), and the canonical graph artifacts
+(`graph.json`, `memory/`) are subagent-write-denied even inside the slit, so
+a poisoned extractor can only feed chunks into the main loop's deterministic
+merge — the same exposure the serial path always had, not a new one.
+512 tests + 3× typecheck green; full Xcode build verified; app rebuilt +
+installed. Builds on v0.1.57.
 
 **v0.1.57** — Claude Code plugins become first-class in MARVIN + the ultron
 voice. **Plugins (ADR-0053):** MARVIN runs the SDK in isolation mode, so plugins
@@ -439,13 +490,17 @@ The high-water marks. Diagnostic detail per release in the [changelog](./history
 
 ## Deferred (blockers, not capacity)
 
-### Honeycomb MCP integration for observability
+### Honeycomb MCP integration for observability — SUPERSEDED (ADR-0054 §3)
 
-Would register as `marvin-honeycomb` and expose trace querying as tools the executor could invoke while debugging production issues. **Blocker:** requires a Honeycomb account + team-specific configuration; baking that into MARVIN's source violates the [isolation contract](./concepts/isolation-contract.md). Belongs in `<workDir>/.marvin/` config; no shipping ETA until a user has a Honeycomb environment to be the first to try.
+~~Would register as `marvin-honeycomb` and expose trace querying as tools the executor could invoke while debugging production issues.~~ Superseded by the plugin platform: the honeycomb **plugin** ships the skills + read-only agents (ADR-0054), its MCP server arrives confirm-gated via ADR-0053, and team-specific config stays in the user's `~/.claude` / `<workDir>/.marvin` — the [isolation contract](./concepts/isolation-contract.md) holds with no MARVIN-side Honeycomb code at all. Enable the `honeycomb` plugin per project instead.
 
 ### Test coverage beyond the write-channel security layer
 
 The Vitest harness covers `fs-sandbox` / `fs-write-policy` / `fs-constants` / `fs-write-confirm-registry` and the new Swift logic targets (`MARVINLogic`, `MARVINTests`). The Agent SDK interaction loop, the React/SwiftUI shells, and individual API routes remain uncovered — still opportunistic. See [Testing](./development/testing.md).
+
+### File tree: migrate OutlineGroup → NSOutlineView (ADR-0056 durable fix)
+
+SwiftUI's `OutlineGroup` has needed **four** crash patches on the file tree (ADR-0056) — it's structurally fragile for a large, per-turn-replaced, agent-mutated tree, and loses expansion state on every structural change. The durable fix is a custom `NSViewRepresentable` around `NSOutlineView` owning its own diffing/expansion/selection (anticipated by [ADR-0018 §5](./decisions/0018-native-file-tree.md)). **Trigger:** if the crash recurs after ADR-0056's whole-tree-id fix, do this — no fifth OutlineGroup band-aid. **Blocker:** ~800-line AppKit rewrite that needs interactive visual verification, so it's a deliberate standalone piece, not a same-change follow-on to the crash fix.
 
 ### Real Developer ID + notarization
 
