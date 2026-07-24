@@ -208,6 +208,10 @@ final class MarvinBridge {
     /// change and reacts; the value itself is meaningless.
     private(set) var shortcutsTriggerCount: Int = 0
     private(set) var quickOpenTriggerCount: Int = 0
+    /// ADR-0059 — the always-available "Audit Session" menu affordance (the
+    /// scope-met chip is the primary one). ChatPreviewView observes this and
+    /// runs the read-only auditor.
+    private(set) var sessionAuditTriggerCount: Int = 0
 
     /// Phase 5f — editor cursor state lifted onto the bridge so the
     /// app-wide bottom status bar can read it without coupling to the
@@ -235,6 +239,7 @@ final class MarvinBridge {
 
     func triggerShortcutsHelp()  { shortcutsTriggerCount   &+= 1 }
     func triggerQuickOpen()      { quickOpenTriggerCount    &+= 1 }
+    func triggerSessionAudit()   { sessionAuditTriggerCount &+= 1 }
     func triggerSymbolSearch()   { symbolSearchTriggerCount &+= 1 }
     func triggerBuildTask()      { buildTaskTriggerCount    &+= 1 }
     func triggerTerminalCommand(_ cmd: String) {

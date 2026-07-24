@@ -1508,6 +1508,14 @@ struct ChatPreviewView: View {
     /// ADR-0044 — backlog browser sheet.
     @State private var backlogPanelOpen = false
     @State private var plansPanelOpen = false
+    // ADR-0059 — session auditor. `auditReport` drives the findings sheet;
+    // the audit runs out-of-band and never touches the executor's context.
+    @State private var auditRunning = false
+    @State private var auditReport: AuditReport? = nil
+    @State private var auditError: String? = nil
+    /// Findings the user has parked / dispatched / dismissed this sitting.
+    /// Local only — the durable record is the report file on disk.
+    @State private var handledFindings: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1620,6 +1628,11 @@ struct ChatPreviewView: View {
         .onChange(of: bridge.activeProjectId) { _, _ in
             syncHydrateFromBridge()
         }
+        // ADR-0059 — the "Audit Session…" menu item (always-available
+        // affordance) routes here; the scope-met chip calls the same path.
+        .onChange(of: bridge.sessionAuditTriggerCount) { _, _ in
+            Task { await runSessionAudit() }
+        }
         // Phase 2e — present the head of the confirm queue as a
         // modal sheet. We use isPresented bound to "is there a
         // pending confirm" (set: false denies the head) so the user
@@ -1682,6 +1695,20 @@ struct ChatPreviewView: View {
                 onRemove: { model.removePlan($0) },
                 onClose: { plansPanelOpen = false }
             )
+        }
+        // ADR-0059 — session-audit findings. Advisory only; closing it changes
+        // nothing, and the report never reaches the executor's context.
+        .sheet(item: $auditReport) { auditReportSheet($0) }
+        .alert(
+            "Audit failed",
+            isPresented: Binding(
+                get: { auditError != nil },
+                set: { if !$0 { auditError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { auditError = nil }
+        } message: {
+            Text(auditError ?? "")
         }
     }
 
@@ -2518,12 +2545,330 @@ struct ChatPreviewView: View {
             .controlSize(.small)
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .help("Clear the SDK session before the next message (⌘⇧N). memory.md auto-loads on the new session.")
+            // ADR-0059 — the natural audit moment is right after a completion
+            // claim. The mechanical guard (ADR-0057) already checked the
+            // checkboxes; this offers the judgement-level pass on the same
+            // claim. Read-only, advisory, reports to the user.
+            auditSessionButton
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
             Color.secondary.opacity(0.05)
         )
+    }
+
+    /// "Audit session" — runs the read-only session auditor (ADR-0059) over
+    /// this session's claims-vs-evidence packet and shows the findings report.
+    /// Deliberately NOT an Ask-mode function: Ask mode is the executor with
+    /// writes disabled (same session, same context), and an executor auditing
+    /// its own narrative from inside that narrative is exactly the
+    /// self-briefing failure ADR-0059 avoids.
+    @ViewBuilder
+    private var auditSessionButton: some View {
+        Button {
+            Task { await runSessionAudit() }
+        } label: {
+            if auditRunning {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small)
+                    Text("Auditing…").font(.caption)
+                }
+            } else {
+                Label("Audit session", systemImage: "magnifyingglass.circle")
+                    .font(.caption)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(auditRunning || bridge.projectWorkDir == nil)
+        .help("Run a read-only audit of this session: an independent pass that checks what MARVIN CLAIMED against what actually ran and changed. Advisory only — it can't block anything, and findings go to you, not to MARVIN.")
+    }
+
+    /// POST /api/audit → findings report. Read-only and out-of-band: the
+    /// executor neither triggers this nor sees the result (ADR-0059).
+    private func runSessionAudit() async {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty,
+              let pid = model.loadedProjectId,
+              let sid = model.loadedSessionId else {
+            await MainActor.run { auditError = "No active session to audit yet." }
+            return
+        }
+        await MainActor.run { auditRunning = true; auditError = nil }
+        defer { Task { @MainActor in auditRunning = false } }
+
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/audit"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        req.timeoutInterval = 300
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "workDir": cwd, "projectId": pid, "sessionId": sid,
+        ])
+
+        struct AuditResponse: Decodable {
+            let report: String?
+            let path: String?
+            let findingCount: Int?
+            let findings: [AuditFinding]?
+            let error: String?
+        }
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let decoded = try? JSONDecoder().decode(AuditResponse.self, from: data)
+            if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                await MainActor.run {
+                    auditError = decoded?.error ?? "Audit failed (HTTP \(http.statusCode))."
+                }
+                return
+            }
+            guard let report = decoded?.report else {
+                await MainActor.run { auditError = decoded?.error ?? "Audit returned no report." }
+                return
+            }
+            await MainActor.run {
+                auditReport = AuditReport(
+                    text: report,
+                    path: decoded?.path,
+                    findingCount: decoded?.findingCount ?? 0,
+                    findings: decoded?.findings ?? []
+                )
+            }
+        } catch {
+            await MainActor.run { auditError = error.localizedDescription }
+        }
+    }
+
+    /// One structured finding, parsed server-side from the report (ADR-0059
+    /// addendum 2) so each row can carry its own actions.
+    struct AuditFinding: Decodable, Identifiable, Equatable {
+        let title: String
+        let `class`: String
+        let severity: String
+        let claim: String
+        let evidence: String
+        let suggest: String
+        var id: String { title }
+
+        /// info | warn | high → colour. Unknown severities read as info.
+        var tint: Color {
+            switch severity.lowercased() {
+            case "high": return .red
+            case "warn": return .orange
+            default: return .secondary
+            }
+        }
+        var icon: String {
+            switch severity.lowercased() {
+            case "high": return "exclamationmark.octagon.fill"
+            case "warn": return "exclamationmark.triangle.fill"
+            default: return "info.circle"
+            }
+        }
+    }
+
+    /// The findings report shown in the audit sheet.
+    struct AuditReport: Identifiable, Equatable {
+        let text: String
+        let path: String?
+        let findingCount: Int
+        let findings: [AuditFinding]
+        var id: String { path ?? String(text.prefix(64)) }
+    }
+
+    @ViewBuilder
+    func auditReportSheet(_ report: AuditReport) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: report.findingCount == 0 ? "checkmark.seal" : "exclamationmark.magnifyingglass")
+                    .foregroundStyle(report.findingCount == 0 ? .green : .orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(report.findingCount == 0
+                         ? "Session audit — clean"
+                         : "Session audit — \(report.findingCount) finding\(report.findingCount == 1 ? "" : "s")")
+                        .font(.headline)
+                    Text("Read-only advisory (ADR-0059) — findings are prompts to look, not verdicts.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let p = report.path {
+                    Button {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(p, forType: .string)
+                    } label: { Label("Copy path", systemImage: "doc.on.doc") }
+                    .buttonStyle(.bordered).controlSize(.small)
+                }
+                Button("Close") { auditReport = nil }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Interactive triage: one card per finding with its own
+                    // actions. The user acts on findings — the auditor never
+                    // does, so authority still runs user → executor (ADR-0059).
+                    ForEach(report.findings) { f in
+                        auditFindingCard(f)
+                    }
+                    if report.findings.isEmpty {
+                        Text(report.text)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        DisclosureGroup("Full report") {
+                            Text(report.text)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 6)
+                        }
+                        .font(.caption)
+                    }
+                }
+                .padding(14)
+            }
+        }
+        .frame(minWidth: 720, idealWidth: 900, minHeight: 460, idealHeight: 640)
+    }
+
+    /// One finding, with the three actions the user actually has: park it as
+    /// tracked work, hand it to MARVIN now, or dismiss it. "Dismiss" is local
+    /// — the durable record is always the report file on disk.
+    @ViewBuilder
+    private func auditFindingCard(_ f: AuditFinding) -> some View {
+        let handled = handledFindings.contains(f.id)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: f.icon).foregroundStyle(f.tint).font(.caption)
+                Text(f.title).font(.headline)
+                Spacer()
+                Text(f.class)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            }
+            if !f.claim.isEmpty {
+                labelledLine("claim", f.claim)
+            }
+            if !f.evidence.isEmpty {
+                labelledLine("evidence", f.evidence)
+            }
+            if !f.suggest.isEmpty {
+                labelledLine("suggest", f.suggest)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                if handled {
+                    Label("handled", systemImage: "checkmark")
+                        .font(.caption).foregroundStyle(.green)
+                } else {
+                    Button("Dismiss") { handledFindings.insert(f.id) }
+                        .buttonStyle(.borderless).controlSize(.small)
+                    Button {
+                        Task { await parkFinding(f) }
+                    } label: { Label("Park to backlog", systemImage: "tray.and.arrow.down") }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .help("Add this finding to the project backlog as tracked work (ADR-0044), where it can be promoted to a plan later.")
+                    Button {
+                        workOnFinding(f)
+                    } label: { Label("Work on it", systemImage: "play.circle") }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .help("Hand this finding to MARVIN now — switches to Plan mode and asks for a plan first. You are sending it; the auditor never talks to MARVIN.")
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(f.tint.opacity(handled ? 0.15 : 0.35), lineWidth: 1)
+                )
+        )
+        .opacity(handled ? 0.55 : 1)
+    }
+
+    @ViewBuilder
+    private func labelledLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .frame(width: 58, alignment: .trailing)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Park a finding into the project backlog (ADR-0044) via the existing
+    /// manual-add route — it then flows through all the backlog machinery
+    /// (panel, sort/filter, promote-to-plan, resolve) with no new persistence.
+    private func parkFinding(_ f: AuditFinding) async {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+        // auditor severity (info|warn|high) → backlog severity (low|med|high)
+        let severity: String
+        switch f.severity.lowercased() {
+        case "high": severity = "high"
+        case "warn": severity = "med"
+        default: severity = "low"
+        }
+        var body = ""
+        if !f.claim.isEmpty { body += "**Claim:** \(f.claim)\n\n" }
+        if !f.evidence.isEmpty { body += "**Evidence:** \(f.evidence)\n\n" }
+        if !f.suggest.isEmpty { body += "**Suggested next step:** \(f.suggest)\n\n" }
+        body += "_From a session audit (ADR-0059) · class: \(f.class)_"
+
+        var req = URLRequest(url: ServerConfig.baseURL.appendingPathComponent("api/backlog"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "workDir": cwd, "title": f.title, "body": body, "severity": severity,
+        ])
+        _ = try? await URLSession.shared.data(for: req)
+        await MainActor.run {
+            handledFindings.insert(f.id)
+            model.refreshBacklogCount()
+        }
+    }
+
+    /// Hand a finding to MARVIN as the next turn. Mirrors `promoteBacklog`:
+    /// Plan mode + present-a-plan-first, and queue when a turn is in flight so
+    /// it can't be silently dropped.
+    private func workOnFinding(_ f: AuditFinding) {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+        NativePrefs.shared.setMode("plan")
+        var instruction =
+            "A read-only session audit raised the finding below. Investigate it "
+            + "read-only first, then present a plan inline (open with a "
+            + "`# Plan — <title>` heading + numbered steps) for approval. Do NOT "
+            + "start editing yet. If you judge the finding to be wrong, say so "
+            + "with evidence instead of planning work.\n\n"
+            + "**\(f.title)** (class: \(f.class), severity: \(f.severity))\n\n"
+        if !f.claim.isEmpty { instruction += "- Claim: \(f.claim)\n" }
+        if !f.evidence.isEmpty { instruction += "- Evidence: \(f.evidence)\n" }
+        if !f.suggest.isEmpty { instruction += "- Suggested next step: \(f.suggest)\n" }
+
+        if model.isSending {
+            model.queuedMessages.append(.init(text: instruction, cwd: cwd))
+        } else {
+            model.sendControl(
+                instruction: instruction,
+                display: "Working on audit finding: \(f.title)",
+                cwd: cwd
+            )
+        }
+        handledFindings.insert(f.id)
+        auditReport = nil
     }
 
     /// ADR-0022 §3 follow-up — visible when the user has clicked
