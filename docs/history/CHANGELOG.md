@@ -9,6 +9,86 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-07-24 — v0.1.58: reliability-guard arc — MARVIN starts enforcing its own workflow mechanically.**
+  Five ADRs, one pattern: a prose MUST in `personality.ts` fired unreliably, so
+  each moved the enforcement to the gate or the turn-end hook where prose
+  couldn't be skipped.
+  **ADR-0054 — plugin agents, read-only.** ADR-0053 shipped stripping plugin
+  `agents/` pending this decision; the plugins users actually install
+  (claude-security: 7 agents, code-modernization: 8, honeycomb: 2) have the
+  agents AS the product, so the strip left them half-working. Now agents load;
+  containment is mechanical and two-layered — dispatch of an unknown
+  `subagent_type` confirm-gates, and any tool call carrying that agent's
+  `agentID` collapses to read-only under the existing ADR-0030 invariant, so a
+  plugin "patch-generator" can analyse and propose but never write. Hooks stay
+  stripped, explicitly not "pending" — there is no read-only version of
+  "interpose on every tool call." Supersedes the roadmap's deferred bespoke
+  Honeycomb-MCP item.
+  **ADR-0055 — check-back promise guard.** Observed live: a turn said
+  *"…pipeline #2701545119 is running — I'll check back in ~7 minutes"* and
+  armed nothing. Evidence: the project's wakeups file was `{"wakeups": []}`
+  (a real schedule persists immediately) and zero scheduler activity in the
+  sidecar log — the tool was available, the model just narrated and stopped.
+  Fix: a turn-end guard tracks the final assistant text and whether
+  `schedule_wakeup`/`run_background_job` ran; on an unbacked promise it parses
+  the delay from the message ("~7 minutes" → 420s, else a 300s default) and
+  arms the wakeup itself, with a prompt telling the fired turn to check the
+  actual status rather than re-promise. Bonus fix: wakeup-fired turns defaulted
+  to `marvin` persona instead of the new `ultron` default.
+  **ADR-0056 — file-tree crash.** Three identical crash reports (2026-07-23
+  00:37, 21:07; 2026-07-24 14:42) — `EXC_BREAKPOINT`/SIGTRAP inside SwiftUI's
+  `OutlineListCoordinator`/`ViewListTree.visitItem`, unrelated to any of this
+  week's other changes (earliest predates them). Root cause: `OutlineGroup`
+  requires ids unique across the WHOLE file tree; the existing guard deduped
+  only siblings, so a cross-branch path collision (an agent mutating files
+  mid-refresh, a case-fold collision) still tripped the assert — the fourth
+  crash on this view after three prior symptom-patches (v0.1.26 animation
+  disable, empty-dir-to-leaf, sibling dedup) that each addressed a different
+  symptom without closing the actual gap. Fix: sanitise the fetched tree to
+  whole-tree id-uniqueness (`deduplicatedTreeWide`) before `OutlineGroup` ever
+  sees it. Explicitly not certified "gone" — the crash isn't reproducible on
+  demand — so a durable NSOutlineView migration is scoped on the roadmap with
+  a recurrence trigger: if it happens again, that's the follow-up, not a fifth
+  band-aid.
+  **ADR-0057 — workflow-completion guard.** The user-reported failure this
+  arc responds to directly: *"the scope of done is not followed... the plan
+  items are not fully updated."* MARVIN was declaring `<!-- marvin:scope-met
+  -->` while its own `TodoWrite` sat `pending`/`in_progress` and an ADR's
+  `## Scope of Done` stayed unticked. Fix: at scope-met, check the turn's last
+  TodoWrite for open items and any ADR edited this turn for an entirely
+  unticked DoD section; on a real gap, fire a corrective turn demanding HONEST
+  reconciliation — mark what's genuinely done, leave the rest open, and do not
+  claim scope-met falsely. Extended same-day for the multi-turn case the user
+  flagged: a terminal turn that declares a plan done without re-emitting
+  TodoWrite is now caught via a defensively-parsed fallback into the persisted
+  plan spine (used only when no TodoWrite ran this turn, so the 500ms-debounced
+  client PUT can't be racily stale). Deliberately conservative on the ADR
+  check — a partially-ticked DoD (legitimate deferrals, like this release's own
+  ADR-0056 durable-fix box) is never flagged, only a wholesale zero-ticked miss.
+  **ADR-0058 — parallel graph extraction + same-day addendum.** User-reported:
+  updating graphify with one agent takes very long on a large project.
+  Diagnosis: graphify's skill mandates parallel extraction subagents, but they
+  must write chunk files, and MARVIN's subagent read-only invariant denied
+  every subagent write — collapsing the fan-out to serial. Fix: a narrow
+  `graphify-out/`-scoped file-write exception unblocks parallelism (works even
+  with graphify's stock `general-purpose` dispatch, no fork needed) plus a
+  registered Haiku-tier `graph-extractor` agent for the cost half — chunk
+  extraction doesn't need a frontier model. Framed as read-only *discovery*
+  (the sanctioned scout/dynamic-workflow category), not the parallel
+  *implementation* Golden Rule 1 forbids. Shipped with two noted limits, both
+  closed same-day once flagged: the gate now **rewrites** a stock
+  general-purpose extraction dispatch to `graph-extractor` via `updatedInput`
+  when the brief both names a `graphify-out/` path and uses extraction
+  vocabulary — the Haiku saving no longer depends on a prompt steer being
+  followed — and the canonical graph artifacts (`graph.json`, `memory/`) are
+  denied to subagent writes even inside the slit, so a poisoned extractor can
+  only feed chunks into the main loop's deterministic merge, the same exposure
+  the serial path always had.
+  **Verification.** 512 vitest green (+46 across the five ADRs' pure detectors
+  and gate/dispatch tests); `@marvin/runtime` and `@marvin/tools` typecheck;
+  full Xcode build + bundled-sidecar health probe passed; app rebuilt and
+  installed to `~/Applications`.
+
 - **2026-07-23 — v0.1.57: Claude Code plugins become first-class (ADR-0053) + the ultron voice.**
   **Problem.** Plugins installed through the Claude Code `/plugin` UI were invisible
   to MARVIN: the Agent SDK runs in isolation mode (no `settingSources`), and plugin
