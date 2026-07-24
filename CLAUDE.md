@@ -11,14 +11,16 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    user-MARVIN loop. Do not reintroduce multi-agent dispatch, role catalogs,
    pipeline rules, or Kanban-as-source-of-truth — that pattern degrades up to
    70 % on sequential code work and amplifies errors 17× in flat-topology
-   "bag of agents" setups (2026 multi-agent coding literature). The three
+   "bag of agents" setups (2026 multi-agent coding literature). The
    sanctioned exceptions are bounded, **read-only** subagents spawned by the
    main session for a parenthetical task: the **advisor** (second opinion on
    hard decisions — [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md)),
    the **scout** (breadth-first read-only research — [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md)),
-   and **dynamic workflows** (read-only audit / research / discovery fan-out
-   at `effort: xhigh`, opt-in — [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md)).
-   All three share one enforced invariant: **a subagent cannot mutate the
+   **dynamic workflows** (read-only audit / research / discovery fan-out
+   at `effort: xhigh`, opt-in — [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md)),
+   and **plugin-shipped agents** (opt-in per project, dispatch confirm-gated,
+   analyse-and-report only — [ADR-0054](./docs/decisions/0054-plugin-agents-read-only-hooks-stay-stripped.md)).
+   All of them share one enforced invariant: **a subagent cannot mutate the
    workspace** — the permission gate hard-denies Write/Edit/NotebookEdit and
    unsafe Bash from any call that carries an SDK `agentID`. Parallel
    *implementation* remains forbidden; that's the failure this rule exists to
@@ -254,9 +256,13 @@ without the `settingSources` blast radius:
   `installed_plugins.json` (same registry the Claude Code UI uses — installs are
   bidirectionally visible). Clone+copy only; nothing runs at install.
 - **Loaded via the SDK `plugins:[{type:'local',path}]` array** (a sanitised
-  staged copy under `.marvin/plugins-stage/`). v1 loads **skills + slash
-  commands + MCP servers**; plugin **agents** (Golden Rule 1) and **hooks**
-  (tool-flow risk) are stripped, pending a follow-up ADR.
+  staged copy under `.marvin/plugins-stage/`). Loads **skills + slash
+  commands + MCP servers + agents** — plugin agents run **read-only**
+  ([ADR-0054](./docs/decisions/0054-plugin-agents-read-only-hooks-stay-stripped.md)):
+  dispatch confirm-gates (unknown `subagent_type`) and the ADR-0030 `agentID`
+  invariant hard-denies mutations, so they analyse/report while the main loop
+  applies changes. Plugin **hooks** are never loaded (no read-only containment
+  exists for "interpose on every tool call" — ADR-0054 §2).
 - **Gate change:** `mcpToolPolicy` (`@marvin/tools/policy`) now allowlists
   MARVIN's own in-process servers and routes **every other `mcp__*` tool through
   `confirm`** — closing the prior blanket-allow of unknown MCP tools. Plugin MCP

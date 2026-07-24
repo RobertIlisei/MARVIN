@@ -93,6 +93,9 @@ const SANCTIONED_SUBAGENT_TYPES: ReadonlySet<string> = new Set([
   "scout",
   "advisor",
   "general-purpose",
+  // ADR-0058 — cheap, parallel graph-extraction subagent (Haiku tier). Its
+  // writes are gate-scoped to graphify-out/; read-only discovery otherwise.
+  "graph-extractor",
 ]);
 
 // Narrow regex whitelist for Bash commands that are safe enough to auto-run.
