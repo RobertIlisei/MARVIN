@@ -85,7 +85,10 @@ final class FileTreeModel {
                 // caller has since asked for a different cwd, and
                 // rendering this would flash old content.
                 guard !Task.isCancelled else { return }
-                response = res
+                // Sanitise to a whole-tree-id-unique shape before it reaches
+                // OutlineGroup — a duplicate path anywhere traps SwiftUI's
+                // outline coordinator (ADR-0056). No-op for well-formed trees.
+                response = res.treeWideUnique()
                 loadedCwd = cwd
             } catch is CancellationError {
                 // Quiet — racing with a project switch.
