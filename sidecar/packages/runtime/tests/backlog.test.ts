@@ -185,6 +185,13 @@ describe("backlog store — provisional capture (ADR-0047)", () => {
     expect(r.ok && r.item.status === "open").toBe(true);
   });
 
+  // Explicit timeout: this fills the rail with MAX_OPEN_ITEMS (200) sequential
+  // adds, each a real file write + index rebuild — ~400 filesystem ops. It runs
+  // in ~1.3 s on a local SSD but exceeded vitest's 5 s default on GitHub's
+  // slower runners, which is why the `test` workflow went red from v0.1.56 (the
+  // release that raised the rail 50 → 200) and stayed red for four releases.
+  // The test isn't wrong and the product isn't slow; the default was just tight
+  // for I/O of this size. 30 s leaves headroom without masking a genuine hang.
   it("provisional auto-capture bypasses the open-count rail (never silently dropped)", async () => {
     for (let i = 0; i < MAX_OPEN_ITEMS; i++) {
       const r = await addBacklogItem(workDir, { title: `open item ${i}` });
@@ -197,7 +204,7 @@ describe("backlog store — provisional capture (ADR-0047)", () => {
     expect(prov.ok).toBe(true);
     if (!prov.ok) return;
     expect(prov.item.status).toBe("provisional");
-  });
+  }, 30_000);
 });
 
 describe("backlog store — caps", () => {
@@ -209,6 +216,8 @@ describe("backlog store — caps", () => {
     const r = await addBacklogItem(workDir, { title: "ok", body: "y".repeat(MAX_BODY_CHARS + 1) });
     expect(r.ok).toBe(false);
   });
+  // Same rail-filling cost as the provisional test above — see the note there
+  // for why the default 5 s timeout was too tight on CI runners.
   it("rejects new items past the open-count rail", async () => {
     for (let i = 0; i < MAX_OPEN_ITEMS; i++) {
       const r = await addBacklogItem(workDir, { title: `item number ${i}` });
@@ -216,7 +225,7 @@ describe("backlog store — caps", () => {
     }
     const over = await addBacklogItem(workDir, { title: "one too many" });
     expect(over.ok).toBe(false);
-  });
+  }, 30_000);
 });
 
 describe("backlog content-class classifier (MCP write boundary)", () => {
