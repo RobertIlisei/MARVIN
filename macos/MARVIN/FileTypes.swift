@@ -46,6 +46,57 @@ struct FileNode: Codable, Identifiable, Equatable {
 
     var id: String { path }
     var isDirectory: Bool { type == "dir" }
+
+    /// Rebuild this node with its subtree filtered so no `path` (the OutlineGroup
+    /// id) repeats anywhere — inserting each kept child's path into `seen` and
+    /// pruning any node whose path was already seen. The caller inserts THIS
+    /// node's path before calling. See `deduplicatedTreeWide` for the why.
+    func deduplicated(into seen: inout Set<String>) -> FileNode {
+        guard let kids = children else { return self }
+        var kept: [FileNode] = []
+        kept.reserveCapacity(kids.count)
+        for child in kids where seen.insert(child.path).inserted {
+            kept.append(child.deduplicated(into: &seen))
+        }
+        return FileNode(name: name, path: path, type: type, children: kept)
+    }
+}
+
+extension Array where Element == FileNode {
+    /// Guarantee `id` (absolute path) is unique across the WHOLE tree, pruning
+    /// any node whose path was already seen elsewhere.
+    ///
+    /// CRASH FIX (ADR-0056). SwiftUI's `OutlineGroup` asserts — EXC_BREAKPOINT /
+    /// SIGTRAP inside `ViewListTree.visitItem(_:force:)` from
+    /// `OutlineListCoordinator.outlineView(_:child:ofItem:)` — the moment it
+    /// visits a duplicate identifier anywhere in the tree, taking down the whole
+    /// app. `FileNode.outlineChildren` deduped SIBLINGS only; a duplicate path
+    /// in two DIFFERENT branches (the sidecar walk racing a mid-session file
+    /// mutation, a case-fold collision) slipped through and traps. This enforces
+    /// the whole-tree invariant the id contract always claimed. No-op for
+    /// well-formed trees (every path already unique).
+    func deduplicatedTreeWide() -> [FileNode] {
+        var seen = Set<String>()
+        var out: [FileNode] = []
+        out.reserveCapacity(count)
+        for node in self where seen.insert(node.path).inserted {
+            out.append(node.deduplicated(into: &seen))
+        }
+        return out
+    }
+}
+
+extension FileTreeResponse {
+    /// A copy whose tree is guaranteed id-unique across the whole tree
+    /// (ADR-0056). Applied before the response reaches `OutlineGroup`.
+    func treeWideUnique() -> FileTreeResponse {
+        FileTreeResponse(
+            root: root,
+            tree: tree.deduplicatedTreeWide(),
+            truncated: truncated,
+            count: count
+        )
+    }
 }
 
 /// Wire response for GET /api/files/tree.
