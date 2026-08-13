@@ -95,3 +95,77 @@ license to skip the tool.
       `run_background_job` ran and the turn succeeded (no-op otherwise).
 - [x] Firm-surface note added; wakeup persona default fixed.
 - [x] Full suite + typecheck green; app rebuilt.
+
+---
+
+## Addendum (2026-08-07) — a background job is not a clock
+
+**Context.** The guard failed on a real turn, reported by the user with a
+screenshot:
+
+> "Steps [5]-[7] landed (…). Dev stack is starting in the background; I'll check
+> readiness and run the Playwright verification in ~2.5 minutes."
+
+The turn ended (8 m 31 s). Nothing followed. The user had to say *"you said you
+will check and you did not"* — the exact failure this ADR exists to prevent,
+one turn-shape removed from the original.
+
+**Two independent defects.** Either alone would have swallowed the promise, so
+both are fixed:
+
+1. **The detector never matched.** `detectUncoveredCheckBack` returned `null`
+   on that sentence, for two separate reasons:
+   - the timed pattern capped the gap between `I'll` and `in` at **40
+     characters**; the real clause ("check readiness and run the Playwright
+     verification ") is 51. A promise failed to register **for being wordy**.
+   - the duration was `\d+`, which cannot match `2.5` — even though
+     `parseDelaySeconds` has handled decimals since day one. The two regexes
+     disagreed, so the delay was parseable while the promise was invisible.
+
+   Also widened: the open-ended pattern's verb list was
+   `continue|resume|pick up|follow up`, which misses the vocabulary a coding
+   session actually uses ("I'll re-run the suite once the stack is up").
+
+2. **The coverage test was wrong in kind.** `armedFollowThrough` was a single
+   boolean set by *any* `schedule_wakeup` **or** `run_background_job`. The turn
+   started the dev stack with `run_background_job`, so the guard was disarmed
+   before detection even ran.
+
+   A dev server **never exits**, so ADR-0038's completion turn can never fire.
+   The runtime treated "a job is running" as "the promise is handled" when the
+   job could not, even in principle, discharge it.
+
+**Decision.** Coverage is decided per-promise, not by a global flag:
+
+- `CheckBackDetection` gains `hasExplicitDelay` — did the promise name a time?
+- `isCheckBackCovered(detection, { scheduleWakeup, backgroundJob })`:
+  - a `schedule_wakeup` covers **any** promise;
+  - a `run_background_job` covers only an **open-ended** one;
+  - a **timed** promise is covered by a wakeup and nothing else.
+- `sdk-runner` tracks `armedWakeup` and `armedBackgroundJob` separately, and
+  runs detection unconditionally (coverage is evaluated after, not before).
+
+The cost of erring this way is one extra check-in turn when a job completes near
+its wakeup. That is strictly better than silence — which is what the user got.
+
+**The general lesson**, consistent with the rest of this ADR: the original guard
+encoded *"was a mechanism armed?"* when the question is *"was THIS promise
+discharged?"* A backstop that accepts any nearby activity as proof of
+follow-through will keep finding turn shapes where the activity and the promise
+are unrelated.
+
+## Scope of Done — addendum
+
+- [x] Detector matches the verbatim 2026-08-07 sentence; `~2.5 minutes` → 150 s.
+- [x] Timed pattern: gap 40 → 90 chars, `\d+` → `\d+(\.\d+)?` shared with
+      `parseDelaySeconds` via one constant, so they cannot drift apart again.
+- [x] Open-ended pattern covers check/verify/confirm/re-run/run/test/retry/
+      review/kick off/start/finish/report.
+- [x] `hasExplicitDelay` + `isCheckBackCovered`; `sdk-runner` tracks the two
+      mechanisms separately and detects unconditionally.
+- [x] `personality.ts` states the mechanism-matching rule and names the
+      long-running-server case.
+- [x] 9 new unit tests incl. the real sentence and the background-job
+      regression; 26 in the file, 597 across the suite; `tsc --noEmit` clean.
+- [x] Bare mentions ("you could check back later", "takes about 7 minutes")
+      still do not trip it.
