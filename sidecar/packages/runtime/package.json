@@ -20,6 +20,7 @@
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./backlog": "./src/backlog.ts",
+    "./backlog-groom": "./src/backlog-groom.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
     "./background-jobs": "./src/background-jobs.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",
@@ -35,7 +36,8 @@
     "./project-skill-discoverer": "./src/project-skill-discoverer.ts",
     "./plugin-loader": "./src/plugin-loader.ts",
     "./plugin-installer": "./src/plugin-installer.ts",
-    "./session-auditor": "./src/session-auditor.ts"
+    "./session-auditor": "./src/session-auditor.ts",
+    "./slash-commands": "./src/slash-commands.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

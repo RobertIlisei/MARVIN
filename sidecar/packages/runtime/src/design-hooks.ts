@@ -76,6 +76,14 @@ export interface DesignTurnContext {
    *  the drift signal: reading files you've never touched, in areas the graph
    *  could have pointed at. Reset to 0 by any graph call. */
   novelFilesSinceGraph: number;
+  /** ADR-0060 addendum 2 — novel reads currently CHARGED to the drift budget
+   *  and not yet refunded. Tracked so an Edit/Write can refund exactly once.
+   *  Cleared alongside the budget on a graph call. */
+  chargedFiles: Set<string>;
+  /** Diagnostic counters for `graph.turn.summary`: how many novel reads were
+   *  charged, and how many were refunded as implementation. */
+  driftCharges: number;
+  driftRefunds: number;
   /** ADR-0060 — how many drift nudges have fired this turn (capped, so a long
    *  legitimate implementation turn can't be nagged repeatedly). */
   graphifyNudgeCount: number;
@@ -186,6 +194,9 @@ export function createTurnDesignContext(
     graphCallCount: 0,
     seenSourceFiles: new Set<string>(),
     novelFilesSinceGraph: 0,
+    chargedFiles: new Set<string>(),
+    driftCharges: 0,
+    driftRefunds: 0,
     graphifyNudgeCount: 0,
     advisorCallCount: 0,
     sourceFilesRead: 0,
@@ -221,6 +232,30 @@ export function recordAllowedTool(
     // ADR-0060 — re-orienting clears the drift budget. The rule isn't "query
     // the graph N times", it's "don't explore blind for long stretches".
     ctx.novelFilesSinceGraph = 0;
+    ctx.chargedFiles.clear();
+    return;
+  }
+
+  // ADR-0060 addendum 2 — IMPLEMENTATION REFUND.
+  //
+  // Measured on a real implementation-heavy session (2026-07-25): of 49 novel
+  // source reads, 20 were files MARVIN went on to Edit/Write. Reading a file
+  // you are about to change is correct behaviour, not blind exploration — but
+  // at Read time it is indistinguishable from drift, since the Edit hasn't
+  // happened yet. `seenSourceFiles` only exempts RE-reads, so those 20 first
+  // reads were charged to the drift budget and inflated the signal ~40 %.
+  //
+  // Fix retroactively: when a charged file is mutated, refund it. The budget
+  // then reflects only reads that never became edits — actual orientation,
+  // which is the graph's job. This is why escalating to a mid-turn hard deny
+  // would have been wrong: it would have blocked real implementation reads.
+  if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit") {
+    const target = pickPath(toolInput, ["file_path", "notebook_path", "path"]);
+    if (target && ctx.chargedFiles.has(target)) {
+      ctx.chargedFiles.delete(target);
+      ctx.novelFilesSinceGraph = Math.max(0, ctx.novelFilesSinceGraph - 1);
+      ctx.driftRefunds += 1;
+    }
     return;
   }
   if (toolName === "Task") {
@@ -242,6 +277,9 @@ export function recordAllowedTool(
       if (!ctx.seenSourceFiles.has(target)) {
         ctx.seenSourceFiles.add(target);
         ctx.novelFilesSinceGraph += 1;
+        // Charged — refundable if this turns out to be a read-before-edit.
+        ctx.chargedFiles.add(target);
+        ctx.driftCharges += 1;
       }
     }
     return;
@@ -262,6 +300,10 @@ export function recordAllowedTool(
       if (!ctx.seenSourceFiles.has(key)) {
         ctx.seenSourceFiles.add(key);
         ctx.novelFilesSinceGraph += 1;
+        ctx.driftCharges += 1;
+        // Deliberately NOT added to chargedFiles: a search has no file to edit,
+        // so it can never be refunded as implementation. Searching the tree IS
+        // the exploration the rule targets.
       }
     }
   }
@@ -339,6 +381,62 @@ export function checkGraphDrift(
  * empty output (the SDK falls through to its normal allow path or
  * canUseTool for gated tools).
  */
+/**
+ * Emit a design-hook event on the `[marvin.telemetry]` channel (ADR-0060
+ * follow-up). Goes to the sidecar log, which is readable at
+ * `~/Library/Logs/MARVIN/sidecar.log` — the same channel ADR-0055/0057 use, and
+ * deliberately NOT `appendAutoAuditEntry`, which drops every non-mutator tool.
+ * Never throws: observability must not be able to break a turn.
+ */
+function logDesignHookEvent(fields: Record<string, unknown>): void {
+  try {
+    console.info(
+      "[marvin.telemetry] " + JSON.stringify({ ...fields, at: new Date().toISOString() }),
+    );
+  } catch {
+    /* never break a turn on a telemetry serialisation error */
+  }
+}
+
+/**
+ * One-line, end-of-turn summary of graph-vs-file behaviour (ADR-0060 follow-up).
+ *
+ * The per-fire lines above say whether a guard fired; this says what the turn
+ * actually DID, so the graph:file ratio can be read straight from the log
+ * instead of reconstructed from session transcripts. Call once per turn from
+ * the runner. Safe to call with a context that never saw a structural tool.
+ */
+export function logDesignTurnSummary(ctx: DesignTurnContext): void {
+  if (!ctx.hasGraph && ctx.sourceFilesRead === 0 && ctx.graphCallCount === 0) return;
+  // `exploreOps` is the number that actually matters: drift charges MINUS the
+  // reads that turned out to be implementation. The first reading of this log
+  // (1 graph : 17.5 "file ops") was misleading precisely because it lumped
+  // implementation reads and non-source reads in with orientation. Reporting
+  // charges/refunds/exploreOps separately makes the exploration-only ratio —
+  // graphCalls : exploreOps — readable straight from the line.
+  const exploreOps = Math.max(0, ctx.driftCharges - ctx.driftRefunds);
+  logDesignHookEvent({
+    kind: "graph.turn.summary",
+    turnId: ctx.turnId,
+    hasGraph: ctx.hasGraph,
+    graphCalls: ctx.graphCallCount,
+    // Drift-relevant only: source-file reads + project-tree searches. Never
+    // .md / .sql / .yaml — the code graph doesn't index those, so they are not
+    // reads the graph could have replaced.
+    driftOps: ctx.sourceFilesRead,
+    driftCharges: ctx.driftCharges,
+    implRefunds: ctx.driftRefunds,
+    exploreOps,
+    exploreRatio:
+      ctx.graphCallCount > 0
+        ? Math.round((exploreOps / ctx.graphCallCount) * 10) / 10
+        : null,
+    novelFilesAtEnd: ctx.novelFilesSinceGraph,
+    nudges: ctx.graphifyNudgeCount,
+    denied: ctx.graphifyHookFired,
+  });
+}
+
 export function makeDesignHooksPreToolUse(args: {
   cwd: string;
   turnId: string;
@@ -360,15 +458,26 @@ export function makeDesignHooksPreToolUse(args: {
       mode,
     });
     if (designDeny) {
-      // Audit-log the deny so post-hoc inspection can see what fired.
-      // The audit log filter drops non-Edit/Write/Bash entries silently —
-      // safe to call regardless of the tool name.
+      // Observability (ADR-0060 follow-up). NOTE: `appendAutoAuditEntry` early-
+      // returns for anything outside Edit/Write/Bash, and the design hooks fire
+      // on Read/Grep/Glob — so this call has ALWAYS been a silent no-op and the
+      // whole design-hooks feature was unobservable. Kept (harmless, and it does
+      // record if a mutator ever trips a rule), but the telemetry line below is
+      // the one that actually lands, in the sidecar log, matching the
+      // `[marvin.telemetry]` channel ADR-0055/0057 use.
       appendAutoAuditEntry(cwd, {
         tool: evt.tool_name as AutoAuditEntryKind,
         reason: `design-hook deny: ${designDeny.message?.split(":")[0] ?? "rule"}`,
         input: safeInput,
         turnId,
         toolUseId: toolUseId ?? evt.tool_use_id ?? "unknown",
+      });
+      logDesignHookEvent({
+        kind: "designhook.deny",
+        turnId,
+        tool: evt.tool_name,
+        graphCallCount: designCtx.graphCallCount,
+        sourceFilesRead: designCtx.sourceFilesRead,
       });
       return {
         hookSpecificOutput: {
@@ -390,6 +499,19 @@ export function makeDesignHooksPreToolUse(args: {
     recordAllowedTool(designCtx, evt.tool_name, safeInput);
 
     if (drift) {
+      // The nudge is injected as context, which leaves NO trace in the session
+      // transcript — so without this line there is no way to tell "the nudge
+      // fired and was ignored" (→ escalate) from "the nudge never fired"
+      // (→ fix a bug). Those need opposite responses; ADR-0060's empirical
+      // follow-up is unanswerable without it.
+      logDesignHookEvent({
+        kind: "graph.drift.nudge",
+        turnId,
+        tool: evt.tool_name,
+        novelFilesSinceGraph: designCtx.novelFilesSinceGraph,
+        nudgeCount: designCtx.graphifyNudgeCount,
+        graphCallCount: designCtx.graphCallCount,
+      });
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
