@@ -325,11 +325,11 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 2459 nodes · 5082 edges (2026-08-06 rebuild; honours
+  files. 2490 nodes · 5220 edges (2026-08-13 rebuild; honours
   [`.graphifyignore`](./.graphifyignore)).
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1326 nodes · 1626 edges (built 2026-08-06).
+  `.marvin/memory.md`. 1357 nodes · 1663 edges (built 2026-08-13).
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
@@ -398,8 +398,8 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-08-06 rebuild: `GET()` (139 edges), `POST()` (130),
-`trim()` (73), `decode` (51), `ChatPreviewModel` (45) are the real
+After the 2026-08-13 rebuild: `GET()` (142 edges), `POST()` (131),
+`trim()` (74), `decode` (52), `ChatPreviewModel` (45) are the real
 architectural anchors. (Note the API-route handlers now outrank
 everything — the sidecar's route surface is the widest coupling point in
 the repo. An incremental `update` can transiently drop a hot node out of
