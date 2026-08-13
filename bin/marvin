@@ -142,6 +142,22 @@ check_port() {
       check_bind_address || true
       return 10  # sentinel — already-running
     fi
+    # The macOS app spawns the bundled sidecar itself (SidecarManager.swift)
+    # and writes no $PID_FILE — that file belongs to `bin/marvin start`. So the
+    # pidfile test alone misreports a perfectly healthy app-owned sidecar as a
+    # foreign process, and then tells the user to KILL it, which takes down a
+    # running MARVIN. Observed 2026-08-12. Walk up to the parent instead: the
+    # sidecar's parent is the .app binary.
+    local parent_pid parent_cmd
+    parent_pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    parent_cmd="$(ps -o command= -p "${parent_pid:-0}" 2>/dev/null)"
+    case "$parent_cmd" in
+      *MARVIN.app/Contents/MacOS/MARVIN*)
+        ok "port $PORT bound by MARVIN.app's bundled sidecar (pid $pid, app pid $parent_pid)"
+        check_bind_address || true
+        return 10  # sentinel — already-running
+        ;;
+    esac
     fail "port $PORT is bound by a non-MARVIN process (pid $pid)"
     dim "  kill it:  kill $pid"
     return 3
@@ -186,8 +202,18 @@ check_credentials() {
     ok "~/.claude/.credentials.json present"
     return 0
   fi
-  if ls "$HOME/Library/Application Support/claude-cli/history.jsonl" >/dev/null 2>&1; then
+  # Ask the Keychain directly. The previous probe tested for a claude-cli
+  # HISTORY file as a proxy for Keychain credentials — an artifact current
+  # Claude Code doesn't write, so a correctly-authenticated machine reported
+  # "no Anthropic credentials detected" while MARVIN ran fine. Observed
+  # 2026-08-12. `-s` matches the service name; we only check for existence, and
+  # never read the secret (that would prompt for Keychain access).
+  if security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
     ok "macOS Keychain credentials (host-credentials mode)"
+    return 0
+  fi
+  if ls "$HOME/Library/Application Support/claude-cli/history.jsonl" >/dev/null 2>&1; then
+    ok "macOS Keychain credentials (host-credentials mode, legacy probe)"
     return 0
   fi
   warn "no Anthropic credentials detected"
