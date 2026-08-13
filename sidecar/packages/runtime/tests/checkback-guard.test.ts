@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCheckBackWakeup,
   detectUncoveredCheckBack,
+  isCheckBackCovered,
   parseDelaySeconds,
 } from "../src/checkback-guard";
 
@@ -65,9 +66,94 @@ describe("parseDelaySeconds", () => {
 
 describe("buildCheckBackWakeup", () => {
   it("quotes the promise and tells the fired turn to follow through, not re-promise", () => {
-    const { reason, prompt } = buildCheckBackWakeup({ quote: "I'll check back in ~7 minutes", delaySeconds: 420 });
+    const { reason, prompt } = buildCheckBackWakeup({
+      quote: "I'll check back in ~7 minutes",
+      delaySeconds: 420,
+      hasExplicitDelay: true,
+    });
     expect(reason).toMatch(/ADR-0055/);
     expect(prompt).toContain("I'll check back in ~7 minutes");
     expect(prompt).toMatch(/do not simply\s+re-promise/i);
+  });
+});
+
+// ── ADR-0055 addendum (2026-08-07) ──────────────────────────────────────────
+// Second observed failure, verbatim from the user's screenshot:
+//
+//   "Steps [5]-[7] landed (…). Dev stack is starting in the background;
+//    I'll check readiness and run the Playwright verification in ~2.5 minutes."
+//
+// The turn ended and nothing followed. TWO independent defects had to be fixed;
+// either one alone would have swallowed the promise.
+
+const REAL_2026_08_07 =
+  "Steps [5]-[7] landed (TENANT_ADMIN/MANAGER reconcile flows + ACCOUNTANT " +
+  "disabled-button check). Dev stack is starting in the background; I'll check " +
+  "readiness and run the Playwright verification in ~2.5 minutes.";
+
+describe("detectUncoveredCheckBack — the 2026-08-07 miss", () => {
+  it("detects the real sentence and parses ~2.5 minutes → 150s", () => {
+    const d = detectUncoveredCheckBack(REAL_2026_08_07);
+    expect(d).not.toBeNull();
+    expect(d?.delaySeconds).toBe(150);
+    expect(d?.hasExplicitDelay).toBe(true);
+    expect(d?.quote).toContain("Playwright verification");
+  });
+
+  it("matches a promise too WORDY for the old 40-char gap", () => {
+    // The clause between "I'll" and "in" is 51 chars. A promise is not less
+    // binding for being verbose.
+    expect(
+      detectUncoveredCheckBack("I'll check readiness and run the Playwright verification in ~2 minutes."),
+    ).not.toBeNull();
+  });
+
+  it("matches a DECIMAL duration, which the promise pattern used to reject", () => {
+    // parseDelaySeconds always handled decimals; the promise regex did not, so
+    // the delay was parseable while the promise itself was invisible.
+    expect(detectUncoveredCheckBack("I'll verify in ~1.5 hours.")?.delaySeconds).toBe(5400);
+  });
+
+  it("matches follow-through verbs a coding session actually uses", () => {
+    for (const t of [
+      "I'll re-run the suite once the stack is up.",
+      "I'll verify the flows after the build finishes.",
+      "I'll confirm the fix when CI goes green.",
+      "I'll kick off the e2e run once the server is listening.",
+    ]) {
+      expect(detectUncoveredCheckBack(t), t).not.toBeNull();
+    }
+  });
+
+  it("still ignores a bare mention that promises nothing", () => {
+    expect(detectUncoveredCheckBack("You could check back later if you want.")).toBeNull();
+    expect(detectUncoveredCheckBack("The pipeline takes about 7 minutes to run.")).toBeNull();
+  });
+});
+
+describe("isCheckBackCovered — a background job is not a clock", () => {
+  const timed = detectUncoveredCheckBack(REAL_2026_08_07)!;
+  const openEnded = detectUncoveredCheckBack("I'll continue once the build finishes.")!;
+
+  it("THE REGRESSION: a background job does NOT cover a timed promise", () => {
+    // The dev stack was started with run_background_job — a server that never
+    // exits, so ADR-0038's completion turn can never fire. Treating that as
+    // coverage is exactly why the user waited and nothing came.
+    expect(isCheckBackCovered(timed, { scheduleWakeup: false, backgroundJob: true })).toBe(false);
+  });
+
+  it("a background job DOES cover an open-ended promise", () => {
+    expect(openEnded.hasExplicitDelay).toBe(false);
+    expect(isCheckBackCovered(openEnded, { scheduleWakeup: false, backgroundJob: true })).toBe(true);
+  });
+
+  it("a scheduled wakeup covers either kind", () => {
+    expect(isCheckBackCovered(timed, { scheduleWakeup: true, backgroundJob: false })).toBe(true);
+    expect(isCheckBackCovered(openEnded, { scheduleWakeup: true, backgroundJob: false })).toBe(true);
+  });
+
+  it("nothing armed covers nothing", () => {
+    expect(isCheckBackCovered(timed, { scheduleWakeup: false, backgroundJob: false })).toBe(false);
+    expect(isCheckBackCovered(openEnded, { scheduleWakeup: false, backgroundJob: false })).toBe(false);
   });
 });
