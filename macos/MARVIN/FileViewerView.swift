@@ -342,6 +342,11 @@ struct FileViewerNSView: NSViewRepresentable {
     /// M5: git diff markers for the current file. Keys are 1-indexed
     /// line numbers; values are the status (added / modified / removed).
     var diffLines: [Int: DiffLineStatus] = [:]
+    /// Line a chat link asked to jump to (1-indexed), or nil. Passed in as a
+    /// value and cleared via `onTargetConsumed` so the scroll is a plain
+    /// effect of the render rather than state mutated during one.
+    var targetLine: Int? = nil
+    var onTargetConsumed: () -> Void = {}
     /// Push edits back into the model. Closure (instead of an
     /// @Binding) so the wrapper stays a simple value type and the
     /// model gets the updates synchronously on the main thread.
@@ -371,6 +376,15 @@ struct FileViewerNSView: NSViewRepresentable {
         scroll.hasHorizontalScroller = true
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
+
+        // Find-in-file (⌘F). STTextView owns an `NSTextFinder` and implements
+        // `performTextFinderAction(_:)`; the find BAR needs a scroll view to
+        // attach to, which `scrollableTextView()` above already gives us. All
+        // that was missing was turning it on and routing the menu commands —
+        // see `FindCommands` (MARVINApp.swift). Incremental searching
+        // highlights matches as you type rather than only on Enter.
+        textView.isIncrementalSearchingEnabled = true
+        textView.isSelectable = true
 
         // Line-number gutter.
         let ruler = STLineNumberRulerView(textView: textView)
@@ -439,6 +453,25 @@ struct FileViewerNSView: NSViewRepresentable {
             context.coordinator.lastExtension = fileExtension
             context.coordinator.lastIsDark = isDark
             context.coordinator.lastPath = path
+        }
+
+        // Chat-link jump. Deferred until content is present: the first render
+        // after a tab switch has an empty buffer, and scrolling that lands at
+        // the top. No soft wrap here (widthTracksTextView is false), so line
+        // height is uniform and the offset is just line × height.
+        if let target = targetLine, !content.isEmpty, textView.string == content {
+            let lineHeight = NSLayoutManager().defaultLineHeight(
+                for: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+            )
+            let y = CGFloat(max(0, target - 1)) * lineHeight
+            // Show a few lines of lead-in so the target isn't jammed against
+            // the top edge.
+            let lead = lineHeight * 4
+            textView.scrollToVisible(
+                NSRect(x: 0, y: max(0, y - lead), width: 1, height: lineHeight + lead * 2)
+            )
+            let done = onTargetConsumed
+            DispatchQueue.main.async { done() }
         }
 
         // M5: propagate diff markers to the gutter bar.
@@ -752,6 +785,20 @@ struct FileViewerView: View {
                     .clipShape(Capsule())
             }
             Spacer()
+            // Find in file (⌘F). The menu command alone is invisible — twice
+            // now a capability has shipped with no on-screen affordance and
+            // gone unfound. The button and Edit ▸ Find drive the same
+            // NSTextFinder.
+            if bridge.selectedFilePath != nil {
+                Button {
+                    FindCommands.perform(.showFindInterface, focusingEditor: true)
+                } label: {
+                    Label("Find in File", systemImage: "magnifyingglass")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Find in this file (⌘F) · next ⌘G · previous ⇧⌘G")
+            }
             // M6: file history popover.
             if bridge.selectedFilePath != nil {
                 Button {
@@ -860,6 +907,8 @@ struct FileViewerView: View {
                         isDark: bridge.preferredColorScheme != .light,
                         isEditable: buffer.canEdit && !buffer.isSaving,
                         diffLines: diffLines,
+                        targetLine: bridge.pendingEditorLine,
+                        onTargetConsumed: { _ = bridge.consumePendingEditorLine() },
                         onContentChange: { p, c in
                             model.updateContent(path: p, content: c)
                             // Phase 5f — line count fed to global
