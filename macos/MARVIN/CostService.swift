@@ -18,6 +18,13 @@ extension Notification.Name {
     /// Posted by File → New Session (⌘⇧N). The chat preview view
     /// observes this and starts a fresh session (`model.clear()`).
     static let marvinRequestNewSession = Notification.Name("marvin.requestNewSession")
+    /// Posted by View → Backlog (⌘⇧B). Opens the backlog panel.
+    ///
+    /// The tray chip that used to be the only way in is gated on
+    /// `backlogOpenCount > 0`, so a project with an empty backlog had NO route
+    /// to the panel at all — and therefore none to the groomer's Review button
+    /// either. A menu item is reachable regardless of what's parked.
+    static let marvinRequestBacklogPanel = Notification.Name("marvin.requestBacklogPanel")
 }
 
 @MainActor

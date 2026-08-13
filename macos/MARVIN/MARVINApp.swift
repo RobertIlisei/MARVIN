@@ -475,6 +475,19 @@ struct MARVINApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
 
+            // Backlog panel (⌘⇧B). The tray chip is gated on there being open
+            // items, so an empty backlog left the panel — and the groomer's
+            // Review button inside it — completely unreachable. Same
+            // notification pattern as New Session: the menu can't touch the
+            // view's @State directly.
+            CommandGroup(after: .sidebar) {
+                Divider()
+                Button("Backlog") {
+                    NotificationCenter.default.post(name: .marvinRequestBacklogPanel, object: nil)
+                }
+                .keyboardShortcut("b", modifiers: [.command, .shift])
+            }
+
             // Phase 1d.23 — File menu items that act on the active
             // project's workDir. Both depend on the bridge —
             // disabled when no project is selected — and are net-

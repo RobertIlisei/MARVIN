@@ -1673,6 +1673,18 @@ struct ChatPreviewView: View {
                 }
             }
         }
+        // View → Backlog (⌘⇧B). The tray chip is gated on there being open
+        // items, so an empty backlog left the panel — and the groomer's Review
+        // button inside it — unreachable.
+        //
+        // `.onReceive` rather than the `addObserver` pattern the other
+        // notifications use: those all mutate `model.*`, an @Observable
+        // reference, which survives being captured in an escaping closure.
+        // `backlogPanelOpen` is @State on this struct, and assigning to it from
+        // a captured copy is the kind of thing that silently does nothing.
+        .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
+            backlogPanelOpen = true
+        }
         // ADR-0044 — the backlog browser.
         .sheet(isPresented: $backlogPanelOpen) {
             if let wd = bridge.projectWorkDir {
