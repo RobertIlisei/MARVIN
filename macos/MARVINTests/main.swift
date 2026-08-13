@@ -624,7 +624,255 @@ runner.suite("plan-completion-invariant") {
     }
 }
 
+// MARK: - ChatMarkdown (assistant output rendering)
+
+runner.suite("ChatMarkdown") {
+    runner.test("headings, paragraphs and rules split correctly") {
+        let out = ChatMarkdown.parse("## Part 1 — Findings\n\nSome prose here.\n\n---\n")
+        runner.expect(out.count, equals: 3, "three blocks")
+        runner.expect(out[0] == .heading(level: 2, text: "Part 1 — Findings"), "h2 parsed")
+        runner.expect(out[1] == .paragraph("Some prose here."), "paragraph parsed")
+        runner.expect(out[2] == .rule, "rule parsed")
+    }
+
+    runner.test("a hash without a space is prose, not a heading") {
+        let out = ChatMarkdown.parse("#hashtag not a heading")
+        runner.expect(out[0] == .paragraph("#hashtag not a heading"), "no false heading")
+    }
+
+    runner.test("fenced code keeps its language and body verbatim") {
+        let out = ChatMarkdown.parse("```swift\nlet x = 1\n// ## not a heading\n```")
+        runner.expect(out.count, equals: 1, "single code block")
+        runner.expect(
+            out[0] == .code(language: "swift", content: "let x = 1\n// ## not a heading"),
+            "markdown inside a fence is not re-parsed")
+    }
+
+    runner.test("pipe table parses headers and rows") {
+        let md = "| Before | After |\n| --- | --- |\n| a | b |\n| c | d |"
+        let out = ChatMarkdown.parse(md)
+        runner.expect(
+            out[0] == .table(headers: ["Before", "After"], rows: [["a", "b"], ["c", "d"]]),
+            "table parsed")
+    }
+
+    runner.test("pipes without a delimiter row stay prose") {
+        let out = ChatMarkdown.parse("| this is just | text with pipes")
+        runner.expect(out[0] == .paragraph("| this is just | text with pipes"), "no false table")
+    }
+
+    runner.test("bullet and ordered lists") {
+        let bullets = ChatMarkdown.parse("- one\n- two")
+        runner.expect(bullets[0] == .list(items: ["one", "two"], ordered: false), "bullets")
+        let ordered = ChatMarkdown.parse("1. first\n2. second")
+        runner.expect(ordered[0] == .list(items: ["first", "second"], ordered: true), "ordered")
+    }
+
+    runner.test("blockquote joins contiguous lines") {
+        let out = ChatMarkdown.parse("> line one\n> line two")
+        runner.expect(out[0] == .quote("line one\nline two"), "quote joined")
+    }
+
+    runner.test("plain text with no markdown yields one paragraph") {
+        let out = ChatMarkdown.parse("just a sentence")
+        runner.expect(out.count, equals: 1, "one block")
+        runner.expect(out[0] == .paragraph("just a sentence"), "unchanged")
+    }
+
+    runner.test("language tags map to highlighter extensions") {
+        runner.expect(ChatMarkdown.fileExtension(forLanguage: "TypeScript"), equals: "ts", "ts")
+        runner.expect(ChatMarkdown.fileExtension(forLanguage: "sh"), equals: "sh", "shell")
+        runner.expect(ChatMarkdown.fileExtension(forLanguage: "brainfuck") == nil, "unknown → nil")
+    }
+}
+
 // MARK: - run + report
+
+// MARK: - MarkdownLinks (clickable chat output)
+
+// MARK: - FileTree (2026-08-06)
+//
+// The file tree crashed the app FOUR times, each through SwiftUI's outline
+// coordinator disagreeing with NSOutlineView about a tree it couldn't be kept
+// consistent with. Every previous fix was verified by running the app and
+// waiting to see whether it died again. The model + flattening now live in
+// MARVINLogic precisely so the invariants are pinned here instead.
+
+func node(_ path: String) -> FileNode {
+    FileNode(name: (path as NSString).lastPathComponent, path: path, type: "file", children: nil)
+}
+func dir(_ path: String, _ kids: [FileNode]) -> FileNode {
+    FileNode(name: (path as NSString).lastPathComponent, path: path, type: "dir", children: kids)
+}
+
+runner.suite("FileTree — branch-ness + identity") {
+    runner.test("a directory with children is a branch; a file is not") {
+        runner.expect(dir("/p/src", [node("/p/src/a.swift")]).isOutlineBranch, "dir with kids")
+        runner.expect(!node("/p/a.swift").isOutlineBranch, "file")
+    }
+
+    runner.test("an EMPTY directory is a leaf, not an expandable branch") {
+        // Regression: a non-nil empty children array used to reach OutlineGroup
+        // and trap it. It now simply has no disclosure chevron.
+        runner.expect(!dir("/p/build", []).isOutlineBranch, "empty dir")
+        runner.expect(
+            !FileNode(name: "cache", path: "/p/cache", type: "dir", children: nil).isOutlineBranch,
+            "dir with nil children"
+        )
+    }
+
+    runner.test("emptying a directory changes its row identity") {
+        // Regression (crash report 2026-08-03): id was the bare path, so a
+        // folder could flip branch -> leaf while keeping the same identity.
+        let before = dir("/p/build", [node("/p/build/out.o")])
+        let after = dir("/p/build", [])
+        runner.expect(before.id != after.id, "branch and leaf ids differ")
+        runner.expect(after.id, equals: "/p/build", "leaf id is the bare path")
+        runner.expect(before.id, equals: "/p/build/", "branch id is suffixed")
+    }
+
+    runner.test("identical walks produce identical ids") {
+        let a = dir("/p/src", [node("/p/src/a.swift")])
+        let b = dir("/p/src", [node("/p/src/a.swift")])
+        runner.expect(a.id, equals: b.id, "stable across refetch")
+    }
+
+    runner.test("deduplicatedTreeWide prunes a path repeated anywhere") {
+        // ADR-0056 — a symlink loop can emit the same path twice.
+        let tree = [
+            dir("/p", [node("/p/a.swift"), node("/p/a.swift")]),
+            dir("/p", [node("/p/b.swift")]),
+        ].deduplicatedTreeWide()
+        runner.expect(tree.count, equals: 1, "duplicate root pruned")
+        runner.expect(tree[0].children?.count, equals: 1, "duplicate child pruned")
+    }
+}
+
+runner.suite("FileTree — flattening") {
+    let tree = [
+        dir("/p/src", [
+            node("/p/src/a.swift"),
+            dir("/p/src/ui", [node("/p/src/ui/b.swift")]),
+        ]),
+        dir("/p/build", []),
+        node("/p/README.md"),
+    ]
+
+    runner.test("collapsed: only roots, all at depth 0") {
+        let rows = flattenFileTree(tree, expanded: [])
+        runner.expect(rows.map(\.node.path), equals: ["/p/src", "/p/build", "/p/README.md"], "roots only")
+        runner.expect(rows.allSatisfy { $0.depth == 0 }, "all depth 0")
+        runner.expect(rows.allSatisfy { !$0.isExpanded }, "none expanded")
+    }
+
+    runner.test("expanding one level reveals its children at depth 1") {
+        let rows = flattenFileTree(tree, expanded: ["/p/src"])
+        runner.expect(
+            rows.map(\.node.path),
+            equals: ["/p/src", "/p/src/a.swift", "/p/src/ui", "/p/build", "/p/README.md"],
+            "children spliced in order"
+        )
+        runner.expect(rows[1].depth, equals: 1, "child depth")
+        runner.expect(rows[0].isExpanded, "parent marked open")
+    }
+
+    runner.test("nested expansion nests depth") {
+        let rows = flattenFileTree(tree, expanded: ["/p/src", "/p/src/ui"])
+        runner.expect(rows.first { $0.node.path == "/p/src/ui/b.swift" }?.depth, equals: 2, "grandchild depth")
+    }
+
+    runner.test("an empty directory is never expandable, even if in the expanded set") {
+        // The state could name it after it emptied; it must not claim a chevron.
+        let rows = flattenFileTree(tree, expanded: ["/p/build"])
+        let build = rows.first { $0.node.path == "/p/build" }
+        runner.expect(build?.isExpandable, equals: false, "no chevron")
+        runner.expect(build?.isExpanded, equals: false, "not open")
+        runner.expect(rows.count, equals: 3, "emitted no phantom children")
+    }
+
+    runner.test("expansion survives a directory losing and regaining children") {
+        // The crash case, as a state transition. Expansion is path-keyed, so
+        // the folder is still open once its children come back.
+        let expanded: Set<String> = ["/p/src"]
+        let emptied = [dir("/p/src", [])]
+        let refilled = [dir("/p/src", [node("/p/src/a.swift")])]
+        runner.expect(flattenFileTree(emptied, expanded: expanded).count, equals: 1, "leaf while empty")
+        let back = flattenFileTree(refilled, expanded: expanded)
+        runner.expect(back.count, equals: 2, "reopens when refilled")
+        runner.expect(back[0].isExpanded, "still expanded")
+    }
+
+    runner.test("a cyclic tree terminates instead of recursing forever") {
+        // A symlink loop the sidecar failed to reject must not hang the app.
+        let loop = dir("/p/a", [dir("/p/a", [node("/p/a/x.swift")])])
+        let rows = flattenFileTree([loop], expanded: ["/p/a"])
+        runner.expect(rows.count, equals: 1, "repeated path visited once")
+    }
+
+    runner.test("allDirectoryPaths finds every expandable directory") {
+        runner.expect(allDirectoryPaths(tree), equals: ["/p/src", "/p/src/ui"], "empty dir excluded")
+    }
+}
+
+runner.suite("MarkdownLinks") {
+    // Every path under this fake tree "exists"; nothing else does.
+    let exists: (String) -> Bool = { $0.hasPrefix("/proj/real") }
+
+    runner.test("bare URLs become links") {
+        let spans = MarkdownLinks.webSpans(in: "see https://example.com/a_b?q=1 now")
+        runner.expect(spans.count, equals: 1, "one web span")
+        runner.expect(spans[0].url.absoluteString, equals: "https://example.com/a_b?q=1", "full URL captured")
+    }
+
+    runner.test("trailing sentence punctuation is not part of the URL") {
+        let spans = MarkdownLinks.webSpans(in: "docs at https://example.com/x.")
+        runner.expect(spans[0].url.absoluteString, equals: "https://example.com/x", "period excluded")
+    }
+
+    runner.test("text with no URL yields nothing") {
+        runner.expect(MarkdownLinks.webSpans(in: "no links at all here").isEmpty, "no spans")
+    }
+
+    runner.test("file reference with a line number carries the line") {
+        let spans = MarkdownLinks.fileSpans(
+            in: "broken at real/Login.tsx:61-69 today",
+            workDir: "/proj",
+            exists: exists
+        )
+        runner.expect(spans.count, equals: 1, "one file span")
+        runner.expect(spans[0].url.scheme ?? "", equals: MarkdownLinks.fileScheme, "private scheme")
+        runner.expect(spans[0].url.path, equals: "/proj/real/Login.tsx", "resolved against workDir")
+        runner.expect(spans[0].url.query ?? "", equals: "line=61", "start line carried")
+    }
+
+    runner.test("file reference without a line number still links") {
+        let spans = MarkdownLinks.fileSpans(in: "see real/README.md", workDir: "/proj", exists: exists)
+        runner.expect(spans.count, equals: 1, "one file span")
+        runner.expect(spans[0].url.query == nil, "no line query")
+    }
+
+    runner.test("paths that do not resolve are left as plain text") {
+        let spans = MarkdownLinks.fileSpans(in: "maybe ghost/Nope.swift:12", workDir: "/proj", exists: exists)
+        runner.expect(spans.isEmpty, "no dead links")
+    }
+
+    runner.test("absolute paths bypass workDir resolution") {
+        let spans = MarkdownLinks.fileSpans(in: "at /proj/real/a.ts:9", workDir: "/other", exists: exists)
+        runner.expect(spans.count, equals: 1, "absolute path linked")
+        runner.expect(spans[0].url.path, equals: "/proj/real/a.ts", "used as-is")
+    }
+
+    runner.test("no workDir means no file links") {
+        runner.expect(MarkdownLinks.fileSpans(in: "real/a.ts", workDir: nil, exists: exists).isEmpty, "inert")
+    }
+
+    runner.test("a URL is not mistaken for a file path") {
+        // `example.com/x.ts` looks path-shaped; the web span must win and the
+        // file matcher must not resolve a fragment of a URL.
+        let spans = MarkdownLinks.fileSpans(in: "https://example.com/real/a.ts", workDir: "/proj", exists: exists)
+        runner.expect(spans.isEmpty, "no file span inside a URL")
+    }
+}
 
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")

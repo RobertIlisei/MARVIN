@@ -9,6 +9,7 @@
 // for the first cut. Upgrading to `LSSubsequenceMatch` or a
 // hand-rolled fuzzy ranker is one focused change away.
 
+import MARVINLogic
 import SwiftUI
 import AppKit
 
