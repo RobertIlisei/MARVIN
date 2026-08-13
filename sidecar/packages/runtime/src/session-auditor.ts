@@ -35,6 +35,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 
 import { listChanges, type ChangedFile } from "./change-checkpoints";
+import { collectCiStatus, renderCiStatus, type CiStatus } from "./ci-status";
 import { readAutoAuditTail, type AutoAuditEntry } from "./auto-audit";
 import { latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
@@ -102,6 +103,9 @@ export interface AuditPacket {
   claimedScopeMet: boolean;
   /** Whether the code graph is trustworthy evidence for this session. */
   graph: GraphFreshness;
+  /** CI verdict for the commit the tree is on — makes "shipped on a red
+   *  build" detectable rather than invisible. */
+  ci: CiStatus;
 }
 
 /** The Phase-7 close marker — same literal as workflow-guard / ScopeMetDetector. */
@@ -255,6 +259,7 @@ export function buildAuditPacket(args: {
     touchedDocs: touchedDocsFrom(changedFiles),
     claimedScopeMet: messages.some((m) => m.text.includes(SCOPE_MET_SENTINEL)),
     graph: computeGraphFreshness(graphMtime(cwd), changedFiles),
+    ci: safe(() => collectCiStatus(cwd), { state: "unknown" as const, reason: "collector failed" }),
   };
 }
 
@@ -353,6 +358,10 @@ export function renderAuditPrompt(packet: AuditPacket): string {
   }
   lines.push("");
 
+  lines.push(`## G. EVIDENCE — CI for the current commit`);
+  lines.push(renderCiStatus(packet.ci));
+  lines.push("");
+
   lines.push(`## Your task`);
   lines.push(
     "Audit this session per your operating contract. Verify claims against the " +
@@ -395,6 +404,10 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "Do not re-report those. You exist for what code cannot detect:",
   "",
   "- **claim-gap** — MARVIN claimed something the evidence doesn't support.",
+  "- **shipped-red** — the session claimed work was shipped / released / verified",
+  "  while §G shows CI RED or still RUNNING for this commit. A `stale` or",
+  "  `unknown` CI status is NOT grounds for this finding — absence of evidence",
+  "  is not evidence of failure any more than it is of a pass.",
   '  ("verified end-to-end" but the audit log shows only a typecheck; "fixed",',
   "  but no matching change; a cited test/file/SHA that doesn't exist.)",
   "- **drift** — the work wandered from the plan's or the user's stated intent,",

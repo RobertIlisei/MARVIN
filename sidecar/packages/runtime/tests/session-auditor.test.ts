@@ -157,6 +157,7 @@ describe("renderAuditPrompt", () => {
     sessionId: "s1",
     projectId: "p1",
     cwd: "/proj",
+    ci: { state: "unknown", reason: "test fixture" },
     messages: [
       { role: "user", at: "t0", text: "ship it" },
       { role: "marvin", at: "t1", turnId: "turn-1", text: "Verified end-to-end and shipped." },

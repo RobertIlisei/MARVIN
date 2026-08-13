@@ -37,6 +37,7 @@
     "./plugin-loader": "./src/plugin-loader.ts",
     "./plugin-installer": "./src/plugin-installer.ts",
     "./session-auditor": "./src/session-auditor.ts",
+    "./ci-status": "./src/ci-status.ts",
     "./slash-commands": "./src/slash-commands.ts"
   },
   "scripts": {
