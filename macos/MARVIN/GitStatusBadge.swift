@@ -18,6 +18,7 @@
 // untracked, conflicted beats both. This mirrors VS Code / Cursor's
 // "any dirty descendant" indicator.
 
+import MARVINLogic
 import SwiftUI
 
 indirect enum GitStatusBadge: Equatable {

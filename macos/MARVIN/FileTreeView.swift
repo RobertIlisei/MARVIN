@@ -1,7 +1,7 @@
 // FileTreeView — Phase 3b dev surface for the native file tree.
 //
-// A separate Window scene hosting a SwiftUI `OutlineGroup` rendering
-// of the active project's `/api/files/tree` response. The main
+// A separate Window scene rendering the active project's
+// `/api/files/tree` response as a flat, self-indented list. The main
 // MARVIN window's WebView keeps rendering the existing web file tree
 // independently; Phase 3d promotes this content into the main left
 // pane once 3c (selection wiring) reaches parity.
@@ -17,16 +17,19 @@
 //      between them — open the same project, watch the same file
 //      list populate in both surfaces.
 //
-// ## Why OutlineGroup before NSOutlineView
+// ## Why a flat list, not OutlineGroup (2026-08-06)
 //
-// ADR-0018 §5 defers the OutlineGroup-vs-NSOutlineView call until
-// we have a measurement on a real ~5k-file repo. SwiftUI's
-// OutlineGroup ships in 2 lines of code and exposes the `children`
-// keyPath natively — perfect for our `FileNode.children?` shape.
-// If frame drops show up at scale we drop down to NSOutlineView via
-// `NSViewRepresentable`; the model layer (FileTreeModel) stays
-// unchanged either way.
+// ADR-0018 §5 deferred the OutlineGroup-vs-NSOutlineView call pending a
+// measurement on a real repo. Four app-killing crashes settled it before the
+// perf question ever came up: `List` + `OutlineGroup` drives NSOutlineView
+// through SwiftUI's `OutlineListCoordinator`, which traps whenever its
+// lazily-loaded row entries disagree with the SwiftUI view list — and a tree
+// that an agent mutates under a 15s refresh poll keeps finding new ways to
+// disagree. The tree is now flattened by `flattenFileTree` (MARVINLogic) and
+// rendered with a plain `List` + `ForEach`; expansion state is a `Set<String>`
+// this view owns. See `MARVINLogic/FileTree.swift` for the crash history.
 
+import MARVINLogic
 import SwiftUI
 
 /// View-model for the file tree preview. Owns the fetch state, the
@@ -85,9 +88,10 @@ final class FileTreeModel {
                 // caller has since asked for a different cwd, and
                 // rendering this would flash old content.
                 guard !Task.isCancelled else { return }
-                // Sanitise to a whole-tree-id-unique shape before it reaches
-                // OutlineGroup — a duplicate path anywhere traps SwiftUI's
-                // outline coordinator (ADR-0056). No-op for well-formed trees.
+                // Sanitise to a whole-tree-path-unique shape (ADR-0056): a
+                // duplicate path would render the same file twice, and since
+                // expansion is path-keyed, toggling one would toggle both.
+                // No-op for well-formed trees.
                 response = res.treeWideUnique()
                 loadedCwd = cwd
             } catch is CancellationError {
@@ -128,11 +132,18 @@ struct FileTreeView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = FileTreeModel()
 
+    /// Expanded directories, keyed by ABSOLUTE PATH (not row id, which also
+    /// encodes branch-ness — a folder that gains or loses its last child would
+    /// otherwise snap shut). Ours to own now that the tree renders flat; this
+    /// is the state `OutlineGroup` used to keep, unreachably, inside AppKit.
+    /// Starts empty: roots collapsed, matching the previous behaviour.
+    @State private var expanded: Set<String> = []
+
     // Phase 5c (ADR-0020) — file mutation dialog state. The IDE-feel
     // context-menu actions (New File / New Folder / Rename / Move to
     // Trash) drive a small set of sheets + alerts here. We keep the
-    // state hoisted on FileTreeView (rather than per-row) so the
-    // OutlineGroup row identity stays stable when a sheet opens.
+    // state hoisted on FileTreeView (rather than per-row) so row
+    // identity stays stable when a sheet opens.
 
     /// Backing state for the "New file" / "New folder" sheet.
     @State private var newEntryContext: NewEntryContext? = nil
@@ -228,9 +239,9 @@ struct FileTreeView: View {
     /// bridge so the existing web FileViewer (Monaco) opens them in
     /// the main window. Directories don't dispatch — taps on a
     /// directory row should expand/collapse via the disclosure
-    /// triangle, which OutlineGroup handles itself; we just
-    /// suppress the no-op dispatch here. Selection state still
-    /// updates so the user sees the row highlight regardless.
+    /// chevron (`toggleExpanded`); we just suppress the no-op
+    /// dispatch here. Selection state still updates so the user
+    /// sees the row highlight regardless.
     ///
     /// Reverse direction (web tree click → native highlight) is
     /// deferred to Phase 3d per ADR-0018 §3 — once the native tree
@@ -245,6 +256,28 @@ struct FileTreeView: View {
         // WebView's Monaco still consumes the dispatchWebCommand
         // event; the native viewer reads from bridge.selectedFilePath.
         bridge.setSelectedFile(node.path)
+    }
+
+    /// Visible rows for the current tree + expansion state.
+    ///
+    /// Recomputed per render rather than cached: it's a linear walk over the
+    /// EXPANDED subtree only (collapsed directories cost one row, not their
+    /// subtree), so a large project with a few folders open is a few hundred
+    /// rows. A cache here would have to be invalidated on every refresh poll,
+    /// every git-status change, and every toggle — which is the staleness the
+    /// outline coordinator crashed over.
+    private func rows(of tree: [FileNode]) -> [FileTreeDisplayRow] {
+        flattenFileTree(tree, expanded: expanded)
+    }
+
+    /// Open/close a directory. Path-keyed, so the state survives the node
+    /// changing shape (or disappearing and coming back) between refreshes.
+    private func toggleExpanded(_ node: FileNode) {
+        if expanded.contains(node.path) {
+            expanded.remove(node.path)
+        } else {
+            expanded.insert(node.path)
+        }
     }
 
     /// Phase 3b — drive the model from bridge.projectWorkDir.
@@ -329,45 +362,51 @@ struct FileTreeView: View {
             if response.tree.isEmpty {
                 placeholder("(empty tree)")
             } else {
-                // Phase 5f — tree rendered with `List` instead of
-                // `LazyVStack`, because `OutlineGroup` only auto-indents
-                // its descendants when it's hosted inside a `List`.
-                // Inside a LazyVStack every row draws at depth-0, so
-                // the tree looked flat — every file at the same x as
-                // the project root. `.listStyle(.sidebar)` gives us
-                // the native macOS sidebar look with disclosure
-                // triangles + per-depth indentation guides, matching
-                // Xcode's project navigator and Finder's column view.
+                // FLAT list — deliberately NOT `List` + `OutlineGroup`.
                 //
-                // The row still owns its selection highlight; we
-                // suppress List's default row background + separators
-                // so List's selection style doesn't double-stack with
-                // the row's accent fill.
+                // The outline path crashed the app four times (duplicate ids,
+                // a non-nil empty children array, whole-tree id collisions,
+                // a branch→leaf flip under a stable id). Each fix removed one
+                // way for SwiftUI's `OutlineListCoordinator` to disagree with
+                // NSOutlineView's lazily-loaded row entries; none removed the
+                // disagreement itself, because that state isn't ours to keep
+                // consistent while an agent mutates files under a 15s refresh
+                // poll. `flattenFileTree` (MARVINLogic) turns the tree into a
+                // plain row array we diff ourselves, so there is no outline
+                // coordinator and the whole failure mode is gone. See
+                // `MARVINLogic/FileTree.swift` for the full history.
+                //
+                // Indentation and disclosure are now ours: the row draws its
+                // own chevron and leading pad from `depth`. `.listStyle(.sidebar)`
+                // still supplies the native sidebar chrome. The row owns its
+                // selection highlight, so List's row background + separators
+                // stay suppressed to avoid double-stacking.
                 List {
-                    OutlineGroup(
-                        response.tree,
-                        children: \.outlineChildren
-                    ) { node in
+                    ForEach(rows(of: response.tree)) { row in
                         FileTreeRow(
-                            node: node,
-                            isSelected: model.selectedPath == node.path,
-                            onTap: { selectRow(node) },
+                            node: row.node,
+                            depth: row.depth,
+                            isExpandable: row.isExpandable,
+                            isExpanded: row.isExpanded,
+                            isSelected: model.selectedPath == row.node.path,
+                            onToggle: { toggleExpanded(row.node) },
+                            onTap: { selectRow(row.node) },
                             onNewFile: {
                                 newEntryContext = NewEntryContext(
-                                    parentDir: parentDir(for: node),
+                                    parentDir: parentDir(for: row.node),
                                     kind: .file
                                 )
                             },
                             onNewFolder: {
                                 newEntryContext = NewEntryContext(
-                                    parentDir: parentDir(for: node),
+                                    parentDir: parentDir(for: row.node),
                                     kind: .dir
                                 )
                             },
                             onRename: {
-                                renameContext = RenameContext(node: node)
+                                renameContext = RenameContext(node: row.node)
                             },
-                            onTrash: { trashContext = node }
+                            onTrash: { trashContext = row.node }
                         )
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
@@ -376,18 +415,10 @@ struct FileTreeView: View {
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
-                // Crash fix (v0.1.26): SwiftUI's `List` + `OutlineGroup` +
-                // `.sidebar` has a framework bug — when the list reconciles
-                // while a folder is expanded, `OutlineListCoordinator`
-                // animates a row collapse through `_NSOutlineViewAnimator`
-                // and asserts (`ViewListTree.visitItem` → SIGTRAP). This
-                // fires on EVERY reconcile, and the git-status badges
-                // (dirtyStatus) re-render the rows on every turn + a 15s
-                // poll — so a long session reliably hits it. Disabling
-                // animations on the list subtree means updates reload
-                // instantly instead of through the crashing animator. The
-                // tree has no animation worth keeping (selection + badges
-                // are instant anyway), so this is pure crash-avoidance.
+                // The tree has no animation worth keeping — selection and the
+                // git-status badges are instant — and a re-render fires on
+                // every turn plus a 15s poll, so animating row insertion just
+                // makes a refresh flicker.
                 .transaction { $0.disablesAnimations = true }
                 if response.truncated {
                     truncatedBanner(count: response.count)
@@ -575,8 +606,26 @@ struct FileTreeView: View {
 /// so tests / future drag-source code can pick rows up by path.
 private struct FileTreeRow: View {
     let node: FileNode
+    /// Nesting level. `OutlineGroup` used to supply indentation implicitly;
+    /// with a flat list the row draws its own leading pad from this.
+    let depth: Int
+    /// Whether to draw a disclosure chevron at all (false for files and for
+    /// empty directories, which would expand into nothing).
+    let isExpandable: Bool
+    let isExpanded: Bool
     let isSelected: Bool
+    /// Open/close this directory. Separate from `onTap` so clicking the
+    /// chevron never changes the selection, matching Finder and Xcode.
+    let onToggle: () -> Void
     let onTap: () -> Void
+
+    /// Points of indent per nesting level. Matches the step `.listStyle(.sidebar)`
+    /// applied to `OutlineGroup` descendants, so the tree looks unchanged.
+    private static let indentStep: CGFloat = 14
+    /// Width reserved for the chevron column. Reserved even for leaves, so
+    /// files line up with their sibling folders' labels instead of shifting
+    /// left into the triangle's slot.
+    private static let chevronWidth: CGFloat = 12
     /// Phase 5c — file ops surfaced via the row's context menu.
     /// Closures hoist the action up to FileTreeView, which owns the
     /// dialog state + the FilesService calls. Keeps row stateless.
@@ -609,6 +658,19 @@ private struct FileTreeRow: View {
         // at most, a few dozen visible directory rows) it's free.
         let dirty = GitStatusBadge.resolve(for: node, bridge: MarvinBridge.shared)
         return HStack(spacing: 6) {
+            // Indent + disclosure. The chevron is a plain tappable glyph
+            // rather than a Button so it inherits the row's flat styling and
+            // doesn't steal the row's hit region beyond its own frame.
+            Color.clear
+                .frame(width: CGFloat(depth) * Self.indentStep, height: 1)
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .frame(width: Self.chevronWidth)
+                .opacity(isExpandable ? 1 : 0)
+                .contentShape(Rectangle())
+                .onTapGesture { if isExpandable { onToggle() } }
+                .allowsHitTesting(isExpandable)
             Image(systemName: FileTypeIcon.symbol(for: kind))
                 .foregroundStyle(FileTypeIcon.color(for: kind))
                 .frame(width: 16)
@@ -736,40 +798,6 @@ private extension View {
         } else {
             self
         }
-    }
-}
-
-/// SwiftUI's OutlineGroup needs a recursive `children` keyPath that
-/// returns nil for leaves and the (possibly empty) child array for
-/// branches. FileNode's wire shape uses `nil` for leaf files; an
-/// empty children array on a directory means "empty folder, still
-/// expandable". We keep both shapes intact and surface them through
-/// this computed accessor — wraps a `nil → nil`, `[] → []`, `[…] →
-/// […]` mapping in one place so the view doesn't reach into the
-/// model's optional handling repeatedly.
-private extension FileNode {
-    var outlineChildren: [FileNode]? {
-        guard isDirectory else { return nil }
-        let kids = children ?? []
-        // CRASH FIX — SwiftUI's `OutlineGroup` / `List(children:)` traps
-        // (EXC_BREAKPOINT in `OutlineListCoordinator.recursivelyDiffRows` →
-        // `collapseItem` → `_assertionFailure`) when this keypath returns a
-        // NON-NIL EMPTY array: an "expandable but empty" directory. The
-        // coordinator expects nil (leaf) or a NON-EMPTY array. An agent
-        // mutating files mid-session (a dir emptied/created, then a tree
-        // re-fetch) flips a node into the `[]` shape, and the next row diff
-        // crashes the whole app. Collapse an empty directory to a LEAF (no
-        // disclosure triangle — it simply doesn't expand into nothing); the
-        // folder icon still comes from `isDirectory`, so it reads correctly.
-        guard !kids.isEmpty else { return nil }
-        // Defensive: OutlineGroup requires IDs unique across the WHOLE tree
-        // and asserts (crash) on a duplicate. `id` is the absolute path, so
-        // a symlink loop or a case-folding collision could produce dupes —
-        // dedupe siblings by path so a bad tree degrades gracefully instead
-        // of taking down the outline. No-op for well-formed trees.
-        guard kids.count > 1 else { return kids }
-        var seen = Set<String>()
-        return kids.filter { seen.insert($0.path).inserted }
     }
 }
 

@@ -20,6 +20,7 @@
 //   • The user explicitly asked for "tag files and text and paste
 //     images" — this delivers all three.
 
+import MARVINLogic
 import AppKit
 import SwiftUI
 

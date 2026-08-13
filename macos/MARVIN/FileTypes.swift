@@ -15,80 +15,19 @@
 // ChatTypes.swift in Phase 2).
 
 import Foundation
+import MARVINLogic
 
 // MARK: - File tree
 
-/// One node in the file tree returned by GET /api/files/tree. Recursive
-/// — a `dir` node carries its children inline. Identifiable so
-/// SwiftUI's OutlineGroup can diff rows by stable id without an
-/// `.id()` modifier per cell. The absolute path is the natural id —
-/// it's unique and stable across walks.
-struct FileNode: Codable, Identifiable, Equatable {
-    /// Last path segment ("README.md", "src", …). Used as the row
-    /// label; the full path lives in `path` for ops.
-    let name: String
-    /// Absolute path on disk. Sandbox-checked by the sidecar before
-    /// emission, so any path the Swift side sees has already passed
-    /// the symlink / escape policies in
-    /// packages/runtime/src/fs-sandbox.ts.
-    let path: String
-    /// Discriminator — "file" or "dir". The wire today doesn't carry
-    /// other types (symlinks are rejected upstream); we keep the raw
-    /// String here rather than mapping to a Swift enum so a future
-    /// "submodule" or "lfs" type doesn't need a Swift release to
-    /// surface.
-    let type: String
-    /// Children for `dir` nodes; nil / empty for `file` nodes. The
-    /// sidecar walks to its configured depth cap (default 10) and
-    /// emits the full subtree inline; lazy-load-on-expand is a
-    /// future change per ADR-0018 §4.
-    let children: [FileNode]?
-
-    var id: String { path }
-    var isDirectory: Bool { type == "dir" }
-
-    /// Rebuild this node with its subtree filtered so no `path` (the OutlineGroup
-    /// id) repeats anywhere — inserting each kept child's path into `seen` and
-    /// pruning any node whose path was already seen. The caller inserts THIS
-    /// node's path before calling. See `deduplicatedTreeWide` for the why.
-    func deduplicated(into seen: inout Set<String>) -> FileNode {
-        guard let kids = children else { return self }
-        var kept: [FileNode] = []
-        kept.reserveCapacity(kids.count)
-        for child in kids where seen.insert(child.path).inserted {
-            kept.append(child.deduplicated(into: &seen))
-        }
-        return FileNode(name: name, path: path, type: type, children: kept)
-    }
-}
-
-extension Array where Element == FileNode {
-    /// Guarantee `id` (absolute path) is unique across the WHOLE tree, pruning
-    /// any node whose path was already seen elsewhere.
-    ///
-    /// CRASH FIX (ADR-0056). SwiftUI's `OutlineGroup` asserts — EXC_BREAKPOINT /
-    /// SIGTRAP inside `ViewListTree.visitItem(_:force:)` from
-    /// `OutlineListCoordinator.outlineView(_:child:ofItem:)` — the moment it
-    /// visits a duplicate identifier anywhere in the tree, taking down the whole
-    /// app. `FileNode.outlineChildren` deduped SIBLINGS only; a duplicate path
-    /// in two DIFFERENT branches (the sidecar walk racing a mid-session file
-    /// mutation, a case-fold collision) slipped through and traps. This enforces
-    /// the whole-tree invariant the id contract always claimed. No-op for
-    /// well-formed trees (every path already unique).
-    func deduplicatedTreeWide() -> [FileNode] {
-        var seen = Set<String>()
-        var out: [FileNode] = []
-        out.reserveCapacity(count)
-        for node in self where seen.insert(node.path).inserted {
-            out.append(node.deduplicated(into: &seen))
-        }
-        return out
-    }
-}
+// `FileNode` + the tree-wide dedupe live in `MARVINLogic/FileTree.swift` —
+// moved there (2026-08-06) so `MARVINTests` can pin the invariants that four
+// separate app-killing crashes turned out to hinge on. Only the wire envelope
+// stays here with the rest of the file/git response models.
 
 extension FileTreeResponse {
-    /// A copy whose tree is guaranteed id-unique across the whole tree
-    /// (ADR-0056). Applied before the response reaches `OutlineGroup`.
+    /// A copy whose tree is guaranteed path-unique across the whole tree
+    /// (ADR-0056). Applied before the response reaches the view, so a symlink
+    /// loop can't produce two rows for one file.
     func treeWideUnique() -> FileTreeResponse {
         FileTreeResponse(
             root: root,
