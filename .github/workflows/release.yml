@@ -31,8 +31,19 @@ permissions:
   contents: write  # needed to create the GitHub Release
 
 jobs:
+  # Gate the release on the SAME suite `test.yml` runs on branch pushes.
+  #
+  # A tag push matches neither of test.yml's branch filters, so cutting a
+  # release ran zero tests — four went out on a red build before anyone
+  # noticed. Calling the workflow (rather than copying its steps) means the
+  # gate can't drift away from what development actually verifies.
+  test:
+    uses: ./.github/workflows/test.yml
+
   build:
     name: build .app + cut release
+    # Nothing is built, signed, uploaded or tagged unless the suite passed.
+    needs: test
     # macos-15 — Apple Silicon (arm64) runner with Xcode 16+. We need
     # the newer Xcode because xcodegen emits objectVersion=77 project
     # files that macos-14's Xcode 15 refuses to read.

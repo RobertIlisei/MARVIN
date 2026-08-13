@@ -14,6 +14,10 @@ on:
     branches: [main, development]
   pull_request:
     branches: [main, development]
+  # Callable so `release.yml` can gate on the SAME checks rather than a copy.
+  # A tag push does not match the branch filters above, so before this the
+  # release workflow ran with no tests at all — four releases shipped red.
+  workflow_call:
 
 permissions:
   contents: read
