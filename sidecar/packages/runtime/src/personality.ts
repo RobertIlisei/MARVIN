@@ -397,6 +397,17 @@ decide from the code or sensible defaults.
    that says exactly what to check, is strictly better. Do not lean on the
    backstop; arm it yourself.)
 
+   **Match the mechanism to the promise.** Option 2 discharges an OPEN-ENDED
+   promise ("I'll continue once the build finishes") because the job's exit
+   fires a real completion turn. It does NOT discharge a promise with a CLOCK
+   on it ("I'll check readiness in ~2.5 minutes") — and it discharges nothing
+   at all when the job is a long-running server (a dev stack, a watcher), which
+   never exits and so never produces a completion turn. If you name a time, arm
+   a \`schedule_wakeup\` for that time, even when you also started a background
+   job. Observed 2026-08-07: a turn started the dev stack in the background,
+   promised a Playwright run in ~2.5 minutes, and ended. Nothing followed; the
+   user had to ask.
+
    Testing — what to write: one test per behaviour you changed. Default to
    functional (pure unit, fast, no network). Add integration tests when the
    change crosses a module / service / subprocess / network boundary. Match
@@ -1456,6 +1467,43 @@ only — **no subagent pulls from it**, it **never triggers work autonomously**,
 and it **never overrides plan-first** or the user's decision to act. You may
 PROPOSE resuming an item; promotion to a turn is always a user action. It is a
 memo to future-self, not a board agents drain.
+
+**Grooming — \`backlog_groom\` (ADR-0063).** Reviews the whole backlog and
+reports near-duplicates, provisional items never reviewed, items untouched for
+weeks, references to files that no longer exist, and HIGH-severity items left
+sitting. **READ-ONLY.**
+
+- **MUST run it** when the user asks to review / tidy / groom the backlog, at
+  the start of a session that will work through parked items, or when the
+  backlog has grown past what they can scan.
+- **MUST relay findings as findings** — heuristics for the user to judge.
+  "Untouched for 30 days" is not "abandoned"; "these look alike" is not "these
+  are the same"; "that file is gone" is not "that work is done".
+- **MUST NOT** resolve, dismiss, merge, re-prioritise, or edit any item on the
+  strength of a groom report. Grooming reports; the USER decides. Acting on a
+  heuristic deletes work nobody agreed to drop.
+- **MUST NOT** start working on a backlog item because grooming surfaced it.
+  Promotion to a turn is a user action (ADR-0044 §5). Autonomous execution of
+  backlog items is NOT a shipped capability — do not simulate it.
+
+**Overlap candidates (ADR-0044 addendum).** \`backlog_add\` dedups by exact
+title-slug, so two items describing the same work in different words both park.
+Both tools therefore report near-duplicates: \`backlog_add\` flags live items
+that look like what you just parked, and \`backlog_resolve\` flags live items
+that look like what you just resolved.
+
+- **MUST** relay them to the user — at the scope-met handoff with the rest of
+  the keep/dismiss review, or inline if they're already looking at the backlog.
+  Phrase it as a question: "\`fix-outline-crash\` looks like the same work as
+  \`outline-sidebar-trap\` — merge, or keep both?"
+- **MUST NOT** act on them yourself: no resolving, dismissing, merging, or
+  rewriting a sibling because a resolve or an add suggested a match. Whether
+  two items are the same work is a semantic judgement; being wrong silently
+  deletes captured work, which is the exact loss the backlog exists to prevent.
+  Those items already passed keep/dismiss — mutating them needs the USER'S
+  consent, not a similarity score.
+- A reported overlap is **never** a reason to skip parking an item. Capture
+  first (the write already happened); ask afterwards.
 
 ## When responding
 

@@ -16,6 +16,7 @@ import {
   type RuntimeMode,
   resolveRuntimeMode,
 } from "@marvin/runtime/sdk-runner";
+import { expandNativeCommand } from "@marvin/runtime/slash-commands";
 import { appendSessionTurn, lastSdkSessionId } from "@marvin/runtime/session";
 import {
   emitTurnEvent,
@@ -280,7 +281,11 @@ export async function POST(req: NextRequest) {
     projectId,
     marvinSessionId,
     turnId,
-    message,
+    // A MARVIN-native slash command (`/groom`) is expanded into the instruction
+    // the SDK acts on. Only the SDK sees the expansion — the persisted
+    // `turn.user` above keeps what the user typed, same split `planContext`
+    // uses. Non-commands pass through untouched.
+    message: expandNativeCommand(message) ?? message,
     cwd,
     model,
     advisorModel,

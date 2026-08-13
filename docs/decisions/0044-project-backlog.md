@@ -187,3 +187,81 @@ same shape as the other surfaces in the CLAUDE.md table.
       stashed clean tree). macOS `swift build` — verified at implementation.
 - [x] CLAUDE.md firm-surface table + Cross-session continuity section name the
       backlog and its boundary vs memory/plans/roadmap.
+
+---
+
+## Addendum (2026-08-06) — overlap is surfaced, never reconciled
+
+**Context.** `addBacklogItem` dedups by exact title-slug. "Fix the file-tree
+outline crash" and "Stop the outline crashing on refresh" slugify differently,
+so both park and neither ever notices the other. §3-as-amended by
+[ADR-0047](./0047-backlog-capture-at-discovery.md) made capture un-gated at
+discovery, which makes near-duplicates accumulate by construction — the open
+rail was raised 50 → 200 (2026-07-08) after a real project hit 50 through
+ordinary use.
+
+The proposal considered was: on resolve, re-check the remaining items and
+**update them accordingly**.
+
+**Decision.** Detect overlap at both write boundaries; report it; change
+nothing else.
+
+- `backlogSimilarity(a, b)` and `relatedBacklogItems(target, others)` are pure
+  and exported, like `classifyBacklogText` — the calibration is unit-testable
+  at the boundary rather than asserted in prose.
+- `addBacklogItem` returns `related` (live items resembling the one just
+  parked); `resolveBacklogItem` returns `related` (live items resembling the
+  one just resolved). Both **always** write their own item first.
+- `backlog_add` / `backlog_resolve` render the candidates as a question for the
+  user. `personality.ts` carries a MUST-relay / MUST-NOT-act pair.
+
+**Why not auto-update siblings.** Three reasons, in order of weight:
+
+1. **It inverts ADR-0047's consent model.** Capture is un-gated *because*
+   consent lands later, at the keep/dismiss handoff. An item that reached
+   `open` has already passed that gate; auto-resolving it when a *neighbour*
+   resolves mutates consented state with no new consent point.
+2. **Wrong judgements destroy the thing the backlog protects.** The backlog
+   exists so discoveries don't evaporate. A bad cascade makes one evaporate
+   *and* leaves a record saying it was completed — strictly worse than never
+   capturing it. Detection can be wrong cheaply; mutation cannot.
+3. **It is Kanban by the back door (Golden Rule 1).** Once resolving A rewrites
+   B, the backlog maintains its own state machine. §5's invariant is that the
+   store is inert: read by MARVIN and the user, never self-driving.
+
+Judging "is B obsolete now that A landed" is also *semantic* — deterministic
+code can't do it, so the auto-update variant means an LLM pass over the open
+set on every resolve. Detection is a set intersection.
+
+**Calibration.** Containment over the shorter title's meaningful tokens (not
+Jaccard — backlog titles are short and one is often a more specific restatement
+of the other, which Jaccard penalises), plus a bonus when both items name the
+same file. Tuned so a shared file path alone is *not* enough: same file,
+different work is the common case. `RELATED_MIN_SCORE` / `RELATED_MAX` are
+exported so the thresholds are a one-line change.
+
+**Both write paths are covered.** `POST /api/backlog` returns `related` too, and
+the macOS panel renders it as a dismissible orange notice under the header — an
+advisory ("Added. This looks like the same work as …"), deliberately not styled
+as the red error banner, because the add succeeded. The Swift decode treats the
+field as optional so an older bundled sidecar degrades to no hint rather than a
+failed add.
+
+## Scope of Done — addendum
+
+- [x] `backlogSimilarity` + `relatedBacklogItems` pure + exported; stopwords,
+      singular-fold, file-path extraction that ignores version strings and
+      prose abbreviations.
+- [x] `addBacklogItem` returns `related` (required); `resolveBacklogItem`
+      returns `related` (optional on `ResolveResult`, populated only there).
+- [x] Both MCP tools render candidates as a user-facing question.
+- [x] `personality.ts` MUST-relay / MUST-NOT-act firm surface.
+- [x] 12 unit tests: calibration (reworded duplicate, unrelated work, shared
+      path insufficient, shared verbs insufficient, version strings ignored),
+      selection (self/resolved excluded, provisional+doing included, cap), and
+      the write-boundary invariant that resolving one sibling leaves the other
+      byte-identical and still indexed. 30/30 in `backlog.test.ts`.
+- [x] `tsc --noEmit` clean for `packages/runtime` + the sidecar app.
+- [x] `POST /api/backlog` returns `related`; `BacklogService.add` decodes it
+      (optional field — older bundles degrade to no hint); `BacklogPanel` shows
+      a dismissible advisory distinct from the error banner.
