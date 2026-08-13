@@ -30,7 +30,11 @@ import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { loadEnabledPlugins } from "./plugin-loader";
 import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
 import { scheduleWakeup } from "./wakeup-scheduler";
-import { buildCheckBackWakeup, detectUncoveredCheckBack } from "./checkback-guard";
+import {
+  buildCheckBackWakeup,
+  detectUncoveredCheckBack,
+  isCheckBackCovered,
+} from "./checkback-guard";
 import {
   buildReconcilePrompt,
   hasScopeMet,
@@ -41,6 +45,7 @@ import {
   type WorkflowGap,
 } from "./workflow-guard";
 import { readPlanState } from "./plan-state";
+import { saveSlashCommands } from "./slash-commands";
 import { recordPreImage } from "./change-checkpoints";
 import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
@@ -55,6 +60,7 @@ import {
   clearTurnDesignContext,
   createTurnDesignContext,
   type DesignTurnContext,
+  logDesignTurnSummary,
   makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
@@ -1463,7 +1469,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // and whether any follow-through mechanism was armed during the turn, so at
   // turn-end we can auto-arm a wakeup for an unbacked "I'll check back" promise.
   let finalAssistantText = "";
-  let armedFollowThrough = false;
+  let armedWakeup = false;
+  let armedBackgroundJob = false;
   // Workflow-completion guard state (ADR-0057). Latest TodoWrite payload and the
   // set of ADR files this turn edited, checked at turn-end against the scope-met
   // marker to catch a premature "done".
@@ -1497,6 +1504,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // client skips turn.completed on replay).
     const turnStartedAtIso = new Date().toISOString();
     const q = query({ prompt: turnPrompt, options });
+    // Slash-command catalog capture is armed here but FIRED after the
+    // `system/init` event below — `supportedCommands()` is a control request
+    // that needs the subprocess session initialised, so calling it straight
+    // after `query()` races the handshake and silently fails.
+    let capturedCommands = false;
     for await (const ev of q) {
       if (ev.type === "result") {
         // Enrich BEFORE onEvent forwards + persists it, so the wire event
@@ -1522,9 +1534,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             };
             if (b.type === "text" && typeof b.text === "string") texts.push(b.text);
             if (b.type === "tool_use" && typeof b.name === "string") {
-              if (b.name.includes("schedule_wakeup") || b.name.includes("run_background_job")) {
-                armedFollowThrough = true;
-              }
+              // Tracked SEPARATELY (ADR-0055 addendum): they discharge
+              // different promises. A wakeup covers any promise; a background
+              // job only covers an open-ended one, since a long-running server
+              // never completes and so never fires a completion turn.
+              if (b.name.includes("schedule_wakeup")) armedWakeup = true;
+              if (b.name.includes("run_background_job")) armedBackgroundJob = true;
               // ADR-0057 — capture the latest TodoWrite payload and any ADR files
               // edited this turn, for the turn-end workflow-completion guard.
               const input = b.input as Record<string, unknown> | undefined;
@@ -1548,6 +1563,42 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {
         lastSessionId = ev.session_id;
+        // Capture the slash-command catalog for the composer's autocomplete.
+        // Fired HERE (not right after `query()`) because `supportedCommands()`
+        // is a control request that needs the session handshake done — the
+        // earlier placement raced it and failed silently. Failures are now
+        // LOGGED rather than swallowed: an unobservable capture is
+        // indistinguishable from "no commands", which is exactly the
+        // debugging dead-end the ADR-0060 telemetry work was about.
+        if (!capturedCommands && input.projectId) {
+          capturedCommands = true;
+          const pid = input.projectId;
+          void (async () => {
+            try {
+              const cmds = await q.supportedCommands();
+              saveSlashCommands(pid, cmds);
+              console.info(
+                "[marvin.telemetry] " +
+                  JSON.stringify({
+                    kind: "slashcommands.captured",
+                    projectId: pid,
+                    count: Array.isArray(cmds) ? cmds.length : 0,
+                    at: new Date().toISOString(),
+                  }),
+              );
+            } catch (e) {
+              console.info(
+                "[marvin.telemetry] " +
+                  JSON.stringify({
+                    kind: "slashcommands.failed",
+                    projectId: pid,
+                    error: (e as Error)?.message ?? String(e),
+                    at: new Date().toISOString(),
+                  }),
+              );
+            }
+          })();
+        }
       } else if (ev.type === "result") {
         lastSessionId = ev.session_id;
         durationMs = ev.duration_ms;
@@ -1631,6 +1682,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
+    // ADR-0060 follow-up — emit the turn's graph:file summary BEFORE dropping
+    // the context, so the ratio is readable from the sidecar log instead of
+    // reconstructed from session transcripts.
+    logDesignTurnSummary(designCtx);
     clearTurnDesignContext(turnId);
   }
 
@@ -1639,9 +1694,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // follow-through mechanism, arm the wakeup ourselves so the promise becomes
   // real (the model's firm-surface MUST fires unreliably — this is the
   // mechanical backstop). No-op without a wakeup context (unknown session).
-  if (!resultError && wakeupCtx && !armedFollowThrough) {
+  if (!resultError && wakeupCtx) {
     const detected = detectUncoveredCheckBack(finalAssistantText);
-    if (detected) {
+    // Coverage is decided per-promise, not by a single "something was armed"
+    // flag: a background job discharges "I'll continue once it's done", but not
+    // "I'll check in ~2.5 minutes" (ADR-0055 addendum).
+    if (detected && !isCheckBackCovered(detected, {
+      scheduleWakeup: armedWakeup,
+      backgroundJob: armedBackgroundJob,
+    })) {
       const { reason, prompt } = buildCheckBackWakeup(detected);
       const res = scheduleWakeup({
         ...wakeupCtx,

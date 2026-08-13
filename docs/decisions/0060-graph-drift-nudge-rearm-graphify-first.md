@@ -126,6 +126,107 @@ Edit/Write/Bash — never interrupt the act of implementing.
   improve, the next escalation is lowering the threshold, not restoring the
   wall.
 
+## Addendum (2026-07-25) — observability, because the guard couldn't be measured
+
+First post-ship measurement (session `8198787f`, 67 ops) showed the ratio at
+1:4.7 — modestly better than the 1:5-1:11 baseline — but the drift shape intact:
+**33 consecutive file ops after the last graph call, containing 23 novel
+files/searches** against a threshold of 7. The nudge should have fired and hit
+its per-turn cap.
+
+**Whether it did was unknowable**, which made the ADR's own empirical
+follow-up unanswerable. Two failure modes were indistinguishable:
+
+- the nudge fired and the model ignored it → the advisory shape is too weak,
+  escalate;
+- the nudge never fired → a wiring bug, fix the code.
+
+Opposite responses, no data to choose. Causes:
+
+1. The nudge is injected as PreToolUse `additionalContext`, which leaves **no
+   trace in the session transcript** (hook output is not a stream event).
+2. `appendAutoAuditEntry` **early-returns for every tool outside
+   Edit/Write/Bash** (`auto-audit.ts:206`). The design hooks fire on
+   Read/Grep/Glob — so the existing deny-logging call has *always* been a
+   silent no-op. The whole design-hooks feature has been unobservable since it
+   shipped, and the in-code comment ("the filter drops non-Edit/Write/Bash
+   entries silently — safe to call") mistook that for harmless.
+
+**Fix.** Emit on the `[marvin.telemetry]` console channel — the same one
+ADR-0055/0057 use, landing in `~/Library/Logs/MARVIN/sidecar.log`:
+
+- `graph.drift.nudge` — per fire, with `novelFilesSinceGraph`, `nudgeCount`,
+  `graphCallCount`, tool;
+- `designhook.deny` — per deny (previously invisible);
+- `graph.turn.summary` — once per turn from `runAgent`'s `finally`, carrying
+  `graphCalls` / `fileOps` / `nudges` / `denied`, so the ratio reads straight
+  off the log instead of being reconstructed from transcripts.
+
+The `appendAutoAuditEntry` call is kept (harmless, and it does record if a
+mutator ever trips a rule) but is no longer the load-bearing path.
+
+**Lesson worth generalising:** a guard that cannot be measured cannot be tuned.
+ADR-0055/0057 got away without telemetry because their effects are visible in
+state (a wakeup record exists; a corrective turn appears). An advisory guard has
+no such artifact, so observability is part of its definition of done — not a
+follow-up.
+
+## Addendum 2 (2026-07-25) — the signal was wrong, not the enforcement
+
+With telemetry landing, the first real reading was unambiguous about the
+*mechanism*:
+
+```
+graph.turn.summary  graphCalls:2  fileOps:36  nudges:3 (cap hit)  denied:true
+```
+
+The deny fired, all three nudges fired, and the model kept reading. Read
+narrowly, that says "advisory is too weak — escalate to a mid-turn deny."
+**That would have been the wrong fix.** Analysing the same session's transcript:
+
+| | count |
+|---|---|
+| novel source reads | 49 |
+| → later Edited/Written (**implementation**) | 20 |
+| → never mutated (**exploration**) | 29 |
+| graph calls | 14 |
+
+Exploration-only, the ratio is **1 graph : 2.1 exploratory reads** — not bad at
+all. The alarming 1:17.5 headline was an artifact of counting (a) non-source
+reads the graph never indexes (57 of 157 were `.md`/`.sql`/`.yaml`) and (b)
+**reads of files the model was about to edit**. Reading a file you are about to
+change is correct behaviour; 40 % of the drift charges were that.
+
+So the defect was in the **signal**, not the enforcement strength — and a hard
+mid-turn deny would have blocked real implementation work in exactly that
+session. Two narrowings:
+
+### N1. Implementation refund
+
+`seenSourceFiles` only ever exempted *re*-reads; a first read-before-edit looks
+identical to drift at hook time, because the Edit hasn't happened yet. So the
+charge is now **refunded retroactively**: novel reads are tracked in
+`chargedFiles`, and an `Edit`/`Write`/`NotebookEdit` on a charged path refunds
+it (once, never below zero). The budget then reflects only reads that never
+became edits — actual orientation, which is the graph's job. A graph call clears
+`chargedFiles` alongside the budget so a later edit can't refund a stale charge.
+
+`Grep`/`Glob` charges are deliberately **not** refundable — a search has no file
+to edit, and searching the tree is precisely the exploration the rule targets.
+
+### N2. Telemetry that reports the exploration ratio directly
+
+`graph.turn.summary` now emits `driftCharges`, `implRefunds`, `exploreOps`
+(= charges − refunds) and a precomputed `exploreRatio`, alongside `driftOps`
+(renamed from the misleading `fileOps`; it was already source-only). The
+exploration-only ratio is now readable straight off the log line instead of
+being reconstructed — which is what made the first reading misleading.
+
+**Lesson:** before escalating an enforcement mechanism, verify the signal it
+fires on. The telemetry answered "did it fire?" correctly and I nearly drew the
+wrong conclusion from it, because the *denominator* was measuring the wrong
+thing.
+
 ## Scope of Done
 
 - [x] `DesignTurnContext` tracks `seenSourceFiles` / `novelFilesSinceGraph` /
@@ -138,6 +239,19 @@ Edit/Write/Bash — never interrupt the act of implementing.
 - [x] The PreToolUse adapter emits it as non-blocking `additionalContext`; the
       first-read hard deny is unchanged.
 - [x] Full suite + typecheck green; app rebuilt.
-- [ ] **Empirical follow-up (not verifiable at ship time):** re-measure the
-      graph:file ratio over the next real sessions and re-tune the threshold if
-      it hasn't moved. Tracked on the roadmap.
+- [x] **Addendum:** nudge fires, denies, and a per-turn graph:file summary emit
+      on the `[marvin.telemetry]` channel (sidecar log) — the guard is now
+      measurable, and "fired but ignored" is distinguishable from "never fired".
+      Unit-tested, including that telemetry can never throw into a turn.
+- [x] **Addendum 2:** novel read-before-edit is refunded retroactively so
+      implementation no longer inflates drift (Grep/Glob non-refundable, refund
+      once, graph call clears charges); `graph.turn.summary` reports
+      `driftCharges` / `implRefunds` / `exploreOps` / `exploreRatio` so the
+      exploration-only ratio is directly readable — unit tested, including that
+      a 12-file read-then-edit burst never nudges.
+- [ ] **Empirical follow-up (still open):** re-read `exploreRatio` from
+      `graph.turn.summary` over the next real sessions. Pre-narrowing analysis
+      put genuine exploration at ~1 graph : 2.1 exploratory reads, which may
+      mean the rule is already working and no escalation is warranted — decide
+      on the corrected number, not the raw ratio. Enforcement escalation
+      remains explicitly NOT justified by current data.

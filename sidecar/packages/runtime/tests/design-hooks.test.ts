@@ -16,6 +16,7 @@ import {
   checkGraphDrift,
   GRAPH_DRIFT_MAX_NUDGES,
   GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
+  logDesignTurnSummary,
 } from "../src/design-hooks";
 
 /**
@@ -571,5 +572,205 @@ describe("graph drift nudge (ADR-0060)", () => {
     const ctx = createTurnDesignContext(turnId, cwd); // no seedGraph
     readNovel(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD + 3);
     expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "new.ts") })).toBeNull();
+  });
+});
+
+// ADR-0060 follow-up — observability. The nudge is injected as hook
+// additionalContext, which leaves NO trace in the session transcript, and
+// appendAutoAuditEntry early-returns for every non-mutator tool (the design
+// hooks fire on Read/Grep/Glob). So without a telemetry line there is no way
+// to distinguish "fired and ignored" from "never fired" — opposite fixes.
+describe("design-hook observability (ADR-0060 follow-up)", () => {
+  let cleanup: () => void;
+  let cwd: string;
+  const turnId = "test-turn-telemetry";
+  let lines: string[];
+  let origInfo: typeof console.info;
+
+  beforeEach(() => {
+    ({ cwd, cleanup } = withTmpCwd());
+    lines = [];
+    origInfo = console.info;
+    console.info = ((msg?: unknown) => {
+      if (typeof msg === "string") lines.push(msg);
+    }) as typeof console.info;
+  });
+  afterEach(() => {
+    console.info = origInfo;
+    clearTurnDesignContext(turnId);
+    cleanup();
+  });
+
+  const telemetry = () =>
+    lines
+      .filter((l) => l.startsWith("[marvin.telemetry] "))
+      .map((l) => JSON.parse(l.slice("[marvin.telemetry] ".length)) as Record<string, unknown>);
+
+  it("emits a per-turn graph:file summary so the ratio is readable from the log", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "x" });
+    for (let i = 0; i < 9; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `f${i}.ts`) });
+    }
+    logDesignTurnSummary(ctx);
+    const ev = telemetry().find((e) => e.kind === "graph.turn.summary");
+    expect(ev).toBeTruthy();
+    expect(ev!.graphCalls).toBe(1);
+    expect(ev!.driftOps).toBe(9);
+    expect(ev!.turnId).toBe(turnId);
+    expect(ev!.hasGraph).toBe(true);
+  });
+
+  it("reports the exploration-only ratio (charges minus implementation refunds)", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "x" });
+    // 2 exploratory reads (never edited) + 3 read-then-edit implementation reads.
+    for (let i = 0; i < 2; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `explore${i}.ts`) });
+    }
+    for (let i = 0; i < 3; i++) {
+      const f = join(cwd, "src", `impl${i}.ts`);
+      recordAllowedTool(ctx, "Read", { file_path: f });
+      recordAllowedTool(ctx, "Edit", { file_path: f });
+    }
+    logDesignTurnSummary(ctx);
+    const ev = telemetry().find((e) => e.kind === "graph.turn.summary")!;
+    expect(ev.driftCharges).toBe(5);
+    expect(ev.implRefunds).toBe(3);
+    expect(ev.exploreOps).toBe(2); // only the genuinely exploratory reads
+    expect(ev.exploreRatio).toBe(2); // 2 exploratory reads per 1 graph call
+  });
+
+  it("stays silent for a turn that touched nothing structural", () => {
+    const ctx = createTurnDesignContext(turnId, cwd); // no graph, no ops
+    logDesignTurnSummary(ctx);
+    expect(telemetry().filter((e) => e.kind === "graph.turn.summary")).toHaveLength(0);
+  });
+
+  it("summary reports nudge count so 'fired' is distinguishable from 'never fired'", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "x" });
+    for (let i = 0; i < GRAPH_DRIFT_NOVEL_FILE_THRESHOLD; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `n${i}.ts`) });
+    }
+    expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "probe.ts") })).toBeTruthy();
+    logDesignTurnSummary(ctx);
+    const ev = telemetry().find((e) => e.kind === "graph.turn.summary");
+    expect(ev!.nudges).toBe(1);
+  });
+
+  it("never throws even if serialisation misbehaves", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    ctx.hasGraph = true;
+    console.info = (() => {
+      throw new Error("boom");
+    }) as typeof console.info;
+    expect(() => logDesignTurnSummary(ctx)).not.toThrow();
+  });
+});
+
+// ADR-0060 addendum 2 — the implementation refund. Measured on a real
+// implementation-heavy session: of 49 novel source reads, 20 were files MARVIN
+// went on to Edit. Reading a file you're about to change is correct behaviour,
+// but at Read time it's indistinguishable from drift, so those 20 inflated the
+// signal ~40%. This is why escalating to a mid-turn hard deny would have been
+// wrong — it would have blocked real implementation reads.
+describe("implementation refund (ADR-0060 addendum 2)", () => {
+  let cleanup: () => void;
+  let cwd: string;
+  const turnId = "test-turn-refund";
+
+  beforeEach(() => {
+    ({ cwd, cleanup } = withTmpCwd());
+    seedGraph(cwd);
+  });
+  afterEach(() => {
+    clearTurnDesignContext(turnId);
+    cleanup();
+  });
+
+  it("read-then-edit REFUNDS the drift charge (implementation, not exploration)", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const f = join(cwd, "src", "a.ts");
+    recordAllowedTool(ctx, "Read", { file_path: f });
+    expect(ctx.novelFilesSinceGraph).toBe(1);
+    recordAllowedTool(ctx, "Edit", { file_path: f });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    expect(ctx.driftCharges).toBe(1);
+    expect(ctx.driftRefunds).toBe(1);
+  });
+
+  it("Write and NotebookEdit refund too", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const a = join(cwd, "src", "a.ts");
+    const b = join(cwd, "src", "b.ts");
+    recordAllowedTool(ctx, "Read", { file_path: a });
+    recordAllowedTool(ctx, "Read", { file_path: b });
+    expect(ctx.novelFilesSinceGraph).toBe(2);
+    recordAllowedTool(ctx, "Write", { file_path: a });
+    recordAllowedTool(ctx, "NotebookEdit", { notebook_path: b });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    expect(ctx.driftRefunds).toBe(2);
+  });
+
+  it("an edit refunds only ONCE, and never below zero", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const f = join(cwd, "src", "a.ts");
+    recordAllowedTool(ctx, "Read", { file_path: f });
+    for (let i = 0; i < 5; i++) recordAllowedTool(ctx, "Edit", { file_path: f });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    expect(ctx.driftRefunds).toBe(1);
+  });
+
+  it("editing a file that was never read charges nothing (no phantom refund)", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Edit", { file_path: join(cwd, "src", "never-read.ts") });
+    expect(ctx.driftRefunds).toBe(0);
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+  });
+
+  it("pure exploration still accrues drift and nudges (refund doesn't defang the rule)", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    for (let i = 0; i < GRAPH_DRIFT_NOVEL_FILE_THRESHOLD; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `explore${i}.ts`) });
+    }
+    // None were edited → nothing refunded → the nudge still fires.
+    expect(ctx.driftRefunds).toBe(0);
+    expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", "more.ts") })).toBeTruthy();
+  });
+
+  it("an implementation burst does NOT reach the nudge threshold", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    // Read-then-edit, 12 files — classic implementation. Never nudges.
+    for (let i = 0; i < 12; i++) {
+      const f = join(cwd, "src", `impl${i}.ts`);
+      recordAllowedTool(ctx, "Read", { file_path: f });
+      recordAllowedTool(ctx, "Edit", { file_path: f });
+      expect(checkGraphDrift(ctx, "Read", { file_path: join(cwd, "src", `next${i}.ts`) })).toBeNull();
+    }
+    expect(ctx.graphifyNudgeCount).toBe(0);
+  });
+
+  it("Grep/Glob charges are NOT refundable (a search has no file to edit)", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Grep", { pattern: "foo", path: cwd });
+    expect(ctx.novelFilesSinceGraph).toBe(1);
+    recordAllowedTool(ctx, "Edit", { file_path: join(cwd, "src", "foo.ts") });
+    expect(ctx.novelFilesSinceGraph).toBe(1); // unchanged
+    expect(ctx.driftRefunds).toBe(0);
+  });
+
+  it("a graph call clears charged files so later edits can't refund stale charges", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const f = join(cwd, "src", "a.ts");
+    recordAllowedTool(ctx, "Read", { file_path: f });
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "x" });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    recordAllowedTool(ctx, "Edit", { file_path: f });
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    expect(ctx.driftRefunds).toBe(0); // charge was already cleared, not refunded
   });
 });

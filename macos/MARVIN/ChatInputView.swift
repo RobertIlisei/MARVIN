@@ -45,6 +45,21 @@ struct ChatTextEditor: NSViewRepresentable {
     /// Disable the editor (e.g. while a turn is in flight). The
     /// NSTextView still draws but stops accepting keyDown events.
     var isDisabled: Bool = false
+    /// Slash-command autocomplete hooks. All default to inert, so any caller
+    /// that doesn't opt in behaves exactly as before.
+    /// Names of commands that actually exist, so the composer can HIGHLIGHT a
+    /// recognised `/command` token. Without it there's no way to tell a real
+    /// command from ordinary text that happens to start with a slash.
+    var knownCommands: Set<String> = []
+    /// Fired from the text view's OWN change notification with its OWN string.
+    /// The `text` @Binding round-trips through SwiftUI and can lag a keystroke,
+    /// which left the autocomplete showing results for the previous query.
+    /// This is the source of truth, at the moment it changes.
+    var onTextChange: (String) -> Void = { _ in }
+    var isCommandPopupOpen: () -> Bool = { false }
+    var onCommandMove: (Int) -> Void = { _ in }
+    var onCommandAccept: () -> Void = {}
+    var onCommandDismiss: () -> Void = {}
     /// Phase 5e — callback for clipboard images pasted into the
     /// editor. The ChatNSTextView intercepts paste and routes any
     /// image content here; the parent saves it to disk + adds it
@@ -100,8 +115,42 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.onImagePaste = { image in onImagePaste(image) }
         textView.onFilePaste = { urls in onFilePaste(urls) }
         textView.onAtTrigger = { onAtTrigger() }
+        textView.isCommandPopupOpen = { isCommandPopupOpen() }
+        textView.onCommandMove = { delta in onCommandMove(delta) }
+        textView.onCommandAccept = { onCommandAccept() }
+        textView.onCommandDismiss = { onCommandDismiss() }
         textView.isEditable = !isDisabled
         textView.isSelectable = true
+        Self.highlightCommandToken(in: textView, known: knownCommands)
+    }
+
+    /// Tint a leading `/command` token when it names a real command.
+    ///
+    /// Uses the layout manager's TEMPORARY attributes, not the text storage:
+    /// temporary attributes are display-only, so this cannot disturb typing,
+    /// IME composition, undo, or the string the composer actually sends.
+    static func highlightCommandToken(in textView: NSTextView, known: Set<String>) {
+        guard let lm = textView.layoutManager else { return }
+        let full = NSRange(location: 0, length: (textView.string as NSString).length)
+        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
+        lm.removeTemporaryAttribute(.font, forCharacterRange: full)
+        let text = textView.string
+        guard text.hasPrefix("/") else { return }
+        // The token is everything up to the first whitespace/newline.
+        let afterSlash = text.dropFirst()
+        let token = afterSlash.prefix { !$0.isWhitespace && !$0.isNewline }
+        guard !token.isEmpty, known.contains(String(token)) else { return }
+        let range = NSRange(location: 0, length: token.count + 1)
+        lm.addTemporaryAttributes(
+            [
+                .foregroundColor: NSColor.controlAccentColor,
+                .font: NSFont.monospacedSystemFont(
+                    ofSize: NSFont.systemFontSize,
+                    weight: .semibold
+                ),
+            ],
+            forCharacterRange: range
+        )
     }
 
     func makeCoordinator() -> Coordinator {
@@ -115,7 +164,14 @@ struct ChatTextEditor: NSViewRepresentable {
         }
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
+            let current = textView.string
+            parent.text = current
+            // Drive dependent UI from the editor's actual content, not from the
+            // binding we just wrote (which SwiftUI may not have propagated yet).
+            parent.onTextChange(current)
+            if let tv = textView as? ChatNSTextView {
+                ChatTextEditor.highlightCommandToken(in: tv, known: parent.knownCommands)
+            }
         }
     }
 }
@@ -140,7 +196,42 @@ final class ChatNSTextView: NSTextView {
     /// the would-be `@<query>` with an attachment chip.
     var onAtTrigger: (() -> Bool)?
 
+    /// Slash-command autocomplete. Set by the wrapper; returns true when the
+    /// popup is OPEN, which is the only condition under which this view
+    /// steals ↑/↓/⇥/⎋/⏎ from the text-editing pipeline. When the popup is
+    /// closed every key behaves exactly as before — the popup is strictly
+    /// additive, and typing can never be broken by it.
+    var isCommandPopupOpen: (() -> Bool)?
+    /// Move the popup selection. -1 = up, +1 = down.
+    var onCommandMove: ((Int) -> Void)?
+    /// Accept the highlighted command (⇥ or ⏎ while open).
+    var onCommandAccept: (() -> Void)?
+    /// Dismiss the popup (⎋ while open).
+    var onCommandDismiss: (() -> Void)?
+
     override func keyDown(with event: NSEvent) {
+        // Slash-command popup navigation. Checked FIRST and gated on the popup
+        // actually being open, so none of this is reachable during normal
+        // typing. ⏎ is included so Enter accepts the highlighted command
+        // instead of submitting a half-typed `/emi` as a chat message.
+        if isCommandPopupOpen?() == true {
+            let mods = event.modifierFlags
+            let plain = !mods.contains(.command) && !mods.contains(.option) && !mods.contains(.control)
+            switch event.keyCode {
+            case 126 where plain: // ↑
+                onCommandMove?(-1); return
+            case 125 where plain: // ↓
+                onCommandMove?(1); return
+            case 48 where plain: // ⇥
+                onCommandAccept?(); return
+            case 53: // ⎋ — always dismisses, modifiers irrelevant
+                onCommandDismiss?(); return
+            case 36 where plain && !mods.contains(.shift): // ⏎
+                onCommandAccept?(); return
+            default:
+                break
+            }
+        }
         // 36 is the keyCode for the main Return key. (NSEvent doesn't
         // expose a typed constant for this; the value is stable across
         // macOS releases.) IDE chat convention: Enter alone submits;
@@ -371,8 +462,48 @@ struct ChatInputBar: View {
         return accepted
     }
 
+    /// Slash-command autocomplete (`/`-triggered). Additive: when the popup is
+    /// closed the composer behaves exactly as it did before.
+    @Environment(MarvinBridge.self) private var bridge
+    @State private var slash = SlashCommandModel()
+    /// Distance from the top of the window to the top of the input bar —
+    /// measured live, so the popup shrinks as the window does instead of
+    /// spilling over the transcript.
+    @State private var roomAbove: CGFloat = 320
+    /// Leave the transcript some breathing room; never collapse below a
+    /// usable list.
+    private var popupMaxHeight: CGFloat { max(120, min(360, roomAbove - 48)) }
+    /// Project the catalog is scoped to — commands differ per project
+    /// (plugins are opt-in per workspace).
+    private var bridgeProjectId: String? { bridge.activeProjectId }
+
+    /// Replace the composer text with the accepted command + trailing space.
+    private func acceptSlashCommand() {
+        if let next = slash.accepted() {
+            text = next
+            slash.close()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 4) {
+            // Slash-command autocomplete. A real layout SIBLING above the
+            // composer rather than an overlay: as an overlay it drew straight
+            // over the Send/effort row below it. As a sibling the VStack gives
+            // it its own space and the transcript above yields instead.
+            if slash.isOpen {
+                SlashCommandPopup(
+                    matches: slash.matches,
+                    selected: slash.selected,
+                    maxListHeight: popupMaxHeight,
+                    query: slash.activeQuery,
+                    onPick: { idx in
+                        slash.selectIndex(idx)
+                        acceptSlashCommand()
+                    }
+                )
+                .transition(.opacity)
+            }
             ChatAttachmentsBar(attachments: $attachments)
             // Phase 5f — drag handle above the editor. IDE-style
             // chat surfaces (Cursor, Continue, Slack, iMessage on
@@ -389,6 +520,12 @@ struct ChatInputBar: View {
                     // isSending appends to the model's queue instead
                     // of starting a parallel turn.
                     isDisabled: false,
+                    knownCommands: slash.knownNames,
+                    onTextChange: { current in slash.update(for: current) },
+                    isCommandPopupOpen: { slash.isOpen },
+                    onCommandMove: { delta in slash.move(delta) },
+                    onCommandAccept: { acceptSlashCommand() },
+                    onCommandDismiss: { slash.close() },
                     onImagePaste: { image in
                         guard let url = ClipboardImage.savePNG(image) else {
                             return false
@@ -429,12 +566,50 @@ struct ChatInputBar: View {
                 .frame(height: editorHeight)
 
                 if text.isEmpty && attachments.isEmpty {
-                    Text("Message MARVIN — ⏎ send · ⇧⏎ newline · @ mention · paste image / file")
+                    Text("Message MARVIN — ⏎ send · ⇧⏎ newline · / commands · @ mention · paste image / file")
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 10)
                         .allowsHitTesting(false)
+                }
+            }
+            .onChange(of: text) { _, newValue in
+                slash.update(for: newValue)
+            }
+            // Measure how much room exists above the composer, live. `minY` in
+            // global space IS that room, and it changes on every window resize
+            // — so the popup cap tracks the window instead of being a guess.
+            //
+            // CRASH FIX — the measurement is FROZEN while the popup is open.
+            // `roomAbove` feeds `popupMaxHeight`, which sizes `SlashCommandPopup`,
+            // which is a layout SIBLING ABOVE this view: re-measuring while it is
+            // open closes a geometry → state → geometry cycle. In a window too
+            // short to grant the composer its ideal height the cycle has no
+            // fixpoint — each pass resizes the popup, which moves `minY`, which
+            // resizes the popup. Every iteration dirties the SwiftUI graph from
+            // inside `NSHostingView.layout()`, so AppKit keeps re-running the
+            // window's "Update Constraints in Window" phase until it exceeds its
+            // per-window budget and throws an uncaught NSException from
+            // `-[NSWindow _postWindowNeedsUpdateConstraints]` — SIGTRAP, whole
+            // app down (crash reports 2026-08-02, 2026-08-05).
+            //
+            // Freezing is also the CORRECT value, not just the safe one: the
+            // quantity we want is "room above the composer with no popup in it",
+            // which is exactly the last reading taken before it opened.
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { roomAbove = proxy.frame(in: .global).minY }
+                        .onChange(of: proxy.frame(in: .global).minY) { _, v in
+                            guard !slash.isOpen else { return }
+                            roomAbove = v
+                        }
+                }
+            )
+            .task(id: bridgeProjectId) {
+                if let pid = bridgeProjectId {
+                    await slash.load(projectId: pid, workDir: bridge.projectWorkDir)
                 }
             }
             .sheet(isPresented: $atPickerOpen) {
