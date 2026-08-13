@@ -157,15 +157,27 @@ private struct TextBlockView: View {
         // / system / result text fills the row width so long
         // paragraphs wrap naturally without ragged-right edges.
         let isInBubble = (role == .user)
-        Text(text)
-            .font(role == .system || role == .result ? .caption : .body)
-            .foregroundStyle(role == .system || role == .result ? .secondary : .primary)
-            .frame(
-                maxWidth: isInBubble ? nil : .infinity,
-                alignment: .leading
+        // Assistant/system/result output is markdown — headings, fenced code,
+        // pipe tables, lists — and used to render as literal syntax. The user's
+        // own message stays plain: they typed it, so showing it back
+        // reinterpreted (a leading `#` becoming a heading) would misrepresent
+        // what they sent.
+        if isInBubble {
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: nil, alignment: .leading)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            MarkdownView(
+                text: text,
+                fillWidth: true,
+                baseFont: role == .system || role == .result ? .caption : .body,
+                baseColor: role == .system || role == .result ? .secondary : .primary,
+                workDir: MarvinBridge.shared.projectWorkDir
             )
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
