@@ -413,6 +413,24 @@ final class MarvinBridge {
         persistFileState()
     }
 
+    /// Chat-link navigation: open `path` in the editor, optionally remembering
+    /// a target line so the viewer can scroll to it. Called when the user
+    /// clicks a `file.swift:120` reference in MARVIN's output.
+    func openFileFromChat(path: String, line: Int?) {
+        pendingEditorLine = line
+        setSelectedFile(path)
+    }
+
+    /// Line a chat link asked to jump to, consumed by the file viewer once it
+    /// has loaded. Nil when the open came from anywhere else.
+    private(set) var pendingEditorLine: Int?
+
+    /// Viewer calls this after honouring (or ignoring) the target.
+    func consumePendingEditorLine() -> Int? {
+        defer { pendingEditorLine = nil }
+        return pendingEditorLine
+    }
+
     /// Phase 5c — close one open-file tab. Removing the active tab
     /// promotes a neighbour: prefer the tab to the right (the one
     /// that "shifts left" into the closed slot), then fall back to
