@@ -87,7 +87,15 @@ export async function POST(req: NextRequest) {
     ...(severity ? { severity } : {}),
   });
   if (!res.ok) return NextResponse.json({ error: res.error }, { status: 400 });
-  return NextResponse.json({ ok: true, item: res.item, created: res.created });
+  // `related` = live items that look like the same work (ADR-0044 addendum).
+  // Advisory: the item is already written. The panel shows it as a hint so a
+  // manual add gets the same duplicate warning the MCP path does.
+  return NextResponse.json({
+    ok: true,
+    item: res.item,
+    created: res.created,
+    related: res.related,
+  });
 }
 
 interface PatchBody {

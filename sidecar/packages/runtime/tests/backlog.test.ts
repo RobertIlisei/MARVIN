@@ -9,12 +9,16 @@ import {
   MAX_BODY_CHARS,
   MAX_OPEN_ITEMS,
   MAX_TITLE_CHARS,
+  RELATED_MAX,
   addBacklogItem,
+  backlogSimilarity,
   classifyBacklogText,
   listBacklog,
+  relatedBacklogItems,
   resolveBacklogItem,
   setBacklogStatus,
   updateBacklogItem,
+  type BacklogItem,
 } from "../src/backlog";
 
 // ADR-0044 — the per-project backlog store. A durable parking lot for deferred
@@ -238,5 +242,140 @@ describe("backlog content-class classifier (MCP write boundary)", () => {
   });
   it("rejects a decision (belongs in an ADR)", () => {
     expect(classifyBacklogText("We decided to use SSE over polling", "").ok).toBe(false);
+  });
+});
+
+// ADR-0044 addendum — overlap detection. Exact-slug dedup can't see two items
+// that describe the same work in different words, and un-gated capture at
+// discovery (ADR-0047) makes those accumulate. Detection is SURFACE-ONLY:
+// nothing here may mutate a sibling.
+
+function item(over: Partial<BacklogItem> & { title: string }): BacklogItem {
+  return {
+    id: over.id ?? over.title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    title: over.title,
+    body: over.body ?? "",
+    status: over.status ?? "open",
+    severity: over.severity ?? "med",
+    sessionId: "",
+    created: "2026-08-06T00:00:00.000Z",
+    updated: "2026-08-06T00:00:00.000Z",
+  };
+}
+
+describe("backlog overlap — similarity calibration", () => {
+  it("scores a reworded duplicate as related", () => {
+    const a = item({ title: "Fix the file-tree outline crash on refresh" });
+    const b = item({ title: "Stop the outline crashing when the tree refreshes" });
+    expect(backlogSimilarity(a, b)).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("scores unrelated work as unrelated", () => {
+    const a = item({ title: "Fix the file-tree outline crash on refresh" });
+    const b = item({ title: "Add a retry path to the cost tracker upload" });
+    expect(backlogSimilarity(a, b)).toBeLessThan(0.5);
+  });
+
+  it("treats a shared file path as strong but not sufficient evidence", () => {
+    const shared = item({ title: "Widen the sidebar indent", body: "In FileTreeView.swift" });
+    const other = item({ title: "Cache git badges per turn", body: "See FileTreeView.swift:412" });
+    // Same file, genuinely different work — must not be reported.
+    expect(backlogSimilarity(shared, other)).toBeLessThan(0.5);
+    // Same file AND overlapping vocabulary — reported.
+    const closer = item({ title: "Cache the sidebar indent guides", body: "FileTreeView.swift" });
+    expect(backlogSimilarity(shared, closer)).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("is not fooled by shared imperative verbs alone", () => {
+    const a = item({ title: "Fix the login redirect" });
+    const b = item({ title: "Fix the export button" });
+    expect(backlogSimilarity(a, b)).toBeLessThan(0.5);
+  });
+
+  it("ignores version strings and prose abbreviations as file paths", () => {
+    const a = item({ title: "Bump the runtime", body: "we shipped 0.1.60, e.g. the cask" });
+    const b = item({ title: "Retune the poller", body: "was 0.1.60, e.g. every 15s" });
+    expect(backlogSimilarity(a, b)).toBeLessThan(0.5);
+  });
+});
+
+describe("backlog overlap — relatedBacklogItems", () => {
+  const target = item({ title: "Fix the outline crash", id: "fix-the-outline-crash" });
+
+  it("excludes itself, and resolved items", () => {
+    const others = [
+      target,
+      item({ title: "Fix the outline crash on refresh", id: "dup-done", status: "done" }),
+      item({ title: "Fix the outline crash in the sidebar", id: "dup-dismissed", status: "dismissed" }),
+    ];
+    expect(relatedBacklogItems(target, others)).toEqual([]);
+  });
+
+  it("includes provisional and doing items", () => {
+    const others = [
+      item({ title: "Fix the outline crash on refresh", id: "dup-prov", status: "provisional" }),
+      item({ title: "Fix the outline crash in the sidebar", id: "dup-doing", status: "doing" }),
+    ];
+    expect(relatedBacklogItems(target, others).map((i) => i.id).sort()).toEqual([
+      "dup-doing",
+      "dup-prov",
+    ]);
+  });
+
+  it("caps the number of candidates", () => {
+    const others = Array.from({ length: RELATED_MAX + 4 }, (_, n) =>
+      item({ title: `Fix the outline crash variant ${n}`, id: `dup-${n}` }),
+    );
+    expect(relatedBacklogItems(target, others)).toHaveLength(RELATED_MAX);
+  });
+});
+
+describe("backlog overlap — reported at the write boundary, never applied", () => {
+  it("add reports a near-duplicate the slug dedup cannot see", async () => {
+    const first = await addBacklogItem(workDir, {
+      title: "Fix the file-tree outline crash on refresh",
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.related).toEqual([]);
+
+    const second = await addBacklogItem(workDir, {
+      title: "Stop the outline crashing when the tree refreshes",
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    // Different slug — so it IS parked, and both files exist...
+    expect(second.item.id).not.toBe(first.item.id);
+    expect(existsSync(itemPath(first.item.id))).toBe(true);
+    expect(existsSync(itemPath(second.item.id))).toBe(true);
+    // ...but the overlap is reported rather than silently dropped.
+    expect(second.related.map((i) => i.id)).toEqual([first.item.id]);
+  });
+
+  it("resolve reports still-live siblings WITHOUT touching them", async () => {
+    const a = await addBacklogItem(workDir, { title: "Fix the outline crash on refresh" });
+    const b = await addBacklogItem(workDir, { title: "Fix the outline crash in the sidebar" });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+
+    const res = await resolveBacklogItem(workDir, { id: a.item.id, resolution: "done" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.related?.map((i) => i.id)).toEqual([b.item.id]);
+
+    // THE INVARIANT: the sibling is untouched — same status, same updated stamp.
+    const after = (await listBacklog(workDir)).find((i) => i.id === b.item.id);
+    expect(after?.status).toBe("open");
+    expect(after?.updated).toBe(b.item.updated);
+    // And it is still listed in the active index.
+    expect(await readFile(indexPath(), "utf-8")).toContain(b.item.title);
+  });
+
+  it("reports nothing when the backlog holds unrelated work", async () => {
+    await addBacklogItem(workDir, { title: "Add a retry path to the cost tracker" });
+    const res = await addBacklogItem(workDir, { title: "Widen the sidebar indent guides" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.related).toEqual([]);
   });
 });

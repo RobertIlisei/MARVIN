@@ -44,6 +44,20 @@ struct BacklogPanel: View {
     @State private var items: [BacklogItem] = []
     @State private var isLoading = false
     @State private var error: String?
+    /// Possible-duplicate notice after a manual add (ADR-0044 addendum).
+    /// Separate from `error` because the add SUCCEEDED — conflating the two
+    /// would read as a rejection.
+    @State private var duplicateHint: String?
+    /// Groom findings (ADR-0063), keyed to items by id. Empty until the user
+    /// presses Review; cleared explicitly. Purely an annotation layer — no
+    /// code path turns a finding into a mutation.
+    @State private var findings: [BacklogFinding] = []
+    @State private var isGrooming = false
+    @State private var groomTruncated = false
+    /// Narrow the list to flagged items. Turned ON automatically by a review
+    /// that finds something — pressing Review means "show me what's wrong", and
+    /// leaving the user to hunt for annotations in a 66-row list does not.
+    @State private var onlyFlagged = false
     @State private var newTitle = ""
     /// Item opened in the detail sheet (severity/body editing, resolve
     /// with note). Nested sheet on the panel sheet — macOS stacks fine.
@@ -85,8 +99,16 @@ struct BacklogPanel: View {
                 }
             }
             .filter { severityAllowed($0.severity) }
+            // Review focus (ADR-0063 addendum). Findings land on stale and
+            // duplicated items, which are OLD by definition — under the default
+            // "Newest" sort every one of them sinks below the fold. A count with
+            // no way to reach it reads as "22 findings and I can't see any".
+            .filter { !onlyFlagged || flaggedIds.contains($0.id) }
             .sorted(by: sortComparator)
     }
+
+    /// Item ids carrying at least one finding.
+    private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
 
     /// Grouped view of `visible`. `.none` collapses to a single untitled band.
     private var groupedSections: [(title: String, items: [BacklogItem])] {
@@ -120,6 +142,32 @@ struct BacklogPanel: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .padding(.horizontal, 12).padding(.top, 8)
+            }
+            // Possible-duplicate hint (ADR-0044 addendum). Advisory, not an
+            // error: the item was added. Orange, dismissible, and it never
+            // resolves anything on the user's behalf.
+            if let duplicateHint {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "arrow.triangle.merge")
+                        .foregroundStyle(.orange)
+                    Text(duplicateHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Button {
+                        self.duplicateHint = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .help("Dismiss")
+                }
+                .padding(.horizontal, 12).padding(.top, 8)
+            }
+            if !findings.isEmpty {
+                groomSummary
+                Divider()
             }
             content
             Divider()
@@ -194,10 +242,89 @@ struct BacklogPanel: View {
             .menuStyle(.borderlessButton).fixedSize()
 
             Spacer()
+
+            // Groom (ADR-0063). Read-only: it annotates rows with findings and
+            // changes nothing. Acting on a finding stays an explicit action
+            // through the row's existing controls.
+            if !findings.isEmpty {
+                Button {
+                    findings = []
+                    groomTruncated = false
+                    onlyFlagged = false
+                } label: {
+                    Label("Clear findings", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Dismiss the review annotations. Nothing was changed.")
+            }
+            Button {
+                Task { await runGroom() }
+            } label: {
+                if isGrooming {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Review", systemImage: "checklist")
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(isGrooming)
+            .help("Review the backlog for duplicates, stale items, unreviewed captures, "
+                  + "and references to files that no longer exist. Read-only.")
         }
         .font(.caption)
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
+    }
+
+    /// Summary bar shown after a review. Findings are heuristics, so this
+    /// states what was found and leaves every decision to the user.
+    private var groomSummary: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checklist").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(
+                    "\(findings.count) finding\(findings.count == 1 ? "" : "s")"
+                        + (groomTruncated ? " (capped — more remain)" : "")
+                        + " on \(flaggedIds.count) item\(flaggedIds.count == 1 ? "" : "s")"
+                        + " — these are suggestions, nothing was changed."
+                )
+                .font(.caption.weight(.semibold))
+                Text(
+                    onlyFlagged
+                        ? "Showing only flagged items. Details are on each row."
+                        : "Showing the whole backlog — flagged items are marked in orange."
+                )
+                .font(.caption2).foregroundStyle(.secondary)
+                if let unmatched = unmatchedFindingSummary {
+                    // A finding whose item another filter hides would otherwise
+                    // be invisible — a silent partial view.
+                    Text(unmatched).font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            Spacer(minLength: 0)
+            Toggle("Only flagged", isOn: $onlyFlagged)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .font(.caption2)
+                .help("Narrow the list to the items this review flagged.")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    /// Findings whose item is hidden by the OTHER filters (severity, resolved),
+    /// so the count in the summary never implies rows the user can't reach.
+    /// Deliberately ignores `onlyFlagged` — that one narrows TO the findings.
+    private var unmatchedFindingSummary: String? {
+        let reachable = Set(
+            items
+                .filter { $0.status == "open" || $0.status == "doing" || showResolved }
+                .filter { severityAllowed($0.severity) }
+                .map(\.id)
+        ).union(provisional.map(\.id))
+        let hidden = findings.filter { !reachable.contains($0.id) }
+        guard !hidden.isEmpty else { return nil }
+        return "\(hidden.count) relate to items hidden by the severity / resolved filters."
     }
 
     @ViewBuilder private var content: some View {
@@ -271,6 +398,28 @@ struct BacklogPanel: View {
         }
     }
 
+    /// Review annotations for one item (ADR-0063). Advisory — each states what
+    /// was observed and what the user MIGHT do; none of it is applied, and the
+    /// row's own buttons stay the only way to act. Shared by both row builders
+    /// so a finding can't be counted in the summary yet render nowhere.
+    @ViewBuilder
+    private func findingAnnotations(for item: BacklogItem) -> some View {
+        ForEach(findings.filter { $0.id == item.id }, id: \.findingId) { f in
+            HStack(alignment: .top, spacing: 6) {
+                Text(f.badge)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.orange.opacity(0.18), in: Capsule())
+                    .foregroundStyle(.orange)
+                Text("\(f.detail) → \(f.suggestion)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 1)
+        }
+    }
+
     private func provisionalRow(_ item: BacklogItem) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: severityIcon(item.severity))
@@ -282,6 +431,10 @@ struct BacklogPanel: View {
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
                 }
+                // Provisional rows carry findings too — `unreviewed` targets
+                // them specifically, so without this the one finding kind aimed
+                // at this section would be counted and never shown.
+                findingAnnotations(for: item)
                 HStack(spacing: 8) {
                     Button("Keep") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "open") } } }
                         .controlSize(.small)
@@ -320,6 +473,7 @@ struct BacklogPanel: View {
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
                 }
+                findingAnnotations(for: item)
                 HStack(spacing: 8) {
                     Button("Details") { detailItem = item }
                         .controlSize(.small)
@@ -379,11 +533,54 @@ struct BacklogPanel: View {
         catch { self.error = error.localizedDescription }
     }
 
+    /// Review the backlog (ADR-0063). Annotates rows; changes nothing.
+    private func runGroom() async {
+        isGrooming = true
+        defer { isGrooming = false }
+        do {
+            let result = try await BacklogService.shared.groom(workDir: workDir)
+            findings = result.findings
+            groomTruncated = result.truncated
+            // Focus the list on what was found. Reversible from the summary bar.
+            onlyFlagged = !result.findings.isEmpty
+            if result.findings.isEmpty {
+                // Say so explicitly — an empty annotation layer is
+                // indistinguishable from "the button didn't work".
+                duplicateHint = "Reviewed — nothing stale, duplicated, or unreviewed."
+            } else {
+                duplicateHint = nil
+            }
+        } catch {
+            self.error = "Review failed: \(error.localizedDescription)"
+        }
+    }
+
     private func addNew() async {
         let title = newTitle.trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }
         newTitle = ""
-        await mutate { try await BacklogService.shared.add(workDir: workDir, title: title, body: nil, severity: nil) }
+        duplicateHint = nil
+        do {
+            let related = try await BacklogService.shared.add(
+                workDir: workDir,
+                title: title,
+                body: nil,
+                severity: nil
+            )
+            await refresh()
+            onChanged()
+            // The item IS added — this is a hint, not a rejection. Exact-title
+            // dedup can't see a reworded duplicate (ADR-0044 addendum), so say
+            // so and let the user merge or resolve; nothing is touched for them.
+            if !related.isEmpty {
+                let titles = related.map { "“\($0.title)”" }.joined(separator: ", ")
+                duplicateHint = related.count == 1
+                    ? "Added. This looks like the same work as \(titles) — merge or resolve one?"
+                    : "Added. This looks like the same work as \(related.count) existing items: \(titles)."
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func exportIssue(_ item: BacklogItem) async {

@@ -13,8 +13,13 @@
  * runs autonomously. Scoped to the active project's workDir.
  */
 
+import { existsSync } from "node:fs";
+import { resolve, sep } from "node:path";
+
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+
+import { groomBacklog, renderGroomReport } from "./backlog-groom";
 
 import {
   BACKLOG_SEVERITIES,
@@ -25,6 +30,7 @@ import {
   listBacklog,
   resolveBacklogItem,
   setBacklogStatus,
+  type BacklogItem,
   type BacklogStatus,
 } from "./backlog";
 
@@ -39,6 +45,23 @@ function textResult(text: string) {
 }
 function errorResult(message: string) {
   return { isError: true, content: [{ type: "text" as const, text: message }] };
+}
+
+/**
+ * Render overlap candidates for the model to relay.
+ *
+ * Deliberately phrased as a question for the USER, not an instruction to the
+ * model: overlap is a hint, and acting on it unprompted would resolve work
+ * nobody agreed to drop (ADR-0044 addendum).
+ */
+function overlapNote(related: BacklogItem[], lead: string): string {
+  if (related.length === 0) return "";
+  const list = related.map((i) => `\`${i.id}\` "${i.title}" [${i.status}]`).join(", ");
+  return (
+    ` ${lead} ${related.length === 1 ? "1 live item looks" : `${related.length} live items look`}` +
+    ` like the same work: ${list}. Mention this to the user and let THEM decide` +
+    ` whether to merge or resolve — do not resolve or rewrite them yourself.`
+  );
 }
 
 export function createBacklogMcpServer(ctx: BacklogToolContext) {
@@ -89,7 +112,8 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           `(${res.item.severity}${prov ? ", provisional" : ""}). ` +
           (prov
             ? `Auto-captured — list it at the handoff and keep/dismiss with \`backlog_resolve\`.`
-            : `Surfaces next session and in the backlog panel; resolve with \`backlog_resolve\`.`),
+            : `Surfaces next session and in the backlog panel; resolve with \`backlog_resolve\`.`) +
+          overlapNote(res.related, "Possible overlap —"),
       );
     },
   );
@@ -137,16 +161,62 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           : await resolveBacklogItem(cwd, { id, resolution, ...(note ? { note } : {}) });
       if (!res.ok) return errorResult(res.error);
       return textResult(
-        resolution === "keep"
+        (resolution === "keep"
           ? `Backlog item \`${id}\` kept (now open).`
-          : `Backlog item \`${id}\` marked ${resolution}.`,
+          : `Backlog item \`${id}\` marked ${resolution}.`) +
+          overlapNote(res.related ?? [], "Still open —"),
       );
+    },
+  );
+
+  const groomTool = tool(
+    "backlog_groom",
+    "REVIEW the backlog and report what looks wrong — near-duplicates, " +
+      "auto-captured items never reviewed, items untouched for weeks, references " +
+      "to files that no longer exist, and HIGH-severity items left sitting. " +
+      "READ-ONLY: it changes nothing. Use it when the user asks to review / tidy " +
+      "/ groom the backlog, at the start of a session that will work through " +
+      "parked items, or when the backlog has grown enough that the user can't " +
+      "scan it. Every finding is a HEURISTIC — relay them and let the user " +
+      "decide. You MUST NOT resolve, merge, re-prioritise, or edit any item on " +
+      "the strength of this report alone (ADR-0063).",
+    {
+      staleDays: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Days untouched before an item counts as stale. Default 30."),
+      maxFindings: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Cap on findings returned. Default 25."),
+    },
+    async ({ staleDays, maxFindings }) => {
+      const items = await listBacklog(cwd);
+      if (items.length === 0) return textResult("Backlog is empty — nothing to groom.");
+      const report = groomBacklog(items, {
+        now: new Date(),
+        ...(staleDays ? { staleDays } : {}),
+        ...(maxFindings ? { maxFindings } : {}),
+        // Resolved against the project workDir. A path that escapes the
+        // project is treated as present rather than missing: we can't verify
+        // it, and reporting an unverifiable path as gone would be a lie.
+        fileExists: (ref) => {
+          const abs = resolve(cwd, ref);
+          if (!abs.startsWith(resolve(cwd) + sep)) return true;
+          return existsSync(abs);
+        },
+      });
+      return textResult(renderGroomReport(report));
     },
   );
 
   return createSdkMcpServer({
     name: "marvin-backlog",
     version: "1.0.0",
-    tools: [addTool, listTool, resolveTool],
+    tools: [addTool, listTool, resolveTool, groomTool],
   });
 }
