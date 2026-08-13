@@ -54,6 +54,11 @@
 	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Robert Ilisei. MIT License.</string>
+	<!-- MarvinApplication overrides -reportException: so an uncaught NSException
+	     records its name + reason to ~/Library/Logs/MARVIN/exceptions.log before
+	     AppKit terminates. See CrashDiagnostics.swift. If the class ever fails to
+	     resolve, AppKit falls back to NSApplication — the app still launches, it
+	     just stops capturing. -->
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

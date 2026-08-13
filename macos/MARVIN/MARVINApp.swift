@@ -13,6 +13,7 @@
 // just a window onto an already-running Node server.
 
 import AppKit
+import STTextView
 import SwiftUI
 
 /// Wraps an action that opens a SwiftUI window by id. `@Environment`
@@ -135,6 +136,58 @@ func openProjectWithPanel() {
     }
 }
 
+/// Find-in-file plumbing (⌘F) for the native file viewer.
+///
+/// `STTextView` already owns an `NSTextFinder` and implements
+/// `performTextFinderAction(_:)`, but nothing ever CALLED it: the Find menu was
+/// removed with the WebView (ADR-0021 M5) and the replacement was left as a
+/// follow-up, so an opened file had no search at all.
+///
+/// The wrinkle is that `performTextFinderAction(_:)` reads its action from
+/// `(sender as? NSMenuItem)?.tag` and asserts on anything else — a plain
+/// SwiftUI `Button` action can't drive it. So each command fabricates a tagged
+/// `NSMenuItem` and sends it down the responder chain: `to: nil` means "first
+/// responder", which is the focused text view. When no text view has focus the
+/// send simply returns false and nothing happens, which is the correct no-op.
+enum FindCommands {
+    /// - Parameter focusingEditor: when true, move first responder to the file
+    ///   viewer's text view first. The header's Find button needs this — a
+    ///   click can leave focus on the composer (or the button), and "Find in
+    ///   File" that searches the chat box would be worse than doing nothing.
+    ///   The MENU commands deliberately pass false: ⌘F pressed while typing a
+    ///   message should search *that* field, which the responder chain already
+    ///   gets right.
+    static func perform(_ action: NSTextFinder.Action, focusingEditor: Bool = false) {
+        if focusingEditor,
+           let window = NSApp.keyWindow,
+           let editor = firstEditor(in: window.contentView),
+           window.firstResponder !== editor {
+            window.makeFirstResponder(editor)
+        }
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        NSApp.sendAction(
+            #selector(NSResponder.performTextFinderAction(_:)),
+            to: nil,
+            from: item
+        )
+    }
+
+    /// Depth-first search for the file viewer's text view.
+    ///
+    /// Matches on the concrete type rather than `responds(to:)` — the find
+    /// selector is declared on `NSResponder`, so every view in the hierarchy
+    /// answers yes to it and the check would select the first view it met.
+    private static func firstEditor(in view: NSView?) -> NSView? {
+        guard let view else { return nil }
+        if view is STTextView { return view }
+        for sub in view.subviews {
+            if let hit = firstEditor(in: sub) { return hit }
+        }
+        return nil
+    }
+}
+
 /// SwiftUI lifecycle hook for app-scope AppKit state. We use this
 /// only for things that genuinely don't fit in a SwiftUI scene —
 /// currently the menu-bar `NSStatusItem` (Phase 1d.19), which has
@@ -162,6 +215,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appNapToken: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // FIRST — before anything can throw. Captures the name + reason of an
+        // uncaught NSException to ~/Library/Logs/MARVIN/exceptions.log. The
+        // repeating `_postWindowNeedsUpdateConstraints` crash (2026-08-02/05/07)
+        // leaves a backtrace but no reason in the .ips, which is why two fixes
+        // were aimed at an inferred cause. See CrashDiagnostics.swift.
+        ExceptionLog.installHooks()
+
+        // Dev-only: `MARVIN_SNAPSHOT_MD=<path>` rasterises the chat markdown
+        // view to a PNG and exits. Done HERE rather than in `App.init()`
+        // because `ImageRenderer` needs a live AppKit run loop. Inert unless
+        // the env var is set.
+        if MarkdownSnapshot.runIfRequested() {
+            exit(0)
+        }
+
         // Spawn the bundled sidecar FIRST — Process.run() returns the
         // moment the child is forked, well before Next.js binds to
         // 3030, so kicking it off now overlaps Node startup with the
@@ -305,6 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct MARVINApp: App {
+
     /// Bridge AppKit-only app-scope state (menu-bar item) into
     /// SwiftUI's lifecycle. Nothing else uses the delegate today.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -373,9 +442,26 @@ struct MARVINApp: App {
                 OpenAboutButton()
             }
 
-            // ADR-0021 M5: Reload/Zoom/Find were WebView-only — removed.
-            // ⌘R reconnects the sidecar health probe from the offline view's
-            // "Reconnect" button. Native NSTextFinder for ⌘F is a follow-up.
+            // ADR-0021 M5: Reload/Zoom were WebView-only — removed. ⌘R
+            // reconnects the sidecar health probe from the offline view's
+            // "Reconnect" button.
+            //
+            // Find, restored 2026-08-13. Placed after the pasteboard group so
+            // it lands where macOS apps conventionally put it (Edit ▸ Find),
+            // with the standard key equivalents — ⌘F / ⌘G / ⇧⌘G / ⌘E. These
+            // route through the responder chain, so they act on whichever text
+            // view has focus and no-op otherwise.
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("Find…") { FindCommands.perform(.showFindInterface) }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find Next") { FindCommands.perform(.nextMatch) }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { FindCommands.perform(.previousMatch) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") { FindCommands.perform(.setSearchString) }
+                    .keyboardShortcut("e", modifiers: .command)
+            }
 
             // Phase 1d.25 — File → New Session (⌘⇧N). Posts a
             // notification the chat view observes (same pattern as
