@@ -13,6 +13,17 @@ struct BacklogItem: Codable, Identifiable, Equatable {
     let status: String     // provisional | open | doing | done | dismissed
     let severity: String   // low | med | high
     let created: String
+    /// ADR-0064 — what sort of work this is. Optional in the wire shape so the
+    /// 430 items written before the field existed still decode.
+    let kind: String?
+    /// Waiting on something outside the repo. Orthogonal to status and kind.
+    let blocked: Bool?
+    let blockedOn: String?
+
+    /// Never nil at the call site — an absent kind means "unspecified", which
+    /// is a real value, not a missing one.
+    var kindOrUnspecified: String { kind ?? "unspecified" }
+    var isBlocked: Bool { blocked ?? false }
 }
 
 /// One groom finding (ADR-0063) — something that looks wrong with a backlog
@@ -139,6 +150,27 @@ final class BacklogService {
         // Tolerate a sidecar that predates the field — an older bundle just
         // means no hint, not a failed add.
         return (try? JSONDecoder().decode(AddResponse.self, from: data))?.related ?? []
+    }
+
+    /// ADR-0064 — classify an item. Any field omitted is left untouched.
+    func classify(
+        workDir: String,
+        id: String,
+        kind: String? = nil,
+        blocked: Bool? = nil,
+        blockedOn: String? = nil
+    ) async throws {
+        var payload: [String: Any] = ["workDir": workDir, "id": id]
+        if let kind { payload["kind"] = kind }
+        if let blocked { payload["blocked"] = blocked }
+        if let blockedOn { payload["blockedOn"] = blockedOn }
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/backlog"))
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (_, resp) = try await session.data(for: req)
+        try Self.ensure2xx(resp)
     }
 
     /// Set an item's status (done / dismissed / doing / open).

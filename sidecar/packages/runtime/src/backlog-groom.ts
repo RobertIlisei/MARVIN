@@ -54,7 +54,11 @@ export type GroomFindingKind =
   /** Names a file that no longer exists — the work may have landed. */
   | "dangling-reference"
   /** Filed as high severity and then left alone, which is a contradiction. */
-  | "aging-high-severity";
+  | "aging-high-severity"
+  /** A bug left sitting. Unlike an investigation, a bug doesn't improve with age. */
+  | "aging-bug"
+  /** Blocked, but nobody said on what — so nobody can tell when it unblocks. */
+  | "blocked-without-reason";
 
 export interface GroomFinding {
   kind: GroomFindingKind;
@@ -107,7 +111,9 @@ const KIND_ORDER: GroomFindingKind[] = [
   "duplicate",
   "dangling-reference",
   "unreviewed",
+  "aging-bug",
   "aging-high-severity",
+  "blocked-without-reason",
   "stale",
 ];
 
@@ -205,9 +211,45 @@ export function groomBacklog(items: BacklogItem[], opts: GroomOptions): GroomRep
       });
     }
 
+    // A BUG that has sat for a while (ADR-0064). Deliberately a lower bar than
+    // generic staleness: a bug is a thing that is currently wrong, and unlike an
+    // investigation it does not become less true by being ignored.
+    if (
+      item.kind === "bug" &&
+      !item.blocked &&
+      ageUpdated !== null &&
+      ageUpdated >= highSeverityDays
+    ) {
+      findings.push({
+        kind: "aging-bug",
+        item,
+        related: [],
+        detail: `a bug, untouched for ${Math.floor(ageUpdated)} days`,
+        suggestion: "fix it, or say why it's tolerable and downgrade to chore",
+      });
+    }
+
+    if (item.blocked && item.blockedOn.trim() === "") {
+      findings.push({
+        kind: "blocked-without-reason",
+        item,
+        related: [],
+        detail: "marked blocked with no note about what it's waiting on",
+        suggestion: "record what unblocks it, or clear the blocked flag",
+      });
+    }
+
     // Staleness last: it's the weakest signal, and an item already flagged for
     // a concrete reason doesn't need "and it's also old" appended.
+    //
+    // Two exemptions, both from ADR-0064:
+    //  - BLOCKED items are waiting on someone else; nagging about age when the
+    //    user can't act is noise that trains them to ignore the whole report.
+    //  - `investigate` items age normally — their output is a decision, and
+    //    "we haven't decided yet" is a state, not a problem.
     if (
+      !item.blocked &&
+      item.kind !== "investigate" &&
       ageUpdated !== null &&
       ageUpdated >= staleDays &&
       !findings.some((f) => f.item.id === item.id)

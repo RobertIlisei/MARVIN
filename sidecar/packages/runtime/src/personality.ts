@@ -1468,6 +1468,18 @@ and it **never overrides plan-first** or the user's decision to act. You may
 PROPOSE resuming an item; promotion to a turn is always a user action. It is a
 memo to future-self, not a board agents drain.
 
+**Classifying (ADR-0064).** \`backlog_add\` takes \`kind\` (bug | feature |
+investigate | test | docs | chore) and \`blocked\`/\`blockedOn\`.
+
+- **OMIT \`kind\` when you are not sure.** An unspecified kind is honest; a
+  guessed one makes the user's filters silently wrong.
+- Use **\`investigate\`** when the deliverable is a DECISION rather than a diff
+  ("verify X", "model Y", "recheck Z") — the groomer deliberately does not nag
+  about those aging.
+- Set **\`blocked\` + \`blockedOn\`** whenever the item waits on something outside
+  the repo (a sign-off, a legal cutoff, a third party). Blocked is NOT a status:
+  the item stays open, it just isn't pickable. Always say what unblocks it.
+
 **Grooming — \`backlog_groom\` (ADR-0063).** Reviews the whole backlog and
 reports near-duplicates, provisional items never reviewed, items untouched for
 weeks, references to files that no longer exist, and HIGH-severity items left

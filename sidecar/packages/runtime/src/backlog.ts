@@ -39,12 +39,55 @@ export type BacklogStatus = (typeof BACKLOG_STATUSES)[number];
 export const BACKLOG_SEVERITIES = ["low", "med", "high"] as const;
 export type BacklogSeverity = (typeof BACKLOG_SEVERITIES)[number];
 
+/**
+ * What KIND of work an item is — orthogonal to severity, which says how much
+ * it matters (ADR-0064).
+ *
+ * Derived from a real 56-item backlog rather than picked off a shelf. Two of
+ * these would be missing from a generic bug/improvement/chore taxonomy:
+ *
+ *  - `investigate` — the output is a DECISION, not a diff ("verify the EPPO
+ *    codes", "recheck the TLS + LPIS vintage", "model the eco-scheme
+ *    interaction"). ~1 in 5 items. Aging is normal for these, so the groomer
+ *    must not nag about them the way it does about a stale bug.
+ *  - `docs` — drift between what's written and what's true, which is neither a
+ *    bug in the product nor an improvement to it.
+ *
+ * `unspecified` is the default and stays that way for every pre-existing item:
+ * a guessed kind is worse than none, because filters then silently miss things.
+ */
+export const BACKLOG_KINDS = [
+  "unspecified",
+  "bug",
+  "feature",
+  "investigate",
+  "test",
+  "docs",
+  "chore",
+] as const;
+export type BacklogKind = (typeof BACKLOG_KINDS)[number];
+
 export interface BacklogItem {
   id: string; // slug
   title: string;
   body: string;
   status: BacklogStatus;
   severity: BacklogSeverity;
+  /** What sort of work this is. See BACKLOG_KINDS. */
+  kind: BacklogKind;
+  /**
+   * Waiting on something OUTSIDE the repo — a sign-off, a legal cutoff, a pilot
+   * filing, an undecided policy.
+   *
+   * Deliberately NOT a kind and NOT a status value. It is orthogonal to both: a
+   * blocked bug and a blocked feature are both blocked, and folding it into
+   * `status` would make it mutually exclusive with `doing`. Before this, five
+   * items nobody could act on sat as plain `open`, indistinguishable from work
+   * that was ready — so "what can I pick up?" returned things it shouldn't.
+   */
+  blocked: boolean;
+  /** What it's waiting on, in one line. Only meaningful when `blocked`. */
+  blockedOn: string;
   /** Session that parked it (best-effort link back); empty for manual UI adds. */
   sessionId: string;
   created: string; // ISO
@@ -55,6 +98,9 @@ export interface AddBacklogInput {
   title: string;
   body?: string;
   severity?: BacklogSeverity;
+  kind?: BacklogKind;
+  blocked?: boolean;
+  blockedOn?: string;
   sessionId?: string;
   /**
    * ADR-0047 — auto-capture at discovery. `true` parks the item as
@@ -296,6 +342,7 @@ function parseItem(slug: string, content: string): BacklogItem {
   const body = afterFm >= 0 ? content.slice(afterFm + 1).trim() : "";
   const statusRaw = parseField(content, "status");
   const sevRaw = parseField(content, "severity");
+  const kindRaw = parseField(content, "kind");
   return {
     id: parseField(content, "id") || slug,
     title: parseField(content, "title") || slug,
@@ -306,6 +353,13 @@ function parseItem(slug: string, content: string): BacklogItem {
     severity: (BACKLOG_SEVERITIES as readonly string[]).includes(sevRaw)
       ? (sevRaw as BacklogSeverity)
       : "med",
+    // Absent in every file written before ADR-0064. Missing -> "unspecified"
+    // rather than a guess: an invented kind would make filters silently wrong.
+    kind: (BACKLOG_KINDS as readonly string[]).includes(kindRaw)
+      ? (kindRaw as BacklogKind)
+      : "unspecified",
+    blocked: parseField(content, "blocked") === "true",
+    blockedOn: parseField(content, "blockedOn"),
     sessionId: parseField(content, "sessionId"),
     created: parseField(content, "created"),
     updated: parseField(content, "updated"),
@@ -319,6 +373,9 @@ function serialize(item: BacklogItem): string {
     `title: ${item.title.replace(/\n/g, " ").trim()}\n` +
     `status: ${item.status}\n` +
     `severity: ${item.severity}\n` +
+    `kind: ${item.kind}\n` +
+    `blocked: ${item.blocked ? "true" : "false"}\n` +
+    `blockedOn: ${item.blockedOn.replace(/\n/g, " ").trim()}\n` +
     `sessionId: ${item.sessionId}\n` +
     `created: ${item.created}\n` +
     `updated: ${item.updated}\n` +
@@ -457,6 +514,12 @@ export async function addBacklogItem(
     body,
     status,
     severity,
+    // An omitted kind KEEPS what's there rather than resetting to unspecified —
+    // a re-add (or a provisional confirm) must not wipe a classification the
+    // user made in the panel.
+    kind: input.kind ?? existing?.kind ?? "unspecified",
+    blocked: input.blocked ?? existing?.blocked ?? false,
+    blockedOn: (input.blockedOn ?? existing?.blockedOn ?? "").trim().slice(0, 200),
     sessionId: input.sessionId ?? existing?.sessionId ?? "",
     created: existing?.created || now,
     updated: now,
@@ -502,13 +565,22 @@ export async function resolveBacklogItem(
 export async function updateBacklogItem(
   workDir: string,
   id: string,
-  fields: { severity?: BacklogSeverity; body?: string },
+  fields: {
+    severity?: BacklogSeverity;
+    body?: string;
+    kind?: BacklogKind;
+    blocked?: boolean;
+    blockedOn?: string;
+  },
 ): Promise<ResolveResult> {
   const path = join(backlogDir(workDir), `${id}.md`);
   if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(path, "utf-8"));
   if (fields.severity !== undefined) item.severity = fields.severity;
   if (fields.body !== undefined) item.body = fields.body.trim().slice(0, MAX_BODY_CHARS);
+  if (fields.kind !== undefined) item.kind = fields.kind;
+  if (fields.blocked !== undefined) item.blocked = fields.blocked;
+  if (fields.blockedOn !== undefined) item.blockedOn = fields.blockedOn.trim().slice(0, 200);
   item.updated = new Date().toISOString();
   try {
     await writeFile(path, serialize(item), "utf-8");

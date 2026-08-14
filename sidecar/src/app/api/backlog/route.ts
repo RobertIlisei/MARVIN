@@ -1,7 +1,7 @@
 /**
  * GET   /api/backlog?workDir=…&status=…  → { workDir, items: BacklogItem[] }
  * POST  /api/backlog  { workDir, title, body?, severity? }  → add (manual UI add)
- * PATCH /api/backlog  { workDir, id, status?, note?, severity?, body? }
+ * PATCH /api/backlog  { workDir, id, status?, note?, severity?, body?, kind?, blocked?, blockedOn? }
  *       → resolve / set status and/or edit fields (detail view)
  *
  * The backlog UI read/write loop (ADR-0044). All verbs delegate to the shared
@@ -17,12 +17,14 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import {
+  BACKLOG_KINDS,
   BACKLOG_SEVERITIES,
   BACKLOG_STATUSES,
   addBacklogItem,
   listBacklog,
   setBacklogStatus,
   updateBacklogItem,
+  type BacklogKind,
   type BacklogSeverity,
   type BacklogStatus,
 } from "@marvin/runtime/backlog";
@@ -107,6 +109,12 @@ interface PatchBody {
    *  stored value; may be sent with or without a status change. */
   severity?: string;
   body?: string;
+  /** ADR-0064 — classification. `kind` is what sort of work it is;
+   *  `blocked`/`blockedOn` is whether it's waiting on something outside
+   *  the repo. Orthogonal to each other and to status. */
+  kind?: string;
+  blocked?: boolean;
+  blockedOn?: string;
 }
 
 export async function PATCH(req: NextRequest) {
@@ -126,9 +134,12 @@ export async function PATCH(req: NextRequest) {
   const hasStatus = body.status !== undefined;
   const hasSeverity = body.severity !== undefined;
   const hasBody = body.body !== undefined;
-  if (!hasStatus && !hasSeverity && !hasBody) {
+  const hasKind = body.kind !== undefined;
+  const hasBlocked = body.blocked !== undefined;
+  const hasBlockedOn = body.blockedOn !== undefined;
+  if (!hasStatus && !hasSeverity && !hasBody && !hasKind && !hasBlocked && !hasBlockedOn) {
     return NextResponse.json(
-      { error: "nothing to change — send status, severity, and/or body" },
+      { error: "nothing to change — send status, severity, body, kind, blocked and/or blockedOn" },
       { status: 400 },
     );
   }
@@ -144,16 +155,25 @@ export async function PATCH(req: NextRequest) {
       { status: 400 },
     );
   }
+  if (hasKind && !(BACKLOG_KINDS as readonly string[]).includes(body.kind!)) {
+    return NextResponse.json(
+      { error: `kind must be one of ${BACKLOG_KINDS.join(", ")}` },
+      { status: 400 },
+    );
+  }
   if (hasBody && body.body!.length > MAX_BODY_BYTES) {
     return NextResponse.json({ error: "body too large" }, { status: 413 });
   }
   // Field edits first, then the status transition (which may append a
   // note to the just-replaced body) — matches how the detail view
   // batches "edit + resolve" into one PATCH.
-  if (hasSeverity || hasBody) {
+  if (hasSeverity || hasBody || hasKind || hasBlocked || hasBlockedOn) {
     const res = await updateBacklogItem(v.workDir, body.id, {
       ...(hasSeverity ? { severity: body.severity as BacklogSeverity } : {}),
       ...(hasBody ? { body: body.body } : {}),
+      ...(hasKind ? { kind: body.kind as BacklogKind } : {}),
+      ...(hasBlocked ? { blocked: body.blocked } : {}),
+      ...(hasBlockedOn ? { blockedOn: body.blockedOn } : {}),
     });
     if (!res.ok) return NextResponse.json({ error: res.error }, { status: 404 });
     if (!hasStatus) return NextResponse.json({ ok: true, item: res.item });

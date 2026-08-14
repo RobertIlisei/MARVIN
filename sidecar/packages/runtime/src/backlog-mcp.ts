@@ -22,6 +22,7 @@ import { z } from "zod";
 import { groomBacklog, renderGroomReport } from "./backlog-groom";
 
 import {
+  BACKLOG_KINDS,
   BACKLOG_SEVERITIES,
   MAX_BODY_CHARS,
   MAX_TITLE_CHARS,
@@ -84,12 +85,33 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       title: z.string().min(1).describe(`One actionable line; the dedup key (≤${MAX_TITLE_CHARS} chars).`),
       body: z.string().optional().describe(`Optional: why it matters + the concrete change (≤${MAX_BODY_CHARS} chars).`),
       severity: z.enum(BACKLOG_SEVERITIES).optional().describe("low | med | high. Default med."),
+      kind: z
+        .enum(BACKLOG_KINDS)
+        .optional()
+        .describe(
+          "What SORT of work: bug | feature | investigate | test | docs | chore. " +
+            "`investigate` is for items whose output is a DECISION rather than a diff. " +
+            "OMIT it when you are not sure — an unspecified kind is honest, a guessed " +
+            "one makes the user's filters silently wrong (ADR-0064).",
+        ),
+      blocked: z
+        .boolean()
+        .optional()
+        .describe(
+          "True when the item waits on something OUTSIDE the repo — a sign-off, a " +
+            "legal cutoff, a third party. Not a status: a blocked item is still open, " +
+            "it just isn't pickable. Always pair with `blockedOn`.",
+        ),
+      blockedOn: z
+        .string()
+        .optional()
+        .describe("What unblocks it, one line. Required in practice whenever blocked is true."),
       provisional: z
         .boolean()
         .optional()
         .describe("true = auto-capture at discovery (no go-ahead); awaits keep/dismiss at the handoff. Default false (user-confirmed)."),
     },
-    async ({ title, body, severity, provisional }) => {
+    async ({ title, body, severity, kind, blocked, blockedOn, provisional }) => {
       const cls = classifyBacklogText(title, body ?? "");
       if (!cls.ok) {
         return errorResult(
@@ -102,6 +124,9 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         title,
         ...(body ? { body } : {}),
         ...(severity ? { severity } : {}),
+        ...(kind ? { kind } : {}),
+        ...(blocked !== undefined ? { blocked } : {}),
+        ...(blockedOn ? { blockedOn } : {}),
         ...(provisional ? { provisional } : {}),
         ...(marvinSessionId ? { sessionId: marvinSessionId } : {}),
       });
