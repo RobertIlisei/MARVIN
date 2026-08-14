@@ -330,6 +330,36 @@ final class FileViewerModel {
 /// Editable STTextView with line-number ruler + tree-sitter highlight
 /// re-application on every content change. The Coordinator forwards
 /// textDidChange into the model so dirty tracking happens push-based.
+/// `STTextView` that appends MARVIN's AI actions to the native context menu.
+///
+/// Appended to `super.menu(for:)` rather than replacing it — Cut/Copy/Paste,
+/// spelling and services are what a right-click is expected to do, and an
+/// editor that drops them to make room for AI is a worse editor.
+final class MarvinEditorTextView: STTextView {
+    /// Set by the representable's coordinator. Nil disables the actions rather
+    /// than showing menu items that would silently no-op.
+    weak var aiTarget: AnyObject?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let aiTarget else { return menu }
+        menu.addItem(.separator())
+        let selectors: [EditorAIAction: Selector] = [
+            .explain:   #selector(FileViewerNSView.Coordinator.marvinExplain(_:)),
+            .review:    #selector(FileViewerNSView.Coordinator.marvinReview(_:)),
+            .docstring: #selector(FileViewerNSView.Coordinator.marvinDocstring(_:)),
+            .addToChat: #selector(FileViewerNSView.Coordinator.marvinAddToChat(_:)),
+        ]
+        for action in EditorAIAction.allCases {
+            guard let sel = selectors[action] else { continue }
+            let item = NSMenuItem(title: action.title, action: sel, keyEquivalent: "")
+            item.target = aiTarget
+            menu.addItem(item)
+        }
+        return menu
+    }
+}
+
 struct FileViewerNSView: NSViewRepresentable {
     /// Path that owns this buffer — the Coordinator carries it back
     /// out to the model on every textDidChange. Must match the path
@@ -357,6 +387,13 @@ struct FileViewerNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = STTextView.scrollableTextView()
+        // Swap in our subclass so the context menu can carry the AI actions.
+        // `scrollableTextView()` builds a stock STTextView and STTextView only
+        // exposes init(frame:), so the replacement is constructed fresh and
+        // configured below exactly as the stock one would have been.
+        if let stock = scroll.documentView as? STTextView, !(stock is MarvinEditorTextView) {
+            scroll.documentView = MarvinEditorTextView(frame: stock.frame)
+        }
         guard let textView = scroll.documentView as? STTextView else {
             return scroll
         }
@@ -410,6 +447,7 @@ struct FileViewerNSView: NSViewRepresentable {
         // cursor row:col into the status bar.
         context.coordinator.textView = textView
         textView.delegate = context.coordinator
+        (textView as? MarvinEditorTextView)?.aiTarget = context.coordinator
         return scroll
     }
 
@@ -508,6 +546,46 @@ struct FileViewerNSView: NSViewRepresentable {
                 return
             }
             onContentChange(path, textView.string)
+        }
+
+        // MARK: - AI actions (context menu)
+        //
+        // Targets for MarvinEditorTextView's menu items. Each resolves the
+        // current selection to (text, line range) and hands off to the
+        // dispatcher; the chat view owns actually sending the turn.
+
+        @objc func marvinExplain(_ sender: Any?) { fireAI(.explain) }
+        @objc func marvinReview(_ sender: Any?) { fireAI(.review) }
+        @objc func marvinDocstring(_ sender: Any?) { fireAI(.docstring) }
+        @objc func marvinAddToChat(_ sender: Any?) { fireAI(.addToChat) }
+
+        @MainActor
+        private func fireAI(_ action: EditorAIAction) {
+            guard let textView else { return }
+            let full = textView.string
+            let ns = full as NSString
+            let range = textView.selectedRange()
+            let safe = NSRange(
+                location: max(0, min(range.location, ns.length)),
+                length: max(0, min(range.length, ns.length - max(0, min(range.location, ns.length))))
+            )
+            let selected = safe.length > 0 ? ns.substring(with: safe) : ""
+            // 1-indexed inclusive, matching every "file:line" convention — and
+            // matching what MarkdownLinks parses back out of the reply, so the
+            // citation in MARVIN's answer is clickable.
+            let (startRow, _) = Self.rowColumn(in: full, at: safe.location)
+            let (endRow, _) = Self.rowColumn(in: full, at: safe.location + max(0, safe.length - 1))
+            let lines = safe.length > 0
+                ? (startRow == endRow ? "\(startRow)" : "\(startRow)-\(endRow)")
+                : ""
+            EditorAIDispatcher.fire(
+                action,
+                selection: selected,
+                wholeFile: full,
+                path: path,
+                lineRange: lines,
+                cwd: MarvinBridge.shared.projectWorkDir
+            )
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

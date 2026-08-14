@@ -11,6 +11,8 @@ _Active work. Add a one-line entry when a piece of work starts; move it out (to 
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
 
+- **Editor AI smart actions + IDE gap analysis** — right-click a selection in the file viewer for **Explain this code · Review & improve · Generate docstring · Add selection to chat**. Each anchors the prompt to `file:line` so the reply's citations are clickable, appends to the native context menu rather than replacing it (Cut/Copy/Paste survive), and falls back to the whole file when nothing is selected. `review` and `docstring` are read-only-first: a context-menu click carries no confirmation step, so they propose and wait. Companion research at [`docs/reference/ide-feature-gap-2026-08.md`](reference/ide-feature-gap-2026-08.md) — MARVIN already matches Cursor/VS Code on the *hard* parts (agent, multi-file review, codebase context, MCP); the gaps are concentrated in editor-level interaction. Next up there: AI commit message, fix-from-diagnostic, inline edit (⌘K). Deliberate non-goals recorded too — ghost-text Tab completion needs a second fast model provider off the Agent SDK hot path, which cuts against the local-first trust model.
+
 ## Current version
 
 **v0.1.61** — Stability, and a backlog that reviews itself. **Four app-killing
