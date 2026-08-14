@@ -1685,6 +1685,21 @@ struct ChatPreviewView: View {
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
             backlogPanelOpen = true
         }
+        // Editor right-click AI actions. Queued when a turn is in flight rather
+        // than dropped — `sendControl` guards on `!isSending`, and the backlog
+        // "Promote to plan" bug was exactly this: the action vanished with no
+        // feedback because the panel closed anyway.
+        .onReceive(NotificationCenter.default.publisher(for: .marvinEditorAIAction)) { note in
+            guard let info = note.userInfo as? [String: String],
+                  let prompt = info["prompt"], !prompt.isEmpty,
+                  let display = info["display"] else { return }
+            let cwd = (info["cwd"]?.isEmpty == false) ? info["cwd"] : bridge.projectWorkDir
+            if model.isSending {
+                model.queuedMessages.append(.init(text: prompt, cwd: cwd))
+            } else {
+                model.sendControl(instruction: prompt, display: display, cwd: cwd)
+            }
+        }
         // ADR-0044 — the backlog browser.
         .sheet(isPresented: $backlogPanelOpen) {
             if let wd = bridge.projectWorkDir {
