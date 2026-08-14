@@ -9,6 +9,68 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-14 — v0.1.61: four crashes closed, and a backlog that reviews itself.**
+  *Diagnostic trail.* The file tree had crashed four times, always the same
+  shape: `List` + `OutlineGroup` drives NSOutlineView through SwiftUI's
+  `OutlineListCoordinator`, which keeps lazily-loaded row entries alongside the
+  SwiftUI view list and calls `_assertionFailure` whenever the two disagree
+  (`3a22b76`, `e20e0ca`, `0161ad7`/ADR-0056, then 2026-08-03). Each fix removed
+  one way to disagree; the fourth crash was *caused* by the third — mapping
+  empty directories to `nil` (to dodge crash #2) let a folder flip branch→leaf
+  while keeping its identity, so AppKit still held child rows for a childless
+  item. That is the signature of a wrong abstraction, not wrong parameters, so
+  the tree was flattened (`flattenFileTree`, pure + total + cycle-safe) and the
+  coordinator removed from the picture entirely — ADR-0061. `FileNode` moved to
+  MARVINLogic because every prior fix had been "verified" by running the app and
+  waiting; there are now 25 assertions on branch-ness, identity across an
+  empty/non-empty flip, depth, cycles, and expansion surviving a directory
+  emptying and refilling.
+  A *second*, unrelated crash resisted two fixes. The `.ips` reports carry a
+  backtrace but no exception `name`/`reason`, and nothing reached the unified
+  log — so both fixes targeted a mechanism inferred from the stack alone, and
+  the second was disproven by a crash whose `slice_uuid` matched the rebuilt
+  binary exactly. Rather than guess a third time, `CrashDiagnostics.swift`
+  captures the exception (ADR-0062). It answered on the first occurrence:
+  `NSGenericException` — *"the window has been marked as needing another Update
+  Constraints in Window pass, but it has already had more … than there are views
+  in the window"* — AppKit's loop breaker, with the cycle closing inside SwiftUI
+  (`NSHostingView._willUpdateConstraintsForSubtree` → `cancelAsyncRendering` →
+  `setNeedsUpdate`). MARVIN creates none of the nested hosting views involved.
+  Mitigated by registering `NSApplicationCrashOnExceptions=false` — a stale
+  frame beats losing a session — and **the root cause remains open**. Note the
+  hook's own first attempt (an `NSApplication` subclass via `NSPrincipalClass`)
+  was silently ignored under SwiftUI; it was caught only because the hook stamps
+  a session line stating whether it is armed.
+  *Decision trail.* The check-back guard failed on a real turn ("Dev stack is
+  starting in the background; I'll check readiness … in ~2.5 minutes", then
+  silence). Two defects: the timed pattern capped the gap between "I'll" and
+  "in" at 40 chars — 51 in the real clause, so a promise failed to register for
+  being *wordy* — and used `\d+`, which cannot match "2.5" though
+  `parseDelaySeconds` always could. Worse, coverage was one boolean set by any
+  wakeup *or* background job, so a dev server that never exits disarmed the
+  guard. Coverage is now per promise (ADR-0055 addendum).
+  Backlog gained a **review** pass (ADR-0063) and **classification** (ADR-0064),
+  both read-only: it reports duplicates, stale items, dead file references and
+  untriaged captures, and the user decides. Acting on a heuristic would delete
+  work nobody agreed to drop — the exact loss the backlog exists to prevent. The
+  taxonomy was fitted to a real 430-item backlog: `investigate` (~1 in 5, output
+  is a decision not a diff) and `blocked` (waiting on a human outside the repo —
+  an axis, not a category) are both absent from a generic bug/feature/chore
+  split. No backfill; existing items stay `unspecified` rather than take a
+  guessed label.
+  *Verification.* 641 tests across 43 files (+53 this cycle), `tsc` clean for
+  runtime + sidecar app, `swift build` + 167 Swift assertions green. CI now
+  gates the release on the suite — a tag push matched neither of `test.yml`'s
+  branch filters, so cutting a release ran **zero** tests and four went out red;
+  `test.yml` is `workflow_call`-able and release `needs: test`. The session
+  auditor also takes CI as evidence, with `stale` load-bearing: a green run for
+  a *different* commit says nothing rather than vouching for a commit it never
+  built.
+  Also: find-in-file (⌘F) restored — `STTextView` already owned an
+  `NSTextFinder` and nothing ever called it; View ▸ Backlog (⌘⇧B) so the panel
+  is reachable when the backlog is empty; and `bin/marvin doctor` no longer
+  reports the app's own bundled sidecar as a foreign process to kill.
+
 - **2026-07-25 — v0.1.60: graph drift (ADR-0060) + the red CI nobody saw.**
   Two findings, both from measuring rather than assuming.
   **ADR-0060 — graph drift.** User observation: MARVIN queries the graph during

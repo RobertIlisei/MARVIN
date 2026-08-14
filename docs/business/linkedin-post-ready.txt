@@ -1,0 +1,34 @@
+Your AI assistant notices a second problem while fixing the first one. You're not going to deal with it now. Where does it go?
+
+Usually nowhere. It gets mentioned in the chat, the chat ends, and it's gone.
+
+MARVIN — the pair-programming assistant I'm building — parks it. The moment it notices something out of scope, it writes an item to your project directory. Not to a server. A file, sitting next to your code, that outlives the session.
+
+That worked. Then it worked too well.
+
+One project is now at 430 parked items, 56 still open. Past a certain size a backlog stops being a memory and becomes a landfill: near-duplicates that exact-title matching can't catch, items whose work quietly shipped months ago, references to files that don't exist any more.
+
+So this week it learned to review itself.
+
+You hit Review and it reports what looks wrong — duplicates, stale entries, dead file references, auto-captures nobody ever triaged. On that backlog, 26 things worth a second look.
+
+And it cannot fix a single one of them.
+
+Not "shouldn't". Cannot. There is no write path in that code. The report even carries the instruction "these are heuristics, do not act on them" next to the data, so it survives being quoted out of context.
+
+That sounds timid. It isn't.
+
+Every judgement in there is probabilistic. "Untouched for 30 days" is not "abandoned". "These two look alike" is not "these are the same". "That file is gone" is not "that work is done" — the file may have moved, or the item may be the request to create it.
+
+An assistant that quietly closes the wrong item is worse than no assistant. Because now you also don't know what you lost.
+
+MARVIN is open source (MIT). Link in the comments.
+
+#AI #DeveloperTools #SoftwareEngineering #BuildInPublic #macOS
+
+
+--- FIRST COMMENT ---
+
+Repo: https://github.com/RobertIlisei/MARVIN
+
+The reasoning is written up as a decision record — ADR-0063 covers why the reviewer reports instead of reconciling, and what it deliberately doesn't do.
