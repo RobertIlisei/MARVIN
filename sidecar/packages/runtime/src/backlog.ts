@@ -581,7 +581,14 @@ export async function updateBacklogItem(
   if (fields.kind !== undefined) item.kind = fields.kind;
   if (fields.blocked !== undefined) item.blocked = fields.blocked;
   if (fields.blockedOn !== undefined) item.blockedOn = fields.blockedOn.trim().slice(0, 200);
-  item.updated = new Date().toISOString();
+  // `updated` drives STALENESS, so only a change to the WORK counts as touching
+  // it. Labelling an item is not engaging with it: a classification pass over a
+  // whole backlog would otherwise reset every staleness clock at once and blind
+  // the groomer for a month. Observed 2026-08-14 — classifying 58 items made
+  // all 9 stale findings and every aging-bug vanish, which read like the new
+  // exemptions working when it was really the timestamps being clobbered.
+  const touchedWork = fields.body !== undefined || fields.severity !== undefined;
+  if (touchedWork) item.updated = new Date().toISOString();
   try {
     await writeFile(path, serialize(item), "utf-8");
     await rewriteBacklogIndex(workDir);

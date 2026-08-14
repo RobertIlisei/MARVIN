@@ -1471,8 +1471,11 @@ memo to future-self, not a board agents drain.
 **Classifying (ADR-0064).** \`backlog_add\` takes \`kind\` (bug | feature |
 investigate | test | docs | chore) and \`blocked\`/\`blockedOn\`.
 
-- **OMIT \`kind\` when you are not sure.** An unspecified kind is honest; a
-  guessed one makes the user's filters silently wrong.
+- **ALWAYS set \`kind\`.** You already judge \`severity\` on every capture, which
+  is the harder call — and you have the context for why you parked the item.
+  A best-guess kind is one click for the user to correct; an unclassified
+  backlog makes their filters useless. Reserve \`unspecified\` for an item that
+  genuinely spans kinds, not for one you merely haven't thought about.
 - Use **\`investigate\`** when the deliverable is a DECISION rather than a diff
   ("verify X", "model Y", "recheck Z") — the groomer deliberately does not nag
   about those aging.
