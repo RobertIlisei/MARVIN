@@ -90,9 +90,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         .optional()
         .describe(
           "What SORT of work: bug | feature | investigate | test | docs | chore. " +
-            "`investigate` is for items whose output is a DECISION rather than a diff. " +
-            "OMIT it when you are not sure — an unspecified kind is honest, a guessed " +
-            "one makes the user's filters silently wrong (ADR-0064).",
+            "SET THIS ON EVERY CAPTURE — you already judge severity, which is harder, " +
+            "and you have the context for why you parked it. `investigate` is for items " +
+            "whose output is a DECISION rather than a diff (verify / model / recheck). " +
+            "Use `unspecified` ONLY when the item genuinely spans kinds; a best-guess " +
+            "kind is one click for the user to correct, whereas an unclassified backlog " +
+            "makes the filters useless (ADR-0064 addendum).",
         ),
       blocked: z
         .boolean()
@@ -138,6 +141,11 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           (prov
             ? `Auto-captured — list it at the handoff and keep/dismiss with \`backlog_resolve\`.`
             : `Surfaces next session and in the backlog panel; resolve with \`backlog_resolve\`.`) +
+          (res.created && res.item.kind === "unspecified"
+            ? ` It is UNCLASSIFIED — call \`backlog_add\` again with the same title and a \`kind\` ` +
+              `(bug | feature | investigate | test | docs | chore), plus \`blocked\`/\`blockedOn\` if it ` +
+              `waits on someone outside the repo. An unclassified item makes the user's filters useless.`
+            : "") +
           overlapNote(res.related, "Possible overlap —"),
       );
     },

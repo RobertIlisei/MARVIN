@@ -75,6 +75,11 @@ struct BacklogPanel: View {
     @AppStorage("marvin.backlog.showMed")      private var showMed = true
     @AppStorage("marvin.backlog.showLow")      private var showLow = true
     @AppStorage("marvin.backlog.showResolved") private var showResolved = false
+    /// Kinds the user has switched OFF, comma-joined (ADR-0064). Stored as one
+    /// string rather than a flag per kind so adding a kind later doesn't strand
+    /// a new @AppStorage key — and an empty string means "show everything",
+    /// which is the right default for a filter nobody has touched.
+    @AppStorage("marvin.backlog.hiddenKinds") private var hiddenKindsRaw = ""
 
     /// Actionable items (open+doing), unfiltered — drives the header badge.
     private var active: [BacklogItem] {
@@ -109,7 +114,18 @@ struct BacklogPanel: View {
             // no way to reach it reads as "22 findings and I can't see any".
             .filter { !onlyFlagged || flaggedIds.contains($0.id) }
             .filter { !hideBlocked || !$0.isBlocked }
+            .filter { !hiddenKinds.contains($0.kindOrUnspecified) }
             .sorted(by: sortComparator)
+    }
+
+    private var hiddenKinds: Set<String> {
+        Set(hiddenKindsRaw.split(separator: ",").map(String.init)).subtracting([""])
+    }
+
+    private func toggleKind(_ k: String) {
+        var h = hiddenKinds
+        if h.contains(k) { h.remove(k) } else { h.insert(k) }
+        hiddenKindsRaw = h.sorted().joined(separator: ",")
     }
 
     /// Item ids carrying at least one finding.
@@ -247,6 +263,18 @@ struct BacklogPanel: View {
                     Toggle("High", isOn: $showHigh)
                     Toggle("Med",  isOn: $showMed)
                     Toggle("Low",  isOn: $showLow)
+                }
+                Divider()
+                Section("Kind") {
+                    ForEach(["bug", "feature", "investigate", "test", "docs", "chore", "unspecified"], id: \.self) { k in
+                        Toggle(
+                            k == "unspecified" ? "Unclassified" : k.capitalized,
+                            isOn: Binding(
+                                get: { !hiddenKinds.contains(k) },
+                                set: { _ in toggleKind(k) }
+                            )
+                        )
+                    }
                 }
                 Divider()
                 Toggle("Show resolved", isOn: $showResolved)
@@ -694,6 +722,12 @@ struct BacklogPanel: View {
             let on = ["high", "med", "low"].filter(severityAllowed)
             parts.append(on.isEmpty ? "none" : on.map(severityLabel).joined(separator: "/"))
         }
+        // A hidden kind or a hidden blocked set must show in the label —
+        // otherwise the list silently omits rows and reads as an empty backlog.
+        if !hiddenKinds.isEmpty {
+            parts.append("-\(hiddenKinds.sorted().joined(separator: "/"))")
+        }
+        if hideBlocked { parts.append("-blocked") }
         if showResolved { parts.append("+resolved") }
         return parts.isEmpty ? "Filter" : "Filter: \(parts.joined(separator: " "))"
     }

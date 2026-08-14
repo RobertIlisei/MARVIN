@@ -443,3 +443,31 @@ describe("backlog store — kind + blocked (ADR-0064)", () => {
     expect(r.item.status).toBe("open"); // untouched
   });
 });
+
+describe("backlog store — classification must not reset the staleness clock", () => {
+  it("a kind/blocked edit leaves `updated` alone", async () => {
+    // Regression (2026-08-14): a classification pass over 58 items bumped every
+    // `updated`, which silenced 9 stale findings and every aging-bug for a
+    // month — and looked like the new kind-exemptions working.
+    const a = await addBacklogItem(workDir, { title: "Do not touch my clock" });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    const before = a.item.updated;
+
+    const r = await updateBacklogItem(workDir, a.item.id, { kind: "bug", blocked: true, blockedOn: "x" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.item.kind).toBe("bug");
+    expect(r.item.updated).toBe(before);
+  });
+
+  it("a body or severity edit DOES bump it — that's real engagement", async () => {
+    const a = await addBacklogItem(workDir, { title: "Substance changed" });
+    if (!a.ok) return;
+    await new Promise((r) => setTimeout(r, 5));
+    const r = await updateBacklogItem(workDir, a.item.id, { body: "new detail" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.item.updated).not.toBe(a.item.updated);
+  });
+});
