@@ -203,7 +203,7 @@ struct BacklogPanel: View {
             Divider()
             addRow
         }
-        .frame(minWidth: 560, idealWidth: 640, minHeight: 380, idealHeight: 520)
+        .frame(minWidth: 720, idealWidth: 920, minHeight: 520, idealHeight: 720)
         .task { await refresh() }
         .sheet(item: $detailItem) { item in
             BacklogDetailView(
@@ -790,7 +790,7 @@ struct BacklogDetailView: View {
                 .padding(14)
             }
         }
-        .frame(minWidth: 480, idealWidth: 540, minHeight: 360, idealHeight: 440)
+        .frame(minWidth: 680, idealWidth: 820, minHeight: 520, idealHeight: 660)
     }
 
     private var header: some View {
@@ -809,40 +809,59 @@ struct BacklogDetailView: View {
         .background(Color(nsColor: .controlBackgroundColor))
     }
 
+    /// Severity / kind / status on one line, blocked on its own.
+    ///
+    /// These were one HStack — severity picker, kind picker, a long-labelled
+    /// toggle, its text field, a caption AND the status badge. At the sheet's
+    /// width that cannot fit, so SwiftUI collapsed the toggle's label into a
+    /// one-word-per-line column. Anything carrying prose gets its own row.
     private var metaRow: some View {
-        HStack(spacing: 12) {
-            Picker("Severity", selection: $severity) {
-                Text("low").tag("low")
-                Text("med").tag("med")
-                Text("high").tag("high")
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 220)
-            .onChange(of: severity) { _, next in
-                guard next != item.severity else { return }
-                Task { await save(severity: next) }
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                Picker("Severity", selection: $severity) {
+                    Text("low").tag("low")
+                    Text("med").tag("med")
+                    Text("high").tag("high")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                .onChange(of: severity) { _, next in
+                    guard next != item.severity else { return }
+                    Task { await save(severity: next) }
+                }
 
-            // ADR-0064 — kind + blocked. Saved immediately on change, like
-            // severity: the detail sheet has no explicit Save for these fields
-            // and a silently-discarded edit is worse than an eager write.
-            Picker("Kind", selection: $kind) {
-                Text("unspecified").tag("unspecified")
-                Text("bug").tag("bug")
-                Text("feature").tag("feature")
-                Text("investigate").tag("investigate")
-                Text("test").tag("test")
-                Text("docs").tag("docs")
-                Text("chore").tag("chore")
-            }
-            .frame(maxWidth: 260)
-            .onChange(of: kind) { _, next in
-                guard next != item.kindOrUnspecified else { return }
-                Task { await classify(kind: next) }
+                // ADR-0064 — saved immediately on change, like severity: the
+                // sheet has no explicit Save for these and a silently-discarded
+                // edit is worse than an eager write.
+                Picker("Kind", selection: $kind) {
+                    Text("unspecified").tag("unspecified")
+                    Text("bug").tag("bug")
+                    Text("feature").tag("feature")
+                    Text("investigate").tag("investigate")
+                    Text("test").tag("test")
+                    Text("docs").tag("docs")
+                    Text("chore").tag("chore")
+                }
+                .frame(width: 210)
+                .onChange(of: kind) { _, next in
+                    guard next != item.kindOrUnspecified else { return }
+                    Task { await classify(kind: next) }
+                }
+
+                Spacer(minLength: 8)
+
+                Text(item.status)
+                    .font(.caption)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.12), in: Capsule())
+                Text("added \(item.created.prefix(10))")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
 
             Toggle("Blocked — waiting on something outside the repo", isOn: $blocked)
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
                 .onChange(of: blocked) { _, next in
                     guard next != item.isBlocked else { return }
                     Task { await classify(blocked: next) }
@@ -850,22 +869,13 @@ struct BacklogDetailView: View {
             if blocked {
                 TextField("What unblocks it? (e.g. accountant sign-off)", text: $blockedOn)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 420)
+                    .frame(maxWidth: 460)
                     .onSubmit { Task { await classify(blockedOn: blockedOn) } }
                 Text("Recorded so the groomer can tell a waiting item from a forgotten one.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
-            Text(item.status)
-                .font(.caption)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Color.blue.opacity(0.12), in: Capsule())
-            Spacer()
-            Text("added \(item.created.prefix(10))")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
-
     private var bodyEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -880,7 +890,7 @@ struct BacklogDetailView: View {
             }
             TextEditor(text: $bodyText)
                 .font(.system(size: 12))
-                .frame(minHeight: 140)
+                .frame(minHeight: 240)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
