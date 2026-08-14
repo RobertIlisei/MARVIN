@@ -16,6 +16,9 @@ function item(over: Partial<BacklogItem> & { id: string }): BacklogItem {
     title: over.title ?? over.id.replace(/-/g, " "),
     body: over.body ?? "",
     status: over.status ?? "open",
+    kind: over.kind ?? "unspecified",
+    blocked: over.blocked ?? false,
+    blockedOn: over.blockedOn ?? "",
     severity: over.severity ?? "med",
     sessionId: "",
     created: over.created ?? daysAgo(1),
@@ -142,5 +145,50 @@ describe("renderGroomReport", () => {
     expect(text).toMatch(/heuristic/i);
     expect(text).toMatch(/do not resolve, merge, re-prioritise, or edit/i);
     expect(text).toContain("`old`");
+  });
+});
+
+// ── ADR-0064: kind + blocked ────────────────────────────────────────────────
+// Two axes added after reading a real 56-item backlog. Both change what the
+// groomer nags about, which is the only reason they earn their place.
+
+describe("groomBacklog — kind-aware rules", () => {
+  it("flags a bug left sitting, at a LOWER bar than generic staleness", () => {
+    // 20 days: past highSeverityDays (14), short of staleDays (30).
+    const items = [item({ id: "old-bug", kind: "bug", updated: daysAgo(20) })];
+    expect(kinds(items)).toEqual(["aging-bug:old-bug"]);
+  });
+
+  it("does NOT nag about an aging investigation", () => {
+    // Its output is a decision; "not decided yet" is a state, not a problem.
+    const items = [item({ id: "research", kind: "investigate", updated: daysAgo(90) })];
+    expect(kinds(items)).toEqual([]);
+  });
+
+  it("still flags an aging chore or feature as stale", () => {
+    expect(kinds([item({ id: "c", kind: "chore", updated: daysAgo(60) })])).toEqual(["stale:c"]);
+    expect(kinds([item({ id: "f", kind: "feature", updated: daysAgo(60) })])).toEqual(["stale:f"]);
+  });
+});
+
+describe("groomBacklog — blocked is not staleness", () => {
+  it("never calls a blocked item stale — the user cannot act on it", () => {
+    // Nagging about work someone else owns trains the user to ignore the report.
+    const items = [
+      item({ id: "waiting", blocked: true, blockedOn: "accountant sign-off", updated: daysAgo(120) }),
+    ];
+    expect(kinds(items)).toEqual([]);
+  });
+
+  it("does not flag an aging BUG either, when it's blocked", () => {
+    const items = [
+      item({ id: "blocked-bug", kind: "bug", blocked: true, blockedOn: "vendor fix", updated: daysAgo(90) }),
+    ];
+    expect(kinds(items)).toEqual([]);
+  });
+
+  it("flags blocked-with-no-reason, because nobody can tell when it unblocks", () => {
+    const items = [item({ id: "vague", blocked: true, blockedOn: "  ", updated: daysAgo(1) })];
+    expect(kinds(items)).toEqual(["blocked-without-reason:vague"]);
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -256,6 +256,9 @@ function item(over: Partial<BacklogItem> & { title: string }): BacklogItem {
     title: over.title,
     body: over.body ?? "",
     status: over.status ?? "open",
+    kind: over.kind ?? "unspecified",
+    blocked: over.blocked ?? false,
+    blockedOn: over.blockedOn ?? "",
     severity: over.severity ?? "med",
     sessionId: "",
     created: "2026-08-06T00:00:00.000Z",
@@ -377,5 +380,66 @@ describe("backlog overlap — reported at the write boundary, never applied", ()
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.related).toEqual([]);
+  });
+});
+
+describe("backlog store — kind + blocked (ADR-0064)", () => {
+  it("defaults to unspecified/not-blocked, and round-trips through the file", async () => {
+    const a = await addBacklogItem(workDir, { title: "Plain item" });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    expect(a.item.kind).toBe("unspecified");
+    expect(a.item.blocked).toBe(false);
+
+    const b = await addBacklogItem(workDir, {
+      title: "Classified item",
+      kind: "bug",
+      blocked: true,
+      blockedOn: "vendor patch",
+    });
+    if (!b.ok) return;
+    const reread = (await listBacklog(workDir)).find((i) => i.id === b.item.id);
+    expect(reread?.kind).toBe("bug");
+    expect(reread?.blocked).toBe(true);
+    expect(reread?.blockedOn).toBe("vendor patch");
+  });
+
+  it("BACK-COMPAT: an item file written before these fields still parses", async () => {
+    // The 430 existing items have no kind/blocked lines. Missing must mean
+    // "unspecified", never a guess — a guessed kind makes filters silently wrong.
+    const dir = join(workDir, ".marvin", "backlog");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "legacy.md"),
+      "---\nid: legacy\ntitle: An older item\nstatus: open\nseverity: high\n" +
+        "sessionId: \ncreated: 2026-01-01T00:00:00.000Z\nupdated: 2026-01-01T00:00:00.000Z\n---\n\nbody\n",
+      "utf-8",
+    );
+    const item = (await listBacklog(workDir)).find((i) => i.id === "legacy");
+    expect(item?.kind).toBe("unspecified");
+    expect(item?.blocked).toBe(false);
+    expect(item?.severity).toBe("high"); // unrelated fields still parse
+  });
+
+  it("an omitted kind on re-add KEEPS the existing classification", async () => {
+    // A provisional confirm or a re-add must not wipe what the user set.
+    const a = await addBacklogItem(workDir, { title: "Keep my kind", kind: "docs" });
+    if (!a.ok) return;
+    const b = await addBacklogItem(workDir, { title: "Keep my kind", severity: "high" });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    expect(b.item.kind).toBe("docs");
+    expect(b.item.severity).toBe("high");
+  });
+
+  it("updateBacklogItem edits kind/blocked without touching status", async () => {
+    const a = await addBacklogItem(workDir, { title: "Reclassify me" });
+    if (!a.ok) return;
+    const r = await updateBacklogItem(workDir, a.item.id, { kind: "test", blocked: true, blockedOn: "CI" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.item.kind).toBe("test");
+    expect(r.item.blocked).toBe(true);
+    expect(r.item.status).toBe("open"); // untouched
   });
 });

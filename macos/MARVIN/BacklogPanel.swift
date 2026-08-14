@@ -22,13 +22,14 @@ enum BacklogSort: String, CaseIterable, Identifiable {
 
 /// Optional banding of the active list.
 enum BacklogGroup: String, CaseIterable, Identifiable {
-    case none, severity, status
+    case none, severity, status, kind
     var id: String { rawValue }
     var label: String {
         switch self {
         case .none:     return "None"
         case .severity: return "Severity"
         case .status:   return "Status"
+        case .kind:     return "Kind"
         }
     }
 }
@@ -58,6 +59,9 @@ struct BacklogPanel: View {
     /// that finds something — pressing Review means "show me what's wrong", and
     /// leaving the user to hunt for annotations in a 66-row list does not.
     @State private var onlyFlagged = false
+    /// Hide items waiting on something outside the repo (ADR-0064). Off by
+    /// default — hiding work silently is worse than showing it marked.
+    @State private var hideBlocked = false
     @State private var newTitle = ""
     /// Item opened in the detail sheet (severity/body editing, resolve
     /// with note). Nested sheet on the panel sheet — macOS stacks fine.
@@ -104,6 +108,7 @@ struct BacklogPanel: View {
             // "Newest" sort every one of them sinks below the fold. A count with
             // no way to reach it reads as "22 findings and I can't see any".
             .filter { !onlyFlagged || flaggedIds.contains($0.id) }
+            .filter { !hideBlocked || !$0.isBlocked }
             .sorted(by: sortComparator)
     }
 
@@ -125,6 +130,15 @@ struct BacklogPanel: View {
             return ["doing", "open", "done", "dismissed"].compactMap { st in
                 let g = v.filter { $0.status == st }
                 return g.isEmpty ? nil : (statusLabel(st), g)
+            }
+        case .kind:
+            // ADR-0064. `unspecified` sorts LAST — it's the pre-classification
+            // default on 430 existing items, so leading with it would bury the
+            // groups that carry information.
+            let order = ["bug", "feature", "investigate", "test", "docs", "chore", "unspecified"]
+            return order.compactMap { k in
+                let g = v.filter { $0.kindOrUnspecified == k }
+                return g.isEmpty ? nil : (k == "unspecified" ? "Unclassified" : k.capitalized, g)
             }
         }
     }
@@ -236,6 +250,7 @@ struct BacklogPanel: View {
                 }
                 Divider()
                 Toggle("Show resolved", isOn: $showResolved)
+                Toggle("Hide blocked", isOn: $hideBlocked)
             } label: {
                 Label(filterLabel, systemImage: "line.3.horizontal.decrease.circle")
             }
@@ -464,6 +479,18 @@ struct BacklogPanel: View {
                     } else if resolved {
                         statusBadge(item.status, .secondary)
                     }
+                    // ADR-0064 — kind + blocked. Blocked is shown even when the
+                    // kind isn't set: "you can't act on this" is the more
+                    // load-bearing fact of the two.
+                    if item.kindOrUnspecified != "unspecified" {
+                        statusBadge(item.kindOrUnspecified, kindColor(item.kindOrUnspecified))
+                    }
+                    if item.isBlocked {
+                        statusBadge("blocked", .purple)
+                            .help(item.blockedOn?.isEmpty == false
+                                  ? "Waiting on: \(item.blockedOn!)"
+                                  : "Blocked, but no note on what unblocks it")
+                    }
                     Image(systemName: "chevron.right.circle")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -593,6 +620,21 @@ struct BacklogPanel: View {
         }
     }
 
+    /// Kind → tint. Bug reads as a problem (red), investigate as an open
+    /// question (blue), the rest neutral — the palette should not imply
+    /// urgency, which is severity's job.
+    private func kindColor(_ k: String) -> Color {
+        switch k {
+        case "bug":         return .red
+        case "investigate": return .blue
+        case "feature":     return .green
+        case "test":        return .teal
+        case "docs":        return .gray
+        case "chore":       return .secondary
+        default:            return .secondary
+        }
+    }
+
     private func severityIcon(_ s: String) -> String {
         switch s {
         case "high": return "exclamationmark.2"
@@ -671,6 +713,11 @@ struct BacklogDetailView: View {
 
     @State private var severity: String
     @State private var bodyText: String
+    /// ADR-0064 — classification, editable here because this is where the user
+    /// already reads the item closely enough to judge it.
+    @State private var kind: String
+    @State private var blocked: Bool
+    @State private var blockedOn: String
     @State private var resolveNote = ""
     @State private var error: String?
     @State private var savedFlash = false
@@ -681,6 +728,9 @@ struct BacklogDetailView: View {
          onDismissSheet: @escaping () -> Void) {
         self.workDir = workDir
         self.item = item
+        _kind = State(initialValue: item.kindOrUnspecified)
+        _blocked = State(initialValue: item.isBlocked)
+        _blockedOn = State(initialValue: item.blockedOn ?? "")
         self.onPromote = onPromote
         self.onChanged = onChanged
         self.onDismissSheet = onDismissSheet
@@ -738,6 +788,39 @@ struct BacklogDetailView: View {
                 guard next != item.severity else { return }
                 Task { await save(severity: next) }
             }
+
+            // ADR-0064 — kind + blocked. Saved immediately on change, like
+            // severity: the detail sheet has no explicit Save for these fields
+            // and a silently-discarded edit is worse than an eager write.
+            Picker("Kind", selection: $kind) {
+                Text("unspecified").tag("unspecified")
+                Text("bug").tag("bug")
+                Text("feature").tag("feature")
+                Text("investigate").tag("investigate")
+                Text("test").tag("test")
+                Text("docs").tag("docs")
+                Text("chore").tag("chore")
+            }
+            .frame(maxWidth: 260)
+            .onChange(of: kind) { _, next in
+                guard next != item.kindOrUnspecified else { return }
+                Task { await classify(kind: next) }
+            }
+
+            Toggle("Blocked — waiting on something outside the repo", isOn: $blocked)
+                .font(.callout)
+                .onChange(of: blocked) { _, next in
+                    guard next != item.isBlocked else { return }
+                    Task { await classify(blocked: next) }
+                }
+            if blocked {
+                TextField("What unblocks it? (e.g. accountant sign-off)", text: $blockedOn)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 420)
+                    .onSubmit { Task { await classify(blockedOn: blockedOn) } }
+                Text("Recorded so the groomer can tell a waiting item from a forgotten one.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
             Text(item.status)
                 .font(.caption)
                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -790,6 +873,24 @@ struct BacklogDetailView: View {
     }
 
     // MARK: - Actions
+
+    /// ADR-0064 — persist a classification edit. Metadata only: it never
+    /// touches status, so nothing can be resolved by a mis-click here.
+    private func classify(kind: String? = nil, blocked: Bool? = nil, blockedOn: String? = nil) async {
+        do {
+            try await BacklogService.shared.classify(
+                workDir: workDir,
+                id: item.id,
+                kind: kind,
+                blocked: blocked,
+                blockedOn: blockedOn
+            )
+            savedFlash = true
+            onChanged()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 
     private func save(severity: String? = nil, body: String? = nil) async {
         do {
