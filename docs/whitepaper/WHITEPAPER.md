@@ -295,6 +295,23 @@ an activity-logged memory file that bloated to 419KB, ~99% redundant, and
 overflowed the model's context window. The fix was not a bigger window; it
 was content-class enforcement at the write boundary.¹²
 
+Curation has a second half, though: a store that only ever grows stops
+being read, and an unread backlog is indistinguishable from no backlog.
+So the same store gained a **review** pass — it reports near-duplicates
+that exact-title matching cannot see, auto-captures nobody triaged, items
+referencing files that no longer exist. Every one of those is a heuristic,
+which fixes the design: it *reports*, and the human decides. Nothing is
+resolved, merged or re-prioritised on the strength of a guess, because
+acting on a wrong heuristic deletes work nobody agreed to drop — the exact
+loss the backlog exists to prevent. The instruction travels with the data
+rather than only in the system prompt, so it survives being read out of
+context.¹²
+
+That principle — *surface, never mutate* — is the one to carry across.
+Where an assistant's judgement is probabilistic, the safe boundary is
+between analysis and application: let it be freely wrong in what it
+notices, and structurally unable to act on being wrong.
+
 ```mermaid
 flowchart LR
   X["something worth keeping"] --> Q{"what is it?"}
@@ -537,7 +554,11 @@ ad-hoc signed — no paid developer program — and installs to
     [`docs/guides/workflows.md`](../guides/workflows.md).
 12. Memory as durable facts:
     [ADR-0042](../decisions/0042-memory-as-durable-facts.md); backlog:
-    [ADR-0044](../decisions/0044-project-backlog.md).
+    [ADR-0044](../decisions/0044-project-backlog.md); backlog review, and
+    why it reports rather than reconciles:
+    [ADR-0063](../decisions/0063-backlog-groomer-review-not-execute.md);
+    classification (`kind`, and `blocked` as its own axis):
+    [ADR-0064](../decisions/0064-backlog-kind-and-blocked.md).
 13. Context budget measurement:
     [ADR-0041](../decisions/0041-project-graph-lifecycle-and-context-budget.md).
     Measured 2026-06-14 on one mature production project — not MARVIN's own
@@ -548,4 +569,4 @@ ad-hoc signed — no paid developer program — and installs to
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.55; the repository is the authoritative, current reference.*
+v0.1.60; the repository is the authoritative, current reference.*
