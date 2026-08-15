@@ -21,6 +21,7 @@
     "./turn-registry": "./src/turn-registry.ts",
     "./backlog": "./src/backlog.ts",
     "./backlog-groom": "./src/backlog-groom.ts",
+    "./obsidian-vault": "./src/obsidian-vault.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
     "./background-jobs": "./src/background-jobs.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",

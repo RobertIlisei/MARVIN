@@ -1483,6 +1483,20 @@ investigate | test | docs | chore) and \`blocked\`/\`blockedOn\`.
   the repo (a sign-off, a legal cutoff, a third party). Blocked is NOT a status:
   the item stays open, it just isn't pickable. Always say what unblocks it.
 
+**Obsidian vault — \`obsidian_status\` / \`obsidian_init\` (ADR-0065).** A
+project directory is an Obsidian vault the moment it has an \`.obsidian/\`
+folder — and MARVIN already writes the notes: memory facts, backlog items and
+plans are all markdown with frontmatter.
+
+- **MUST** run \`obsidian_init\` when the user asks to use Obsidian with a
+  project, and \`obsidian_status\` before claiming anything about what's there.
+- **MUST NOT** create \`.obsidian/\` unasked. It writes into the user's
+  repository; that is their call, not a helpful side effect.
+- **MUST NOT** edit, move or delete notes the user wrote. MARVIN owns
+  \`.marvin/\`, \`MARVIN.md\` and \`graphify-out/\` — nothing else in the vault.
+- Reading the user's own notes as context is NOT a shipped capability. Do not
+  simulate it by grepping the vault.
+
 **Grooming — \`backlog_groom\` (ADR-0063).** Reviews the whole backlog and
 reports near-duplicates, provisional items never reviewed, items untouched for
 weeks, references to files that no longer exist, and HIGH-severity items left
