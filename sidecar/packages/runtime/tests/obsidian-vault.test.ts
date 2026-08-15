@@ -129,7 +129,7 @@ describe("renderIndexNote", () => {
 
   it("links the two hubs so the graph view has a shape", () => {
     const note = renderIndexNote(
-      { isVault: true, preExisting: false, notes: { memory: 1, backlog: 1, plans: 0 }, graphNotes: false },
+      { isVault: true, preExisting: false, notes: { memory: 1, backlog: 1, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true },
       "p",
     );
     expect(note).toContain("[[memory]]");
@@ -137,17 +137,59 @@ describe("renderIndexNote", () => {
   });
 
   it("only advertises code-graph notes when they exist", () => {
-    const base = { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 } };
+    const base = { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, hiddenFolderPlugin: true };
     expect(renderIndexNote({ ...base, graphNotes: false }, "p")).not.toMatch(/Code graph/);
     expect(renderIndexNote({ ...base, graphNotes: true }, "p")).toMatch(/Code graph/);
   });
 
   it("says plainly what MARVIN will not do", () => {
     const note = renderIndexNote(
-      { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, graphNotes: false },
+      { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true },
       "p",
     );
     expect(note).toMatch(/does \*\*not\*\* edit notes you\ncreate/);
     expect(note).toMatch(/never deletes a note/);
+  });
+});
+
+describe("the dot-folder trap (verified against a real vault, 2026-08-15)", () => {
+  it("warns loudly when no hidden-folder plugin is enabled", async () => {
+    // Obsidian does not index dot-prefixed folders, and every MARVIN note lives
+    // under `.marvin/`. Without the plugin the vault opens showing MARVIN.md
+    // with two broken links and nothing else.
+    await seedNotes({ memory: 5 });
+    const note = renderIndexNote(await vaultStatus(workDir), "p");
+    expect(note).toMatch(/\[!warning\]/);
+    expect(note).toMatch(/Hidden Folders Access/);
+    expect(note).toMatch(/does not index folders whose name starts with a dot/);
+  });
+
+  it("drops the warning once the plugin is enabled", async () => {
+    await mkdir(dot(), { recursive: true });
+    await writeFile(
+      join(dot(), "community-plugins.json"),
+      JSON.stringify(["hidden-folders-access"]),
+      "utf-8",
+    );
+    const s = await vaultStatus(workDir);
+    expect(s.hiddenFolderPlugin).toBe(true);
+    expect(renderIndexNote(s, "p")).not.toMatch(/\[!warning\]/);
+  });
+
+  it("does not mistake an unrelated plugin for the fix", async () => {
+    await mkdir(dot(), { recursive: true });
+    await writeFile(
+      join(dot(), "community-plugins.json"),
+      JSON.stringify(["dataview", "templater-obsidian"]),
+      "utf-8",
+    );
+    expect((await vaultStatus(workDir)).hiddenFolderPlugin).toBe(false);
+  });
+
+  it("treats a missing or malformed plugin list as 'not enabled'", async () => {
+    await mkdir(dot(), { recursive: true });
+    expect((await vaultStatus(workDir)).hiddenFolderPlugin).toBe(false);
+    await writeFile(join(dot(), "community-plugins.json"), "not json", "utf-8");
+    expect((await vaultStatus(workDir)).hiddenFolderPlugin).toBe(false);
   });
 });

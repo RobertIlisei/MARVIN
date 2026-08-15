@@ -60,7 +60,22 @@ export interface VaultStatus {
   notes: { memory: number; backlog: number; plans: number };
   /** graphify's per-node note export is present. */
   graphNotes: boolean;
+  /**
+   * Whether a plugin is enabled that makes dot-prefixed folders visible.
+   *
+   * Load-bearing, not cosmetic: **Obsidian does not index dot-prefixed folders**,
+   * and every note MARVIN writes lives under `.marvin/`. Without such a plugin
+   * the vault opens showing `MARVIN.md` with two broken links and nothing else
+   * — which is exactly the trap the first user hit. Verified 2026-08-15.
+   */
+  hiddenFolderPlugin: boolean;
 }
+
+/**
+ * Community plugins that expose dot-folders. Matched by manifest id, taken from
+ * a real vault rather than guessed.
+ */
+export const HIDDEN_FOLDER_PLUGIN_IDS = ["hidden-folders-access", "show-hidden-files"];
 
 const APP_JSON = "app.json";
 
@@ -84,7 +99,20 @@ export async function vaultStatus(workDir: string): Promise<VaultStatus> {
       plans: await countMd(join(workDir, ".marvin", "plans")),
     },
     graphNotes: existsSync(join(workDir, "graphify-out", "obsidian")),
+    hiddenFolderPlugin: await hasHiddenFolderPlugin(dot),
   };
+}
+
+/** Read `.obsidian/community-plugins.json` — the list of ENABLED plugin ids. */
+async function hasHiddenFolderPlugin(dotDir: string): Promise<boolean> {
+  try {
+    const raw = await readFile(join(dotDir, "community-plugins.json"), "utf-8");
+    const enabled = JSON.parse(raw) as unknown;
+    if (!Array.isArray(enabled)) return false;
+    return enabled.some((id) => typeof id === "string" && HIDDEN_FOLDER_PLUGIN_IDS.includes(id));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -129,7 +157,15 @@ This project directory is an Obsidian vault. The notes below are written and
 maintained by MARVIN as it works; you can read, link and annotate them like any
 others.
 
-## What's here
+${status.hiddenFolderPlugin ? "" : `> [!warning] Most of these notes are invisible right now
+> Obsidian does not index folders whose name starts with a dot, and every note
+> below lives under \`.marvin/\`. The links in this file will not resolve until
+> you enable a plugin that exposes hidden folders:
+>
+> Settings → Community plugins → Browse → **"Hidden Folders Access"** → Install,
+> Enable, then toggle on \`.marvin\`.
+
+`}## What's here
 
 - **[[memory]]** — ${memory} durable fact${memory === 1 ? "" : "s"}: invariants, gotchas and constraints the next session can't re-derive from the code.
 - **[[backlog]]** — ${backlog} parked item${backlog === 1 ? "" : "s"}: work noticed in flight and deliberately deferred.

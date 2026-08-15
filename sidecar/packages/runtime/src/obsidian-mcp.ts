@@ -73,7 +73,12 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
           : "This project is NOT yet a vault — no `.obsidian/`. `obsidian_init` creates one.") +
           ` Notes MARVIN maintains here: ${memory} memory fact(s), ${backlog} backlog item(s), ` +
           `${plans} plan(s).` +
-          (s.graphNotes ? " Code-graph notes present." : " No code-graph notes yet."),
+          (s.graphNotes ? " Code-graph notes present." : " No code-graph notes yet.") +
+          (s.isVault && !s.hiddenFolderPlugin
+            ? " WARNING: no hidden-folder plugin is enabled, so Obsidian is not showing " +
+              "`.marvin/` at all — the user sees MARVIN.md with broken links and nothing else. " +
+              "Tell them to install \"Hidden Folders Access\" and toggle on `.marvin`."
+            : ""),
       );
     },
   );
@@ -116,6 +121,11 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
           ` It now surfaces ${memory} memory fact(s), ${backlog} backlog item(s) and ${plans} plan(s),` +
           ` ${relinked} of them relinked into the index hubs.` +
           ` ${graph.detail}` +
+          (res.status.hiddenFolderPlugin
+            ? ""
+            : " IMPORTANT: Obsidian does not index dot-prefixed folders, so `.marvin/` is" +
+              " invisible until they install the \"Hidden Folders Access\" community plugin" +
+              " and toggle on `.marvin`. Say this — without it the vault looks empty.") +
           " Tell the user to open this project directory as a vault in Obsidian, and to start at `MARVIN.md`.",
       );
     },
