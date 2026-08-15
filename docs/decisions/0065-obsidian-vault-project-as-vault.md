@@ -115,3 +115,50 @@ them.** That was the explicit fork, and it is deliberately unbuilt:
       edit user notes / reading the vault is not a capability.
 - [x] 12 unit tests, 655 suite-wide; `tsc` clean.
 - [x] Phase 2 (two-way) recorded as unbuilt with the reasons.
+
+---
+
+## Addendum (2026-08-15) — Obsidian does not index dot-folders
+
+**Found by the user, minutes after Phase 1 shipped.** They opened the vault and
+saw `MARVIN.md` with two broken links and nothing else.
+
+**Obsidian does not index folders whose name starts with a dot.** Every note
+this integration surfaces lives under `.marvin/`. So the vault was, out of the
+box, empty of exactly the content it existed to show.
+
+This is a verification failure, not a design one: the wikilinks were checked
+(129 of them, on the real project) and the *rendering* was not. "The links are
+written" and "the links resolve" are different claims, and only the second one
+mattered.
+
+**Fix.** The user installs a community plugin that exposes hidden folders —
+[Hidden Folders Access](https://github.com/dsebastien/obsidian-hidden-folders-access)
+(id `hidden-folders-access`) or
+[Show Hidden Files](https://github.com/polyipseity/obsidian-show-hidden-files) —
+and toggles on `.marvin`. Verified working.
+
+Since that step is required and easy to miss, it is now *detected* rather than
+documented and hoped for:
+
+- `vaultStatus` reads `.obsidian/community-plugins.json` — the enabled-plugin
+  list — and reports `hiddenFolderPlugin`. Plugin ids were taken from a real
+  vault, not guessed.
+- `renderIndexNote` leads with an Obsidian callout when it's absent, so the
+  first thing the user reads in an otherwise-empty vault is why it's empty.
+- `obsidian_status` and `obsidian_init` both say so in their result, so MARVIN
+  tells the user instead of leaving them to discover it.
+
+**Alternatives considered.** A visible `MARVIN/` symlink to `.marvin/` avoids
+the plugin entirely, but Obsidian's indexer can double-count symlinked trees and
+the behaviour couldn't be verified from outside the app. Moving MARVIN's notes
+out of `.marvin/` would break every existing project. The plugin is what the
+ecosystem uses for this exact case.
+
+## Scope of Done — addendum
+
+- [x] `hiddenFolderPlugin` detected from the enabled-plugin list, not assumed.
+- [x] Index note leads with a warning callout when absent; drops it when present.
+- [x] Both MCP tools report it.
+- [x] 4 tests: warns when absent, silent when present, ignores unrelated
+      plugins, treats missing/malformed lists as "not enabled". 659 suite-wide.
