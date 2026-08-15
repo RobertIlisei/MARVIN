@@ -74,8 +74,12 @@ async function rewriteIndex(workDir: string): Promise<number> {
       /* skip unreadable */
     }
   }
+  // Wikilink rather than a markdown link (ADR-0065): Obsidian resolves
+  // `[[memory/<slug>]]` to the note and draws the edge, which is what makes the
+  // vault a graph instead of a list. Markdown links render fine in Obsidian but
+  // do not create graph edges, so the index looked connected and wasn't.
   const lines = entries.map(
-    (e) => `- [${e.name}](memory/${e.slug}.md)${e.hook ? ` — ${e.hook}` : ""}`,
+    (e) => `- [[memory/${e.slug}|${e.name}]]${e.hook ? ` — ${e.hook}` : ""}`,
   );
   const body =
     `${INDEX_HEADER}\n\n` +

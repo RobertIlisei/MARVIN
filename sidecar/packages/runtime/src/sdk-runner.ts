@@ -26,6 +26,7 @@ import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Optio
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { createBacklogMcpServer } from "./backlog-mcp";
+import { createObsidianMcpServer } from "./obsidian-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { loadEnabledPlugins } from "./plugin-loader";
 import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
@@ -1289,6 +1290,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // the active project's workDir; carries the session id for the source link.
   const backlogMcp = createBacklogMcpServer({ cwd, marvinSessionId: input.marvinSessionId });
 
+  // Obsidian vault integration (ADR-0065). Status is read-only; init writes
+  // only `.obsidian/app.json`, `MARVIN.md` and `graphify-out/obsidian/` — never
+  // a note the user wrote. Scoped to the active project's workDir.
+  const obsidianMcp = createObsidianMcpServer({ cwd });
+
   // In-process MCP server exposing the self-wakeup tools (ADR-0031). Only
   // wired when we know which session to resume — a wakeup turn must be able
   // to re-enter THIS marvinSession. Captures the turn's config so the fired
@@ -1372,6 +1378,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       "marvin-graph": graphMcp,
       "marvin-memory": memoryMcp,
       "marvin-backlog": backlogMcp,
+      "marvin-obsidian": obsidianMcp,
       ...(wakeupMcp ? { "marvin-control": wakeupMcp } : {}),
       // Opt-in external (stdio) browser server (ADR-0045). Off by default; its
       // tools are gated in `classifyToolCall` (code-exec denied, interaction

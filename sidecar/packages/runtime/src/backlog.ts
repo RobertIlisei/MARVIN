@@ -427,7 +427,12 @@ export async function rewriteBacklogIndex(workDir: string): Promise<number> {
       return order[a.severity] - order[b.severity] || a.created.localeCompare(b.created);
     });
   const lines = active.map(
-    (i) => `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title} — backlog/${i.id}.md`,
+    // `[[backlog/<id>]]` rather than a bare path: Obsidian resolves it to the
+    // note, which is what connects the index to its items in the graph view
+    // (ADR-0065). Without links the vault is N disconnected dots. Reads the
+    // same as the old text form everywhere else, including the context
+    // injection that quotes this file.
+    (i) => `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title} — [[backlog/${i.id}]]`,
   );
   const body =
     `${INDEX_HEADER}\n\n` +

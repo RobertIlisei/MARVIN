@@ -56,7 +56,9 @@ describe("backlog store — add / list / resolve", () => {
     const index = await readFile(indexPath(), "utf-8");
     expect(index).toContain(res.item.title);
     expect(index).toContain("(high)");
-    expect(index).toContain(`backlog/${res.item.id}.md`);
+    // Wikilink, not a bare path (ADR-0065) — this is the edge Obsidian's graph
+    // view draws from the index to the item.
+    expect(index).toContain(`[[backlog/${res.item.id}]]`);
   });
 
   it("re-adding the same title dedups (updates in place, no second file)", async () => {
