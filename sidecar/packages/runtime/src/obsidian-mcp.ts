@@ -19,6 +19,8 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import { initVault, vaultStatus } from "./obsidian-vault";
+import { rewriteBacklogIndex } from "./backlog";
+import { rewriteMemoryIndex } from "./memory-mcp";
 
 const run = promisify(execFile);
 
@@ -93,6 +95,13 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
     async ({ exportGraph }) => {
       const res = await initVault(cwd, basename(cwd));
       if (!res.ok) return errorResult(`Could not set up the vault: ${res.error}`);
+      // Regenerate both indexes so the vault is LINKED the moment it opens.
+      // They only rewrite on their own next write, so without this the hubs
+      // carry pre-ADR-0065 plain paths and the graph view is empty on arrival —
+      // the exact failure this integration exists to fix.
+      let relinked = 0;
+      try { relinked += await rewriteBacklogIndex(cwd); } catch { /* no backlog yet */ }
+      try { relinked += await rewriteMemoryIndex(cwd); } catch { /* no memory yet */ }
       const graph = exportGraph === false
         ? { ok: false, detail: "code-graph export skipped (not requested)" }
         : await exportGraphNotes(cwd);
@@ -104,7 +113,8 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
           (res.ignoreFiltersAdded.length
             ? ` Added ${res.ignoreFiltersAdded.length} ignore filter(s) so the graph view shows notes, not node_modules.`
             : "") +
-          ` It now surfaces ${memory} memory fact(s), ${backlog} backlog item(s) and ${plans} plan(s).` +
+          ` It now surfaces ${memory} memory fact(s), ${backlog} backlog item(s) and ${plans} plan(s),` +
+          ` ${relinked} of them relinked into the index hubs.` +
           ` ${graph.detail}` +
           " Tell the user to open this project directory as a vault in Obsidian, and to start at `MARVIN.md`.",
       );

@@ -55,7 +55,7 @@ const TYPE_ENUM = ["user", "feedback", "project", "reference"] as const;
  * the index canonical (no drift between files and index) and inherently
  * deduped — one line per file.
  */
-async function rewriteIndex(workDir: string): Promise<number> {
+export async function rewriteMemoryIndex(workDir: string): Promise<number> {
   const memDir = join(workDir, ".marvin", "memory");
   let files: string[] = [];
   try {
@@ -146,7 +146,7 @@ export function createMemoryMcpServer(workDir: string) {
           `---\n\n${bodyText || hookOneLine}\n`;
         const existed = existsSync(join(memDir, `${slug}.md`));
         await writeFile(join(memDir, `${slug}.md`), fm, "utf-8");
-        const count = await rewriteIndex(workDir);
+        const count = await rewriteMemoryIndex(workDir);
         return textResult(
           `${existed ? "Updated" : "Saved"} fact \`${slug}\` (${type ?? "project"}). ` +
             `memory index now has ${count} fact${count === 1 ? "" : "s"}.`,

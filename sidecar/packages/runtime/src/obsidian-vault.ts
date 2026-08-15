@@ -131,10 +131,8 @@ others.
 
 ## What's here
 
-- **[[memory]]** — ${memory} durable fact${memory === 1 ? "" : "s"}: invariants,
-  gotchas and constraints the next session can't re-derive from the code.
-- **[[backlog]]** — ${backlog} parked item${backlog === 1 ? "" : "s"}: work
-  noticed in flight and deliberately deferred.
+- **[[memory]]** — ${memory} durable fact${memory === 1 ? "" : "s"}: invariants, gotchas and constraints the next session can't re-derive from the code.
+- **[[backlog]]** — ${backlog} parked item${backlog === 1 ? "" : "s"}: work noticed in flight and deliberately deferred.
 - **Plans** — ${plans} in \`.marvin/plans/\`, one per piece of planned work.
 ${status.graphNotes ? "- **Code graph** — one note per symbol under `graphify-out/obsidian/`, linked by call and import.\n" : ""}
 ## How to read it
