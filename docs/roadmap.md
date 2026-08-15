@@ -6,7 +6,7 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-- **Re-measure graph:file ratio (ADR-0060 empirical follow-up)** — the drift nudge cannot self-verify (no deterministic way to know a read *should* have been a graph query). Re-run the transcript analysis over the next few real sessions; if the ratio hasn't moved off 1:5–1:11, lower `GRAPH_DRIFT_NOVEL_FILE_THRESHOLD` rather than restore the hard block.
+- **Re-measure graph:file ratio (ADR-0060 empirical follow-up)** — the drift nudge cannot self-verify (no deterministic way to know a read *should* have been a graph query). Re-run the transcript analysis over the next few real sessions; if the ratio hasn't moved off 1:5–1:11, lower `GRAPH_DRIFT_NOVEL_FILE_THRESHOLD` rather than restore the hard block. **Partly answered 2026-08-15:** `graphify benchmark` puts the graph at **27.5×** fewer tokens per query than naive full-corpus reads on this repo — the *value* side is now measured (CLAUDE.md's long-quoted "~36×" never was). The *behavioural* side — whether MARVIN actually reaches for the graph first — still needs the transcript pass.
 - **Rich chat rendering + clickable output (uncommitted, in local build)** — assistant text now renders as real markdown (headings, fenced code with tree-sitter highlighting, pipe tables via a custom `Layout`, lists, quotes) instead of literal syntax, and URLs + `path/File.swift:61` references are clickable: web links open the browser, file refs open in MARVIN's editor and scroll to the line. Link detection lives in `MARVINLogic/ChatMarkdown.swift` (`MarkdownLinks`) so it is unit-pinned; only paths that resolve under the project workDir become links, so there are no dead ones. Prose blocks render through `RichText` (an `NSTextView`) rather than SwiftUI `Text`: `.textSelection(.enabled)` and links are mutually exclusive in `Text` — the I-beam wins over the whole run, so links never advertised themselves — while `NSTextView` gives pointing-hand cursors, `clickedOnLink`, and selection together. **Hang regression, found and fixed (2026-08-01):** the first `RichText` answered `sizeThatFits` by resizing the live text container and calling `ensureLayout` — which invalidates the layout, so SwiftUI's repeated width probes re-typeset the whole string each time. Nested in stack layouts it went pathological: MARVIN froze for 551s on the main thread, sampled inside `NSLayoutManager` → ICU line-breaking (`.hang` report 22:27:53). Measurement now goes to a shared offscreen text stack memoised on (text, width); a stress render that never completed in 400s now takes 130 ms. `MARVIN_SNAPSHOT_REPEAT=N` keeps that measurable. The `MARVIN_SNAPSHOT_MD` harness also moved off `ImageRenderer` (which substitutes a placeholder for any `NSViewRepresentable`) to an offscreen `NSHostingView` + `cacheDisplay`, restoring pixel-accurate verification.
 
 _When a work item lands, move its line out of this section into a dated `## Recent milestones` entry (with the cask + tag + ADR if any)._
@@ -16,6 +16,44 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 - **Obsidian vault — the project directory IS the vault ([ADR-0065](decisions/0065-obsidian-vault-project-as-vault.md))** — measuring first changed the answer: one real project already held **819 markdown files MARVIN wrote** (79 memory facts, 437 backlog items, 303 plans), all with frontmatter Obsidian reads as properties. A vault is just a folder with `.obsidian/`, so content and container both existed. The actual gap was **links** — all 79 memory files had *zero* `[[wikilinks]]`, so the graph view would have shown 819 disconnected dots. Markdown links render in Obsidian but create no graph edges, which is why the index would have *looked* connected while the graph stayed empty. Both indexes now emit wikilinks; `obsidian_init` writes `.obsidian/` + a `MARVIN.md` front door and exports the code graph as notes. Opt-in and non-destructive: never created unasked, an existing vault's settings are merged not clobbered, a corrupt `app.json` is left alone, and MARVIN edits nothing outside `.marvin/`, `MARVIN.md` and `graphify-out/`. Phase 2 (MARVIN reading your own notes as context) deliberately unbuilt — it hits the ADR-0041 context budget and needs a consent model.
 
 ## Current version
+
+**v0.1.62** — Graphify at full surface, and two tools that were quietly lying.
+An audit of what MARVIN's bridge actually *calls* found it using about a quarter
+of graphify 0.9.43 — and two of the gaps weren't cosmetic. **MARVIN could not
+answer a blast-radius question and didn't know it.** `graph_neighbors` was
+documented as "1-hop blast radius" and rendered `→`/`←` arrows, but `graph.json`
+is built `directed: false`, so orientation in `links` is networkx
+adjacency-iteration order — proven by finding the same `calls` relation in
+*opposite* orientations for two known caller/callee pairs. graphify's own
+`affected` reverse-traverses that graph and inherits the defect; `--directed`
+turned out not to be a build flag at all in 0.9.43 (it exists only on `diagnose
+multigraph`, as a simulation toggle — passing it to the pipeline exits 0 and
+changes nothing). The directed truth lives in the per-file extraction cache's
+`raw_calls`. New **`graph_affected`** (ADR-0066) reads it: real callers with
+exact file and line, verified against ground truth on both TypeScript and Java.
+It is honest where it is weak — the callee side is a bare *name*, so `assertThat`
+(21,214 sites on a real project) returns an ambiguity warning rather than a blast
+radius, "no callers" is explicitly not "dead code", and stale sites from a former
+repo layout are filtered by existence check. **The work-memory loop saved
+answers and learned nothing:** `save-result --outcome` had existed since 0.9.x
+and MARVIN never sent it, and `reflect` had never run anywhere — 3 saved Q&As,
+zero outcomes, no `reflections/`. `graph_save_result` now carries
+`outcome`/`correction` (a `corrected` with no correction is rejected at the write
+boundary, as with `remember` and `backlog_add`) and **`graph_reflect`** aggregates
+them into a lessons doc. **Communities are named** on both graphs via the
+`claude-cli` backend — no API key, which this machine doesn't have — and
+`summarizeGraph`, which had never read `community_name`, now surfaces them, so
+orientation reads "Git Write Policy Gate" instead of `[12] 58 nodes`. Scale work
+came from measuring on a real Java monorepo rather than MARVIN's own small repo:
+433k call edges cost 3.0 s and 127 MB there, which the per-turn watchdog would
+have re-paid every turn — incremental ingest (the cache is content-addressed, so
+entries only ever appear) plus string interning and single-project retention took
+that to **5 ms and 36 MB**. And ADR-0060's open follow-up is **half-answered with
+a number**: `graphify benchmark` puts the graph at **27.5×** fewer tokens per
+query on this repo, 24.1× on the user's — the long-quoted "~36×" was never
+measured. Two capabilities declined on principle: the cross-repo `global` graph
+(merges projects — Golden Rule 4) and `check-update` (semantic-only; the
+watchdog is AST-only and already gates on HEAD).
 
 **v0.1.61** — Stability, and a backlog that reviews itself. **Four app-killing
 crashes closed.** The file tree left SwiftUI's `OutlineGroup` entirely

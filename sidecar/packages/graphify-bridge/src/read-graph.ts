@@ -29,8 +29,25 @@ export interface GraphNode {
   id: string;
   label?: string;
   community?: number;
+  /**
+   * Semantic community name from `graphify label` ("Backlog Service Types").
+   * Absent, or the literal "Community N" placeholder, on an unlabelled graph.
+   */
+  community_name?: string;
   file_type?: string;
   source_file?: string;
+}
+
+/**
+ * graphify writes "Community 12" when a community has never been named. That
+ * is a placeholder, not a name — surfacing it costs context and tells MARVIN
+ * nothing it can't read off the id.
+ */
+function realCommunityName(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed || /^community\s+\d+$/i.test(trimmed)) return null;
+  return trimmed;
 }
 
 export interface GraphLink {
@@ -62,10 +79,12 @@ export interface GraphSummary {
   };
   /** Top nodes by degree ("god nodes"). */
   godNodes: Array<{ id: string; label: string; degree: number }>;
-  /** Community id → member count + sample labels. */
+  /** Community id → member count + semantic name (if labelled) + samples. */
   communities: Array<{
     id: number;
     size: number;
+    /** From `graphify label`; null when the graph is unlabelled. */
+    name: string | null;
     sampleLabels: string[];
   }>;
 }
@@ -126,11 +145,13 @@ export function summarizeGraph(graphPath: string): GraphSummary {
       degree: deg,
     }));
 
-  const byCommunity = new Map<number, { labels: string[] }>();
+  const byCommunity = new Map<number, { labels: string[]; name: string | null }>();
   for (const n of nodes) {
     if (typeof n.community !== "number") continue;
-    const cur = byCommunity.get(n.community) ?? { labels: [] };
+    const cur = byCommunity.get(n.community) ?? { labels: [], name: null };
     cur.labels.push(n.label ?? n.id);
+    // Every node in a community carries the same name; first real one wins.
+    if (!cur.name) cur.name = realCommunityName(n.community_name);
     byCommunity.set(n.community, cur);
   }
 
@@ -138,6 +159,7 @@ export function summarizeGraph(graphPath: string): GraphSummary {
     .map(([id, v]) => ({
       id,
       size: v.labels.length,
+      name: v.name,
       sampleLabels: v.labels.slice(0, 5),
     }))
     .sort((a, b) => b.size - a.size)
@@ -191,6 +213,38 @@ function loadRaw(graphPath: string): { raw: RawNodeLink; nodes: GraphNode[]; lin
   } catch {
     return null;
   }
+}
+
+/**
+ * node id → label, memoised on the graph file's mtime.
+ *
+ * Needed by the directed call index (`call-index.ts`), which knows callers only
+ * as node ids and must recover a symbol name to walk another hop back. Memoised
+ * because `loadRaw` re-parses a multi-megabyte graph.json on every call, and a
+ * depth-2 traversal would otherwise pay that repeatedly within one tool call.
+ */
+const labelIndexMemo = new Map<string, { mtimeMs: number; index: Map<string, string> }>();
+
+export function nodeLabelIndex(graphPath: string): Map<string, string> {
+  if (!existsSync(graphPath)) return new Map();
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(graphPath).mtimeMs;
+  } catch {
+    return new Map();
+  }
+  const hit = labelIndexMemo.get(graphPath);
+  if (hit && hit.mtimeMs === mtimeMs) return hit.index;
+
+  const loaded = loadRaw(graphPath);
+  const index = new Map<string, string>();
+  for (const n of loaded?.nodes ?? []) {
+    if (typeof n.id === "string" && typeof n.label === "string") {
+      index.set(n.id, n.label);
+    }
+  }
+  labelIndexMemo.set(graphPath, { mtimeMs, index });
+  return index;
 }
 
 function computeDegrees(links: GraphLink[]): Map<string, number> {

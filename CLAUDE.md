@@ -325,11 +325,38 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 2490 nodes · 5220 edges (2026-08-13 rebuild; honours
-  [`.graphifyignore`](./.graphifyignore)).
+  files. 6773 nodes · 12766 edges · 385 named communities (2026-08-15
+  rebuild; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  rebuild use `graphify . --code-only` — without `--code-only` the run
+  aborts on the docs, which need an LLM backend and belong to the knowledge
+  graph anyway. (`graphify update .` is the incremental path and needs no
+  such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1357 nodes · 1663 edges (built 2026-08-13).
+  `.marvin/memory.md`. 1410 nodes · 1722 edges · 127 named communities
+  (built 2026-08-15).
+
+**Community names.** Both graphs were 100 % `Community N` placeholders until
+2026-08-15, which made `graph_summary`'s community section unreadable. They
+are now named via `graphify label . --backend=claude-cli` — the `claude-cli`
+backend drives the OAuth'd Claude CLI, so this needs **no API key** (this
+machine has none).
+
+> **Labels are not durable across a structural rebuild.** When the community
+> set shifts, graphify does *not* keep the saved LLM labels — it silently
+> renames every community after its hub node, so "Git Write Policy Gate"
+> becomes `git/src/index.ts`. Observed 2026-08-15 when a `graphify update .`
+> moved the code graph 318 → 392 communities. The fallback is still readable,
+> but it is filenames, not concepts. **Re-run `graphify label` after any
+> rebuild that changes the community count.** Do NOT wire this into the
+> per-turn watchdog — it is an LLM pass, and the watchdog runs on every turn.
+
+> **Gotcha:** `graphify label` has no `--graph` flag, and `cluster-only
+> --graph <path>` *reads* that path but *writes* the default one — pointing it
+> at the knowledge graph very nearly overwrote the code graph with it (the
+> node-count guard refused, 2026-08-15). To label the knowledge graph, stage a
+> copy as `graphify-out/graph.json` in a scratch directory, run `label` there,
+> and copy the result back.
 
 **Who builds them (ADR-0041).** When the **running IDE** has a project open, it
 auto-refreshes that project's *code AND knowledge* graphs per turn — fire-and-
@@ -345,12 +372,32 @@ Each MCP tool (`graph_summary`, `graph_search`, `graph_neighbors`,
 `graph_path`, `graph_query`, `graph_save_result`) takes a `scope` parameter
 of `"code"` (default), `"knowledge"`, or `"all"`. Default preserves
 backwards-compatible behaviour — every existing call site queries the
-code graph as before.
+code graph as before. Two further tools landed with
+[ADR-0066](./docs/decisions/0066-graphify-directed-call-index-and-work-memory.md):
+
+- **`graph_affected({symbol, depth?})`** — the blast-radius tool: who *calls*
+  this symbol, with exact file and line. Use it before modifying, renaming or
+  deleting anything. **`graph_neighbors` is not a blast-radius tool** — the
+  built graph is undirected (`directed: false`), so its `→`/`←` arrows are
+  networkx adjacency-iteration order, not call direction. `graph_affected`
+  reads the AST call cache (`graphify-out/cache/*.json`, `raw_calls`) instead,
+  which is genuinely directed. Code scope only.
+- **`graph_reflect({scope?})`** — aggregates the outcomes recorded by
+  `graph_save_result` into `graphify-out/reflections/LESSONS.md`.
+  Deterministic, no LLM.
+
+`graph_save_result` now takes **`outcome: useful | dead_end | corrected`**
+(plus `correction`). Send it every time: without an outcome the save is a
+cache entry and `graph_reflect` has nothing to learn from. A wrong graph
+answer recorded as `corrected` is the highest-value signal there is.
 
 See [Golden rule 7](#golden-rules-for-working-in-this-repo) — this is a
-non-negotiable rule, not a nice-to-have. Querying a graph is ~36× cheaper
-per question than file reads and catches structural couplings grep would
-miss.
+non-negotiable rule, not a nice-to-have. **Measured 2026-08-15 with
+`graphify benchmark`: 27.5× fewer tokens per query** than naive full-corpus
+reads (268,066 naive tokens → ~9,763 per query), and the graph catches
+structural couplings grep would miss. (The previously-quoted "~36×" was never
+measured on this repo; re-run `graphify benchmark graphify-out/graph.json`
+when the number drifts.)
 
 ### What the graph excludes
 
@@ -398,13 +445,16 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-08-13 rebuild: `GET()` (142 edges), `POST()` (131),
-`trim()` (74), `decode` (52), `ChatPreviewModel` (45) are the real
-architectural anchors. (Note the API-route handlers now outrank
-everything — the sidecar's route surface is the widest coupling point in
-the repo. An incremental `update` can transiently drop a hot node out of
-the top 10: re-extracting only some of its source files prunes its
-cross-file edges, so prefer a full rebuild when counts look off.)
+After the 2026-08-15 rebuild: `cn()` (97 edges), `requireMarvinClient()`
+(92), `checkFsPath()` (76), `ChatPreviewModel` (73), `ChatPreviewView` (55),
+`BacklogPanel` (46) are the real architectural anchors — the shared client
+guard and the fs-path check are the widest coupling points in the repo.
+(An incremental `update` can transiently drop a hot node out of the top 10:
+re-extracting only some of its source files prunes its cross-file edges, so
+prefer a full rebuild when counts look off.) This list moves a lot — it
+changed twice in one afternoon across two rebuilds — so **read it with
+`graphify god-nodes --top 8` rather than trusting the transcription here**,
+which had drifted badly by the time ADR-0066 checked it.
 Language primitives also bubble to the top —
 `string`, `text`, `font`, `View`, `data`, `image`, `Kind`, `Codable` —
 those are AST-noise from the tree-sitter pass, not concepts; treat them as
