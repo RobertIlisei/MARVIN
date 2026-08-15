@@ -9,6 +9,98 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-15 — v0.1.62: graphify at full surface, and two tools that were quietly lying.**
+
+  **Diagnostic.** The question was simply whether MARVIN used the current graphify.
+  It did not: the bridge shells out to three subcommands only — `update`, `query`,
+  `save-result` — while `graph_summary` / `graph_search` / `graph_neighbors` /
+  `graph_path` are hand-rolled parsing of `graph.json` inside `mcp-server.ts`,
+  frozen at the point the bridge was written. Two of the gaps were not cosmetic.
+
+  **Finding 1 — the blast-radius tool could not do blast radius.** Golden Rule 7
+  names blast radius as a graph trigger, `graph_neighbors` was documented as
+  "1-hop blast radius", and its output rendered `→`/`←` arrows. Those arrows are
+  noise. `graph.json` is built `directed: false`, and networkx's undirected
+  `node_link_data` emits each edge in whatever order adjacency iteration produces,
+  so `source`/`target` reflects node insertion order. Proof: `graphPathForScope
+  --calls--> buildProjectContext` and `sdk_runner_runAgent --calls-->
+  createGraphMcpServer` appear with the *same* relation in *opposite* orientations,
+  though both describe a caller/callee pair. graphify's own `affected` reverse-
+  traverses that graph, so on this repo it returned `buildProjectContext`'s
+  **callees** under the heading "Affected nodes". The obvious fix — rebuild
+  directed — turned out not to exist: `--directed` is not a build flag in 0.9.43,
+  only a post-build simulation toggle on `diagnose multigraph`. Passing it to the
+  pipeline exits 0 and changes nothing. Verified, not assumed.
+
+  **Decision.** The directed truth is in `graphify-out/cache/<hash>.json`, which
+  the AST pass writes per source file and which carries `raw_calls`: an explicit
+  `caller_nid → callee` list with file and line. New `call-index.ts` reads that;
+  new `graph_affected` exposes it (ADR-0066). Deliberately *not* a wrapper over
+  `graphify affected`, and deliberately honest about its limits — the callee side
+  is an unresolved symbol *name*, so above 40 call sites it returns an ambiguity
+  warning instead of a number, "no callers" is stated as not-proof-of-dead-code,
+  and stale entries are filtered (the cache is never garbage-collected, so it
+  still held `apps/web/.../route.ts` sites long after that tree became `sidecar/`
+  — 4,990 of 28,930 edges here).
+
+  **Finding 2 — the work-memory loop was a cache, not feedback.** `save-result`
+  has accepted `--outcome useful|dead_end|corrected` and `--correction` since
+  0.9.x; MARVIN never sent either, and `graphify reflect` had never been run on
+  any project. Measured: 3 saved Q&As, zero outcomes, no `reflections/` directory.
+  `graph_save_result` now takes `outcome`/`correction` and `graph_reflect`
+  aggregates them with half-life decay and a corroboration threshold. A
+  `corrected` with no correction is **rejected at the tool boundary** — it would
+  teach `reflect` that a node is unreliable while withholding what is actually
+  true. Same write-boundary enforcement as `remember` (ADR-0042) and `backlog_add`
+  (ADR-0044), applied where prose guidance had already failed once.
+
+  **Also.** Both graphs' communities were 100 % `Community N` placeholders, which
+  is why `graph_summary`'s community section read as noise; now named via
+  `graphify label --backend=claude-cli`, which drives the OAuth'd Claude CLI and
+  so needs no API key (this machine has none). That surfaced a second bug:
+  `summarizeGraph` had never read `community_name`, so the labels would have been
+  invisible to MARVIN — wired through, and unnamed communities now prompt for a
+  relabel rather than failing silently.
+
+  **Verification.** `graph_affected` checked against hand-known ground truth on
+  two stacks: `buildProjectContext` → chat route, context route, turn-orchestrator;
+  `createGraphMcpServer` → sdk-runner, session-auditor; and on a Java/Spring Boot
+  monorepo, `SubscriptionRepository` / `DocumentService` with exact lines. The
+  reflect loop was run end-to-end and produced a LESSONS.md carrying a real
+  correction. 689 tests pass (17 new over the call index), 8/8 typecheck.
+
+  **Scale, found by measuring on a real project rather than this one.** MARVIN's
+  own repo is small; the user's Java monorepo has 433,361 call edges across 321 MB
+  of cache, where the naive implementation cost **3.0 s and 127 MB resident** — and
+  the per-turn watchdog runs `graphify update` on the active project every turn,
+  which would have re-paid that on the next query. Fixed by exploiting the fact
+  that the cache is content-addressed (entries never change in place, so only
+  unread files need parsing) plus string interning and single-project retention:
+  **5 ms and 36 MB**. A vanished cache entry still forces a clean rebuild, since
+  that is the one case where the accumulated index could hold dead call sites.
+
+  **Two operational hazards, now documented rather than left as landmines.**
+  `cluster-only --graph <path>` *reads* that path but *writes* the default one —
+  pointing it at the knowledge graph very nearly overwrote the code graph with it,
+  and only graphify's node-count guard refused. And LLM community labels do **not**
+  survive a structural rebuild: when the community set shifts graphify silently
+  renames every community after its hub node, so "Git Write Policy Gate" became
+  `git/src/index.ts` after an update moved the code graph 318 → 392 communities.
+  Re-run `label` after such a rebuild; do not wire it into the per-turn watchdog.
+
+  **Measured, not claimed.** `graphify benchmark`: **27.5×** fewer tokens per query
+  on this repo, 24.1× on the user's. CLAUDE.md had asserted "~36×" with nothing
+  behind it. This half-answers ADR-0060's open follow-up — the *value* side is now
+  a number; the *behavioural* side (does MARVIN actually reach for the graph first)
+  still needs the transcript pass. The hand-maintained god-node list had drifted
+  badly and is now read from `graphify god-nodes` instead.
+
+  **Declined on principle**, recorded so they are not re-proposed: the cross-repo
+  `global` graph (merges projects into one — Golden Rule 4, a contamination
+  question, not a performance one) and `check-update` (reports *semantic*
+  re-extraction pending; MARVIN's watchdog is AST-only and already gates on
+  HEAD-unchanged plus a 10-minute debounce).
+
 - **2026-08-14 — v0.1.61: four crashes closed, and a backlog that reviews itself.**
   *Diagnostic trail.* The file tree had crashed four times, always the same
   shape: `List` + `OutlineGroup` drives NSOutlineView through SwiftUI's

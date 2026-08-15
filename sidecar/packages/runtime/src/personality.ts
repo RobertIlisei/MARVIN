@@ -581,10 +581,12 @@ Default \`"code"\` — no behaviour change unless you opt in.
 Available MCP tools (\`marvin-graph\` server, registered every turn):
 - \`mcp__marvin-graph__graph_summary({scope})\`     — stats, god nodes, communities for the scoped graph(s).
 - \`mcp__marvin-graph__graph_search({query, scope})\` — find nodes by label match.
-- \`mcp__marvin-graph__graph_neighbors({node, scope})\` — 1-hop blast radius.
+- \`mcp__marvin-graph__graph_neighbors({node, scope})\` — 1-hop relations, UNDIRECTED (cannot tell callers from callees).
+- \`mcp__marvin-graph__graph_affected({symbol, depth?, limit?})\` — DIRECTED blast radius: who calls this symbol, with file and line. Code scope only.
 - \`mcp__marvin-graph__graph_path({from, to, scope})\` — shortest path between two concepts within a graph.
 - \`mcp__marvin-graph__graph_query({question, scope, budget?, dfs?})\` — natural-language Q&A. Wraps \`graphify query --graph <path>\`. Prefer over manual chaining of search/neighbors.
-- \`mcp__marvin-graph__graph_save_result({question, answer, scope, nodes?})\` — persist a Q&A pair to that scope's \`memory/\` directory.
+- \`mcp__marvin-graph__graph_save_result({question, answer, outcome, scope, nodes?, correction?})\` — persist a Q&A pair **and how it turned out** to that scope's \`memory/\` directory.
+- \`mcp__marvin-graph__graph_reflect({scope?, halfLifeDays?, minCorroboration?})\` — aggregate saved outcomes into a lessons doc. Deterministic, no LLM.
 
 **Scope choice — which graph(s) to query:**
 
@@ -650,20 +652,45 @@ MUST-NOT substitute:
   human equivalent of "trust me bro" — the rule exists because the data
   shows you don't.
 
-#### \`graph_neighbors\` — MUST
+#### \`graph_affected\` — MUST
 
 Trigger: any symbol you intend to **modify, rename, delete, or change the
 signature/contract of** in Phase 3 (Impact Analysis) or Phase 6 (Implement).
-One \`graph_neighbors\` call per affected symbol before the diff lands.
+Also: "what breaks if I change X", "who calls X", "is X dead code".
+One \`graph_affected\` call per affected symbol **before the diff lands**.
+
+Call as \`graph_affected({symbol: "<bare symbol name>", depth: 1})\`. Use
+\`depth: 2\` when the direct callers are thin wrappers and you need the real
+consumers behind them.
+
+This is the blast-radius tool. \`graph_neighbors\` is NOT — the built graph is
+undirected, so its \`→\`/\`←\` arrows are adjacency-iteration order, not call
+direction. \`graph_affected\` reads the AST call cache instead, so callers come
+back with exact file and line.
+
+Read the two honesty signals in its output and act on them:
+- **ambiguity warning** — the symbol name is common (\`parse\`, \`get\`, \`trim\`),
+  so the hits include unrelated symbols sharing the name. Narrow with
+  \`graph_search\` or a scoped grep; do NOT report the count as a blast radius.
+- **no callers found** — this is NOT proof of dead code. Entry points, dynamic
+  dispatch, and reflection all look like this. Confirm before deleting.
+
+MUST-NOT skip because:
+- "it's a small change" — small changes with unexpected consumers are exactly
+  the regression class this exists to surface.
+- "I'll find the callers with grep" — grep finds the string, not the call, and
+  reports no caller/callee distinction at all.
+
+#### \`graph_neighbors\` — MUST
+
+Trigger: you need the **undirected context** around a node — what it imports,
+what contains it, what it is defined near — rather than who calls it.
 
 Call as \`graph_neighbors({node: "<symbol-or-node-id>", scope: "code"})\`
 for code symbols; \`scope: "all"\` if the symbol is also referenced in ADRs.
 
-MUST-NOT skip because:
-- "it's a small change" — small changes with unexpected 1-hop consumers
-  are exactly the regression class \`graph_neighbors\` exists to surface.
-- "I'll find the callers with grep" — text search misses dynamic dispatch,
-  re-exports, and config-level references the graph catches.
+MUST-NOT use it as a blast-radius answer. It cannot distinguish a caller from
+a callee; that is \`graph_affected\`'s job.
 
 #### \`graph_path\` — MUST
 
@@ -705,14 +732,45 @@ chain, blast-radius enumeration). Persist it so the next session doesn't
 re-walk the same path.
 
 Call as \`graph_save_result({question: "<the question as asked>", answer:
-"<your synthesis, cited>", scope: "<scope you used>", nodes:
-["nodeId1", ...]})\`. The memory dir is per-graph; it complements
-\`.marvin/memory.md\` (which is free-form, cross-session, human-edited).
+"<your synthesis, cited>", outcome: "<useful|dead_end|corrected>", scope:
+"<scope you used>", nodes: ["nodeId1", ...]})\`. The memory dir is per-graph;
+it complements \`.marvin/memory.md\` (which is free-form, cross-session,
+human-edited).
+
+**\`outcome\` is not optional in practice.** It is the entire signal
+\`graph_reflect\` learns from; a save without one is a cache entry, not
+feedback. Choose it from what actually happened *after* the graph answered:
+- \`useful\` — you then read the source and the graph's answer held up.
+- \`dead_end\` — the graph didn't contain the answer and you fell back to
+  \`Grep\`/\`Read\`. Recording this is how the graph's blind spots become known
+  instead of being rediscovered every session.
+- \`corrected\` — the graph's answer was **wrong**. Pass \`correction\` with what
+  was actually true. Highest-value signal there is; never swallow it out of
+  tidiness.
 
 MUST-NOT skip:
 - "the answer was short" — the test is whether the question would recur,
   not the length of the answer. "Where is the cost tracker initialised"
   recurs every session; save it.
+- "the graph was wrong so there's nothing to save" — backwards. A wrong
+  answer with a \`correction\` is worth more than a right one.
+
+#### \`graph_reflect\` — MUST
+
+Trigger, either of:
+1. You are **starting structural work in an area where the graph previously
+   misled you** — run it first and read the corrections before trusting the
+   graph again.
+2. You have recorded **≥3 outcomes** in this session.
+
+Call as \`graph_reflect({scope: "code"})\`. It is deterministic aggregation of
+outcomes already on disk — no LLM, no cost, safe to run whenever the trigger
+fires. It returns the lessons inline, so act on them **in this turn** rather
+than filing them away.
+
+MUST-NOT skip because:
+- "I'll just remember the correction" — you will not; the next session starts
+  with none of this conversation. That is the whole reason the file exists.
 
 ### Cross-tool MUST-NOTs
 
@@ -737,7 +795,9 @@ the three audit questions:
   the work genuinely fit the fast-path exception?
 - For every "how does X work" / "what calls Y" question I answered, did I
   use \`graph_query\` or \`graph_neighbors\` — or did I shortcut to \`Read\`?
-- For every symbol I modified, did I run \`graph_neighbors\` first?
+- For every symbol I modified, did I run \`graph_affected\` first?
+- For every graph answer I acted on, did I record an \`outcome\` — including
+  the ones where the graph was wrong?
 
 If the honest answer to any of these is "no, I shortcut" — say so in the
 turn-close. The status bar's "graph N · files M" chip will surface drift

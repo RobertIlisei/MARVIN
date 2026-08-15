@@ -1,6 +1,17 @@
+export {
+  AMBIGUITY_THRESHOLD,
+  type AffectedResult,
+  buildCallIndex,
+  cacheDirFor,
+  type CallIndex,
+  type CallSite,
+  callersOf,
+  symbolOf,
+} from "./call-index";
 export { createGraphMcpServer } from "./mcp-server";
 export {
   type GraphScope,
+  nodeLabelIndex,
   type GraphSummary,
   getNeighbors,
   graphPathForScope,
