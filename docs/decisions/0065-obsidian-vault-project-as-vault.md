@@ -162,3 +162,77 @@ ecosystem uses for this exact case.
 - [x] Both MCP tools report it.
 - [x] 4 tests: warns when absent, silent when present, ignores unrelated
       plugins, treats missing/malformed lists as "not enabled". 659 suite-wide.
+
+---
+
+## Addendum 2 (2026-08-15) — making both graphs actually earn their keep
+
+The user asked the right question: *how does MARVIN get value from graphify and
+from Obsidian, and won't two graphs confuse it?*
+
+**The honest answer was that MARVIN got value from graphify and none at all from
+Obsidian** — Phase 1 gave it two tools (`status`, `init`) and no way to read a
+note. And it cannot be confused between the two graphs, because Obsidian's graph
+is computed in memory from wikilinks and is not a queryable surface. The
+confusion risk was the user's: two graph viewers over overlapping content.
+
+Measuring turned up two real gaps.
+
+**1. graphify wasn't looking at most of MARVIN's own notes.** The knowledge
+graph's default inputs were `CLAUDE.md`, `README.md`, `docs/`,
+`.marvin/memory.md` — so of 819 notes on a real project, only the memory INDEX
+was reachable by `graph_query`. 437 backlog items and 303 plans were invisible
+to the one tool Golden Rule 7 requires trying first. Inputs now include
+`.marvin/memory/`, `.marvin/backlog/` and `.marvin/plans/`.
+
+Verified: 1455 files → 8516 nodes, and *"GDPR erasure saga scope and what is
+parked about it"* now returns two backlog items and a plan alongside the ADR,
+the runbook and the coverage audit. Before, those three were unreachable.
+
+**2. Nothing linked to anything.** 819 notes, 129 links, every one index→item.
+The relationships were in the prose all along — a body says "ADR-0211", a fact
+names `site.yml` — and only the syntax that makes a reference an EDGE was
+missing. `note-links.ts` derives them:
+
+- **ADR references** resolved against the real files. `[[ADR-0211]]` does *not*
+  resolve to `docs/adr/0211-three-level-mfa-enforcement.md`, so an unresolved
+  reference is **omitted** rather than emitted as a node that looks like a note
+  and opens nothing.
+- **File references** only when the path has a directory component and the file
+  exists — a link to a deleted file is worse than no link.
+- **Derived, delimited, regenerated** below a marker, never merged into the body
+  the model or user wrote; stripped on parse so it never counts toward the body
+  cap or round-trips into itself.
+
+Result on the real project: **378 of 437 items** gained links, from zero.
+
+Both fixes feed *both* consumers, which is the point — graphify and Obsidian
+read the same markdown, so a link written for the graph view is also an edge in
+the knowledge graph.
+
+**3. `graphify export obsidian`** verified: 2628 notes plus a `graph.canvas`
+from MARVIN's own code graph.
+
+### Division of labour, stated
+
+| | graphify | Obsidian |
+|---|---|---|
+| consumer | MARVIN | the user |
+| form | queryable, typed, `file:line` citations | visual, browsable, editable |
+
+**MARVIN should not read the Obsidian graph.** It would be a strictly worse
+graphify — no typed nodes, no traversal API, no citations, and it would have to
+parse wikilinks to rebuild what graphify already computes. Same knowledge, two
+consumers, deliberately different shapes.
+
+## Scope of Done — addendum 2
+
+- [x] Knowledge-graph inputs include `.marvin/memory/`, `backlog/`, `plans/`;
+      verified a query now reaches parked work.
+- [x] `note-links.ts` derives ADR + file links; unresolvable refs omitted;
+      dedup normalises `.md` so one note never gets two edges (caught on the
+      first real pass).
+- [x] All three backlog write paths emit the trailer; `relinkBacklogNotes`
+      backfills; `obsidian_init` runs it.
+- [x] 13 link tests + 672 suite-wide; `tsc` clean both packages.
+- [x] `graphify export obsidian` verified (2628 notes + canvas).
