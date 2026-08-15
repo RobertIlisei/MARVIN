@@ -24,7 +24,8 @@ Usage:
   python3 build-knowledge-graph.py <workDir> [--inputs <relpath> ...]
 
 Defaults inputs to:
-  CLAUDE.md  README.md  docs/  .marvin/memory.md
+  CLAUDE.md  README.md  docs/
+  .marvin/memory.md  .marvin/memory/  .marvin/backlog/  .marvin/plans/
 """
 
 from __future__ import annotations
@@ -261,7 +262,21 @@ def main():
         print(f"error: workDir does not exist or is not a directory: {root}", file=sys.stderr)
         return 1
 
-    inputs_rel = args.inputs or ["CLAUDE.md", "README.md", "docs", ".marvin/memory.md"]
+    # `.marvin/backlog` + `.marvin/plans` added 2026-08-15 (ADR-0065 addendum).
+    # Measured on a real project: of 819 notes MARVIN had written, only the
+    # memory INDEX was reachable by graph_query — 437 backlog items and 303
+    # plans were invisible to the one tool MARVIN is required to try first.
+    # These are the assistant's own notes about the project; excluding them
+    # meant "what's parked near this subsystem?" fell back to grep.
+    inputs_rel = args.inputs or [
+        "CLAUDE.md",
+        "README.md",
+        "docs",
+        ".marvin/memory.md",
+        ".marvin/memory",
+        ".marvin/backlog",
+        ".marvin/plans",
+    ]
     inputs = [root / p for p in inputs_rel]
 
     patterns = _load_graphifyignore(root)

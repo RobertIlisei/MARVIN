@@ -21,6 +21,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { buildAdrIndex, linkTrailerFor, stripLinkTrailer, type AdrIndex } from "./note-links";
+
 export const INDEX_HEADER = "# Project Backlog";
 export const MAX_TITLE_CHARS = 120;
 export const MAX_BODY_CHARS = 2000;
@@ -339,7 +341,10 @@ function parseField(content: string, field: string): string {
 function parseItem(slug: string, content: string): BacklogItem {
   const bodyStart = content.indexOf("\n---", 3);
   const afterFm = bodyStart >= 0 ? content.indexOf("\n", bodyStart + 1) : -1;
-  const body = afterFm >= 0 ? content.slice(afterFm + 1).trim() : "";
+  // The link trailer is DERIVED (ADR-0065 addendum) — strip it so it never
+  // counts toward the body cap, never shows in the detail view's body field,
+  // and never round-trips into itself on the next write.
+  const body = stripLinkTrailer(afterFm >= 0 ? content.slice(afterFm + 1).trim() : "").trim();
   const statusRaw = parseField(content, "status");
   const sevRaw = parseField(content, "severity");
   const kindRaw = parseField(content, "kind");
@@ -366,7 +371,46 @@ function parseItem(slug: string, content: string): BacklogItem {
   };
 }
 
-function serialize(item: BacklogItem): string {
+/**
+ * Write one item with its derived link trailer.
+ *
+ * Every write path goes through here so the trailer can never drift out of
+ * sync with the body that produced it. `adrIndex` is passed in when a caller is
+ * writing many items, so a relink pass scans the ADR directory once rather than
+ * once per item.
+ */
+async function writeItem(
+  workDir: string,
+  item: BacklogItem,
+  adrIndex?: AdrIndex,
+): Promise<void> {
+  const index = adrIndex ?? (await buildAdrIndex(workDir));
+  const trailer = linkTrailerFor(`${item.title}\n${item.body}`, workDir, index);
+  await writeFile(join(backlogDir(workDir), `${item.id}.md`), serialize(item, trailer), "utf-8");
+}
+
+/**
+ * Regenerate every live item's link trailer. Used when turning a project into a
+ * vault: existing notes predate the trailer, so without this the graph stays
+ * two starbursts until each item happens to be touched again.
+ */
+export async function relinkBacklogNotes(workDir: string): Promise<number> {
+  const items = await readAll(workDir);
+  if (items.length === 0) return 0;
+  const adrIndex = await buildAdrIndex(workDir);
+  let n = 0;
+  for (const item of items) {
+    try {
+      await writeItem(workDir, item, adrIndex);
+      n += 1;
+    } catch {
+      /* skip unwritable */
+    }
+  }
+  return n;
+}
+
+function serialize(item: BacklogItem, linkTrailer = ""): string {
   return (
     `---\n` +
     `id: ${item.id}\n` +
@@ -379,7 +423,7 @@ function serialize(item: BacklogItem): string {
     `sessionId: ${item.sessionId}\n` +
     `created: ${item.created}\n` +
     `updated: ${item.updated}\n` +
-    `---\n\n${item.body || item.title}\n`
+    `---\n\n${item.body || item.title}\n${linkTrailer}`
   );
 }
 
@@ -536,7 +580,7 @@ export async function addBacklogItem(
 
   try {
     await mkdir(dir, { recursive: true });
-    await writeFile(path, serialize(item), "utf-8");
+    await writeItem(workDir, item);
     await rewriteBacklogIndex(workDir);
     return { ok: true, item, created: !existing, related };
   } catch (err) {
@@ -595,7 +639,7 @@ export async function updateBacklogItem(
   const touchedWork = fields.body !== undefined || fields.severity !== undefined;
   if (touchedWork) item.updated = new Date().toISOString();
   try {
-    await writeFile(path, serialize(item), "utf-8");
+    await writeItem(workDir, item);
     await rewriteBacklogIndex(workDir);
     return { ok: true, item };
   } catch (err) {
@@ -619,7 +663,7 @@ export async function setBacklogStatus(
     item.body = `${item.body}\n\n> ${status} — ${note.trim()}`.trim().slice(0, MAX_BODY_CHARS);
   }
   try {
-    await writeFile(path, serialize(item), "utf-8");
+    await writeItem(workDir, item);
     await rewriteBacklogIndex(workDir);
     return { ok: true, item };
   } catch (err) {

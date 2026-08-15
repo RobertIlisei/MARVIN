@@ -19,7 +19,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import { initVault, vaultStatus } from "./obsidian-vault";
-import { rewriteBacklogIndex } from "./backlog";
+import { relinkBacklogNotes, rewriteBacklogIndex } from "./backlog";
 import { rewriteMemoryIndex } from "./memory-mcp";
 
 const run = promisify(execFile);
@@ -107,6 +107,12 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
       let relinked = 0;
       try { relinked += await rewriteBacklogIndex(cwd); } catch { /* no backlog yet */ }
       try { relinked += await rewriteMemoryIndex(cwd); } catch { /* no memory yet */ }
+      // Existing notes predate the derived link trailer, so without this pass
+      // the graph stays two starbursts until each item happens to be touched
+      // again. Regenerating is safe: the trailer is delimited and recomputed,
+      // never merged into the body.
+      let itemsLinked = 0;
+      try { itemsLinked = await relinkBacklogNotes(cwd); } catch { /* best effort */ }
       const graph = exportGraph === false
         ? { ok: false, detail: "code-graph export skipped (not requested)" }
         : await exportGraphNotes(cwd);
@@ -119,7 +125,8 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
             ? ` Added ${res.ignoreFiltersAdded.length} ignore filter(s) so the graph view shows notes, not node_modules.`
             : "") +
           ` It now surfaces ${memory} memory fact(s), ${backlog} backlog item(s) and ${plans} plan(s),` +
-          ` ${relinked} of them relinked into the index hubs.` +
+          ` ${relinked} relinked into the index hubs` +
+          (itemsLinked ? `, ${itemsLinked} item note(s) given derived links to their ADRs and files.` : ".") +
           ` ${graph.detail}` +
           (res.status.hiddenFolderPlugin
             ? ""
