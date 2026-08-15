@@ -34,6 +34,12 @@ export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
   ".ruff_cache",
   "target",
   "vendor",
+  // Generated graph output — graphify's extraction cache alone was 12,195
+  // files on one real project, consuming 61% of the file tree's 20,000-entry
+  // cap and truncating the tree so folders looked MISSING. Same class as
+  // node_modules: derived, already gitignored, and nobody browses an
+  // extraction cache through an IDE file tree. Observed 2026-08-15.
+  "graphify-out",
 ]);
 
 /**
