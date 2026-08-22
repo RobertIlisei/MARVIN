@@ -69,6 +69,7 @@ import { latestForTier } from "./models";
 import { defaultModel } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { markTurnMutated } from "./turn-registry";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -950,6 +951,25 @@ export function residentContextTokens(event: SDKMessage): number | null {
  * GC'd on the next read). Best-effort: checkpointing must never block or
  * fail a write.
  */
+/**
+ * Does this allowed tool call change the workspace? (ADR-0069)
+ *
+ * Used only to decide whether an in-flight turn may be preempted by an
+ * arriving user message. Deliberately CONSERVATIVE: anything uncertain counts
+ * as mutating, because the cost of a false negative (interrupting a turn
+ * mid-write) is a corrupted edit, while a false positive merely makes the user
+ * queue instead of preempting.
+ */
+export function isMutatingToolCall(toolName: string, input: Record<string, unknown>): boolean {
+  if (["Edit", "Write", "NotebookEdit", "MultiEdit"].includes(toolName)) return true;
+  if (toolName !== "Bash") return false;
+  const cmd = typeof input.command === "string" ? input.command : "";
+  if (!cmd) return true; // unknown Bash -> assume it writes
+  // A short read-only allowlist. Everything else is treated as mutating.
+  const readOnly = /^\s*(git\s+(status|log|diff|show|branch|rev-parse)|ls|cat|head|tail|grep|rg|find|wc|pwd|echo|which|stat|file|du|df)\b/;
+  return !readOnly.test(cmd);
+}
+
 function maybeRecordPreImage(args: {
   checkpoint: { projectId: string; marvinSessionId: string } | undefined;
   cwd: string;
@@ -1092,6 +1112,12 @@ export function makeAutoModeLogger(args: {
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
     if (cls.decision !== "deny") {
       maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
+      // ADR-0069 — the preemption safety flag. Set the INSTANT a mutating call
+      // is allowed, before the write lands: a turn midway through an edit is
+      // precisely the one an arriving user message must not interrupt.
+      if (checkpoint && isMutatingToolCall(toolName, safeInput)) {
+        markTurnMutated(checkpoint.marvinSessionId);
+      }
     }
     if (cls.decision === "deny") {
       return {

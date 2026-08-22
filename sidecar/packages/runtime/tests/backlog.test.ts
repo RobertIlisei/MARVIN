@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  repairSwallowedField,
   MAX_BODY_CHARS,
   MAX_OPEN_ITEMS,
   MAX_TITLE_CHARS,
@@ -349,8 +350,12 @@ describe("backlog overlap — reported at the write boundary, never applied", ()
     });
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    // Different slug — so it IS parked, and both files exist...
-    expect(second.item.id).not.toBe(first.item.id);
+    // ADR-0070 changed this deliberately: a near-identical restatement is now
+    // REFUSED rather than parked-and-annotated. The original is handed back.
+    // (Advisory reporting still applies BELOW the gate threshold — see the
+    // near-duplicate gate suite.)
+    expect(second.duplicateOf).toBeTruthy();
+    expect(second.item.id).toBe(first.item.id);
     expect(existsSync(itemPath(first.item.id))).toBe(true);
     expect(existsSync(itemPath(second.item.id))).toBe(true);
     // ...but the overlap is reported rather than silently dropped.
@@ -471,5 +476,127 @@ describe("backlog store — classification must not reset the staleness clock", 
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.item.updated).not.toBe(a.item.updated);
+  });
+});
+
+// ── Frontmatter parsing: the newline-swallowing bug (2026-08-18) ────────────
+// `parseField` used `\s*`, which matches NEWLINES — so an EMPTY field captured
+// the following line as its value, and the serializer wrote it back. Measured
+// on a real project: 453 of 461 files held `blockedOn: sessionId: <uuid>`, some
+// having swallowed two lines. Latent for as long as the parser existed;
+// ADR-0064's `blockedOn` (empty on ~98% of items) made every write hit it.
+describe("frontmatter parsing — empty fields must not swallow the next line", () => {
+  it("parses an empty field as empty, not as the next line", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "marvin-fm-"));
+    const file = join(dir, ".marvin", "backlog", "x.md");
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      [
+        "---",
+        "id: x",
+        "title: An item",
+        "status: open",
+        "severity: low",
+        "kind: chore",
+        "blocked: false",
+        "blockedOn:",
+        "sessionId: dea26a4f-3324",
+        "created: 2026-08-18T12:10:39.358Z",
+        "updated: 2026-08-18T12:10:39.358Z",
+        "---",
+        "",
+        "body",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const items = await listBacklog(dir);
+    const it0 = items.find((i) => i.id === "x");
+    expect(it0).toBeTruthy();
+    // The regression: blockedOn used to come back as "sessionId: dea26a4f-3324".
+    expect(it0!.blockedOn).toBe("");
+    expect(it0!.sessionId).toBe("dea26a4f-3324");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("repairSwallowedField blanks a value that is really another field", () => {
+    expect(repairSwallowedField("sessionId: dea26a4f-3324")).toBe("");
+    expect(repairSwallowedField("sessionId: created: 2026-08-10T19:32:49.646Z")).toBe("");
+  });
+
+  it("repairSwallowedField preserves a LEGITIMATE blockedOn value", () => {
+    // Real reasons must survive — including ones containing a colon.
+    expect(repairSwallowedField("undecided policy")).toBe("undecided policy");
+    expect(repairSwallowedField("waiting on legal: DPA signature")).toBe(
+      "waiting on legal: DPA signature",
+    );
+    expect(repairSwallowedField("")).toBe("");
+  });
+});
+
+// ── Near-duplicate gate (ADR-0070) ─────────────────────────────────────────
+// Un-gated capture (ADR-0047) let one session park the same ADR-0344 question
+// twice in two wordings (0.88 similar) and another park the same prod .env
+// check twice (0.75), while resolving nothing. The gate refuses the restatement
+// instead of writing it — non-destructively.
+describe("near-duplicate capture gate", () => {
+  it("refuses a restatement of a live item and hands back the original", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "marvin-dupe-"));
+    const first = await addBacklogItem(dir, {
+      title: "ADR-0344: confirm generated_at-as-issued_date proxy for AVIZ_DOCUMENT",
+    });
+    expect(first.ok && first.created).toBe(true);
+
+    const second = await addBacklogItem(dir, {
+      title: "ADR-0344: confirm generated_at proxies issued_date for AVIZ_DOCUMENT",
+    });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.created).toBe(false);
+      expect(second.duplicateOf).toBeTruthy();
+      // Nothing lost: the ORIGINAL is what comes back.
+      expect(second.item.id).toBe(first.ok ? first.item.id : "");
+    }
+    // And only one file exists.
+    expect((await listBacklog(dir)).length).toBe(1);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("lets genuinely different work through", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "marvin-dupe2-"));
+    await addBacklogItem(dir, { title: "Add archive_mode gauge to prod-wal-guard-metrics.sh" });
+    const other = await addBacklogItem(dir, {
+      title: "Provision OpenBao database static role agricore-app",
+    });
+    expect(other.ok && other.created).toBe(true);
+    expect((await listBacklog(dir)).length).toBe(2);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("force re-admits an item the gate refused", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "marvin-dupe3-"));
+    await addBacklogItem(dir, { title: "Verify prod .env AGRICORE_POSTGRES_IMAGE and build-push" });
+    const forced = await addBacklogItem(dir, {
+      title: "Verify prod /opt/agricore/.env AGRICORE_POSTGRES_IMAGE and build-push flow",
+      force: true,
+    });
+    expect(forced.ok && forced.created).toBe(true);
+    expect((await listBacklog(dir)).length).toBe(2);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("never blocks an UPDATE to an existing item", async () => {
+    // Same title = same slug = an update, which must always be allowed.
+    const dir = await mkdtemp(join(tmpdir(), "marvin-dupe4-"));
+    const a = await addBacklogItem(dir, { title: "Fix the flaky retention IT", severity: "low" });
+    const b = await addBacklogItem(dir, { title: "Fix the flaky retention IT", severity: "high" });
+    expect(b.ok).toBe(true);
+    if (b.ok) {
+      expect(b.duplicateOf).toBeUndefined();
+      expect(b.item.severity).toBe("high");
+      expect(b.item.id).toBe(a.ok ? a.item.id : "");
+    }
+    await rm(dir, { recursive: true, force: true });
   });
 });

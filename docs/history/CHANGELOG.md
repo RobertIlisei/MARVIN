@@ -9,6 +9,101 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-22 — v0.1.63: the session where MARVIN was measured instead of guessed at.**
+
+  Six ADRs, each starting from a number. The through-line: every "obvious" cause
+  in this release was wrong, and the measurement said so.
+
+  **ADR-0067 — three days of plan work, diagnosed.** The user reported a plan
+  taking three days. Rather than theorise, the transcript was measured (10,237
+  records, 104 turns): **49.0 h elapsed, 15.9 h working, 33.1 h waiting on the
+  user — and only ~10 % of that wait was legitimate.** 17.8 h across 65 turns was
+  MARVIN ending mid-plan having asked *nothing*; 6.7 h across 20 turns was asking
+  permission the approved plan already granted; 5.1 h was a transport error
+  killing the session with nobody awake to notice. The user had typed "Resume the
+  ACTIVE plan — and ONLY this plan" **8 times**: a hand-built workaround for a
+  product defect. Cause: Golden Rule 8 gated on the *turn* boundary, making every
+  milestone a blocking handoff. Now gates on the **scope** boundary — an approved
+  plan is standing authorization — with the out-of-scope stop untouched and
+  stated more forcefully. Transport failures auto-continue through ADR-0031's
+  existing rails (narrow allowlist; overflow/abort/auth stay terminal).
+  `scripts/session-time-breakdown.py` makes it re-measurable.
+
+  **ADR-0066 — graphify at full surface.** The bridge used roughly a quarter of
+  0.9.43. `graph_neighbors` was documented as "1-hop blast radius" and rendered
+  `→`/`←` arrows — but the graph is built `directed: false`, proven by finding
+  the same `calls` relation in **opposite orientations** for two known
+  caller/callee pairs. graphify's own `affected` inherits the defect, and
+  `--directed` turned out not to be a build flag at all. `graph_affected` reads
+  the AST call cache instead. Validated on a Java monorepo: 433,361 directed
+  edges, where the naive implementation cost 3.0 s / 127 MB — unusable under a
+  per-turn watchdog — until incremental ingest (the cache is content-addressed)
+  plus interning took it to **5 ms / 36 MB**. `graph_save_result` now carries an
+  `outcome` and `graph_reflect` aggregates it; both graphs' communities are named
+  via the OAuth'd `claude-cli` backend (no API key); token reduction **measured
+  at 27.5×**, replacing an unmeasured "~36×".
+
+  **ADR-0068 — the plan system stopped lying, in four ways.** MARVIN reported
+  that a real plan "isn't a tracked plan; it never was" and that genuine merged
+  commits were "fabricated". Both false — the plan was the session's own
+  `activePlanId`, and every "fabricated" item was in it. The user was one step
+  from discarding real work. The *suspicion* was earned: 347 checkbox bullets, 24
+  duplicated, 14 IDs reused, 7 present both checked and unchecked. Four fixes —
+  `sameWork` (stop duplicating on rewording, validated 347→277 with the four
+  least-similar merges hand-checked), `dedupeSubtasks` (existing plans self-heal,
+  last-status-wins so undone work is never marked done), provenance (`id` +
+  `source:` path, so verifying is one read instead of a 303-file scan), and a
+  firm surface: **a failed search is a fact about the search, not the world.**
+  Two addenda followed the same day: completed sub-tasks now collapse in the
+  injected block (**9,173 → 4,073 tokens/turn** on a real plan), step counting
+  stopped promoting nested bullets (**66 "steps" found in a 6-step file**, which
+  is why the UI said "1/12" while MARVIN said "all 6 done"), and plan files carry
+  a freshness date so three-week-old work stops being offered as "in-flight".
+  A correction is recorded in the ADR itself: the original claim that plans
+  accumulate *across sessions* was wrong and unchecked — it happened inside one
+  57-hour thread.
+
+  **ADR-0069 — user messages were being silently dropped.** A wakeup held the
+  one-turn-per-session slot; the user's "Update graphify…" got a `409` and was
+  **discarded** — confirmed absent from all 150 `turn.user` records in that
+  session. Two machine turns then answered questions the user hadn't asked while
+  a stale banner offered a Retry that cannot work. "Just preempt" was
+  unavailable: the 409 was itself the fix for blind eviction "silently orphaning
+  a possibly-heavy in-flight turn". So messages now persist to disk *before* any
+  scheduling decision, and preemption is gated on **observed behaviour, not turn
+  kind** — `machine && !mutated`, with the flag set the instant a write is
+  *allowed*. That automatically protects auto-continue turns, which are
+  machine-started but resume real implementation work. Machine turns are now
+  rate-limited (ADR-0031 bounded depth and count, never rate; the two colliding
+  wakeups were 53 s apart).
+
+  **ADR-0070 — the backlog stopped outgrowing itself.** Reported as "I work 1
+  item and MARVIN opens 2-5". Measured: sessions at 6-added/0-resolved and
+  9-added/2-resolved. Two of the investigator's own hypotheses were disproved en
+  route — `backlog_add` *does* dedupe (it just annotated after writing), and the
+  12 design/animation skills enabled on a Spring Boot backend have **never
+  fired**. The real cause was ADR-0047's un-gated capture meeting deep
+  investigation sessions. Capture now needs all three of actionable /
+  out-of-scope / worth-rediscovering, and a near-identical restatement is refused
+  at the tool boundary. Calibrated on two real duplicate pairs (0.88, 0.75)
+  against a distinct pair (0.00), with a **signal floor** after the existing
+  suite caught that "Item one" vs "Item two" scores **1.00**.
+
+  **ADR-0062 addenda — the layout crash is finally instrumented.** The hook added
+  to diagnose it had **never fired in 24 sessions**: it swizzled the *instance*
+  method `-[NSApplication reportException:]` while AppKit's layout path calls the
+  *class* method `+[NSApplication _crashOnException:]`. The session-start stamp
+  claiming "exceptions are logged and survived" was false for precisely the crash
+  it existed for. Now armed — and it produced the first capture in 11 days,
+  naming `STTextView`'s per-fragment `addSubview` and then, on a later crash,
+  `NSSplitViewController.loadView` running *inside* a 150-invalidation burst.
+  The monitor was itself bounded after it grew the log 30 KB → 4.4 MB doing
+  symbolication and synchronous I/O inside the layout pass. Attempt four at the
+  root cause (an `@Observable` health-poll write with no equality guard) ships
+  with a falsifiable metric rather than a claim. **Root cause remains OPEN** —
+  three prior fixes were disproved by byte-identical stacks, and this one is
+  deliberately labelled unproven.
+
 - **2026-08-15 — v0.1.62: graphify at full surface, and two tools that were quietly lying.**
 
   **Diagnostic.** The question was simply whether MARVIN used the current graphify.

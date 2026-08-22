@@ -126,7 +126,8 @@ final class HealthMonitor {
     private func recordMiss(_ reason: String) {
         consecutiveFailures += 1
         if consecutiveFailures >= offlineThreshold || state.isOffline {
-            state = .offline(reason: reason)
+            let next = SidecarState.offline(reason: reason)
+            if state != next { state = next }
         }
         // else: under threshold + currently connecting/online → hold, no reset.
     }
@@ -149,7 +150,23 @@ final class HealthMonitor {
             }
             let health = try JSONDecoder().decode(SidecarHealth.self, from: data)
             consecutiveFailures = 0
-            state = .online(health)
+            // ADR-0062 experiment — assign ONLY on a real change.
+            //
+            // `@Observable` fires on every `set`, with no equality check, so an
+            // unconditional write here invalidated the SwiftUI graph on every
+            // poll (15 s when healthy). `ContentView.mainContent` reads
+            // `health.state` in a `switch`, so each write re-evaluated the
+            // branch containing the `HSplitView` — and a rebuilt split view
+            // means `NSSplitViewController.loadView` → `addSubview` for every
+            // pane, which is 150+ constraint invalidations in one burst. That
+            // is exactly the storm shape the monitor captured on 2026-08-22.
+            //
+            // `SidecarHealth` is all stable config (ok/auth/binary/model/dataDir
+            // — no timestamps or counters), so a healthy sidecar produces an
+            // EQUAL value poll after poll and this writes nothing. Real
+            // transitions still propagate immediately.
+            let next = SidecarState.online(health)
+            if state != next { state = next }
         } catch let urlError as URLError {
             // Specific URLError codes get specific messages — the
             // user gets a real instruction instead of a generic

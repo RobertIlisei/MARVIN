@@ -347,9 +347,38 @@ function arm(record: WakeupRecord): void {
  * Returns `true` when the wakeup was deferred (or dropped at the cap), meaning
  * the caller must NOT dispatch it.
  */
+/**
+ * Minimum spacing between consecutive MACHINE-initiated turns on one session
+ * (ADR-0069).
+ *
+ * ADR-0031 bounds wakeup *depth* and *pending count*, but not RATE. On
+ * 2026-08-17 two wakeups fired 53 s apart (22:19:20 and 22:20:13) and between
+ * them a user message was rejected and lost: back-to-back self-initiated turns
+ * left the human almost no gap to be heard. Spacing them reduces that collision
+ * pressure at the source rather than only handling it after the fact.
+ */
+export const MIN_MACHINE_TURN_SPACING_MS = 60_000;
+
+/** When the last machine-initiated turn started, per session. */
+const lastMachineTurnAt = new Map<string, number>();
+
+/** Called by the fire handler as a machine turn begins. */
+export function noteMachineTurnStarted(marvinSessionId: string, now: number = Date.now()): void {
+  lastMachineTurnAt.set(marvinSessionId, now);
+}
+
+export function __resetMachineSpacingForTests(): void {
+  lastMachineTurnAt.clear();
+}
+
 function deferIfSessionBusy(record: WakeupRecord): boolean {
   const live = getLiveTurn(record.marvinSessionId);
-  if (!live || live.ended) return false;
+  const last = lastMachineTurnAt.get(record.marvinSessionId);
+  const tooSoon =
+    last !== undefined && Date.now() - last < MIN_MACHINE_TURN_SPACING_MS;
+  // Treat "another machine turn just ran" exactly like "the session is busy":
+  // re-arm on the same backoff instead of stacking self-initiated turns.
+  if ((!live || live.ended) && !tooSoon) return false;
   const deferrals = (record.deferrals ?? 0) + 1;
   if (deferrals > MAX_FIRE_DEFERRALS) {
     unpersist(record.projectId, record.id);

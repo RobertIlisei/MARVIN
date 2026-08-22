@@ -874,6 +874,401 @@ runner.suite("MarkdownLinks") {
     }
 }
 
+
+// MARK: - Plan de-duplication (ADR-0068)
+//
+// Measured on a real corrupted plan (agri-saas-platform, 2026-08-17):
+// `.marvin/plans/grouped-backlog-fix-pass.md` had grown to 347 checkbox
+// bullets / 38,980 bytes, with 24 duplicated texts, 14 IDs reused for
+// DIFFERENT work, and 7 bullets present BOTH checked and unchecked. The
+// injected plan context was therefore self-contradictory, and the model
+// reading it concluded — wrongly — that the plan "never was" a tracked plan
+// and that real, merged work had been "fabricated".
+//
+// Cause: `mergeSubtasks` matches on equality or containment and APPENDS when
+// both fail. A reworded sub-task is a new row. These strings are taken from
+// the real file.
+
+runner.suite("plan-dedupe") {
+    let longA = "Milestone A (sweep-side): zilier_entries + documents widened match, dry-run counts, TDD RED-GREEN, DoD-completeness tests (purgeStorage chain + non-zero dry-run counts) — 41/41 green"
+    let longB = "Milestone A (sweep-side): zilier_entries + documents widened match, TDD, DoD-completeness tests — 41/41 green"
+
+    runner.test("the real reworded pair is recognised as the same work") {
+        // Neither equal nor containing: this is exactly the pair that
+        // produced a duplicate row in production.
+        runner.expect(
+            !PlanTextMatch.matches(PlanTextMatch.normalize(longA), PlanTextMatch.normalize(longB)),
+            "precondition: old matcher does NOT catch this pair"
+        )
+        runner.expect(
+            PlanTextMatch.sameWork(PlanTextMatch.normalize(longA), PlanTextMatch.normalize(longB)),
+            "sameWork catches the reworded duplicate"
+        )
+    }
+
+    runner.test("distinct milestones sharing a short prefix are NOT merged") {
+        // The danger of prefix matching is collapsing real, separate work.
+        let a = PlanTextMatch.normalize("Milestone 2: wire ActivityController to the resolver")
+        let b = PlanTextMatch.normalize("Milestone 2: wire TreatmentController to the resolver")
+        runner.expect(!PlanTextMatch.sameWork(a, b), "different controllers stay separate")
+    }
+
+    runner.test("short items are never merged on prefix alone") {
+        let a = PlanTextMatch.normalize("Run make fast")
+        let b = PlanTextMatch.normalize("Run make e2e")
+        runner.expect(!PlanTextMatch.sameWork(a, b), "short similar items stay separate")
+    }
+
+    runner.test("dedupe collapses the reworded pair and keeps the richer text") {
+        let items = [
+            TodoItem(content: longA, status: "completed", activeForm: nil),
+            TodoItem(content: longB, status: "completed", activeForm: nil),
+        ]
+        let (out, collapsed) = PlanProgress.dedupeSubtasks(items)
+        runner.expect(out.count, equals: 1, "two rows become one")
+        runner.expect(collapsed, equals: 1, "reports what it collapsed")
+        runner.expect(out[0].content.count >= longA.count, "keeps the fuller wording")
+    }
+
+    runner.test("a contradictory pair resolves to the most recent statement") {
+        // Same work listed completed, then listed pending again. Last write
+        // wins — silently preferring 'completed' would mark undone work done.
+        let items = [
+            TodoItem(content: longA, status: "completed", activeForm: nil),
+            TodoItem(content: longB, status: "pending", activeForm: nil),
+        ]
+        let (out, _) = PlanProgress.dedupeSubtasks(items)
+        runner.expect(out.count, equals: 1, "collapsed")
+        runner.expect(out[0].status, equals: "pending", "latest status wins")
+    }
+
+    runner.test("dedupe is order-preserving and idempotent") {
+        let items = [
+            TodoItem(content: "Alpha step doing the first distinct thing", status: "completed", activeForm: nil),
+            TodoItem(content: longA, status: "completed", activeForm: nil),
+            TodoItem(content: "Omega step doing the last distinct thing", status: "pending", activeForm: nil),
+            TodoItem(content: longB, status: "completed", activeForm: nil),
+        ]
+        let (once, _) = PlanProgress.dedupeSubtasks(items)
+        let (twice, again) = PlanProgress.dedupeSubtasks(once)
+        runner.expect(once.count, equals: 3, "one duplicate removed")
+        runner.expect(once[0].content.hasPrefix("Alpha"), "order preserved")
+        runner.expect(once[2].content.hasPrefix("Omega"), "order preserved")
+        runner.expect(again, equals: 0, "second pass finds nothing to collapse")
+        runner.expect(twice.count, equals: 3, "idempotent")
+    }
+
+    runner.test("mergeSubtasks no longer appends a reworded duplicate") {
+        // The regression itself: merging a reworded restatement must update
+        // the existing row, not add a second one.
+        let existing = [TodoItem(content: longA, status: "pending", activeForm: nil)]
+        let out = PlanProgress.mergeSubtasks(existing, [TodoItem(content: longB, status: "completed", activeForm: nil)])
+        runner.expect(out.count, equals: 1, "no duplicate row")
+        runner.expect(out[0].status, equals: "completed", "status updated in place")
+    }
+
+    runner.test("keys still win over text when present") {
+        let existing = [TodoItem(content: "Some work", status: "pending", activeForm: nil, key: "k1")]
+        let out = PlanProgress.mergeSubtasks(existing, [TodoItem(content: "Rephrased entirely", status: "completed", activeForm: nil, key: "k1")])
+        runner.expect(out.count, equals: 1, "keyed match still reconciles")
+        runner.expect(out[0].status, equals: "completed", "status updated")
+    }
+}
+
+
+// MARK: - Injected plan-context block (ADR-0068 addendum)
+//
+// Measured on the real `Grouped backlog fix pass` plan: 20 steps, 336
+// sub-tasks, 61% already completed, rendered in full into EVERY turn —
+// 36,694 chars (~9,173 tokens). Collapsing the completed ones halves it.
+// This block is also what the model mis-read when it called genuine merged
+// work "fabricated", so its wording is load-bearing, not cosmetic.
+
+runner.suite("plan-context-block") {
+    func sub(_ c: String, _ st: String) -> TodoItem {
+        TodoItem(content: c, status: st, activeForm: nil)
+    }
+    func planWith(_ subs: [TodoItem], path: String? = "/proj/.marvin/plans/p.md") -> Plan {
+        var step = PlanStep(content: "Wire the thing", status: "in_progress")
+        step.subtasks = subs
+        return Plan(id: "p", title: "P", text: "", path: path, steps: [step])
+    }
+
+    runner.test("returns nil when the plan has no steps") {
+        let empty = Plan(id: "p", title: "P", text: "", path: nil, steps: [])
+        runner.expect(PlanContextBlock.render(plan: empty) == nil, "no block for an empty plan")
+    }
+
+    runner.test("carries id and on-disk source so the plan is verifiable") {
+        let out = PlanContextBlock.render(plan: planWith([sub("a", "pending")])) ?? ""
+        runner.expect(out.contains("(id: p)"), "id present")
+        runner.expect(out.contains("source: /proj/.marvin/plans/p.md"), "path present")
+    }
+
+    runner.test("says so honestly when the plan is not yet on disk") {
+        let out = PlanContextBlock.render(plan: planWith([sub("a", "pending")], path: nil)) ?? ""
+        runner.expect(out.contains("not yet written to disk"), "states the absence")
+    }
+
+    runner.test("does NOT collapse a small number of completed sub-tasks") {
+        // Collapsing "1 of 2 complete" hides more than it saves.
+        let out = PlanContextBlock.render(plan: planWith([
+            sub("alpha done", "completed"),
+            sub("beta open", "pending"),
+        ])) ?? ""
+        runner.expect(out.contains("alpha done"), "completed item still shown")
+        runner.expect(!out.contains("of 2 sub-tasks complete"), "no summary line")
+    }
+
+    runner.test("collapses completed sub-tasks past the threshold, stating the count") {
+        var subs = (1...5).map { sub("done item \($0)", "completed") }
+        subs.append(sub("the open one", "pending"))
+        let out = PlanContextBlock.render(plan: planWith(subs)) ?? ""
+        runner.expect(out.contains("5 of 6 sub-tasks complete"), "count stated")
+        runner.expect(!out.contains("done item 3"), "completed detail omitted")
+        runner.expect(out.contains("the open one"), "open work always shown in full")
+    }
+
+    runner.test("omission can never read as 'not done'") {
+        var subs = (1...5).map { sub("done \($0)", "completed") }
+        subs.append(sub("open", "pending"))
+        let out = PlanContextBlock.render(plan: planWith(subs)) ?? ""
+        runner.expect(out.contains("a summarised item IS"), "explicitly states summarised == done")
+        runner.expect(out.contains("do not redo it"), "tells the model not to redo it")
+    }
+
+    runner.test("PRESERVES original numbering after omitting completed items") {
+        // Renumbering would silently move the model's own reference points and
+        // make the block disagree with the file it cites.
+        var subs = (1...5).map { sub("done \($0)", "completed") }
+        subs.append(sub("sixth item, still open", "pending"))
+        let out = PlanContextBlock.render(plan: planWith(subs)) ?? ""
+        runner.expect(out.contains("1.6 sixth item"), "kept index 6, not renumbered to 1.1")
+    }
+
+    runner.test("an all-complete step summarises without a misleading suffix") {
+        let out = PlanContextBlock.render(plan: planWith((1...5).map { sub("d\($0)", "completed") })) ?? ""
+        runner.expect(out.contains("5 of 5 sub-tasks complete"), "count stated")
+        runner.expect(!out.contains("the open ones follow"), "no promise of open items when there are none")
+    }
+
+    runner.test("in-progress sub-tasks are never collapsed") {
+        var subs = (1...5).map { sub("done \($0)", "completed") }
+        subs.append(sub("actively running", "in_progress"))
+        let out = PlanContextBlock.render(plan: planWith(subs)) ?? ""
+        runner.expect(out.contains("actively running"), "in-progress work stays visible")
+        runner.expect(out.contains("[~]"), "in-progress glyph retained")
+    }
+
+    runner.test("collapsing materially shrinks a realistic plan") {
+        var subs = (1...200).map { sub("completed sub-task number \($0) with a fairly long description", "completed") }
+        subs.append(contentsOf: (1...10).map { sub("open sub-task \($0)", "pending") })
+        let collapsed = (PlanContextBlock.render(plan: planWith(subs)) ?? "").count
+        // Reference: the same plan with nothing collapsed.
+        var openOnly = PlanStep(content: "Wire the thing", status: "in_progress")
+        openOnly.subtasks = subs
+        let full = subs.reduce(0) { $0 + $1.content.count + 12 }
+        runner.expect(collapsed < full / 2, "collapsed block is less than half the full rendering")
+    }
+}
+
+
+// MARK: - Plan file freshness stamp (ADR-0068 addendum 2)
+//
+// Observed 2026-08-17: a brand-new session found a plan on disk last modified
+// Jul 28 — three weeks earlier — and offered it as "an in-flight plan … want me
+// to resume at step 7?". `Read` does not surface mtime, so unchecked boxes were
+// the only signal available, and unchecked means "never finished", not
+// "current". The stamp puts the date in the file itself.
+
+runner.suite("plan-file-stamp") {
+    let day = DateFormatter()
+    day.locale = Locale(identifier: "en_US_POSIX")
+    day.timeZone = TimeZone(identifier: "UTC")
+    day.dateFormat = "yyyy-MM-dd"
+    let d1 = day.date(from: "2026-07-28")!
+    let d2 = day.date(from: "2026-08-17")!
+
+    runner.test("stamps the body with the date and the caveat") {
+        let out = PlanFile.stamped("# Plan — X\n1. [ ] do it", date: d1)
+        runner.expect(out.contains("2026-07-28"), "date present")
+        runner.expect(out.contains("Unchecked boxes mean this plan was never"), "caveat present")
+        runner.expect(out.contains("# Plan — X"), "body preserved")
+    }
+
+    runner.test("stripStamp round-trips to the original body") {
+        let body = "# Plan — X\n1. [ ] do it"
+        runner.expect(PlanFile.stripStamp(PlanFile.stamped(body, date: d1)), equals: body, "round-trip")
+    }
+
+    runner.test("stamping is idempotent — no stacking of trailers") {
+        // Re-saving must replace the stamp, never append a second one.
+        let once = PlanFile.stamped("# Plan", date: d1)
+        let twice = PlanFile.stamped(once, date: d2)
+        runner.expect(twice.components(separatedBy: PlanFile.stampMarker).count - 1, equals: 1, "exactly one stamp")
+        runner.expect(twice.contains("2026-08-17"), "carries the NEW date")
+        runner.expect(!twice.contains("2026-07-28"), "old date gone")
+    }
+
+    runner.test("an unstamped body strips to itself") {
+        // The 303 pre-existing plan files have no stamp; stripping must be a no-op.
+        let plain = "# Plan — legacy\n1. [x] done"
+        runner.expect(PlanFile.stripStamp(plain), equals: plain, "unchanged")
+    }
+
+    runner.test("CHANGE DETECTION ignores the stamp") {
+        // The load-bearing property: same body + different date must compare
+        // equal, or every save rewrites the file and every plan looks fresh.
+        let body = "# Plan — X\n1. [ ] step"
+        let a = PlanFile.stamped(body, date: d1)
+        let b = PlanFile.stamped(body, date: d2)
+        runner.expect(PlanFile.stripStamp(a), equals: PlanFile.stripStamp(b), "stamp excluded from comparison")
+        runner.expect(a != b, "the raw files DO differ (so a naive compare would churn)")
+    }
+
+    runner.test("a real body change is still detected") {
+        let a = PlanFile.stamped("# Plan\n1. [ ] step", date: d1)
+        let b = PlanFile.stamped("# Plan\n1. [x] step", date: d1)
+        runner.expect(PlanFile.stripStamp(a) != PlanFile.stripStamp(b), "progress change detected")
+    }
+}
+
+
+// MARK: - Step counting: nested bullets are sub-tasks, not steps (ADR-0068 add. 3)
+//
+// Observed 2026-08-19: MARVIN reported "Plan complete — all 6 top-level steps
+// verified done" while the UI showed "1/12 · Paused" on the same plan. Both were
+// right about different things. The lenient step regex (`^\s*` — any
+// indentation) found 66 "steps" in a file with 6 numbered ones, because every
+// indented sub-bullet was promoted to a top-level step.
+
+runner.suite("plan-step-counting") {
+    let plan = """
+    # Plan — Retention sweep
+
+    1. [ ] **Consolidate the research** into a per-kind schedule
+       - [ ] **Sweep shape:** hardcoded per-kind sweep
+       - [ ] **Garage deletion:** delete storage_ref and siblings
+       - [ ] **Superseded chains:** deletion order for the self-FK
+    2. [ ] **Draft the ADR** via the authoring skill
+       - [x] decide sweep shape
+       - [x] decide deletion order
+    3. [ ] **Verify and close out:** make fast + make smoke
+    """
+
+    runner.test("counts only TOP-LEVEL markers as steps") {
+        let steps = PlanParser.steps(from: plan)
+        runner.expect(steps.count, equals: 3, "3 numbered steps, not 8")
+    }
+
+    runner.test("the promoted sub-bullets are gone from the step list") {
+        let contents = PlanParser.steps(from: plan).map(\.content).joined(separator: " | ")
+        runner.expect(!contents.contains("Sweep shape"), "nested bullet is not a step")
+        runner.expect(!contents.contains("decide sweep shape"), "nested bullet is not a step")
+        runner.expect(contents.contains("Consolidate the research"), "top-level step kept")
+        runner.expect(contents.contains("Verify and close out"), "top-level step kept")
+    }
+
+    runner.test("a fully-bulleted top-level plan still parses") {
+        let bulleted = "- [ ] First thing to do\n- [ ] Second thing to do"
+        runner.expect(PlanParser.steps(from: bulleted).count, equals: 2, "top-level bullets count")
+    }
+
+    runner.test("FALLBACK: a plan that indents everything still yields steps") {
+        // Zero steps would be worse than over-counting, so the lenient matcher
+        // is retried when the strict pass finds nothing.
+        let indented = "   - [ ] Only an indented item here\n   - [ ] And another one"
+        runner.expect(PlanParser.steps(from: indented).count, equals: 2, "fallback engaged")
+    }
+
+    runner.test("PlanFile.render still overlays NESTED lines") {
+        // The overlay legitimately marks sub-bullets; only step COUNTING changed.
+        runner.expect(PlanParser.stepText(of: "   - [ ] a nested item") != nil, "nested still matches for render")
+        runner.expect(PlanParser.stepText(of: "1. a top-level item") != nil, "top-level still matches")
+    }
+}
+
+
+// MARK: - Plan file: no echoed duplicates, and step re-derivation (ADR-0068 add.3)
+//
+// (a) `PlanFile.render` injected a step's reconciled sub-tasks under its line
+//     AND let the model's own nested bullets for the same items pass through —
+//     duplicating every sub-task in the saved file.
+// (b) The step-counting fix is prospective; a plan whose state was built by the
+//     old parser keeps its inflated list, so the strip shows "1/12" for a 6-step
+//     plan until the state is re-derived.
+
+runner.suite("plan-file-dedupe-and-rederive") {
+    func item(_ c: String, _ st: String = "completed") -> TodoItem {
+        TodoItem(content: c, status: st, activeForm: nil)
+    }
+
+    let text = """
+    # Plan — Retention
+
+    1. Consolidate the research
+       - decide sweep shape
+       - decide deletion order
+    2. Draft the ADR
+    """
+
+    runner.test("(a) an injected sub-task is not ALSO echoed from the text") {
+        var s1 = PlanStep(content: "Consolidate the research", status: "in_progress")
+        s1.subtasks = [item("decide sweep shape"), item("decide deletion order")]
+        let plan = Plan(id: "p", title: "P", text: text, path: nil,
+                        steps: [s1, PlanStep(content: "Draft the ADR", status: "pending")])
+        let out = PlanFile.render(plan)
+        let sweep = out.components(separatedBy: "decide sweep shape").count - 1
+        let order = out.components(separatedBy: "decide deletion order").count - 1
+        runner.expect(sweep, equals: 1, "sweep shape appears once, not twice")
+        runner.expect(order, equals: 1, "deletion order appears once, not twice")
+        runner.expect(out.contains("[x] decide sweep shape"), "the LIVE status survives")
+    }
+
+    runner.test("(a) a TOP-LEVEL line matching a sub-task name still survives") {
+        // Only indented echoes are dropped; a real step must never vanish.
+        var s1 = PlanStep(content: "Alpha", status: "in_progress")
+        s1.subtasks = [item("Draft the ADR")]          // same text as step 2
+        let plan = Plan(id: "p", title: "P",
+                        text: "1. Alpha\n2. Draft the ADR", path: nil,
+                        steps: [s1, PlanStep(content: "Draft the ADR", status: "pending")])
+        let out = PlanFile.render(plan)
+        runner.expect(out.contains("2."), "the top-level step line survives")
+    }
+
+    runner.test("(b) re-derive collapses promoted bullets back into sub-tasks") {
+        // Stored state from the OLD parser: 4 "steps", 2 of them really nested.
+        let stored = [
+            PlanStep(content: "Consolidate the research", status: "in_progress"),
+            PlanStep(content: "decide sweep shape", status: "completed"),
+            PlanStep(content: "decide deletion order", status: "completed"),
+            PlanStep(content: "Draft the ADR", status: "pending"),
+        ]
+        let fixed = PlanProgress.redriveSteps(text: text, existing: stored)
+        runner.expect(fixed.count, equals: 2, "4 stored -> 2 real steps")
+        runner.expect(fixed[0].subtasks.count, equals: 2, "both demoted under their parent")
+        runner.expect(fixed[0].subtasks.allSatisfy { $0.status == "completed" },
+                      "completed work is PRESERVED, not discarded")
+        runner.expect(fixed[1].content, equals: "Draft the ADR", "later step kept in order")
+    }
+
+    runner.test("(b) a healthy plan is returned untouched") {
+        let ok = [
+            PlanStep(content: "Consolidate the research", status: "completed"),
+            PlanStep(content: "Draft the ADR", status: "pending"),
+        ]
+        let out = PlanProgress.redriveSteps(text: text, existing: ok)
+        runner.expect(out.count, equals: 2, "unchanged")
+        runner.expect(out[0].status, equals: "completed", "status untouched")
+    }
+
+    runner.test("(b) never returns an empty plan when the text cannot be parsed") {
+        let stored = [PlanStep(content: "Something", status: "completed")]
+        let out = PlanProgress.redriveSteps(text: "prose with no list markers at all", existing: stored)
+        runner.expect(out.count >= 1, "falls back rather than wiping the plan")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

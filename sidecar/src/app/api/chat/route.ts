@@ -20,11 +20,14 @@ import { expandNativeCommand } from "@marvin/runtime/slash-commands";
 import { appendSessionTurn, lastSdkSessionId } from "@marvin/runtime/session";
 import {
   emitTurnEvent,
+  endLiveTurn,
   getLiveTurn,
+  isPreemptible,
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
+import { enqueuePending } from "@marvin/runtime/pending-input";
 import { runDetachedTurn } from "@/lib/turn-orchestrator";
 
 export const runtime = "nodejs";
@@ -155,16 +158,45 @@ export async function POST(req: NextRequest) {
   // `marvinSessionId` sent) generates a random id above and can't
   // collide. Ended turns sitting in their 60s grace window have
   // `ended === true` and never block.
+  // ADR-0069 — a human message is NEVER refused. The old behaviour returned
+  // 409 and the client dropped the text: on 2026-08-17 a wakeup held the slot,
+  // the user's "Update graphify…" was rejected, and it never ran — confirmed
+  // absent from all 150 turn.user records in that session. Input loss is the
+  // one failure a single-turn-per-session model must not have.
   const inflight = getLiveTurn(marvinSessionId);
   if (inflight && !inflight.ended) {
-    return new Response(
-      JSON.stringify({
-        error: "A turn is already in progress for this session.",
-        code: "turn-in-progress",
-        turnId: inflight.turnId,
-      }),
-      { status: 409, headers: { "Content-Type": "application/json" } },
-    );
+    // Persist FIRST, so the message survives even if what follows throws or the
+    // process dies. Everything after this point is best-effort scheduling.
+    const queued = enqueuePending(projectId, marvinSessionId, message);
+
+    if (isPreemptible(inflight)) {
+      // A machine-initiated turn that has not written anything. It exists to
+      // serve the user, so it yields to one — cancelled through the same abort
+      // path an explicit /api/chat/cancel uses, and its wakeup is re-armed by
+      // the orchestrator so nothing is lost.
+      inflight.abortController.abort();
+      endLiveTurn(inflight, {
+        event: "turn.error",
+        data: { error: "yielded to a user message (ADR-0069)", code: "preempted" },
+      });
+      // Fall through and start the user's turn below.
+    } else {
+      // Mid-write, or the user's own earlier turn: queue behind it. The drain
+      // in `runDetachedTurn` picks it up the moment the slot frees.
+      return new Response(
+        JSON.stringify({
+          queued: true,
+          code: "queued-behind-turn",
+          depth: queued.ok ? queued.depth : 1,
+          turnId: inflight.turnId,
+          reason:
+            inflight.kind === "machine"
+              ? "a background turn is mid-write; your message runs next"
+              : "a turn is already running; your message runs next",
+        }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      );
+    }
   }
   const personality: PersonalityMode = body.personality ?? "ultron";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
@@ -246,7 +278,7 @@ export async function POST(req: NextRequest) {
 
   // Register the live turn. Events get pushed to BOTH the on-disk
   // transcript AND this bus; any number of HTTP subscribers can listen.
-  const liveTurn = registerLiveTurn({ turnId, marvinSessionId, projectId });
+  const liveTurn = registerLiveTurn({ turnId, marvinSessionId, projectId, kind: "human" });
 
   const turnStartedPayload = {
     marvinSessionId,

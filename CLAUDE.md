@@ -85,6 +85,19 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    (six commits past the small ask, each step seemed worth doing) is
    the failure mode this rule exists to prevent. ADRs carry their own
    `## Scope of Done` block per the template in `personality.ts`.
+   **Gate on the SCOPE boundary, not the turn boundary
+   ([ADR-0067](./docs/decisions/0067-gate-on-scope-not-turn-boundaries.md)).**
+   An approved plan is standing authorization for every step in it: while
+   steps remain and the last one passed its checks, CONTINUE in the same
+   turn — don't stop, don't emit the scope-met block, and don't ask
+   permission the plan already granted. Stop at the plan's end, when the
+   next action would leave the plan, on a judgement gap, or on a real
+   trade-off. Measured on a real 2-day session: 33.1 h of 49 h was spent
+   waiting on the user and **only ~10 % of that wait was legitimate** —
+   17.8 h was MARVIN ending turns mid-plan having asked nothing. This
+   doesn't weaken the rule, it aims it: the rule exists to stop you
+   wandering OUT of scope, never to stop you finishing what was approved.
+   Re-measure with `scripts/session-time-breakdown.py --latest <projectId>`.
 
 ### The firm surfaces
 
@@ -102,6 +115,8 @@ reads at turn time.
 | **Dynamic workflows** | "Dynamic workflows — read-only fan-out only" section in `personality.ts` | When `effort: xhigh` may fan out parallel subagents — read-only audit / research / discovery ONLY, opt-in, never parallel implementation. Enforced by the subagent read-only invariant in `classifyToolCall` (any `agentID` call that mutates is hard-denied). See [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md). |
 | **ADR triggers** | Phase 4 "Deterministic ADR triggers" | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | Phase 5a "State the Definition of Done" + Phase 7 "Match-not-improve" + ADR template `## Scope of Done` | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
+| **Negative claims** | `"I could not find it" is NOT "it does not exist"` section in `personality.ts`; [ADR-0068](./docs/decisions/0068-plan-dedupe-provenance-and-negative-claims.md) | What MARVIN must establish before saying something doesn't exist, was never done, or was fabricated. On 2026-08-17 it scanned 303 plan files, missed the active plan, and reported that genuine merged work was "fabricated" — the user was one step from discarding it. MUST resolve by identity (the active-plan block now names `id` + `source:` path), search ≥2 ways, and state where it looked; MUST-NOT call the user's project history fabricated without positively establishing the negative. |
+| **Scope-boundary gating** | Phase 7 "Gate on the SCOPE boundary, not the turn boundary" + the "would any answer change what I do next?" test in the question-asking rules; [ADR-0067](./docs/decisions/0067-gate-on-scope-not-turn-boundaries.md) | When to CONTINUE inside an approved plan vs STOP and hand off, and which questions are stalls rather than questions. The 2026-08-17 transcript analysis found 33.1 h of a 49 h session spent waiting on the user, ~90 % of it avoidable — 65 turns ended mid-plan with no question asked, 20 asked permission the plan had already granted, and the user typed a "resume the ACTIVE plan" macro 8× to restart a stalled system. Transport errors now auto-continue via the ADR-0031 wakeup rails instead of leaving the session dead (5.1 h across 4 incidents). |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
 | **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. Since 2026-07-02 the gate also hard-denies direct model writes to `.marvin/memory.md` / `.marvin/memory/` (ADR-0042 enforcement addendum — same mechanism as the `.marvin/plans/` deny). |
 | **Project backlog** | "Project backlog — what goes in it" section in `personality.ts`; [ADR-0044](./docs/decisions/0044-project-backlog.md) | What may be parked to `.marvin/backlog/` and how. Actionable deferred work only ("noticed in flight, not in scope" follow-ups / out-of-scope improvements / blockers), via the `backlog_add` MCP tool — MUST-NOT park facts (→`remember`), status (→git), or decisions (→ADR). **Anti-Kanban (Golden Rule 1):** a parking lot read by MARVIN + the user — no subagent pull, never auto-executed, never overrides plan-first. Capture is un-gated at discovery (`provisional: true`, ADR-0047); consent moves to the keep/dismiss review at the scope-met handoff; open items surface in the next session's context. |
