@@ -110,3 +110,106 @@ afterwards is the mitigation working.**
 - [x] `NSApplicationCrashOnExceptions` registered false, reversible by the user.
 - [x] Root cause documented as OPEN, with the ruled-out branches recorded so the
       next attempt doesn't re-walk them.
+
+## Addendum (2026-08-18) — the mitigation was blind, and the crash is still fatal
+
+Two crashes overnight, 02:04:04 and 02:21:22, both `EXC_BREAKPOINT / SIGTRAP`
+with **identical** stacks:
+
+```
++[NSApplication _crashOnException:]
+_NSViewLayout ← NSPerformVisuallyAtomicChange ← -[NSView _layoutSubtreeWithOldSize:]
+← -[NSWindow _layoutViewTree] ← NSDisplayCycleFlush ← CA::Transaction::commit()
+```
+
+Only two frames belong to us, both `main()`. This is the same non-converging
+Update-Constraints loop this ADR opened — the exception text was captured once,
+on **2026-08-07**, via `NSSetUncaughtExceptionHandler`:
+
+> NSGenericException: The window has been marked as needing another Update
+> Constraints in Window pass, but it has already had more Update Constraints in
+> Window passes than there are views in the window. `<SwiftUI.AppKitWindow>`
+
+**The instrumentation this ADR added has never fired.** Measured: **24 session
+starts, 0 exceptions captured** by the `reportException:` swizzle. The reason is
+a method mismatch — the hook swizzles the INSTANCE method
+`-[NSApplication reportException:]`, while AppKit's layout error path calls the
+CLASS method `+[NSApplication _crashOnException:]` directly. Different methods
+on different metaclasses; hooking one never hooks the other.
+
+So the session-start stamp asserting *"exceptions are logged and survived"* was
+false precisely for the crash class this ADR exists to diagnose. Both crashes
+died writing nothing.
+
+### Fixed
+
+- **`+[NSApplication _crashOnException:]` is now swizzled too** — verified the
+  selector resolves as a class method on the live class. It logs, then calls
+  through: the process is going down either way, and pretending otherwise is
+  what made the old stamp misleading.
+- **The view tree is dumped with the exception** (`recordWindowTree`, capped at
+  400 nodes). The reason this bug has stayed open is that the exception names a
+  *window* but never the *view* that keeps invalidating; two fixes were
+  previously inferred from the stack alone and both were disproved. The next
+  occurrence should name the culprit.
+- **The stamp no longer lies**: it now distinguishes non-layout exceptions
+  (logged and survived) from AppKit layout-cycle exceptions (still fatal).
+
+### Not fixed
+
+The root cause. This addendum buys evidence, not a cure — deliberately, given
+this ADR's own history of confident fixes that a byte-identical stack later
+disproved. Ruled out as contributors by this occurrence: the plans live at crash
+time held 4–5 steps and **zero** sub-tasks, so plan rendering was not the
+trigger, and `RichText` already measures on a static offscreen text stack.
+
+## Addendum 2 (2026-08-18) — the hook fired, and what it named
+
+First capture in 11 days. `+[NSApplication _crashOnException:]` logged the
+exception **with the view tree**:
+
+```
+NSGenericException — …more Update Constraints in Window passes than there are
+views in the window
+```
+
+Of **401 views** in that window, exactly **one** was still dirty:
+
+```
+AppKitWindowHostingView<ModifiedContent<AnyView, RootModifier>>
+    constraints=40  needsUpdate=true
+```
+
+Everything else had settled. So the non-converging view is the **SwiftUI root
+hosting view**, not a leaf — and it is wrapped in `AnyView`.
+
+Supporting shape from the same capture: `DocumentView` / `PlatformGroupContainer`
+at **4065 pt** inside a **1320 pt** window; a `SwiftUIOutlineListView` with 37
+`ListTableCellView` → `NSHostingView<AnyView>` cells; 60 `SwiftUIAppKitButton` +
+60 `ContentViewHost`.
+
+### Why this is still not a fix
+
+The tree says WHICH view fails to settle. It does not say WHO keeps dirtying it —
+by the time `_crashOnException:` runs, the invalidation storm is over. Naming a
+suspect from view-type names is precisely how this ADR previously produced two
+confident fixes that a byte-identical stack disproved. `ChatPreviewView.trayRows`
+(which builds `[AnyView]`) is the best match in our code, but that is an
+inference, not evidence.
+
+### Pass counter added instead
+
+`ConstraintStorm` swizzles `-[NSView setNeedsUpdateConstraints:]` and counts
+invalidations in a rolling **0.5 s** window. At **150** — well below the ~401
+needed to trip AppKit's own breaker, so it fires *before* the fatal pass — it
+records the triggering view, its ancestry, and **`Thread.callStackSymbols`**.
+
+That stack is the missing evidence: it names the code path doing the
+invalidating, which turns the next occurrence from "which view is dirty" into
+"which of our code dirtied it".
+
+Cost when healthy is one integer increment per call; everything expensive sits
+behind the threshold, and a 20 s cooldown means the diagnostic cannot itself
+become the pathology. The session-start stamp reports whether it armed —
+the same lesson as the original hook, which sat un-armed and silent for 24
+sessions because nothing said otherwise.

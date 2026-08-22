@@ -111,6 +111,12 @@ export interface AddBacklogInput {
    * existing provisional item to `open`.
    */
   provisional?: boolean;
+  /**
+   * Bypass the near-duplicate gate (ADR-0070). For the rare case where two
+   * items really are distinct despite near-identical wording — the model must
+   * say so deliberately rather than re-park by default.
+   */
+  force?: boolean;
 }
 
 export type AddBacklogResult =
@@ -124,6 +130,8 @@ export type AddBacklogResult =
        * always written, and nothing else is touched. See `relatedBacklogItems`.
        */
       related: BacklogItem[];
+      /** Set when the capture was refused as a restatement of this item. */
+      duplicateOf?: string;
     }
   | { ok: false; error: string };
 
@@ -137,6 +145,7 @@ export type ResolveResult =
        * a licence to resolve them too.
        */
       related?: BacklogItem[];
+      duplicateOf?: string;
     }
   | { ok: false; error: string };
 
@@ -191,6 +200,38 @@ export function classifyBacklogText(
  * Raise it if candidates read as noise; lower it if near-duplicates slip past.
  */
 export const RELATED_MIN_SCORE = 0.5;
+
+/**
+ * Score at or above which a NEW capture is treated as a re-statement of an
+ * existing live item and is refused rather than written (ADR-0070).
+ *
+ * Calibrated on two real duplicate pairs created within single sessions:
+ *
+ *   0.88  "ADR-0344: confirm generated_at-as-issued_date proxy for AVIZ_DOCUMENT"
+ *       ~ "ADR-0344: confirm generated_at proxies issued_date for AVIZ_DOCUMENT"
+ *   0.75  "Verify prod /opt/agricore/.env AGRICORE_POSTGRES_IMAGE and build-push"
+ *       ~ "Verify prod .env AGRICORE_POSTGRES_IMAGE + whether build-push uses it"
+ *
+ * and against a genuinely distinct pair from the same session, which scores
+ * **0.00**. 0.75 catches both duplicates with a wide margin above unrelated
+ * work. Deliberately far above RELATED_MIN_SCORE (0.5), which stays advisory:
+ * "possibly related" must keep meaning "look at this", not "blocked".
+ */
+export const NEAR_DUPLICATE_SCORE = 0.75;
+
+/**
+ * Minimum significant tokens on BOTH titles before the near-duplicate gate is
+ * allowed to refuse a capture.
+ *
+ * Without this the score is computed from too little text to mean anything:
+ * "Item one" vs "Item two" scores **1.00**, because the numerals are filtered
+ * as insignificant and both titles collapse to the single token {item}. Any two
+ * short titles sharing one word would be refused. Same reasoning as the Swift
+ * side's `sameWorkPrefix` — a similarity signal needs enough input to be
+ * evidence rather than coincidence. Below the floor the overlap is still
+ * REPORTED (advisory), just never enforced.
+ */
+export const NEAR_DUPLICATE_MIN_TOKENS = 4;
 /** Never surface more than this — a wall of maybes gets ignored wholesale. */
 export const RELATED_MAX = 3;
 /** A file in common is stronger evidence than a word in common, but not proof. */
@@ -334,8 +375,39 @@ function indexFile(workDir: string): string {
   return join(workDir, ".marvin", "backlog.md");
 }
 
+/**
+ * Blank any frontmatter value that is actually the NEXT field's line, swallowed
+ * by the old `\s*` parser (2026-08-18).
+ *
+ * Safe by construction: the serializer writes every field on its own line, so a
+ * swallowed line still exists in the file in its correct place — the bogus copy
+ * is pure duplication and dropping it loses nothing. Verified on the real data:
+ * every corrupted file held BOTH `blockedOn: sessionId: <uuid>` and a proper
+ * `sessionId: <uuid>` line.
+ */
+export function repairSwallowedField(value: string): string {
+  // Matched against the KNOWN field names only. A looser `^\w+:` test would
+  // also blank a legitimate reason like "legal: DPA signature" — real
+  // blockedOn values are prose and often contain a colon.
+  return /^(?:id|title|status|severity|kind|blocked|blockedOn|sessionId|created|updated):\s/.test(
+    value,
+  )
+    ? ""
+    : value;
+}
+
 function parseField(content: string, field: string): string {
-  return new RegExp(`^${field}:\\s*(.*)$`, "m").exec(content)?.[1]?.trim() ?? "";
+  // `[^\S\n]*` = horizontal whitespace ONLY. `\s*` also matches the NEWLINE,
+  // so an EMPTY field swallowed the following line as its value — and the
+  // serializer then wrote that back, corrupting the file permanently and
+  // compounding on every subsequent save.
+  //
+  // Measured 2026-08-18 on a real project: 453 of 461 backlog files held
+  // `blockedOn: sessionId: <uuid>`, some having swallowed two lines
+  // (`blockedOn: sessionId: created: …`). The bug was latent here for as long as
+  // this parser existed; ADR-0064's `blockedOn` — empty on ~98 % of items —
+  // is what made every write hit it.
+  return new RegExp(`^${field}:[^\\S\\n]*(.*)$`, "m").exec(content)?.[1]?.trim() ?? "";
 }
 
 function parseItem(slug: string, content: string): BacklogItem {
@@ -364,7 +436,8 @@ function parseItem(slug: string, content: string): BacklogItem {
       ? (kindRaw as BacklogKind)
       : "unspecified",
     blocked: parseField(content, "blocked") === "true",
-    blockedOn: parseField(content, "blockedOn"),
+    // Self-heal files corrupted by the old parser (see repairSwallowedField).
+    blockedOn: repairSwallowedField(parseField(content, "blockedOn")),
     sessionId: parseField(content, "sessionId"),
     created: parseField(content, "created"),
     updated: parseField(content, "updated"),
@@ -573,10 +646,35 @@ export async function addBacklogItem(
     created: existing?.created || now,
     updated: now,
   };
-  // Near-duplicate check. Advisory ONLY — the item is written either way. An
-  // overlap is a prompt for the user ("this looks like `outline-crash`, still
-  // want both?"), never grounds to drop a capture on the model's judgement.
+  // Near-duplicate check. Advisory at RELATED_MIN_SCORE — the item is written
+  // and the overlap is surfaced for the user to judge.
   const related = relatedBacklogItems(item, all);
+
+  // ADR-0070 — but a NEAR-IDENTICAL restatement is refused instead of written.
+  // Measured: one session captured the same ADR-0344 question twice in two
+  // wordings (0.88 similar), and another captured the same prod .env check
+  // twice (0.75). Un-gated capture (ADR-0047) means the model re-parks a thing
+  // it already parked minutes earlier, which is how a session ends 6-added /
+  // 0-resolved.
+  //
+  // Non-destructive by construction: nothing is deleted or merged, the caller
+  // is handed the EXISTING item, and `force` re-admits a genuinely distinct
+  // item that happens to score high. Only applies when creating something new —
+  // an update to an existing item (same title slug) is never blocked.
+  if (!existing && !input.force) {
+    const enoughSignal = (o: BacklogItem) =>
+      significantTokens(item.title).size >= NEAR_DUPLICATE_MIN_TOKENS &&
+      significantTokens(o.title).size >= NEAR_DUPLICATE_MIN_TOKENS;
+    const dupe = all.find(
+      (o) =>
+        LIVE_STATUSES.has(o.status) &&
+        enoughSignal(o) &&
+        backlogSimilarity(item, o) >= NEAR_DUPLICATE_SCORE,
+    );
+    if (dupe) {
+      return { ok: true, item: dupe, created: false, related, duplicateOf: dupe.id };
+    }
+  }
 
   try {
     await mkdir(dir, { recursive: true });

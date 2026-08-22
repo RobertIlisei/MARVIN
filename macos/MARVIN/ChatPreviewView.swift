@@ -192,24 +192,11 @@ final class ChatPreviewModel {
     /// `<system-reminder>` and appends it to the user turn — a volatile suffix
     /// that never enters the cached prompt prefix and is never persisted to
     /// `turn.user`. nil when no plan is active (then nothing is injected).
+    /// Delegates to `PlanContextBlock` (MARVINLogic) so the most
+    /// context-expensive string MARVIN emits is unit-tested rather than trusted.
     func activePlanContextBlock() -> String? {
-        guard let plan = activePlan, !plan.steps.isEmpty else { return nil }
-        func glyph(_ s: String) -> String {
-            s == "completed" ? "[x]" : (s == "in_progress" ? "[~]" : "[ ]")
-        }
-        var lines = [
-            "Active plan — \"\(plan.title)\" · current status (authoritative; "
-                + "supersedes any earlier TodoWrite/tool statuses in this transcript). "
-                + "You are mid-execution on this plan — continue it and keep its "
-                + "checklist updated; a step is done only when all its sub-tasks are.",
-        ]
-        for (i, step) in plan.steps.enumerated() {
-            lines.append("\(glyph(step.status)) \(i + 1). \(step.content)")
-            for (j, sub) in step.subtasks.enumerated() {
-                lines.append("    \(glyph(sub.status)) \(i + 1).\(j + 1) \(sub.content)")
-            }
-        }
-        return lines.joined(separator: "\n")
+        guard let plan = activePlan else { return nil }
+        return PlanContextBlock.render(plan: plan)
     }
 
     /// Clear all plans (fresh SDK session / session switch). In-memory only —
@@ -335,10 +322,16 @@ final class ChatPreviewModel {
         let path = (dir as NSString).appendingPathComponent("\(plan.id).md")
         // The file is a live projection of the plan text + step progress
         // (checkboxes + nested sub-tasks), not the raw presented markdown.
-        let rendered = PlanFile.render(plan)
+        let body = PlanFile.render(plan)
         do {
             let onDisk = try? String(contentsOfFile: path, encoding: .utf8)
-            if onDisk != rendered {
+            // Compare STRIPPED bodies (ADR-0068 addendum 2). The freshness stamp
+            // changes with the date, so comparing raw text would rewrite the file
+            // on every save and make every plan look freshly touched — destroying
+            // the staleness signal the stamp exists to provide.
+            let changed = PlanFile.stripStamp(onDisk ?? "") != PlanFile.stripStamp(body)
+            let rendered = changed ? PlanFile.stamped(body, date: Date()) : (onDisk ?? body)
+            if changed {
                 try FileManager.default.createDirectory(
                     atPath: dir, withIntermediateDirectories: true)
                 try rendered.write(toFile: path, atomically: true, encoding: .utf8)
@@ -971,7 +964,17 @@ final class ChatPreviewModel {
                     projectId: projectId, sessionId: sessionId),
                     !stored.plans.isEmpty,
                     loadedSessionId == sessionId {
-                    plans = stored.plans
+                    // ADR-0068 addendum 3 (part b) — repair step lists built by
+                    // the old parser, which promoted nested bullets to top-level
+                    // steps (one real plan stored 12 steps for a 6-step file, so
+                    // the strip read "1/12" forever). Lossless: a demoted entry
+                    // becomes a sub-task of the step it sat under, keeping its
+                    // status. A healthy plan is returned untouched.
+                    plans = stored.plans.map { plan in
+                        var p = plan
+                        p.steps = PlanProgress.redriveSteps(text: p.text, existing: p.steps)
+                        return p
+                    }
                     activePlanId = stored.activePlanId ?? stored.plans.last?.id
                     // Refresh the plan file to the stored truth + set `path`
                     // so "Open plan" works. Idempotent write; no focus steal.

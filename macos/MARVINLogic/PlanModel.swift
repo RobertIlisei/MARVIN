@@ -160,8 +160,33 @@ public enum TodoExtractor {
 /// bulleted (`-` / `*` / `•`) steps; ignores headings and prose. Falls back to
 /// non-empty lines, then to a single "Execute the plan" item.
 public enum PlanParser {
-    /// Matches a numbered (`1.` / `1)`) or bulleted (`-` / `*` / `•`) step line.
+    /// Matches a numbered (`1.` / `1)`) or bulleted (`-` / `*` / `•`) step line,
+    /// at ANY indentation. Used for the checkbox overlay in `PlanFile.render`,
+    /// which legitimately marks nested lines too.
     private static let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+
+    /// TOP-LEVEL markers only — no leading indentation (ADR-0068 addendum 3).
+    ///
+    /// Counting steps with the lenient regex promotes every indented sub-bullet
+    /// to a top-level step. Measured 2026-08-19 on a real plan: the lenient
+    /// pattern found **66** "steps" in a file with **6** numbered ones, and the
+    /// UI showed "1/12 · Paused" while MARVIN — reading the file — reported
+    /// "Plan complete: all 6 top-level steps verified done". Both were right
+    /// about different things, which is worse than either being wrong.
+    private static let topLevelStepRE = try? NSRegularExpression(pattern: #"^(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+
+    /// Step content using a specific matcher. Extracted so top-level and
+    /// any-depth parsing share identical cleanup.
+    private static func stepText(of line: String, using re: NSRegularExpression?) -> String? {
+        guard let re else { return nil }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        guard let m = re.firstMatch(in: line, range: range),
+              let r = Range(m.range(at: 1), in: line) else { return nil }
+        let content = String(line[r])
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+        return content.count > 1 ? content : nil
+    }
 
     /// The step content of a single line — the marker stripped, emphasis /
     /// inline code removed — or nil if the line isn't a step. Shared by
@@ -181,9 +206,13 @@ public enum PlanParser {
 
     public static func todos(from plan: String) -> [TodoItem] {
         let lines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var items: [String] = []
-        for line in lines {
-            if let content = stepText(of: line) { items.append(content) }
+        // Top-level markers define the STEPS. Nested bullets are sub-tasks and
+        // are nested by tag (ADR-0049), never promoted here.
+        var items: [String] = lines.compactMap { stepText(of: $0, using: topLevelStepRE) }
+        if items.isEmpty {
+            // A plan that indents everything would otherwise parse to zero
+            // steps — worse than over-counting. Fall back to the lenient match.
+            items = lines.compactMap { stepText(of: $0, using: stepRE) }
         }
         if items.isEmpty {
             // No list markers — take substantive non-heading lines.
@@ -231,12 +260,108 @@ public enum PlanProgress {
             let idx: Int?
             if let k = item.key {
                 idx = out.firstIndex(where: { $0.key == k })
-                    ?? out.firstIndex(where: { $0.key == nil && matches(normalize($0.content), normalize(item.content)) })
+                    ?? out.firstIndex(where: { $0.key == nil && sameWork(normalize($0.content), normalize(item.content)) })
             } else {
                 let ni = normalize(item.content)
-                idx = out.firstIndex(where: { matches(normalize($0.content), ni) })
+                idx = out.firstIndex(where: { sameWork(normalize($0.content), ni) })
             }
             if let i = idx { out[i] = item } else { out.append(item) }
+        }
+        return out
+    }
+
+    /// Same-work test used by merge and repair (ADR-0068). Wider than
+    /// `matches`: also treats a long shared prefix as the same item, which is
+    /// how a reworded restatement used to become a duplicate row.
+    public static func sameWork(_ a: String, _ b: String) -> Bool { PlanTextMatch.sameWork(a, b) }
+
+    /// Collapse duplicate sub-tasks that a previous (pre-ADR-0068) merge
+    /// appended. Returns the repaired list and how many rows were removed.
+    ///
+    /// Repair semantics, chosen deliberately:
+    ///
+    /// - **Order preserved.** A checklist that reorders itself is unreadable.
+    /// - **Last statement wins for STATUS.** A real plan held 7 items that were
+    ///   both `[x]` and `[ ]`. Preferring "completed" would mark undone work
+    ///   done — the failure that actually misleads a reader — so the most
+    ///   recent statement is taken instead.
+    /// - **Richest wording kept.** Restatements tend to shorten and drop the
+    ///   evidence ("— 41/41 green"); keeping the longer text preserves it.
+    /// - **Keys are authoritative.** Two rows sharing a key are the same row
+    ///   regardless of text.
+    public static func dedupeSubtasks(_ items: [TodoItem]) -> (items: [TodoItem], collapsed: Int) {
+        var out: [TodoItem] = []
+        var collapsed = 0
+        for item in items {
+            let ni = normalize(item.content)
+            let idx: Int?
+            if let k = item.key {
+                idx = out.firstIndex(where: { $0.key == k })
+                    ?? out.firstIndex(where: { $0.key == nil && sameWork(normalize($0.content), ni) })
+            } else {
+                idx = out.firstIndex(where: { sameWork(normalize($0.content), ni) })
+            }
+            guard let i = idx else {
+                out.append(item)
+                continue
+            }
+            collapsed += 1
+            // Latest status, fullest content, first non-nil key/activeForm.
+            let keepContent = item.content.count >= out[i].content.count ? item.content : out[i].content
+            out[i] = TodoItem(
+                content: keepContent,
+                status: item.status,
+                activeForm: item.activeForm ?? out[i].activeForm,
+                key: out[i].key ?? item.key
+            )
+        }
+        return (out, collapsed)
+    }
+
+
+    /// Re-derive a plan's steps when stored state disagrees with its text
+    /// (ADR-0068 addendum 3, part b).
+    ///
+    /// The step-counting fix is prospective: a plan whose state was built by the
+    /// old parser keeps its inflated list forever, so the strip goes on showing
+    /// "1/12" for a plan with 6 steps. This repairs it in place.
+    ///
+    /// **Lossless by construction.** Stored steps are in document order, so a
+    /// stored entry that is NOT a top-level step must have been a nested bullet
+    /// under the last real step before it — that is exactly where it is put
+    /// back, carrying its status. Nothing about completed work is discarded;
+    /// it changes level, not existence.
+    ///
+    /// Returns `existing` untouched when the counts already agree, so a healthy
+    /// plan pays one parse and no mutation.
+    public static func redriveSteps(text: String, existing: [PlanStep]) -> [PlanStep] {
+        let fresh = PlanParser.steps(from: text)
+        guard !fresh.isEmpty, fresh.count != existing.count else { return existing }
+
+        // Which stored entries correspond to real top-level steps?
+        var freshIds = Set(fresh.map { $0.id })
+        var out: [PlanStep] = []
+        for stored in existing {
+            if freshIds.contains(stored.id) {
+                freshIds.remove(stored.id)
+                out.append(stored)                      // a real step — keep as-is
+            } else if var parent = out.popLast() {
+                // A promoted sub-bullet. Demote it under the step it sat below,
+                // preserving its status as a sub-task.
+                parent.subtasks = mergeSubtasks(
+                    parent.subtasks,
+                    [TodoItem(content: stored.content, status: stored.status, activeForm: stored.activeForm)]
+                )
+                parent.subtasks = dedupeSubtasks(parent.subtasks).items
+                out.append(parent)
+            }
+            // A promoted bullet with no preceding step is dropped: it was never
+            // a step, and there is nowhere truthful to put it.
+        }
+        // Any fresh step the stored list never had (plan text edited since).
+        for f in fresh where freshIds.contains(f.id) {
+            freshIds.remove(f.id)
+            out.append(f)
         }
         return out
     }
@@ -323,6 +448,18 @@ public enum PlanProgress {
             }
         }
 
+        // ADR-0068 — REPAIR PASS. Plans built before the `sameWork` merge fix
+        // carry duplicate rows: one real plan reached 347 sub-task bullets with
+        // 24 duplicated texts and 7 items present both checked and unchecked,
+        // which is what made its injected context self-contradictory. Collapsing
+        // on every reconcile lets an already-corrupted plan heal in place
+        // instead of needing a manual rewrite. It is idempotent, so a clean plan
+        // pays nothing but the comparison.
+        for idx in steps.indices where !steps[idx].subtasks.isEmpty {
+            let (repaired, collapsed) = dedupeSubtasks(steps[idx].subtasks)
+            if collapsed > 0 { steps[idx].subtasks = repaired }
+        }
+
         // ADR-0049 — upward completion propagation, with a HARD invariant
         // (ADR-0049 addendum): a step that owns sub-tasks is "completed" if and
         // ONLY IF every sub-task is completed. It can never read as done while a
@@ -365,6 +502,44 @@ public enum PlanFile {
         let trimmed = String(collapsed.prefix(60))
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return trimmed.isEmpty ? "plan" : trimmed
+    }
+
+
+    /// Delimiter for the generated freshness trailer (ADR-0068 addendum 2).
+    ///
+    /// A plan file carries no date in its body, and `Read` does not surface
+    /// mtime — so a model that finds a plan on disk has only unchecked boxes to
+    /// go on, and unchecked boxes mean "never finished", not "current". Observed
+    /// 2026-08-17: a plan last touched **three weeks earlier** (Jul 28) was
+    /// offered to the user as "an in-flight plan … want me to resume at step 7?".
+    /// Stamping the file puts the date in front of any future reader for free,
+    /// with no extra tool call.
+    public static let stampMarker = "<!-- marvin:plan-updated"
+
+    /// Strip a previously written stamp, returning the plan body alone.
+    ///
+    /// Load-bearing for change detection: the caller compares STRIPPED bodies so
+    /// a re-render with a new date does not count as a change. Without that, every
+    /// save would rewrite the file and every plan would look freshly touched —
+    /// destroying the signal this exists to create.
+    public static func stripStamp(_ text: String) -> String {
+        guard let r = text.range(of: stampMarker) else { return text }
+        return String(text[text.startIndex..<r.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Append the freshness trailer. `date` is injected so tests are deterministic.
+    public static func stamped(_ body: String, date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(identifier: "UTC")
+        fmt.dateFormat = "yyyy-MM-dd"
+        let day = fmt.string(from: date)
+        return stripStamp(body)
+            + "\n\n\(stampMarker) \(day) -->\n"
+            + "_Last updated \(day). Unchecked boxes mean this plan was never "
+            + "finished — not that it is still active. Check the date before "
+            + "treating it as in-flight._\n"
     }
 
     /// ADR-0046 (follow-up) — project the plan's live progress onto its saved
@@ -414,6 +589,14 @@ public enum PlanFile {
         }
 
         var out: [String] = []
+        // ADR-0068 addendum 3 (part a) — sub-tasks we have ALREADY written under
+        // their parent, with live status. The model's own nested bullets for the
+        // same items still sit further down `plan.text`; echoing them too is what
+        // duplicated checkbox lines in the saved file (9 redundant lines in one
+        // real plan, far more in others). The injected copy wins: it carries the
+        // reconciled status, the echoed one is frozen at whatever the model last
+        // typed.
+        var emittedSubs = Set<String>()
         let lines = plan.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         for line in lines {
             if let content = PlanParser.stepText(of: line) {
@@ -421,10 +604,18 @@ public enum PlanFile {
                 if let step = byId[id], !emitted.contains(id) {
                     out.append(overlay(line, step.status))
                     let indent = line.prefix { $0 == " " || $0 == "\t" }
-                    for sub in step.subtasks { out.append(subLine(String(indent), sub)) }
+                    for sub in step.subtasks {
+                        out.append(subLine(String(indent), sub))
+                        emittedSubs.insert(PlanProgress.normalize(sub.content))
+                    }
                     emitted.insert(id)
                     continue
                 }
+                // Drop an INDENTED source line we have already emitted as a
+                // sub-task. Indentation is required: a top-level line that
+                // happens to match a sub-task is a real step and must survive.
+                let isNested = line.first == " " || line.first == "\t"
+                if isNested && emittedSubs.contains(id) { continue }
             }
             out.append(line)
         }

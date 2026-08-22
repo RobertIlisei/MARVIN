@@ -83,6 +83,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       "never an auto-executed queue.",
     {
       title: z.string().min(1).describe(`One actionable line; the dedup key (≤${MAX_TITLE_CHARS} chars).`),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only after a capture was refused as a near-duplicate: set true if the item really IS distinct despite the similar wording. Never set it pre-emptively.",
+        ),
       body: z.string().optional().describe(`Optional: why it matters + the concrete change (≤${MAX_BODY_CHARS} chars).`),
       severity: z.enum(BACKLOG_SEVERITIES).optional().describe("low | med | high. Default med."),
       kind: z
@@ -114,7 +120,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         .optional()
         .describe("true = auto-capture at discovery (no go-ahead); awaits keep/dismiss at the handoff. Default false (user-confirmed)."),
     },
-    async ({ title, body, severity, kind, blocked, blockedOn, provisional }) => {
+    async ({ title, body, severity, kind, blocked, blockedOn, provisional, force }) => {
       const cls = classifyBacklogText(title, body ?? "");
       if (!cls.ok) {
         return errorResult(
@@ -125,6 +131,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       }
       const res = await addBacklogItem(cwd, {
         title,
+        ...(force ? { force } : {}),
         ...(body ? { body } : {}),
         ...(severity ? { severity } : {}),
         ...(kind ? { kind } : {}),
@@ -134,6 +141,15 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         ...(marvinSessionId ? { sessionId: marvinSessionId } : {}),
       });
       if (!res.ok) return errorResult(res.error);
+      if (res.duplicateOf) {
+        return textResult(
+          `NOT parked — this restates an item already open: \`${res.duplicateOf}\` ` +
+            `("${res.item.title}"). Nothing was lost; that item still stands. ` +
+            `If your note adds something, update THAT item's body instead of parking a ` +
+            `second one. If it is genuinely different work, call \`backlog_add\` again ` +
+            `with \`force: true\` and say why in the body.`,
+        );
+      }
       const prov = res.item.status === "provisional";
       return textResult(
         `${res.created ? "Parked" : "Updated"} backlog item \`${res.item.id}\` ` +

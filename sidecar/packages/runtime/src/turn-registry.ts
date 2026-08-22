@@ -45,6 +45,24 @@ export interface LiveTurn {
   bus: EventEmitter;
   /** True once the turn has emitted a terminal event (`turn.completed` / `turn.error`). */
   ended: boolean;
+  /**
+   * Who started this turn (ADR-0069).
+   *
+   * `"machine"` = a scheduled wakeup, a background-job completion, an
+   * auto-reconcile, or a transport auto-continue. Those exist to serve the
+   * user, so they must never outrank one.
+   */
+  kind: "human" | "machine";
+  /**
+   * True once this turn has been ALLOWED a workspace-mutating tool call.
+   *
+   * This is the preemption safety rule. Interrupting a turn that has only read
+   * is free; interrupting one that has started writing can leave a half-applied
+   * edit. Deciding on observed behaviour beats guessing from the turn's kind —
+   * a transport auto-continue is machine-started but resumes real
+   * implementation work, and must not be cut off mid-edit.
+   */
+  mutated: boolean;
 }
 
 /**
@@ -91,6 +109,9 @@ export function registerLiveTurn(input: {
   turnId: string;
   marvinSessionId: string;
   projectId: string;
+  /** ADR-0069 — defaults to "human" so an un-migrated caller is never
+   *  mistaken for a machine turn and preempted. */
+  kind?: "human" | "machine";
 }): LiveTurn {
   // If a prior turn was registered under this session but never ended
   // cleanly (rare — server crash, or an explicit replace), evict it so
@@ -122,6 +143,8 @@ export function registerLiveTurn(input: {
     abortController: new AbortController(),
     bus,
     ended: false,
+    kind: input.kind ?? "human",
+    mutated: false,
   };
   live.set(input.marvinSessionId, turn);
   // Announce AFTER the turn is in the map, so any listener that reacts by
@@ -193,4 +216,30 @@ export function cancelLiveTurn(marvinSessionId: string): boolean {
     data: { error: "cancelled by user", cancelled: true },
   });
   return true;
+}
+
+/**
+ * Mark the session's live turn as having mutated the workspace (ADR-0069).
+ *
+ * Called from the permission gate the moment a mutating tool call is ALLOWED —
+ * not when it completes. A turn that is midway through a write is exactly the
+ * one that must not be preempted, so the flag has to be set before the edit
+ * lands, never after.
+ */
+export function markTurnMutated(marvinSessionId: string): void {
+  const turn = live.get(marvinSessionId);
+  if (turn && !turn.ended) turn.mutated = true;
+}
+
+/**
+ * May an arriving human message interrupt the turn in flight?
+ *
+ * Only a machine-initiated turn that has not yet written anything. Everything
+ * else queues. This deliberately keeps the protection the 409 was introduced
+ * for — never evict a turn that could be mid-mutation — while removing the
+ * case where a wakeup outranks the person it exists to serve.
+ */
+export function isPreemptible(turn: LiveTurn | null): boolean {
+  if (!turn || turn.ended) return false;
+  return turn.kind === "machine" && !turn.mutated;
 }

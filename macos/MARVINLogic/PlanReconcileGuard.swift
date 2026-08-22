@@ -47,6 +47,33 @@ public enum PlanTextMatch {
         guard a.count >= 6, b.count >= 6 else { return false }
         return a.contains(b) || b.contains(a)
     }
+
+    /// How much identical leading text two sub-tasks must share before we treat
+    /// a rewording as the SAME work (ADR-0068).
+    ///
+    /// 40 characters is deliberately conservative. Real plan items in this
+    /// codebase diverge early when they are genuinely different
+    /// ("Milestone 2: wire ActivityController…" vs "…wire TreatmentController…"
+    /// share only 18), while a reworded restatement of one item keeps a long
+    /// identical head ("Milestone A (sweep-side): zilier_entries + documents
+    /// widened match, …" — 60+ before it diverges).
+    public static let sameWorkPrefix = 40
+
+    /// Do two normalised strings describe the same piece of work?
+    ///
+    /// `matches` (equality or containment) misses the case that actually
+    /// corrupted a real plan: the model restating a sub-task in fewer words, so
+    /// neither string contains the other. Measured on
+    /// `grouped-backlog-fix-pass.md` — 24 duplicated bullets, all of this shape.
+    ///
+    /// Prefix agreement is only trusted when BOTH strings are longer than the
+    /// threshold; otherwise a short generic opener ("run make fast…") could
+    /// swallow unrelated items.
+    public static func sameWork(_ a: String, _ b: String) -> Bool {
+        if matches(a, b) { return true }
+        guard a.count > sameWorkPrefix, b.count > sameWorkPrefix else { return false }
+        return a.prefix(sameWorkPrefix) == b.prefix(sameWorkPrefix)
+    }
 }
 
 public enum PlanRebaseGuard {
