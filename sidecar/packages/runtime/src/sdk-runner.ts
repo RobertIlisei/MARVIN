@@ -1386,7 +1386,22 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // hard-denies these, this is the belt-and-braces (same shape as the
     // scout). Bash is NOT disallowed: read-only shell (ls/grep/cat) stays
     // available; the gate denies only *mutating* Bash.
-    ...(readOnly ? { disallowedTools: ["Edit", "Write", "NotebookEdit"] } : {}),
+    // FOREIGN HARNESS TOOLS (ADR-0055 addendum 2). `ScheduleWakeup` is the
+    // Claude Code harness's own tool for `/loop` dynamic pacing. Inside
+    // MARVIN's SDK session there is no loop for it to pace, so calling it
+    // schedules NOTHING — but it reads as the obvious choice, and MARVIN's own
+    // tool is the snake_case `schedule_wakeup`. Observed 2026-08-23: MARVIN
+    // called `ScheduleWakeup`, told the user it had "scheduled a check in ~2
+    // minutes", and nothing ever fired — the wakeup store held only an
+    // unrelated 24 h entry. Worse, the coverage check below tests
+    // `name.includes("schedule_wakeup")`, which is FALSE for `ScheduleWakeup`,
+    // so the promise looked uncovered to the backstop and armed nothing either.
+    // Remove it from the tool surface entirely: a tool that silently no-ops a
+    // safety-critical promise must not be reachable.
+    disallowedTools: [
+      "ScheduleWakeup",
+      ...(readOnly ? ["Edit", "Write", "NotebookEdit"] : []),
+    ],
     // PreToolUse fires on EVERY tool call BEFORE the SDK's permission
     // pipeline. canUseTool only gets called for tools the SDK considers
     // gate-worthy (Edit / Write / Bash) — Read / Grep / Glob auto-allow
