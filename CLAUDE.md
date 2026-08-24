@@ -240,6 +240,13 @@ Anthropic skills are **not committed** (they're ~10 MB; open-source tidy
 on demand and copies all of them into `~/.claude/skills/` (idempotent — existing
 user-level skills are left alone):
 
+> **`install-skills.sh` never updates.** It *skips* anything already present, so
+> a skill installed once stays at that version forever. Pulling a newer version
+> is the Skills pane's job ([ADR-0071](./docs/decisions/0071-install-provenance-and-update-path.md)) —
+> and it needs a recorded source, which skills installed by this script don't
+> have. Use "Set source" on the row once to bind the upstream URL.
+
+
 | Category | Skill |
 |---|---|
 | Design | `frontend-design`, `canvas-design`, `theme-factory`, `brand-guidelines` |
@@ -277,6 +284,16 @@ without the `settingSources` blast radius:
   copies the plugin into `~/.claude/plugins/cache/…`, and registers it in
   `installed_plugins.json` (same registry the Claude Code UI uses — installs are
   bidirectionally visible). Clone+copy only; nothing runs at install.
+- **Update an installed plugin** ([ADR-0071](./docs/decisions/0071-install-provenance-and-update-path.md)):
+  every install now records where it came from, so "pull the latest" works.
+  Provenance lives in `~/.marvin/plugin-sources.json` — deliberately NOT a new
+  key in the co-owned `installed_plugins.json`. `POST /api/plugins/update`
+  (`checkOnly` / single / `all`); the pane gets Check-for-updates + per-row
+  Update. Superseded cache versions are pruned. Plugins installed through the
+  Claude Code `/plugin` UI have no MARVIN provenance and are skipped — not ours
+  to update. **Skills work the same way** (`POST /api/skills/update`), with
+  provenance in `.marvin-source.json` inside each skill folder; a skill with no
+  record gets a one-time "Set source" in the Skills pane.
 - **Loaded via the SDK `plugins:[{type:'local',path}]` array** (a sanitised
   staged copy under `.marvin/plugins-stage/`). Loads **skills + slash
   commands + MCP servers + agents** — plugin agents run **read-only**
@@ -340,16 +357,16 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 6773 nodes · 12766 edges · 385 named communities (2026-08-15
-  rebuild; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  files. 6905 nodes · 13419 edges · 393 named communities (2026-08-24
+  rebuild on graphify 0.9.48; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
   graph anyway. (`graphify update .` is the incremental path and needs no
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1410 nodes · 1722 edges · 127 named communities
-  (built 2026-08-15).
+  `.marvin/memory.md`. 1484 nodes · 1818 edges · 128 named communities
+  (built 2026-08-24).
 
 **Community names.** Both graphs were 100 % `Community N` placeholders until
 2026-08-15, which made `graph_summary`'s community section unreadable. They
@@ -426,8 +443,11 @@ the graph — that's contract-by-example signal worth keeping.
 
 Use the gitignore-syntax `.graphifyignore` at any project's root to scope
 graphify the same way — `graphify` honours the file relative to where it
-runs. Inline `# comments` after a pattern are NOT supported by graphify's
-parser as of v0.4.23; put comments on their own line.
+runs. Inline `# comments` after a pattern **are** supported as of 0.9.48
+(`_parse_gitignore_line` follows the gitignore spec: `#` must be preceded by
+whitespace, so `path#with#hash.py` survives). They were NOT supported on
+v0.4.23, which is why existing entries keep comments on their own line —
+that still works and needs no migration.
 
 ### Before any structural exploration or codebase question
 
@@ -460,10 +480,11 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-08-15 rebuild: `cn()` (97 edges), `requireMarvinClient()`
-(92), `checkFsPath()` (76), `ChatPreviewModel` (73), `ChatPreviewView` (55),
-`BacklogPanel` (46) are the real architectural anchors — the shared client
-guard and the fs-path check are the widest coupling points in the repo.
+After the 2026-08-24 rebuild: `cn()` (97 edges), `requireMarvinClient()`
+(96), `checkFsPath()` (76), `ChatPreviewModel` (73), `ChatPreviewView` (55),
+`validateProjectCwd()` (47), `SkillsPane` (46), `BacklogPanel` (46) are the
+real architectural anchors — the shared client guard, the fs-path check and
+the project-cwd validator are the widest coupling points in the repo.
 (An incremental `update` can transiently drop a hot node out of the top 10:
 re-extracting only some of its source files prunes its cross-file edges, so
 prefer a full rebuild when counts look off.) This list moves a lot — it
