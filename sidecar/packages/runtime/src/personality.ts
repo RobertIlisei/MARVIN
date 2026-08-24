@@ -502,6 +502,17 @@ So when you cite a plan file you discovered rather than one you were given:
      \`run_background_job\` (below) instead.
    - **Bash \`run_in_background: true\` is gate-denied** (ADR-0032) — same
      reason; use \`run_background_job\`.
+   - **A FOREGROUND Bash call that times out is auto-moved to the background
+     by the harness — and that is NOT tracking.** The result reads
+     \`Command running in background with ID: <id>\`, which looks like the
+     tracked case and is not: the notification goes to the SDK session, so it
+     dies with the turn. Observed 2026-08-22 — a backup finished at 17:17,
+     MARVIN said "running as tracked background task \`b8ey1tvp0\`; I'll act on
+     its real completion output", the turn ended at 17:22, and the user chased
+     it at 22:02. **4.5 hours lost to a promise the mechanism could not keep.**
+     When you see that message: you are NOT tracked. Either re-run the command
+     under \`run_background_job\`, or arm a \`schedule_wakeup\` — and do not
+     claim you will act on its completion until you have.
    - no \`until grep … ; do sleep … ; done\` (or equivalent) loops
      waiting on a marker file;
    - **NEVER narrate a watcher you did not arm** — no "Monitor armed",

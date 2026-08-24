@@ -169,3 +169,100 @@ are unrelated.
       regression; 26 in the file, 597 across the suite; `tsc --noEmit` clean.
 - [x] Bare mentions ("you could check back later", "takes about 7 minutes")
       still do not trip it.
+
+## Addendum (2026-08-22) — the backstop missed a real promise, and why
+
+MARVIN ran a pgBackRest backup, and closed the turn with:
+
+> It's running as tracked background task `b8ey1tvp0`; **I'll act on its real
+> completion output rather than guess.**
+
+The job finished at **17:17**. The turn ended at **17:22**. Nothing fired until
+the user chased it at **22:02** — **4.5 hours**.
+
+### Two separate defects, and neither was the one first suspected
+
+The initial hypothesis was that ADR-0032's `run_in_background` deny had failed.
+It had not: the tool input was `{command, timeout: 300000}` with
+`run_in_background` **unset**, so the gate correctly saw nothing to deny.
+
+**What actually happened:** the command ran in the FOREGROUND, exceeded its
+300 s timeout, and *the SDK harness auto-moved it to the background*, returning
+`Command running in background with ID: b8ey1tvp0`. MARVIN read that as
+ADR-0038 tracking. It is not — an auto-backgrounded task notifies the SDK
+session, which dies with the turn.
+
+So neither ADR-0032 (explicit flag) nor ADR-0038 (`run_background_job`) applied,
+and the failure fell into the gap between them. **This backstop is the layer
+that should have caught it**, and it did not, for two reasons found by testing
+the literal sentence:
+
+1. `"act"` was not in `FOLLOW_THROUGH_VERBS` — a list holding `check`, `verify`,
+   `run`, `report` and 17 others, but not the verb actually used.
+2. The sentence carries **no `when`/`once`/`after`/`in` cue**. The clause
+   pattern requires one, so even with `act` added it would still have missed.
+
+### Fixed
+
+- `act`, `react`, `respond`, `handle` added to the verb list.
+- A new pattern keys on the **event noun** instead of a temporal cue —
+  `completion|completes|finishes|exits|terminates|returns` — because that is how
+  a coding session says "when the process ends" without saying "when".
+- `personality.ts` now states plainly that a timed-out foreground Bash call is
+  auto-backgrounded by the harness and is **NOT** tracked, with the instruction
+  to re-run under `run_background_job` or arm a `schedule_wakeup` before
+  claiming any completion follow-up.
+
+Negative cases are tested alongside the positive ones — a false positive arms a
+spurious wakeup, so "The job completes in about an hour" and "I acted on the
+completion output already" must stay silent.
+
+## Addendum 2 (2026-08-23) — a foreign tool that silently armed nothing
+
+One day after addendum 1, the same class of failure with a different mechanism.
+MARVIN closed a turn with:
+
+> Restarted the stale dev API in the background … and **scheduled a check in ~2
+> minutes** before re-running the Playwright spec.
+
+Nothing fired. The wakeup store held one unrelated 24-hour entry.
+
+### The tool it called was not MARVIN's
+
+The transcript records a call to **`ScheduleWakeup`** — bare, no `mcp__` prefix.
+That is the **Claude Code harness's** tool, for `/loop` dynamic pacing. MARVIN's
+own tool is the snake_case `schedule_wakeup` (`wakeup-tools.ts:57`). Inside
+MARVIN's SDK session there is no loop for the harness tool to pace, so the call
+schedules nothing — while reading, to the model, as the obvious choice.
+
+Three layers failed in sequence:
+
+1. **The tool was reachable at all.** A foreign tool that silently no-ops a
+   safety-critical promise should never have been on the surface.
+2. **The coverage check missed it.** `sdk-runner.ts` tests
+   `b.name.includes("schedule_wakeup")` — **false** for `ScheduleWakeup`
+   (case differs). Correct in isolation, but it meant the turn looked
+   *uncovered*, leaving the backstop as the only net.
+3. **The backstop missed it too.** Every pattern required a future-tense
+   `"I'll …"`. This sentence is **past tense** — it asserts the watcher
+   *already exists*. That is a stronger and more misleading claim than a
+   promise, and it was invisible.
+
+### Fixed
+
+- **`ScheduleWakeup` is added to `disallowedTools`**, so the SDK never exposes
+  it. Structural, not prose — the same move as ADR-0032's `run_in_background`
+  deny.
+- **A past-tense pattern** now matches `scheduled|armed|set up|queued` + a
+  watcher noun + `in|for|after`. Negatives are tested: "I scheduled the backup
+  to run nightly", "A check was already scheduled by the runtime" and
+  "scheduled maintenance in production" must stay silent, since a false positive
+  arms a spurious wakeup.
+
+### The pattern behind the pattern
+
+This is the **third** widening of these regexes (2026-08-07, 08-22, 08-23), and
+each was driven by a real miss in vocabulary nobody predicted. Enumerating
+phrasings is losing ground slowly. The structural alternative — arm on any
+turn-ending commitment the runtime cannot see a watcher for, rather than
+matching prose — is recorded here as the direction, not yet built.

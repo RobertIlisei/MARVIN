@@ -68,6 +68,11 @@ const FOLLOW_THROUGH_VERBS = [
   "check", "verify", "confirm", "validate", "re-?run", "rerun", "run",
   "test", "retry", "revisit", "review", "look", "kick\\s+off", "start",
   "finish", "complete", "wrap\\s+up", "report",
+  // Added 2026-08-22 after a real miss: "I'll ACT on its real completion
+  // output rather than guess." The promise was as binding as any above and
+  // the backstop never saw it, so a job that finished at 17:17 sat unreported
+  // until the user chased it at 22:02 — 4.5 h.
+  "act", "react", "respond", "handle",
 ].join("|");
 
 /**
@@ -87,6 +92,30 @@ const PROMISE_PATTERNS: readonly RegExp[] = [
   // vocabulary a coding session actually uses.
   new RegExp(
     String.raw`\bi(?:'|’)?ll\s+(?:${FOLLOW_THROUGH_VERBS})\b[^.!?\n]{0,${GAP}}\b(?:when|once|after|in)\b`,
+    "i",
+  ),
+  // Completion-referencing promise with NO temporal cue word.
+  //
+  // "I'll act on its real completion output rather than guess" is a firm
+  // commitment, but it contains no when/once/after/in, so the clause pattern
+  // above cannot see it. The cue here is the EVENT noun instead — completion /
+  // finishes / exits / reports — which is exactly how a coding session phrases
+  // "when the process ends" without saying "when".
+  new RegExp(
+    String.raw`\bi(?:'|’)?ll\s+(?:${FOLLOW_THROUGH_VERBS})\b[^.!?\n]{0,${GAP}}\b(?:completion|completes|finishes|exits|terminates|returns)\b`,
+    "i",
+  ),
+  // PAST-TENSE claim of having armed something: "…and scheduled a check in
+  // ~2 minutes", "I set a reminder for 5 min".
+  //
+  // Every pattern above requires a future-tense "I'll". Observed 2026-08-23:
+  // MARVIN wrote "…and scheduled a check in ~2 minutes before re-running the
+  // Playwright spec" — a stronger commitment than a promise, because it
+  // asserts the watcher ALREADY EXISTS. It had called the harness's foreign
+  // `ScheduleWakeup`, which armed nothing. A false claim of coverage is worse
+  // than a promise of it, so it must trip the backstop too.
+  new RegExp(
+    String.raw`\b(?:scheduled|armed|set(?:\s+up)?|queued)\s+(?:an?\s+|the\s+)?(?:check|re-?check|wakeup|wake-?up|reminder|follow-?up|recheck)\b[^.!?\n]{0,${GAP}}\b(?:in|for|after)\b`,
     "i",
   ),
   // Timed promise: "I'll <anything> in ~N <unit>".

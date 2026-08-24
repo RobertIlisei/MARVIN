@@ -157,3 +157,72 @@ describe("isCheckBackCovered — a background job is not a clock", () => {
     expect(isCheckBackCovered(openEnded, { scheduleWakeup: false, backgroundJob: false })).toBe(false);
   });
 });
+
+// ── The 2026-08-22 miss: "I'll act on its real completion output" ──────────
+// A backup finished at 17:17; MARVIN promised to act on completion; the turn
+// ended at 17:22; the user chased it at 22:02. The backstop exists to arm a
+// wakeup when a promise has no watcher, and it saw nothing — "act" was not a
+// follow-through verb, and the sentence carries no when/once/after/in cue.
+describe("check-back detection — completion-referencing promises", () => {
+  it("catches the exact sentence that was missed", () => {
+    const real =
+      "It's running as tracked background task b8ey1tvp0; " +
+      "I'll act on its real completion output rather than guess.";
+    expect(detectUncoveredCheckBack(real)).not.toBeNull();
+  });
+
+  it("catches the same promise with a temporal cue", () => {
+    expect(detectUncoveredCheckBack("I'll act on the result when it finishes.")).not.toBeNull();
+    expect(detectUncoveredCheckBack("I'll respond once the job exits.")).not.toBeNull();
+    expect(detectUncoveredCheckBack("I'll handle it on completion.")).not.toBeNull();
+  });
+
+  it("does NOT fire on completion words without a first-person promise", () => {
+    // False positives arm spurious wakeups, so the negative edge matters as
+    // much as the positive one.
+    for (const t of [
+      "The job completes in about an hour.",
+      "You could check the completion output yourself.",
+      "I acted on the completion output already.",
+      "Completion is expected shortly.",
+    ]) {
+      expect(detectUncoveredCheckBack(t), t).toBeNull();
+    }
+  });
+});
+
+// ── The 2026-08-23 miss: a FALSE CLAIM of coverage ─────────────────────────
+// MARVIN called the harness's foreign `ScheduleWakeup` (not its own
+// `schedule_wakeup`), which armed nothing, then told the user it had
+// "scheduled a check in ~2 minutes". Every prior pattern required a
+// future-tense "I'll", so a sentence asserting the watcher ALREADY EXISTS —
+// a stronger and more misleading claim — was invisible.
+describe("check-back detection — past-tense claims of having armed a watcher", () => {
+  it("catches the exact sentence that was missed", () => {
+    const real =
+      "Restarted the stale dev API in the background and scheduled a check " +
+      "in ~2 minutes before re-running the Playwright spec.";
+    expect(detectUncoveredCheckBack(real)).not.toBeNull();
+  });
+
+  it("catches the same claim in other phrasings", () => {
+    for (const t of [
+      "I scheduled a check in ~2 minutes.",
+      "armed a wakeup for 5 minutes",
+      "set up a recheck after the build",
+    ]) {
+      expect(detectUncoveredCheckBack(t), t).not.toBeNull();
+    }
+  });
+
+  it("does NOT fire on scheduling talk that is not a self-claimed watcher", () => {
+    for (const t of [
+      "The user scheduled a meeting in the morning.",
+      "I scheduled the backup to run nightly.",
+      "A check was already scheduled by the runtime.",
+      "scheduled maintenance in production",
+    ]) {
+      expect(detectUncoveredCheckBack(t), t).toBeNull();
+    }
+  });
+});
