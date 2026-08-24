@@ -9,6 +9,110 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-24 — v0.1.64: what MARVIN installs, it can now update — and two promises it could not keep.**
+
+  **ADR-0071 — install provenance, and the update path it enables.** The question
+  was plain: does MARVIN have a refresh for pulling latest versions of already-
+  installed skills and plugins? It did not, and the reason was not a missing
+  button.
+
+  | Surface | What it actually did |
+  |---|---|
+  | `SkillsPane.refresh()` / `PluginsPane.refresh()` | Re-read the **local** index. A list refresh, not a version pull. |
+  | `addSkillFromGit` | Clone `--depth=1`, `rmSync(dest)`, copy — *"idempotent re-install"*. |
+  | `installPluginFromGit` | Same, into `cache/<market>/<plugin>/<version>`. |
+  | `scripts/install-skills.sh` | Explicitly **skips** anything already present. Never updates. |
+
+  So re-installing from the same URL *was* an update — if you remembered the URL
+  and re-typed it, one item at a time. The blocker was **missing provenance**:
+  `registerInstalledPlugin` wrote `scope / installPath / version / installedAt /
+  lastUpdated` and **no clone URL**; `installCandidates` just copied a folder.
+  Nothing on disk knew where anything came from, so an updater had no source.
+
+  Two stores, deliberately not one. Skills get `.marvin-source.json` **inside**
+  the installed folder — the folder is the unit of install *and* of deletion, so
+  removing a skill removes its record. Plugins get a sidecar registry in MARVIN's
+  own data dir, explicitly **not** a new field in
+  `~/.claude/plugins/installed_plugins.json`: that file is co-owned by the Claude
+  Code `/plugin` UI, ADR-0053's premise is that installs stay visible in both
+  directions, and an unknown key risks the other writer dropping it. The cost is
+  a plugin updated *by* Claude Code leaving our record stale — which the content
+  hash catches on the next check.
+
+  **"Newer" is a content hash, not a version string.** Skills have no version
+  field at all; plugins have one and routinely ship changes without bumping it.
+
+  **Identity is name AND repo-relative path**, and a test proved why. By name
+  alone, an upstream *rename* and an upstream *deletion* are indistinguishable —
+  recorded name absent, some other skill present. The first implementation fell
+  back to "the repo's only remaining skill", which on a deletion would have
+  installed a **different skill over the user's**, silently. Path matching runs
+  first (a rename keeps the folder; a deletion removes it); the sole-candidate
+  guess survives only where there is no recorded identity at all.
+
+  Backfill instead of migration — there is nothing to migrate *from*. Both
+  endpoints accept an optional `url` that binds provenance and updates in one
+  step; the Skills pane surfaces it as **Set source**. `url` + `all` is rejected:
+  one URL applied to every item would silently rebind every record.
+
+  Two gaps from the same hole closed: superseded plugin cache versions are pruned
+  (behind `isPrunableCachePath`, which refuses anything that isn't exactly
+  `<market>/<plugin>/<version>` inside our own cache — it deletes recursively
+  from a path another program writes, so the guard is paranoid and unit-tested),
+  and `lastUpdated` is finally read.
+
+  Verification: 24 new tests, 772 total pass, 8/8 typecheck, macOS build clean.
+
+  **ADR-0055 addenda — two escapes, one 4.5-hour miss.** A background job
+  finished at 17:17; MARVIN had said *"I'll act on its real completion output
+  rather than guess"*; the user chased it at 22:02. The checkback backstop
+  existed and saw nothing, twice over:
+
+  1. **The promise didn't match.** `act`/`respond` weren't follow-through verbs,
+     and the clause pattern requires a temporal cue (`when`/`once`/`after`/`in`)
+     the sentence never used — its cue was the **event noun** (*completion*),
+     which is exactly how a coding session says "when the process ends" without
+     saying "when".
+  2. **A past-tense claim of coverage was unmatched entirely**, because every
+     prior pattern requires a future-tense "I'll". Observed 2026-08-23: *"…and
+     scheduled a check in ~2 minutes"* asserts a watcher that **already exists** —
+     a stronger commitment than a promise, and it was false.
+
+  It was false because MARVIN had called **`ScheduleWakeup`** — the Claude Code
+  harness's tool for `/loop` dynamic pacing, which schedules nothing inside an
+  SDK session. It reads as the obvious choice; MARVIN's own tool is the
+  snake_case `schedule_wakeup`. Worse, the coverage check tests
+  `name.includes("schedule_wakeup")`, **false** for `ScheduleWakeup` — so the
+  promise looked uncovered to the backstop *and* armed nothing. The tool is now
+  off the surface entirely: one that silently no-ops a safety-critical promise
+  must not be reachable. Also documented: a foreground `Bash` call that times out
+  is auto-moved to the background by the harness and reports *"Command running in
+  background with ID: <id>"* — which looks like the tracked case and is not,
+  because the notification goes to the SDK session and dies with the turn.
+
+  **Concise output style in the ultron voice.** MARVIN runs the Agent SDK in
+  isolation mode (no `settingSources`), so `outputStyle` in
+  `~/.claude/settings.json` is never read, and there is no `/config` to set it
+  from — the slash catalog is skills + whatever the SDK reports + one native
+  command. The equivalent lever is the personality mode, so Claude Code's concise
+  style ships verbatim inside `ULTRON_STYLE`, minus its "you are an interactive
+  CLI tool" line (a straight identity contradiction two paragraphs below "You are
+  ULTRON") and plus two lines keeping the imperious declaration to one sentence.
+  Left alone and worth knowing: `CORE_BEHAVIOR` still says *"Silent progress is a
+  failure mode"*, the direct opposite of the style's rule 2. The conflict clause
+  is meant to win, but it lands ~1650 lines earlier and that line is global.
+
+  **graphify 0.9.43 → 0.9.48.** The PyPI package is `graphifyy`, installed into
+  Homebrew's python@3.14 — which is why `pip show graphify` finds nothing, and
+  why PEP 668 blocks the upgrade without `--break-system-packages`. Both graphs
+  rebuilt (code 6773→6905 nodes / 12766→13419 edges; knowledge 1410→1484 /
+  1722→1818) and re-labelled: the rebuild moved the community count, which drops
+  the LLM labels back to filename fallbacks — 57 of 363 had degraded, and 0
+  remain. One CLAUDE.md claim corrected outright: inline `# comments` in
+  `.graphifyignore` **are** supported now (`_parse_gitignore_line` follows the
+  gitignore spec), where the doc still said otherwise "as of v0.4.23".
+
+
 - **2026-08-22 — v0.1.63: the session where MARVIN was measured instead of guessed at.**
 
   Six ADRs, each starting from a number. The through-line: every "obvious" cause

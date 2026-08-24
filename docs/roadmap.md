@@ -33,6 +33,46 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.64** — Things MARVIN installs can now be updated, and two promises it
+could not keep. **Install provenance (ADR-0071):** MARVIN could install a skill
+or a plugin but never pull a newer version of either — and the blocker was not
+a missing button. `registerInstalledPlugin` recorded `installPath`/`version`/
+`lastUpdated` and **no clone URL**; skills recorded **nothing at all**. Nothing
+on disk knew where anything came from, so an updater had no source to
+re-clone. (`install-skills.sh` compounds it: it *skips* anything already
+present, so a skill installed once stays at that version forever.) Every
+install now records its origin — `.marvin-source.json` inside the skill folder,
+and a MARVIN-owned sidecar registry for plugins, deliberately **not** a new key
+in the co-owned `installed_plugins.json` the Claude Code `/plugin` UI also
+writes. "Is upstream newer?" is a **content hash**, not a version string:
+skills have no version field, and plugins routinely ship changes without
+bumping theirs. Identity is name **AND** repo-relative path, because by name
+alone an upstream rename and an upstream deletion are indistinguishable — a
+test caught the first implementation installing a *different* skill over the
+user's when upstream deleted theirs. Two CSRF-guarded routes with
+check/single/bulk modes, Check-for-updates + per-row Update in both panes, and
+a one-time "Set source" for the backfill (there is nothing to migrate *from*).
+Superseded plugin cache versions are finally pruned.
+**Two ADR-0055 escapes closed**, both from one 4.5-hour miss: a background job
+finished at 17:17, MARVIN had said *"I'll act on its real completion output"*,
+and the user chased it at 22:02. The backstop saw nothing — the sentence's cue
+was the event noun (*completion*), not a temporal `when`/`once`, and `act` was
+not a follow-through verb. Separately, a **past-tense claim of coverage**
+("…and scheduled a check in ~2 minutes") was entirely unmatched, because every
+prior pattern requires a future-tense "I'll" — and it was false, because MARVIN
+had called `ScheduleWakeup`, the *harness's* `/loop` tool, which schedules
+nothing inside an SDK session. It reads as the obvious choice; MARVIN's own
+tool is the snake_case `schedule_wakeup`. Worse, the coverage check tests
+`name.includes("schedule_wakeup")` — false for `ScheduleWakeup` — so the
+promise looked uncovered *and* armed nothing. The tool is now off the surface
+entirely: one that silently no-ops a safety-critical promise must not be
+reachable. **Also:** Claude Code's concise output style now ships in the ultron
+voice (MARVIN runs the SDK in isolation mode, so `outputStyle` in
+`~/.claude/settings.json` is never read and there is no `/config` to set it
+from), and graphify moved 0.9.43 → 0.9.48 with both graphs rebuilt, re-labelled
+(57 of 363 community labels had degraded to filenames) and their stamps
+corrected — including one CLAUDE.md claim that was simply wrong.
+
 **v0.1.63** — The session where MARVIN was measured instead of guessed at. Six
 ADRs, and every one started from a number rather than a hunch.
 **Three days became a diagnosis (ADR-0067):** a 49-hour session was 15.9 h of
