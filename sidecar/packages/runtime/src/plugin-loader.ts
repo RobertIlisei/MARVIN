@@ -35,14 +35,20 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+import {
+  readAllPluginProvenance,
+  type SourceInfo,
+  toSourceInfo,
+} from "./install-provenance";
 
 import { validateProjectCwd } from "./projects";
 
@@ -135,6 +141,10 @@ export interface PluginSummary {
   hasHooks: boolean;
   /** True when this plugin is currently enabled for the project. */
   enabled: boolean;
+  /** Where MARVIN installed this from, when it installed it (ADR-0071).
+   *  Absent for plugins installed through the Claude Code `/plugin` UI —
+   *  those are not ours to update. */
+  source?: SourceInfo;
 }
 
 /**
@@ -147,6 +157,7 @@ export function listInstalledPlugins(workDir: string): PluginSummary[] {
   const enabled = new Set(readEnabledPlugins(workDir));
   const seen = new Set<string>();
   const out: PluginSummary[] = [];
+  const provenance = readAllPluginProvenance();
 
   let file: InstalledPluginsFile;
   try {
@@ -181,6 +192,9 @@ export function listInstalledPlugins(workDir: string): PluginSummary[] {
         existsSync(join(entry.installPath, "hooks")) || "hooks" in manifest,
       // A plugin is enabled if either its bare name or full key is listed.
       enabled: enabled.has(name) || enabled.has(key),
+      ...(toSourceInfo(provenance[key] ?? null)
+        ? { source: toSourceInfo(provenance[key] ?? null) }
+        : {}),
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));

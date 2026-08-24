@@ -41,7 +41,8 @@
     "./plugin-installer": "./src/plugin-installer.ts",
     "./session-auditor": "./src/session-auditor.ts",
     "./ci-status": "./src/ci-status.ts",
-    "./slash-commands": "./src/slash-commands.ts"
+    "./slash-commands": "./src/slash-commands.ts",
+    "./install-provenance": "./src/install-provenance.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

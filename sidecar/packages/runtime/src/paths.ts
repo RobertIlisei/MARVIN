@@ -70,6 +70,12 @@ export const marvinPaths = {
   /** Per-session agent-edit checkpoint store (ADR-0034). */
   checkpointsDir: (projectId: string, marvinSessionId: string) =>
     join(getMarvinDataDir(), "checkpoints", projectId, marvinSessionId),
+  /** Install provenance for full plugins (ADR-0071). Kept HERE rather than in
+   *  `~/.claude/plugins/installed_plugins.json` so that file stays exactly the
+   *  shape Claude Code writes — bidirectional visibility is the whole point of
+   *  ADR-0053's shared registry, and an unknown key could be dropped or
+   *  rejected by the other writer. */
+  pluginSources: () => join(getMarvinDataDir(), "plugin-sources.json"),
 } as const;
 
 /** Ensure the parent directory of a file exists. Safe to call on every write. */

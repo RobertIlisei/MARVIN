@@ -27,6 +27,32 @@ import SwiftUI
 
 // MARK: - Wire types (decoded from /api/skills)
 
+/// Recorded install provenance for one skill (ADR-0071).
+struct SkillSourceInfo: Decodable {
+    let url: String?
+    let marketplace: String?
+    let plugin: String?
+    let installedAt: String
+    let lastUpdated: String
+    /// False when the record exists but can't be re-fetched from.
+    let updatable: Bool
+}
+
+/// One row's result from POST /api/skills/update.
+private struct SkillUpdateOutcome: Decodable {
+    let name: String
+    let scope: String
+    /// "updated" | "up-to-date" | "update-available" | "error"
+    let status: String
+    let error: String?
+}
+
+private struct SkillUpdateResponse: Decodable {
+    let ok: Bool?
+    let error: String?
+    let results: [SkillUpdateOutcome]?
+}
+
 private struct SkillsIndexResponse: Decodable {
     let fingerprint: FingerprintBlock
     let suggestions: [Suggestion]
@@ -63,6 +89,10 @@ private struct SkillsIndexResponse: Decodable {
         let name: String
         let description: String
         let path: String
+        /// Where MARVIN fetched this from (ADR-0071). Absent for skills the
+        /// user authored, copied in by hand, or installed before provenance
+        /// existed — those get a one-time "set source" instead of Update.
+        let source: SkillSourceInfo?
         var id: String { path }
     }
 
@@ -71,6 +101,7 @@ private struct SkillsIndexResponse: Decodable {
         let description: String
         let path: String
         let shadowsUserGlobal: Bool
+        let source: SkillSourceInfo?
         var id: String { path }
     }
 
@@ -126,6 +157,23 @@ struct SkillsPane: View {
     @State private var buildingSuggestion: String?
     /// Detailed-explanation popover for a discovered suggestion's rationale + body.
     @State private var inspectedDiscovered: SkillsIndexResponse.DiscoveredSuggestion?
+
+    // ADR-0071 — update state. Keyed "<scope>:<name>" because a project-local
+    // and a user-global skill can share a name (project-local shadows it).
+    @State private var updateStatus: [String: String] = [:]
+    @State private var updatingSkill: String?
+    @State private var checkingUpdates = false
+    /// "Set source" sheet — binds a URL to a skill that has no provenance.
+    @State private var bindSourceFor: BindTarget?
+    @State private var bindURL = ""
+    @State private var bindBusy = false
+    @State private var bindError: String?
+
+    struct BindTarget: Identifiable {
+        let name: String
+        let scope: String
+        var id: String { "\(scope):\(name)" }
+    }
 
     // ADR-0039 — "Add from GitHub" sheet state.
     @State private var addSheetOpen = false
@@ -186,6 +234,7 @@ struct SkillsPane: View {
             discoveredDetailSheet(suggestion)
         }
         .sheet(isPresented: $addSheetOpen) { addFromGitSheet }
+        .sheet(item: $bindSourceFor) { target in bindSourceSheet(target) }
     }
 
     // MARK: - Add from GitHub (ADR-0039)
@@ -614,15 +663,30 @@ struct SkillsPane: View {
                 .help("Fetch a skill from a Git repo (ADR-0039)")
             }
             ToolbarItem(placement: .automatic) {
+                Button { Task { await checkAllSkillUpdates() } } label: {
+                    Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help("Re-fetch every skill MARVIN installed and report which ones changed upstream (ADR-0071). Nothing is installed until you press Update.")
+                .disabled(checkingUpdates || updatableSkillCount == 0)
+            }
+            ToolbarItem(placement: .automatic) {
                 Button {
                     Task { await refresh() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh")
+                .help("Reload the installed list (does NOT check upstream)")
                 .disabled(isLoading)
             }
         }
+    }
+
+    /// Rows that could be updated at all — gates the toolbar button so it
+    /// isn't offered on a tree where nothing has a recorded source.
+    private var updatableSkillCount: Int {
+        guard let idx = index else { return 0 }
+        return idx.userGlobal.filter { $0.source?.updatable == true }.count
+            + idx.projectLocal.filter { $0.source?.updatable == true }.count
     }
 
     /// Shared section header: icon · title · count chip.
@@ -657,14 +721,15 @@ struct SkillsPane: View {
             } else {
                 ForEach(active) { skill in
                     installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: nil, active: true,
+                                 badge: nil, scope: "user-global", source: skill.source,
+                                 active: true,
                                  onToggle: { Task { await toggleSkill(skill.name) } })
                 }
                 ForEach(idx.projectLocal) { skill in
                     // Project-local skills are authored FOR this project — always
                     // active, no toggle.
                     installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: "local")
+                                 badge: "local", scope: "project-local", source: skill.source)
                 }
             }
         }
@@ -685,7 +750,8 @@ struct SkillsPane: View {
             } else {
                 ForEach(inactive) { skill in
                     installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: nil, active: false,
+                                 badge: nil, scope: "user-global", source: skill.source,
+                                 active: false,
                                  onToggle: { Task { await toggleSkill(skill.name) } })
                 }
             }
@@ -779,6 +845,169 @@ struct SkillsPane: View {
 
     /// Flip a user-global skill in/out of the project's active set. Switches
     /// to an explicit `.marvin/skills.json` choice on first toggle.
+    // MARK: - Updates (ADR-0071)
+
+    /// POST /api/skills/update. `checkOnly` reports without installing.
+    private func postSkillUpdate(body: [String: Any]) async -> SkillUpdateResponse? {
+        var req = URLRequest(url: apiBase.appendingPathComponent("api/skills/update"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        // A bulk check shallow-clones once per skill — generous, but bounded.
+        req.timeoutInterval = 180
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            return try? JSONDecoder().decode(SkillUpdateResponse.self, from: data)
+        } catch {
+            await MainActor.run { self.pasteboardToast = "Update check failed: \(error.localizedDescription)" }
+            return nil
+        }
+    }
+
+    /// Check both scopes. Installs nothing, so it is always safe to run.
+    /// project-local is only checked when a project is open — the route
+    /// requires a validated workDir for that scope.
+    private func checkAllSkillUpdates() async {
+        await MainActor.run { checkingUpdates = true }
+        defer { Task { @MainActor in checkingUpdates = false } }
+
+        var all: [SkillUpdateOutcome] = []
+        if let resp = await postSkillUpdate(
+            body: ["all": true, "checkOnly": true, "scope": "user-global"]
+        ) {
+            all.append(contentsOf: resp.results ?? [])
+        }
+        if let workDir = bridge.projectWorkDir,
+           let resp = await postSkillUpdate(
+               body: ["all": true, "checkOnly": true, "scope": "project-local", "workDir": workDir]
+           ) {
+            all.append(contentsOf: resp.results ?? [])
+        }
+
+        await MainActor.run {
+            for r in all { updateStatus["\(r.scope):\(r.name)"] = r.status }
+            let available = all.filter { $0.status == "update-available" }.count
+            let failed = all.filter { $0.status == "error" }.count
+            if all.isEmpty {
+                pasteboardToast = "Nothing to check — no skill here has a recorded source."
+            } else if available == 0 {
+                pasteboardToast = failed == 0
+                    ? "All \(all.count) up to date."
+                    : "All up to date (\(failed) could not be checked)."
+            } else {
+                pasteboardToast = "\(available) update\(available == 1 ? "" : "s") available."
+            }
+        }
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        await MainActor.run { self.pasteboardToast = nil }
+    }
+
+    /// Fetch and install the latest for one skill. `url` re-binds provenance
+    /// (the "Set source" path) and is otherwise omitted.
+    private func updateOneSkill(name: String, scope: String, url: String? = nil) async {
+        let key = "\(scope):\(name)"
+        await MainActor.run { updatingSkill = key }
+        defer { Task { @MainActor in updatingSkill = nil } }
+
+        var body: [String: Any] = ["name": name, "scope": scope]
+        if let url, !url.isEmpty { body["url"] = url }
+        if scope == "project-local" {
+            guard let workDir = bridge.projectWorkDir else {
+                await MainActor.run { self.pasteboardToast = "Open a project to update its local skills." }
+                return
+            }
+            body["workDir"] = workDir
+        }
+
+        guard let resp = await postSkillUpdate(body: body) else { return }
+        guard let outcome = resp.results?.first else {
+            await MainActor.run { self.pasteboardToast = resp.error ?? "Update failed." }
+            return
+        }
+        await MainActor.run {
+            // An update can RENAME the skill (upstream changed its frontmatter),
+            // so record the status under the returned name, not the one we sent.
+            updateStatus["\(scope):\(outcome.name)"] = outcome.status
+            switch outcome.status {
+            case "updated": pasteboardToast = "Updated \(outcome.name)."
+            case "up-to-date": pasteboardToast = "\(outcome.name) is already up to date."
+            default: pasteboardToast = "Update failed: \(outcome.error ?? "unknown error")"
+            }
+        }
+        if outcome.status == "updated" { await refresh() }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await MainActor.run { self.pasteboardToast = nil }
+    }
+
+    /// Bind a Git URL to a skill that has none, then immediately update from it.
+    @ViewBuilder
+    private func bindSourceSheet(_ target: BindTarget) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Set source for \(target.name)").font(.headline)
+            Text("MARVIN has no record of where this skill came from, so it can't re-fetch it. Paste the Git URL it lives at — it's stored beside the skill and reused for every future update.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("https://github.com/owner/repo/tree/main/skills/\(target.name)", text: $bindURL)
+                .textFieldStyle(.roundedBorder)
+            if let bindError {
+                Text(bindError).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Button("Cancel") { bindSourceFor = nil }
+                Spacer()
+                if bindBusy { ProgressView().controlSize(.small) }
+                Button("Set and update") {
+                    Task { await bindAndUpdate(target) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(bindBusy || bindURL.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 520)
+    }
+
+    private func bindAndUpdate(_ target: BindTarget) async {
+        let url = bindURL.trimmingCharacters(in: .whitespaces)
+        guard !url.isEmpty else { return }
+        await MainActor.run { bindBusy = true; bindError = nil }
+        defer { Task { @MainActor in bindBusy = false } }
+
+        var body: [String: Any] = ["name": target.name, "scope": target.scope, "url": url]
+        if target.scope == "project-local" {
+            guard let workDir = bridge.projectWorkDir else {
+                await MainActor.run { bindError = "Open a project first." }
+                return
+            }
+            body["workDir"] = workDir
+        }
+        guard let resp = await postSkillUpdate(body: body) else {
+            await MainActor.run { bindError = "The request failed." }
+            return
+        }
+        guard let outcome = resp.results?.first else {
+            await MainActor.run { bindError = resp.error ?? "Nothing came back." }
+            return
+        }
+        if outcome.status == "error" {
+            // Keep the sheet open — the URL is probably wrong and the user is
+            // one edit away from a working one.
+            await MainActor.run { bindError = outcome.error ?? "Update failed." }
+            return
+        }
+        await MainActor.run {
+            updateStatus["\(target.scope):\(outcome.name)"] = outcome.status
+            bindSourceFor = nil
+            bindURL = ""
+            pasteboardToast = "Source set for \(outcome.name)."
+        }
+        await refresh()
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await MainActor.run { self.pasteboardToast = nil }
+    }
+
     private func toggleSkill(_ name: String) async {
         guard let workDir = bridge.projectWorkDir, let idx = index else { return }
         let userGlobalNames = Set(idx.userGlobal.map { $0.name })
@@ -804,6 +1033,8 @@ struct SkillsPane: View {
         description: String,
         path: String,
         badge: String?,
+        scope: String,
+        source: SkillSourceInfo?,
         active: Bool? = nil,
         onToggle: (() -> Void)? = nil
     ) -> some View {
@@ -839,6 +1070,7 @@ struct SkillsPane: View {
                 }
             }
             Spacer()
+            skillUpdateControl(name: name, scope: scope, source: source)
             Button("View") {
                 openSkillFile(path)
             }
@@ -846,6 +1078,48 @@ struct SkillsPane: View {
             .controlSize(.small)
         }
         .padding(.vertical, 2)
+    }
+
+    /// Update affordance for one skill (ADR-0071).
+    ///
+    /// A skill with no recorded source is the common case on an existing
+    /// machine — every skill installed before provenance existed, plus anything
+    /// hand-authored. Rather than a dead button, those get "Set source", which
+    /// binds a URL once and turns the row into a normal updatable one.
+    @ViewBuilder
+    private func skillUpdateControl(name: String, scope: String, source: SkillSourceInfo?) -> some View {
+        let key = "\(scope):\(name)"
+        let status = updateStatus[key]
+        if updatingSkill == key {
+            ProgressView().controlSize(.small)
+        } else if source?.updatable != true {
+            Button("Set source") {
+                bindURL = ""; bindError = nil
+                bindSourceFor = BindTarget(name: name, scope: scope)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("This skill has no recorded origin, so there's nothing to re-fetch. Give it the Git URL once and Update works from then on.")
+        } else {
+            HStack(spacing: 6) {
+                if status == "update-available" {
+                    Text("update available")
+                        .font(.caption2)
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                } else if status == "up-to-date" {
+                    Text("up to date").font(.caption2).foregroundStyle(.tertiary)
+                } else if status == "updated" {
+                    Text("updated").font(.caption2).foregroundStyle(.green)
+                }
+                Button("Update") { Task { await updateOneSkill(name: name, scope: scope) } }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(updatingSkill != nil || checkingUpdates)
+                    .help("Re-fetch from \(source?.url ?? "its recorded source"). Last updated \(source?.lastUpdated ?? "unknown")." )
+            }
+        }
     }
 
     @ViewBuilder
