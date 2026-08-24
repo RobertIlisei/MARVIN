@@ -51,7 +51,39 @@ private struct PluginSummary: Decodable, Identifiable {
     let hasMcp: Bool
     let hasHooks: Bool
     let enabled: Bool
+    /// Where MARVIN installed this from (ADR-0071). Absent for plugins that
+    /// arrived through the Claude Code /plugin UI — not ours to update.
+    let source: SourceInfo?
     var id: String { key }
+}
+
+/// Recorded install provenance (ADR-0071).
+private struct SourceInfo: Decodable {
+    let url: String?
+    let marketplace: String?
+    let plugin: String?
+    let installedAt: String
+    let lastUpdated: String
+    /// False when the record exists but can't be re-fetched from.
+    let updatable: Bool
+}
+
+/// One row's result from POST /api/plugins/update.
+private struct UpdateOutcome: Decodable, Identifiable {
+    let key: String
+    let name: String
+    /// "updated" | "up-to-date" | "update-available" | "error"
+    let status: String
+    let error: String?
+    let fromVersion: String?
+    let toVersion: String?
+    var id: String { key }
+}
+
+private struct UpdateResponse: Decodable {
+    let ok: Bool?
+    let error: String?
+    let results: [UpdateOutcome]?
 }
 
 // MARK: - View
@@ -67,6 +99,12 @@ struct PluginsPane: View {
     /// Catalog search text + the one catalog entry currently installing.
     @State private var catalogSearch = ""
     @State private var installingFromCatalog: String?
+
+    // Update state (ADR-0071): last check result per plugin key, plus which
+    // key is mid-update so its button can spin.
+    @State private var updateStatus: [String: String] = [:]
+    @State private var updatingKey: String?
+    @State private var checkingUpdates = false
 
     // Install sheet state.
     @State private var installSheetOpen = false
@@ -154,13 +192,27 @@ struct PluginsPane: View {
                 .help("Install a plugin from a marketplace or Git URL (ADR-0053)")
             }
             ToolbarItem(placement: .automatic) {
+                Button { Task { await checkAllUpdates() } } label: {
+                    Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help("Re-fetch every plugin MARVIN installed and report which ones changed upstream (ADR-0071). Nothing is installed until you press Update.")
+                .disabled(checkingUpdates || updatableCount == 0)
+            }
+            ToolbarItem(placement: .automatic) {
                 Button { Task { await refresh() } } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh")
+                .help("Reload the installed list (does NOT check upstream)")
                 .disabled(isLoading)
             }
         }
+    }
+
+    /// How many rows could be updated at all — drives the toolbar button's
+    /// enabled state so "Check for updates" isn't offered when nothing here
+    /// has a recorded source.
+    private var updatableCount: Int {
+        plugins.filter { $0.source?.updatable == true }.count
     }
 
     @ViewBuilder
@@ -191,8 +243,53 @@ struct PluginsPane: View {
                 contributionChips(p)
             }
             Spacer()
+            updateControl(p)
         }
         .padding(.vertical, 3)
+    }
+
+    /// Update affordance for one plugin (ADR-0071).
+    ///
+    /// Three states, deliberately distinct: no recorded source (nothing to do —
+    /// explain why rather than showing a dead button), a known update waiting,
+    /// and the neutral idle state where Update means "check, then fetch if
+    /// there's anything new".
+    @ViewBuilder
+    private func updateControl(_ p: PluginSummary) -> some View {
+        let status = updateStatus[p.key]
+        if p.source?.updatable != true {
+            Text("no source")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
+        } else if updatingKey == p.key {
+            ProgressView().controlSize(.small)
+        } else {
+            HStack(spacing: 6) {
+                if status == "update-available" {
+                    Text("update available")
+                        .font(.caption2)
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                } else if status == "up-to-date" {
+                    Text("up to date").font(.caption2).foregroundStyle(.tertiary)
+                } else if status == "updated" {
+                    Text("updated").font(.caption2).foregroundStyle(.green)
+                }
+                Button("Update") { Task { await updateOne(p) } }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(updatingKey != nil || checkingUpdates)
+                    .help(sourceHelp(p.source))
+            }
+        }
+    }
+
+    private func sourceHelp(_ s: SourceInfo?) -> String {
+        guard let s else { return "Re-fetch this plugin." }
+        let origin = s.url ?? s.marketplace ?? "its recorded source"
+        return "Re-fetch from \(origin). Last updated \(s.lastUpdated)."
     }
 
     /// Small chips summarising what the plugin contributes. Loaded contributions
@@ -542,6 +639,79 @@ struct PluginsPane: View {
         } catch {
             await MainActor.run { installError = error.localizedDescription }
         }
+    }
+
+    // MARK: - Updates (ADR-0071)
+
+    /// POST /api/plugins/update. `checkOnly` reports without installing.
+    private func postUpdate(body: [String: Any]) async -> UpdateResponse? {
+        var req = URLRequest(url: apiBase.appendingPathComponent("api/plugins/update"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
+        // A bulk check shallow-clones once per plugin — generous, but bounded.
+        req.timeoutInterval = 180
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            return try? JSONDecoder().decode(UpdateResponse.self, from: data)
+        } catch {
+            await MainActor.run { toast = "Update check failed: \(error.localizedDescription)" }
+            return nil
+        }
+    }
+
+    /// Check every plugin with a recorded source. Installs nothing — the row
+    /// buttons do that, so a check is always safe to run.
+    private func checkAllUpdates() async {
+        await MainActor.run { checkingUpdates = true }
+        defer { Task { @MainActor in checkingUpdates = false } }
+
+        guard let resp = await postUpdate(body: ["all": true, "checkOnly": true]) else { return }
+        let results = resp.results ?? []
+        await MainActor.run {
+            for r in results { updateStatus[r.key] = r.status }
+            let available = results.filter { $0.status == "update-available" }.count
+            let failed = results.filter { $0.status == "error" }.count
+            if results.isEmpty {
+                toast = "Nothing to check — no plugin here was installed by MARVIN."
+            } else if available == 0 {
+                toast = failed == 0
+                    ? "All \(results.count) up to date."
+                    : "All up to date (\(failed) could not be checked)."
+            } else {
+                toast = "\(available) update\(available == 1 ? "" : "s") available."
+            }
+        }
+        try? await Task.sleep(nanoseconds: 4_000_000_000)
+        await MainActor.run { toast = nil }
+    }
+
+    /// Fetch and install the latest for one plugin.
+    private func updateOne(_ p: PluginSummary) async {
+        await MainActor.run { updatingKey = p.key }
+        defer { Task { @MainActor in updatingKey = nil } }
+
+        guard let resp = await postUpdate(body: ["key": p.key]) else { return }
+        guard let outcome = resp.results?.first else {
+            await MainActor.run { toast = resp.error ?? "Update failed." }
+            return
+        }
+        await MainActor.run {
+            updateStatus[p.key] = outcome.status
+            switch outcome.status {
+            case "updated":
+                let to = outcome.toVersion.map { " → v\($0)" } ?? ""
+                toast = "Updated \(outcome.name)\(to)."
+            case "up-to-date":
+                toast = "\(outcome.name) is already up to date."
+            default:
+                toast = "Update failed: \(outcome.error ?? "unknown error")"
+            }
+        }
+        if outcome.status == "updated" { await refresh() }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await MainActor.run { toast = nil }
     }
 
     @ViewBuilder

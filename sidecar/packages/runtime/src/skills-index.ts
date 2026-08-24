@@ -10,7 +10,7 @@
  * (`GET /api/skills`).
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,11 @@ import {
   type ProjectFingerprint,
 } from "@marvin/project-context";
 
+import {
+  readSkillProvenanceForSkillMd,
+  type SourceInfo,
+  toSourceInfo,
+} from "./install-provenance";
 import { readCachedDiscovery } from "./project-skill-discoverer";
 import { listProjectSkills } from "./project-skills-plugin";
 import {
@@ -30,6 +35,11 @@ export interface InstalledSkill {
   name: string;
   description: string;
   path: string;
+  /** Where MARVIN fetched this skill from, when it fetched it (ADR-0071).
+   *  Absent for anything installed before provenance existed, and for skills
+   *  the user authored or copied in by hand — the pane offers a one-time
+   *  "set source" instead of Update for those. */
+  source?: SourceInfo;
 }
 
 export interface ProjectLocalSkill extends InstalledSkill {
@@ -105,10 +115,12 @@ function listUserGlobalSkills(): InstalledSkill[] {
     try {
       const text = readFileSync(skillMd, "utf-8");
       const fm = parseFrontmatter(text);
+      const source = toSourceInfo(readSkillProvenanceForSkillMd(skillMd));
       out.push({
         name: fm.name ?? name,
         description: fm.description ?? "",
         path: skillMd,
+        ...(source ? { source } : {}),
       });
     } catch {
       /* skip unreadable */
@@ -155,10 +167,14 @@ export function buildSkillsIndex(workDir: string): SkillsIndex {
 
   const projectLocalRaw = listProjectSkills(workDir);
   const projectLocal: ProjectLocalSkill[] = projectLocalRaw
-    .map((s) => ({
-      ...s,
-      shadowsUserGlobal: userGlobalNames.has(s.name),
-    }))
+    .map((s) => {
+      const source = toSourceInfo(readSkillProvenanceForSkillMd(s.path));
+      return {
+        ...s,
+        shadowsUserGlobal: userGlobalNames.has(s.name),
+        ...(source ? { source } : {}),
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
   const projectLocalNames = new Set(projectLocal.map((s) => s.name));
 
