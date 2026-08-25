@@ -1257,6 +1257,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const turnEnv: Record<string, string | undefined> = {
     ...process.env,
     ...honeycombEnv,
+    // ADR-0073 — keep the TodoWrite contract across the SDK 0.3 upgrade.
+    // From 0.3.142, Opus 4.8+ / Sonnet 5+ sessions get NO task-tracking tool
+    // unless opted in, and the opt-in family defaults to the id-based Task
+    // tools (TaskCreate/TaskUpdate). MARVIN's entire plan spine (ADR-0046/
+    // 0049/0052/0068) reconciles TodoWrite snapshots by `[N]`/`[N.M]` tag;
+    // silently losing that tool would leave every plan frozen at "pending".
+    // Opt the family in, and select the legacy snapshot tool over Task tools.
+    // Migrating the spine to Task ids is its own change (ADR-0073 §next).
+    CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
+    CLAUDE_CODE_ENABLE_TASKS: "0",
     // Enrich PATH so the SDK + every subprocess it spawns (notably the
     // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
     // when MARVIN was launched from Finder with the minimal launchd PATH.

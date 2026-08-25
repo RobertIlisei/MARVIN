@@ -202,6 +202,8 @@ export function createMemoryMcpServer(workDir: string) {
   return createSdkMcpServer({
     name: "marvin-memory",
     version: "1.0.0",
+    // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch.
+    alwaysLoad: true,
     tools: [rememberTool, recallTool],
   });
 }

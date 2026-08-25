@@ -141,6 +141,8 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
   return createSdkMcpServer({
     name: "marvin-obsidian",
     version: "1.0.0",
+    // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch.
+    alwaysLoad: true,
     tools: [statusTool, initTool],
   });
 }

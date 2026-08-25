@@ -63,7 +63,17 @@ const SDK_CTX: Parameters<CanUseTool>[2] = {
   signal: new AbortController().signal,
   suggestions: [],
   toolUseID: TOOL_USE_ID,
+  // Required from Agent SDK 0.3 (ADR-0073).
+  requestId: "req_test_001",
 };
+
+/** Agent SDK 0.3 types `canUseTool` as returning `PermissionResult | null`.
+ *  MARVIN's gates never return null — a null here is a test failure, not a
+ *  case to branch on — so unwrap loudly. */
+function must<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error("gate returned null");
+  return value;
+}
 
 function readAuditLines(cwd: string): unknown[] {
   const p = path.join(cwd, ".marvin", "auto-audit.jsonl");
@@ -248,7 +258,12 @@ describe("remapGraphExtractionDispatch — stock graphify fan-out → Haiku (ADR
     const res = (await canUse(
       "Task",
       { subagent_type: "general-purpose", prompt: stockPrompt },
-      { toolUseID: "tu-remap", agentID: undefined as unknown as string, signal: new AbortController().signal },
+      {
+        toolUseID: "tu-remap",
+        requestId: "req-remap",
+        agentID: undefined as unknown as string,
+        signal: new AbortController().signal,
+      },
     )) as { behavior: string; updatedInput?: Record<string, unknown> };
     expect(res.behavior).toBe("allow");
     expect(res.updatedInput?.subagent_type).toBe("graph-extractor");
@@ -459,7 +474,7 @@ describe("classifyToolCall — Playwright MCP gating (ADR-0045)", () => {
 describe("makeAutoModeLogger (auto mode)", () => {
   it("denies hard-deny patterns even in auto mode (single safety floor)", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });
-    const result = await logger("Bash", { command: "rm -rf /" }, SDK_CTX);
+    const result = must(await logger("Bash", { command: "rm -rf /" }, SDK_CTX));
     expect(result.behavior).toBe("deny");
     // No audit line is written for denied calls — the SDK never ran.
     expect(readAuditLines(tmpRoot)).toEqual([]);
@@ -467,11 +482,11 @@ describe("makeAutoModeLogger (auto mode)", () => {
 
   it("allows + audits a confirm-class call (auto-mode bypass)", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });
-    const result = await logger(
+    const result = must(await logger(
       "Edit",
       { file_path: `${tmpRoot}/foo.ts`, old_string: "a", new_string: "b" },
       SDK_CTX,
-    );
+    ));
     expect(result.behavior).toBe("allow");
     if (result.behavior === "allow") {
       expect(result.updatedInput).toEqual({
@@ -494,7 +509,7 @@ describe("makeAutoModeLogger (auto mode)", () => {
   it("allows + audits an auto-class mutating call without the bypass prefix", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });
     // `git status` is in BASH_AUTO_ALLOW — auto-class even in gated mode.
-    const result = await logger("Bash", { command: "git status" }, SDK_CTX);
+    const result = must(await logger("Bash", { command: "git status" }, SDK_CTX));
     expect(result.behavior).toBe("allow");
     const lines = readAuditLines(tmpRoot) as Array<{ tool: string; reason: string }>;
     expect(lines).toHaveLength(1);
@@ -512,7 +527,7 @@ describe("makeAutoModeLogger (auto mode)", () => {
 
   it("normalises undefined toolInput to {}", async () => {
     const logger = makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID });
-    const result = await logger("Read", undefined as unknown as Record<string, unknown>, SDK_CTX);
+    const result = must(await logger("Read", undefined as unknown as Record<string, unknown>, SDK_CTX));
     expect(result.behavior).toBe("allow");
     if (result.behavior === "allow") {
       expect(result.updatedInput).toEqual({});
@@ -528,7 +543,7 @@ describe("makeGatedCanUseTool (gated mode)", () => {
       turnId: TURN_ID,
       onConfirmRequest: (r) => seen.push(r),
     });
-    const result = await gate("Bash", { command: "rm -rf $HOME/important" }, SDK_CTX);
+    const result = must(await gate("Bash", { command: "rm -rf $HOME/important" }, SDK_CTX));
     expect(result.behavior).toBe("deny");
     // Hard-deny short-circuits — no confirm card is rendered.
     expect(seen).toEqual([]);
@@ -542,7 +557,7 @@ describe("makeGatedCanUseTool (gated mode)", () => {
       turnId: TURN_ID,
       onConfirmRequest: (r) => seen.push(r),
     });
-    const result = await gate("Bash", { command: "git status" }, SDK_CTX);
+    const result = must(await gate("Bash", { command: "git status" }, SDK_CTX));
     expect(result.behavior).toBe("allow");
     expect(seen).toEqual([]);
     const lines = readAuditLines(tmpRoot) as Array<{ tool: string }>;
@@ -592,7 +607,7 @@ describe("makeGatedCanUseTool (gated mode)", () => {
       behavior: "allow",
       updatedInput: { file_path: `${tmpRoot}/foo.ts`, old_string: "a", new_string: "b" },
     });
-    const result = await promise;
+    const result = must(await promise);
     expect(result.behavior).toBe("allow");
 
     // No audit line until the user opts in — the audit log records
@@ -611,7 +626,7 @@ describe("makeGatedCanUseTool (gated mode)", () => {
     const promise = gate("Edit", { file_path: `${tmpRoot}/x.ts`, old_string: "a", new_string: "b" }, SDK_CTX);
 
     clearTurnConfirms(TURN_ID);
-    const result = await promise;
+    const result = must(await promise);
     expect(result.behavior).toBe("deny");
     if (result.behavior === "deny") {
       expect(result.message).toMatch(/aborted/);
