@@ -48,6 +48,9 @@ export function getMarvinDataDir(): string {
  * path it gets added here, not computed ad-hoc.
  */
 export const marvinPaths = {
+  /** The data dir itself — for callers that own a whole subtree under it
+   *  (e.g. the session archive, ADR-0073). */
+  dataDir: () => getMarvinDataDir(),
   /** App-level config: default model, personality mode, UI prefs. */
   config: () => join(getMarvinDataDir(), "config.json"),
   /** Registered projects (id, name, workDir, createdAt). */
