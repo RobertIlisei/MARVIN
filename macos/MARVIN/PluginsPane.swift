@@ -160,6 +160,7 @@ struct PluginsPane: View {
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Capsule().fill(Color.secondary.opacity(0.15)))
                     Spacer()
+                    paneActions
                 }
                 Text("Installed Claude Code plugins (from ~/.claude/plugins). Toggle one on to load its skills + commands + gated MCP + read-only agents for THIS project (ADR-0053/0054). Hooks are never loaded.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -181,31 +182,35 @@ struct PluginsPane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    installError = nil; marketplacePlugins = []; marketplaceName = nil
-                    installSheetOpen = true
-                } label: {
-                    Label("Install", systemImage: "arrow.down.circle")
-                }
-                .help("Install a plugin from a marketplace or Git URL (ADR-0053)")
+    }
+
+    /// Pane-local actions — see the note on `SkillsPane.paneActions` for why
+    /// these are not `ToolbarItem`s.
+    private var paneActions: some View {
+        HStack(spacing: 10) {
+            Button {
+                installError = nil; marketplacePlugins = []; marketplaceName = nil
+                installSheetOpen = true
+            } label: {
+                Label("Install", systemImage: "arrow.down.circle")
             }
-            ToolbarItem(placement: .automatic) {
-                Button { Task { await checkAllUpdates() } } label: {
-                    Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .help("Re-fetch every plugin MARVIN installed and report which ones changed upstream (ADR-0071). Nothing is installed until you press Update.")
-                .disabled(checkingUpdates || updatableCount == 0)
+            .help("Install — add a plugin from a marketplace or Git URL (ADR-0053)")
+            Button { Task { await checkAllUpdates() } } label: {
+                Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
             }
-            ToolbarItem(placement: .automatic) {
-                Button { Task { await refresh() } } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Reload the installed list (does NOT check upstream)")
-                .disabled(isLoading)
+            .help(updatableCount == 0
+                  ? "Check for updates — nothing to check: no plugin here was installed by MARVIN (ones from the Claude Code /plugin UI have no recorded source)."
+                  : "Check for updates — re-fetch the \(updatableCount) plugin\(updatableCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing (ADR-0071).")
+            .disabled(checkingUpdates || updatableCount == 0)
+            Button { Task { await refresh() } } label: {
+                Label("Reload list", systemImage: "arrow.clockwise")
             }
+            .help("Reload the installed list from disk (does not check upstream)")
+            .disabled(isLoading)
         }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .controlSize(.small)
     }
 
     /// How many rows could be updated at all — drives the toolbar button's

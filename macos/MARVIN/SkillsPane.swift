@@ -636,6 +636,7 @@ struct SkillsPane: View {
     private func content(_ idx: SkillsIndexResponse) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                paneActions
                 // ADR-0037 — organised around the one question that matters:
                 // what is ACTIVE for this project. Active → available to turn
                 // on → recommended to add. (Was five flat, overlapping
@@ -651,34 +652,44 @@ struct SkillsPane: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    addError = nil; addCandidates = []; addSelected = []
-                    addPlugins = []; addMarketplace = nil
-                    addSheetOpen = true
-                } label: {
-                    Label("Add from GitHub", systemImage: "arrow.down.circle")
-                }
-                .help("Fetch a skill from a Git repo (ADR-0039)")
+    }
+
+    /// Pane-local actions. These used to be `ToolbarItem`s, which was wrong
+    /// twice over: `LeftPane` keeps every pane mounted (opacity-toggled, to
+    /// preserve child `@State`), so BOTH the Skills and Plugins toolbars
+    /// rendered into the window toolbar at once — six unlabelled icons — and
+    /// `.help()` on a `ToolbarItem` button never surfaced a tooltip. A row
+    /// inside the pane shows only when the pane does, and `.help()` on a plain
+    /// view works everywhere else in this app.
+    private var paneActions: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles.rectangle.stack").foregroundStyle(.tint)
+            Text("Skills").font(.headline)
+            Spacer()
+            Button {
+                addError = nil; addCandidates = []; addSelected = []
+                addPlugins = []; addMarketplace = nil
+                addSheetOpen = true
+            } label: {
+                Label("Add from GitHub", systemImage: "arrow.down.circle")
             }
-            ToolbarItem(placement: .automatic) {
-                Button { Task { await checkAllSkillUpdates() } } label: {
-                    Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .help("Re-fetch every skill MARVIN installed and report which ones changed upstream (ADR-0071). Nothing is installed until you press Update.")
-                .disabled(checkingUpdates || updatableSkillCount == 0)
+            .help("Add from GitHub — fetch a skill from a Git repo or marketplace URL (ADR-0039)")
+            Button { Task { await checkAllSkillUpdates() } } label: {
+                Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
             }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    Task { await refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Reload the installed list (does NOT check upstream)")
-                .disabled(isLoading)
+            .help(updatableSkillCount == 0
+                  ? "Check for updates — nothing to check: no installed skill has a recorded source yet. Use “Set source” on a row first."
+                  : "Check for updates — re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing (ADR-0071).")
+            .disabled(checkingUpdates || updatableSkillCount == 0)
+            Button { Task { await refresh() } } label: {
+                Label("Reload list", systemImage: "arrow.clockwise")
             }
+            .help("Reload the installed list from disk (does not check upstream)")
+            .disabled(isLoading)
         }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .controlSize(.small)
     }
 
     /// Rows that could be updated at all — gates the toolbar button so it
