@@ -307,3 +307,45 @@ wiping the plan.
 
 Verified against the real state file: `stored steps: 12 · top-level in text: 6 →
 REPAIR`, and healthy plans report `leave untouched`.
+
+## Addendum 4 (2026-08-25) — a reading list is not a step list
+
+Reported as *"MARVIN is either not following the plan, skipping steps, or
+replanning during execution."* None of those. The plan MARVIN was tracking was
+not the plan the user was reading.
+
+**Measured.** Plan file: **10** numbered steps, then a `Sources:` block of six
+`- [ ] [title](url)` bullets. Tracked state (`<session>.plans.json`): **16**
+steps — the six citations parsed as work, one of them `in_progress`. The file
+also held **three** contradictory copies of its step list, with checkboxes
+disagreeing between copies (`[x]` at the top, `[ ]` in the duplicate below).
+
+**Three mechanisms, one root.**
+
+1. `topLevelStepRE` matches any list marker at column 0. A `Sources:` entry is a
+   column-0 bullet, so the parser has no notion of where the step list *ends*.
+   Addendum 3 fixed indentation over-counting; it did not address sections.
+   ADR-0049's `[N]` tag then maps onto step N of a 16-item list — every tag
+   past 10 lands on a URL, and the mapping drifts. That is the "skipping".
+2. `PlanFile.render` appends any step with no exact-id source line. A step the
+   model *rephrased* (TodoWrite `activeForm`) misses the exact match, is
+   appended — and because MARVIN re-reads the file and echoes it back as
+   `# Plan`, which `ingestPlan` adopts as the new source text, it is appended
+   again on the next render. The roadmap already recorded this as known and
+   unfixed.
+3. `redriveSteps` (addendum 3b) demoted unparsed stored steps under the
+   preceding real step. For a citation that moves the lie one level down.
+
+**Fix.** `PlanParser` cuts at a reference heading (`Sources:`, `## References`,
+`See also`, …) and drops any link-only bullet wherever it sits — a citation is
+never work. `render` passes reference lines through verbatim (no checkbox, no
+sub-task injection) and fuzzy-matches every step-like line before appending a
+leftover, so the echo loop cannot accumulate copies. `redriveSteps` drops
+stored citation-steps outright. 8 tests; 257 assertions pass.
+
+**Why the parser is still the wrong layer.** Every defect here is downstream
+of deriving step identity by counting markdown markers. Agent SDK 0.3 replaced
+`TodoWrite` with id-based `TaskCreate`/`TaskUpdate` — server-assigned ids are
+exactly the stable join key `[N]` tags were invented to synthesise. ADR-0073
+takes the SDK upgrade; migrating the spine to Task ids is the step after, and
+is what retires this class of bug rather than patching its next instance.

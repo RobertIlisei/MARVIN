@@ -1269,6 +1269,113 @@ runner.suite("plan-file-dedupe-and-rederive") {
     }
 }
 
+// MARK: - Plan parser: a reading list is not a step list (ADR-0068 addendum 4)
+//
+// Observed 2026-08-25 on a real plan: 10 numbered steps followed by a
+// `Sources:` block of six `- [ ] [title](url)` bullets. The top-level matcher
+// counted 16 steps, TodoWrite `[N]` tags past 10 landed on URLs, and the state
+// file showed MARVIN "in_progress" on a blog post. The same file held three
+// contradictory copies of its step list, because the renderer re-appended
+// rephrased steps every time the model echoed the file back as `# Plan`.
+runner.suite("PlanParser · reference section (ADR-0068 add.4)") {
+
+    let planWithSources = """
+    # Plan — Fix the dashboards
+
+    1. [ ] **Verify** the metric names on prod
+    2. [ ] **Fix** the six dashboards
+    3. [ ] **Ship** via the tag pipeline
+
+    Sources:
+    - [ ] [Grafana best practices](https://grafana.com/docs/best-practices/)
+    - [ ] [Multi-tenant Loki dashboards](https://example.com/loki-tenants)
+    - [x] [Repeating panels](https://example.com/repeating)
+    """
+
+    runner.test("bullets under a Sources: heading are not steps") {
+        let steps = PlanParser.steps(from: planWithSources)
+        runner.expect(steps.count, equals: 3, "3 steps, not 6")
+        let all = steps.map(\.content).joined(separator: " | ")
+        runner.expect(!all.contains("https://"), "no URL became a step")
+    }
+
+    runner.test("the heading matches its common spellings") {
+        for h in ["Sources:", "## References", "**See also**", "Further reading", "sources"] {
+            runner.expect(PlanParser.isReferenceHeading(h), "'\(h)' opens a reference section")
+        }
+        runner.expect(!PlanParser.isReferenceHeading("1. Source the config from Vault"), "a step mentioning 'source' is not a heading")
+        runner.expect(!PlanParser.isReferenceHeading("Sources of truth: the ADR and the graph"), "prose is not a heading")
+    }
+
+    runner.test("a link-only bullet is dropped even OUTSIDE a reference section") {
+        let plan = "1. [ ] Do the work\n2. [ ] [Just a link](https://example.com)\n3. [ ] More work"
+        runner.expect(PlanParser.steps(from: plan).count, equals: 2, "the citation is skipped")
+    }
+
+    runner.test("a step that CONTAINS a link is still a step") {
+        let plan = "1. [ ] Follow [the guide](https://example.com) to migrate\n2. [ ] Verify"
+        runner.expect(PlanParser.steps(from: plan).count, equals: 2, "prose + link is work")
+    }
+
+    runner.test("redriveSteps DROPS stored citation-steps rather than demoting them") {
+        let stale = [
+            PlanStep(content: "Verify the metric names on prod", status: "completed"),
+            PlanStep(content: "Fix the six dashboards", status: "in_progress"),
+            PlanStep(content: "Ship via the tag pipeline", status: "pending"),
+            PlanStep(content: "[Grafana best practices](https://grafana.com/docs/best-practices/)", status: "pending"),
+            PlanStep(content: "[Repeating panels](https://example.com/repeating)", status: "in_progress"),
+        ]
+        let fixed = PlanProgress.redriveSteps(text: planWithSources, existing: stale)
+        runner.expect(fixed.count, equals: 3, "the two citations are gone")
+        runner.expect(fixed.last?.subtasks.isEmpty == true, "and were NOT nested under the last real step")
+        runner.expect(fixed[1].status, equals: "in_progress", "real step statuses survive")
+    }
+
+    runner.test("render leaves the Sources block untouched — no checkboxes, no injections") {
+        var plan = Plan(id: "p", title: "t", text: planWithSources, path: nil,
+                        steps: PlanParser.steps(from: planWithSources))
+        plan.steps[0].status = "completed"
+        plan.steps[1].subtasks = [TodoItem(content: "Fix tenant-health.json", status: "completed", activeForm: nil)]
+        let out = PlanFile.render(plan)
+        runner.expect(out.contains("1. [x] **Verify**"), "step 1 overlaid")
+        runner.expect(out.contains("  - [x] Fix tenant-health.json"), "sub-task injected under step 2")
+        // The reference lines pass through byte-for-byte.
+        runner.expect(out.contains("- [ ] [Grafana best practices](https://grafana.com/docs/best-practices/)"), "source line verbatim")
+        runner.expect(out.contains("- [x] [Repeating panels](https://example.com/repeating)"), "source line verbatim, box preserved")
+        runner.expect(out.components(separatedBy: "Fix tenant-health.json").count == 2, "sub-task injected exactly once")
+    }
+
+    runner.test("render does NOT re-append a rephrased step that is already in the text") {
+        // The model shortened step 2's wording in TodoWrite; the exact-id match
+        // misses, but the fuzzy match must catch it — otherwise it is appended,
+        // echoed back, and appended again on every render.
+        var plan = Plan(id: "p", title: "t", text: planWithSources, path: nil,
+                        steps: PlanParser.steps(from: planWithSources))
+        plan.steps[1] = PlanStep(content: "Fix the six dashboards against verified names", status: "in_progress")
+        let once = PlanFile.render(plan)
+        // The source line (`**Fix** the six dashboards`) stays; the rephrased
+        // wording must NOT be appended as a second copy.
+        runner.expect(once.contains("2. [ ] **Fix** the six dashboards"), "original line kept")
+        runner.expect(!once.contains("- [ ] Fix the six dashboards against verified names"),
+                      "rephrased step is not appended")
+        // Simulate the echo loop: adopt the rendered output as the new source text.
+        plan.text = once
+        let twice = PlanFile.render(plan)
+        runner.expect(!twice.contains("- [ ] Fix the six dashboards against verified names"),
+                      "still not appended after a round-trip")
+        runner.expect(twice.components(separatedBy: "the six dashboards").count == 2,
+                      "exactly one line mentions the step after a round-trip")
+    }
+
+    runner.test("a genuinely new step (no line in the text) is still appended") {
+        var plan = Plan(id: "p", title: "t", text: planWithSources, path: nil,
+                        steps: PlanParser.steps(from: planWithSources))
+        plan.steps.append(PlanStep(content: "Additional work: rotate the Loki API key", status: "pending"))
+        let out = PlanFile.render(plan)
+        runner.expect(out.contains("- [ ] Additional work: rotate the Loki API key"), "discovered work lands in the file")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -204,15 +204,61 @@ public enum PlanParser {
         return content.count > 1 ? content : nil
     }
 
+    /// A heading that ends the step list: `Sources:`, `## References`, `See also`.
+    /// Everything below it is reading material, not work (ADR-0068 addendum 4).
+    private static let referenceHeadingRE = try? NSRegularExpression(
+        pattern: #"^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:sources?|references?|links?|further reading|see also|reading list|bibliography)(?:\*\*)?\s*:?\s*$"#,
+        options: [.caseInsensitive]
+    )
+    /// A bullet whose entire content is one markdown link — `[title](url)` —
+    /// optionally behind a checkbox. A citation, never a step.
+    private static let linkOnlyRE = try? NSRegularExpression(
+        pattern: #"^(?:\[[ xX]\]\s*)?\[[^\]]+\]\([^)]+\)\s*$"#
+    )
+
+    /// True for a line that opens a trailing reference section. Exported so
+    /// `PlanFile.render` and `redriveSteps` apply the identical boundary.
+    public static func isReferenceHeading(_ line: String) -> Bool {
+        guard let re = referenceHeadingRE else { return false }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        return re.firstMatch(in: line, range: range) != nil
+    }
+
+    /// True when a step's CONTENT (marker already stripped) is a bare link.
+    /// Exported for the same reason.
+    public static func isLinkOnly(_ content: String) -> Bool {
+        guard let re = linkOnlyRE else { return false }
+        let range = NSRange(content.startIndex..<content.endIndex, in: content)
+        return re.firstMatch(in: content, range: range) != nil
+    }
+
+    /// The plan's lines up to (not including) a trailing reference section.
+    /// Exported so the renderer's overlay stops where the parser stops.
+    public static func stepRegion(of lines: [String]) -> ArraySlice<String> {
+        if let cut = lines.firstIndex(where: isReferenceHeading) { return lines[..<cut] }
+        return lines[...]
+    }
+
     public static func todos(from plan: String) -> [TodoItem] {
-        let lines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let allLines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // ADR-0068 addendum 4 — a plan's `Sources:` block is a reading list. Its
+        // entries are `- [title](url)` bullets at column 0, so the top-level
+        // matcher below counted them as STEPS: a real 10-step plan tracked as 16,
+        // TodoWrite `[N]` tags past 10 landed on URLs, and MARVIN reported it
+        // was "executing" a blog post. Cut at the heading, and drop any
+        // link-only bullet wherever it sits — a citation is never work.
+        let lines = Array(stepRegion(of: allLines))
         // Top-level markers define the STEPS. Nested bullets are sub-tasks and
         // are nested by tag (ADR-0049), never promoted here.
-        var items: [String] = lines.compactMap { stepText(of: $0, using: topLevelStepRE) }
+        var items: [String] = lines
+            .compactMap { stepText(of: $0, using: topLevelStepRE) }
+            .filter { !isLinkOnly($0) }
         if items.isEmpty {
             // A plan that indents everything would otherwise parse to zero
             // steps — worse than over-counting. Fall back to the lenient match.
-            items = lines.compactMap { stepText(of: $0, using: stepRE) }
+            items = lines
+                .compactMap { stepText(of: $0, using: stepRE) }
+                .filter { !isLinkOnly($0) }
         }
         if items.isEmpty {
             // No list markers — take substantive non-heading lines.
@@ -342,6 +388,11 @@ public enum PlanProgress {
         var freshIds = Set(fresh.map { $0.id })
         var out: [PlanStep] = []
         for stored in existing {
+            // ADR-0068 addendum 4 — a stored "step" that is really a citation
+            // (the parser used to promote `Sources:` bullets) is dropped, not
+            // demoted: nesting a URL under the last real step would just move
+            // the lie one level down.
+            if PlanParser.isLinkOnly(stored.content) { continue }
             if freshIds.contains(stored.id) {
                 freshIds.remove(stored.id)
                 out.append(stored)                      // a real step — keep as-is
@@ -598,7 +649,12 @@ public enum PlanFile {
         // typed.
         var emittedSubs = Set<String>()
         let lines = plan.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        for line in lines {
+        // Lines below a `Sources:` heading are passed through verbatim — they
+        // are not steps, so they get no checkbox and can never absorb a
+        // sub-task injection (ADR-0068 addendum 4).
+        let stepLineCount = PlanParser.stepRegion(of: lines).count
+        for (index, line) in lines.enumerated() {
+            if index >= stepLineCount { out.append(line); continue }
             if let content = PlanParser.stepText(of: line) {
                 let id = PlanProgress.normalize(content)
                 if let step = byId[id], !emitted.contains(id) {
@@ -622,7 +678,24 @@ public enum PlanFile {
 
         // Steps with no source line (e.g. "Additional work") — append as a
         // checklist so discovered work still lands in the file.
-        let leftovers = plan.steps.filter { !emitted.contains($0.id) }
+        //
+        // ADR-0068 addendum 4 — but never one that is ALREADY in the text under
+        // a slightly different wording. A step whose content the model rephrased
+        // (e.g. shortened into an `activeForm`) misses the exact-id match above,
+        // was appended here, and then — because MARVIN re-reads the file and
+        // echoes it back as `# Plan`, which `ingestPlan` adopts as the new
+        // source text — appended AGAIN on the next render. One real plan file
+        // held three contradictory copies of its own step list. Fuzzy-match
+        // every step-like line in the text before appending; and never append
+        // a citation.
+        let textIds: [String] = lines.compactMap { line in
+            PlanParser.stepText(of: line).map(PlanProgress.normalize)
+        }
+        let leftovers = plan.steps.filter { step in
+            !emitted.contains(step.id)
+                && !PlanParser.isLinkOnly(step.content)
+                && !textIds.contains(where: { PlanProgress.matches($0, step.id) })
+        }
         if !leftovers.isEmpty {
             if out.last?.isEmpty == false { out.append("") }
             for step in leftovers {
