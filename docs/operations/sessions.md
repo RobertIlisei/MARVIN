@@ -11,6 +11,22 @@ Every MARVIN conversation is a **session**. Sessions have an id, a project, a tr
 
 There is no "session closed" marker on disk. A session's end is implicit — it's just the last entry of the JSONL before the user moved on.
 
+## Listing sessions — never parse the transcripts (ADR-0072)
+
+`GET /api/sessions?projectId=…` returns one summary per transcript
+(`sessionId`, `updatedAt`, `bytes`, `firstUserMessage`, `turnCount`), newest
+first. It **must not** load the transcripts to do so: on a real project (347
+sessions, 2.6 GB) the old `loadSession`-per-file implementation took **23 s**,
+which the native client cancelled and restarted on every SwiftUI rebuild —
+the picker stayed empty forever and, because hydration waited on the list, the
+open chat rendered blank. Nothing on disk was lost; it only looked that way.
+
+`listSessionSummaries` (`session.ts`) counts `"type":"turn.user"` markers with
+`Buffer.indexOf`, parses only the first user-turn line from a bounded head
+read, and caches the result in `sessions/<projectId>/.summaries.json` keyed on
+`(mtime, size)`. Sessions are append-only, so the hit rate is near-total. The
+native client now hydrates the saved session id **before** the list arrives.
+
 ## The JSONL transcript
 
 ```jsonl
