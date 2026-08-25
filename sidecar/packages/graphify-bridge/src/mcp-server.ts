@@ -694,6 +694,12 @@ export function createGraphMcpServer(workDir: string) {
   return createSdkMcpServer({
     name: "marvin-graph",
     version: "0.0.3",
+    // ADR-0073 — Agent SDK 0.3 DEFERS MCP tools behind ToolSearch by default.
+    // These are the graphify-first tools (Golden Rule 7): the design hooks
+    // hard-deny Read/Grep/Glob until a graph call has happened, so if the
+    // graph tools are not in the turn-1 prompt the rule deadlocks the turn.
+    // alwaysLoad also blocks startup until this server is connected.
+    alwaysLoad: true,
     tools: [
       summaryTool,
       searchTool,

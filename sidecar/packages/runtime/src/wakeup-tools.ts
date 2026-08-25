@@ -192,6 +192,10 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
   return createSdkMcpServer({
     name: "marvin-control",
     version: "0.0.1",
+    // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch. The
+    // checkback guard (ADR-0055) relies on `schedule_wakeup` being callable
+    // without a discovery step; a deferred tool is an unarmed promise.
+    alwaysLoad: true,
     tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool],
   });
 }

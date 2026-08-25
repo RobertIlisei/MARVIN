@@ -266,6 +266,8 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
   return createSdkMcpServer({
     name: "marvin-backlog",
     version: "1.0.0",
+    // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch.
+    alwaysLoad: true,
     tools: [addTool, listTool, resolveTool, groomTool],
   });
 }
