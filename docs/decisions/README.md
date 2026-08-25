@@ -44,6 +44,49 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0028](./0028-multi-graph-architecture.md) | Multi-graph (code + knowledge), federated at the MCP layer | Accepted (development branch) | 2026-05-21 |
 | [0029](./0029-keychain-token-read-for-model-discovery.md) | Read Keychain token for live model discovery + tier-based defaults | Accepted (development branch) | 2026-05-28 |
 | [0030](./0030-dynamic-workflows-read-only-fan-out.md) | Dynamic workflows as a third subagent pattern, scoped read-only | Accepted (development branch) | 2026-05-28 |
+| [0031](./0031-self-scheduled-wakeups.md) | MARVIN may self-schedule bounded wakeups | Accepted | 2026-05-30 |
+| [0032](./0032-deny-background-bash.md) | Hard-deny Bash `run_in_background` at the tool gate | Accepted | 2026-06-01 |
+| [0033](./0033-advisor-registered-agent-per-role-effort.md) | Advisor as a registered agent with its own reasoning effort | Accepted | 2026-06-07 |
+| [0034](./0034-agent-change-review-checkpoints.md) | Cursor-style review of agent edits via pre-image checkpoints | Accepted | 2026-06-10 |
+| [0035](./0035-bundled-app-owns-its-port.md) | The bundled app owns its port: reclaim-then-spawn + version-stamped health | Accepted | 2026-06-10 |
+| [0036](./0036-ask-agent-plan-modes.md) | Ask / Agent / Plan modes + live to-do list | Accepted | 2026-06-11 |
+| [0037](./0037-skill-enablement-active-set.md) | Per-project skill enablement (installed ≠ active) | Accepted | 2026-06-11 |
+| [0038](./0038-background-jobs-event-wakeups.md) | Background jobs with event-based completion wakeups | Accepted | 2026-06-11 |
+| [0039](./0039-fetch-skills-from-git.md) | Fetch skills from Git repos and marketplaces | Accepted | 2026-06-11 |
+| [0040](./0040-interactive-ask-user-question.md) | Interactive AskUserQuestion (clickable decision options) | Accepted | 2026-06-14 |
+| [0041](./0041-project-graph-lifecycle-and-context-budget.md) | Project-graph lifecycle + first-message context budget | Accepted | 2026-06-14 |
+| [0042](./0042-memory-as-durable-facts.md) | memory.md as a curated durable-facts layer (not an activity log) | Accepted | 2026-06-14 |
+| [0043](./0043-server-turn-announcements.md) | Server-initiated turns reach the idle client (turn announcements) | Accepted | 2026-06-18 |
+| [0044](./0044-project-backlog.md) | Project backlog: a durable parking lot for deferred work | Accepted | 2026-06-19 |
+| [0045](./0045-playwright-mcp-gated.md) | Playwright MCP: opt-in, gated browser-automation server | Accepted | 2026-06-19 |
+| [0046](./0046-plan-as-durable-spine.md) | Plan as the durable spine: reconcile, don't clobber | Accepted | — |
+| [0047](./0047-backlog-capture-at-discovery.md) | Backlog capture at discovery (provisional items) | Accepted | — |
+| [0048](./0048-full-session-history-tail-first.md) | Full session history: tail-first paint, background full-load | Accepted | — |
+| [0049](./0049-plan-step-join-key-and-rollup.md) | Plan-step join key + subtask roll-up: link tasks to the plan by tag, not by fuzzy text | Accepted | — |
+| [0050](./0050-continue-control-anchors-active-plan.md) | The Continue control anchors on the active plan, not a project re-audit | Accepted | — |
+| [0051](./0051-plan-in-context-injection.md) | Plan-in-context: re-inject the active plan into the model every turn | Accepted | — |
+| [0052](./0052-durable-plan-spine-and-plan-file-ownership.md) | Durable plan spine, plan-file ownership, and the re-base guard | Accepted | 2026-07-02 |
+| [0053](./0053-plugins-as-local-plugin-loader.md) | Claude Code plugins in MARVIN: opt-in local-plugin loader | Accepted | 2026-07-23 |
+| [0054](./0054-plugin-agents-read-only-hooks-stay-stripped.md) | Plugin subagents: admitted read-only; plugin hooks stay stripped | Accepted | 2026-07-23 |
+| [0055](./0055-checkback-promise-auto-arm-guard.md) | Check-back promise guard: auto-arm the wakeup the model forgot | Accepted | 2026-07-24 |
+| [0056](./0056-file-tree-outlinegroup-crash-treewide-id.md) | File-tree crash: enforce whole-tree id uniqueness; schedule the NSOutlineView migration | Accepted | 2026-07-24 |
+| [0057](./0057-workflow-completion-guard.md) | Workflow-completion guard: force plan/ADR reconciliation on scope-met | Accepted | 2026-07-24 |
+| [0058](./0058-parallel-graph-extraction-scoped-write-subagent.md) | Parallel graph extraction: a Haiku `graph-extractor` subagent with a graphify-out-scoped write | Accepted | 2026-07-24 |
+| [0059](./0059-session-auditor-runtime-dispatched-read-only.md) | Session auditor: runtime-dispatched, read-only, reports to the user | Accepted | 2026-07-24 |
+| [0060](./0060-graph-drift-nudge-rearm-graphify-first.md) | Graph drift: re-arm graphify-first mid-turn as a nudge, not a wall | Accepted | 2026-07-25 |
+| [0061](./0061-file-tree-flat-list-not-outlinegroup.md) | File tree renders a flat list; `OutlineGroup` is retired | Accepted | 2026-08-06 |
+| [0062](./0062-update-constraints-loop-identified-mitigated.md) | The `_postWindowNeedsUpdateConstraints` crash: identified, mitigated, not yet fixed | Accepted (mitigation) | 2026-08-07 |
+| [0063](./0063-backlog-groomer-review-not-execute.md) | Backlog groomer: the review half of the loop, without the execution half | Accepted | 2026-08-12 |
+| [0064](./0064-backlog-kind-and-blocked.md) | Backlog items get a `kind`, and `blocked` becomes its own axis | Accepted | 2026-08-14 |
+| [0065](./0065-obsidian-vault-project-as-vault.md) | Obsidian: the project directory IS the vault | Accepted | 2026-08-15 |
+| [0066](./0066-graphify-directed-call-index-and-work-memory.md) | Graphify at full surface: a directed call index, and closing the work-memory loop | Accepted | 2026-08-15 |
+| [0067](./0067-gate-on-scope-not-turn-boundaries.md) | Gate on scope boundaries, not turn boundaries | Accepted | 2026-08-17 |
+| [0068](./0068-plan-dedupe-provenance-and-negative-claims.md) | Plan de-duplication, context provenance, and the discipline of negative claims | Accepted | 2026-08-17 |
+| [0069](./0069-never-drop-a-user-message.md) | Never drop a user message: durable queue + safe preemption | Accepted | 2026-08-17 |
+| [0070](./0070-backlog-capture-bar-and-duplicate-gate.md) | A bar on backlog capture, and a gate on near-duplicates | Accepted | 2026-08-20 |
+| [0071](./0071-install-provenance-and-update-path.md) | Install provenance, and the update path it enables | Accepted | 2026-08-24 |
+| [0072](./0072-session-list-must-not-parse-transcripts.md) | The session list must not parse transcripts, and a slow list must never blank the chat | Accepted | 2026-08-24 |
+| [0073](./0073-agent-sdk-0-3-upgrade.md) | Agent SDK 0.2.113 → 0.3.245, behaviour-neutral by construction | Accepted | 2026-08-25 |
 
 ## Template
 

@@ -9,6 +9,81 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-25 — v0.1.65: the SDK catches up, and two things that only *looked* broken.**
+
+  **ADR-0073 — Agent SDK 0.2.113 → 0.3.245, behaviour-neutral by construction.**
+  The trail started with a plan bug (below) and ended at the official docs:
+  `TodoWrite` — the tool MARVIN's entire plan spine reconciles against — is
+  deprecated and, on Sonnet 5 / Opus 4.8+, **absent by default** from 0.3.142.
+  MARVIN was on 0.2.113: behind the end of the 0.2 line (0.2.141), 92 releases
+  into 0.3, predating `TodoWrite`'s own deprecation notice (0.2.136). Every
+  Sonnet 5 session had been on the legacy contract by accident.
+
+  Every 0.3 change was checked against the code, not the changelog:
+
+  | Change | Effect on MARVIN | Pin |
+  |---|---|---|
+  | Task tools replace `TodoWrite` (0.3.142) | plan spine receives nothing; every plan freezes at `pending` | `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` + `CLAUDE_CODE_ENABLE_TASKS=0` |
+  | MCP tools deferred behind `ToolSearch` | `graph_*` absent from turn-1; graphify-first hooks hard-deny Read/Grep/Glob → deadlock. `schedule_wakeup` behind a discovery step = an unarmed promise (ADR-0055) | `alwaysLoad: true` on all five in-process servers |
+  | MCP servers connect in background (0.2.142) | turn could start before `marvin-graph` registers | `alwaysLoad` blocks startup until connected |
+  | `options.env` replaces the subprocess env | would strip PATH/auth | already safe — both sites spread `process.env` |
+  | `canUseTool` → `PermissionResult \| null`, `requestId` required | gates never return null; type-only | test file: `must()` + field |
+  | `graphify-bridge` pinned its own `^0.2.113` | two SDK copies in one process | aligned |
+
+  **Verified live:** a 0.3.245 `system/init` on `claude-sonnet-5` with the two
+  flags reports 113 tools, subagent tool **`Task`** (the wire name the gate
+  matches on — unchanged), todo family **`TodoWrite`** only. The Task-id
+  migration that actually retires the ADR-0068 bug class is deliberately a
+  separate, non-neutral ADR: bundling it with a two-minor-version upgrade would
+  make any regression unattributable.
+
+  **ADR-0072 — "I lost all my sessions."** Neither claim in *"marvin crashed
+  again … I lost all sessions, including the one that was running"* was true,
+  and establishing that took measurement: pid up 1h56m, no `.ips` since Aug 22,
+  all 347 transcripts on disk, the "lost" one ending `turn.completed / success`,
+  `GET /api/sessions/<id>` in **96 ms** — and `GET /api/sessions` in **23 s**,
+  reproducibly. The route `JSON.parse`d every transcript (2.6 GB) to fill two
+  preview fields. Two client defects turned slow into gone: `refreshSessions`
+  cancelled the in-flight fetch on every call (its comment promised the
+  opposite) and is called from the tab strip's `.onAppear`, which re-fires on
+  every SwiftUI rebuild — measured **8×** per launch (ADR-0062) — so the fetch
+  restarted forever; and `autoHydrate` awaited the list purely to convert an id
+  it already held, so an empty list meant hydrate never ran. The layout storm
+  and the missing sessions were one event. Fix: `Buffer.indexOf` marker count +
+  bounded head read, cached on `(mtime, size)` beside the transcripts — 23 s →
+  36 ms warm. Hydration no longer depends on the list. 10 tests, one pinning
+  scan-count == parsed-count, one pinning that a `cli.event` quoting a
+  transcript record isn't miscounted.
+
+  **ADR-0068 addendum 4 — a reading list is not a step list.** *"MARVIN is
+  either not following the plan, skipping steps, or replanning."* None of
+  those: a 10-step plan with a `Sources:` block of six `- [ ] [title](url)`
+  bullets was tracked as **16 steps** — one URL `in_progress` — because
+  `topLevelStepRE` matches any column-0 marker and has no notion of where the
+  list *ends*; ADR-0049's `[N]` tags past 10 landed on citations. The same
+  file held three contradictory copies of its step list: `render` appends any
+  step with no exact-id line, MARVIN echoes the file back as `# Plan`,
+  `ingestPlan` adopts it as source, next render appends again (the roadmap had
+  recorded this as known-unfixed). Parser cuts at a reference heading and drops
+  link-only bullets anywhere; `render` passes reference lines through verbatim
+  and fuzzy-matches before appending; `redriveSteps` drops stored citations
+  rather than nesting them under the last real step. One of the new tests was
+  initially wrong (the source line is `**Fix**`, so the literal only appears
+  when the bug is present) — fixed the assertion, not the code. 257 assertions.
+
+  **Pane actions, not window-toolbar items.** *"Buttons on top right have no
+  tooltips, I don't know what they are"* — six unlabelled icons were the same
+  three actions twice: `LeftPane` keeps every pane mounted (opacity-toggled to
+  preserve `@State`), so both the Skills and Plugins `.toolbar` blocks rendered
+  at once, and `.help()` on a `ToolbarItem` button never surfaced. Now an
+  in-pane row per pane, with tooltips that say *why* a button is disabled.
+
+  **Docs.** The ADR index in `docs/decisions/README.md` had stopped at 0030;
+  backfilled through 0073 from the files. CLAUDE.md gains the ADR-0073 contract
+  section and the `.summaries.json` entry; `docs/operations/sessions.md` gains
+  the listing contract; README status was two releases stale.
+
+
 - **2026-08-24 — v0.1.64: what MARVIN installs, it can now update — and two promises it could not keep.**
 
   **ADR-0071 — install provenance, and the update path it enables.** The question

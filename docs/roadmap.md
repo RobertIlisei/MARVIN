@@ -6,12 +6,6 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 _Active work. Add a one-line entry when a piece of work starts; move it out (to CHANGELOG, with the date) when it lands._
 
-- **Agent SDK 0.2.113 → 0.3.245, behaviour-neutral ([ADR-0073](decisions/0073-agent-sdk-0-3-upgrade.md))** — found while chasing a plan bug: the official docs say `TodoWrite` is deprecated and **absent by default on Sonnet 5 / Opus 4.8+** from SDK 0.3.142, and MARVIN was on 0.2.113 — behind the end of its own line and predating the deprecation notice. Every 0.3 default that would change behaviour is pinned back with its reason: `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` + `CLAUDE_CODE_ENABLE_TASKS=0` keep the plan spine's snapshot tool; `alwaysLoad: true` on all five in-process MCP servers, because 0.3 **defers MCP tools behind ToolSearch** and the graphify-first design hooks would deadlock a turn whose prompt has no `graph_*` tools. Checked, not assumed: both `env:` sites already spread `process.env` (0.3 replaces the subprocess env); the subagent wire name is still `Task`; `graphify-bridge` was pinning its own `^0.2.113`, so one process was running two SDK copies. Verified with a live `system/init` probe on Sonnet 5: 113 tools, `Task`, `TodoWrite`. The Task-id migration that actually retires the ADR-0068 bug class is deliberately a separate ADR.
-
-- **A reading list is not a step list ([ADR-0068](decisions/0068-plan-dedupe-provenance-and-negative-claims.md) addendum 4)** — "MARVIN is skipping steps / replanning" was neither: the plan it tracked wasn't the plan on screen. A 10-step plan with a `Sources:` block of six `- [ ] [title](url)` bullets was tracked as **16 steps, one URL `in_progress`**, because `topLevelStepRE` matches any column-0 marker and has no notion of where the list ends — so ADR-0049's `[N]` tags past 10 landed on citations and drifted. The same file held three contradictory copies of its step list: `render` appends any step with no exact-id line, the model echoes the file back as `# Plan`, `ingestPlan` adopts it as source, and the next render appends again (the roadmap had already recorded this as known-unfixed). Parser now cuts at a reference heading and drops link-only bullets anywhere; `render` passes reference lines through verbatim and fuzzy-matches before appending; `redriveSteps` drops stored citations instead of nesting them under the last real step. 8 tests, 257 assertions.
-
-- **Skills and plugins can be updated, not just installed ([ADR-0071](decisions/0071-install-provenance-and-update-path.md))** — MARVIN could install a skill (ADR-0039) or a full plugin (ADR-0053) but never pull a newer version of either. The panes' `refresh()` re-read the **local** index; `install-skills.sh` explicitly *skips* anything already present; re-installing from the same URL worked but only if you remembered and re-typed it. The blocker wasn't a missing button — it was missing provenance: `registerInstalledPlugin` recorded `scope/installPath/version/installedAt/lastUpdated` and **no clone URL**, and skills recorded nothing at all, so an updater had no source to re-clone. Now every install writes where it came from — `.marvin-source.json` inside the skill folder, and a MARVIN-owned sidecar registry for plugins (deliberately NOT a new key in the co-owned `installed_plugins.json`, which the Claude Code `/plugin` UI also writes). "Is upstream newer?" is a content hash, not a version string: skills have no version field, and plugins routinely ship changes without bumping theirs. Identity is name **AND** repo-relative path, because by name alone a rename and a deletion are indistinguishable — a test caught the first implementation installing a *different* skill over the user's when upstream deleted theirs. Two CSRF-guarded routes (`/api/skills/update`, `/api/plugins/update`) with `checkOnly`, single, and bulk modes; both panes get Check-for-updates + per-row Update; sourceless skills get a one-time "Set source" (the backfill path, since there's nothing to migrate *from*). Also closes two gaps that fell out of the same hole: superseded plugin cache versions are now pruned behind a paranoid path guard, and `lastUpdated` is finally read. 24 new tests.
-
 - **Plan file duplication + repairing inflated step state ([ADR-0068](decisions/0068-plan-dedupe-provenance-and-negative-claims.md) addendum 3a/3b)** — two halves of the same defect. **(a)** `PlanFile.render` injected a step's reconciled sub-tasks under its line AND echoed the model's own nested bullets for the same items, duplicating every sub-task in the saved file (9 redundant lines in one plan). The injected copy now wins — it carries live status — and suppression is limited to *indented* lines so a real top-level step can never be swallowed. **(b)** `redriveSteps` repairs plan state built by the old parser, applied at hydration: lossless, because stored steps are in document order, so a promoted bullet is demoted under the step it sat below with its status intact. Dry-run on the real state: `12 stored -> 6 top-level = REPAIR`; healthy plans `leave untouched`. 11 new Swift assertions.
 
 - **Model and UI disagreed on what a plan "step" is ([ADR-0068](decisions/0068-plan-dedupe-provenance-and-negative-claims.md) addendum 3)** — MARVIN reported "Plan complete — all 6 top-level steps verified done" while the strip showed **"1/12 · Paused"** on the same plan. The model reads the plan FILE; the strip renders plan STATE; they disagreed on the step count. Cause: `PlanParser.stepRE` starts `^\s*`, so ANY indentation matched and every nested sub-bullet was promoted to a top-level step — **66 "steps" found in a file with 6**. Fixed by anchoring step *counting* to top-level markers only, in the single place steps are enumerated. `PlanFile.render`'s checkbox overlay is deliberately untouched (it should mark nested lines), and a fallback keeps fully-indented plans working, since parsing to zero steps is worse than over-counting. Noticed but not fixed: that same file had accumulated the same sub-task block 4-5x — the render appends unmatched steps, so files collect repeats independently of the state-side dedupe.
@@ -36,6 +30,43 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 - **Obsidian vault — the project directory IS the vault ([ADR-0065](decisions/0065-obsidian-vault-project-as-vault.md))** — measuring first changed the answer: one real project already held **819 markdown files MARVIN wrote** (79 memory facts, 437 backlog items, 303 plans), all with frontmatter Obsidian reads as properties. A vault is just a folder with `.obsidian/`, so content and container both existed. The actual gap was **links** — all 79 memory files had *zero* `[[wikilinks]]`, so the graph view would have shown 819 disconnected dots. Markdown links render in Obsidian but create no graph edges, which is why the index would have *looked* connected while the graph stayed empty. Both indexes now emit wikilinks; `obsidian_init` writes `.obsidian/` + a `MARVIN.md` front door and exports the code graph as notes. Opt-in and non-destructive: never created unasked, an existing vault's settings are merged not clobbered, a corrupt `app.json` is left alone, and MARVIN edits nothing outside `.marvin/`, `MARVIN.md` and `graphify-out/`. Phase 2 (MARVIN reading your own notes as context) deliberately unbuilt — it hits the ADR-0041 context budget and needs a consent model.
 
 ## Current version
+
+**v0.1.65** — The SDK catches up, and two things that only *looked* broken.
+**Agent SDK 0.2.113 → 0.3.245 ([ADR-0073](decisions/0073-agent-sdk-0-3-upgrade.md)):**
+found while chasing a plan bug — the official docs say `TodoWrite` is
+deprecated and **absent by default on Sonnet 5 / Opus 4.8+** from 0.3.142, and
+MARVIN was behind the end of its own 0.2 line, on a version predating the
+deprecation notice. Every 0.3 default that would change behaviour is pinned
+back with its reason: `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` + `CLAUDE_CODE_ENABLE_TASKS=0`
+keep the plan spine's snapshot tool; `alwaysLoad: true` on all five in-process
+MCP servers, because 0.3 **defers MCP tools behind ToolSearch** and the
+graphify-first hooks would deadlock a turn whose prompt has no `graph_*` tools.
+Checked, not assumed — both `env:` sites already spread `process.env`, the
+subagent wire name is still `Task`, and `graphify-bridge` was quietly pinning
+its own `^0.2.113` (two SDK copies in one process). Verified with a live
+`system/init` on Sonnet 5. The Task-id migration that retires the ADR-0068 bug
+class is deliberately its own ADR.
+**"I lost all my sessions" ([ADR-0072](decisions/0072-session-list-must-not-parse-transcripts.md)):**
+nothing was lost. `GET /api/sessions` `JSON.parse`d all 347 transcripts
+(2.6 GB) per request — **23 s** — and the native client cancelled and
+restarted that fetch on every SwiftUI rebuild (measured 8× per launch), so it
+never completed; hydration waited on it, so the open chat rendered blank while
+its transcript loaded in 96 ms. Scan + `(mtime, size)` cache: **36 ms**.
+Hydration no longer depends on the list; `refreshSessions` coalesces as its
+comment always claimed.
+**"MARVIN is skipping plan steps" ([ADR-0068](decisions/0068-plan-dedupe-provenance-and-negative-claims.md) addendum 4):**
+the plan it tracked wasn't the plan on screen — a 10-step plan with a
+`Sources:` bibliography was tracked as **16 steps, one URL `in_progress`**,
+because the parser had no notion of where the list ends; the file held three
+contradictory copies of its step list from a render→echo→ingest loop. Parser
+stops at a reference heading and drops link-only bullets; render fuzzy-matches
+before appending; redrive drops citations instead of nesting them.
+**Also:** skills and plugins can be **updated** ([ADR-0071](decisions/0071-install-provenance-and-update-path.md)
+— provenance recorded at install, content-hash "newer?", cache GC, Set-source
+backfill); pane actions moved out of the window toolbar (both panes' toolbars
+were rendering at once, six unlabelled icons) into in-pane rows with tooltips
+that say *why* a button is disabled; the ADR index, stuck at 0030, is
+backfilled through 0073.
 
 **v0.1.64** — Things MARVIN installs can now be updated, and two promises it
 could not keep. **Install provenance (ADR-0071):** MARVIN could install a skill

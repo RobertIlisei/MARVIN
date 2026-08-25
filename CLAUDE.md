@@ -157,7 +157,7 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 | Path | Responsibility |
 |---|---|
 | `sidecar/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
-| `sidecar/packages/runtime/` | Claude Agent SDK runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.245**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
 | `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
 | `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
 | `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
@@ -213,6 +213,13 @@ directory makes it the user's thing, not MARVIN's.
 
 `MARVIN_DATA_DIR` env var, default `~/.marvin/`. Stores:
 - `sessions/<projectId>/<sessionId>.jsonl` — conversation transcripts
+- `sessions/<projectId>/.summaries.json` — picker cache for the session list
+  ([ADR-0072](./docs/decisions/0072-session-list-must-not-parse-transcripts.md)):
+  per-session `firstUserMessage` + `turnCount`, keyed on `(mtime, size)`.
+  Listing 347 sessions used to `JSON.parse` 2.6 GB per request (23 s — long
+  enough for the client to cancel and restart it forever, which read as "all
+  my sessions are gone"). Now a marker scan + this cache: 36 ms warm. Safe to
+  delete; it rebuilds on the next list.
 - `cost-tracker.json` — daily/weekly/lifetime spend
 - `projects.json` — registered projects (id, name, workDir)
 - Graph caches per project live next to the project (`<workDir>/graphify-out/`).
@@ -306,6 +313,31 @@ without the `settingSources` blast radius:
   MARVIN's own in-process servers and routes **every other `mcp__*` tool through
   `confirm`** — closing the prior blanket-allow of unknown MCP tools. Plugin MCP
   tools are therefore confirm-gated, and the subagent read-only invariant applies.
+
+## Agent SDK contract — two pins that keep the plan spine alive (ADR-0073)
+
+MARVIN is on Agent SDK **0.3.245**. Two 0.3 defaults would silently change
+what MARVIN does, and both are pinned back in `sdk-runner.ts` with the reason
+at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
+
+- **`CLAUDE_CODE_ENABLE_TODO_TOOLS=1` + `CLAUDE_CODE_ENABLE_TASKS=0`** in
+  `turnEnv`. From 0.3.142, Sonnet 5 / Opus 4.8+ sessions get **no**
+  task-tracking tool unless opted in, and the opt-in family defaults to the
+  id-based `TaskCreate`/`TaskUpdate`. The entire plan spine (ADR-0046 / 0049 /
+  0052 / 0068) reconciles `TodoWrite` snapshots by `[N]`/`[N.M]` tag. Remove
+  either flag and every plan freezes at `pending` with no error.
+- **`alwaysLoad: true` on all five in-process MCP servers** (`marvin-graph`,
+  `-memory`, `-backlog`, `-obsidian`, `-control`). 0.3 defers MCP tools behind
+  `ToolSearch` by default; the graphify-first design hooks hard-deny
+  Read/Grep/Glob until a `graph_*` call has happened, so a turn-1 prompt with
+  no graph tools would deadlock. `alwaysLoad` also blocks startup until the
+  server is connected, which closes the 0.2.142 background-connect race.
+
+Verified live, not inferred: a 0.3.245 `system/init` on `claude-sonnet-5`
+with the flags reports the subagent tool as **`Task`** (what the gate matches
+on) and the todo family as **`TodoWrite`** only. Migrating the spine to Task
+ids — which is what retires the ADR-0068 bug class — is a separate, non-neutral
+ADR, deliberately not bundled with the upgrade.
 
 ## Browser automation — Playwright CLI (default) + opt-in MCP (ADR-0045)
 
