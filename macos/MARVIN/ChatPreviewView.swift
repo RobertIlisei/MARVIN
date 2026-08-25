@@ -533,9 +533,23 @@ final class ChatPreviewModel {
     /// (fresh install) or the saved id no longer exists on disk.
     func autoHydrate(projectId: String) async {
         guard loadedSessionId == nil else { return }
+
+        // Hydrate from the SAVED id without waiting for the session list
+        // (ADR-0072). The list is only ever used here to turn an id we
+        // already have into a summary object — but it is the single most
+        // expensive call in the app, and when it was slow this `await` left
+        // the chat completely blank: list fails or returns empty -> no
+        // `target` -> `hydrate` never runs, even though the transcript
+        // itself loads in ~96 ms. A slow picker must never cost the user
+        // their conversation.
+        if let saved = NativePrefs.shared.lastSessionId(forProject: projectId) {
+            hydrate(projectId: projectId, sessionId: saved, tail: 200)
+        }
+
         do {
             let res = try await ChatService.shared.fetchSessions(projectId: projectId)
             sessions = res.sessions
+            // The saved-id hydrate above may already have claimed this.
             guard loadedSessionId == nil else { return }
             let saved = NativePrefs.shared.lastSessionId(forProject: projectId)
             let target = saved.flatMap { id in sessions.first(where: { $0.sessionId == id }) }
@@ -554,13 +568,26 @@ final class ChatPreviewModel {
     }
 
     /// Refresh the sessions list for `projectId`. Idempotent: a
-    /// fetch in flight isn't re-started; subsequent calls await
-    /// the existing task. Called on menu-open + after a turn
+    /// fetch in flight isn't re-started; subsequent calls let the
+    /// existing task finish. Called on menu-open + after a turn
     /// completes (so a fresh turn shows up in history without a
     /// relaunch).
+    ///
+    /// ADR-0072: this used to `cancel()` the in-flight task and start a new
+    /// one — the exact opposite of what the comment above promised, and it
+    /// mattered. `refreshSessions` is called from nine sites, one of them
+    /// the tab strip's `.onAppear`, which re-fires on every SwiftUI subtree
+    /// rebuild. With `NSSplitViewController.loadView` observed running 8x in
+    /// a single launch, a fetch that took longer than the gap between
+    /// rebuilds was cancelled and restarted forever and could never
+    /// complete, so the picker stayed permanently empty. Coalescing makes a
+    /// slow fetch survive a rebuild storm.
     func refreshSessions(projectId: String) {
-        sessionsFetchTask?.cancel()
+        // A fetch already running for this project will deliver the same
+        // answer — let it.
+        if let existing = sessionsFetchTask, !existing.isCancelled { return }
         sessionsFetchTask = Task { @MainActor in
+            defer { sessionsFetchTask = nil }
             do {
                 let res = try await ChatService.shared.fetchSessions(
                     projectId: projectId

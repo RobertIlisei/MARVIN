@@ -12,7 +12,7 @@
  * `turn.completed` event with aggregated totals.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ClaudeStreamEvent, TokenUsage } from "./claude-cli";
 import { marvinPaths } from "./paths";
@@ -316,4 +316,163 @@ export function listSessions(projectId: string): Array<{
   return out
     .sort((a, b) => b.mtime - a.mtime)
     .map(({ sessionId, updatedAt, bytes }) => ({ sessionId, updatedAt, bytes }));
+}
+
+// ── Cheap session summaries for the picker (ADR-0072) ──────────────────
+
+/**
+ * Per-session preview data for the history list.
+ *
+ * `GET /api/sessions` used to build this by calling `loadSession` on every
+ * transcript — a full `JSON.parse` of every line of every file. On a project
+ * with 347 sessions / 2.6 GB that measured **23 seconds**, which is long
+ * enough that the client's fetch is cancelled and restarted (by a SwiftUI
+ * rebuild re-firing `.onAppear`) before it can ever complete. The list then
+ * stays empty forever, and because `autoHydrate` gates hydration on the list,
+ * the whole chat renders blank even though the transcript itself loads in
+ * ~96 ms. See ADR-0072.
+ *
+ * Two changes make it cheap:
+ *
+ *  1. **No JSON parsing for the count.** `turnCount` is the number of
+ *     `turn.user` records, which is a byte-level substring count — no
+ *     allocation per line, no object graph. Only the ONE line holding the
+ *     first user message is parsed.
+ *  2. **Cache keyed on (mtime, size).** A transcript that hasn't changed
+ *     cannot have a different summary. Since sessions are append-only and
+ *     all but the active one are immutable, near every entry is a cache hit
+ *     after the first pass — including across restarts, because the cache is
+ *     persisted next to the transcripts.
+ */
+export interface SessionSummaryData {
+  firstUserMessage: string | null;
+  turnCount: number;
+}
+
+interface CachedSummary extends SessionSummaryData {
+  mtimeMs: number;
+  bytes: number;
+}
+
+/** Marker we count to derive `turnCount` without parsing. Kept in lockstep
+ *  with the `turn.user` record written by `appendTurn` — the test pins that
+ *  a real transcript's scan count equals the parsed count. */
+const USER_TURN_MARKER = '"type":"turn.user"';
+
+/** Bytes of the file head scanned for the first user message. The first
+ *  `turn.user` is the opening record of a transcript, so this is generous;
+ *  a transcript whose head somehow holds no user turn just gets a null
+ *  preview rather than paying a full read. */
+const HEAD_SCAN_BYTES = 256 * 1024;
+
+function summaryCachePath(projectId: string): string {
+  return `${marvinPaths.sessionsDir(projectId)}/.summaries.json`;
+}
+
+function readSummaryCache(projectId: string): Record<string, CachedSummary> {
+  try {
+    const raw = readFileSync(summaryCachePath(projectId), "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, CachedSummary>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSummaryCache(
+  projectId: string,
+  cache: Record<string, CachedSummary>,
+): void {
+  try {
+    const p = summaryCachePath(projectId);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify(cache), "utf-8");
+  } catch {
+    /* the cache is an optimisation — a failure must not fail the listing */
+  }
+}
+
+/**
+ * Compute one session's summary by scanning rather than parsing.
+ * Exported for tests.
+ */
+export function scanSessionSummary(path: string): SessionSummaryData {
+  let firstUserMessage: string | null = null;
+  let turnCount = 0;
+  try {
+    const buf = readFileSync(path);
+    // Count markers over the raw bytes. `indexOf` on a Buffer walks memory
+    // without materialising strings, which is what makes this ~2 orders of
+    // magnitude cheaper than JSON.parse per line.
+    let idx = buf.indexOf(USER_TURN_MARKER, 0, "utf-8");
+    while (idx !== -1) {
+      turnCount += 1;
+      idx = buf.indexOf(USER_TURN_MARKER, idx + USER_TURN_MARKER.length, "utf-8");
+    }
+    // Parse only the first user-turn line, from a bounded head slice.
+    const head = buf.subarray(0, HEAD_SCAN_BYTES).toString("utf-8");
+    for (const line of head.split("\n")) {
+      if (!line.includes(USER_TURN_MARKER)) continue;
+      try {
+        const rec = JSON.parse(line) as { message?: unknown };
+        if (typeof rec.message === "string") {
+          firstUserMessage = rec.message.slice(0, 120);
+        }
+      } catch {
+        // A truncated final line in the head slice is expected — the next
+        // matching line (if any) still gets a chance.
+        continue;
+      }
+      break;
+    }
+  } catch {
+    /* unreadable → empty summary, same as the old loadSession(null) path */
+  }
+  return { firstUserMessage, turnCount };
+}
+
+/**
+ * Summaries for every session in a project, newest first — the read model
+ * behind `GET /api/sessions`. Cache hits cost a `statSync`; misses cost one
+ * buffer scan of that transcript alone.
+ */
+export function listSessionSummaries(projectId: string): Array<{
+  sessionId: string;
+  updatedAt: string;
+  bytes: number;
+  firstUserMessage: string | null;
+  turnCount: number;
+}> {
+  const base = listSessions(projectId);
+  const cache = readSummaryCache(projectId);
+  const next: Record<string, CachedSummary> = {};
+  let dirty = false;
+
+  const out = base.map((s) => {
+    const path = marvinPaths.sessionFile(projectId, s.sessionId);
+    const mtimeMs = new Date(s.updatedAt).getTime();
+    const hit = cache[s.sessionId];
+    // Size AND mtime must both match. Size alone would miss an in-place
+    // rewrite; mtime alone is coarse on some filesystems.
+    const fresh = hit && hit.mtimeMs === mtimeMs && hit.bytes === s.bytes;
+    const summary: SessionSummaryData = fresh
+      ? { firstUserMessage: hit.firstUserMessage, turnCount: hit.turnCount }
+      : scanSessionSummary(path);
+    if (!fresh) dirty = true;
+    next[s.sessionId] = { ...summary, mtimeMs, bytes: s.bytes };
+    return {
+      sessionId: s.sessionId,
+      updatedAt: s.updatedAt,
+      bytes: s.bytes,
+      firstUserMessage: summary.firstUserMessage,
+      turnCount: summary.turnCount,
+    };
+  });
+
+  // Rewrite when anything was recomputed OR when sessions disappeared, so a
+  // deleted transcript's entry doesn't linger forever.
+  if (dirty || Object.keys(cache).length !== Object.keys(next).length) {
+    writeSummaryCache(projectId, next);
+  }
+  return out;
 }

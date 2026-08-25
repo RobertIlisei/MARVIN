@@ -1,4 +1,4 @@
-import { listSessions, loadSession } from "@marvin/runtime/session";
+import { listSessionSummaries } from "@marvin/runtime/session";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -24,27 +24,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
   }
 
-  const base = listSessions(projectId);
-  const summaries: SessionSummary[] = base.map((s) => {
-    const record = loadSession(projectId, s.sessionId);
-    let firstUserMessage: string | null = null;
-    let turnCount = 0;
-    if (record) {
-      for (const t of record.turns) {
-        if (t.type === "turn.user") turnCount += 1;
-        if (t.type === "turn.user" && firstUserMessage === null) {
-          firstUserMessage = t.message.slice(0, 120);
-        }
-      }
-    }
-    return {
-      sessionId: s.sessionId,
-      updatedAt: s.updatedAt,
-      bytes: s.bytes,
-      firstUserMessage,
-      turnCount,
-    };
-  });
+  // Previously this called `loadSession` per entry — a full JSON.parse of
+  // every line of every transcript, just to read two summary fields. On a
+  // 347-session / 2.6 GB project that measured 23 SECONDS, long enough that
+  // the client cancelled and restarted the fetch (a SwiftUI rebuild re-fires
+  // the tab strip's `.onAppear`) before it could ever return, leaving the
+  // picker permanently empty AND — because autoHydrate gates on this list —
+  // the chat blank. `listSessionSummaries` scans instead of parsing and
+  // caches on (mtime, size). See ADR-0072.
+  const summaries: SessionSummary[] = listSessionSummaries(projectId);
 
   return NextResponse.json(
     { projectId, sessions: summaries },
