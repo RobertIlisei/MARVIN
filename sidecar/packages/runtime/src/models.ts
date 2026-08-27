@@ -81,7 +81,10 @@ function tierFor(id: string): ModelInfo["tier"] {
 
 /** Shape an Anthropic auth header from a raw key/token, picking the
  *  right header per credential shape (OAuth → Bearer, console → x-api-key). */
-function headersForCredential(cred: string): Record<string, string> {
+function headersForCredential(cred: string, provider?: string): Record<string, string> {
+  if (provider === "openrouter") {
+    return { Authorization: `Bearer ${cred}` };
+  }
   if (/^sk-ant-oat/i.test(cred)) {
     return {
       Authorization: `Bearer ${cred}`,
@@ -109,7 +112,7 @@ function buildAuthHeaders(): Record<string, string> | null {
   // 1. UI-configured key wins, mirroring auth.ts precedence.
   const cfg = readAuthConfig();
   if (cfg?.mode === "api-key" && cfg.apiKey) {
-    return headersForCredential(cfg.apiKey.trim());
+    return headersForCredential(cfg.apiKey.trim(), cfg.provider);
   }
 
   // 2 + 3. Env-var credentials.
@@ -137,6 +140,7 @@ interface AnthropicModelsResponse {
     id: string;
     type: string;
     display_name?: string;
+    name?: string;
     created_at?: string;
   }>;
   has_more: boolean;
@@ -180,7 +184,11 @@ export async function listModels(options: {
     const collected: ModelInfo[] = [];
     let after: string | null = null;
     for (let page = 0; page < 10; page += 1) {
-      const url = new URL("https://api.anthropic.com/v1/models");
+      const cfg = readAuthConfig();
+      const baseUrl = cfg?.mode === "api-key" && cfg?.provider === "openrouter"
+        ? "https://openrouter.ai/api/v1/models"
+        : "https://api.anthropic.com/v1/models";
+      const url = new URL(baseUrl);
       url.searchParams.set("limit", "100");
       if (after) url.searchParams.set("after_id", after);
 
@@ -200,7 +208,7 @@ export async function listModels(options: {
       for (const m of body.data) {
         collected.push({
           id: m.id,
-          displayName: m.display_name ?? m.id,
+          displayName: m.display_name ?? m.name ?? m.id,
           tier: tierFor(m.id),
           createdAt: m.created_at ?? null,
           live: true,

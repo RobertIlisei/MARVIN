@@ -22,6 +22,7 @@ private struct AuthConfigStatus: Decodable {
 
     struct ConfigBody: Decodable {
         let mode: String?       // "cli" | "api-key" | null (no file)
+        let provider: String?   // "anthropic" | "openrouter" | null
         let keyHint: String?    // "…wxyz" | null
         let savedAt: String?    // ISO timestamp | null
     }
@@ -36,6 +37,7 @@ private struct AuthConfigStatus: Decodable {
 struct AuthSettingsSection: View {
     @State private var status: AuthConfigStatus?
     @State private var draftMode: String = "cli"      // local picker state
+    @State private var draftProvider: String = "anthropic"
     @State private var draftKey: String = ""          // SecureField draft
     @State private var inFlight: Bool = false
     @State private var lastError: String?
@@ -58,13 +60,20 @@ struct AuthSettingsSection: View {
             }
 
             if draftMode == "api-key" {
+                Picker("Provider", selection: $draftProvider) {
+                    Text("Anthropic").tag("anthropic")
+                    Text("OpenRouter").tag("openrouter")
+                }
+                .pickerStyle(.inline)
+                .disabled(inFlight)
+
                 LabeledContent("API key") {
                     HStack(spacing: 8) {
                         SecureField("sk-ant-…", text: $draftKey)
                             .textFieldStyle(.roundedBorder)
                             .disabled(inFlight)
                         Button("Save") {
-                            Task { await save(mode: "api-key", key: draftKey) }
+                            Task { await save(mode: "api-key", provider: draftProvider, key: draftKey) }
                         }
                         .disabled(inFlight || draftKey.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -102,7 +111,7 @@ struct AuthSettingsSection: View {
                     .foregroundStyle(.red)
             }
 
-            Text("Default is the Claude CLI session (auto-detected from ~/.claude). Pick \"Anthropic API key\" only if you want every chat turn billed against a specific Console key.")
+            Text("Default is the Claude CLI session (auto-detected from ~/.claude). Pick \"Anthropic API key\" only if you want every chat turn billed against a specific Console key or OpenRouter.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -126,13 +135,14 @@ struct AuthSettingsSection: View {
                 // Sync the picker to whatever the file says, falling back
                 // to "cli" when no file exists (today's default).
                 self.draftMode = next.config.mode ?? "cli"
+                self.draftProvider = next.config.provider ?? "anthropic"
             }
         } catch {
             await MainActor.run { self.lastError = "Failed to load auth config: \(error.localizedDescription)" }
         }
     }
 
-    private func save(mode: String, key: String?) async {
+    private func save(mode: String, provider: String? = nil, key: String?) async {
         await MainActor.run {
             self.inFlight = true
             self.lastError = nil
@@ -144,6 +154,9 @@ struct AuthSettingsSection: View {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
         var body: [String: String] = ["mode": mode]
+        if let p = provider {
+            body["provider"] = p
+        }
         if let k = key?.trimmingCharacters(in: .whitespaces), !k.isEmpty {
             body["apiKey"] = k
         }
@@ -190,6 +203,7 @@ struct AuthSettingsSection: View {
             await MainActor.run {
                 self.status = next
                 self.draftMode = next.config.mode ?? "cli"
+                self.draftProvider = next.config.provider ?? "anthropic"
                 self.draftKey = ""
             }
         } catch {
