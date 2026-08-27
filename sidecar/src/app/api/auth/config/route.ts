@@ -26,6 +26,7 @@ const MAX_BODY_BYTES = 8 * 1024;
 
 interface PostBody {
   mode?: string;
+  provider?: string;
   apiKey?: string;
 }
 
@@ -70,6 +71,7 @@ export async function POST(req: NextRequest) {
 
   const result = writeAuthConfig({
     mode,
+    provider: body.provider === "openrouter" ? "openrouter" : undefined,
     apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
   });
   if (!result.ok) {
