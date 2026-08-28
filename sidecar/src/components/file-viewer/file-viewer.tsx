@@ -24,13 +24,16 @@ function fmtBytes(n: number): string {
 
 export function FileViewer({
   cwd,
-  filePath,
+  filePath: requestedPath,
   onClose,
+  onRevertPath,
 }: {
   cwd: string;
   filePath: string;
   onClose: () => void;
+  onRevertPath?: (path: string) => void;
 }) {
+  const [activePath, setActivePath] = useState(requestedPath);
   const [data, setData] = useState<ContentResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,12 +51,44 @@ export function FileViewer({
   const editorRef = useRef<MonacoEditorHandle | null>(null);
 
   useEffect(() => {
+    if (requestedPath === activePath) return;
+
+    if (!dirty.isDirty) {
+      setActivePath(requestedPath);
+      return;
+    }
+
+    let active = true;
+    dirty.guardOrConfirm(
+      () => new Promise((resolve) => {
+        setGuard({
+          open: true,
+          filePath: activePath.startsWith(cwd) ? activePath.slice(cwd.length).replace(/^\/+/, "") : activePath,
+          onResolve: resolve,
+        });
+      }),
+      async () => (await editorRef.current?.save()) ?? false,
+    ).then((proceed) => {
+      if (!active) return;
+      setGuard((g) => ({ ...g, open: false }));
+      if (proceed) {
+        dirty.markClean();
+        setActivePath(requestedPath);
+      } else {
+        onRevertPath?.(activePath);
+      }
+    });
+
+    return () => { active = false; };
+  }, [requestedPath, activePath, cwd, dirty, onRevertPath]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setData(null);
     fetch(
-      `/api/files/content?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`,
+      `/api/files/content?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(activePath)}`,
     )
       .then(async (r) => {
         if (!r.ok) {
@@ -74,11 +109,11 @@ export function FileViewer({
     return () => {
       cancelled = true;
     };
-  }, [cwd, filePath]);
+  }, [cwd, activePath]);
 
-  const relPath = filePath.startsWith(cwd)
-    ? filePath.slice(cwd.length).replace(/^\/+/, "")
-    : filePath;
+  const relPath = activePath.startsWith(cwd)
+    ? activePath.slice(cwd.length).replace(/^\/+/, "")
+    : activePath;
 
   const handleClose = async () => {
     if (dirty.isDirty) {
@@ -127,7 +162,7 @@ export function FileViewer({
       {data?.binary && (
         <ReadOnlyPanel
           cwd={cwd}
-          filePath={filePath}
+          filePath={activePath}
           data={data}
           relPath={relPath}
           onClose={handleClose}
@@ -137,9 +172,9 @@ export function FileViewer({
         <MonacoEditor
           // key forces a fresh mount when the file changes — simpler than
           // plumbing a reload through internal state.
-          key={filePath}
+          key={activePath}
           cwd={cwd}
-          filePath={filePath}
+          filePath={activePath}
           initialContent={data.content}
           initialMtime={data.mtime}
           initialSize={data.size}
@@ -163,7 +198,7 @@ export function FileViewer({
       {data && !data.binary && data.content == null && (
         <ReadOnlyPanel
           cwd={cwd}
-          filePath={filePath}
+          filePath={activePath}
           data={data}
           relPath={relPath}
           onClose={handleClose}
