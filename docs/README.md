@@ -32,6 +32,7 @@ If you just want to run MARVIN, start with [Quickstart](./getting-started/quicks
 - [Observability](./operations/observability.md) — what's instrumented, what's planned
 - [Sessions — persistence + resume](./operations/sessions.md)
 - [Health checks](./operations/health.md)
+- [SDLC metrics](./operations/sdlc-metrics.md) — DORA-proxy leading/lagging indicators for MARVIN's own repo
 
 ## Security
 - [Credentials](./security/credentials.md) — Keychain, API keys, host-credentials auto-detection
