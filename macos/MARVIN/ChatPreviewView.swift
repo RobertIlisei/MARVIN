@@ -2659,9 +2659,13 @@ struct ChatPreviewView: View {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
         req.timeoutInterval = 300
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+        var body: [String: Any] = [
             "workDir": cwd, "projectId": pid, "sessionId": sid,
-        ])
+        ]
+        if let executor = bridge.executorModel {
+            body["model"] = executor
+        }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         struct AuditResponse: Decodable {
             let report: String?

@@ -31,6 +31,17 @@ export interface ModelInfo {
    * warn the user when they're picking from the fallback list.
    */
   live: boolean;
+  /** Context window size reported by OpenRouter, if any. */
+  contextWindow?: number;
+  /** Per-token pricing reported by OpenRouter, if any. */
+  pricing?: {
+    prompt: string;
+    completion: string;
+    /** Discounted per-token price for cached input, when the model bills one. */
+    input_cache_read?: string;
+    /** Per-token price for cache writes — often a *premium* over `prompt`. */
+    input_cache_write?: string;
+  };
 }
 
 export interface ListModelsResult {
@@ -143,6 +154,8 @@ interface AnthropicModelsResponse {
     name?: string;
     created_at?: string;
     created?: number; // OpenRouter uses unix timestamp
+    context_length?: number; // OpenRouter
+    pricing?: NonNullable<ModelInfo["pricing"]>; // OpenRouter
   }>;
   has_more?: boolean;
   first_id?: string | null;
@@ -186,12 +199,15 @@ export async function listModels(options: {
     let after: string | null = null;
     for (let page = 0; page < 10; page += 1) {
       const cfg = readAuthConfig();
-      const baseUrl = cfg?.mode === "api-key" && cfg?.provider === "openrouter"
+      const isOpenRouter = cfg?.mode === "api-key" && cfg?.provider === "openrouter";
+      const baseUrl = isOpenRouter
         ? "https://openrouter.ai/api/v1/models"
         : "https://api.anthropic.com/v1/models";
       const url = new URL(baseUrl);
-      url.searchParams.set("limit", "100");
-      if (after) url.searchParams.set("after_id", after);
+      if (!isOpenRouter) {
+        url.searchParams.set("limit", "100");
+        if (after) url.searchParams.set("after_id", after);
+      }
 
       const res = await fetch(url.toString(), {
         headers,
@@ -213,6 +229,8 @@ export async function listModels(options: {
           tier: tierFor(m.id),
           createdAt: m.created_at ?? (m.created ? new Date(m.created * 1000).toISOString() : null),
           live: true,
+          contextWindow: m.context_length,
+          pricing: m.pricing,
         });
       }
       if (!body.has_more || !body.last_id) break;
@@ -340,13 +358,78 @@ const EXTENDED_CONTEXT_WINDOW = 1_000_000;
  * usage percentage and the colour-band thresholds, so a 1M session isn't
  * flagged "critical" at 140K (which would be 14% of its real capacity).
  */
-export function contextWindowFor(modelId: string | null | undefined): number {
+export async function contextWindowFor(modelId: string | null | undefined): Promise<number> {
   if (!modelId) return DEFAULT_CONTEXT_WINDOW;
   const lower = modelId.toLowerCase();
+
+  const cached = await cachedListModels();
+  const found = cached.models.find((m) => m.id === modelId);
+  if (found?.contextWindow && found.contextWindow > 0) {
+    return found.contextWindow;
+  }
+
   if (lower.includes("[1m]") || lower.includes("-1m") || lower.includes("1m]")) {
     return EXTENDED_CONTEXT_WINDOW;
   }
   return DEFAULT_CONTEXT_WINDOW;
+}
+
+/** The per-turn usage shape the Agent SDK reports on the result event. */
+export interface TurnTokenUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+/**
+ * Price a turn's token usage against one model's per-token pricing.
+ * Pure — exported for tests.
+ *
+ * Cache tokens are billed at OpenRouter's dedicated cache prices when the
+ * model reports them (`input_cache_read` is a discount — glm serves it at
+ * 1/5 of the prompt price; `input_cache_write` can be a premium). When a
+ * cache field is absent the prompt price stands in, which is the correct
+ * reading for pricing objects that don't distinguish (and the pre-2026-08-28
+ * behaviour this function replaced — it billed ALL cache tokens at full
+ * prompt price, ~5× over on cache-heavy turns).
+ */
+export function estimateCostFromPricing(
+  pricing: NonNullable<ModelInfo["pricing"]>,
+  tokenUsage: TurnTokenUsage,
+): number | null {
+  const promptPrice = Number(pricing.prompt) || 0;
+  const completionPrice = Number(pricing.completion) || 0;
+  const cacheReadPrice =
+    pricing.input_cache_read !== undefined
+      ? Number(pricing.input_cache_read) || 0
+      : promptPrice;
+  const cacheWritePrice =
+    pricing.input_cache_write !== undefined
+      ? Number(pricing.input_cache_write) || 0
+      : promptPrice;
+
+  const cost =
+    (tokenUsage.input_tokens ?? 0) * promptPrice +
+    (tokenUsage.cache_read_input_tokens ?? 0) * cacheReadPrice +
+    (tokenUsage.cache_creation_input_tokens ?? 0) * cacheWritePrice +
+    (tokenUsage.output_tokens ?? 0) * completionPrice;
+  return cost > 0 ? cost : null;
+}
+
+/**
+ * Calculate the estimated cost in USD for a single turn.
+ * Looks up the model in the cached list to find its pricing.
+ */
+export async function calculateEstimatedCost(
+  modelId: string | null | undefined,
+  tokenUsage?: TurnTokenUsage | null
+): Promise<number | null> {
+  if (!modelId || !tokenUsage) return null;
+  const cached = await cachedListModels();
+  const found = cached.models.find((m) => m.id === modelId);
+  if (!found?.pricing) return null;
+  return estimateCostFromPricing(found.pricing, tokenUsage);
 }
 
 /**

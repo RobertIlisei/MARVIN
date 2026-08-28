@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);
   if (guard) return guard;
 
-  let body: { workDir?: string };
+  let body: { workDir?: string; model?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: v.error }, { status: v.status });
   }
   try {
-    const payload = await discoverProjectSkills(v.workDir);
+    const payload = await discoverProjectSkills(v.workDir, body.model);
     return NextResponse.json(payload);
   } catch (e) {
     const message = e instanceof Error ? e.message : "unknown error";
