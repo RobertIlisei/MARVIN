@@ -944,6 +944,7 @@ export default function Home() {
                         cwd={cwd}
                         filePath={selectedPath!}
                         onClose={() => setSelectedPath(undefined)}
+                        onRevertPath={setSelectedPath}
                       />
                     </Panel>,
                   );

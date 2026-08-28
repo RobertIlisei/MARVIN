@@ -29,6 +29,7 @@ import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { detectFingerprint } from "@marvin/project-context";
 
+import { buildSubprocessEnv } from "./auth";
 import { latestForTier } from "./models";
 
 const pExecFile = promisify(execFile);
@@ -252,6 +253,7 @@ export async function discoverProjectSkills(
         permissionMode: "bypassPermissions",
         abortController: abort,
         cwd: workDir,
+        env: buildSubprocessEnv(),
       },
     })) {
       const m = evt as SDKMessage & Record<string, unknown>;

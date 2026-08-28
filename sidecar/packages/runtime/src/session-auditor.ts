@@ -37,6 +37,7 @@ import { createGraphMcpServer } from "@marvin/graphify-bridge";
 import { listChanges, type ChangedFile } from "./change-checkpoints";
 import { collectCiStatus, renderCiStatus, type CiStatus } from "./ci-status";
 import { readAutoAuditTail, type AutoAuditEntry } from "./auto-audit";
+import { buildSubprocessEnv } from "./auth";
 import { latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
@@ -656,6 +657,7 @@ export async function runSessionAudit(args: {
       prompt,
       options: {
         cwd,
+        env: buildSubprocessEnv(),
         ...(model ? { model } : {}),
         ...(args.abortController ? { abortController: args.abortController } : {}),
         // Read-only by SDK contract (ADR-0059 §2) — refused before the call

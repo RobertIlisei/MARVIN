@@ -64,7 +64,7 @@ final class NativePrefs {
     // MARK: - Setters (write UserDefaults + sync bridge)
 
     func setPersonality(_ v: String) {
-        guard v == "marvin" || v == "neutral" else { return }
+        guard v == "marvin" || v == "neutral" || v == "ultron" else { return }
         personality = v
         UserDefaults.standard.set(v, forKey: "marvin.personality")
         MarvinBridge.shared.personality = v
