@@ -41,6 +41,7 @@ import { buildSubprocessEnv } from "./auth";
 import { latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
+import { readAuthConfig } from "./auth-config";
 
 /** Caps — the packet is bounded so an audit can't blow up cost or context. */
 export const AUDIT_CAPS = {
@@ -647,7 +648,9 @@ export async function runSessionAudit(args: {
     return { ok: false, error: "nothing to audit — this session has no recorded messages yet." };
   }
 
-  const model = args.model ?? (await latestForTier("sonnet")) ?? undefined;
+  const auth = readAuthConfig();
+  const isOpenRouter = auth?.mode === "api-key" && auth?.provider === "openrouter";
+  const finalModel = (isOpenRouter && args.model) ? args.model : (await latestForTier("sonnet")) ?? undefined;
   const prompt = renderAuditPrompt(packet);
 
   let text = "";
@@ -658,7 +661,7 @@ export async function runSessionAudit(args: {
       options: {
         cwd,
         env: buildSubprocessEnv(),
-        ...(model ? { model } : {}),
+        ...(finalModel ? { model: finalModel } : {}),
         ...(args.abortController ? { abortController: args.abortController } : {}),
         // Read-only by SDK contract (ADR-0059 §2) — refused before the call
         // reaches the model, so no `canUseTool` wiring is needed here.
@@ -701,7 +704,7 @@ export async function runSessionAudit(args: {
 
   const header =
     `# Session audit — ${sessionId}\n\n` +
-    `_Generated ${new Date().toISOString()} · model ${model ?? "(default)"} · ` +
+    `_Generated ${new Date().toISOString()} · model ${finalModel ?? "(default)"} · ` +
     `${packet.messages.length} messages, ${packet.auditLog.length} tool entries, ` +
     `${packet.changedFiles.length} changed files_\n\n` +
     `> Read-only advisory (ADR-0059). Findings are prompts to look, not verdicts, ` +

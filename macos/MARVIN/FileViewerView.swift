@@ -758,33 +758,36 @@ struct FileViewerView: View {
             Text("Another process modified this file since you opened it. Reload to discard your edits, or Overwrite to keep them and replace the on-disk version.")
         }
         // Unsaved changes alert.
-        .alert(
-            "Unsaved Changes",
-            isPresented: Binding(
-                get: { unsavedClosePath != nil },
-                set: { if !$0 { unsavedClosePath = nil } }
-            ),
-            presenting: unsavedClosePath
-        ) { path in
-            Button("Save") {
-                Task {
-                    let ok = await performSave(force: false, targetPath: path)
-                    if ok {
-                        commitClose(path: path)
+        .background(
+            EmptyView()
+                .alert(
+                    "Unsaved Changes",
+                    isPresented: Binding(
+                        get: { unsavedClosePath != nil },
+                        set: { if !$0 { unsavedClosePath = nil } }
+                    ),
+                    presenting: unsavedClosePath
+                ) { path in
+                    Button("Save") {
+                        Task {
+                            let ok = await performSave(force: false, targetPath: path)
+                            if ok {
+                                commitClose(path: path)
+                            }
+                            unsavedClosePath = nil
+                        }
                     }
-                    unsavedClosePath = nil
+                    Button("Discard", role: .destructive) {
+                        commitClose(path: path)
+                        unsavedClosePath = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        unsavedClosePath = nil
+                    }
+                } message: { path in
+                    Text("Do you want to save the changes made to \((path as NSString).lastPathComponent)? Your changes will be lost if you don't save them.")
                 }
-            }
-            Button("Discard", role: .destructive) {
-                commitClose(path: path)
-                unsavedClosePath = nil
-            }
-            Button("Cancel", role: .cancel) {
-                unsavedClosePath = nil
-            }
-        } message: { path in
-            Text("Do you want to save the changes made to \((path as NSString).lastPathComponent)? Your changes will be lost if you don't save them.")
-        }
+        )
     }
 
     // MARK: - Tab bar
@@ -1115,6 +1118,7 @@ struct FileViewerView: View {
         model.ensureLoaded(cwd: cwd, path: path)
     }
 
+    @MainActor
     private func requestClose(path: String) {
         if let buffer = model.buffer(for: path), buffer.isDirty {
             unsavedClosePath = path
@@ -1123,11 +1127,13 @@ struct FileViewerView: View {
         }
     }
 
+    @MainActor
     private func commitClose(path: String) {
         bridge.closeFile(path)
         model.dropBuffer(path: path)
     }
 
+    @MainActor
     private func performSave(force: Bool, targetPath: String?) async -> Bool {
         guard let cwd = bridge.projectWorkDir,
               let path = targetPath ?? bridge.selectedFilePath else { return false }

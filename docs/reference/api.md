@@ -175,7 +175,9 @@ The chat-stream hook (`useChatStream.hydrateFromSession`) consumes this to rebui
 
 ### `GET /api/cost?projectId=…`
 
-Aggregated spend for a project.
+Aggregated spend for a project. Each request also refreshes the cached
+OpenRouter account balance (3 s bounded, best-effort) when the configured
+provider is `openrouter`.
 
 **Response:**
 
@@ -185,6 +187,7 @@ Aggregated spend for a project.
   week:     { /* same shape */ };
   lifetime: { /* same shape */ };
   daily:    Array<{ day: string /* YYYY-MM-DD */, costUsd, turns }>;  // last N active days
+  openRouter: { totalCredits, totalUsage } | null;  // present when provider is openrouter
 }
 ```
 
@@ -587,18 +590,21 @@ The HTML is served with a strict CSP (sandbox attribute + `frame-src 'self'` onl
 
 ### `GET /api/models`
 
-List available Claude models. Attempts Anthropic's `/v1/models` endpoint with whatever credentials are readable; falls back to a minimal static list when creds live in macOS Keychain.
+List available models. Attempts Anthropic's `/v1/models` endpoint with whatever credentials are readable — or OpenRouter's `/v1/models` when the configured provider is `openrouter` (that list additionally carries per-model `contextWindow` and `pricing`); falls back to a minimal static list when creds live in macOS Keychain.
 
 **Response:**
 
 ```ts
 {
   models: Array<{
-    id: string;              // "claude-opus-4-7"
+    id: string;              // "claude-opus-4-7" | "z-ai/glm-5.3-flash"
     displayName: string;     // "Claude Opus 4.7"
     tier: "opus" | "sonnet" | "haiku" | "other";
     createdAt: string | null;
     live: boolean;           // true if from the live API, false if from fallback
+    contextWindow?: number;  // OpenRouter only
+    pricing?: { prompt: string; completion: string;
+                input_cache_read?: string; input_cache_write?: string };  // OpenRouter only, USD per token
   }>;
   source: "anthropic-api" | "fallback";
   error: string | null;
@@ -606,7 +612,18 @@ List available Claude models. Attempts Anthropic's `/v1/models` endpoint with wh
 }
 ```
 
-Consumed by the header's `<ModelPicker>`.
+Consumed by the header's `<ModelPicker>` and by the per-turn cost
+estimator (`calculateEstimatedCost`).
+
+## OpenRouter proxy
+
+### `POST /api/proxy/openrouter/[...path]`
+
+Local bridge that lets the Claude Agent SDK talk to OpenRouter BYOK: the SDK insists on `x-api-key` + an `sk-ant-` prefix, so this route strips the prefix, re-injects the real key as `Authorization: Bearer …`, and proxies the request (streaming response passthrough) to `https://openrouter.ai/api/<path>`. Guarded by the loopback CSRF checks (Origin allowlist + `Sec-Fetch-Site`) — the CLI client sends no browser headers, but a drive-by browser tab can't pass the checks either.
+
+**Request:** the SDK's Anthropic-shaped body, forwarded verbatim. Headers: `x-api-key: sk-ant-api03-<openrouter-key>` (the spoofed form the runner sets).
+
+**Response:** OpenRouter's response, status + body + stream verbatim (`content-encoding` / `transfer-encoding` stripped).
 
 ## Health
 

@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       model,
-      contextWindow: contextWindowFor(model),
+      contextWindow: await contextWindowFor(model),
       estimate: {
         systemPrompt,
         tools: TOOLS_TOKEN_ESTIMATE,

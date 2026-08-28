@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
 
+import { requireLoopbackClient } from "@/lib/csrf";
+
 export const runtime = "edge"; // Edge runtime is ideal for streaming proxies
 
 /**
@@ -18,6 +20,14 @@ export const runtime = "edge"; // Edge runtime is ideal for streaming proxies
 export async function POST(
   req: NextRequest
 ) {
+  // CSRF half-guard (ADR-0009 lineage): the client here is the Claude CLI
+  // subprocess, which can't send X-Marvin-Client — but a browser always
+  // attaches Origin / Sec-Fetch-Site to a cross-origin POST, so the
+  // loopback checks still stop a drive-by tab from spending the user's
+  // OpenRouter credit through this proxy.
+  const guard = requireLoopbackClient(req);
+  if (guard) return guard;
+
   // Extract the path after /api/proxy/openrouter
   // e.g. /api/proxy/openrouter/v1/messages -> /v1/messages
   let pathString = req.nextUrl.pathname.replace(/^\/api\/proxy\/openrouter\/?/, "");

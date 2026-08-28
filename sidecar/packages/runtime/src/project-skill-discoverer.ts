@@ -30,6 +30,7 @@ import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { detectFingerprint } from "@marvin/project-context";
 
 import { buildSubprocessEnv } from "./auth";
+import { readAuthConfig } from "./auth-config";
 import { latestForTier } from "./models";
 
 const pExecFile = promisify(execFile);
@@ -210,6 +211,7 @@ function parseSuggestions(text: string): DiscoveredSkill[] {
  */
 export async function discoverProjectSkills(
   workDir: string,
+  model?: string,
 ): Promise<DiscoveredSkillsPayload> {
   const fp = detectFingerprint(workDir);
   const structure = topLevelStructure(workDir);
@@ -226,8 +228,10 @@ export async function discoverProjectSkills(
   // Newest live Sonnet — tier-resolved (ADR-0029) so a new Sonnet ships
   // into this call automatically. Falls back to the static list's newest
   // Sonnet when discovery is unavailable.
+  const auth = readAuthConfig();
+  const isOpenRouter = auth?.mode === "api-key" && auth?.provider === "openrouter";
   const discoveryModel =
-    (await latestForTier("sonnet")) ?? "claude-sonnet-4-6";
+    (isOpenRouter && model) ? model : (await latestForTier("sonnet")) ?? "claude-sonnet-4-6";
 
   // One-shot Agent SDK call. No tools, no MCP, no permission machinery
   // — pure prompt-in / text-out. The SDK still routes through the same
