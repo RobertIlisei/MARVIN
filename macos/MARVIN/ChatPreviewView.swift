@@ -797,26 +797,7 @@ final class ChatPreviewModel {
     /// is fire-and-forget — failure is logged but doesn't block
     /// the local teardown; a refreshed window can always re-issue.
     func cancel() {
-        activeTask?.cancel()
-        activeTask = nil
-        isSending = false
-        currentActivity = nil
-        // Cancel is a hard reset — drop any pending queued messages
-        // alongside the in-flight turn. Without this the user hits
-        // Stop, sees the brain idle, then a stale queued message fires
-        // half a second later and confuses them.
-        queuedMessages.removeAll()
-        // Seal any still-streaming rows so the chat doesn't sit there
-        // showing "streaming…" forever on the row that was mid-write
-        // when the user hit Stop.
-        for i in messages.indices where messages[i].isStreaming {
-            messages[i].isStreaming = false
-        }
-        // Drop any open confirm sheet — the SDK is being torn down
-        // and its registry will be cleared, so Allow/Deny clicks
-        // would 404. Auto-closing is the user-visible signal that
-        // the cancel actually took effect.
-        pendingConfirms.removeAll()
+        detachLocalStream()
         // ADR-0021 M4: brief cancelling state → idle.
         MarvinBridge.shared.marvinState = "cancelling"
         Task { @MainActor in
@@ -833,6 +814,34 @@ final class ChatPreviewModel {
                 }
             }
         }
+    }
+
+    /// Stop consuming the local stream WITHOUT telling the sidecar to end the
+    /// turn. `runDetachedTurn` runs the SDK to completion independent of the
+    /// HTTP/SSE lifecycle by design (see `turn-orchestrator.ts`) specifically
+    /// so a turn survives its viewer going away — that's the whole point of
+    /// `attachLive` and the ADR-0043 announce loop, which already resume a
+    /// server-initiated background job across a session switch. A turn YOU
+    /// started deserves the same treatment. Only the explicit Stop button
+    /// (`cancel()`, below) should reach `/api/chat/cancel` — it used to be
+    /// the only caller of this teardown, so `hydrate()` calling `cancel()`
+    /// on every session switch was silently killing the turn you just left.
+    private func detachLocalStream() {
+        activeTask?.cancel()
+        activeTask = nil
+        isSending = false
+        currentActivity = nil
+        // Queued messages were typed against the session we're leaving —
+        // drop them rather than misdirect them into the next one.
+        queuedMessages.removeAll()
+        // Seal any still-streaming rows so the chat doesn't sit there
+        // showing "streaming…" forever on the row that was mid-write.
+        for i in messages.indices where messages[i].isStreaming {
+            messages[i].isStreaming = false
+        }
+        // Drop any open confirm sheet for the session we're leaving —
+        // hydrate() is about to load a different session's own state.
+        pendingConfirms.removeAll()
     }
 
     func clear() {
@@ -928,10 +937,13 @@ final class ChatPreviewModel {
             return
         }
 
-        // Cancel any in-flight turn from the previous session so the
-        // user doesn't see foreign events landing into the freshly
-        // hydrated list.
-        cancel()
+        // Stop consuming the previous session's stream so the user doesn't
+        // see foreign events landing into the freshly hydrated list. This
+        // must NOT cancel the turn server-side (that's `cancel()`, reserved
+        // for the explicit Stop button) — a turn you started should keep
+        // running in the background and be resumable via `attachLive` when
+        // you switch back, same as a server-initiated background job.
+        detachLocalStream()
         resumeTask?.cancel()
         resumeTask = nil
 
