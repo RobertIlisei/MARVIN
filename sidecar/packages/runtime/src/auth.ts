@@ -292,10 +292,14 @@ export function buildSubprocessEnv(): NodeJS.ProcessEnv {
       const key =
         (cfg?.mode === "api-key" ? cfg.apiKey : undefined) ||
         trimEnv("ANTHROPIC_API_KEY");
-      env.ANTHROPIC_API_KEY = key;
+      
       delete env.CLAUDE_CODE_OAUTH_TOKEN;
       if (cfg?.mode === "api-key" && cfg.provider === "openrouter") {
-        env.ANTHROPIC_BASE_URL = "https://openrouter.ai/api/v1";
+        env.ANTHROPIC_API_KEY = key ? `sk-ant-api03-${key}` : undefined;
+        const port = process.env.PORT || "3030";
+        env.ANTHROPIC_BASE_URL = `http://localhost:${port}/api/proxy/openrouter`;
+      } else {
+        env.ANTHROPIC_API_KEY = key;
       }
       return env;
     }
