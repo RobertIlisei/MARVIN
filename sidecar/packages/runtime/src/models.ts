@@ -138,14 +138,15 @@ function buildAuthHeaders(): Record<string, string> | null {
 interface AnthropicModelsResponse {
   data: Array<{
     id: string;
-    type: string;
+    type?: string;
     display_name?: string;
     name?: string;
     created_at?: string;
+    created?: number; // OpenRouter uses unix timestamp
   }>;
-  has_more: boolean;
-  first_id: string | null;
-  last_id: string | null;
+  has_more?: boolean;
+  first_id?: string | null;
+  last_id?: string | null;
 }
 
 /**
@@ -210,7 +211,7 @@ export async function listModels(options: {
           id: m.id,
           displayName: m.display_name ?? m.name ?? m.id,
           tier: tierFor(m.id),
-          createdAt: m.created_at ?? null,
+          createdAt: m.created_at ?? (m.created ? new Date(m.created * 1000).toISOString() : null),
           live: true,
         });
       }

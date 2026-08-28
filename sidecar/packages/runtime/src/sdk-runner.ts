@@ -70,6 +70,7 @@ import { defaultModel } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { markTurnMutated } from "./turn-registry";
+import { buildSubprocessEnv } from "./auth";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -1254,8 +1255,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // Honeycomb configs each get their own env via `Options.env`
   // below, so they don't clobber each other. Audit finding #4.
   const { env: honeycombEnv } = computeHoneycombTelemetryEnv(cwd);
+  const authEnv = buildSubprocessEnv();
   const turnEnv: Record<string, string | undefined> = {
-    ...process.env,
+    ...authEnv,
     ...honeycombEnv,
     // ADR-0073 — keep the TodoWrite contract across the SDK 0.3 upgrade.
     // From 0.3.142, Opus 4.8+ / Sonnet 5+ sessions get NO task-tracking tool
