@@ -643,11 +643,20 @@ struct FileViewerNSView: NSViewRepresentable {
             range: fullRange
         )
 
-        guard !fileExtension.isEmpty else { return }
         // Pass the basename too so well-known extensionless files
         // (Dockerfile, Makefile, .gitignore, .env) pick up
         // language-aware highlighting.
+        //
+        // This used to `guard !fileExtension.isEmpty else { return }` FIRST,
+        // which bailed before the highlighter ever saw the filename — so
+        // every extensionless file rendered as plain text even though
+        // `RegexHighlighter.languageId` recognises Makefile / Dockerfile /
+        // .env / .gitignore by name (user, 2026-08-30: a Makefile shown
+        // unhighlighted next to the same file coloured in another IDE).
+        // The highlighter already returns nil for anything it cannot
+        // identify, so the guard was pure loss.
         let filename = (path as NSString).lastPathComponent
+        guard !fileExtension.isEmpty || !filename.isEmpty else { return }
         guard let spans = SyntaxHighlighter.highlight(
             content: content,
             fileExtension: fileExtension,

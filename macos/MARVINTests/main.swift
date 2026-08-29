@@ -1832,6 +1832,38 @@ runner.suite("BottomPanelMigration") {
     }
 }
 
+runner.suite("LanguageDetection") {
+    // 2026-08-30 — a Makefile rendered as plain text next to the same file
+    // coloured in another IDE. The language WAS recognised; the viewer bailed
+    // on `fileExtension.isEmpty` before asking. These pin the by-name set so
+    // the detection half can't silently regress.
+    func lang(_ name: String) -> String? {
+        let ext = (name as NSString).pathExtension
+        return LanguageDetection.languageId(forExtension: ext, filename: name)
+    }
+    runner.test("recognises extensionless files by name") {
+        runner.expect(lang("Makefile"), equals: "makefile", "Makefile")
+        runner.expect(lang("GNUmakefile"), equals: "makefile", "GNUmakefile")
+        runner.expect(lang("Makefile.local"), equals: "makefile", "Makefile.local")
+        runner.expect(lang("Dockerfile"), equals: "dockerfile", "Dockerfile")
+        runner.expect(lang("Dockerfile.prod"), equals: "dockerfile", "Dockerfile.prod")
+        runner.expect(lang(".env"), equals: "bash", ".env")
+        runner.expect(lang(".gitignore"), equals: "bash", ".gitignore")
+    }
+    runner.test("covers the languages this project is actually made of") {
+        // The user's project: 2216 .java, 327 .sql, 413 .ts, 61 .yaml.
+        runner.expect(lang("Service.java"), equals: "java", "java")
+        runner.expect(lang("V1__init.sql"), equals: "sql", "sql")
+        runner.expect(lang("app.ts"), equals: "typescript", "ts")
+        runner.expect(lang("compose.yaml"), equals: "yaml", "yaml")
+        runner.expect(lang("pom.xml"), equals: "xml", "xml")
+    }
+    runner.test("returns nil for genuinely unknown files, so callers can fall back") {
+        runner.expect(lang("photo.heic") == nil, "unknown extension")
+        runner.expect(lang("Anexa") == nil, "unknown extensionless name")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
