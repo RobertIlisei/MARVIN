@@ -15,6 +15,7 @@
 // will have the flag set.
 
 import Foundation
+import MARVINLogic
 import SwiftUI
 
 @MainActor
@@ -161,17 +162,38 @@ final class NativePrefs {
         }
     }
 
+    /// Toolbar / menu semantics. A bottom key selects its tab, or closes the
+    /// panel when that tab is already showing (plan §D / VS Code).
     func togglePane(_ key: String) {
         var next = panes
         switch key {
-        case "files":    next.files    = !next.files
-        case "brain":    next.brain    = !next.brain
-        case "graph":    next.graph    = !next.graph
-        case "preview":  next.preview  = !next.preview
-        case "terminal": next.terminal = !next.terminal
-        case "problems": next.problems = !next.problems
-        default: return
+        case "files":    next.files = !next.files
+        case "brain":    next.brain = !next.brain
+        default:
+            guard let tab = BottomPanelTab(rawValue: key) else { return }
+            next.bottom = next.bottom.activating(tab)
         }
+        setPanes(next)
+    }
+
+    /// Producer semantics — a build task, the diagnostics pill. Shows the
+    /// tab and never closes the panel (a task must not hide its own output).
+    func revealPane(_ tab: BottomPanelTab) {
+        var next = panes
+        next.bottom = next.bottom.revealing(tab)
+        setPanes(next)
+    }
+
+    /// ⌘J — open/close the bottom panel, keeping the selected tab.
+    func toggleBottomPanel() {
+        var next = panes
+        next.bottom = next.bottom.toggled()
+        setPanes(next)
+    }
+
+    func selectBottomTab(_ tab: BottomPanelTab) {
+        var next = panes
+        next.bottom = BottomPanelState(isOpen: true, activeTab: tab)
         setPanes(next)
     }
 
@@ -392,16 +414,33 @@ private struct PanesCodable: Codable {
     var files: Bool; var brain: Bool; var graph: Bool
     var preview: Bool; var terminal: Bool
     var problems: Bool?  // optional for backward-compat with old UserDefaults payloads
+    /// Plan §D — the tabbed panel's own shape. The four booleans above are
+    /// still WRITTEN as a projection so an older build reads a sane layout
+    /// instead of an empty panel; reading prefers these when present.
+    var bottomOpen: Bool?
+    var bottomTab: String?
 
     init(from s: MarvinBridge.PaneState) {
-        files = s.files; brain = s.brain; graph = s.graph
-        preview = s.preview; terminal = s.terminal; problems = s.problems
+        files = s.files; brain = s.brain
+        let p = BottomPanelMigration.project(s.bottom)
+        graph = p.graph; preview = p.preview; terminal = p.terminal; problems = p.problems
+        bottomOpen = s.bottom.isOpen
+        bottomTab = s.bottom.activeTab.rawValue
     }
 
     func toState() -> MarvinBridge.PaneState {
         var s = MarvinBridge.PaneState()
-        s.files = files; s.brain = brain; s.graph = graph
-        s.preview = preview; s.terminal = terminal; s.problems = problems ?? false
+        s.files = files; s.brain = brain
+        let stored = bottomTab.flatMap(BottomPanelTab.init(rawValue:))
+        if let open = bottomOpen, let stored {
+            s.bottom = BottomPanelState(isOpen: open, activeTab: stored)
+        } else {
+            // Legacy payload: derive the panel from whichever panes were on.
+            s.bottom = BottomPanelMigration.resolve(
+                terminal: terminal, problems: problems ?? false,
+                preview: preview, graph: graph, stored: stored
+            )
+        }
         return s
     }
 

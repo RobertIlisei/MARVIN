@@ -14,6 +14,7 @@
 
 import AppKit
 import STTextView
+import MARVINLogic
 import SwiftUI
 
 /// Wraps an action that opens a SwiftUI window by id. `@Environment`
@@ -602,19 +603,33 @@ struct MARVINApp: App {
                 .keyboardShortcut("b", modifiers: [.command])
 
                 Button("Toggle Knowledge Graph") {
-                    NativePrefs.shared.togglePane("graph")
+                    NativePrefs.shared.selectBottomTab(.graph)
                 }
                 .keyboardShortcut("g", modifiers: [.command])
                 .disabled(MarvinBridge.shared.projectWorkDir == nil)
 
-                Button("Toggle Terminal") {
-                    NativePrefs.shared.togglePane("terminal")
+                // Plan §D — ⌘J is now the PANEL toggle (VS Code), keeping
+                // whichever tab is selected; the tabs get their own keys.
+                Button("Toggle Bottom Panel") {
+                    NativePrefs.shared.toggleBottomPanel()
                 }
                 .keyboardShortcut("j", modifiers: [.command])
                 .disabled(MarvinBridge.shared.projectWorkDir == nil)
 
+                Button("Terminal") {
+                    NativePrefs.shared.selectBottomTab(.terminal)
+                }
+                .keyboardShortcut("`", modifiers: [.control])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
+                Button("Problems") {
+                    NativePrefs.shared.selectBottomTab(.problems)
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(MarvinBridge.shared.projectWorkDir == nil)
+
                 Button("Toggle Browser Preview") {
-                    NativePrefs.shared.togglePane("preview")
+                    NativePrefs.shared.selectBottomTab(.preview)
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
                 .disabled(MarvinBridge.shared.projectWorkDir == nil)

@@ -128,11 +128,18 @@ jobs:
           set -euo pipefail
           cd macos
           xcodegen generate
+          # SwiftTerm (ADR-0078) ships `SwiftTermBuildInfoPlugin`, a SPM
+          # build-tool plugin. xcodebuild refuses to run a package plugin it
+          # has not been told to trust and fails with "Validate plug-in …"
+          # — there is no interactive trust prompt on a CI runner. The flag
+          # is the sanctioned non-interactive equivalent; the plugin only
+          # stamps a build-info source file.
           xcodebuild \
             -project MARVIN.xcodeproj \
             -scheme MARVIN \
             -configuration Release \
             -derivedDataPath build \
+            -skipPackagePluginValidation \
             -quiet \
             build
           built="build/Build/Products/Release/MARVIN.app"

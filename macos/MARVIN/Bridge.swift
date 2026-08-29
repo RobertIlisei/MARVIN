@@ -235,10 +235,16 @@ final class MarvinBridge {
     struct PaneState: Equatable {
         var files: Bool = true
         var brain: Bool = true
-        var graph: Bool = false
-        var preview: Bool = false
-        var terminal: Bool = false
-        var problems: Bool = false
+        /// The bottom area is ONE tabbed panel (plan §D), not four
+        /// independent panes. `graph`/`preview`/`terminal`/`problems` are
+        /// derived from it so existing call sites and the legacy persisted
+        /// payload keep working; the panel is the source of truth.
+        var bottom = BottomPanelState()
+
+        var graph: Bool { bottom.isOpen && bottom.activeTab == .graph }
+        var preview: Bool { bottom.isOpen && bottom.activeTab == .preview }
+        var terminal: Bool { bottom.isOpen && bottom.activeTab == .terminal }
+        var problems: Bool { bottom.isOpen && bottom.activeTab == .problems }
     }
     /// ADR-0021 M1: writable by NativePrefs directly.
     var panes: PaneState = PaneState()
@@ -390,7 +396,7 @@ final class MarvinBridge {
         // Ensure the preview pane is actually visible — otherwise
         // "Open in Browser" silently does nothing the first time.
         if !panes.preview {
-            NativePrefs.shared.togglePane("preview")
+            NativePrefs.shared.revealPane(.preview)
         }
     }
 
