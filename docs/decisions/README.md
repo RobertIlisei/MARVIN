@@ -90,6 +90,9 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0075](./0075-sidecar-drops-browser-ui.md) | Sidecar drops the browser UI; native macOS app is the only client | Accepted | 2026-08-29 |
 | [0076](./0076-mid-turn-steering-streaming-input.md) | Mid-turn steering: messages are delivered into the running turn (streaming input) | Accepted | 2026-08-29 |
 | [0077](./0077-ai-native-sdlc-selective-adoption.md) | Selective adoption of the AI-native SDLC playbook — evals in CI, test-weakening + publish guards; artifact set rejected | Accepted | 2026-08-29 |
+| [0079](./0079-subagent-tool-rename-and-rails.md) | The subagent tool renamed `Task` → `Agent` and five guards went dead; Golden Rule 1 unchanged, depth/concurrency/`maxTurns` rails made mechanical | Accepted | 2026-08-29 |
+| [0080](./0080-background-subagents-and-builtin-readonly-agents.md) | Scouts run in the background — the runner defers `result` while background tasks are live instead of killing them; `Explore`/`Plan` sanctioned | Accepted | 2026-08-29 |
+| [0081](./0081-implementer-subagents-on-isolated-worktrees.md) | Implementer subagents on isolated worktrees — Golden Rule 1 amended from "cannot mutate the workspace" to "cannot mutate the main tree"; MARVIN names the branch, the user merges | Accepted | 2026-08-29 |
 
 ## Template
 

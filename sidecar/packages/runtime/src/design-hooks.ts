@@ -38,6 +38,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { appendAutoAuditEntry, type AutoAuditEntryKind } from "./auto-audit";
+import { isSubagentDispatch } from "@marvin/tools/policy";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -258,7 +259,8 @@ export function recordAllowedTool(
     }
     return;
   }
-  if (toolName === "Task") {
+  // Both spellings: the SDK renamed Task → Agent (see SUBAGENT_DISPATCH_TOOLS).
+  if (isSubagentDispatch(toolName)) {
     const description =
       typeof toolInput.description === "string" ? toolInput.description : "";
     if (description.trim().toLowerCase().startsWith("advisor:")) {
@@ -447,6 +449,20 @@ export function makeDesignHooksPreToolUse(args: {
   return async (input, toolUseId) => {
     if (input.hook_event_name !== "PreToolUse") return {} as HookJSONOutput;
     const evt = input as PreToolUseHookInput;
+    // ADR-0081 observability — the hook is the FIRST MARVIN code a subagent's
+    // tool call reaches (canUseTool is only consulted for gate-worthy tools).
+    // One line per subagent call, so "the CLI denied it before we saw it" and
+    // "we saw it and denied it" are distinguishable from the sidecar log.
+    const agentId = (input as { agent_id?: string }).agent_id;
+    if (agentId) {
+      logDesignHookEvent({
+        kind: "hook.subagent",
+        turnId,
+        tool: evt.tool_name,
+        agentId,
+        agentType: (input as { agent_type?: string }).agent_type ?? null,
+      });
+    }
     const safeInput =
       evt.tool_input && typeof evt.tool_input === "object" && !Array.isArray(evt.tool_input)
         ? (evt.tool_input as Record<string, unknown>)
@@ -658,8 +674,8 @@ function checkAdvisorOnAdrTrigger(
     message:
       `advisor-on-ADR-trigger: the target path matches the "${triggerLabel}" ` +
       "ADR trigger pattern, and no advisor consult has fired this turn. " +
-      "Spawn a Task subagent first:\n\n" +
-      "    tool_use Task:\n" +
+      "Spawn a subagent first:\n\n" +
+      "    tool_use Agent:\n" +
       '      subagent_type: "general-purpose"\n' +
       '      model:          "opus"\n' +
       '      description:    "advisor: <one-line topic>"\n' +

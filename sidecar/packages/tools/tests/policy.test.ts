@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_TOOL_NAMES, mcpToolPolicy, toolPolicy } from "../src/policy";
+import { KNOWN_TOOL_NAMES, isSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
 
 describe("toolPolicy — Bash hard-deny coverage", () => {
   // Audit finding #2: `\brm\s+-rf\s+\/` only matched a literal `/` after
@@ -134,38 +134,62 @@ describe("toolPolicy — Bash run_in_background hard-deny (ADR-0032)", () => {
   });
 });
 
-describe("toolPolicy — Task subagent gating (audit finding #3)", () => {
-  it("auto-allows sanctioned `scout` subagent", () => {
-    const result = toolPolicy("Task", { subagent_type: "scout" });
-    expect(result.class).toBe("auto");
-  });
-
-  it("auto-allows sanctioned `advisor` subagent (ADR-0033)", () => {
-    const result = toolPolicy("Task", { subagent_type: "advisor" });
-    expect(result.class).toBe("auto");
-  });
-
-  it("auto-allows sanctioned `general-purpose` subagent", () => {
-    const result = toolPolicy("Task", {
-      subagent_type: "general-purpose",
+// Both spellings of the subagent-dispatch tool. The SDK renamed Task → Agent
+// in Claude Code v2.1.63 and the gate kept matching the literal "Task", so
+// dispatch went ungated (Agent was not even in KNOWN_TOOL_NAMES, which meant
+// the not-in-the-gated-set blanket-allow). Every case below runs under BOTH
+// names so the rename cannot silently disarm the gate a second time.
+describe.each(["Task", "Agent"] as const)(
+  "toolPolicy — %s subagent gating (audit finding #3)",
+  (tool) => {
+    it("auto-allows sanctioned `scout` subagent", () => {
+      expect(toolPolicy(tool, { subagent_type: "scout" }).class).toBe("auto");
     });
-    expect(result.class).toBe("auto");
-  });
 
-  it("auto-allows sanctioned `graph-extractor` subagent (ADR-0058)", () => {
-    const result = toolPolicy("Task", { subagent_type: "graph-extractor" });
-    expect(result.class).toBe("auto");
-  });
+    it("auto-allows sanctioned `advisor` subagent (ADR-0033)", () => {
+      expect(toolPolicy(tool, { subagent_type: "advisor" }).class).toBe("auto");
+    });
 
-  it("requires confirm for an unknown subagent_type", () => {
-    const result = toolPolicy("Task", { subagent_type: "rogue" });
-    expect(result.class).toBe("confirm");
-    expect(result.reason).toContain("rogue");
-  });
+    it("auto-allows sanctioned `general-purpose` subagent", () => {
+      expect(toolPolicy(tool, { subagent_type: "general-purpose" }).class).toBe("auto");
+    });
 
-  it("requires confirm for a bare Task with no subagent_type", () => {
-    const result = toolPolicy("Task", {});
-    expect(result.class).toBe("confirm");
+    it("auto-allows sanctioned `graph-extractor` subagent (ADR-0058)", () => {
+      expect(toolPolicy(tool, { subagent_type: "graph-extractor" }).class).toBe("auto");
+    });
+
+    it("auto-allows Claude Code's built-in read-only Explore / Plan agents (ADR-0080)", () => {
+      expect(toolPolicy(tool, { subagent_type: "Explore" }).class).toBe("auto");
+      expect(toolPolicy(tool, { subagent_type: "Plan" }).class).toBe("auto");
+      expect(toolPolicy(tool, { subagent_type: "implementer" }).class).toBe("auto"); // ADR-0081
+      // The catch-all built-in has every tool; it stays gated.
+      expect(toolPolicy(tool, { subagent_type: "claude" }).class).toBe("confirm");
+    });
+
+    it("requires confirm for an unknown subagent_type", () => {
+      const result = toolPolicy(tool, { subagent_type: "rogue" });
+      expect(result.class).toBe("confirm");
+      expect(result.reason).toContain("rogue");
+    });
+
+    it("requires confirm for a bare dispatch with no subagent_type", () => {
+      const result = toolPolicy(tool, {});
+      expect(result.class).toBe("confirm");
+      expect(result.reason).toContain(tool);
+    });
+
+    it("is in the gated set, so the gate never blanket-allows it", () => {
+      expect(KNOWN_TOOL_NAMES.has(tool)).toBe(true);
+      expect(isSubagentDispatch(tool)).toBe(true);
+    });
+  },
+);
+
+describe("isSubagentDispatch", () => {
+  it("does not match a lookalike tool name", () => {
+    for (const name of ["TaskCreate", "TaskUpdate", "TodoWrite", "AgentTool", "agent"]) {
+      expect(isSubagentDispatch(name)).toBe(false);
+    }
   });
 });
 
@@ -211,6 +235,7 @@ describe("KNOWN_TOOL_NAMES export (audit finding #21)", () => {
       "WebFetch",
       "WebSearch",
       "Task",
+      "Agent",
       "NotebookEdit",
     ] as const) {
       expect(KNOWN_TOOL_NAMES.has(name)).toBe(true);

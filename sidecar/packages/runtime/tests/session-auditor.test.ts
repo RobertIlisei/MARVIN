@@ -374,7 +374,18 @@ describe("readAuditReport (path containment)", () => {
 
 describe("AUDITOR_DISALLOWED_TOOLS (read-only contract, ADR-0059 §2)", () => {
   it("refuses every mutator, the web, and agent spawning", () => {
-    for (const t of ["Edit", "Write", "NotebookEdit", "Bash", "WebFetch", "WebSearch", "Task"]) {
+    // "Agent" is the post-v2.1.63 name for "Task"; disallowedTools matches on
+    // the literal name the model emits, so both must be listed.
+    for (const t of [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "Agent",
+    ]) {
       expect(AUDITOR_DISALLOWED_TOOLS, t).toContain(t);
     }
   });

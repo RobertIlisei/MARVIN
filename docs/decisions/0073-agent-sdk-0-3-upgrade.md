@@ -34,6 +34,14 @@ releases into 0.3, and predating `TodoWrite`'s own deprecation notice
 | Peer `@anthropic-ai/sdk` ≥ 0.93 | Was 0.80/0.81; only `refresh-docs.ts` imports it | Bumped to 0.120 |
 | `graphify-bridge` pinned its own `^0.2.113` | Two SDK copies in one process — `createSdkMcpServer` from one, `query` from the other | Aligned to 0.3.245 |
 
+> **Correction (2026-08-29, [ADR-0079](./0079-subagent-tool-rename-and-rails.md)):**
+> the subagent-tool half of the paragraph below is **wrong**. It was read off
+> `system/init`, which still advertises the old name. The `tool_use` blocks the
+> gate actually sees carry `Agent` — Claude Code renamed the tool in v2.1.63,
+> and five of MARVIN's guards silently stopped matching. The `TodoWrite` half
+> stands. Verify a tool-name contract against a `tool_use` block from a real
+> transcript, never against `system/init`.
+
 **Verified live**, not inferred: a 0.3.245 session on `claude-sonnet-5` with the
 two env flags reports **113 tools, subagent tool `Task`, todo family
 `TodoWrite` only** — the wire name MARVIN's gate matches on

@@ -9,21 +9,22 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import {
+  cancelBackgroundJob,
+  listBackgroundJobs,
+  MAX_JOBS_PER_SESSION,
+  startBackgroundJob,
+} from "./background-jobs";
 
 import {
+  cancelWakeup,
+  listWakeups,
   MAX_DELAY_SECONDS,
   MAX_PENDING_PER_SESSION,
   MIN_DELAY_SECONDS,
-  cancelWakeup,
-  listWakeups,
   scheduleWakeup,
 } from "./wakeup-scheduler";
-import {
-  MAX_JOBS_PER_SESSION,
-  cancelBackgroundJob,
-  listBackgroundJobs,
-  startBackgroundJob,
-} from "./background-jobs";
+import { createWorktree, describeWorktree, listWorktrees, removeWorktree } from "./worktrees";
 
 /** Per-turn identity + config the wakeup tools capture for the future turn. */
 export interface WakeupToolContext {
@@ -196,6 +197,44 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     },
   );
 
+  // ADR-0081 — worktrees for implementer subagents. MARVIN creates and names
+  // them (never the subagent), dispatches an `implementer` with the path in
+  // its prompt, and the gate confines that agent's writes to the tree.
+  const worktreeCreate = tool(
+    "worktree_create",
+    "Create an isolated git worktree for ONE bounded implementation task, on a fresh branch cut from the current HEAD (ADR-0081). Returns the absolute path and branch. Then dispatch an `implementer` subagent whose prompt states that path verbatim — the permission gate binds the agent to it and allows writes ONLY there. Use when two or more independent implementation tasks can run at once, or to keep building while you continue other work. The result is a branch the USER merges; nothing merges automatically.",
+    {
+      task: z.string().min(3).max(200).describe("One line: what the implementer will build. Becomes the branch/directory slug."),
+    },
+    async ({ task }) => {
+      try {
+        const rec = createWorktree(ctx.cwd, task);
+        return { content: [{ type: "text", text: `Worktree ready.\npath: ${rec.path}\nbranch: ${rec.branch}\nbase: ${rec.base}\n\nDispatch: Agent { subagent_type: "implementer", prompt: "Your worktree is ${rec.path} (branch ${rec.branch}). Task: ${task} …" }` }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `worktree_create failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    },
+  );
+  const worktreeList = tool(
+    "worktree_list",
+    "List the implementer worktrees registered for this project, with their branch and how many commits each is ahead of its base. Use to report finished work for the user to review (`git diff <base>...<branch>`) and merge.",
+    {},
+    async () => {
+      const all = listWorktrees(ctx.cwd);
+      if (all.length === 0) return { content: [{ type: "text", text: "No worktrees registered." }] };
+      return { content: [{ type: "text", text: all.map((w) => describeWorktree(ctx.cwd, w)).join("\n") }] };
+    },
+  );
+  const worktreeRemove = tool(
+    "worktree_remove",
+    "Remove a worktree CHECKOUT after the user has merged or rejected its branch. The branch itself is kept — deleting it is the user's call. Never remove a worktree whose implementer is still running.",
+    { slug: z.string().min(1).describe("The worktree slug from worktree_list.") },
+    async ({ slug }) => {
+      const rec = removeWorktree(ctx.cwd, slug);
+      return { content: [{ type: "text", text: rec ? `Removed checkout ${rec.path}; branch ${rec.branch} kept.` : `No worktree named ${slug}.` }] };
+    },
+  );
+
   return createSdkMcpServer({
     name: "marvin-control",
     version: "0.0.1",
@@ -203,6 +242,6 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     // checkback guard (ADR-0055) relies on `schedule_wakeup` being callable
     // without a discovery step; a deferred tool is an unarmed promise.
     alwaysLoad: true,
-    tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool],
+    tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool, worktreeCreate, worktreeList, worktreeRemove],
   });
 }

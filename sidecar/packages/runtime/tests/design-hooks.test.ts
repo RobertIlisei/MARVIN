@@ -359,6 +359,25 @@ describe("design-hooks · advisor-on-ADR-trigger", () => {
     expect(result).toBeNull();
   });
 
+  // Task → Agent rename (Claude Code v2.1.63): the advisor design hook matched
+  // the literal "Task", so it stopped counting advisor consults entirely.
+  it("counts an advisor consult dispatched under the `Agent` tool name", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", {
+      subagent_type: "advisor",
+      description: "advisor: redesign auth",
+    });
+    expect(ctx.advisorCallCount).toBe(1);
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Edit",
+        toolInput: { file_path: join(cwd, "src", "auth", "login.ts") },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
   it("doesn't count a non-advisor Task as satisfying the rule", () => {
     const ctx = createTurnDesignContext(turnId, cwd);
     // A scout Task or a generic Task with no advisor: prefix shouldn't

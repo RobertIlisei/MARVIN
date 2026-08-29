@@ -51,6 +51,7 @@ export type AutoAuditEntryKind =
   | "WebFetch"
   | "WebSearch"
   | "Task"
+  | "Agent"
   | "NotebookEdit";
 
 export interface AutoAuditEntry {
@@ -73,7 +74,7 @@ const TOOLS_WORTH_LOGGING: ReadonlySet<AutoAuditEntryKind> = new Set([
   "Edit",
   "Write",
   "Bash",
-  // NotebookEdit + Task fall through the gate via the policy module
+  // NotebookEdit + Task/Agent fall through the gate via the policy module
   // and don't reach the bypass branch we hook below; logging them
   // would be redundant.
 ]);
