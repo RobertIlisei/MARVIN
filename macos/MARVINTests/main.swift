@@ -1618,6 +1618,122 @@ runner.suite("SSEFrameParser") {
     }
 }
 
+runner.suite("TerminalEnvironment") {
+    runner.test("strips MARVIN's own credentials and keeps the user's") {
+        let env = TerminalEnvironment.make(
+            from: ["ANTHROPIC_API_KEY": "sk", "CLAUDE_CODE_OAUTH_TOKEN": "t", "NPM_TOKEN": "keep", "HOME": "/Users/x", "PATH": "/usr/bin:/bin"],
+            columns: 120, rows: 40
+        )
+        runner.expect(env["ANTHROPIC_API_KEY"] == nil, "api key scrubbed")
+        runner.expect(env["CLAUDE_CODE_OAUTH_TOKEN"] == nil, "oauth token scrubbed")
+        runner.expect(env["NPM_TOKEN"], equals: "keep", "user token preserved")
+        runner.expect(env["TERM"], equals: "xterm-256color", "TERM set")
+        runner.expect(env["COLUMNS"], equals: "120", "COLUMNS set")
+        runner.expect(env["PATH"]?.hasPrefix("/opt/homebrew/bin:") == true, "homebrew prepended")
+        runner.expect(env["PATH"]?.contains("/Users/x/.local/bin") == true, "user local bin added")
+        runner.expect(env["LANG"], equals: "en_US.UTF-8", "LANG defaulted")
+    }
+    runner.test("login shell argv0") {
+        let sh = TerminalEnvironment.shell(from: ["SHELL": "/bin/zsh"])
+        runner.expect(sh.path, equals: "/bin/zsh", "path")
+        runner.expect(sh.argv0, equals: "-zsh", "argv0 marks a login shell")
+        runner.expect(TerminalEnvironment.shell(from: [:]).path, equals: "/bin/zsh", "default shell")
+    }
+}
+
+/// Spawn a deterministic /bin/sh on a pty and collect its output.
+final class PTYHarness {
+    let pty: PTYProcess
+    private let buffer = Locked<String>("")
+    private let exitStatus = Locked<Int32?>(nil)
+    init(cwd: String = "/tmp", columns: Int = 80, rows: Int = 24) throws {
+        var env = TerminalEnvironment.make(from: ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()], columns: columns, rows: rows)
+        env["PS1"] = ""  // no prompt noise in the output we assert on
+        pty = try PTYProcess(executable: "/bin/sh", argv0: "sh", environment: env, workingDirectory: cwd, columns: columns, rows: rows)
+        pty.onOutput = { [buffer] data in buffer.set(buffer.get() + String(decoding: data, as: UTF8.self)) }
+        pty.onExit = { [exitStatus] st in exitStatus.set(st) }
+    }
+    var output: String { buffer.get() }
+    var exited: Int32? { exitStatus.get() }
+    /// Poll until `output` contains `needle` (the run loop keeps spinning).
+    @discardableResult
+    func wait(for needle: String, timeout: TimeInterval = 5) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if buffer.get().contains(needle) { return true }
+            pumpRunLoop(for: 0.05)
+        }
+        return false
+    }
+    func waitExit(timeout: TimeInterval = 5) -> Int32? {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end, exitStatus.get() == nil { pumpRunLoop(for: 0.05) }
+        return exitStatus.get()
+    }
+}
+
+runner.suite("PTYProcess") {
+    runner.test("a real tty: output arrives and the shell sees a terminal") {
+        guard let h = try? PTYHarness() else { runner.expect(false, "spawn"); return }
+        h.pty.write("echo HELLO_$((1+1)); [ -t 0 ] && echo IS_TTY\n")
+        runner.expect(h.wait(for: "HELLO_2"), "echo output received")
+        runner.expect(h.wait(for: "IS_TTY"), "stdin is a tty")
+        h.pty.terminate()
+    }
+
+    runner.test("cd persists across commands — the thing the old terminal could not do") {
+        guard let h = try? PTYHarness() else { runner.expect(false, "spawn"); return }
+        h.pty.write("cd /usr\n")
+        h.pty.write("pwd\n")
+        runner.expect(h.wait(for: "/usr\n") || h.wait(for: "/usr\r\n"), "pwd after cd shows /usr")
+        h.pty.terminate()
+    }
+
+    // THE gate for the rest of the terminal work: without a controlling
+    // tty there is no foreground process group and 0x03 is swallowed.
+    runner.test("Ctrl-C interrupts the foreground job") {
+        guard let h = try? PTYHarness() else { runner.expect(false, "spawn"); return }
+        h.pty.write("sleep 30\n")
+        pumpRunLoop(for: 0.4)
+        h.pty.write(Data([0x03]))
+        h.pty.write("echo ALIVE_AFTER\n")
+        runner.expect(h.wait(for: "ALIVE_AFTER", timeout: 3), "shell answers within 3s — sleep was killed")
+        h.pty.terminate()
+    }
+
+    runner.test("window size reaches the child, before and after resize") {
+        guard let h = try? PTYHarness(columns: 100, rows: 30) else { runner.expect(false, "spawn"); return }
+        h.pty.write("stty size\n")
+        runner.expect(h.wait(for: "30 100"), "initial 30x100")
+        h.pty.resize(columns: 132, rows: 43)
+        h.pty.write("stty size\n")
+        runner.expect(h.wait(for: "43 132"), "after resize 43x132")
+        h.pty.terminate()
+    }
+
+    runner.test("exit status is reported once, with the code") {
+        guard let h = try? PTYHarness() else { runner.expect(false, "spawn"); return }
+        h.pty.write("exit 3\n")
+        let st = h.waitExit()
+        runner.expect(st != nil, "onExit fired")
+        runner.expect(st.flatMap(PTYProcess.exitCode(from:)), equals: 3, "exit code 3")
+        runner.expect(!h.pty.isRunning, "isRunning false after exit")
+    }
+
+    runner.test("terminate() hangs the session up and nothing is left running") {
+        guard let h = try? PTYHarness() else { runner.expect(false, "spawn"); return }
+        h.pty.write("sleep 60\n")
+        pumpRunLoop(for: 0.3)
+        let pid = h.pty.pid
+        h.pty.terminate(grace: 0.5)
+        let st = h.waitExit(timeout: 4)
+        runner.expect(st != nil, "shell exited after SIGHUP")
+        pumpRunLoop(for: 0.3)
+        // The whole process group must be gone — no orphan `sleep`.
+        runner.expect(kill(-pid, 0) != 0, "process group gone (kill -pid,0 fails)")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

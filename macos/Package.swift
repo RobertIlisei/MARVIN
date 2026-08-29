@@ -167,6 +167,16 @@ let package = Package(
             url: "https://github.com/tree-sitter/tree-sitter-bash.git",
             from: "0.23.0"
         ),
+
+        // ADR-0078 — SwiftTerm is the terminal RENDERER only: a VT100/xterm
+        // state machine + NSView. The pty and the shell are MARVIN's own
+        // (`MARVINLogic/PTYProcess`), so `LocalProcess*` is not used — that
+        // keeps env scrubbing, teardown and tests in code we own. Pinned to
+        // a minor: the delegate surface is stable, majors are not.
+        .package(
+            url: "https://github.com/migueldeicaza/SwiftTerm.git",
+            from: "1.20.0"
+        ),
     ],
     targets: [
         // ADR-0022: pure-logic library. Holds helpers that have no UI
@@ -251,6 +261,7 @@ let package = Package(
                 .product(name: "TreeSitterC", package: "tree-sitter-c"),
                 .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
                 .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             // SPM looks for Sources/MARVIN by default; we keep
             // sources at macos/MARVIN to match the Xcode

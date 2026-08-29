@@ -1,66 +1,46 @@
-// TerminalPaneView — Phase 5e. Native peer of the web app's
-// Terminal (sidecar/src/components/terminal/terminal.tsx).
+// TerminalPaneView — a real terminal (ADR-0078).
 //
-// Design choice: the existing `/api/terminal/run` endpoint is a
-// one-shot command runner streaming SSE events (started / stdout /
-// stderr / exit). It is NOT a PTY. So this surface is a "command
-// runner with scrollback", not a fully interactive shell. That
-// matches the web peer exactly. A real PTY-backed interactive
-// shell would need server-side PTY plumbing + SwiftTerm — both
-// big lifts deferred to a future phase.
+// Until 2026-08-29 this pane ran every command as a fresh `$SHELL -c`
+// through the sidecar's `/api/terminal/run` and rendered the SSE stream:
+// `cd` never persisted, Ctrl-C did nothing, no colours, no `vim`, and a
+// text field under a scrollback that lost focus on every Enter. It is now a
+// persistent login shell on a pty (`MARVINLogic/PTYProcess`), rendered by
+// SwiftTerm, owned by `TerminalSessionStore` so it survives pane toggles.
 //
-// IDE convention this matches:
-//   • Bottom panel layout (VS Code's terminal pane shape)
-//   • Up/Down arrow → command history
-//   • ⌘K → clear scrollback
-//   • Run button + Enter both submit
-//   • ANSI colour passthrough is a stretch goal; we strip ANSI
-//     escape sequences to keep the renderer simple.
+// IDE conventions kept:
+//   • ⌘K clears (Ctrl-L to the shell), Stop sends Ctrl-C
+//   • build tasks type into the same shell (`bridge.pendingTerminalCommand`)
 
 import SwiftUI
-import MARVINLogic
 
 struct TerminalPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
 
-    private static let historyKey = "marvin.term.history"
-    private static let historyMax = 100
-
-    @State private var input: String = ""
-    @State private var lines: [TermLine] = []
-    @State private var history: [String] = []
-    @State private var historyIndex: Int = -1
-    @State private var isRunning: Bool = false
-    @State private var runner: TerminalRunner? = nil
-    @FocusState private var inputFocused: Bool
-
-    private struct TermLine: Identifiable {
-        let id = UUID()
-        let kind: Kind
-        let text: String
-        enum Kind { case prompt, stdout, stderr, info }
+    private var session: TerminalSession? {
+        bridge.projectWorkDir.map { TerminalSessionStore.shared.session(for: $0) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             MarvinDivider()
-            scrollback
-            MarvinDivider()
-            inputBar
+            if let session {
+                PTYTerminalView(session: session)
+            } else {
+                Text("Open a project to start a shell.")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear {
-            history = Self.loadHistory()
-            inputFocused = true
-        }
-        // M7: BuildTaskSheet injects a command via bridge.pendingTerminalCommand.
-        // We observe it here and execute it so the task runner can drive the terminal.
-        .onChange(of: bridge.pendingTerminalCommand) { _, cmd in
-            guard let cmd, !cmd.isEmpty else { return }
+        // BuildTaskSheet injects a command via bridge.pendingTerminalCommand.
+        // The store outlives the pane, so a task fired while the pane was
+        // hidden lands in the same shell the user sees when it opens.
+        .onChange(of: bridge.pendingTerminalCommand, initial: true) { _, cmd in
+            guard let cmd, !cmd.isEmpty, let session else { return }
             bridge.consumePendingTerminalCommand()
-            input = cmd
-            submit()
+            session.run(command: cmd)
         }
     }
 
@@ -82,338 +62,39 @@ struct TerminalPaneView: View {
                     .foregroundStyle(.tertiary)
             }
             Spacer()
-            if isRunning {
+            if let session {
+                if session.isRunning {
+                    Button {
+                        session.interrupt()
+                    } label: {
+                        Label("Stop", systemImage: "stop.circle.fill")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    .help("Send Ctrl-C to the shell")
+                } else {
+                    Button {
+                        session.start()
+                    } label: {
+                        Label("Restart", systemImage: "arrow.clockwise")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Start a new shell")
+                }
                 Button {
-                    runner?.cancel()
+                    session.clear()
                 } label: {
-                    Label("Stop", systemImage: "stop.circle.fill")
-                        .font(.system(size: 11))
+                    Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(.red)
-                .help("Send SIGTERM to the running command")
+                .keyboardShortcut("k", modifiers: [.command])
+                .help("Clear (⌘K)")
             }
-            Button {
-                lines.removeAll()
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .keyboardShortcut("k", modifiers: [.command])
-            .help("Clear scrollback (⌘K)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color(nsColor: .underPageBackgroundColor))
-    }
-
-    private var scrollback: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if lines.isEmpty {
-                        Text("Type a command and press ⏎. Output streams here.")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .padding(12)
-                    } else {
-                        ForEach(lines) { line in
-                            lineView(line)
-                                .id(line.id)
-                        }
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-            }
-            .onChange(of: lines.count) { _, _ in
-                withAnimation(.linear(duration: 0.05)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func lineView(_ line: TermLine) -> some View {
-        let defaultColor: Color = {
-            switch line.kind {
-            case .prompt: return Color.accentColor
-            case .stdout: return .primary
-            case .stderr: return .red
-            case .info:   return .secondary
-            }
-        }()
-        // ANSI colour passthrough — most build tools (cargo, pnpm,
-        // pytest, make, gradle) emit colourful diagnostics. Parse the
-        // SGR escapes into AttributedString runs so they render
-        // legibly instead of either stripping the codes (loses the
-        // signal) or printing raw `^[[31m` (visually garbled).
-        // Prompt + stderr + info lines keep their kind-derived base
-        // colour as the foreground default; per-character ANSI fg
-        // attributes override it where the upstream tool set one.
-        let attributed = ANSIParser.parse(line.text, defaultColor: defaultColor)
-        return Text(attributed)
-            .font(.system(size: 12, design: .monospaced))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-    }
-
-    private var inputBar: some View {
-        HStack(spacing: 8) {
-            Text("❯")
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(Color.accentColor)
-            TextField("command", text: $input)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12, design: .monospaced))
-                .focused($inputFocused)
-                .disabled(isRunning || bridge.projectWorkDir == nil)
-                .onSubmit { submit() }
-                .onKeyPress(.upArrow) {
-                    historyPrev()
-                    return .handled
-                }
-                .onKeyPress(.downArrow) {
-                    historyNext()
-                    return .handled
-                }
-            Button("Run") { submit() }
-                .buttonStyle(.bordered)
-                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty
-                          || isRunning
-                          || bridge.projectWorkDir == nil)
-                .keyboardShortcut(.defaultAction)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .underPageBackgroundColor))
-    }
-
-    // MARK: - Submit + history
-
-    private func submit() {
-        let cmd = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty, !isRunning else { return }
-        guard let cwd = bridge.projectWorkDir else { return }
-        lines.append(TermLine(kind: .prompt, text: "❯ \(cmd)"))
-        appendHistory(cmd)
-        input = ""
-        historyIndex = -1
-        isRunning = true
-
-        let r = TerminalRunner()
-        runner = r
-        // Hand the runner its own task so Stop can cancel it. Without this the
-        // Stop button called `cancel()` on a `URLSessionDataTask` that was
-        // never assigned, and did nothing.
-        let streamTask = Task {
-            await r.run(cwd: cwd, cmd: cmd) { event in
-                switch event {
-                case .started(_):
-                    break
-                case .stdout(let data):
-                    appendStreamChunk(data, kind: .stdout)
-                case .stderr(let data):
-                    appendStreamChunk(data, kind: .stderr)
-                case .exit(let code, let signal, let durationMs):
-                    // Every command is its own `$SHELL -c` until the PTY
-                    // terminal lands, so each one has an exit. A `[exit 0]`
-                    // after every successful `ls` is noise (user, 2026-08-29);
-                    // only a failure or a signal is worth a line.
-                    guard signal != nil || (code ?? 0) != 0 else { break }
-                    let dur = DurationFormat.humanize(ms: durationMs)
-                    let summary: String = {
-                        if let signal {
-                            return "[exit signal=\(signal) · \(dur)]"
-                        }
-                        return "[exit \(code ?? -1) · \(dur)]"
-                    }()
-                    lines.append(TermLine(kind: .stderr, text: summary))
-                case .error(let message):
-                    lines.append(TermLine(kind: .stderr, text: "[error] \(message)"))
-                case .end:
-                    isRunning = false
-                    runner = nil
-                }
-            }
-        }
-        r.adopt(streamTask)
-    }
-
-    /// Append streaming bytes to the scrollback. The stream is split
-    /// on \n so we land one line per row — multiple rows can come
-    /// from one chunk if the upstream writes buffered data.
-    private func appendStreamChunk(_ chunk: String, kind: TermLine.Kind) {
-        let pieces = chunk.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        ).map(String.init)
-        for (i, piece) in pieces.enumerated() {
-            if i == 0, let last = lines.last,
-               (last.kind == .stdout || last.kind == .stderr),
-               last.kind == kind,
-               !piece.isEmpty {
-                // Concatenate with the previous partial line — the
-                // upstream chunk boundary doesn't always align with
-                // a newline.
-                lines[lines.count - 1] = TermLine(kind: kind, text: last.text + piece)
-            } else {
-                if piece.isEmpty && i == pieces.count - 1 { continue }
-                lines.append(TermLine(kind: kind, text: piece))
-            }
-        }
-    }
-
-    private func historyPrev() {
-        guard !history.isEmpty else { return }
-        if historyIndex == -1 { historyIndex = history.count - 1 }
-        else if historyIndex > 0 { historyIndex -= 1 }
-        input = history[historyIndex]
-    }
-
-    private func historyNext() {
-        guard historyIndex >= 0 else { return }
-        if historyIndex < history.count - 1 {
-            historyIndex += 1
-            input = history[historyIndex]
-        } else {
-            historyIndex = -1
-            input = ""
-        }
-    }
-
-    private func appendHistory(_ cmd: String) {
-        if history.last == cmd { return }
-        history.append(cmd)
-        if history.count > Self.historyMax {
-            history.removeFirst(history.count - Self.historyMax)
-        }
-        Self.saveHistory(history)
-    }
-
-    private static func loadHistory() -> [String] {
-        UserDefaults.standard.stringArray(forKey: historyKey) ?? []
-    }
-    private static func saveHistory(_ h: [String]) {
-        UserDefaults.standard.set(h, forKey: historyKey)
-    }
-
-}
-
-// MARK: - SSE runner
-
-/// Thin SSE consumer for /api/terminal/run. Owns the URLSession
-/// data task and yields parsed events to a callback. The callback
-/// runs on @MainActor so the view layer can mutate state directly.
-@MainActor
-final class TerminalRunner {
-    enum Event {
-        case started(pid: Int?)
-        case stdout(String)
-        case stderr(String)
-        case exit(code: Int?, signal: String?, durationMs: Int)
-        case error(String)
-        case end
-    }
-
-    /// The `Task` running `run(...)`.
-    ///
-    /// This used to be a `URLSessionDataTask?` that was declared, never
-    /// assigned, and cancelled by the Stop button — so Stop did nothing at
-    /// all. `run` streams with `URLSession.bytes(for:)`, which has no data
-    /// task to hold; cancelling the structured task is what actually tears
-    /// the stream down.
-    private var task: Task<Void, Never>?
-
-    /// Adopt the task driving `run(...)` so `cancel()` has something to stop.
-    func adopt(_ task: Task<Void, Never>) {
-        self.task = task
-    }
-
-    func cancel() {
-        task?.cancel()
-        task = nil
-    }
-
-    func run(
-        cwd: String,
-        cmd: String,
-        emit: @escaping @MainActor (Event) -> Void
-    ) async {
-        let url = ServerConfig.baseURL.appendingPathComponent("api/terminal/run")
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
-        req.timeoutInterval = .infinity
-        let body: [String: String] = ["cwd": cwd, "cmd": cmd]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        do {
-            let (bytes, response) = try await URLSession.shared.bytes(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                emit(.error("bad response"))
-                emit(.end)
-                return
-            }
-            if !(200..<300).contains(http.statusCode) {
-                emit(.error("HTTP \(http.statusCode)"))
-                emit(.end)
-                return
-            }
-            // SSE framing lives in `MARVINLogic.SSEFrameParser` — shared with
-            // `ChatService`, and tested.
-            //
-            // This loop used to be `for try await line in bytes.lines`,
-            // dispatching on `line.isEmpty`. `AsyncLineSequence` NEVER yields
-            // an empty string, so the dispatch never fired: every event of a
-            // run accumulated into one buffer, `JSONSerialization` rejected the
-            // concatenation, and `dispatch` returned silently. The terminal
-            // echoed your command and printed nothing — not even its exit line.
-            var parser = SSEFrameParser()
-            for try await byte in bytes {
-                try Task.checkCancellation()
-                guard let frame = parser.consume(byte), let name = frame.name else { continue }
-                Self.dispatch(name: name, data: frame.data, emit: emit)
-            }
-            // Flush a trailing event that never got its closing blank line.
-            if let frame = parser.finish(), let name = frame.name {
-                Self.dispatch(name: name, data: frame.data, emit: emit)
-            }
-            emit(.end)
-        } catch {
-            emit(.error(error.localizedDescription))
-            emit(.end)
-        }
-    }
-
-    private static func dispatch(
-        name: String,
-        data: String,
-        emit: @MainActor (Event) -> Void
-    ) {
-        guard let json = data.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: json) as? [String: Any]
-        else {
-            return
-        }
-        switch name {
-        case "started":
-            emit(.started(pid: parsed["pid"] as? Int))
-        case "stdout":
-            if let s = parsed["data"] as? String { emit(.stdout(s)) }
-        case "stderr":
-            if let s = parsed["data"] as? String { emit(.stderr(s)) }
-        case "exit":
-            let code = parsed["code"] as? Int
-            let signal = parsed["signal"] as? String
-            let dur = parsed["durationMs"] as? Int ?? 0
-            emit(.exit(code: code, signal: signal, durationMs: dur))
-        default:
-            break
-        }
     }
 }
