@@ -44,6 +44,27 @@ struct TodoListStrip: View {
     /// or dismiss — instead of a stale full checklist lingering.
     @State private var collapsed: Bool = false
 
+    /// Height of the checklist body, in points, dragged by the grip below it.
+    ///
+    /// Was a hardcoded `maxHeight: 132` — fine for a three-step task list,
+    /// useless for a seven-step plan with sub-tasks, which is exactly when you
+    /// want to see the whole thing (user, 2026-08-29: "we should also be able
+    /// to resize the plan pane, currently it's static size"). `@AppStorage`
+    /// rather than `@State` because a height you dragged once should still be
+    /// there next launch.
+    @AppStorage("marvin.planStripHeight") private var bodyHeight: Double = 132
+
+    /// Drag bounds. The floor keeps at least a couple of rows visible so the
+    /// strip can't be dragged into a sliver that looks broken; the ceiling
+    /// stops it eating the chat it sits above — collapse is the ✕ / chevron,
+    /// not a zero-height drag.
+    private static let minBodyHeight: Double = 64
+    private static let maxBodyHeight: Double = 520
+
+    /// Height at the moment the current drag began — see `resizeGrip`.
+    @State private var dragStartHeight: Double = 132
+    @State private var dragging = false
+
     /// Tier 2 (plan-backed) vs tier 1 (bare task list). Drives every
     /// styling fork below so the two never read as the same artifact.
     /// Tier 2 is selected by the presence of `steps`.
@@ -167,7 +188,8 @@ struct TodoListStrip: View {
                         }
                     }
                 }
-                .frame(maxHeight: 132)
+                .frame(height: bodyHeight)
+                resizeGrip
             }
         }
         .padding(.horizontal, 12)
@@ -176,6 +198,40 @@ struct TodoListStrip: View {
         .onChange(of: allDone) { _, done in
             if done { withAnimation(.easeInOut(duration: 0.15)) { collapsed = true } }
         }
+    }
+
+    /// Drag handle under the checklist. A hairline with a wider invisible hit
+    /// strip — the visible affordance should be a hairline, but a 1pt grab
+    /// target is unusable, so the `contentShape` is 8pt tall.
+    private var resizeGrip: some View {
+        Rectangle()
+            .fill(MarvinTheme.border)
+            .frame(height: 1)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 3)
+            .contentShape(Rectangle().inset(by: -4))
+            .onHover { inside in
+                // The cursor IS the affordance here; the hairline alone gives
+                // no hint that the strip is draggable.
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        // Anchor on the height the drag STARTED from and apply
+                        // the gesture's total translation each frame. Adding
+                        // per-frame deltas instead would drift as soon as the
+                        // clamp bites and the pointer keeps travelling.
+                        if !dragging {
+                            dragging = true
+                            dragStartHeight = bodyHeight
+                        }
+                        let proposed = dragStartHeight + Double(value.translation.height)
+                        bodyHeight = min(max(proposed, Self.minBodyHeight), Self.maxBodyHeight)
+                    }
+                    .onEnded { _ in dragging = false }
+            )
+            .accessibilityLabel("Resize the plan checklist")
     }
 
     private func row(_ item: TodoItem, indent: Bool = false) -> some View {

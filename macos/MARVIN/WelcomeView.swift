@@ -22,7 +22,7 @@ struct WelcomeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .controlBackgroundColor))
 
-            Divider()
+            MarvinDivider()
 
             // Right: actions + recent projects
             actionsPanel
@@ -85,7 +85,7 @@ struct WelcomeView: View {
             }
             .padding(32)
 
-            Divider()
+            MarvinDivider()
 
             openButton
                 .padding(20)

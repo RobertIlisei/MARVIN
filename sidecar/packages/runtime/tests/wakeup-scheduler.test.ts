@@ -14,6 +14,7 @@ import {
   __resetSchedulerForTests,
   armAll,
   cancelWakeup,
+  deferIfSessionBusy,
   fireNow,
   listWakeups,
   MAX_CHAIN_DEPTH,
@@ -49,6 +50,18 @@ function baseInput(over: Partial<Parameters<typeof scheduleWakeup>[0]> = {}) {
     ...over,
   };
 }
+
+describe("wakeup effort", () => {
+  it("carries a requested effort on the record and omits the key when none was given", () => {
+    const withEffort = scheduleWakeup(baseInput({ effort: "low" }));
+    expect(withEffort.ok).toBe(true);
+    if (withEffort.ok) expect(withEffort.record.effort).toBe("low");
+
+    const without = scheduleWakeup(baseInput({}));
+    expect(without.ok).toBe(true);
+    if (without.ok) expect("effort" in without.record).toBe(false);
+  });
+});
 
 /** Write a persisted wakeup file directly (to forge past/stale fireAt). */
 function writeWakeupFile(projectId: string, records: WakeupRecord[]): void {
@@ -268,5 +281,41 @@ describe("fired wakeup yields to a live turn", () => {
 
     await fireNow(record({ id: "w-idle", marvinSessionId: BUSY }));
     expect(fired).toHaveLength(1);
+  });
+});
+
+describe("registration-point re-check (the eviction race, 2026-08-28)", () => {
+  // `fire`/`fireNow` check "busy" once, then the orchestrator awaits
+  // buildProjectContext for seconds before registerLiveTurn. A human POST
+  // in that gap registers first — and used to be EVICTED by the machine
+  // turn with "replaced by a newer turn on the same session". The
+  // orchestrator now re-runs deferIfSessionBusy immediately before
+  // registering; this pins that a human turn registered AFTER the
+  // fire-time check still yields, and the wakeup is kept (re-armed),
+  // not lost.
+  const RACE = "sess-race";
+
+  it("a human turn registered after the fire-time check makes the re-check yield and re-arm", () => {
+    const rec = record({ id: "w-race", marvinSessionId: RACE });
+    // Fire-time check: idle → proceeds (returns false, nothing persisted).
+    expect(deferIfSessionBusy(rec)).toBe(false);
+    expect(listWakeups({ marvinSessionId: RACE })).toHaveLength(0);
+
+    // The user's message lands during the orchestrator's awaits.
+    const human = registerLiveTurn({
+      turnId: "h1", marvinSessionId: RACE, projectId: PROJECT, kind: "human",
+    });
+
+    // Registration-point re-check: must yield, and must keep the wakeup.
+    expect(deferIfSessionBusy(rec)).toBe(true);
+    const pending = listWakeups({ marvinSessionId: RACE });
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.deferrals).toBe(1);
+    expect(pending[0]?.fireAt).toBeGreaterThan(Date.now());
+
+    // And the human turn is untouched — still live, never evicted.
+    expect(getLiveTurn(RACE)).toBe(human);
+    expect(human.ended).toBe(false);
+    endLiveTurn(human, { event: "turn.completed", data: {} });
   });
 });

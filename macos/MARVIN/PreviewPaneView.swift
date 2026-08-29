@@ -46,9 +46,9 @@ struct PreviewPaneView: View {
     var body: some View {
         VStack(spacing: 0) {
             urlBar
-            Divider()
+            MarvinDivider()
             content
-            Divider()
+            MarvinDivider()
             footer
         }
         .background(Color(nsColor: .textBackgroundColor))

@@ -77,7 +77,17 @@ struct RichText: NSViewRepresentable {
         nsView: LinkTextView,
         context: Context
     ) -> CGSize? {
-        let width = proposal.width.map { $0.isFinite && $0 > 0 ? $0 : 400 } ?? 400
+        var width = proposal.width.map { $0.isFinite && $0 > 0 ? $0 : 400 } ?? 400
+        // During a live window / split-view resize every frame proposes a
+        // new width, and every new width is a cache miss that re-typesets
+        // EVERY visible message — the "resizing is sluggish, nothing is
+        // fluid" finding (2026-08-29). Measure at a 32pt-bucketed width
+        // while the drag is in progress (≤32pt of slack at the bottom of a
+        // row, invisible mid-drag); the final layout after the drag ends
+        // measures exactly as before.
+        if nsView.window?.inLiveResize == true || nsView.inLiveResize {
+            width = max(32, (width / 32).rounded(.down) * 32)
+        }
         return CGSize(width: width, height: TextMeasurer.height(of: attributed, width: width))
     }
 

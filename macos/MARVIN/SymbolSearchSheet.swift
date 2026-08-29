@@ -59,7 +59,7 @@ struct SymbolSearchSheet: View {
             .padding(.vertical, 10)
             .background(Color(nsColor: .underPageBackgroundColor))
 
-            Divider()
+            MarvinDivider()
 
             // Body
             bodyContent

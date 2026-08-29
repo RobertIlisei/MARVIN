@@ -256,11 +256,18 @@ targets:
         buildPhase: resources
         excludes:
           - "Queries/**"
+          - "Symbols/**"
       # tree-sitter highlight queries — these DO need their directory
       # structure preserved (SyntaxHighlighter loads with subdirectory:
       # "Queries"), so this single subtree gets the folder-reference
       # treatment the parent doesn't. Lands at Contents/Resources/Queries/.
       - path: MARVIN/Resources/Queries
+        type: folder
+        buildPhase: resources
+      # Symbols icon theme — same folder-reference treatment as Queries, and
+      # for a harder reason: `files/` and `folders/` each contain a
+      # `folder.svg`, so the flattening above would silently drop one of them.
+      - path: MARVIN/Resources/Symbols
         type: folder
         buildPhase: resources
     # NB: NO `info:` block here. That block is destructive — xcodegen

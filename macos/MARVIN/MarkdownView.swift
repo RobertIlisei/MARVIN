@@ -102,7 +102,7 @@ struct MarkdownView: View {
                 }
 
         case .rule:
-            Divider().padding(.vertical, 2)
+            MarvinDivider().padding(.vertical, 2)
         }
     }
 
@@ -224,11 +224,11 @@ private struct CodeBlockView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                .fill(MarvinTheme.elevated)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(MarvinTheme.border, lineWidth: 0.5)
         )
     }
 
@@ -373,7 +373,7 @@ private struct MarkdownTableView: View {
                 }
             }
             .padding(.vertical, 6)
-            Divider()
+            MarvinDivider()
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
                 TableRowLayout(weights: w, spacing: gap) {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
@@ -385,7 +385,7 @@ private struct MarkdownTableView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                if rowIdx < rows.count - 1 { Divider() }
+                if rowIdx < rows.count - 1 { MarvinDivider() }
             }
         }
         .padding(.horizontal, 10)

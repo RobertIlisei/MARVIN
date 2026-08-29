@@ -63,6 +63,14 @@ export interface LiveTurn {
    * implementation work, and must not be cut off mid-edit.
    */
   mutated: boolean;
+  /**
+   * ADR-0076 — deliver a user message INTO this running turn (Claude Code's
+   * mid-turn steering). Set by the orchestrator when the turn runs with a
+   * streaming input channel; absent for turns started without one. Returns
+   * false when the turn can no longer take input (channel closed), in which
+   * case the caller falls back to the durable queue (ADR-0069).
+   */
+  inject?: (text: string) => boolean;
 }
 
 /**

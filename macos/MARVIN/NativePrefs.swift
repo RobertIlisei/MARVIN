@@ -64,7 +64,12 @@ final class NativePrefs {
     // MARK: - Setters (write UserDefaults + sync bridge)
 
     func setPersonality(_ v: String) {
-        guard v == "marvin" || v == "neutral" else { return }
+        // "ultron" was added as the third voice (and the default) but this
+        // guard never learned it, so the footer's cycle neutral → ultron
+        // was a silent no-op and the chip looked stuck on "neutral"
+        // (user: "I click the button and nothing happens", 2026-08-29).
+        // The load path at `marvin.personality` already accepted all three.
+        guard v == "marvin" || v == "neutral" || v == "ultron" else { return }
         personality = v
         UserDefaults.standard.set(v, forKey: "marvin.personality")
         MarvinBridge.shared.personality = v

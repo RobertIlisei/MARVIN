@@ -752,6 +752,14 @@ cmd_install_macos_app() {
     # in .build, but the SPM-mirror install path here doesn't extract
     # those, so we vendor the .scm files into MARVIN/Resources and
     # ship them recursively.
+    # Symbols file/folder icons (Miguel Solorio, MIT — the theme Antigravity
+    # bundles and defaults to). SymbolsIcon.swift looks them up under
+    # Contents/Resources/Symbols/{files,folders}/<name>.svg, so the directory
+    # structure has to survive: files/ and folders/ both contain folder.svg,
+    # and the flattened copy the other resources get would drop one.
+    if [ -d "$macos_dir/MARVIN/Resources/Symbols" ]; then
+      cp -R "$macos_dir/MARVIN/Resources/Symbols" "$built_app/Contents/Resources/"
+    fi
     if [ -d "$macos_dir/MARVIN/Resources/Queries" ]; then
       cp -R "$macos_dir/MARVIN/Resources/Queries" "$built_app/Contents/Resources/"
     fi

@@ -30,6 +30,7 @@ import { createObsidianMcpServer } from "./obsidian-mcp";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { loadEnabledPlugins } from "./plugin-loader";
 import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
+import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { scheduleWakeup } from "./wakeup-scheduler";
 import {
   buildCheckBackWakeup,
@@ -70,6 +71,7 @@ import { defaultModel } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { markTurnMutated } from "./turn-registry";
+import type { TurnInputChannel } from "./turn-input";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -198,52 +200,19 @@ export type AgentMode = "ask" | "agent" | "plan";
  * at the SDK default — its job is the hard call, which it thinks
  * through regardless of the executor's effort.
  */
-export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
-
-/** Legacy 3-mode picker values, accepted for backward compatibility
- *  (persisted prefs, old transcripts). Mapped onto the effort ladder. */
-const LEGACY_EFFORT_ALIAS: Record<string, ReasoningEffort> = {
-  fast: "low",
-  thinking: "high",
-  // "max" is already a valid ladder rung — passes through.
-};
-
-const EFFORT_LEVELS: readonly ReasoningEffort[] = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
-
-/** Top rungs (`xhigh`, `max`) are Opus-only per the SDK; on other
- *  executors the SDK silently falls back to `high`, and so do we so
- *  the call is always valid even if the UI and a stale pref disagree. */
-function supportsTopEffort(model: string): boolean {
-  return /opus/i.test(model);
-}
-
-/**
- * Resolve a user-facing effort selection (new ladder value OR a legacy
- * fast/thinking/max alias) to a concrete SDK `effort`, applying the
- * Opus-only fallback for the top two rungs. Unknown / undefined input
- * defaults to `high` (the SDK default). Pure — exported so tests can
- * pin the mapping + fallback without spinning up a turn.
- */
-export function resolveEffort(
-  selection: string | undefined,
-  model: string,
-): ReasoningEffort {
-  const raw = (selection ?? "high").toLowerCase();
-  const mapped = LEGACY_EFFORT_ALIAS[raw] ?? (raw as ReasoningEffort);
-  const level: ReasoningEffort = EFFORT_LEVELS.includes(mapped)
-    ? mapped
-    : "high";
-  if ((level === "xhigh" || level === "max") && !supportsTopEffort(model)) {
-    return "high";
-  }
-  return level;
-}
+// The effort ladder (`ReasoningEffort`, `resolveEffort`, `stepDownEffort`,
+// `clampEffort`) lives in `./effort` — dependency-free so the wakeup
+// scheduler and background-job runner can use it without importing this
+// module (which imports them). Re-exported here so every existing import
+// path keeps working.
+export {
+  clampEffort,
+  EFFORT_LEVELS,
+  resolveEffort,
+  stepDownEffort,
+  type ReasoningEffort,
+} from "./effort";
+import { resolveEffort, type ReasoningEffort } from "./effort";
 
 /**
  * @deprecated Use {@link resolveEffort}. Kept as a thin alias so any
@@ -260,6 +229,14 @@ export function effortForThinkingMode(
 
 export interface RunAgentInput {
   message: string;
+  /**
+   * ADR-0076 — streaming input. When present the SDK runs in streaming
+   * input mode and further user messages pushed into the channel are
+   * delivered into THIS turn instead of queueing behind it. The runner
+   * closes the channel on a `result` with nothing pending, so a turn with
+   * no extra input terminates exactly as single-message mode did.
+   */
+  inputChannel?: TurnInputChannel | undefined;
   /**
    * ADR-0051 — a compact snapshot of the ACTIVE plan + live per-step status,
    * sent by the client each turn so the model (not just the UI strip) stays
@@ -1288,6 +1265,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     turnId,
     designCtx,
   });
+  // Output governor (PostToolUse) — caps what a Bash result costs before the
+  // model sees it; full output goes to disk with a pointer in the result.
+  const outputGovernorHook = makeOutputGovernorPostToolUse({
+    marvinSessionId: input.marvinSessionId ?? "unscoped",
+    turnId,
+  });
 
   // Both factories live at module scope so tests can pin the dispatch
   // (ADR-0015 §1) without spinning up a full `runAgent` loop.
@@ -1419,6 +1402,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
+      PostToolUse: [{ hooks: [outputGovernorHook] }],
     },
     systemPrompt: {
       type: "preset",
@@ -1545,6 +1529,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     return Number.isFinite(n) && n > 0 ? n : 5_000;
   })();
 
+  // ADR-0076 — hoisted above `try` so `finally` can close it.
+  const channel = input.inputChannel;
   try {
     // ADR-0051 — inject the live active-plan snapshot as a `<system-reminder>`
     // suffix on THIS user turn. It rides the new message (the uncached volatile
@@ -1561,7 +1547,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // timestamps — the ONLY seam that survives transcript reload (the
     // client skips turn.completed on replay).
     const turnStartedAtIso = new Date().toISOString();
-    const q = query({ prompt: turnPrompt, options });
+    // ADR-0076 — streaming input when a channel is supplied; the SDK
+    // accepts an AsyncIterable of user messages in place of the string.
+    const q = query({
+      prompt: channel ? channel.stream(turnPrompt) : turnPrompt,
+      options,
+    });
     // Slash-command catalog capture is armed here but FIRED after the
     // `system/init` event below — `supportedCommands()` is a control request
     // that needs the subprocess session initialised, so calling it straight
@@ -1689,6 +1680,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               ? ev.result
               : ev.subtype;
           resultError = detail;
+        } else if (channel && channel.pending > 0) {
+          // ADR-0076 — a message was injected while this assistant turn
+          // ran. In streaming mode the SDK will now consume it and start
+          // the next assistant turn inside the same query; this `result`
+          // is intermediate, not terminal. Keep iterating; don't arm the
+          // watchdog. (Cost/usage above are overwritten by the final one.)
+          continue;
         } else {
           // Successful result. Arm the watchdog: if the iterator
           // doesn't terminate naturally within WATCHDOG_MS, force-
@@ -1696,6 +1694,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           // throw, but the catch block treats the abort as benign
           // (we already captured the result + token usage above).
           seenSuccessfulResult = true;
+          // ADR-0076 — nothing pending: end the input stream so the SDK
+          // terminates the query the way single-message mode did.
+          channel?.close();
           if (watchdogTimer) clearTimeout(watchdogTimer);
           watchdogTimer = setTimeout(() => {
             try {
@@ -1734,6 +1735,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       resultError = err instanceof Error ? err.message : String(err);
     }
   } finally {
+    // ADR-0076 — whatever ended the loop (result, abort, throw), the input
+    // generator must not be left suspended waiting for a push.
+    channel?.close();
     if (watchdogTimer) {
       clearTimeout(watchdogTimer);
       watchdogTimer = null;

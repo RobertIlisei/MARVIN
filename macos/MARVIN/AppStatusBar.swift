@@ -47,7 +47,7 @@ struct AppStatusBar: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 22)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(MarvinTheme.background)
         .overlay(alignment: .top) {
             // Hairline divider above the bar so it reads as chrome,
             // not part of the pane that sits above it.
@@ -65,13 +65,13 @@ struct AppStatusBar: View {
         HStack(spacing: 10) {
             connectionPip
             if let branch = bridge.branch, !branch.isEmpty {
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 branchSegment(branch: branch)
             }
-            Divider().frame(height: 10)
+            MarvinDivider().frame(height: 10)
             projectSegment
             if bridge.errorCount > 0 || bridge.warningCount > 0 {
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 diagnosticCounters
             }
         }
@@ -209,15 +209,15 @@ struct AppStatusBar: View {
         HStack(spacing: 10) {
             if bridge.selectedFilePath != nil {
                 cursorSegment
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 indentSegment
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 segment(icon: "doc.plaintext", text: "UTF-8")
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 segment(icon: "return", text: "LF")
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
                 fileTypeSegment
-                Divider().frame(height: 10)
+                MarvinDivider().frame(height: 10)
             }
             activitySegment
             contextSegment
@@ -295,7 +295,7 @@ struct AppStatusBar: View {
                     fileReadCalls: bridge.sessionFileReadCalls
                 )
             }
-            Divider().frame(height: 10)
+            MarvinDivider().frame(height: 10)
         }
     }
 
@@ -333,7 +333,7 @@ struct AppStatusBar: View {
             }
             .foregroundStyle(toolUseColour(for: band))
             .help(toolUseHover(band: band, counts: counts))
-            Divider().frame(height: 10)
+            MarvinDivider().frame(height: 10)
         }
     }
 
@@ -545,7 +545,7 @@ struct NotificationLogPopover: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
-            Divider()
+            MarvinDivider()
 
             if notifications.isEmpty {
                 Text("No notifications yet.")
@@ -573,7 +573,7 @@ struct NotificationLogPopover: View {
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            Divider()
+                            MarvinDivider()
                         }
                     }
                 }

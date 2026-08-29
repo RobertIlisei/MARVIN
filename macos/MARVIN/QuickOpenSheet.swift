@@ -53,7 +53,7 @@ struct QuickOpenSheet: View {
             .padding(.vertical, 10)
             .background(Color(nsColor: .underPageBackgroundColor))
 
-            Divider()
+            MarvinDivider()
 
             // Results
             if let err = loadError {

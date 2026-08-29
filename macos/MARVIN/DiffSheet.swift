@@ -147,10 +147,10 @@ struct DiffSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             body_
             if let err = model.lastError {
-                Divider()
+                MarvinDivider()
                 errorBanner(err)
             }
         }

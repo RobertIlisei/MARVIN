@@ -663,14 +663,48 @@ final class ChatPreviewModel {
             activePlanId = plans.last?.id
         }
         if isSending {
-            // Turn already running — queue for after it completes.
-            // turn.completed pops the head of this list and dispatches
-            // it via the same sendInternal path so the user can keep
-            // typing without blocking on each response.
-            queuedMessages.append(QueuedMessage(text: composed, cwd: cwd))
+            // ADR-0076 — a turn is running: deliver the message INTO it
+            // (Claude Code-style steering) instead of parking it locally.
+            // Echo now; the sidecar persists it and tells us whether the
+            // live turn took it (`injected`) or had to queue it behind
+            // (`queued`) — both are server-owned, so nothing stays here.
+            // Only a transport failure falls back to the local queue.
+            messages.append(.userText(composed))
+            let request = injectRequest(message: composed, cwd: cwd)
+            Task { @MainActor in
+                do {
+                    _ = try await ChatService.shared.injectMessage(request: request)
+                } catch {
+                    NSLog("[ChatPreview] inject failed, queuing locally: \(error)")
+                    queuedMessages.append(QueuedMessage(text: composed, cwd: cwd))
+                }
+            }
             return
         }
         sendInternal(message: composed, cwd: cwd)
+    }
+
+    /// ADR-0076 — the same body a normal turn POST sends, for a message
+    /// aimed at the turn already running on `marvinSessionId`.
+    private func injectRequest(message: String, cwd: String?) -> ChatRequest {
+        let prefs = NativePrefs.shared
+        return ChatRequest(
+            message: message,
+            cwd: cwd,
+            projectId: loadedProjectId,
+            marvinSessionId: marvinSessionId,
+            personality: prefs.personality,
+            model: prefs.executorModel,
+            advisorModel: prefs.advisorModel,
+            permissionStrategy: UserDefaults.standard.string(forKey: "marvin.permissionStrategy")
+                ?? NativePermissionStrategy.auto.rawValue,
+            playwrightEnabled: UserDefaults.standard.bool(forKey: "marvin.playwrightEnabled"),
+            planContext: nil,
+            mode: prefs.mode,
+            thinkingMode: prefs.thinkingMode,
+            advisorThinkingMode: prefs.advisorThinkingMode,
+            resetSdkSession: nil
+        )
     }
 
     /// Drop a queued message before it dispatches. Called by the
@@ -844,8 +878,23 @@ final class ChatPreviewModel {
         pendingConfirms.removeAll()
     }
 
+    /// Reset to an empty chat — the "New" button, ⌘⇧N, the tab strip's `+`,
+    /// closing the last tab.
+    ///
+    /// LOCAL teardown only. Starting a new chat must not stop the agent working
+    /// in the one you are leaving. This used to call `cancel()`, which POSTs
+    /// `/api/chat/cancel` and aborts the turn server-side — the exact defect
+    /// b05860c fixed for `hydrate()`, left behind on this path (user,
+    /// 2026-08-29: "click new session and switching on it stops streaming and
+    /// closes the agent work"). The turn now keeps running and `attachLive`
+    /// picks it back up when you switch back, same as any session switch.
+    /// `cancel()` is the Stop button, and nothing else.
     func clear() {
-        cancel()
+        detachLocalStream()
+        // The brain reflects the session ON SCREEN, which is about to be an
+        // empty one — idle it locally without touching the turn left behind.
+        MarvinBridge.shared.marvinState = "idle"
+        MarvinBridge.shared.isBusy = false
         resumeTask?.cancel()
         resumeTask = nil
         // ADR-0043 — drop the announce subscription; a fresh hydrate / first
@@ -1141,6 +1190,22 @@ final class ChatPreviewModel {
                     // Drop late events for a session we've since
                     // navigated away from.
                     guard loadedSessionId == marvinSessionId else { break }
+                    // Re-attaching to a turn that is STILL RUNNING. Leaving the
+                    // session ran `detachLocalStream`, which set `isSending`
+                    // false and idled the brain — correct for the pane we left,
+                    // wrong the moment we come back and events are arriving.
+                    // Without this the session reads as finished while the
+                    // agent is still working, which is indistinguishable from
+                    // "switching sessions cancelled the turn" (user, twice).
+                    // `/api/chat/resume` yields nothing at all when no turn is
+                    // live, so reaching this line IS the liveness signal.
+                    if !isSending {
+                        isSending = true
+                        MarvinBridge.shared.isBusy = true
+                        if MarvinBridge.shared.marvinState == "idle" {
+                            MarvinBridge.shared.marvinState = "thinking"
+                        }
+                    }
                     handle(event: event)
                 }
             } catch {
@@ -1562,9 +1627,9 @@ struct ChatPreviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             sessionTabs
-            Divider()
+            MarvinDivider()
             header
-            Divider()
+            MarvinDivider()
             // Agents bar — model pills, personality, perms (auto/gated).
             // Was previously below the input bar, sandwiched against
             // Send/Queue, which made the layout feel cramped: two rows
@@ -1576,7 +1641,7 @@ struct ChatPreviewView: View {
                 .environment(bridge)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-            Divider()
+            MarvinDivider()
             // The message log OWNS the flexible vertical space — it expands
             // and contracts so the docked tray below never overlaps it.
             messagesPane
@@ -1946,7 +2011,7 @@ struct ChatPreviewView: View {
             .padding(.trailing, 8)
         }
         .frame(height: 32)
-        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        .background(MarvinTheme.background)
         .onAppear {
             if let pid = bridge.activeProjectId {
                 model.loadOpenTabs(projectId: pid)
@@ -2384,14 +2449,14 @@ struct ChatPreviewView: View {
         if !rows.isEmpty {
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                    if index > 0 { Divider() }
+                    if index > 0 { MarvinDivider() }
                     row
                 }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(MarvinTheme.background)
             .overlay(alignment: .top) {
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(MarvinTheme.border)
                     .frame(height: 1)
             }
         }
@@ -2507,7 +2572,7 @@ struct ChatPreviewView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+        .background(MarvinTheme.background)
     }
 
     private var messagesPane: some View {
@@ -2527,7 +2592,7 @@ struct ChatPreviewView: View {
                         ChatMessageRow(message: msg)
                             .padding(.horizontal, 12)
                             .id(msg.id)
-                        Divider()
+                        MarvinDivider()
                             .opacity(0.4)
                     }
                 }
@@ -2545,7 +2610,7 @@ struct ChatPreviewView: View {
         // jumps with streaming-mutated row heights; this modifier
         // handles the dynamic-content case natively.
         .defaultScrollAnchor(.bottom)
-        .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
+        .background(MarvinTheme.background)
     }
 
     /// Pending-queue strip — renders one chip per message the user
@@ -2774,7 +2839,7 @@ struct ChatPreviewView: View {
             }
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))
-            Divider()
+            MarvinDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     // Interactive triage: one card per finding with its own
