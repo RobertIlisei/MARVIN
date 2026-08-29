@@ -45,6 +45,6 @@ describe("claudeCliVersion", () => {
     expect(oldVer).not.toBeNull();
     // The exact bug: "2.1.251" < "2.1.92" lexically.
     expect("2.1.251" < "2.1.92").toBe(true);
-    expect((newVer as number[])[2]).toBeGreaterThan((oldVer as number[])[2]);
+    expect((newVer as number[])[2] ?? 0).toBeGreaterThan((oldVer as number[])[2] ?? 0);
   });
 });

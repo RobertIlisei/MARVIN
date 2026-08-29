@@ -1,6 +1,6 @@
 {
   "name": "@marvin/runtime",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -54,8 +54,8 @@
     "typescript": "^5.6.3"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.245",
-    "@anthropic-ai/sdk": "^0.120.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.251",
+    "@anthropic-ai/sdk": "^0.122.0",
     "@marvin/graphify-bridge": "workspace:*",
     "@marvin/tools": "workspace:*",
     "diff": "^8.0.0",

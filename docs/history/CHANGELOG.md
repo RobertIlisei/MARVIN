@@ -9,6 +9,25 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.74: Agent SDK 0.3.245 → 0.3.251.**
+
+  Routine patch bump (peer `@anthropic-ai/sdk` 0.120 → 0.122). The type diff
+  is purely additive — new cost/caching fields (`pricing`, `cache_ttl`,
+  `estimated_cache_write_usd`), `context_tokens`, `ambient`,
+  `perTaskStopAffordance`; nothing removed.
+
+  ADR-0073's two pins were re-verified live rather than assumed, since a
+  silently-moved SDK default is precisely what that ADR exists for:
+  `TodoWrite` is still the only todo tool (no `TaskCreate`/`TaskUpdate`,
+  which would freeze every plan at "pending"), and the 13 `marvin-graph`
+  tools are still always-loaded (deferring them behind `ToolSearch` would
+  deadlock any turn, because the design hooks deny Read/Grep/Glob until a
+  graph call happens). 172 tools now, up from 113.
+
+  Noted from the same run: `system/init` still reports the subagent tool as
+  `Task` while `tool_use` blocks say `Agent` — the ADR-0079 discrepancy,
+  handled by the gate matching both.
+
 - **2026-08-30 — v0.1.73: MARVIN was running a Claude CLI 159 versions behind.**
 
   The Claude plan-usage block stayed blank. Tracing it found something much

@@ -84,3 +84,32 @@ relaxed for `marvin-obsidian` if context pressure ever warrants it.
 (0.3.216) could replace text-parsing in the confirm gate; `system/permission_denied`
 events (0.3.162) surface auto-denials MARVIN currently drops. Both are
 improvements, not neutrality, so they wait.
+
+## Addendum — 0.3.245 → 0.3.251 (2026-08-30)
+
+Routine patch bump (peer `@anthropic-ai/sdk` 0.120 → 0.122). The type surface
+diff is **purely additive** — nothing removed — with new fields around cost
+and caching (`pricing`, `cache_ttl`, `estimated_cache_write_usd`, `costBasis`),
+`context_tokens`, `ambient`, and `perTaskStopAffordance`.
+
+Both pins **re-verified live** rather than assumed, because that is the
+failure mode this ADR exists for — an SDK default moves and nothing errors:
+
+```
+model claude-haiku-4-5-20251001
+todoFamily   ["TodoWrite"]        ← pin 1 holds (no TaskCreate/TaskUpdate)
+graphTools   13, always loaded    ← pin 2 holds (not deferred behind ToolSearch)
+tools        172                  (was 113 on 0.3.245)
+```
+
+Two things worth recording from the same run:
+
+- `system/init` **still reports the subagent tool as `Task`**, while the
+  `tool_use` blocks say `Agent`. Exactly the discrepancy
+  [ADR-0079](./0079-subagent-tool-rename-and-rails.md) documents; the gate
+  matches both, so this is noted, not a problem.
+- The `rate_limit_event` now carries `unifiedWindows` through `runAgent` —
+  the field the plan-usage block needs. That is the CLI fix from
+  [ADR-0087](./0087-newest-claude-cli-and-reported-context-window.md), not the
+  SDK bump, but this run is where it was confirmed end to end.
+
