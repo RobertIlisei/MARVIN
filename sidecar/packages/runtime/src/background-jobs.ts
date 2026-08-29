@@ -18,14 +18,23 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { stepDownEffort } from "./effort";
 import { randomUUID } from "node:crypto";
 
 import { MAX_CHAIN_DEPTH, fireNow, type WakeupRecord } from "./wakeup-scheduler";
 
 /** Max concurrent background jobs per session — a rail, not a workload. */
 export const MAX_JOBS_PER_SESSION = 3;
-/** Output tail kept in memory for the completion turn (bytes). */
-const TAIL_BYTES = 8 * 1024;
+/**
+ * Output kept for the completion turn: the first `HEAD_BYTES` (where a build
+ * announces its failure) and the last `TAIL_BYTES` (where it announces its
+ * result). Was a single 8 KB tail — which, for a `make smoke`, is Hikari
+ * shutdown noise and a Postgres stack trace after `System.exit(0)`, injected
+ * as ~2.2K tokens of user message per job (measured 2026-08-29); the one
+ * line that mattered, `Tests run: 1663 … BUILD SUCCESS`, survived by luck.
+ */
+const HEAD_BYTES = 1024;
+const TAIL_BYTES = 2 * 1024;
 
 /**
  * Signals that mean the job was STOPPED, not that it finished (ADR-0038
@@ -69,6 +78,10 @@ interface JobRecord {
   startedAt: string;
   child: ChildProcess;
   tail: string;
+  /** First HEAD_BYTES of output, frozen once full. */
+  head: string;
+  /** Total output bytes seen — decides whether head + tail overlap. */
+  bytesSeen: number;
   /** Set when the user cancels — suppresses the completion turn. */
   cancelled: boolean;
   ctx: BackgroundJobContext;
@@ -133,14 +146,21 @@ export function startBackgroundJob(input: {
     startedAt: new Date().toISOString(),
     child,
     tail: "",
+    head: "",
+    bytesSeen: 0,
     cancelled: false,
     ctx,
   };
-  const appendTail = (buf: Buffer) => {
-    rec.tail = (rec.tail + buf.toString("utf-8")).slice(-TAIL_BYTES);
+  const appendOutput = (buf: Buffer) => {
+    const chunk = buf.toString("utf-8");
+    rec.bytesSeen += chunk.length;
+    if (rec.head.length < HEAD_BYTES) rec.head = (rec.head + chunk).slice(0, HEAD_BYTES);
+    // The rolling window is head + tail wide so a job that fits inside it is
+    // reported whole, with no stitching.
+    rec.tail = (rec.tail + chunk).slice(-(HEAD_BYTES + TAIL_BYTES));
   };
-  child.stdout?.on("data", appendTail);
-  child.stderr?.on("data", appendTail);
+  child.stdout?.on("data", appendOutput);
+  child.stderr?.on("data", appendOutput);
   child.on("error", (err) => {
     rec.tail += `\n[spawn error] ${err.message}\n`;
   });
@@ -148,6 +168,14 @@ export function startBackgroundJob(input: {
 
   state.jobs.set(rec.id, rec);
   return { ok: true, id: rec.id, pid: rec.pid };
+}
+
+/** Whole output when it fit the window; otherwise head + elision + tail. */
+function outputExcerpt(rec: JobRecord): string {
+  if (rec.bytesSeen <= HEAD_BYTES + TAIL_BYTES) return rec.tail;
+  const tail = rec.tail.slice(-TAIL_BYTES);
+  const elided = rec.bytesSeen - rec.head.length - tail.length;
+  return `${rec.head}\n…[${elided} bytes elided]…\n${tail}`;
 }
 
 function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | null): void {
@@ -164,7 +192,7 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
 
   const failed = signal != null || (code ?? 1) !== 0;
   const status = signal ? `killed by signal ${signal}` : `exit code ${code ?? "unknown"}`;
-  const tail = rec.tail.trim() || "(no output captured)";
+  const tail = outputExcerpt(rec).trim() || "(no output captured)";
   const prompt =
     "A background job you started earlier has finished.\n\n" +
     `Command: \`${rec.command}\`\n` +
@@ -187,6 +215,10 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
     permissionStrategy: rec.ctx.permissionStrategy,
     thinkingMode: rec.ctx.thinkingMode,
     ...(rec.ctx.advisorThinkingMode ? { advisorThinkingMode: rec.ctx.advisorThinkingMode } : {}),
+    // Dynamic effort (see effort.ts): a job that succeeded wakes the session
+    // one rung down — the follow-up is "read the result and carry on". A job
+    // that failed keeps the user's ceiling; diagnosing is real work.
+    ...(failed ? {} : { effort: stepDownEffort(rec.ctx.thinkingMode, rec.ctx.model) }),
     prompt,
     reason: `background job done: ${rec.reason || rec.command.slice(0, 40)}`,
     createdAt: rec.startedAt,

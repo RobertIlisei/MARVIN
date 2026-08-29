@@ -71,10 +71,16 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         .string()
         .min(1)
         .describe(
-          "The instruction the fired turn runs, e.g. 'Check whether the `npm run build` started earlier succeeded; if it failed, read the error and fix it.' Write it so a fresh turn knows exactly what to do.",
+          "The instruction the fired turn runs, e.g. 'Check whether the `npm run build` started earlier succeeded; if it failed, read the error and fix it.' Keep it to the instruction — the fired turn already has the session; it does not need the history restated.",
+        ),
+      effort: z
+        .enum(["low", "medium", "high", "xhigh", "max"])
+        .optional()
+        .describe(
+          "Reasoning effort for the FIRED turn. Omit to keep the current setting. Use 'low' or 'medium' when the fired turn only checks and reports (did the build pass? is the deploy green?); keep the default when it continues implementation. Can only lower the effort below the user's setting, never raise it.",
         ),
     },
-    async ({ delaySeconds, reason, prompt }) => {
+    async ({ delaySeconds, reason, prompt, effort }) => {
       const result = scheduleWakeup({
         marvinSessionId: ctx.marvinSessionId,
         projectId: ctx.projectId,
@@ -86,6 +92,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         ...(ctx.playwrightEnabled !== undefined ? { playwrightEnabled: ctx.playwrightEnabled } : {}),
         thinkingMode: ctx.thinkingMode,
         advisorThinkingMode: ctx.advisorThinkingMode,
+        effort,
         delaySeconds,
         reason,
         prompt,
