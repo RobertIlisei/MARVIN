@@ -226,8 +226,22 @@ struct TodoListStrip: View {
                             dragging = true
                             dragStartHeight = bodyHeight
                         }
-                        let proposed = dragStartHeight + Double(value.translation.height)
-                        bodyHeight = min(max(proposed, Self.minBodyHeight), Self.maxBodyHeight)
+                        // INVERTED, like the composer's grip in ChatInputView.
+                        //
+                        // The grip sits at the BOTTOM of the checklist, but the
+                        // whole tray is bottom-anchored above the input bar: the
+                        // pane grows UPWARD and the grip stays where it is. With
+                        // the natural sign, dragging down grew the pane upward
+                        // and the handle never followed the pointer — "I drag
+                        // down and the size goes up" (user, 2026-08-30).
+                        // Dragging in the direction the pane actually expands is
+                        // the readable gesture.
+                        bodyHeight = DragResize.height(
+                            start: dragStartHeight,
+                            translation: Double(value.translation.height),
+                            min: Self.minBodyHeight,
+                            max: Self.maxBodyHeight
+                        )
                     }
                     .onEnded { _ in dragging = false }
             )

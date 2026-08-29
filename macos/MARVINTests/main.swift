@@ -1951,6 +1951,27 @@ runner.suite("ContextUsage · reported window") {
     }
 }
 
+runner.suite("DragResize") {
+    runner.test("dragging UP grows a bottom-anchored pane, dragging DOWN shrinks it") {
+        // The bug: the plan grip used `start + translation`, so dragging down
+        // grew the pane upward and the handle never tracked the pointer.
+        runner.expect(DragResize.height(start: 200, translation: -50, min: 64, max: 520), equals: 250, "up grows")
+        runner.expect(DragResize.height(start: 200, translation: 50, min: 64, max: 520), equals: 150, "down shrinks")
+        runner.expect(DragResize.height(start: 200, translation: 0, min: 64, max: 520), equals: 200, "no drag, no change")
+    }
+    runner.test("clamps at both ends without drifting past them") {
+        runner.expect(DragResize.height(start: 100, translation: 500, min: 64, max: 520), equals: 64, "clamped to min")
+        runner.expect(DragResize.height(start: 100, translation: -900, min: 64, max: 520), equals: 520, "clamped to max")
+        // Anchoring on the START height is what keeps a clamped drag reversible:
+        // travel far past the min, come back, and the pane follows again.
+        runner.expect(DragResize.height(start: 100, translation: -10, min: 64, max: 520), equals: 110, "reversible after clamp")
+    }
+    runner.test("both of MARVIN's grips use the same bounds they always did") {
+        runner.expect(DragResize.height(start: 300, translation: -1000, min: 64, max: 520), equals: 520, "plan max")
+        runner.expect(DragResize.height(start: 300, translation: -1000, min: 60, max: 600), equals: 600, "composer max")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
