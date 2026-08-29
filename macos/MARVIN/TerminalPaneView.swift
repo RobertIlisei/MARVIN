@@ -205,7 +205,10 @@ struct TerminalPaneView: View {
 
         let r = TerminalRunner()
         runner = r
-        Task {
+        // Hand the runner its own task so Stop can cancel it. Without this the
+        // Stop button called `cancel()` on a `URLSessionDataTask` that was
+        // never assigned, and did nothing.
+        let streamTask = Task {
             await r.run(cwd: cwd, cmd: cmd) { event in
                 switch event {
                 case .started(_):
@@ -231,6 +234,7 @@ struct TerminalPaneView: View {
                 }
             }
         }
+        r.adopt(streamTask)
     }
 
     /// Append streaming bytes to the scrollback. The stream is split
@@ -309,10 +313,23 @@ final class TerminalRunner {
         case end
     }
 
-    private var task: URLSessionDataTask?
+    /// The `Task` running `run(...)`.
+    ///
+    /// This used to be a `URLSessionDataTask?` that was declared, never
+    /// assigned, and cancelled by the Stop button — so Stop did nothing at
+    /// all. `run` streams with `URLSession.bytes(for:)`, which has no data
+    /// task to hold; cancelling the structured task is what actually tears
+    /// the stream down.
+    private var task: Task<Void, Never>?
+
+    /// Adopt the task driving `run(...)` so `cancel()` has something to stop.
+    func adopt(_ task: Task<Void, Never>) {
+        self.task = task
+    }
 
     func cancel() {
         task?.cancel()
+        task = nil
     }
 
     func run(
@@ -342,30 +359,24 @@ final class TerminalRunner {
                 emit(.end)
                 return
             }
-            // SSE parser — events are blocks separated by \n\n, each
-            // block has `event: <name>` and `data: <json>` lines.
-            var pendingEvent: String? = nil
-            var pendingData: String = ""
-            for try await line in bytes.lines {
-                if line.isEmpty {
-                    // Dispatch the assembled event.
-                    if let name = pendingEvent {
-                        Self.dispatch(name: name, data: pendingData, emit: emit)
-                    }
-                    pendingEvent = nil
-                    pendingData = ""
-                    continue
-                }
-                if line.hasPrefix("event: ") {
-                    pendingEvent = String(line.dropFirst("event: ".count))
-                } else if line.hasPrefix("data: ") {
-                    if !pendingData.isEmpty { pendingData += "\n" }
-                    pendingData += String(line.dropFirst("data: ".count))
-                }
+            // SSE framing lives in `MARVINLogic.SSEFrameParser` — shared with
+            // `ChatService`, and tested.
+            //
+            // This loop used to be `for try await line in bytes.lines`,
+            // dispatching on `line.isEmpty`. `AsyncLineSequence` NEVER yields
+            // an empty string, so the dispatch never fired: every event of a
+            // run accumulated into one buffer, `JSONSerialization` rejected the
+            // concatenation, and `dispatch` returned silently. The terminal
+            // echoed your command and printed nothing — not even its exit line.
+            var parser = SSEFrameParser()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard let frame = parser.consume(byte), let name = frame.name else { continue }
+                Self.dispatch(name: name, data: frame.data, emit: emit)
             }
-            // Flush any trailing event without a closing blank line.
-            if let name = pendingEvent {
-                Self.dispatch(name: name, data: pendingData, emit: emit)
+            // Flush a trailing event that never got its closing blank line.
+            if let frame = parser.finish(), let name = frame.name {
+                Self.dispatch(name: name, data: frame.data, emit: emit)
             }
             emit(.end)
         } catch {
