@@ -86,9 +86,10 @@ struct ChatAgentsFooter: View {
         return Button {
             NativePrefs.shared.setPersonality(next)
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 9))
+            HStack(spacing: 4) {
+                let iconName = active == "marvin" ? "brain" : active == "neutral" ? "face.dashed" : "face.smiling"
+                Image(systemName: iconName)
+                    .font(.system(size: 10))
                 Text(active)
                     .font(.system(size: 11, design: .monospaced))
             }

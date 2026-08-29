@@ -36,6 +36,13 @@ struct CostSummary: Equatable {
 
         var id: String { day }
     }
+
+    struct OpenRouterBalance: Equatable, Codable {
+        let totalCredits: Double
+        let totalUsage: Double
+    }
+
+    let openRouter: OpenRouterBalance?
 }
 
 @MainActor

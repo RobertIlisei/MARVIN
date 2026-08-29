@@ -16,7 +16,9 @@
 
 import { randomUUID } from "node:crypto";
 import { buildProjectContext } from "@marvin/project-context";
-import { recordTurnCost } from "@marvin/runtime/cost-tracker";
+import { recordTurnCost, pollOpenRouterBalance } from "@marvin/runtime/cost-tracker";
+import { readAuthConfig } from "@marvin/runtime/auth-config";
+import { calculateEstimatedCost } from "@marvin/runtime/models";
 import { buildSystemPrompt } from "@marvin/runtime/personality";
 import { touchProject } from "@marvin/runtime/projects";
 import {
@@ -276,11 +278,22 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     return;
   }
 
+  const estimatedCost = await calculateEstimatedCost(model, result.tokenUsage);
+  // The SDK's total_cost_usd prices every model off the Claude rate card —
+  // for an OpenRouter BYOK model it is fiction (measured ~10× over: a
+  // 4.3M-token glm turn recorded $4.21 against ~$0.33 actual). Only fall
+  // back to it when Anthropic is the provider; an unpriceable OpenRouter
+  // turn records 0 and keeps its tokens — the OpenRouter account block
+  // carries the authoritative spend.
+  const provider = readAuthConfig()?.provider ?? "anthropic";
+  const finalCostUsd =
+    estimatedCost ?? (provider === "openrouter" ? null : (result.costUsd ?? null));
+
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.completed",
     at: new Date().toISOString(),
     durationMs: result.durationMs ?? null,
-    costUsd: result.costUsd ?? null,
+    costUsd: finalCostUsd,
     tokenUsage: result.tokenUsage ?? null,
     sessionId: result.sessionId ?? null,
   });
@@ -289,9 +302,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
   recordTurnCost({
     projectId,
-    costUsd: result.costUsd ?? null,
+    costUsd: finalCostUsd,
     tokenUsage: result.tokenUsage ?? null,
   });
+  // Fire and forget balance poll (ADR-0071: OpenRouter native balance tracking)
+  pollOpenRouterBalance().catch(() => {});
   try {
     touchProject(projectId);
   } catch {
@@ -302,7 +317,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     data: {
       sessionId: result.sessionId,
       durationMs: result.durationMs,
-      costUsd: result.costUsd,
+      costUsd: finalCostUsd,
       tokenUsage: result.tokenUsage,
       marvinSessionId,
       turnId,
