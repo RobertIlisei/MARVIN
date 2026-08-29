@@ -33,6 +33,7 @@
 // (Phase 2f).
 
 import Foundation
+import MARVINLogic
 
 /// Errors surfaced by the chat service. UI layer pattern-matches on
 /// these to render appropriate failure states.
@@ -367,58 +368,15 @@ final class ChatService {
             throw ChatServiceError.httpStatus(http.statusCode, body: body)
         }
 
-        // Same byte-level SSE parser as runTurn. Factor-shared via
-        // a private helper would be cleaner, but the parser is small
-        // (~30 lines) and inlining keeps each entry-point easy to
-        // audit independently.
-        var lineBuffer = Data()
-        var currentName: String? = nil
-        var currentData = ""
-
-        func emitLine(_ line: String) throws {
-            if line.isEmpty {
-                if let name = currentName {
-                    let event = ChatStreamEvent(
-                        name: name,
-                        data: Data(currentData.utf8)
-                    )
-                    let parsed = try Self.decode(event: event)
-                    continuation.yield(parsed)
-                    // resume.attached is a non-terminal native-only
-                    // event — surface as .unknown so the consumer can
-                    // log it but the stream stays open until a real
-                    // terminal event lands. The `decode` helper
-                    // already maps unknown names that way.
-                }
-                currentName = nil
-                currentData = ""
-                return
-            }
-            if line.hasPrefix(":") { return }
-            if let value = parseField(prefix: "event: ", line: line) {
-                currentName = value
-            } else if let value = parseField(prefix: "data: ", line: line) {
-                if currentData.isEmpty {
-                    currentData = value
-                } else {
-                    currentData += "\n" + value
-                }
-            }
-        }
-
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if byte == 0x0A {
-                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-                lineBuffer.removeAll(keepingCapacity: true)
-                try emitLine(line)
-            } else if byte != 0x0D {
-                lineBuffer.append(byte)
-            }
-        }
-        if !lineBuffer.isEmpty {
-            let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-            try? emitLine(line)
+        // Framing is `MARVINLogic.SSEFrameParser` — one implementation for
+        // every SSE consumer in the app (see `runTurn` for why not
+        // `bytes.lines`). `resume.attached` is a non-terminal native-only
+        // event; `decode` maps unknown names to `.unknown` so the consumer can
+        // log it while the stream stays open for a real terminal event.
+        try await pumpSSE(bytes) { frame in
+            guard let name = frame.name else { return }
+            let event = ChatStreamEvent(name: name, data: Data(frame.data.utf8))
+            continuation.yield(try Self.decode(event: event))
         }
     }
 
@@ -486,44 +444,19 @@ final class ChatService {
             throw ChatServiceError.httpStatus(http.statusCode, body: body)
         }
 
-        // Minimal SSE parse — we only care about `turn.registered` frames,
-        // whose `data:` is a TurnAnnouncement JSON. `announce.attached` and
-        // `: ping` heartbeats are ignored (they keep the stream warm).
-        var lineBuffer = Data()
-        var currentName: String? = nil
-        var currentData = ""
+        // Framing is `MARVINLogic.SSEFrameParser`. We only care about
+        // `turn.registered` frames, whose `data:` is a TurnAnnouncement JSON;
+        // `announce.attached` and `: ping` heartbeats keep the stream warm and
+        // are ignored.
         let decoder = JSONDecoder()
-
-        func emitLine(_ line: String) {
-            if line.isEmpty {
-                if currentName == "turn.registered",
-                   let ann = try? decoder.decode(
-                       TurnAnnouncement.self,
-                       from: Data(currentData.utf8)
-                   ) {
-                    continuation.yield(ann)
-                }
-                currentName = nil
-                currentData = ""
-                return
-            }
-            if line.hasPrefix(":") { return }
-            if let value = parseField(prefix: "event: ", line: line) {
-                currentName = value
-            } else if let value = parseField(prefix: "data: ", line: line) {
-                currentData = currentData.isEmpty ? value : currentData + "\n" + value
-            }
-        }
-
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if byte == 0x0A {
-                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-                lineBuffer.removeAll(keepingCapacity: true)
-                emitLine(line)
-            } else if byte != 0x0D {
-                lineBuffer.append(byte)
-            }
+        try await pumpSSE(bytes) { frame in
+            guard frame.name == "turn.registered",
+                  let ann = try? decoder.decode(
+                      TurnAnnouncement.self,
+                      from: Data(frame.data.utf8)
+                  )
+            else { return }
+            continuation.yield(ann)
         }
     }
 
@@ -600,85 +533,49 @@ final class ChatService {
             throw ChatServiceError.httpStatus(http.statusCode, body: body)
         }
 
-        // SSE parser — manual byte-level. We accumulate bytes into
-        // a `Data` buffer, scan for \n, emit each line as a String,
-        // and feed the SSE field parser.
+        // SSE framing lives in `MARVINLogic.SSEFrameParser`, shared with the
+        // terminal stream and tested there.
         //
-        // Why not `bytes.lines`? URLSession's `AsyncBytes.lines`
-        // iterator silently stops yielding partway through a long
-        // SSE response on macOS Sonoma — empirical: a smoke turn
-        // that emits 7-10 events yields exactly 3 lines via
-        // `.lines` before the iterator suspends and never resumes,
-        // even though the response is still flowing on the wire
-        // (verified with curl). The cli.event payloads can be
-        // 10KB+ on one line (full Claude CLI tools list + MCP
-        // servers + slash commands) — likely an interaction with
-        // AsyncBytes' internal line buffer. Manual buffering
-        // sidesteps whatever async-bridge state machine causes the
-        // drop and is independently auditable.
-        var lineBuffer = Data()
-        var currentName: String? = nil
-        var currentData = ""
-
-        func emitLine(_ line: String) throws {
-            if line.isEmpty {
-                if let name = currentName {
-                    let event = ChatStreamEvent(
-                        name: name,
-                        data: Data(currentData.utf8)
-                    )
-                    let parsed = try Self.decode(event: event)
-                    continuation.yield(parsed)
-                }
-                currentName = nil
-                currentData = ""
-                return
-            }
-            if line.hasPrefix(":") { return }  // SSE comment
-            if let value = parseField(prefix: "event: ", line: line) {
-                currentName = value
-            } else if let value = parseField(prefix: "data: ", line: line) {
-                // Multi-line `data:` allowed by the spec —
-                // concatenate with newline. /api/chat doesn't
-                // currently emit multi-line, but be tolerant.
-                if currentData.isEmpty {
-                    currentData = value
-                } else {
-                    currentData += "\n" + value
-                }
-            }
-            // `id:` / `retry:` lines silently ignored.
-        }
-
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            if byte == 0x0A {  // '\n'
-                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-                lineBuffer.removeAll(keepingCapacity: true)
-                try emitLine(line)
-            } else if byte != 0x0D {  // skip '\r'
-                lineBuffer.append(byte)
-            }
-        }
-
-        // Stream ended without a final \n — flush any buffered line.
-        // /api/chat always closes after a blank-line terminator so
-        // this normally has nothing to do.
-        if !lineBuffer.isEmpty {
-            let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-            try? emitLine(line)
-        }
-        if let name = currentName, !currentData.isEmpty {
-            let event = ChatStreamEvent(name: name, data: Data(currentData.utf8))
-            if let parsed = try? Self.decode(event: event) {
-                continuation.yield(parsed)
-            }
+        // Why not `bytes.lines`? Two independent defects, both hit in this
+        // repo. URLSession's `AsyncBytes.lines` iterator silently stops
+        // yielding partway through a long SSE response on macOS Sonoma —
+        // empirical: a smoke turn emitting 7-10 events yielded exactly 3 lines
+        // before the iterator suspended and never resumed, while the response
+        // was still flowing on the wire (verified with curl). The cli.event
+        // payloads can be 10 KB+ on one line. And `AsyncLineSequence` never
+        // yields an EMPTY string, so the blank line that terminates an SSE
+        // event is invisible to it — which is what left the terminal pane
+        // printing nothing at all. Byte-level buffering sidesteps both.
+        try await pumpSSE(bytes) { frame in
+            guard let name = frame.name else { return }
+            let event = ChatStreamEvent(name: name, data: Data(frame.data.utf8))
+            continuation.yield(try Self.decode(event: event))
         }
     }
 
-    private func parseField(prefix: String, line: String) -> String? {
-        guard line.hasPrefix(prefix) else { return nil }
-        return String(line.dropFirst(prefix.count))
+    /// Read an SSE body byte-by-byte through the shared framer, handing each
+    /// complete event to `onFrame`.
+    ///
+    /// Every SSE consumer in this file used to inline its own copy of this
+    /// loop — three near-identical copies, with a comment saying factoring it
+    /// out "would be cleaner". The fourth copy, in `TerminalPaneView`, was
+    /// written against `bytes.lines` instead and was silently broken for as
+    /// long as the terminal has existed: `AsyncLineSequence` never yields the
+    /// empty line that terminates an SSE event. One framer, one place to be
+    /// right.
+    private func pumpSSE(
+        _ bytes: URLSession.AsyncBytes,
+        onFrame: (SSEFrame) throws -> Void
+    ) async throws {
+        var parser = SSEFrameParser()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            if let frame = parser.consume(byte) { try onFrame(frame) }
+        }
+        // A body that ended without its terminating blank line: surface what
+        // arrived rather than discard it. Both producers always send one, so
+        // this normally does nothing.
+        if let frame = parser.finish() { try? onFrame(frame) }
     }
 
     /// Decode a typed `ChatTurnEvent` from one SSE envelope. Unknown

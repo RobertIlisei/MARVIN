@@ -1540,6 +1540,84 @@ runner.suite("FileSystemWatcher") {
     }
 }
 
+runner.suite("SSEFrameParser") {
+    /// Feed a whole response body through the parser, the way a byte stream
+    /// arrives, and collect every frame it produced.
+    func frames(_ body: String) -> [SSEFrame] {
+        var parser = SSEFrameParser()
+        var out = parser.consume(contentsOf: Array(body.utf8))
+        if let tail = parser.finish() { out.append(tail) }
+        return out
+    }
+
+    // THE regression. This is the exact body `/api/terminal/run` sends for
+    // `pwd`, and `for try await line in bytes.lines` framed zero events from
+    // it because Foundation never yields the empty line between them.
+    runner.test("splits a real terminal response into one frame per event") {
+        // Exactly what /api/terminal/run sends for `pwd`.
+        let body =
+            "event: started\ndata: {\"pid\":4242}\n\n"
+            + "event: stdout\ndata: {\"data\":\"/Users/me/proj\\n\"}\n\n"
+            + "event: exit\ndata: {\"code\":0,\"durationMs\":7}\n\n"
+        let got = frames(body)
+        runner.expect(got.count, equals: 3, "three events, not one run-on buffer")
+        runner.expect(got.first?.name, equals: "started", "first event name")
+        runner.expect(got.first?.data, equals: #"{"pid":4242}"#, "first event payload")
+        runner.expect(got.last?.name, equals: "exit", "exit event is emitted")
+        // The missing exit line was the fingerprint of the bug in the UI.
+        runner.expect(got.last?.data, equals: #"{"code":0,"durationMs":7}"#, "exit payload")
+    }
+
+    runner.test("an empty line with nothing buffered is not a frame") {
+        // Heartbeat blank lines must not synthesise empty events.
+        runner.expect(frames("\n\n\n").isEmpty, "blank lines alone produce nothing")
+    }
+
+    runner.test("ignores comments, id and retry fields") {
+        let got = frames(": keep-alive\nid: 7\nretry: 500\nevent: ping\ndata: {}\n\n")
+        runner.expect(got.count, equals: 1, "one frame")
+        runner.expect(got.first?.name, equals: "ping", "name survives the noise")
+        runner.expect(got.first?.data, equals: "{}", "data survives the noise")
+    }
+
+    runner.test("joins repeated data lines with a newline") {
+        let got = frames("event: e\ndata: one\ndata: two\n\n")
+        runner.expect(got.first?.data, equals: "one\ntwo", "multi-line data")
+    }
+
+    runner.test("strips exactly one space after the colon") {
+        let got = frames("event: e\ndata:  padded\n\n")
+        runner.expect(got.first?.data, equals: " padded", "second space is payload")
+    }
+
+    runner.test("frames identically whether the wire uses LF or CRLF") {
+        let lf = frames("event: e\ndata: {\"a\":1}\n\n")
+        let crlf = frames("event: e\r\ndata: {\"a\":1}\r\n\r\n")
+        runner.expect(crlf.count, equals: lf.count, "same frame count")
+        runner.expect(crlf.first?.data, equals: lf.first?.data, "same payload")
+    }
+
+    runner.test("reassembles an event split across arbitrary byte chunks") {
+        // The real failure mode is a payload arriving in pieces: a 10 KB
+        // cli.event does not land in one read.
+        let body = "event: stdout\ndata: {\"data\":\"hello world\"}\n\n"
+        var parser = SSEFrameParser()
+        var got: [SSEFrame] = []
+        for byte in Array(body.utf8) {
+            if let f = parser.consume(byte) { got.append(f) }
+        }
+        if let tail = parser.finish() { got.append(tail) }
+        runner.expect(got.count, equals: 1, "one frame from byte-at-a-time feeding")
+        runner.expect(got.first?.data, equals: #"{"data":"hello world"}"#, "payload intact")
+    }
+
+    runner.test("flushes a truncated event that never got its blank line") {
+        let got = frames("event: stdout\ndata: {\"data\":\"partial\"}")
+        runner.expect(got.count, equals: 1, "trailing event is not discarded")
+        runner.expect(got.first?.name, equals: "stdout", "name preserved")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
