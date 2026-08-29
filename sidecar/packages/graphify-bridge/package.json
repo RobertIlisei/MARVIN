@@ -1,6 +1,6 @@
 {
   "name": "@marvin/graphify-bridge",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -17,8 +17,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.245",
-    "@anthropic-ai/sdk": "^0.120.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.251",
+    "@anthropic-ai/sdk": "^0.122.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
