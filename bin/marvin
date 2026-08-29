@@ -582,6 +582,14 @@ readonly MACOS_APP_BUNDLE_DIR="$HOME/Applications/${MACOS_APP_NAME}.app"
 readonly MACOS_LEGACY_APP_BUNDLE_DIR="/Applications/${MACOS_APP_NAME}.app"
 
 cmd_install_macos_app() {
+  # ADR-0086 — a fresh machine gets the whole toolchain, not just the app.
+  # Advisory: a missing graphify must not block installing MARVIN, but the
+  # user should be told once rather than discovering it when a graph query
+  # comes back empty. Skip with MARVIN_SKIP_DEPS=1.
+  if [ "${MARVIN_SKIP_DEPS:-0}" != "1" ]; then
+    cmd_deps install || dim "  some dependencies are missing — see above (bin/marvin deps check)"
+  fi
+
   # Builds the SwiftUI native target at macos/ and installs the
   # resulting MARVIN.app bundle to ~/Applications/. By default (per
   # ADR-0023) the .app is self-contained: bundles node + the Next.js
@@ -1024,6 +1032,69 @@ cmd_uninstall_macos_app() {
 # MARVIN's own watchdog only refreshes while the IDE is OPEN on that project
 # (ADR-0041), so a commit made from a terminal or another editor silently
 # leaves the graph stale. graphify ships both fixes; nothing was wiring them.
+# ADR-0086 — one command that puts every external tool MARVIN needs in
+# place. Until now graphify was "advisory" in `doctor` — a dim line telling
+# the user to run pipx themselves — so a fresh machine had a MARVIN that
+# silently could not rebuild a graph, and Golden Rule 7 degraded to
+# grep-and-pray with nothing saying so.
+cmd_deps() {
+  local mode="${1:-install}" rc=0
+  case "$mode" in
+    check|install) ;;
+    *) err "usage: bin/marvin deps [check|install]"; return 1 ;;
+  esac
+
+  # graphify — the Python CLI that BUILDS the graph MARVIN reads.
+  if command -v graphify >/dev/null 2>&1; then
+    ok "graphify $(graphify --version 2>/dev/null | head -1)"
+  elif [ "$mode" = "check" ]; then
+    err "graphify not installed — run: bin/marvin deps install"
+    rc=1
+  else
+    info "installing graphify"
+    if command -v uv >/dev/null 2>&1; then
+      uv tool install graphifyy && ok "graphify installed (uv)" || { err "uv tool install graphifyy failed"; rc=1; }
+    elif command -v pipx >/dev/null 2>&1; then
+      pipx install graphifyy && ok "graphify installed (pipx)" || { err "pipx install graphifyy failed"; rc=1; }
+    else
+      err "neither uv nor pipx found — install one, then re-run: bin/marvin deps install"
+      dim "  brew install uv     (recommended — graphify's own docs use it)"
+      rc=1
+    fi
+  fi
+
+  # Claude Code CLI — the engine every turn runs through.
+  if command -v claude >/dev/null 2>&1; then
+    ok "claude $(claude --version 2>/dev/null | head -1)"
+  else
+    err "claude CLI not found — MARVIN cannot run a turn without it"
+    dim "  install: https://claude.com/claude-code"
+    rc=1
+  fi
+
+  # Skills MARVIN's prompt names by trigger (install-skills.sh is idempotent).
+  if [ "$mode" = "install" ]; then
+    if [ -x "$REPO_ROOT/scripts/install-skills.sh" ]; then
+      info "installing/refreshing Claude Code skills"
+      bash "$REPO_ROOT/scripts/install-skills.sh" >/dev/null 2>&1 \
+        && ok "skills present in ~/.claude/skills" \
+        || dim "  install-skills.sh reported a problem — run it directly to see why"
+    fi
+  fi
+
+  # Playwright browser — only when the user opted into browser automation.
+  if command -v npx >/dev/null 2>&1; then
+    if npx --no-install playwright --version >/dev/null 2>&1; then
+      ok "playwright available"
+    else
+      dim "  playwright not installed — browser checks will fail"
+      dim "  install:  npx playwright install chromium"
+    fi
+  fi
+
+  return $rc
+}
+
 cmd_graph_hooks() {
   local target="${1:-$PWD}" action="${2:-install}"
   if ! command -v graphify >/dev/null 2>&1; then
@@ -1132,6 +1203,7 @@ case "$subcommand" in
   uninstall-macos-app)  cmd_uninstall_macos_app      ;;
   knowledge-graph)      cmd_knowledge_graph "$@"     ;;
   graph-hooks)          cmd_graph_hooks "$@"         ;;
+  deps)                 cmd_deps "$@"                ;;
   help|-h|--help)  cmd_help ;;
   *)
     fail "unknown subcommand: $subcommand"

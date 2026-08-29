@@ -256,6 +256,28 @@ else
   CLAUDE_LOGIN_HINT=0
 fi
 
+# ── graphify ─────────────────────────────────────────────────────────────────
+# The Python CLI that BUILDS the knowledge graph MARVIN reads. Golden Rule 7
+# makes the graph the first thing MARVIN consults on any structural question;
+# without this binary the graph can never be rebuilt, and the rule silently
+# degrades to grep-and-pray with nothing saying so (ADR-0086).
+
+step "Setting up graphify"
+
+if command -v graphify >/dev/null 2>&1; then
+  ok "graphify $(graphify --version 2>/dev/null | head -1)"
+else
+  if command -v uv >/dev/null 2>&1; then
+    info "Installing graphify (uv)"
+    uv tool install graphifyy || warn "uv tool install graphifyy failed — install manually"
+  elif command -v pipx >/dev/null 2>&1; then
+    info "Installing graphify (pipx)"
+    pipx install graphifyy || warn "pipx install graphifyy failed — install manually"
+  else
+    warn "neither uv nor pipx found — install one, then:  uv tool install graphifyy"
+  fi
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 echo

@@ -15,6 +15,10 @@ import SwiftUI
 
 
 struct ContentView: View {
+    /// ADR-0086 — update prompt, presented from the root so it shows
+    /// whatever pane arrangement the user is in.
+    @State private var updateService = UpdateService.shared
+
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
 
@@ -60,6 +64,22 @@ struct ContentView: View {
         }
         .frame(minWidth: 480, minHeight: 320)
         .preferredColorScheme(bridge.preferredColorScheme)
+        // ADR-0086 — a newer release is out. Sheet rather than a banner: it
+        // is a decision, and it appears at most once per released version.
+        .sheet(isPresented: Binding(
+            get: { updateService.pending != nil },
+            set: { if !$0 { updateService.dismiss() } }
+        )) {
+            if let d = updateService.pending {
+                UpdatePromptView(
+                    decision: d,
+                    onSkip: { updateService.skip(d.latest) },
+                    onLater: { updateService.dismiss() },
+                    onRelease: { updateService.openReleasePage(d.latest) }
+                )
+            }
+        }
+        .task { updateService.start() }
         .background(WindowAccessor { window in
             window.setFrameAutosaveName("MARVINMainWindow")
             // Match the window's own fill to the theme so the split

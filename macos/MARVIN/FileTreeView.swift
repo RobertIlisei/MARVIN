@@ -94,9 +94,13 @@ final class FileTreeModel {
                 // No-op for well-formed trees.
                 response = res.treeWideUnique()
                 loadedCwd = cwd
-            } catch is CancellationError {
-                // Quiet — racing with a project switch.
             } catch {
+                // A cancelled request is not a failure: the tree auto-refresh
+                // (FSEvents) cancels the in-flight fetch whenever the previous
+                // one is still running, and URLSession reports that as
+                // URLError(.cancelled) / −999 — not CancellationError, which
+                // is why it used to reach the banner.
+                guard !BenignCancellation.matches(error) else { return }
                 lastError = "\(error)"
             }
         }
