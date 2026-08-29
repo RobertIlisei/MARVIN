@@ -1734,6 +1734,30 @@ runner.suite("PTYProcess") {
     }
 }
 
+runner.suite("SubagentLedger") {
+    func ev(_ json: String) -> Data { Data(json.utf8) }
+    runner.test("counts dispatches by type, tracks running via task_started/notification") {
+        var l = SubagentLedger()
+        runner.expect(l.apply(cliEventData: ev(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"scout","prompt":"x"}},{"type":"tool_use","name":"Read","input":{}}]}}"#)), "dispatch counted")
+        runner.expect(l.summary.dispatchedByType["scout"], equals: 1, "scout dispatched")
+        runner.expect(l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_started","task_id":"t1","task_type":"local_agent","subagent_type":"scout","is_backgrounded":true}"#)), "started")
+        runner.expect(l.summary.running, equals: 1, "running 1")
+        runner.expect(l.summary.background, equals: 1, "background 1")
+        runner.expect(!l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_started","task_id":"b1","task_type":"local_bash","description":"sleep"}"#)), "bash task ignored")
+        runner.expect(l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed"}"#)), "settled")
+        runner.expect(l.summary.running, equals: 0, "running 0")
+        runner.expect(l.summary.completed, equals: 1, "completed 1")
+        runner.expect(!l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_notification","task_id":"zzz","status":"completed"}"#)), "unknown task ignored")
+    }
+    runner.test("pre-rename Task dispatches and untyped dispatches still count") {
+        var l = SubagentLedger()
+        l.apply(cliEventData: ev(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Task","input":{"subagent_type":"advisor"}},{"type":"tool_use","name":"Agent","input":{"prompt":"p"}}]}}"#))
+        runner.expect(l.summary.dispatchedByType["advisor"], equals: 1, "advisor via Task")
+        runner.expect(l.summary.dispatchedByType["general-purpose"], equals: 1, "untyped = general-purpose")
+        runner.expect(l.summary.dispatched, equals: 2, "total")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

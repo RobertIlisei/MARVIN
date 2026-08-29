@@ -621,15 +621,25 @@ private struct FlatToolbarBackground: ViewModifier {
 /// phase as part of de-duplicating top + bottom chrome.
 struct CostHistoryPopover: View {
     let summary: CostSummary
+    /// ADR-0082 — on a Claude subscription the `$` figures are what the
+    /// tokens WOULD cost at API rates (the SDK's `total_cost_usd`); nothing
+    /// is billed per token. Say so, or "$31,125 lifetime" reads as a bill.
+    var subscription: Bool = false
     @State private var hoveredDay: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("cost for this project")
+            Text(subscription ? "api-equivalent cost · this project" : "cost for this project")
                 .font(.caption.monospaced())
                 .tracking(2)
                 .textCase(.uppercase)
                 .foregroundStyle(.tertiary)
+            if subscription {
+                Text("You are on a Claude plan, not an API key: these are what the tokens would cost at API rates — a relative gauge, not a bill. Your real limits are the plan windows below.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             VStack(spacing: 4) {
                 row("today", currency: summary.today)

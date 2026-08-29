@@ -5,6 +5,7 @@
 // no injected JS, no WebView dependency.
 
 import Foundation
+import MARVINLogic
 import SwiftUI
 
 /// One project entry from the registered list. Phase 1d.33 — drives
@@ -176,6 +177,10 @@ final class MarvinBridge {
     var sessionGraphCalls: Int = 0
     var sessionFileReadCalls: Int = 0
     var sessionGraphSummaryCalls: Int = 0
+    /// Subagent dispatches / running / settled this session (ADR-0080/0081
+    /// observability) — fed from the same cli.event stream, shown in the
+    /// status bar "agents" chip. Reset with the other session counters.
+    var subagents = SubagentLedger()
 
     /// Active personality ("marvin" or "neutral") posted via
     /// `personality-changed`. Drives the About panel's Personality

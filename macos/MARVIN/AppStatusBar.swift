@@ -38,6 +38,7 @@ struct AppStatusBar: View {
     @State private var bellPopoverOpen = false
     @State private var contextPopoverOpen = false
     @State private var activityPopoverOpen = false
+    @State private var subagentPopoverOpen = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -222,6 +223,7 @@ struct AppStatusBar: View {
             activitySegment
             contextSegment
             toolUseSegment
+            subagentSegment
             costSegment
             bellSegment
         }
@@ -260,6 +262,14 @@ struct AppStatusBar: View {
     /// at least one assistant turn has reported usage.
     /// The resolved running model id, preferring what the sidecar actually
     /// reports (carries the `[1m]` marker) over the user's picker selection.
+    /// True when Claude runs on the user's own Claude login (a Max / Pro
+    /// plan) rather than an API key — then the dollar figures are API-rate
+    /// estimates, not a bill, and the plan windows are the real usage.
+    private var onSubscription: Bool {
+        if case .online(let h) = health.state { return h.auth?.mode == "host-credentials" }
+        return false
+    }
+
     private var currentModelId: String? {
         if case .online(let h) = health.state, let m = h.model { return m }
         return bridge.executorModel
@@ -333,6 +343,33 @@ struct AppStatusBar: View {
             }
             .foregroundStyle(toolUseColour(for: band))
             .help(toolUseHover(band: band, counts: counts))
+            MarvinDivider().frame(height: 10)
+        }
+    }
+
+    /// ADR-0080/0081 — live subagent activity: how many were dispatched this
+    /// session (by type), how many are running right now. Hidden until the
+    /// first dispatch. The user asked to SEE how subagents are used; before
+    /// this the only trace was a telemetry line in the sidecar log.
+    @ViewBuilder
+    private var subagentSegment: some View {
+        let s = bridge.subagents.summary
+        if s.dispatched > 0 {
+            Button {
+                subagentPopoverOpen.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2.wave.2")
+                        .font(.system(size: 10))
+                    Text(s.running > 0 ? "agents \(s.dispatched) · \(s.running) running" : "agents \(s.dispatched)")
+                }
+                .foregroundStyle(s.running > 0 ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+            }
+            .buttonStyle(.plain)
+            .help("Subagents dispatched this session · click for the breakdown")
+            .popover(isPresented: $subagentPopoverOpen, arrowEdge: .bottom) {
+                SubagentStatsPopover(summary: s)
+            }
             MarvinDivider().frame(height: 10)
         }
     }
@@ -433,7 +470,7 @@ struct AppStatusBar: View {
             .buttonStyle(.plain)
             .help("Spend today (this project) · click for history")
             .popover(isPresented: $costPopoverOpen, arrowEdge: .bottom) {
-                CostHistoryPopover(summary: cost)
+                CostHistoryPopover(summary: cost, subscription: onSubscription)
             }
         }
     }
@@ -580,6 +617,53 @@ struct NotificationLogPopover: View {
                 .frame(maxHeight: 300)
             }
         }
+        .frame(width: 300)
+    }
+}
+
+
+/// Breakdown of this session's subagent use (ADR-0080/0081).
+struct SubagentStatsPopover: View {
+    let summary: SubagentSummary
+
+    private static let order = ["scout", "advisor", "implementer", "graph-extractor", "Explore", "Plan", "general-purpose"]
+
+    private var rows: [(String, Int)] {
+        let known = Self.order.compactMap { k in summary.dispatchedByType[k].map { (k, $0) } }
+        let other = summary.dispatchedByType.filter { !Self.order.contains($0.key) }.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        return known + other
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("subagents this session")
+                .font(.caption.monospaced())
+                .tracking(2)
+                .textCase(.uppercase)
+                .foregroundStyle(.tertiary)
+            VStack(spacing: 4) {
+                ForEach(rows, id: \.0) { name, n in
+                    HStack {
+                        Text(name)
+                        Spacer()
+                        Text(n.formatted())
+                    }
+                }
+                MarvinDivider().padding(.vertical, 2)
+                HStack { Text("running"); Spacer(); Text(summary.running.formatted()).foregroundStyle(summary.running > 0 ? Color.accentColor : Color.secondary) }
+                HStack { Text("in background"); Spacer(); Text(summary.background.formatted()) }
+                HStack { Text("completed"); Spacer(); Text(summary.completed.formatted()) }
+                if summary.failed > 0 {
+                    HStack { Text("failed / stopped"); Spacer(); Text(summary.failed.formatted()).foregroundStyle(.orange) }
+                }
+            }
+            .font(.callout.monospaced())
+            Text("scout · advisor · graph-extractor are read-only; implementer writes only in its own worktree (ADR-0081).")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
         .frame(width: 300)
     }
 }

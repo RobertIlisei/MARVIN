@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
-import { IGNORE_DIR_NAMES } from "@marvin/tools/fs-constants";
+import { IGNORE_DIR_NAMES, isGraphifyCacheDir } from "@marvin/tools/fs-constants";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -79,6 +79,8 @@ export async function GET(req: NextRequest) {
     for (const e of entries) {
       if (count >= MAX_ENTRIES) break;
       if (IGNORE_DIR_NAMES.has(e.name)) continue;
+      // graphify-out is shown; only its extraction cache is skipped.
+      if (e.isDirectory() && isGraphifyCacheDir(path.basename(dir), e.name)) continue;
       // Skip symlinks during the walk — matches the sandbox helper's
       // reject-symlink policy (see ADR-0008). A symlink named `cache`
       // pointing to /tmp would otherwise leak into the tree UI.

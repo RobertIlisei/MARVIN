@@ -1431,6 +1431,7 @@ final class ChatPreviewModel {
                 b.sessionGraphCalls = 0
                 b.sessionFileReadCalls = 0
                 b.sessionGraphSummaryCalls = 0
+                b.subagents = SubagentLedger()
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
                 clearPlans()
