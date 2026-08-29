@@ -853,7 +853,11 @@ private struct ClaudeWindowRow: View {
                     Text("\(percentLabel(u)) used")
                         .foregroundStyle(tint(u))
                 } else {
-                    Text(window.status.replacingOccurrences(of: "_", with: " "))
+                    // No `utilization` on this snapshot: either the event
+                    // predates the unifiedWindows ingest (an older build) or
+                    // the API did not size the window. Say that — a bare
+                    // "allowed" with no number reads as a broken gauge.
+                    Text(window.status == "allowed" ? "no % yet" : window.status.replacingOccurrences(of: "_", with: " "))
                         .foregroundStyle(window.status == "allowed" ? Color.secondary : Color.orange)
                 }
             }
@@ -872,6 +876,9 @@ private struct ClaudeWindowRow: View {
             HStack(spacing: 6) {
                 if let r = window.resetsAt {
                     Text("resets \(resetLabel(epoch: r))")
+                }
+                if window.utilization == nil {
+                    Text("· fills on the next turn").foregroundStyle(.tertiary)
                 }
                 if window.isUsingOverage == true {
                     Text("· using overage").foregroundStyle(Color.orange)

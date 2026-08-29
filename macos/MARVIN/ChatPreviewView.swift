@@ -1112,6 +1112,15 @@ final class ChatPreviewModel {
         // ADR-0047 — the latest TodoWrite in the transcript carries the plan's
         // step statuses; captured here to restore progress after replay.
         var replayTodos: [TodoItem]? = nil
+        // The graph/reads and subagent chips accumulate from the LIVE event
+        // stream, so re-opening a session — or just restarting the app — left
+        // them at zero while the session obviously had history (user,
+        // 2026-08-29: a 148K-context session showing no chips at all).
+        // Rebuild both from the transcript using the same parsers the live
+        // path uses. Counts cover the replayed window; on a paged load
+        // (`record.truncated`) that is the loaded tail, not the whole session.
+        var replayCounts = ToolUseCounts()
+        var replayAgents = SubagentLedger()
 
         for turn in record.turns {
             switch turn {
@@ -1129,6 +1138,11 @@ final class ChatPreviewModel {
                 if let data = try? encoder.encode(event) {
                     rebuilt = ChatStreamReducer.apply(rebuilt, cliEventData: data)
                     if let todos = TodoExtractor.todos(from: data) { replayTodos = todos }
+                    let d = ToolUseCounter.deltaForCliEvent(data)
+                    replayCounts.graphCalls += d.graphCalls
+                    replayCounts.fileReadCalls += d.fileReadCalls
+                    replayCounts.graphSummaryCalls += d.graphSummaryCalls
+                    replayAgents.apply(cliEventData: data)
                 }
             case let .turnError(_, err):
                 // Match the live path's surface: a banner on the
@@ -1156,6 +1170,12 @@ final class ChatPreviewModel {
         // assistant message after replay; live streaming flags
         // re-enable themselves when the resume tail lands a fresh
         // assistant.
+        let liveBridge = MarvinBridge.shared
+        liveBridge.sessionGraphCalls = replayCounts.graphCalls
+        liveBridge.sessionFileReadCalls = replayCounts.fileReadCalls
+        liveBridge.sessionGraphSummaryCalls = replayCounts.graphSummaryCalls
+        liveBridge.subagents = replayAgents
+
         for i in rebuilt.indices where rebuilt[i].isStreaming {
             rebuilt[i].isStreaming = false
         }
