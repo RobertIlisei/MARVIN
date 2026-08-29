@@ -95,6 +95,21 @@ export interface DesignTurnContext {
    *  stretch? Cleared by any graph call, so a turn can be stopped more than
    *  once but never twice without an intervening graph query. */
   graphDriftDenyFired: boolean;
+  /** ADR-0084 — graph_affected calls this turn. The blast-radius question
+   *  ("who calls this?") is the one grep genuinely cannot answer, and it was
+   *  measured at 0.4 % of graph calls while the UNDIRECTED graph_neighbors —
+   *  which the prompt explicitly says is not a blast-radius tool — was 23×
+   *  more common. */
+  affectedCallCount: number;
+  /** ADR-0084 — blast-radius nudges fired this turn (capped). */
+  blastRadiusNudgeCount: number;
+  /** ADR-0084 — graph_change_impact calls this turn. */
+  changeImpactCallCount: number;
+  /** ADR-0084 — has the pre-ship impact nudge already fired this turn? */
+  shipImpactNudgeFired: boolean;
+  /** ADR-0084 — files this turn has already been nudged about. Editing a
+   *  file twice is one decision, not two. */
+  editedFilesThisTurn: Set<string>;
 }
 
 /** ADR-0060 — novel source files that may be opened after the last graph call
@@ -115,6 +130,17 @@ export const GRAPH_DRIFT_MAX_NUDGES = 3;
  *  the "grep and pray" failure Golden Rule 7 exists to stop. One deny per
  *  stretch — any graph call clears it. */
 export const GRAPH_DRIFT_DENY_THRESHOLD = 25;
+
+/** ADR-0084 — max blast-radius nudges per turn. One per file is right (the
+ *  question is per-symbol), but a 40-file refactor should not carry 40
+ *  reminders. */
+export const BLAST_RADIUS_MAX_NUDGES = 2;
+
+/** ADR-0084 — Bash commands that mean "this work is going out": a commit, a
+ *  push, an MR. Before one of these, `graph_change_impact` answers "what does
+ *  this branch touch that I have not looked at" in one call. Measured across
+ *  5,823 graph calls: it has been used ZERO times. */
+const SHIP_COMMAND = /\b(git\s+(commit|push)|gh\s+pr\s+create|glab\s+mr\s+create)\b/;
 
 /** Resolve enforcement level from env, exported so tests can pin it. */
 export function readDesignHooksMode(): DesignHooksMode {
@@ -216,6 +242,11 @@ export function createTurnDesignContext(
     graphifyNudgeCount: 0,
     graphifyNudgeTotal: 0,
     graphDriftDenyFired: false,
+    affectedCallCount: 0,
+    blastRadiusNudgeCount: 0,
+    changeImpactCallCount: 0,
+    shipImpactNudgeFired: false,
+    editedFilesThisTurn: new Set<string>(),
     advisorCallCount: 0,
     sourceFilesRead: 0,
     graphifyHookFired: false,
@@ -247,6 +278,9 @@ export function recordAllowedTool(
 ): void {
   if (toolName.startsWith("mcp__marvin-graph__")) {
     ctx.graphCallCount += 1;
+    // ADR-0084 — track the two specific tools the measurement found unused.
+    if (toolName.endsWith("__graph_affected")) ctx.affectedCallCount += 1;
+    if (toolName.endsWith("__graph_change_impact")) ctx.changeImpactCallCount += 1;
     // ADR-0060 — re-orienting clears the drift budget. The rule isn't "query
     // the graph N times", it's "don't explore blind for long stretches".
     ctx.novelFilesSinceGraph = 0;
@@ -444,6 +478,82 @@ export function checkGraphDriftDeny(
 }
 
 /**
+ * ADR-0084 (A) — the blast-radius nudge.
+ *
+ * Measured over 5,823 real graph calls: `graph_affected` — who calls this
+ * symbol, with file and line — was 0.4 % of them, while the UNDIRECTED
+ * `graph_neighbors` was 9 %, despite the prompt stating in terms that
+ * neighbours cannot tell callers from callees. MARVIN reaches for the tool
+ * that cannot answer the question. `graph_affected` reads the AST call cache
+ * and is genuinely directed.
+ *
+ * Fires before an Edit/Write to a source file when NO `graph_affected` call
+ * has happened this turn. Advisory, capped, and never on a file the turn has
+ * already edited — changing a file twice is one decision, not two.
+ *
+ * Advisory on purpose: ADR-0060 shipped a threshold tuned blind and had to be
+ * re-tuned in ADR-0083. This one carries telemetry (`blast.radius.nudge`) so
+ * the next move is made on numbers.
+ *
+ * Exported for tests.
+ */
+export function checkBlastRadius(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | null {
+  if (!ctx.hasGraph) return null;
+  if (ctx.affectedCallCount > 0) return null;
+  if (ctx.blastRadiusNudgeCount >= BLAST_RADIUS_MAX_NUDGES) return null;
+  if (toolName !== "Edit" && toolName !== "Write") return null;
+  const target = pickPath(toolInput, ["file_path", "path"]);
+  if (!target || !isSourceFile(target) || !isInsideCwd(ctx.cwd, target)) return null;
+  if (ctx.editedFilesThisTurn.has(target)) return null;
+  ctx.editedFilesThisTurn.add(target);
+  ctx.blastRadiusNudgeCount += 1;
+  return (
+    `[blast radius — advisory] You are about to change ${target} without ` +
+    "having asked who depends on it. `mcp__marvin-graph__graph_affected" +
+    "({symbol})` returns every caller with file and line, from the AST call " +
+    "cache — the one question grep cannot answer. `graph_neighbors` is NOT " +
+    "this: the built graph is undirected, so its arrows are adjacency order, " +
+    "not call direction. If this is a leaf change (a doc, a test, a new " +
+    "file), ignore this."
+  );
+}
+
+/**
+ * ADR-0084 (B) — the pre-ship impact nudge.
+ *
+ * `graph_change_impact` gives the blast radius of a whole branch — the
+ * symbols it defines and every caller OUTSIDE it. Built for exactly the
+ * moment before a commit or MR, and used **zero times** in 5,823 graph
+ * calls. Fires once per turn, on the first ship-shaped Bash command.
+ *
+ * Exported for tests.
+ */
+export function checkShipImpact(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | null {
+  if (!ctx.hasGraph) return null;
+  if (ctx.shipImpactNudgeFired) return null;
+  if (ctx.changeImpactCallCount > 0) return null;
+  if (toolName !== "Bash") return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  if (!SHIP_COMMAND.test(cmd)) return null;
+  ctx.shipImpactNudgeFired = true;
+  return (
+    "[pre-ship impact — advisory] This work is about to leave your machine. " +
+    "`mcp__marvin-graph__graph_change_impact({})` reports, for the current " +
+    "branch, the symbols it changes and every caller outside it — the " +
+    "callers a reviewer would otherwise find. One call, no arguments. If you " +
+    "have already reviewed the diff's blast radius, ignore this."
+  );
+}
+
+/**
  * Build a PreToolUse hook callback for the SDK's `Options.hooks` config.
  *
  * Why a PreToolUse hook instead of `canUseTool`: with `permissionMode:
@@ -582,12 +692,34 @@ export function makeDesignHooksPreToolUse(args: {
     // count reflects the drift that led here, and emitted as non-blocking
     // `additionalContext`: the call proceeds either way.
     const drift = mode === "enforce" ? checkGraphDrift(designCtx, evt.tool_name, safeInput) : null;
+    // ADR-0084 — the two tools the 2026-08-30 measurement found unused:
+    // graph_affected (0.4 % of calls) before a mutation, graph_change_impact
+    // (0 calls, ever) before the work ships. Advisory, like the drift nudge.
+    const blast = mode === "enforce" ? checkBlastRadius(designCtx, evt.tool_name, safeInput) : null;
+    const ship = mode === "enforce" ? checkShipImpact(designCtx, evt.tool_name, safeInput) : null;
 
     // No design-hook deny — record the tool as allowed-from-our-POV so
     // state advances. (canUseTool may still deny for safety reasons; if
     // it does, recordAllowedTool was a slight over-count, but that only
     // delays — never silences — a future hook firing.)
     recordAllowedTool(designCtx, evt.tool_name, safeInput);
+
+    for (const [advice, kind] of [
+      [blast, "blast.radius.nudge"],
+      [ship, "ship.impact.nudge"],
+    ] as const) {
+      if (!advice) continue;
+      logDesignHookEvent({
+        kind,
+        turnId,
+        tool: evt.tool_name,
+        graphCallCount: designCtx.graphCallCount,
+        affectedCallCount: designCtx.affectedCallCount,
+      });
+      return {
+        hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: advice },
+      } as HookJSONOutput;
+    }
 
     if (drift) {
       // The nudge is injected as context, which leaves NO trace in the session
