@@ -152,9 +152,8 @@ struct BuildTaskSheet: View {
 
     private func run(_ task: BuildTask) {
         // Ensure the terminal pane is visible.
-        if !bridge.panes.terminal {
-            NativePrefs.shared.togglePane("terminal")
-        }
+        // Reveal, not toggle: firing a task twice must not hide its output.
+        NativePrefs.shared.revealPane(.terminal)
         // Inject the command into the terminal via a bridge signal.
         MarvinBridge.shared.triggerTerminalCommand(task.command)
         dismiss()

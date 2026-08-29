@@ -1758,6 +1758,80 @@ runner.suite("SubagentLedger") {
     }
 }
 
+runner.suite("BottomPanel") {
+    runner.test("activating selects, and closes only when it is already the visible tab") {
+        var st = BottomPanelState(isOpen: false, activeTab: .terminal)
+        st = st.activating(.problems)
+        runner.expect(st.isOpen, "opens")
+        runner.expect(st.activeTab, equals: .problems, "selects problems")
+        st = st.activating(.terminal)
+        runner.expect(st.isOpen, "switching tab keeps it open")
+        runner.expect(st.activeTab, equals: .terminal, "selects terminal")
+        st = st.activating(.terminal)
+        runner.expect(!st.isOpen, "clicking the visible tab closes (VS Code semantics)")
+        runner.expect(st.activeTab, equals: .terminal, "selection remembered while closed")
+    }
+
+    runner.test("revealing never closes — a build task cannot hide its own output") {
+        var st = BottomPanelState(isOpen: true, activeTab: .terminal)
+        st = st.revealing(.terminal)
+        runner.expect(st.isOpen, "still open after a second reveal")
+        st = BottomPanelState(isOpen: false, activeTab: .graph).revealing(.problems)
+        runner.expect(st.isOpen && st.activeTab == .problems, "opens on the revealed tab")
+    }
+
+    runner.test("toggled opens and closes without changing the selection") {
+        let st = BottomPanelState(isOpen: true, activeTab: .preview).toggled()
+        runner.expect(!st.isOpen, "closed")
+        runner.expect(st.activeTab, equals: .preview, "selection kept")
+        runner.expect(st.toggled().isOpen, "reopens")
+    }
+}
+
+runner.suite("BottomPanelMigration") {
+    runner.test("an existing user's several-panes-open layout resolves by precedence") {
+        // The real shape on disk today: {terminal: true, preview: true}.
+        let st = BottomPanelMigration.resolve(terminal: true, problems: false, preview: true, graph: false)
+        runner.expect(st.isOpen, "open")
+        runner.expect(st.activeTab, equals: .terminal, "terminal wins — it has running state")
+        runner.expect(
+            BottomPanelMigration.resolve(terminal: false, problems: false, preview: true, graph: true).activeTab,
+            equals: .preview, "preview beats graph"
+        )
+    }
+
+    runner.test("no bottom pane on = closed, and the stored tab survives") {
+        let st = BottomPanelMigration.resolve(terminal: false, problems: false, preview: false, graph: false, stored: .problems)
+        runner.expect(!st.isOpen, "closed")
+        runner.expect(st.activeTab, equals: .problems, "stored selection kept for next open")
+        runner.expect(
+            BottomPanelMigration.resolve(terminal: false, problems: false, preview: false, graph: false).activeTab,
+            equals: .terminal, "default selection"
+        )
+    }
+
+    runner.test("a stored tab wins over precedence when it is on") {
+        let st = BottomPanelMigration.resolve(terminal: true, problems: true, preview: false, graph: false, stored: .problems)
+        runner.expect(st.activeTab, equals: .problems, "stored beats precedence")
+        // …but not when it is off — that payload is stale.
+        runner.expect(
+            BottomPanelMigration.resolve(terminal: true, problems: false, preview: false, graph: false, stored: .problems).activeTab,
+            equals: .terminal, "stale stored tab ignored"
+        )
+    }
+
+    runner.test("round-trips through the legacy projection an older build reads") {
+        for tab in BottomPanelTab.allCases {
+            let p = BottomPanelMigration.project(BottomPanelState(isOpen: true, activeTab: tab))
+            let back = BottomPanelMigration.resolve(terminal: p.terminal, problems: p.problems, preview: p.preview, graph: p.graph)
+            runner.expect(back.activeTab, equals: tab, "round-trip \(tab.rawValue)")
+            runner.expect(back.isOpen, "round-trip open \(tab.rawValue)")
+        }
+        let closed = BottomPanelMigration.project(BottomPanelState(isOpen: false, activeTab: .terminal))
+        runner.expect(!closed.terminal && !closed.problems && !closed.preview && !closed.graph, "closed projects all-false")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

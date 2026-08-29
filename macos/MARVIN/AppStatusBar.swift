@@ -80,7 +80,7 @@ struct AppStatusBar: View {
 
     private var diagnosticCounters: some View {
         Button {
-            NativePrefs.shared.togglePane("problems")
+            NativePrefs.shared.revealPane(.problems)
         } label: {
             HStack(spacing: 8) {
                 HStack(spacing: 3) {

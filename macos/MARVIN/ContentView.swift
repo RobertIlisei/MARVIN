@@ -10,6 +10,7 @@
 //   • offline    — the failure reason, plus a copyable command for
 //                  starting the sidecar.
 
+import MARVINLogic
 import SwiftUI
 
 
@@ -302,6 +303,9 @@ struct ContentView: View {
 
     /// ADR-0021 M5: WebView removed. The middle pane is now purely native —
     /// workPaneSplit directly, with folder-drop forwarded to ProjectsService.
+    /// Tabs that have been activated at least once — see `bottomPanesArea`.
+    @State private var mountedBottomTabs: Set<BottomPanelTab> = []
+
     private var webIsland: some View {
         workPaneSplit
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -318,8 +322,7 @@ struct ContentView: View {
     /// bottom child collapses to zero height; the system hides the
     /// divider automatically when a subview is collapsed.
     private var workPaneSplit: some View {
-        let hasBottomPane = bridge.panes.preview || bridge.panes.terminal
-            || bridge.panes.problems || bridge.panes.graph
+        let hasBottomPane = bridge.panes.bottom.isOpen
         return VSplitView {
             editorArea
                 .frame(minHeight: 120)
@@ -346,59 +349,95 @@ struct ContentView: View {
         }
     }
 
-    /// Bottom panes container — preview + terminal stacked
-    /// horizontally, each visible only when its pane toggle is on.
-    /// HSplitView so the user can drag the boundary between preview
-    /// and terminal when both are open.
+    /// The bottom panel: a tab strip and one visible pane (plan §D).
+    ///
+    /// Was four independent panes in an `HSplitView` when 2+ were on and a
+    /// bare `if/else` chain when 1 was — so toggling 1→2 swapped view
+    /// identity and destroyed each pane's `@State`, and Problems was
+    /// unreachable unless its status-bar pill happened to be rendering.
+    /// Now every tab stays mounted (`keptMounted`), so terminal scrollback
+    /// and scroll offsets survive a switch.
     @ViewBuilder
     private var bottomPanesArea: some View {
-        let showPreview  = bridge.panes.preview
-        let showTerminal = bridge.panes.terminal
-        let showProblems = bridge.panes.problems
-        let showGraph    = bridge.panes.graph
-        // Collect visible panes; HSplitView splits them side-by-side.
-        // Single pane: no split. Two+: HSplitView with autosave.
-        let count = (showPreview ? 1 : 0) + (showTerminal ? 1 : 0)
-            + (showProblems ? 1 : 0) + (showGraph ? 1 : 0)
-        if count >= 2 {
-            HSplitView {
-                if showProblems {
-                    DiagnosticsPanelView()
-                        .environment(bridge)
-                        .frame(minWidth: 220)
-                        .background(SplitViewAutosave(name: "marvin.bottom.problems"))
+        let panel = bridge.panes.bottom
+        VStack(spacing: 0) {
+            bottomTabStrip(panel)
+            MarvinDivider()
+            ZStack {
+                // Gated on first activation so an unopened Graph tab never
+                // pays for a WKWebView it may never show.
+                if mountedBottomTabs.contains(.problems) {
+                    DiagnosticsPanelView().environment(bridge)
+                        .keptMounted(active: panel.activeTab == .problems)
                 }
-                if showGraph {
-                    GraphPaneView()
-                        .environment(bridge)
-                        .frame(minWidth: 280)
-                        .background(SplitViewAutosave(name: "marvin.bottom.graph"))
+                if mountedBottomTabs.contains(.terminal) {
+                    TerminalPaneView().environment(bridge)
+                        .keptMounted(active: panel.activeTab == .terminal)
                 }
-                if showPreview {
-                    PreviewPaneView()
-                        .environment(bridge)
-                        .frame(minWidth: 280)
-                        .background(SplitViewAutosave(name: "marvin.bottom"))
+                if mountedBottomTabs.contains(.preview) {
+                    PreviewPaneView().environment(bridge)
+                        .keptMounted(active: panel.activeTab == .preview)
                 }
-                if showTerminal {
-                    TerminalPaneView()
-                        .environment(bridge)
-                        .frame(minWidth: 280)
+                if mountedBottomTabs.contains(.graph) {
+                    GraphPaneView().environment(bridge)
+                        .keptMounted(active: panel.activeTab == .graph)
                 }
             }
-        } else if showPreview {
-            PreviewPaneView()
-                .environment(bridge)
-        } else if showTerminal {
-            TerminalPaneView()
-                .environment(bridge)
-        } else if showProblems {
-            DiagnosticsPanelView()
-                .environment(bridge)
-        } else if showGraph {
-            GraphPaneView()
-                .environment(bridge)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .onChange(of: panel.activeTab, initial: true) { _, tab in
+            if panel.isOpen { mountedBottomTabs.insert(tab) }
+        }
+    }
+
+    private func bottomTabStrip(_ panel: BottomPanelState) -> some View {
+        HStack(spacing: 2) {
+            ForEach(BottomPanelTab.allCases, id: \.rawValue) { tab in
+                let active = panel.activeTab == tab
+                Button {
+                    NativePrefs.shared.selectBottomTab(tab)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: tab.symbol)
+                            .font(.system(size: 10))
+                        Text(tab.title)
+                            .font(.system(size: 11))
+                        if tab == .problems {
+                            let n = bridge.errorCount + bridge.warningCount
+                            if n > 0 {
+                                Text(n.formatted())
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(
+                                        (bridge.errorCount > 0 ? Color.red : Color.orange).opacity(0.22),
+                                        in: Capsule()
+                                    )
+                            }
+                        }
+                    }
+                    .foregroundStyle(active ? AnyShapeStyle(MarvinTheme.textPrimary) : AnyShapeStyle(.secondary))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(active ? MarvinTheme.elevated : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .help(tab.title)
+            }
+            Spacer()
+            Button {
+                NativePrefs.shared.toggleBottomPanel()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .help("Hide panel (⌘J)")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .underPageBackgroundColor))
     }
 
     /// Native empty-state hint shown over the middle pane when no
