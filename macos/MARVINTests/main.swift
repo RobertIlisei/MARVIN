@@ -1927,6 +1927,30 @@ runner.suite("UpdateCheck") {
     }
 }
 
+runner.suite("ContextUsage · reported window") {
+    func ev(_ j: String) -> Data { Data(j.utf8) }
+    runner.test("reads the SDK's own contextWindow from a result event") {
+        // The real shape, from a live transcript 2026-08-30.
+        let d = ev(#"{"type":"result","modelUsage":{"claude-sonnet-5":{"contextWindow":200000,"maxOutputTokens":32000}}}"#)
+        runner.expect(ContextUsageReader.reportedContextWindow(cliEventData: d), equals: 200_000, "200K reported")
+    }
+    runner.test("takes the largest window when a turn used several models") {
+        // Executor + advisor on different models: the bar is about the main
+        // conversation's headroom, so the larger window is the right one.
+        let d = ev(#"{"type":"result","modelUsage":{"claude-haiku-4-5":{"contextWindow":200000},"claude-opus-5":{"contextWindow":1000000}}}"#)
+        runner.expect(ContextUsageReader.reportedContextWindow(cliEventData: d), equals: 1_000_000, "largest wins")
+    }
+    runner.test("returns nil when there is nothing usable, so the estimate stands") {
+        runner.expect(ContextUsageReader.reportedContextWindow(cliEventData: ev(#"{"type":"assistant"}"#)) == nil, "not a result")
+        runner.expect(ContextUsageReader.reportedContextWindow(cliEventData: ev(#"{"type":"result"}"#)) == nil, "no modelUsage")
+        runner.expect(ContextUsageReader.reportedContextWindow(cliEventData: ev(#"{"type":"result","modelUsage":{"m":{"contextWindow":0}}}"#)) == nil, "zero is not a window")
+    }
+    runner.test("the id-based estimate still covers the 1M marker") {
+        runner.expect(ContextUsageReader.contextWindow(forModelId: "claude-opus-5[1m]"), equals: 1_000_000, "[1m]")
+        runner.expect(ContextUsageReader.contextWindow(forModelId: "claude-sonnet-5"), equals: 200_000, "standard")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

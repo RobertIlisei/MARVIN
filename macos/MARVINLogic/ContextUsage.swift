@@ -84,6 +84,36 @@ public enum ContextUsageReader {
         return 200_000
     }
 
+    /// The context window the SDK ITSELF reported for this turn.
+    ///
+    /// Every `result` event carries `modelUsage[<model>].contextWindow` — the
+    /// authoritative number, straight from the model that just ran. MARVIN
+    /// inferred the window from the model id instead: correct for today's
+    /// models (verified 2026-08-30: the SDK reports exactly 200000 for
+    /// Sonnet 5, Fable 5 and Haiku 4.5), but right by coincidence. It would
+    /// be wrong the moment a model ships a different window, or when a 1M
+    /// session is keyed by an id without the `[1m]` marker.
+    ///
+    /// Returns the largest window across the models used this turn — a turn
+    /// can involve the executor plus an advisor on a different model, and the
+    /// bar is about the main conversation's headroom. Nil when the event has
+    /// no usable figure, so callers keep their id-based estimate.
+    public static func reportedContextWindow(cliEventData data: Data) -> Int? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["type"] as? String == "result",
+              let usage = json["modelUsage"] as? [String: Any]
+        else { return nil }
+        var best: Int?
+        for (_, value) in usage {
+            guard let entry = value as? [String: Any],
+                  let window = entry["contextWindow"] as? Int,
+                  window > 0
+            else { continue }
+            best = max(best ?? 0, window)
+        }
+        return best
+    }
+
     /// Read the `usage` block from a cli.event payload and return
     /// `(resident, billable)` token counts. `resident` drives the
     /// status-bar colour ramp; `billable` is shown in the hover
