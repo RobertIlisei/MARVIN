@@ -53,15 +53,20 @@ struct CostSummary: Equatable {
         let isUsingOverage: Bool?
         var id: String { type }
 
+        /// Same wording as the Claude CLI's Usage tab and the desktop app,
+        /// so the three surfaces read as one.
         var label: String {
             switch type {
-            case "five_hour": return "5-hour window"
-            case "seven_day": return "weekly (all models)"
-            case "seven_day_opus": return "weekly · Opus"
-            case "seven_day_sonnet": return "weekly · Sonnet"
-            case "seven_day_overage_included": return "weekly incl. overage"
+            case "five_hour": return "current session"
+            case "seven_day": return "current week (all models)"
+            case "seven_day_overage_included": return "current week (incl. overage)"
             case "overage": return "overage"
-            default: return type.replacingOccurrences(of: "_", with: " ")
+            default:
+                if type.hasPrefix("seven_day_") {
+                    let model = String(type.dropFirst("seven_day_".count))
+                    return "current week (\(model.prefix(1).uppercased() + model.dropFirst()))"
+                }
+                return type.replacingOccurrences(of: "_", with: " ")
             }
         }
     }

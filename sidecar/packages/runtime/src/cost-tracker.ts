@@ -124,25 +124,54 @@ export function recordClaudeRateLimit(info: {
   resetsAt?: number;
   overageStatus?: string;
   isUsingOverage?: boolean;
+  /** Per-window utilisation — what the Claude CLI's Usage tab and the
+   *  desktop app render. Undeclared in the SDK types; observed live
+   *  2026-08-29 with `five_hour` + `seven_day` (and per-model weekly
+   *  windows such as `seven_day_opus` when those models were used). */
+  unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number }>;
 }): ClaudeRateLimitWindow | null {
   const status = info.status;
   if (status !== "allowed" && status !== "allowed_warning" && status !== "rejected") return null;
   const file = readCostFile();
-  const type = info.rateLimitType ?? "unknown";
   const existing = file.claudeRateLimits ?? {};
-  if (type === "unknown" && Object.keys(existing).length > 0) return null;
-  const snapshot: ClaudeRateLimitWindow = {
-    type,
-    status,
-    ...(typeof info.utilization === "number" ? { utilization: info.utilization } : {}),
-    ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
-    ...(typeof info.overageStatus === "string" ? { overageStatus: info.overageStatus } : {}),
-    ...(typeof info.isUsingOverage === "boolean" ? { isUsingOverage: info.isUsingOverage } : {}),
-    at: new Date().toISOString(),
-  };
-  file.claudeRateLimits = { ...existing, [type]: snapshot };
+  const at = new Date().toISOString();
+  const next: Record<string, ClaudeRateLimitWindow> = { ...existing };
+
+  // The headline window the event is about — carries the status flags.
+  const type = info.rateLimitType ?? "unknown";
+  let headline: ClaudeRateLimitWindow | null = null;
+  if (type !== "unknown" || Object.keys(existing).length === 0) {
+    headline = {
+      type,
+      status,
+      ...(typeof info.utilization === "number" ? { utilization: info.utilization } : {}),
+      ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
+      ...(typeof info.overageStatus === "string" ? { overageStatus: info.overageStatus } : {}),
+      ...(typeof info.isUsingOverage === "boolean" ? { isUsingOverage: info.isUsingOverage } : {}),
+      at,
+    };
+    next[type] = headline;
+  }
+
+  // Every window the event sized. Utilisation here is authoritative — it is
+  // the number the CLI shows — so it overrides the headline's, and a window
+  // the headline did not mention (weekly, per-model) gets its own row.
+  for (const [wtype, w] of Object.entries(info.unifiedWindows ?? {})) {
+    if (!w || typeof w !== "object") continue;
+    const base = next[wtype] ?? { type: wtype, status: "allowed" as const, at };
+    next[wtype] = {
+      ...base,
+      status: wtype === type ? status : base.status,
+      ...(typeof w.utilization === "number" ? { utilization: w.utilization } : {}),
+      ...(typeof w.resetsAt === "number" ? { resetsAt: w.resetsAt } : {}),
+      at,
+    };
+  }
+
+  if (headline === null && Object.keys(info.unifiedWindows ?? {}).length === 0) return null;
+  file.claudeRateLimits = next;
   writeCostFile(file);
-  return snapshot;
+  return headline ?? next[Object.keys(info.unifiedWindows ?? {})[0] ?? ""] ?? null;
 }
 
 /** Narrow an SDK message to a rate-limit payload; null for anything else. */
@@ -226,6 +255,14 @@ function dayKey(iso: string): string {
   return iso.slice(0, 10);
 }
 
+/** Display order: current session, weekly (all models), then per-model weeklies. */
+function windowRank(type: string): number {
+  if (type === "five_hour") return 0;
+  if (type === "seven_day") return 1;
+  if (type.startsWith("seven_day")) return 2;
+  return 3;
+}
+
 /** Optional filter: if `projectId` is set, only entries for that project. */
 export function summarizeCost(options: { projectId?: string } = {}): CostSummary {
   const { projectId } = options;
@@ -265,6 +302,8 @@ export function summarizeCost(options: { projectId?: string } = {}): CostSummary
     lifetime,
     daily,
     openRouter: file.openRouter ?? null,
-    claudeRateLimits: Object.values(file.claudeRateLimits ?? {}).sort((a, b) => a.type.localeCompare(b.type)),
+    claudeRateLimits: Object.values(file.claudeRateLimits ?? {}).sort(
+      (a, b) => windowRank(a.type) - windowRank(b.type) || a.type.localeCompare(b.type),
+    ),
   };
 }

@@ -256,6 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // ADR-0078 — hang up every terminal shell so none outlives the app.
+        TerminalSessionStore.shared.terminateAll()
         // Tear down the bundled sidecar before the AppKit run-loop
         // exits. Without this, the `node server.js` child survives
         // Cmd-Q and keeps :3030 bound until the user logs out — a

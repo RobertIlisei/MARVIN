@@ -680,7 +680,7 @@ struct CostHistoryPopover: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
                 .padding(.vertical, 2)
-            Text("claude plan usage")
+            Text("claude plan usage limits")
                 .font(.caption.monospaced())
                 .tracking(2)
                 .textCase(.uppercase)
@@ -801,7 +801,7 @@ private struct ClaudeWindowRow: View {
                 Text(window.label)
                 Spacer()
                 if let u = window.utilization {
-                    Text(percentLabel(u))
+                    Text("\(percentLabel(u)) used")
                         .foregroundStyle(tint(u))
                 } else {
                     Text(window.status.replacingOccurrences(of: "_", with: " "))

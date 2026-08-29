@@ -32,6 +32,23 @@ describe("claude rate limits", () => {
     expect(summarizeCost().claudeRateLimits).toEqual([]);
   });
 
+  it("ingests unifiedWindows — the CLI's numbers — and orders session, weekly, per-model", () => {
+    // Exactly the event observed live on 2026-08-29 (Haiku turn), plus a
+    // per-model weekly window as the CLI shows for Fable.
+    recordClaudeRateLimit({
+      status: "allowed", rateLimitType: "five_hour", resetsAt: 1_788_042_600, overageStatus: "rejected", isUsingOverage: false,
+      unifiedWindows: { seven_day_fable: { utilization: 0.51, resetsAt: 1_788_382_800 }, five_hour: { utilization: 0.13, resetsAt: 1_788_042_600 }, seven_day: { utilization: 0.46, resetsAt: 1_788_382_800 } },
+    });
+    const s = summarizeCost();
+    expect(s.claudeRateLimits.map((w) => [w.type, w.utilization])).toEqual([
+      ["five_hour", 0.13],
+      ["seven_day", 0.46],
+      ["seven_day_fable", 0.51],
+    ]);
+    expect(s.claudeRateLimits[0]?.overageStatus).toBe("rejected"); // headline flags kept
+    expect(s.claudeRateLimits[1]?.resetsAt).toBe(1_788_382_800);
+  });
+
   it("narrows only rate_limit_event messages", () => {
     expect(rateLimitPayload({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour" } })).toEqual({ status: "allowed", rateLimitType: "five_hour" });
     expect(rateLimitPayload({ type: "result" })).toBeNull();
