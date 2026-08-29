@@ -99,6 +99,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0084](./0084-blast-radius-and-pre-ship-impact-nudges.md) | Mechanical triggers for `graph_affected` (0.4 % of 5,823 calls) and `graph_change_impact` (0) — advisory first, with telemetry to decide escalation | Accepted | 2026-08-30 |
 | [0085](./0085-graphify-beyond-search.md) | Graphify beyond search: god-nodes + multigraph diagnose, live Postgres schema into the graph, git hooks for freshness, and LESSONS.md injected to close the work-memory loop | Accepted | 2026-08-30 |
 | [0086](./0086-dependency-bootstrap-and-update-check.md) | `bin/marvin deps` installs the toolchain (graphify was advisory), `graph-hooks` keeps graphs fresh outside the IDE, and a daily update check with a non-auto-installing prompt | Accepted | 2026-08-30 |
+| [0087](./0087-newest-claude-cli-and-reported-context-window.md) | MARVIN ran a Claude CLI 159 versions behind the user's (first-path-wins), which is why the plan-usage bars were blank; resolve the newest, and trust the SDK-reported context window | Accepted | 2026-08-30 |
 
 ## Template
 
