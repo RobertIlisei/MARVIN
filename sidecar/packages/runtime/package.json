@@ -21,6 +21,7 @@
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./pending-input": "./src/pending-input.ts",
+    "./turn-input": "./src/turn-input.ts",
     "./backlog": "./src/backlog.ts",
     "./backlog-groom": "./src/backlog-groom.ts",
     "./obsidian-vault": "./src/obsidian-vault.ts",
