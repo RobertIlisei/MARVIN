@@ -66,6 +66,7 @@ struct BacklogPanel: View {
     /// Item opened in the detail sheet (severity/body editing, resolve
     /// with note). Nested sheet on the panel sheet — macOS stacks fine.
     @State private var detailItem: BacklogItem?
+    @State private var bulkAction: BulkReview?
 
     // Sort / group / filter — persisted so the user's view survives a
     // relaunch (mirrors the localStorage-backed prefs the web shell used).
@@ -162,10 +163,10 @@ struct BacklogPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             if hasControllable {
                 controlStrip
-                Divider()
+                MarvinDivider()
             }
             if let error {
                 Text(error)
@@ -197,10 +198,10 @@ struct BacklogPanel: View {
             }
             if !findings.isEmpty {
                 groomSummary
-                Divider()
+                MarvinDivider()
             }
             content
-            Divider()
+            MarvinDivider()
             addRow
         }
         .frame(minWidth: 720, idealWidth: 920, minHeight: 520, idealHeight: 720)
@@ -427,17 +428,59 @@ struct BacklogPanel: View {
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Color.purple.opacity(0.15), in: Capsule())
                 Spacer()
-                Button("Keep all") {
-                    Task { await mutate { for i in provisional { try await BacklogService.shared.setStatus(workDir: workDir, id: i.id, status: "open") } } }
-                }
-                .controlSize(.small)
-                Button("Dismiss all") {
-                    Task { await mutate { for i in provisional { try await BacklogService.shared.setStatus(workDir: workDir, id: i.id, status: "dismissed") } } }
-                }
-                .controlSize(.small)
+                // ADR-0047 puts the bloat control at THIS review — capture is
+                // deliberately un-gated, so this pass is the only thing standing
+                // between "noticed in flight" and a permanent open item. A
+                // one-click "Keep all" turns that control into a rubber stamp:
+                // on 2026-08-29 eight items were promoted in a single click,
+                // two minutes after capture, with no per-item judgement. Both
+                // bulk actions now name what they are about to do and ask.
+                Button("Keep all") { bulkAction = .keep }
+                    .controlSize(.small)
+                Button("Dismiss all") { bulkAction = .dismiss }
+                    .controlSize(.small)
             }
             ForEach(provisional) { item in provisionalRow(item) }
-            Divider().padding(.vertical, 2)
+            MarvinDivider().padding(.vertical, 2)
+        }
+        .confirmationDialog(
+            bulkAction.map { "\($0.verb) all \(provisional.count) auto-captured items?" } ?? "",
+            isPresented: Binding(get: { bulkAction != nil }, set: { if !$0 { bulkAction = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let action = bulkAction {
+                Button(action.confirmLabel, role: action == .dismiss ? .destructive : nil) {
+                    let target = action.status
+                    Task {
+                        await mutate {
+                            for i in provisional {
+                                try await BacklogService.shared.setStatus(
+                                    workDir: workDir, id: i.id, status: target)
+                            }
+                        }
+                    }
+                    bulkAction = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { bulkAction = nil }
+        } message: {
+            Text(bulkAction?.explanation ?? "")
+        }
+    }
+
+    /// Which bulk review action is awaiting confirmation. `nil` = none pending.
+    private enum BulkReview {
+        case keep, dismiss
+
+        var status: String { self == .keep ? "open" : "dismissed" }
+        var verb: String { self == .keep ? "Keep" : "Dismiss" }
+        var confirmLabel: String { self == .keep ? "Keep all" : "Dismiss all" }
+        var explanation: String {
+            self == .keep
+                ? "They become open backlog items. Reviewing them one by one is "
+                    + "how the list stays worth reading."
+                : "They are marked dismissed. The files stay on disk as history, "
+                    + "but they leave the active list."
         }
     }
 
@@ -469,7 +512,15 @@ struct BacklogPanel: View {
                 .foregroundStyle(severityColor(item.severity))
                 .help("severity: \(item.severity)")
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title).font(.body.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(item.title).font(.body.weight(.semibold))
+                    // The full row already carries this; the review row is
+                    // exactly where "is this a bug or a chore?" decides keep
+                    // vs dismiss, so it belongs here more than there.
+                    if item.kindOrUnspecified != "unspecified" {
+                        statusBadge(item.kindOrUnspecified, kindColor(item.kindOrUnspecified))
+                    }
+                }
                 if !item.body.isEmpty {
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
@@ -777,7 +828,7 @@ struct BacklogDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     metaRow

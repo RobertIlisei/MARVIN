@@ -165,6 +165,24 @@ export async function POST(req: NextRequest) {
   // one failure a single-turn-per-session model must not have.
   const inflight = getLiveTurn(marvinSessionId);
   if (inflight && !inflight.ended) {
+    // ADR-0076 — a HUMAN turn running with a streaming input channel takes
+    // the message NOW (Claude Code's mid-turn steering) instead of queueing
+    // it behind the turn. Persisted to the transcript first, so it is on
+    // disk before delivery; the live bus gets a `turn.user` so attached
+    // clients can render it inline.
+    if (inflight.kind === "human" && inflight.inject?.(message)) {
+      appendSessionTurn(projectId, marvinSessionId, {
+        type: "turn.user",
+        at: new Date().toISOString(),
+        message,
+      });
+      emitTurnEvent(inflight, "turn.user", { message, turnId: inflight.turnId });
+      return new Response(
+        JSON.stringify({ injected: true, code: "injected-into-turn", turnId: inflight.turnId }),
+        { status: 202, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
     // Persist FIRST, so the message survives even if what follows throws or the
     // process dies. Everything after this point is best-effort scheduling.
     const queued = enqueuePending(projectId, marvinSessionId, message);

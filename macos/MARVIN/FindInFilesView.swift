@@ -48,7 +48,7 @@ struct FindInFilesView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchBar
-            Divider()
+            MarvinDivider()
             resultArea
         }
     }

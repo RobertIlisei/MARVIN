@@ -166,7 +166,7 @@ struct SetupPopoverContent: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            Divider()
+            MarvinDivider()
 
             // Models — one-line summary + button to open the dialog.
             VStack(alignment: .leading, spacing: 6) {
@@ -208,7 +208,7 @@ struct SetupPopoverContent: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            Divider()
+            MarvinDivider()
 
             // Voice (= personality)
             HStack(spacing: 8) {

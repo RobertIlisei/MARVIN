@@ -102,6 +102,21 @@ function emptySummary(path: string, error: string | null): GraphSummary {
   };
 }
 
+/**
+ * Every node in the graph, or `[]` when it is absent/unreadable. The whole
+ * file is parsed each call — graph.json is a few MB and the callers are
+ * per-turn tools, so a cache would buy little and go stale on every refresh.
+ */
+export function loadGraphNodes(graphPath: string): GraphNode[] {
+  if (!existsSync(graphPath)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(graphPath, "utf-8")) as RawNodeLink;
+    return Array.isArray(raw.nodes) ? raw.nodes : [];
+  } catch {
+    return [];
+  }
+}
+
 export function summarizeGraph(graphPath: string): GraphSummary {
   if (!existsSync(graphPath)) {
     return emptySummary(graphPath, `No graph at ${graphPath}.`);
@@ -213,6 +228,67 @@ function loadRaw(graphPath: string): { raw: RawNodeLink; nodes: GraphNode[]; lin
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve a CALL-CACHE node id to a graph label, tolerating graphify's two id
+ * schemes.
+ *
+ * The AST cache keys callers as `<file-stem>_<class>_<member>`; graph.json
+ * keys the same node as `<full-path-slug>_<class>_<member>`. On a real repo
+ * (agri, 2026-08-29) exact lookup hit **8 of 17,142** cache ids, so
+ * `graph_affected` had been printing ids like
+ * `tenanterasureservice_tenanterasureservice_lockouttenant` instead of names
+ * since ADR-0066 landed. The path slug ends with the file stem, so the graph
+ * id ends with the whole cache id: exact match first, then `endsWith("_" +
+ * nid)` among the nodes sharing the id's last segment (the member name), which
+ * keeps the scan to a handful of candidates. A tie (two files with the same
+ * stem, class and member) resolves to nothing rather than to a guess.
+ */
+const labelResolverMemo = new Map<
+  string,
+  { mtimeMs: number; exact: Map<string, string>; byTail: Map<string, Array<[string, string]>> }
+>();
+
+export function nodeLabelResolver(graphPath: string): (nid: string) => string | undefined {
+  if (!existsSync(graphPath)) return () => undefined;
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(graphPath).mtimeMs;
+  } catch {
+    return () => undefined;
+  }
+  let entry = labelResolverMemo.get(graphPath);
+  if (!entry || entry.mtimeMs !== mtimeMs) {
+    const exact = new Map<string, string>();
+    const byTail = new Map<string, Array<[string, string]>>();
+    for (const n of loadRaw(graphPath)?.nodes ?? []) {
+      if (typeof n.id !== "string" || typeof n.label !== "string") continue;
+      exact.set(n.id, n.label);
+      const tail = n.id.slice(n.id.lastIndexOf("_") + 1);
+      const list = byTail.get(tail);
+      if (list) list.push([n.id, n.label]);
+      else byTail.set(tail, [[n.id, n.label]]);
+    }
+    entry = { mtimeMs, exact, byTail };
+    labelResolverMemo.set(graphPath, entry);
+  }
+  const { exact, byTail } = entry;
+  return (nid: string) => {
+    const direct = exact.get(nid);
+    if (direct !== undefined) return direct;
+    const tail = nid.slice(nid.lastIndexOf("_") + 1);
+    const candidates = byTail.get(tail);
+    if (!candidates) return undefined;
+    const suffix = `_${nid}`;
+    let found: string | undefined;
+    for (const [id, label] of candidates) {
+      if (!id.endsWith(suffix)) continue;
+      if (found !== undefined) return undefined; // ambiguous — say nothing rather than guess
+      found = label;
+    }
+    return found;
+  };
 }
 
 /**

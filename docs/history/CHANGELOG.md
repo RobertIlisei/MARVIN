@@ -9,6 +9,44 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-29 — v0.1.66: the Antigravity pass, and four bugs the instrumentation named.**
+
+  **The macOS shell now looks like the reference.** The icon port had been
+  chasing the wrong theme: Antigravity bundles **Symbols** (Miguel Solorio,
+  MIT), not Seti — and Seti has *no folder icons at all*, which is why every
+  previous attempt failed on the one thing the user kept pointing at. Read
+  from the installed bundle, not inferred: 204 file + 78 folder SVGs vendored,
+  1237 lookups generated. The left pane gained a VS Code-style icon rail that
+  collapses to rail-only on a narrow drag and re-opens on click.
+
+  **Four defects, each closed on evidence rather than a third guess.**
+
+  | Symptom | What the instrumentation said | Fix |
+  |---|---|---|
+  | Split dividers black | a probe counted **zero** `drawDivider:` calls — modern AppKit does not draw them there | `NSSplitDividerView` is layer-backed with a `backgroundColor` property; set the colour, don't draw it |
+  | Left-pane drag sluggish | storm monitor: 150 invalidations / 0.5 s on the left pane, stack `_recursiveSetDefaultKeyViewLoop → FocusNavigator.allItems` | SwiftUI walked every focusable item in all five mounted panes per frame; inactive panes are now 0×0 and non-focusable |
+  | "New session" killed the running turn | `Tool permission request failed: Error: Stream closed` — the abort tore down the SDK query mid-`can_use_tool` | `clear()` was still calling `cancel()`; the server side was verified healthy first (a dropped SSE stream does **not** stop a turn) |
+  | A duplicate slipped the backlog gate | similarity scored the first **60 characters** — `slugify` builds filenames and truncates | tokenise the full title + an identifier-overlap bonus; 0.43 → 0.80, distinct pairs unmoved |
+
+  **Context cost, measured before touching anything.** A real 158K-token
+  session (14 compactions): 58K was fixed cost before any message. An output
+  governor caps oversized `Bash` results head+tail with the full text on disk
+  (the CLI's own threshold is ~655 KB, so a 15.7K-char Spring log went in
+  whole); the ADR index drops the path — it was the title again as a slug,
+  12.6K tokens where 7.7K carries the same information; background-job tails
+  became head+tail; and reasoning effort is now a **ceiling**, with
+  check-and-report wakeups running a rung lower.
+
+  **graphify reviewed, not adopted wholesale.** Already current at 0.9.51.
+  Its flagship PR tooling shells out to `gh` and is GitHub-only, so
+  `graph_change_impact` rebuilds it forge-agnostic from parts MARVIN already
+  owned. Verifying it live surfaced a two-month-old bug: `graph_affected` had
+  been printing raw cache ids, because exact id lookup matched **8 of 17,142**
+  callers.
+
+  Verified: 846 tests / 53 files green, `tsc` clean across four projects,
+  `swift build` clean, app installed and running.
+
 - **2026-08-25 — v0.1.65: the SDK catches up, and two things that only *looked* broken.**
 
   **ADR-0073 — Agent SDK 0.2.113 → 0.3.245, behaviour-neutral by construction.**

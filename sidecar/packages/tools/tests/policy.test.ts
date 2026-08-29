@@ -266,3 +266,155 @@ describe("mcpToolPolicy — plugin MCP servers gated by default (ADR-0053)", () 
     expect(mcpToolPolicy("TodoWrite")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR-0077 — test-weakening guard + publish guard.
+//
+// Both exist because `auto` permission strategy bypasses the `confirm` class
+// outright, so `confirm` is not a gate for anything irreversible. Prompted by
+// Anthropic's AI-native SDLC playbook, which names "agent weakens tests" and
+// "unbounded autonomy on deploy" as anti-patterns needing deterministic
+// controls rather than prose.
+// ---------------------------------------------------------------------------
+
+describe("toolPolicy — test-weakening guard (ADR-0077)", () => {
+  const edit = (file_path: string, old_string: string, new_string: string) =>
+    toolPolicy("Edit", { file_path, old_string, new_string });
+
+  it("denies introducing .skip into a test file", () => {
+    const d = edit(
+      "sidecar/packages/tools/tests/policy.test.ts",
+      'it("works", () => { expect(1).toBe(1); });',
+      'it.skip("works", () => { expect(1).toBe(1); });',
+    );
+    expect(d.class).toBe("deny");
+    expect(d.reason).toMatch(/test-disable marker/);
+  });
+
+  it.each([
+    ['it.only("a", () => { expect(1).toBe(1); });', ".only disables every other test"],
+    ['it.todo("a");', ".todo"],
+    ['xit("a", () => { expect(1).toBe(1); });', "xit"],
+    ['test.failing("a", () => { expect(1).toBe(1); });', ".failing"],
+    ['describe.skip("a", () => {});', "describe.skip"],
+  ])("denies %s (%s)", (after) => {
+    const d = edit("tests/foo.test.ts", 'it("a", () => { expect(1).toBe(1); });', after);
+    expect(d.class).toBe("deny");
+  });
+
+  it.each([
+    ["tests/test_pytest.py", "@pytest.mark.skip\ndef test_a(): assert 1", "python"],
+    ["pkg/thing_test.go", "func TestA(t *testing.T) { t.Skip() }", "go"],
+    ["macos/MARVINTests/FooTests.swift", "@Disabled func testA() { XCTAssertTrue(x) }", "swift/java"],
+  ])("denies a disable marker in %s (%s)", (path, after) => {
+    const d = edit(path, "def test_a(): assert 1", after);
+    expect(d.class).toBe("deny");
+  });
+
+  it("denies commenting out an assertion", () => {
+    const d = edit(
+      "tests/foo.test.ts",
+      'it("a", () => {\n  expect(x).toBe(1);\n});',
+      'it("a", () => {\n  // expect(x).toBe(1);\n});',
+    );
+    expect(d.class).toBe("deny");
+    expect(d.reason).toMatch(/comments out an assertion/);
+  });
+
+  it("denies an edit that removes every assertion from the region", () => {
+    const d = edit(
+      "tests/foo.test.ts",
+      'it("a", () => {\n  expect(x).toBe(1);\n  expect(y).toBe(2);\n});',
+      'it("a", () => {\n  doTheThing();\n});',
+    );
+    expect(d.class).toBe("deny");
+    expect(d.reason).toMatch(/removes all 2 assertion/);
+  });
+
+  // The precision half: TDD must keep working. `test-driven-development` is a
+  // MUST-trigger skill, so a guard that blocks test authoring is worse than no
+  // guard — it would get turned off.
+  it("allows writing a brand-new failing test (RED step)", () => {
+    const d = toolPolicy("Write", {
+      file_path: "tests/new-feature.test.ts",
+      content: 'it("does the thing", () => {\n  expect(doThing()).toBe(42);\n});',
+    });
+    expect(d.class).not.toBe("deny");
+  });
+
+  it("allows adding an assertion to an existing test", () => {
+    const d = edit(
+      "tests/foo.test.ts",
+      'it("a", () => {\n  expect(x).toBe(1);\n});',
+      'it("a", () => {\n  expect(x).toBe(1);\n  expect(y).toBe(2);\n});',
+    );
+    expect(d.class).not.toBe("deny");
+  });
+
+  it("allows consolidating several assertions into one (partial drop)", () => {
+    const d = edit(
+      "tests/foo.test.ts",
+      "expect(r.a).toBe(1);\nexpect(r.b).toBe(2);\nexpect(r.c).toBe(3);",
+      "expect(r).toMatchObject({ a: 1, b: 2, c: 3 });",
+    );
+    expect(d.class).not.toBe("deny");
+  });
+
+  it("allows re-enabling a skipped test (marker present on BOTH sides)", () => {
+    const d = edit(
+      "tests/foo.test.ts",
+      'it.skip("a", () => { expect(x).toBe(1); });\nit.skip("b", () => {});',
+      'it("a", () => { expect(x).toBe(1); });\nit.skip("b", () => {});',
+    );
+    expect(d.class).not.toBe("deny");
+  });
+
+  it("ignores non-test files entirely", () => {
+    const d = edit(
+      "sidecar/packages/tools/src/policy.ts",
+      "const a = 1;\nexpect;",
+      "// const a = 1;",
+    );
+    expect(d.class).not.toBe("deny");
+  });
+
+  it("ignores a source file that merely mentions expect()", () => {
+    const d = edit("src/helpers.ts", "expect(1).toBe(1)", "nothing");
+    expect(d.class).not.toBe("deny");
+  });
+});
+
+describe("toolPolicy — publish/release guard (ADR-0077)", () => {
+  const denied = [
+    "gh release create v0.1.66 --generate-notes",
+    "gh release upload v0.1.66 MARVIN.zip",
+    "gh release delete v0.1.60",
+    "npm publish",
+    "pnpm publish --access public",
+    "yarn publish",
+    "cargo publish",
+    "twine upload dist/*",
+    "docker push ghcr.io/x/marvin:latest",
+    "git push origin --tags",
+    "git push origin v0.1.66",
+    "git push origin refs/tags/v0.1.66",
+    "gh workflow run release.yml",
+  ];
+  it.each(denied)("denies %s", (cmd) => {
+    expect(toolPolicy("Bash", { command: cmd }).class).toBe("deny");
+  });
+
+  // The ship flow (memory: feedback_ship_flow) is commit -> FF push to main.
+  // Denying that would break the one path the user actually uses.
+  const allowed = [
+    "git push origin development",
+    "git push origin HEAD:main",
+    "git tag -a v0.1.66 -m 'release'",
+    "npm ls",
+    "gh release list",
+    "gh run list",
+  ];
+  it.each(allowed)("does not deny %s", (cmd) => {
+    expect(toolPolicy("Bash", { command: cmd }).class).not.toBe("deny");
+  });
+});

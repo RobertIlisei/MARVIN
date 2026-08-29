@@ -1,16 +1,16 @@
-// Phase 1a/b/c entry point — see docs/decisions/0016-swift-migration.md.
+// Entry point — see docs/decisions/0016-swift-migration.md.
 //
 // The app boots a single window, polls the Node sidecar at
 // http://localhost:3030/api/health, and renders one of three states
-// in the content view: connecting / online (full-bleed WKWebView
-// pointed at localhost:3030) / offline (with concrete instructions
-// for starting the sidecar). Phase 1d (NSToolbar) and Phase 2+ are
-// gated on the daily-use evaluation — see PHASE-1A-OBSERVATIONS.md.
+// in the content view: connecting / online (native SwiftUI chat, file
+// tree, terminal, source control — no browser involved, ADR-0075) /
+// offline (with concrete instructions for starting the sidecar).
 //
 // Architecture note: the sidecar is the trust boundary. The Swift
 // process never reads Anthropic credentials, never spawns the
-// Claude CLI, never persists session transcripts. The `.app` is
-// just a window onto an already-running Node server.
+// Claude CLI, never persists session transcripts — those live in the
+// bundled Node sidecar, which the native app talks to over
+// `/api/**` only (ADR-0075 removed the sidecar's own browser UI).
 
 import AppKit
 import STTextView
@@ -221,6 +221,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // leaves a backtrace but no reason in the .ips, which is why two fixes
         // were aimed at an inferred cause. See CrashDiagnostics.swift.
         ExceptionLog.installHooks()
+
+        // Every draggable split handle gets MarvinTheme.border, so an
+        // NSSplitView divider and a hand-drawn hairline are the same
+        // colour. Drawing-only swizzle — see SplitDividerTheme.swift for
+        // why this is safe where re-classing the split view was not.
+        SplitDividerTheme.install()
 
         // Dev-only: `MARVIN_SNAPSHOT_MD=<path>` rasterises the chat markdown
         // view to a PNG and exits. Done HERE rather than in `App.init()`

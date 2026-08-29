@@ -72,6 +72,13 @@ export interface WakeupRecord {
   /** Advisor-specific effort (ADR-0033); absent = follow the executor.
    *  Optional so pre-0033 persisted records keep parsing. */
   advisorThinkingMode?: string;
+  /**
+   * Effort requested for the FIRED turn, chosen by whoever armed it (the
+   * model via `schedule_wakeup`, or the job runner on a successful job).
+   * Applied through `clampEffort` at fire time, so it can only ever lower
+   * the turn below `thinkingMode`, never raise it. Absent = the ceiling.
+   */
+  effort?: string;
   /** The message injected as the wakeup turn's prompt (already prefixed). */
   prompt: string;
   /** Human reason shown back to MARVIN/the user. */
@@ -108,6 +115,8 @@ export interface ScheduleWakeupInput {
   playwrightEnabled?: boolean;
   thinkingMode: string;
   advisorThinkingMode?: string | undefined;
+  /** See `WakeupRecord.effort`. */
+  effort?: string | undefined;
   delaySeconds: number;
   reason: string;
   prompt: string;
@@ -250,6 +259,7 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
     permissionStrategy: input.permissionStrategy,
     ...(input.playwrightEnabled !== undefined ? { playwrightEnabled: input.playwrightEnabled } : {}),
     thinkingMode: input.thinkingMode,
+    ...(input.effort ? { effort: input.effort } : {}),
     ...(input.advisorThinkingMode
       ? { advisorThinkingMode: input.advisorThinkingMode }
       : {}),
@@ -371,7 +381,17 @@ export function __resetMachineSpacingForTests(): void {
   lastMachineTurnAt.clear();
 }
 
-function deferIfSessionBusy(record: WakeupRecord): boolean {
+/**
+ * Yield to a live turn: re-arm + re-persist `record` on a short backoff and
+ * return true; return false when the session is free. Exported so the
+ * orchestrator can re-check at the moment of `registerLiveTurn` — the
+ * fire-time check alone left a window (the `await buildProjectContext`
+ * inside `startScheduledTurn`, seconds long) in which a human POST could
+ * register first and then be EVICTED by the machine turn with "replaced by
+ * a newer turn on the same session". Observed 2026-08-28 22:3x on a real
+ * session; the opposite of ADR-0069's guarantee.
+ */
+export function deferIfSessionBusy(record: WakeupRecord): boolean {
   const live = getLiveTurn(record.marvinSessionId);
   const last = lastMachineTurnAt.get(record.marvinSessionId);
   const tooSoon =

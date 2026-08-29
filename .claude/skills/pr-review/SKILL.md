@@ -38,6 +38,24 @@ reviewing MARVIN code reads it automatically.
    against the actual diff. Flag scope creep ("branch was supposed
    to add feature X but also touches Y, Z") before detailed review.
 
+## Structural blast radius — before the critical pass
+
+Call `graph_change_impact` with no arguments (the `marvin-graph` MCP tool;
+from a plain Claude Code session use `graphify affected "<symbol>"` per
+changed symbol instead). It diffs the branch against its base, including the
+working tree, and reports:
+
+- **god nodes touched** — a change to the repo's structural spine is never a
+  small change, whatever the line count says;
+- **external callers** — unchanged code that reaches into changed code, with
+  file and line. Read the diff in THAT order: the caller a branch did not
+  touch is where the regression lives;
+- **communities touched** — more than three is a scope-drift signal; say so in
+  the scope-drift check above.
+
+Skip it only when the diff is docs/config-only (the tool will say every file
+is `unindexed`).
+
 ## The critical pass — run on every diff
 
 Apply these checks to every diff, regardless of size. Each is a

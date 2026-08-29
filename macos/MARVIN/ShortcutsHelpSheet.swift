@@ -76,7 +76,7 @@ struct ShortcutsHelpSheet: View {
             }
             .padding(20)
             .background(Color(nsColor: .underPageBackgroundColor))
-            Divider()
+            MarvinDivider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(sections) { section in

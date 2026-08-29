@@ -45,7 +45,7 @@ struct OnboardingView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(nsColor: .controlBackgroundColor))
 
-                Divider()
+                MarvinDivider()
 
                 stepContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -128,7 +128,7 @@ struct OnboardingView: View {
             .padding(40)
 
             Spacer()
-            Divider()
+            MarvinDivider()
             HStack {
                 Spacer()
                 Button {
@@ -172,7 +172,7 @@ struct OnboardingView: View {
             .padding(40)
 
             Spacer()
-            Divider()
+            MarvinDivider()
             HStack {
                 Button("Back") { step = .welcome }
                     .buttonStyle(.bordered)

@@ -54,7 +54,7 @@ struct ConfirmSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            Divider()
+            MarvinDivider()
             if isPlanApproval {
                 planBlock
             } else {
@@ -62,7 +62,7 @@ struct ConfirmSheet: View {
                 if let reason = request.reason, !reason.isEmpty {
                     reasonBlock(reason)
                 }
-                Divider()
+                MarvinDivider()
                 denyMessageField
             }
             Spacer(minLength: 0)

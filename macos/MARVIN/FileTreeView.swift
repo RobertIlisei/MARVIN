@@ -157,14 +157,14 @@ struct FileTreeView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             content
             if let err = model.lastError {
-                Divider()
+                MarvinDivider()
                 errorBanner(err)
             }
             if let err = mutationError {
-                Divider()
+                MarvinDivider()
                 errorBanner("Mutation: \(err)")
             }
         }
@@ -351,7 +351,7 @@ struct FileTreeView: View {
             .help("Re-fetch /api/files/tree for the active project.")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .frame(height: MarvinTheme.paneHeaderHeight)
     }
 
     @ViewBuilder
@@ -381,7 +381,13 @@ struct FileTreeView: View {
                 // still supplies the native sidebar chrome. The row owns its
                 // selection highlight, so List's row background + separators
                 // stay suppressed to avoid double-stacking.
-                List {
+                // Plain stack, not `List(.sidebar)`: the sidebar list style
+                // pads every row to ~28-32pt no matter what the row frame
+                // says (defaultMinListRowHeight only sets a floor), which is
+                // why the tree still fit far fewer entries than VS Code /
+                // Antigravity. A LazyVStack gives exact 22pt rows.
+                ScrollView {
+                  LazyVStack(spacing: 0) {
                     ForEach(rows(of: response.tree)) { row in
                         FileTreeRow(
                             node: row.node,
@@ -408,13 +414,12 @@ struct FileTreeView: View {
                             },
                             onTrash: { trashContext = row.node }
                         )
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
-                        .listRowBackground(Color.clear)
+                        .padding(.horizontal, 4)
                     }
+                  }
+                  .padding(.vertical, 4)
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
+                .background(MarvinTheme.background)
                 // The tree has no animation worth keeping — selection and the
                 // git-status badges are instant — and a re-render fires on
                 // every turn plus a 15s poll, so animating row insertion just
@@ -619,13 +624,28 @@ private struct FileTreeRow: View {
     let onToggle: () -> Void
     let onTap: () -> Void
 
-    /// Points of indent per nesting level. Matches the step `.listStyle(.sidebar)`
-    /// applied to `OutlineGroup` descendants, so the tree looks unchanged.
-    private static let indentStep: CGFloat = 14
-    /// Width reserved for the chevron column. Reserved even for leaves, so
-    /// files line up with their sibling folders' labels instead of shifting
-    /// left into the triangle's slot.
-    private static let chevronWidth: CGFloat = 12
+    /// Points of indent per nesting level — VS Code's `workbench.tree.indent`
+    /// default (8px), so nesting reads exactly like the Antigravity reference.
+    // Tree density. VS Code / Antigravity nominally run 22px rows with 13px
+    // text and 16px icons; the user read that as "way smaller than
+    // Antigravity" side by side (2026-08-29), so MARVIN sits one notch above
+    // the reference. Kept as named constants because they move together — a
+    // row shorter than the icon clips it.
+    static let rowHeight: CGFloat = 24
+    static let textSize: CGFloat = 14
+    /// Drawn size of the glyph. Symbols' SVGs are 24×24 with ~3px of built-in
+    /// padding, so they need a slightly larger box than a full-bleed icon to
+    /// land at the same optical weight.
+    static let iconSize: CGFloat = 19
+    /// Column the glyph is centred in — fixed so names line up regardless of
+    /// glyph aspect.
+    static let iconSlot: CGFloat = 19
+
+    private static let indentStep: CGFloat = 8
+    /// Width reserved for the chevron column (VS Code's twistie is 16px).
+    /// Reserved even for leaves, so files line up with their sibling folders'
+    /// labels instead of shifting left into the triangle's slot.
+    private static let chevronWidth: CGFloat = 16
     /// Phase 5c — file ops surfaced via the row's context menu.
     /// Closures hoist the action up to FileTreeView, which owns the
     /// dialog state + the FilesService calls. Keeps row stateless.
@@ -664,40 +684,71 @@ private struct FileTreeRow: View {
             Color.clear
                 .frame(width: CGFloat(depth) * Self.indentStep, height: 1)
             Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(isSelected ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
                 .frame(width: Self.chevronWidth)
                 .opacity(isExpandable ? 1 : 0)
                 .contentShape(Rectangle())
                 .onTapGesture { if isExpandable { onToggle() } }
                 .allowsHitTesting(isExpandable)
-            Image(systemName: FileTypeIcon.symbol(for: kind))
-                .foregroundStyle(FileTypeIcon.color(for: kind))
-                .frame(width: 16)
+            // Symbols icon theme — the one Antigravity actually bundles and
+            // defaults to (see SymbolsIcon.swift). Colours are baked into each
+            // SVG, and the git decoration deliberately does NOT tint the icon:
+            // a folder like `apps` or `db` reads red / pink in the reference
+            // because Symbols gives it its own glyph, not because it's dirty.
+            // The decoration lives on the NAME and the trailing dot, same as
+            // the reference. SF Symbols remain the fallback for a glyph the
+            // bundle is missing.
+            if let glyph = SymbolsIcon.image(
+                forPath: node.path, isDirectory: node.isDirectory, size: Self.iconSize
+            ) {
+                // No `.resizable()`: the bitmap already IS `iconSize`, and
+                // resizable re-samples it on every layout pass.
+                Image(nsImage: glyph)
+                    .frame(width: Self.iconSlot)
+            } else if node.isDirectory {
+                Image(systemName: "folder")
+                    .font(.system(size: Self.textSize))
+                    .foregroundStyle(dirty?.colour ?? Color(white: 0.72))
+                    .frame(width: Self.iconSlot)
+            } else {
+                Image(systemName: FileTypeIcon.symbol(for: kind))
+                    .font(.system(size: Self.textSize))
+                    .foregroundStyle(FileTypeIcon.color(for: kind))
+                    .frame(width: Self.iconSlot)
+            }
             Text(node.name)
-                .font(.system(size: 13))
+                .font(.system(size: Self.textSize))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(rowTextColour(dirty: dirty))
             Spacer(minLength: 0)
             if let dirty = dirty {
-                Text(dirty.label)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(isSelected ? Color.white : dirty.colour)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(dirty.colour.opacity(isSelected ? 0.0 : 0.15))
-                    )
+                // VS Code shape: a soft dot for a directory roll-up, a bare
+                // letter for a file — no boxed badge.
+                Group {
+                    if case .directoryRollup = dirty {
+                        Circle()
+                            .fill(dirty.colour.opacity(0.85))
+                            .frame(width: 6, height: 6)
+                    } else {
+                        Text(dirty.label)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(dirty.colour)
+                    }
+                }
+                    .padding(.trailing, 4)
                     .help(dirty.tooltip)
             }
         }
-        .padding(.vertical, 2)
+        .frame(height: Self.rowHeight)
         .padding(.horizontal, 4)
+        // A deeply-indented row in a narrow pane can't fit; clip it rather
+        // than let the HStack overflow and paint outside the pane.
+        .clipped()
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isSelected ? Color.accentColor : .clear)
+                .fill(isSelected ? MarvinTheme.rowSelected : .clear)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
@@ -776,9 +827,9 @@ private struct FileTreeRow: View {
     /// badge column. Untouched rows fall back to the system primary
     /// foreground so the file tree stays calm by default.
     private func rowTextColour(dirty: GitStatusBadge?) -> AnyShapeStyle {
-        if isSelected { return AnyShapeStyle(Color.white) }
-        guard let dirty = dirty else { return AnyShapeStyle(.primary) }
-        return AnyShapeStyle(dirty.colour.opacity(0.95))
+        if isSelected { return AnyShapeStyle(MarvinTheme.textPrimary) }
+        guard let dirty = dirty else { return AnyShapeStyle(MarvinTheme.textPrimary) }
+        return AnyShapeStyle(dirty.colour)
     }
 }
 

@@ -39,7 +39,7 @@ struct GraphPaneView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             content
         }
         .task(id: bridge.projectWorkDir) { await probe() }

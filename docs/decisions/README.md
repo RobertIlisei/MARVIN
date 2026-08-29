@@ -87,6 +87,9 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0071](./0071-install-provenance-and-update-path.md) | Install provenance, and the update path it enables | Accepted | 2026-08-24 |
 | [0072](./0072-session-list-must-not-parse-transcripts.md) | The session list must not parse transcripts, and a slow list must never blank the chat | Accepted | 2026-08-24 |
 | [0073](./0073-agent-sdk-0-3-upgrade.md) | Agent SDK 0.2.113 → 0.3.245, behaviour-neutral by construction | Accepted | 2026-08-25 |
+| [0075](./0075-sidecar-drops-browser-ui.md) | Sidecar drops the browser UI; native macOS app is the only client | Accepted | 2026-08-29 |
+| [0076](./0076-mid-turn-steering-streaming-input.md) | Mid-turn steering: messages are delivered into the running turn (streaming input) | Accepted | 2026-08-29 |
+| [0077](./0077-ai-native-sdlc-selective-adoption.md) | Selective adoption of the AI-native SDLC playbook — evals in CI, test-weakening + publish guards; artifact set rejected | Accepted | 2026-08-29 |
 
 ## Template
 

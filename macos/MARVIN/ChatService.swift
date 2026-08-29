@@ -87,6 +87,31 @@ final class ChatService {
     /// Phase 2f. The sidecar keys on marvinSessionId; cancelling
     /// returns whether a turn was actually live to cancel.
     @discardableResult
+    /// ADR-0076 — send a message INTO the turn already running on this
+    /// session (Claude Code-style mid-turn steering). Same body as a normal
+    /// turn POST; the sidecar answers `202 { injected: true }` when the live
+    /// turn took it, or `202 { queued: true }` when it had to queue it behind
+    /// the turn (a machine turn, or the input channel already closed).
+    /// Returns true for injected, false for queued. Anything else throws.
+    func injectMessage(request: ChatRequest) async throws -> Bool {
+        let url = baseURL.appendingPathComponent("api/chat")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONEncoder().encode(request)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ChatServiceError.transport(underlying: URLError(.badServerResponse))
+        }
+        guard http.statusCode == 202 else {
+            throw ChatServiceError.httpStatus(http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return body?["injected"] as? Bool == true
+    }
+
     func cancelTurn(marvinSessionId: String) async throws -> Bool {
         let url = baseURL.appendingPathComponent("api/chat/cancel")
         var req = URLRequest(url: url)
