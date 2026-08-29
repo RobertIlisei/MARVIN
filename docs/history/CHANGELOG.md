@@ -9,6 +9,34 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.73: MARVIN was running a Claude CLI 159 versions behind.**
+
+  The Claude plan-usage block stayed blank. Tracing it found something much
+  larger: **6,589 `rate_limit_event`s across every transcript ever recorded,
+  and not one carried `unifiedWindows`** — the field holding the session and
+  weekly percentages — while a probe on the same machine got it every time.
+
+  The difference was the binary. `discoverClaudeBinary` walked a fixed path
+  list and returned the FIRST that existed, so `/opt/homebrew/bin/claude`
+  (**2.1.92**) beat the user's own `~/.local/bin/claude` (**2.1.251**). MARVIN
+  had been running 159 versions behind, silently, for as long as both were
+  installed. The blank bars were the cheap symptom — CLI skew of that size is
+  exactly what killed five gate guards in ADR-0079 when `Task` became `Agent`.
+
+  It now probes `--version` on every candidate and picks the highest,
+  comparing per component because `"2.1.251" < "2.1.92"` lexically — the same
+  trap the release-version check hit. `MARVIN_CLAUDE_BIN` still wins outright.
+
+  **The context window is no longer guessed.** Every `result` event carries
+  `modelUsage[<model>].contextWindow`; MARVIN inferred it from the model id
+  instead (1M for a `[1m]` marker, else a hardcoded 200K). Correct for today's
+  models — verified across transcripts that Sonnet 5, Opus 5, Fable 5 and
+  Haiku 4.5 all report exactly 200000, and `claude-opus-4-7[1m]` reports
+  1000000 — but right by coincidence. The reported value now wins.
+
+  Also: a cancelled file-tree request no longer renders as a red "Fetch error
+  … Code=-999" banner ([ADR-0086](../decisions/0086-dependency-bootstrap-and-update-check.md)).
+
 - **2026-08-30 — v0.1.72: MARVIN installs its own toolchain, keeps graphs fresh, and tells you when it's out of date.**
 
   **graphify was "advisory"** — a dim line in `doctor` — while Golden Rule 7
