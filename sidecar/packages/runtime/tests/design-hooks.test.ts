@@ -13,8 +13,11 @@ import {
   matchAdrTrigger,
   recordAllowedTool,
   runDesignHooks,
+  BLAST_RADIUS_MAX_NUDGES,
+  checkBlastRadius,
   checkGraphDrift,
   checkGraphDriftDeny,
+  checkShipImpact,
   GRAPH_DRIFT_DENY_THRESHOLD,
   GRAPH_DRIFT_MAX_NUDGES,
   GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
@@ -871,5 +874,70 @@ describe("graph drift — re-arm and escalation (ADR-0083)", () => {
     ctx.hasGraph = false;
     readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD);
     expect(checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd })).toBeNull();
+  });
+});
+
+// ADR-0084 — the two graph tools the 2026-08-30 measurement found unused:
+// graph_affected at 0.4 % of 5,823 calls (while the undirected
+// graph_neighbors was 23× more common), and graph_change_impact at zero.
+describe("blast radius + pre-ship impact nudges (ADR-0084)", () => {
+  const cwd = "/proj";
+  function ctxWithGraph() {
+    const ctx = createTurnDesignContext("t-0084", cwd);
+    ctx.hasGraph = true;
+    return ctx;
+  }
+
+  it("nudges before changing a source file when nobody asked who calls it", () => {
+    const ctx = ctxWithGraph();
+    const n = checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "billing.ts") });
+    expect(n).toContain("graph_affected");
+    expect(n).toContain("undirected"); // names the trap it is correcting
+  });
+
+  it("goes quiet once graph_affected has been called", () => {
+    const ctx = ctxWithGraph();
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_affected", {});
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "a.ts") })).toBeNull();
+  });
+
+  it("never fires twice for the same file, and is capped per turn", () => {
+    const ctx = ctxWithGraph();
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "a.ts") })).not.toBeNull();
+    expect(checkBlastRadius(ctx, "Write", { file_path: join(cwd, "src", "a.ts") })).toBeNull();
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "b.ts") })).not.toBeNull();
+    expect(ctx.blastRadiusNudgeCount).toBe(BLAST_RADIUS_MAX_NUDGES);
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "c.ts") })).toBeNull();
+  });
+
+  it("ignores non-source files and anything outside the project", () => {
+    const ctx = ctxWithGraph();
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "notes.md") })).toBeNull();
+    expect(checkBlastRadius(ctx, "Edit", { file_path: "/etc/hosts" })).toBeNull();
+    expect(checkBlastRadius(ctx, "Bash", { command: "ls" })).toBeNull();
+  });
+
+  it("nudges once, on the first ship-shaped command", () => {
+    for (const command of ["git commit -m x", "git push origin main", "gh pr create", "glab mr create"]) {
+      const ctx = ctxWithGraph();
+      expect(checkShipImpact(ctx, "Bash", { command }), command).toContain("graph_change_impact");
+      expect(checkShipImpact(ctx, "Bash", { command })).toBeNull(); // once per turn
+    }
+  });
+
+  it("stays out of the way of ordinary shell and of a branch already impact-checked", () => {
+    const ctx = ctxWithGraph();
+    expect(checkShipImpact(ctx, "Bash", { command: "git status" })).toBeNull();
+    expect(checkShipImpact(ctx, "Bash", { command: "npm test" })).toBeNull();
+    const checked = ctxWithGraph();
+    recordAllowedTool(checked, "mcp__marvin-graph__graph_change_impact", {});
+    expect(checkShipImpact(checked, "Bash", { command: "git commit -m x" })).toBeNull();
+  });
+
+  it("both stay silent on a project with no graph", () => {
+    const ctx = createTurnDesignContext("t-nograph", cwd);
+    ctx.hasGraph = false;
+    expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "a.ts") })).toBeNull();
+    expect(checkShipImpact(ctx, "Bash", { command: "git commit -m x" })).toBeNull();
   });
 });
