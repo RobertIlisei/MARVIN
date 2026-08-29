@@ -218,6 +218,11 @@ struct TerminalPaneView: View {
                 case .stderr(let data):
                     appendStreamChunk(data, kind: .stderr)
                 case .exit(let code, let signal, let durationMs):
+                    // Every command is its own `$SHELL -c` until the PTY
+                    // terminal lands, so each one has an exit. A `[exit 0]`
+                    // after every successful `ls` is noise (user, 2026-08-29);
+                    // only a failure or a signal is worth a line.
+                    guard signal != nil || (code ?? 0) != 0 else { break }
                     let dur = DurationFormat.humanize(ms: durationMs)
                     let summary: String = {
                         if let signal {
@@ -225,7 +230,7 @@ struct TerminalPaneView: View {
                         }
                         return "[exit \(code ?? -1) · \(dur)]"
                     }()
-                    lines.append(TermLine(kind: .info, text: summary))
+                    lines.append(TermLine(kind: .stderr, text: summary))
                 case .error(let message):
                     lines.append(TermLine(kind: .stderr, text: "[error] \(message)"))
                 case .end:
