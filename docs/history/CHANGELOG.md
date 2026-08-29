@@ -24,6 +24,11 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   `ANSIParser` and the `@xterm/*` deps are gone. The `[exit 0]` line and
   the lost-focus-on-Enter complaint disappear by construction.
 
+  **Tabbed bottom panel.** Problems · Terminal · Preview · Graph, every
+  opened tab kept mounted so scrollback and scroll offsets survive a switch.
+  Replaces the N-booleans-in-an-HSplitView shape whose 1→2 transition
+  destroyed each pane's state. ⌘J toggles the panel; ⌃` / ⌘⇧M select.
+
   **Subagent stats in the status bar.** "agents N · M running" with a
   breakdown by type (scout / advisor / implementer / graph-extractor /
   Explore …), background count, completed, failed — from a pure
