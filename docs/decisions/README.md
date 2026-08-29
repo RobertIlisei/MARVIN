@@ -95,6 +95,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0080](./0080-background-subagents-and-builtin-readonly-agents.md) | Scouts run in the background — the runner defers `result` while background tasks are live instead of killing them; `Explore`/`Plan` sanctioned | Accepted | 2026-08-29 |
 | [0081](./0081-implementer-subagents-on-isolated-worktrees.md) | Implementer subagents on isolated worktrees — Golden Rule 1 amended from "cannot mutate the workspace" to "cannot mutate the main tree"; MARVIN names the branch, the user merges | Accepted | 2026-08-29 |
 | [0082](./0082-claude-plan-usage-from-rate-limit-events.md) | Claude plan usage (5-hour / weekly windows) from the SDK's `rate_limit_event`, shown beside OpenRouter credits; per-turn tokens on the completed row | Accepted | 2026-08-29 |
+| [0083](./0083-graph-drift-rail-rearms-and-escalates.md) | The graph-drift rail re-arms on compliance and escalates to a deny when ignored — measured 8:1–38:1 read:graph, critical by MARVIN's own bands | Accepted | 2026-08-30 |
 
 ## Template
 
