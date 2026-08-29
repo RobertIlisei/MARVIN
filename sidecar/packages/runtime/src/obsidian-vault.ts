@@ -49,6 +49,12 @@ export const DEFAULT_IGNORE_FILTERS = [
   "coverage/",
   "playwright-report/",
   "graphify-out/cache/",
+  // ADR-0090 — `graphify export obsidian` writes ONE NOTE PER GRAPH NODE:
+  // 7,604 notes on MARVIN's own repo, ~32k on a large project, much of it AST
+  // noise (`compilerOptions`, `types_4`). Left unfiltered it drowns the graph
+  // view and the search index, which is the opposite of what the vault is for.
+  // The notes stay on disk and are still openable by direct link.
+  "graphify-out/obsidian/",
 ];
 
 export interface VaultStatus {
@@ -69,12 +75,22 @@ export interface VaultStatus {
    * — which is exactly the trap the first user hit. Verified 2026-08-15.
    */
   hiddenFolderPlugin: boolean;
+  /** ADR-0090 — is the Dataview plugin enabled? The index note ships live
+   *  query blocks only when it is; without the plugin they render as inert
+   *  code fences, which is worse than not offering them. */
+  dataviewPlugin: boolean;
 }
 
 /**
  * Community plugins that expose dot-folders. Matched by manifest id, taken from
  * a real vault rather than guessed.
  */
+/** Where MARVIN's own notes live, relative to the vault root. */
+const MARVIN_DIR = ".marvin";
+
+/** Dataview ships under one id; an array to match the hidden-folder pattern. */
+const DATAVIEW_PLUGIN_IDS: readonly string[] = ["dataview"];
+
 export const HIDDEN_FOLDER_PLUGIN_IDS = ["hidden-folders-access", "show-hidden-files"];
 
 const APP_JSON = "app.json";
@@ -100,16 +116,22 @@ export async function vaultStatus(workDir: string): Promise<VaultStatus> {
     },
     graphNotes: existsSync(join(workDir, "graphify-out", "obsidian")),
     hiddenFolderPlugin: await hasHiddenFolderPlugin(dot),
+    dataviewPlugin: await hasEnabledPlugin(dot, DATAVIEW_PLUGIN_IDS),
   };
 }
 
 /** Read `.obsidian/community-plugins.json` — the list of ENABLED plugin ids. */
 async function hasHiddenFolderPlugin(dotDir: string): Promise<boolean> {
+  return hasEnabledPlugin(dotDir, HIDDEN_FOLDER_PLUGIN_IDS);
+}
+
+/** True when any of `ids` is in the vault's enabled community plugins. */
+async function hasEnabledPlugin(dotDir: string, ids: readonly string[]): Promise<boolean> {
   try {
     const raw = await readFile(join(dotDir, "community-plugins.json"), "utf-8");
     const enabled = JSON.parse(raw) as unknown;
     if (!Array.isArray(enabled)) return false;
-    return enabled.some((id) => typeof id === "string" && HIDDEN_FOLDER_PLUGIN_IDS.includes(id));
+    return enabled.some((id) => typeof id === "string" && ids.includes(id));
   } catch {
     return false;
   }
@@ -176,6 +198,45 @@ ${status.graphNotes ? "- **Code graph** — one note per symbol under `graphify-
 Open the graph view. The two hubs are \`memory\` and \`backlog\`; each links out
 to its individual notes. Frontmatter (\`type\`, \`severity\`, \`kind\`, \`status\`)
 shows as properties, so Obsidian's search and Dataview can filter on them.
+
+## Live views
+
+${status.dataviewPlugin
+  ? `These tables are live — they re-query the notes every time you open this
+file, so they never go stale the way a generated list would.
+
+### Open backlog, most severe first
+
+\`\`\`dataview
+TABLE severity, kind, file.mtime AS updated
+FROM "${MARVIN_DIR}/backlog"
+WHERE status != "resolved"
+SORT severity ASC, file.mtime DESC
+LIMIT 25
+\`\`\`
+
+### Durable facts by type
+
+\`\`\`dataview
+TABLE type, file.mtime AS updated
+FROM "${MARVIN_DIR}/memory"
+SORT file.mtime DESC
+LIMIT 25
+\`\`\`
+
+### Recently resolved
+
+\`\`\`dataview
+LIST
+FROM "${MARVIN_DIR}/backlog"
+WHERE status = "resolved"
+SORT file.mtime DESC
+LIMIT 10
+\`\`\``
+  : `Install the **Dataview** community plugin and re-run \`obsidian_init\` to get
+live tables here — open backlog by severity, durable facts by type, and
+recently resolved work. Without it these would render as code blocks, so they
+are left out rather than shipped broken.`}
 
 ## What MARVIN will and won't touch
 

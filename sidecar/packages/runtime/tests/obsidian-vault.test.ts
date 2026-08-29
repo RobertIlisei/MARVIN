@@ -129,7 +129,7 @@ describe("renderIndexNote", () => {
 
   it("links the two hubs so the graph view has a shape", () => {
     const note = renderIndexNote(
-      { isVault: true, preExisting: false, notes: { memory: 1, backlog: 1, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true },
+      { isVault: true, preExisting: false, notes: { memory: 1, backlog: 1, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true, dataviewPlugin: false },
       "p",
     );
     expect(note).toContain("[[memory]]");
@@ -137,14 +137,14 @@ describe("renderIndexNote", () => {
   });
 
   it("only advertises code-graph notes when they exist", () => {
-    const base = { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, hiddenFolderPlugin: true };
+    const base = { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, hiddenFolderPlugin: true, dataviewPlugin: false };
     expect(renderIndexNote({ ...base, graphNotes: false }, "p")).not.toMatch(/Code graph/);
     expect(renderIndexNote({ ...base, graphNotes: true }, "p")).toMatch(/Code graph/);
   });
 
   it("says plainly what MARVIN will not do", () => {
     const note = renderIndexNote(
-      { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true },
+      { isVault: true, preExisting: false, notes: { memory: 0, backlog: 0, plans: 0 }, graphNotes: false, hiddenFolderPlugin: true, dataviewPlugin: false },
       "p",
     );
     expect(note).toMatch(/does \*\*not\*\* edit notes you\ncreate/);
@@ -191,5 +191,32 @@ describe("the dot-folder trap (verified against a real vault, 2026-08-15)", () =
     expect((await vaultStatus(workDir)).hiddenFolderPlugin).toBe(false);
     await writeFile(join(dot(), "community-plugins.json"), "not json", "utf-8");
     expect((await vaultStatus(workDir)).hiddenFolderPlugin).toBe(false);
+  });
+});
+
+// ADR-0090 — the index note promised Dataview filtering and shipped none,
+// while the user had the plugin installed. Live queries only when the plugin
+// is actually enabled: without it they render as inert code fences, which is
+// worse than not offering them.
+describe("index note — live Dataview views", () => {
+  const base = {
+    isVault: true, preExisting: false,
+    notes: { memory: 5, backlog: 12, plans: 2 },
+    graphNotes: false, hiddenFolderPlugin: true,
+  };
+
+  it("ships query blocks when Dataview is enabled", () => {
+    const note = renderIndexNote({ ...base, dataviewPlugin: true }, "proj");
+    expect(note).toContain("```dataview");
+    expect(note).toContain('FROM ".marvin/backlog"');
+    expect(note).toContain('WHERE status != "resolved"');
+    expect(note).toContain('FROM ".marvin/memory"');
+  });
+
+  it("offers instructions instead of broken fences when it is not", () => {
+    const note = renderIndexNote({ ...base, dataviewPlugin: false }, "proj");
+    expect(note).not.toContain("```dataview");
+    expect(note).toContain("Dataview");
+    expect(note).toMatch(/re-run `obsidian_init`/);
   });
 });
