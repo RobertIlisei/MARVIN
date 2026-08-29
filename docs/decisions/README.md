@@ -100,6 +100,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0085](./0085-graphify-beyond-search.md) | Graphify beyond search: god-nodes + multigraph diagnose, live Postgres schema into the graph, git hooks for freshness, and LESSONS.md injected to close the work-memory loop | Accepted | 2026-08-30 |
 | [0086](./0086-dependency-bootstrap-and-update-check.md) | `bin/marvin deps` installs the toolchain (graphify was advisory), `graph-hooks` keeps graphs fresh outside the IDE, and a daily update check with a non-auto-installing prompt | Accepted | 2026-08-30 |
 | [0087](./0087-newest-claude-cli-and-reported-context-window.md) | MARVIN ran a Claude CLI 159 versions behind the user's (first-path-wins), which is why the plan-usage bars were blank; resolve the newest, and trust the SDK-reported context window | Accepted | 2026-08-30 |
+| [0088](./0088-rename-canary-for-the-dispatch-tool.md) | Gate the subagent dispatch by SHAPE (`subagent_type` in the input), not only by name — a future rename is gated and logged instead of silently ungated | Accepted | 2026-08-30 |
 
 ## Template
 

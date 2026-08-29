@@ -53,7 +53,7 @@ import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks
 import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
-import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, isSubagentDispatch, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, isSubagentDispatch, looksLikeSubagentDispatch, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
@@ -829,7 +829,31 @@ export function classifyToolCall(
   let baseDecision: "allow" | "confirm" | "deny";
   let policyReason: string;
 
-  if (!KNOWN_TOOL_NAMES.has(name as ToolName)) {
+  // RENAME CANARY (ADR-0088). Checked BEFORE the not-in-the-gated-set
+  // blanket-allow below, because that allow is exactly what ADR-0079's
+  // rename fell through: `Agent` was not in KNOWN_TOOL_NAMES, so dispatch
+  // was ungated entirely. A call carrying `subagent_type` is a dispatch
+  // whatever it is called, so an unrecognised tool with that input gets the
+  // sanctioned-type ladder rather than a free pass — and is logged loudly,
+  // because the right fix is to add the name to SUBAGENT_DISPATCH_TOOLS.
+  if (looksLikeSubagentDispatch(name, input)) {
+    try {
+      console.warn(
+        "[marvin.telemetry] " +
+          JSON.stringify({
+            kind: "gate.unknown_dispatch_tool",
+            tool: name,
+            subagentType: typeof input.subagent_type === "string" ? input.subagent_type : null,
+            note: "tool takes subagent_type but is not in SUBAGENT_DISPATCH_TOOLS — likely a rename (ADR-0079/0088)",
+            at: new Date().toISOString(),
+          }),
+      );
+    } catch {
+      /* never break a turn on telemetry */
+    }
+  }
+
+  if (!KNOWN_TOOL_NAMES.has(name as ToolName) && !looksLikeSubagentDispatch(name, input)) {
     // Tools outside our named set are auto-allowed by default — they're
     // sandboxed or delegate back to tools we already gate. EXCEPTION (ADR-0045):
     // a classified external MCP server (Playwright) goes through the ladder so
@@ -846,6 +870,8 @@ export function classifyToolCall(
           ? `${name} changes browser state or reaches the network — confirm (ADR-0045).`
           : `${name} is a read-only browser tool.`;
   } else {
+    // An unknown-but-dispatch-shaped tool lands here too (canary above), and
+    // toolPolicy's dispatch branch handles it by shape, not by name.
     const policy = toolPolicy(name as ToolName, input);
     baseDecision =
       policy.class === "auto" ? "allow" : policy.class === "deny" ? "deny" : "confirm";

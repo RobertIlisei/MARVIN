@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_TOOL_NAMES, isSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
+import { KNOWN_TOOL_NAMES, isSubagentDispatch, looksLikeSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
 
 describe("toolPolicy — Bash hard-deny coverage", () => {
   // Audit finding #2: `\brm\s+-rf\s+\/` only matched a literal `/` after
@@ -441,5 +441,43 @@ describe("toolPolicy — publish/release guard (ADR-0077)", () => {
   ];
   it.each(allowed)("does not deny %s", (cmd) => {
     expect(toolPolicy("Bash", { command: cmd }).class).not.toBe("deny");
+  });
+});
+
+// ADR-0088 — the canary. Matching a NAME is inherently one rename behind;
+// ADR-0079 is the record of what that costs. A call carrying `subagent_type`
+// is a dispatch whatever it is called.
+describe("looksLikeSubagentDispatch (rename canary)", () => {
+  it("flags an unknown tool that takes subagent_type", () => {
+    expect(looksLikeSubagentDispatch("Delegate", { subagent_type: "scout" })).toBe(true);
+    expect(looksLikeSubagentDispatch("Agent2", { subagent_type: "rogue", prompt: "x" })).toBe(true);
+  });
+
+  it("does not fire for names we already know — those take the normal path", () => {
+    expect(looksLikeSubagentDispatch("Task", { subagent_type: "scout" })).toBe(false);
+    expect(looksLikeSubagentDispatch("Agent", { subagent_type: "scout" })).toBe(false);
+  });
+
+  it("does not fire on tools without a subagent_type", () => {
+    expect(looksLikeSubagentDispatch("Bash", { command: "ls" })).toBe(false);
+    expect(looksLikeSubagentDispatch("Delegate", {})).toBe(false);
+    expect(looksLikeSubagentDispatch("Delegate", { subagent_type: "" })).toBe(false);
+    expect(looksLikeSubagentDispatch("Delegate", { subagent_type: 42 })).toBe(false);
+  });
+
+  it("a future rename gets the sanctioned-type ladder, not a free pass", () => {
+    // The ADR-0079 failure: an unrecognised dispatch name fell through to
+    // "not in the gated set" and ran ungated.
+    expect(toolPolicy("Delegate" as never, { subagent_type: "scout" }).class).toBe("auto");
+    expect(toolPolicy("Delegate" as never, { subagent_type: "rogue" }).class).toBe("confirm");
+  });
+});
+
+// Regression: classifyToolCall is reachable with no input at all, and a
+// canary that throws would take the whole turn with it.
+describe("looksLikeSubagentDispatch — missing input", () => {
+  it("survives undefined and null input", () => {
+    expect(looksLikeSubagentDispatch("Delegate", undefined)).toBe(false);
+    expect(looksLikeSubagentDispatch("Delegate", null)).toBe(false);
   });
 });
