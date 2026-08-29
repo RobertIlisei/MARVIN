@@ -597,6 +597,12 @@ struct MARVINApp: App {
                 // both UserDefaults and bridge.panes so every reader
                 // (ContentView, TopBarPopover, the persisted prefs) sees
                 // the same value.
+                Button("Check for Updates…") {
+                    Task { await UpdateService.shared.check(userInitiated: true) }
+                }
+
+                Divider()
+
                 Button("Toggle File Tree") {
                     NativePrefs.shared.togglePane("files")
                 }

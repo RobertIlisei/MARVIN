@@ -1864,6 +1864,69 @@ runner.suite("LanguageDetection") {
     }
 }
 
+runner.suite("BenignCancellation") {
+    runner.test("recognises every shape a cancelled request arrives in") {
+        runner.expect(BenignCancellation.matches(CancellationError()), "Swift CancellationError")
+        runner.expect(BenignCancellation.matches(URLError(.cancelled)), "URLError.cancelled")
+        runner.expect(
+            BenignCancellation.matches(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)),
+            "raw NSURLErrorDomain -999"
+        )
+        // The shape the user actually saw: a transport error wrapping -999.
+        let wrapped = NSError(
+            domain: "MarvinTransport", code: 1,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)]
+        )
+        runner.expect(BenignCancellation.matches(wrapped), "wrapped underlying -999")
+    }
+    runner.test("does NOT swallow real failures") {
+        runner.expect(!BenignCancellation.matches(URLError(.timedOut)), "timeout is real")
+        runner.expect(!BenignCancellation.matches(URLError(.cannotConnectToHost)), "connect failure is real")
+        runner.expect(
+            !BenignCancellation.matches(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)),
+            "bad response is real"
+        )
+    }
+}
+
+runner.suite("UpdateCheck") {
+    runner.test("compares versions numerically, not as strings") {
+        // The bug a string compare would cause: "0.1.9" > "0.1.10" lexically,
+        // so an update prompt would never fire past x.y.9.
+        runner.expect(UpdateCheck.decide(current: "0.1.9", latest: "0.1.10").updateAvailable, "0.1.9 → 0.1.10")
+        runner.expect(UpdateCheck.decide(current: "0.1.71", latest: "0.2.0").updateAvailable, "minor bump")
+        runner.expect(UpdateCheck.decide(current: "0.9.0", latest: "1.0.0").updateAvailable, "major bump")
+        runner.expect(!UpdateCheck.decide(current: "0.1.71", latest: "0.1.71").updateAvailable, "same version")
+        runner.expect(!UpdateCheck.decide(current: "0.1.71", latest: "0.1.70").updateAvailable, "never downgrade")
+    }
+    runner.test("ignores the build suffix the running app carries") {
+        // Info.plist holds e.g. "0.1.71+a43b044"; releases are tagged v0.1.71.
+        runner.expect(!UpdateCheck.decide(current: "0.1.71+a43b044", latest: "v0.1.71").updateAvailable, "same despite +sha")
+        runner.expect(UpdateCheck.decide(current: "0.1.70+abc", latest: "v0.1.71").updateAvailable, "older despite +sha")
+    }
+    runner.test("a dev build ahead of the newest release is never told to downgrade") {
+        runner.expect(!UpdateCheck.decide(current: "0.1.72", latest: "v0.1.71").updateAvailable, "ahead of release")
+    }
+    runner.test("refuses to decide on an unparseable version") {
+        runner.expect(!UpdateCheck.decide(current: "unknown", latest: "v0.1.71").updateAvailable, "bad current")
+        runner.expect(!UpdateCheck.decide(current: "0.1.70", latest: "nightly").updateAvailable, "bad latest")
+    }
+    runner.test("scheduling: never-checked is due, just-checked is not") {
+        let now = Date()
+        runner.expect(UpdateCheck.isDue(last: nil, now: now), "never checked")
+        runner.expect(!UpdateCheck.isDue(last: now.addingTimeInterval(-60), now: now), "checked a minute ago")
+        runner.expect(UpdateCheck.isDue(last: now.addingTimeInterval(-25 * 3600), now: now), "checked 25h ago")
+    }
+    runner.test("skipping a version is per-version, not permanent") {
+        let d = UpdateCheck.decide(current: "0.1.70", latest: "v0.1.71")
+        runner.expect(!UpdateCheck.shouldPrompt(decision: d, skipped: "0.1.71"), "skipped this one")
+        runner.expect(UpdateCheck.shouldPrompt(decision: d, skipped: "0.1.70"), "older skip does not silence")
+        runner.expect(UpdateCheck.shouldPrompt(decision: d, skipped: nil), "no skip")
+        let same = UpdateCheck.decide(current: "0.1.71", latest: "v0.1.71")
+        runner.expect(!UpdateCheck.shouldPrompt(decision: same, skipped: nil), "no update, no prompt")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
