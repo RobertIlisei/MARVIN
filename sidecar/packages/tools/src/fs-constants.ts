@@ -34,13 +34,24 @@ export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
   ".ruff_cache",
   "target",
   "vendor",
-  // Generated graph output — graphify's extraction cache alone was 12,195
-  // files on one real project, consuming 61% of the file tree's 20,000-entry
-  // cap and truncating the tree so folders looked MISSING. Same class as
-  // node_modules: derived, already gitignored, and nobody browses an
-  // extraction cache through an IDE file tree. Observed 2026-08-15.
-  "graphify-out",
 ]);
+
+/**
+ * Subdirectories of `graphify-out/` the tree skips. The folder itself is
+ * shown (user, 2026-08-29: "I can't see the graphify-out directory") —
+ * `graph.json`, `GRAPH_REPORT.md`, `knowledge/graph.json` are things people
+ * open. What must stay out is the extraction cache: 12,195 files on one
+ * real project, 61 % of the tree's 20,000-entry cap, truncating the tree so
+ * unrelated folders looked MISSING (observed 2026-08-15). That was the
+ * reason the whole folder was hidden; hiding only the cache keeps the fix.
+ */
+export const GRAPHIFY_OUT_DIR = "graphify-out";
+export const GRAPHIFY_OUT_SKIP: ReadonlySet<string> = new Set(["cache", ".chunks", "chunks", "reflections"]);
+
+/** True when `name` under `parentName` is a graphify cache the tree hides. */
+export function isGraphifyCacheDir(parentName: string, name: string): boolean {
+  return parentName === GRAPHIFY_OUT_DIR && GRAPHIFY_OUT_SKIP.has(name);
+}
 
 /**
  * Path segments that the user-initiated write policy HARD-denies — create,
@@ -51,9 +62,12 @@ export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
  * the user would ever navigate into). We keep them as a superset so future
  * additions to the ignore set automatically flow into the deny list.
  */
-export const HARD_DENY_DIR_SEGMENTS: ReadonlySet<string> = new Set(
-  [...IGNORE_DIR_NAMES].filter((n) => n !== ".DS_Store"),
-);
+export const HARD_DENY_DIR_SEGMENTS: ReadonlySet<string> = new Set([
+  ...[...IGNORE_DIR_NAMES].filter((n) => n !== ".DS_Store"),
+  // Visible in the tree since 2026-08-29, still not user-writable: it is
+  // graphify's output, and the MCP graph tools own it.
+  GRAPHIFY_OUT_DIR,
+]);
 
 /**
  * Filename patterns for secret-bearing files. Writes/deletes targeting these

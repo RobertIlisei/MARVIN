@@ -4,6 +4,7 @@ import {
   HARD_DENY_DIR_SEGMENTS,
   hasDenySegment,
   IGNORE_DIR_NAMES,
+  isGraphifyCacheDir,
   isSecretFileName,
   SECRET_FILE_PATTERNS,
 } from "../src/fs-constants";
@@ -31,8 +32,9 @@ describe("IGNORE_DIR_NAMES", () => {
 });
 
 describe("HARD_DENY_DIR_SEGMENTS", () => {
-  it("is a subset of IGNORE_DIR_NAMES minus .DS_Store", () => {
+  it("is IGNORE_DIR_NAMES minus .DS_Store, plus graphify-out (visible but not writable)", () => {
     for (const seg of HARD_DENY_DIR_SEGMENTS) {
+      if (seg === "graphify-out") continue;
       expect(IGNORE_DIR_NAMES.has(seg)).toBe(true);
     }
     expect(HARD_DENY_DIR_SEGMENTS.has(".DS_Store")).toBe(false);
@@ -94,5 +96,20 @@ describe("isSecretFileName", () => {
 describe("SECRET_FILE_PATTERNS is non-empty", () => {
   it("won't silently become empty on future refactor", () => {
     expect(SECRET_FILE_PATTERNS.length).toBeGreaterThan(0);
+  });
+});
+
+// graphify-out is VISIBLE in the tree (2026-08-29) — only its cache is
+// skipped, and it stays write-denied.
+describe("graphify-out visibility", () => {
+  it("is not in the tree ignore set, but its cache dirs are skipped", () => {
+    expect(IGNORE_DIR_NAMES.has("graphify-out")).toBe(false);
+    expect(isGraphifyCacheDir("graphify-out", "cache")).toBe(true);
+    expect(isGraphifyCacheDir("graphify-out", ".chunks")).toBe(true);
+    expect(isGraphifyCacheDir("graphify-out", "knowledge")).toBe(false);
+    expect(isGraphifyCacheDir("src", "cache")).toBe(false);
+  });
+  it("remains hard-denied for user writes", () => {
+    expect(HARD_DENY_DIR_SEGMENTS.has("graphify-out")).toBe(true);
   });
 });
