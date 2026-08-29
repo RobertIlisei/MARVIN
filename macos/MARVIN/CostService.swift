@@ -93,6 +93,7 @@ final class CostService {
                 let lifetime: AggregateWire?
                 let daily: [DailyWire]?
                 let openRouter: CostSummary.OpenRouterBalance?
+                let claudeRateLimits: [CostSummary.ClaudeWindow]?
             }
             let w = try JSONDecoder().decode(Wire.self, from: data)
             guard let todayAgg = w.today else {
@@ -110,7 +111,8 @@ final class CostService {
                 daily: (w.daily ?? []).map {
                     CostSummary.DailyEntry(day: $0.day, costUsd: $0.costUsd, turns: $0.turns)
                 },
-                openRouter: w.openRouter
+                openRouter: w.openRouter,
+                claudeWindows: w.claudeRateLimits ?? []
             )
             consecutiveFailures = 0
         } catch {

@@ -42,7 +42,32 @@ struct CostSummary: Equatable {
         let totalUsage: Double
     }
 
+    /// One Claude plan window (5-hour / weekly), as last reported by the
+    /// SDK's `rate_limit_event` (ADR-0082). A subscription has no dollar
+    /// balance — this is its usage.
+    struct ClaudeWindow: Equatable, Codable, Identifiable {
+        let type: String
+        let status: String
+        let utilization: Double?
+        let resetsAt: Double?
+        let isUsingOverage: Bool?
+        var id: String { type }
+
+        var label: String {
+            switch type {
+            case "five_hour": return "5-hour window"
+            case "seven_day": return "weekly (all models)"
+            case "seven_day_opus": return "weekly · Opus"
+            case "seven_day_sonnet": return "weekly · Sonnet"
+            case "seven_day_overage_included": return "weekly incl. overage"
+            case "overage": return "overage"
+            default: return type.replacingOccurrences(of: "_", with: " ")
+            }
+        }
+    }
+
     let openRouter: OpenRouterBalance?
+    let claudeWindows: [ClaudeWindow]
 }
 
 @MainActor

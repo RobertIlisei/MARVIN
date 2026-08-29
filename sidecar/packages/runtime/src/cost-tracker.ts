@@ -23,6 +23,26 @@ export interface CostEntry {
   cacheReadTokens: number;
 }
 
+/**
+ * One Claude plan rate-limit window, as last reported by the SDK's
+ * `rate_limit_event` (ADR-0082). A subscription has no dollar balance to
+ * poll — THIS is its usage: the 5-hour and 7-day windows the Claude app
+ * shows. MARVIN received the event on every turn and dropped it.
+ */
+export interface ClaudeRateLimitWindow {
+  /** `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage`… */
+  type: string;
+  status: "allowed" | "allowed_warning" | "rejected";
+  /** 0..1 — absent when the API did not report it on this event. */
+  utilization?: number;
+  /** Epoch seconds when the window refills. */
+  resetsAt?: number;
+  overageStatus?: string;
+  isUsingOverage?: boolean;
+  /** ISO — when this snapshot was observed. */
+  at: string;
+}
+
 interface CostFileShape {
   entries: CostEntry[];
   openRouter?: {
@@ -30,6 +50,8 @@ interface CostFileShape {
     totalUsage: number;
     fetchedAt: string;
   };
+  /** Latest snapshot per window type, keyed by `type`. */
+  claudeRateLimits?: Record<string, ClaudeRateLimitWindow>;
 }
 
 function readCostFile(): CostFileShape {
@@ -89,6 +111,48 @@ export function recordOpenRouterBalance(totalCredits: number, totalUsage: number
   writeCostFile(file);
 }
 
+/**
+ * Record a `rate_limit_event` from the SDK stream. Keyed by window type so
+ * the popover can show 5-hour and weekly side by side; an event with no
+ * `rateLimitType` is a bare status and is filed under `unknown` only when
+ * nothing better exists, so it can never overwrite a typed window.
+ */
+export function recordClaudeRateLimit(info: {
+  status?: string;
+  rateLimitType?: string;
+  utilization?: number;
+  resetsAt?: number;
+  overageStatus?: string;
+  isUsingOverage?: boolean;
+}): ClaudeRateLimitWindow | null {
+  const status = info.status;
+  if (status !== "allowed" && status !== "allowed_warning" && status !== "rejected") return null;
+  const file = readCostFile();
+  const type = info.rateLimitType ?? "unknown";
+  const existing = file.claudeRateLimits ?? {};
+  if (type === "unknown" && Object.keys(existing).length > 0) return null;
+  const snapshot: ClaudeRateLimitWindow = {
+    type,
+    status,
+    ...(typeof info.utilization === "number" ? { utilization: info.utilization } : {}),
+    ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
+    ...(typeof info.overageStatus === "string" ? { overageStatus: info.overageStatus } : {}),
+    ...(typeof info.isUsingOverage === "boolean" ? { isUsingOverage: info.isUsingOverage } : {}),
+    at: new Date().toISOString(),
+  };
+  file.claudeRateLimits = { ...existing, [type]: snapshot };
+  writeCostFile(file);
+  return snapshot;
+}
+
+/** Narrow an SDK message to a rate-limit payload; null for anything else. */
+export function rateLimitPayload(ev: unknown): Parameters<typeof recordClaudeRateLimit>[0] | null {
+  if (!ev || typeof ev !== "object") return null;
+  const o = ev as { type?: unknown; rate_limit_info?: unknown };
+  if (o.type !== "rate_limit_event" || !o.rate_limit_info || typeof o.rate_limit_info !== "object") return null;
+  return o.rate_limit_info as Parameters<typeof recordClaudeRateLimit>[0];
+}
+
 export async function pollOpenRouterBalance(): Promise<void> {
   const { readAuthConfig } = await import("./auth-config");
   const cfg = readAuthConfig();
@@ -125,6 +189,8 @@ export interface CostSummary {
   /** Newest 12 day buckets (UTC) for the active project, oldest→newest. */
   daily: Array<{ day: string; costUsd: number; turns: number }>;
   openRouter?: { totalCredits: number; totalUsage: number } | null;
+  /** Claude plan windows, newest snapshot each — `[]` until the first event. */
+  claudeRateLimits: ClaudeRateLimitWindow[];
 }
 
 export interface CostAggregate {
@@ -193,5 +259,12 @@ export function summarizeCost(options: { projectId?: string } = {}): CostSummary
     .slice(-12)
     .map(([day, v]) => ({ day, costUsd: v.costUsd, turns: v.turns }));
 
-  return { today, week, lifetime, daily, openRouter: file.openRouter ?? null };
+  return {
+    today,
+    week,
+    lifetime,
+    daily,
+    openRouter: file.openRouter ?? null,
+    claudeRateLimits: Object.values(file.claudeRateLimits ?? {}).sort((a, b) => a.type.localeCompare(b.type)),
+  };
 }

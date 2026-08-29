@@ -50,6 +50,7 @@ import { readPlanState } from "./plan-state";
 import { saveSlashCommands } from "./slash-commands";
 import { recordPreImage } from "./change-checkpoints";
 import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks";
+import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
 import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, isSubagentDispatch, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
@@ -1754,6 +1755,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // ADR-0080 — level signal, REPLACE semantics (see background-tasks.ts).
       const bgTasks = backgroundTasksPayload(ev);
       if (bgTasks) bgLedger.replace(bgTasks);
+      // ADR-0082 — Claude plan usage. The SDK reports the 5-hour / weekly
+      // window state on every turn; for a subscription this IS the spend.
+      const rl = rateLimitPayload(ev);
+      if (rl) {
+        try {
+          recordClaudeRateLimit(rl);
+        } catch {
+          /* usage display is best-effort; never fail a turn on it */
+        }
+      }
       // ADR-0081 — remember which subagent this task_id is, and bind an
       // implementer to the worktree its dispatch prompt names.
       const started = taskStartedPayload(ev);
