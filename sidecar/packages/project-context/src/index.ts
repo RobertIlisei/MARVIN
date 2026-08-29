@@ -117,6 +117,17 @@ async function readAdrTitles(
     .map(({ rel, title }) => ({ rel, title }));
 }
 
+/**
+ * The shortest thing that still identifies an ADR file: its leading number
+ * (`docs/adr/0363-repair-….md` → `0363`), or the bare basename for a file
+ * without one (`INDEX.md` → `INDEX`).
+ */
+function adrRef(rel: string): string {
+  const base = rel.split("/").pop()?.replace(/\.md$/, "") ?? rel;
+  const m = /^(\d{3,5})-/.exec(base);
+  return m?.[1] ?? base;
+}
+
 /** First markdown heading (`#`/`##`/`###`) in the file's first 40 lines. */
 function extractHeading(content: string): string | null {
   const lines = content.split("\n", 40);
@@ -266,15 +277,23 @@ export async function buildProjectContext(
   // graph (`scope:"knowledge"`) → Read the file.
   const adrTitles = await readAdrTitles(options.workDir, adrDirs).catch(() => []);
   if (adrTitles.length > 0) {
-    const index = adrTitles.map(({ rel, title }) => `- \`${rel}\` — ${title}`).join("\n");
+    // Number + title, NOT path + title. The path is the title again as a
+    // slug — on a 365-ADR project it was 54 chars per line against a 76-char
+    // title, so the index cost 12.6K tokens on the first turn of EVERY session
+    // where 7.7K carries the same information (measured 2026-08-29). The
+    // file is derivable: `<dir>/<number>-*.md`, and the knowledge graph
+    // resolves the number too.
+    const index = adrTitles.map(({ rel, title }) => `- ${adrRef(rel)} ${title}`).join("\n");
     const adrBlock =
       `## Architecture Decision Records (${adrTitles.length} — titles only)\n\n` +
-      `These decisions bind current work. Only titles are listed to keep ` +
-      `context lean. To use one:\n` +
+      `These decisions bind current work. Only \`<number> <title>\` is listed to ` +
+      `keep context lean; the file is \`<dir>/<number>-<slug>.md\` under ` +
+      `${adrDirs.map((d) => `\`${d}\``).join(" / ")}. To use one:\n` +
       `1. Find the relevant ADR(s) — query the knowledge graph ` +
       `(\`graph_search\` / \`graph_neighbors\`, \`scope:"knowledge"\`) by topic, ` +
       `or scan this list;\n` +
-      `2. **Read the specific ADR file** for its full text before relying on it.\n\n` +
+      `2. **Read the specific ADR file** (Glob on its number) for its full text ` +
+      `before relying on it.\n\n` +
       `If a proposed change contradicts an ADR, flag it explicitly and either ` +
       `refine the plan or write a new ADR superseding the old one.\n\n${index}`;
     sections.push(adrBlock);

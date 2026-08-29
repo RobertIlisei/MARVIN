@@ -53,6 +53,34 @@ describe("background-job completion wakeup", () => {
     expect(rec.permissionStrategy).toBe("auto"); // posture inherited
   });
 
+  it("a job whose output outgrows the window reports head + tail with the cut named", async () => {
+    const fired = onNextFire();
+    // ~6 KB in the middle, with a distinctive first and last line.
+    startBackgroundJob({
+      command: "echo FIRST-LINE; yes filler | head -c 6000; echo; echo LAST-LINE",
+      reason: "big",
+      ctx,
+    });
+    const rec = await fired;
+    expect(rec.prompt).toContain("FIRST-LINE");
+    expect(rec.prompt).toContain("LAST-LINE");
+    expect(rec.prompt).toMatch(/…\[\d+ bytes elided\]…/);
+    // The whole point — bounded regardless of how much the job printed.
+    expect(rec.prompt.length).toBeLessThan(4500);
+  });
+
+  it("a successful job wakes the session one effort rung down; a failed one keeps the ceiling", async () => {
+    const okFired = onNextFire();
+    startBackgroundJob({ command: "true", reason: "ok", ctx: { ...ctx, model: "claude-opus-5", thinkingMode: "max" } });
+    const ok = await okFired;
+    expect(ok.effort).toBe("xhigh");
+
+    const failFired = onNextFire();
+    startBackgroundJob({ command: "exit 2", reason: "fail", ctx: { ...ctx, model: "claude-opus-5", thinkingMode: "max" } });
+    const failed = await failFired;
+    expect(failed.effort).toBeUndefined();
+  });
+
   it("a failing job's completion turn frames it as a failure", async () => {
     const fired = onNextFire();
     startBackgroundJob({ command: "exit 3", reason: "fail", ctx });
