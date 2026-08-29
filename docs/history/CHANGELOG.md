@@ -9,6 +9,19 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-29 — v0.1.70: session chips survive a reload.**
+
+  The `graph N · reads M` and `agents N` status chips accumulated only from
+  the live event stream, so re-opening a session or restarting the app left
+  them at zero while the session plainly had history — a 148K-context
+  session showed no chips at all. `replay` already re-encodes every stored
+  `cli.event` for the reducer; the same bytes now feed `ToolUseCounter` and
+  `SubagentLedger`. On a paged load the counts cover the loaded tail.
+
+  A Claude plan window with no `utilization` yet reads "no % yet · fills on
+  the next turn" rather than a bare "allowed" — the state every user hits
+  once, on the first launch after upgrading, before a turn has run.
+
 - **2026-08-29 — v0.1.69: a real terminal, subagent stats, Claude plan usage like the CLI, graphify-out visible.**
 
   **The terminal is a terminal** ([ADR-0078](../decisions/0078-pty-terminal-in-process.md)).
