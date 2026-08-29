@@ -9,6 +9,24 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.71: the graphify rail actually holds for a whole turn.**
+
+  Measured four real sessions of the user's project: 8:1, 38:1, 13:1 and 15:1
+  reads-to-graph, with `graph_summary` at ~0 and `graph_affected` /
+  `graph_change_impact` never called. MARVIN's own `ToolUseCounter` calls
+  anything over 8:1 critical, and the 2026-05-27 audit that started this work
+  measured 7:1 — it had got worse.
+
+  The enforcement was not dead code; it fired exactly as designed and the
+  design was wrong. `checkGraphifyFirst` is one-shot, and the ADR-0060 nudge
+  meant to re-arm it was capped at three **per turn** — the sidecar log shows
+  that budget spent in five seconds, after which ~100 file operations ran
+  unchallenged. Now a graph call resets the budget (complying re-arms the
+  rail) and 25 novel files with no graph query escalates to one narrow deny:
+  structural tools only, novel files only, cleared by any graph call, so it
+  never blocks implementation. See
+  [ADR-0083](../decisions/0083-graph-drift-rail-rearms-and-escalates.md).
+
 - **2026-08-29 — v0.1.70: session chips survive a reload.**
 
   The `graph N · reads M` and `agents N` status chips accumulated only from
