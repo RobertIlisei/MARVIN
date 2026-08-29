@@ -237,6 +237,20 @@ export const RELATED_MAX = 3;
 /** A file in common is stronger evidence than a word in common, but not proof. */
 const PATH_OVERLAP_BONUS = 0.4;
 
+/**
+ * Bonus when two titles name the same domain identifiers. Smaller than
+ * `PATH_OVERLAP_BONUS` — a shared file path is a stronger signal than a shared
+ * role name, because a path is where the work happens and a role is merely who
+ * it concerns.
+ *
+ * Calibrated on the 2026-08-29 corpus: it lifts the one duplicate the gate
+ * missed from 0.55 to 0.80 (over `NEAR_DUPLICATE_SCORE`), while the genuinely
+ * distinct pairs from that same session sit at 0.09 and 0.15 and share at most
+ * one identifier, so neither moves at all.
+ */
+const IDENTIFIER_OVERLAP_BONUS = 0.25;
+const MIN_SHARED_IDENTIFIERS = 2;
+
 /** Statuses that can still be acted on — a resolved item is not a duplicate. */
 const LIVE_STATUSES: ReadonlySet<BacklogStatus> = new Set<BacklogStatus>([
   "provisional",
@@ -265,13 +279,52 @@ function stem(token: string): string {
 /**
  * Meaningful title words. Title only — pulling the body in would match any two
  * items that happen to share boilerplate prose.
+ *
+ * Tokenised from the FULL title, deliberately not via `slugify`. `slugify`
+ * builds filenames and truncates at 60 chars, and reusing it here silently
+ * scored only the first 60 characters of every title. Two real items from
+ * 2026-08-29 —
+ *
+ *   "Audit SECURITY DEFINER functions in public now owned by BYPASSRLS
+ *    agricore_migrate post-ADR-0363 transfer"
+ *   "SECURITY DEFINER function ownership escalated agricore_app→agricore_migrate
+ *    on V202608281000 routine transfer"
+ *
+ * — are the same finding, but every token that proves it (`agricore_migrate`,
+ * `V202608281000`, `ADR-0363`, `transfer`) sits past character 60. The gate saw
+ * 0.43 and parked a duplicate; on the full titles it sees 0.55.
  */
 function significantTokens(title: string): Set<string> {
-  const all = slugify(title).split("-").filter((t) => t.length >= 3);
+  const all = title
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
   const kept = all.filter((t) => !OVERLAP_STOPWORDS.has(t));
   // A title made entirely of stopwords ("fix the thing") would otherwise score
   // 0 against everything; fall back rather than go blind.
   return new Set((kept.length ? kept : all).map(stem));
+}
+
+/**
+ * Domain identifiers in a title — the tokens that carry almost all the
+ * discriminating signal in this corpus: SCREAMING acronyms (`BYPASSRLS`,
+ * `RLS`, `DML`), migration/decision stamps (`V202608281000`, `ADR-0363`), and
+ * snake_case names (`agricore_migrate`, `platform_audit`).
+ *
+ * Kept separate from `significantTokens` because containment treats every word
+ * alike: two items can share "security", "definer" and "agricore_migrate" —
+ * which between them name the exact object and role — and still lose to a pair
+ * that happens to share four filler nouns.
+ *
+ * Case-sensitive by necessity, so this reads the ORIGINAL title, not a
+ * lowercased one.
+ */
+function identifierTokens(title: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of title.matchAll(/\b[A-Z]{3,}\b/g)) out.add(m[0].toLowerCase());
+  for (const m of title.matchAll(/\b[Vv]\d{6,}\b|\bADR-\d{3,}\b/g)) out.add(m[0].toLowerCase());
+  for (const m of title.matchAll(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g)) out.add(m[0]);
+  return out;
 }
 
 /**
@@ -337,7 +390,19 @@ export function backlogSimilarity(a: BacklogItem, b: BacklogItem): number {
     filePaths(`${a.title}\n${a.body}`),
     filePaths(`${b.title}\n${b.body}`),
   );
-  return Math.min(1, containment + (sharedPaths > 0 ? PATH_OVERLAP_BONUS : 0));
+  // Two or more shared identifiers, not one: `agricore_app` appears in a third
+  // of this project's titles, so a single hit means "same codebase", not "same
+  // work". Two means the pair names the same object AND the same actor.
+  const sharedIdents = intersectionSize(
+    identifierTokens(a.title),
+    identifierTokens(b.title),
+  );
+  return Math.min(
+    1,
+    containment +
+      (sharedPaths > 0 ? PATH_OVERLAP_BONUS : 0) +
+      (sharedIdents >= MIN_SHARED_IDENTIFIERS ? IDENTIFIER_OVERLAP_BONUS : 0),
+  );
 }
 
 /**
