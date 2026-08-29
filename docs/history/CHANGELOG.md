@@ -9,6 +9,65 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-29 — v0.1.68: subagent gate rename fix, background scouts, worktree implementers, working terminal, Claude plan usage.**
+
+  **The subagent gate was dead** ([ADR-0079](../decisions/0079-subagent-tool-rename-and-rails.md)).
+  Claude Code renamed the dispatch tool `Task` → `Agent` in v2.1.63; five
+  guards matched the literal `"Task"`. A scan of 12 real transcripts found
+  **200 dispatches, all `Agent`, none `Task`** — and `Agent` was absent from
+  `KNOWN_TOOL_NAMES`, so dispatch fell through to the not-in-the-gated-set
+  blanket-allow. ADR-0054's unknown-type confirm, the advisor design hook,
+  ADR-0058's Haiku extraction remap (real ongoing cost) and ADR-0059's
+  auditor no-spawn rule were all inert. ADR-0073's "verified live" claim
+  read `system/init`, which still advertises the old name. One
+  `isSubagentDispatch()`, tests under both spellings, depth/concurrency env
+  rails, per-agent `maxTurns`. Golden Rule 1 re-checked against Anthropic's
+  current guidance and kept.
+
+  **Scouts no longer block the turn** ([ADR-0080](../decisions/0080-background-subagents-and-builtin-readonly-agents.md)).
+  The Agent-SDK default is foreground. Flipping `background: true` needed a
+  runner change: `runAgent` closed the channel and armed a 5 s kill-watchdog
+  at the first `result`. Verified live that a background subagent survives
+  the result, keeps its MCP tools, and that the CLI re-prompts the model
+  with the completion — `result` is now deferred while the SDK's
+  REPLACE-semantics `background_tasks_changed` reports live tasks.
+  `Explore`/`Plan` sanctioned.
+
+  **Parallel implementation on isolated worktrees** ([ADR-0081](../decisions/0081-implementer-subagents-on-isolated-worktrees.md)) —
+  the first amendment to Golden Rule 1: a subagent still cannot mutate the
+  *main* tree, but an `implementer` bound to a worktree MARVIN created may
+  build in that tree. Verified before designing: `EnterWorktree` is refused
+  inside a subagent; the `Agent` tool's `cwd` input is accepted but not
+  honoured; a subagent's `Write` reaches `canUseTool` with `agentID ==
+  task_started.task_id` and an absolute path; reads never reach the gate.
+  So `worktree_create` names branch + directory, the registry binds the
+  agent from its dispatch prompt, the gate allows writes only under its tree
+  and rewrites Bash to `cd '<wt>' && (…)`. The user merges. Found on the
+  way: `runAgent` in single-message mode silently denies every subagent
+  permission request after the first `result` — it now always uses a
+  `TurnInputChannel`. Live-verified end to end.
+
+  **The terminal printed nothing** — `for try await line in bytes.lines`
+  never yields the empty line that terminates an SSE event; a real `pwd`
+  response gave 6 lines, 0 empty, 0 events. Framing extracted to
+  `MARVINLogic.SSEFrameParser` (8 tests, proven against live bytes); all
+  four hand-rolled copies routed through it. Stop worked for the first time.
+
+  **A message could be accepted and never delivered** — an async generator
+  resuming from its `await` ran to the next `yield` on its own, stranding
+  the message on a request the SDK had abandoned; `drainUnconsumed` never
+  saw it. Held in `inFlight` now. Plus the brain-idle / footer-Working
+  desync (only the POST path cleared `isSending`).
+
+  **Claude plan usage** ([ADR-0082](../decisions/0082-claude-plan-usage-from-rate-limit-events.md)) —
+  the SDK's per-turn `rate_limit_event` (5-hour / weekly utilisation,
+  refill time) recorded and shown beside the OpenRouter credits block;
+  per-turn tokens on the completed row.
+
+  Verification: 897 vitest / 57 files (from 855), 306 Swift assertions
+  (from 289), `tsc` ×4, biome clean on new files, three live end-to-end
+  runs through the real `runAgent`.
+
 - **2026-08-29 — v0.1.67: OpenRouter BYOK, Markdown preview, colour swatches.**
 
   **OpenRouter as a provider** (`feature/add-openrouter-support`, merged).
