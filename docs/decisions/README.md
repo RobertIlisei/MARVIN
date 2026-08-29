@@ -101,6 +101,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0086](./0086-dependency-bootstrap-and-update-check.md) | `bin/marvin deps` installs the toolchain (graphify was advisory), `graph-hooks` keeps graphs fresh outside the IDE, and a daily update check with a non-auto-installing prompt | Accepted | 2026-08-30 |
 | [0087](./0087-newest-claude-cli-and-reported-context-window.md) | MARVIN ran a Claude CLI 159 versions behind the user's (first-path-wins), which is why the plan-usage bars were blank; resolve the newest, and trust the SDK-reported context window | Accepted | 2026-08-30 |
 | [0088](./0088-rename-canary-for-the-dispatch-tool.md) | Gate the subagent dispatch by SHAPE (`subagent_type` in the input), not only by name — a future rename is gated and logged instead of silently ungated | Accepted | 2026-08-30 |
+| [0089](./0089-obsidian-trust-with-a-consent-exception.md) | `marvin-obsidian` was registered but not trusted, so every vault call was gated like a plugin; trust it, but keep `obsidian_init` on confirm because it writes into the user's repo | Accepted | 2026-08-30 |
 
 ## Template
 
