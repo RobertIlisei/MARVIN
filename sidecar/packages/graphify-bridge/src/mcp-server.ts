@@ -60,6 +60,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { changeImpact, changedFilesOnBranch, renderChangeImpact } from "./change-impact";
 import { z } from "zod";
 
 import { buildCallIndex, callersOf } from "./call-index";
@@ -68,10 +69,12 @@ import {
   getNeighbors,
   graphPathForScope,
   nodeLabelIndex,
+  nodeLabelResolver,
   resolveNode,
   searchGraph,
   shortestPath,
   summarizeGraph,
+  loadGraphNodes,
 } from "./read-graph";
 
 const pExecFile = promisify(execFile);
@@ -370,9 +373,16 @@ export function createGraphMcpServer(workDir: string) {
           "Max answer length per graph in tokens. Default 2000. Lower for follow-ups; higher for the first orientation question.",
         ),
       dfs: z.boolean().optional().describe("Depth-first instead of breadth-first."),
+      context: z
+        .array(z.string().min(1))
+        .max(6)
+        .optional()
+        .describe(
+          "Restrict traversal to these edge contexts/relations, e.g. [\"calls\"] for a call chain or [\"imports\", \"imports_from\"] for module coupling. The CLI's `--context` flag; omit to traverse everything. Use it when a question drowns in `references`/`contains` noise.",
+        ),
       scope: scopeSchema,
     },
-    async ({ question, budget, dfs, scope }) => {
+    async ({ question, budget, dfs, context, scope }) => {
       const scopes = expandScope(scope);
       const sections: string[] = [];
       for (const sc of scopes) {
@@ -386,6 +396,7 @@ export function createGraphMcpServer(workDir: string) {
           path,
         ];
         if (dfs) args.push("--dfs");
+        for (const c of context ?? []) args.push("--context", c);
         try {
           const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
             cwd: workDir,
@@ -533,8 +544,11 @@ export function createGraphMcpServer(workDir: string) {
             "Build the code graph first: `graphify . --code-only` (AST-only, no LLM cost).",
         );
       }
-      const labels = nodeLabelIndex(graphPathForScope(workDir, "code"));
-      const result = callersOf(index, symbol, depth ?? 1, (nid) => labels.get(nid));
+      // Suffix-tolerant: the cache's caller ids and graph.json's node ids use
+      // different prefixes (see nodeLabelResolver) — exact lookup hit 0.0 %
+      // of callers on a real repo and printed raw ids for two months.
+      const resolveLabel = nodeLabelResolver(graphPathForScope(workDir, "code"));
+      const result = callersOf(index, symbol, depth ?? 1, resolveLabel);
 
       if (result.callers.length === 0) {
         return textResult(
@@ -557,7 +571,7 @@ export function createGraphMcpServer(workDir: string) {
         const rel = c.sourceFile.startsWith(workDir)
           ? c.sourceFile.slice(workDir.length + 1)
           : c.sourceFile;
-        const label = labels.get(c.callerNid) ?? c.callerNid;
+        const label = resolveLabel(c.callerNid) ?? c.callerNid;
         const key = `${label}|${rel}`;
         const existing = rows.get(key);
         if (existing) {
@@ -691,9 +705,114 @@ export function createGraphMcpServer(workDir: string) {
     },
   );
 
+  // ── Tool: graph_community ─────────────────────────────────────────────
+  // The official graphify MCP server has `get_community`; `graph_summary`
+  // names the largest communities but cannot list one. Members by id or by
+  // (labelled) name, so "what else is in the Billing cluster" is one call.
+  const communityTool = tool(
+    "graph_community",
+    "List the members of ONE community (cluster) of the graph, by numeric id or by labelled name (case-insensitive substring). Use after graph_summary names a community you want to see inside, or after graph_change_impact reports which communities a branch touches. Returns labels with their source files.",
+    {
+      community: z
+        .union([z.number().int().min(0), z.string().min(1)])
+        .describe("Community id (from graph_summary / graph_change_impact) or a name fragment like 'billing'."),
+      limit: z.number().int().min(1).max(200).optional().describe("Max members to list. Default 60."),
+      scope: scopeSchema,
+    },
+    async ({ community, limit, scope }) => {
+      const scopes = expandScope(scope);
+      const cap = limit ?? 60;
+      const sections: string[] = [];
+      for (const sc of scopes) {
+        const nodes = loadGraphNodes(graphPathForScope(workDir, sc));
+        if (nodes.length === 0) {
+          sections.push(`[${sc}] graph absent or empty`);
+          continue;
+        }
+        let id: number | null = null;
+        if (typeof community === "number") {
+          id = community;
+        } else {
+          const needle = community.toLowerCase();
+          const hit = nodes.find(
+            (n) => typeof n.community === "number" && (n.community_name ?? "").toLowerCase().includes(needle),
+          );
+          id = hit?.community ?? null;
+        }
+        if (id === null) {
+          sections.push(`[${sc}] no community matching '${community}' — use graph_summary to see the named ones`);
+          continue;
+        }
+        const members = nodes.filter((n) => n.community === id);
+        const name = members.map((n) => n.community_name).find((v) => v && !/^community\s+\d+$/i.test(v)) ?? null;
+        const lines = [`[${sc}] community ${id}${name ? ` — ${name}` : ""}: ${members.length} member(s)`];
+        for (const n of members.slice(0, cap)) {
+          const file = n.source_file ? n.source_file.replace(`${workDir}/`, "") : "";
+          lines.push(`  - ${truncLabel(n.label ?? n.id)}${file ? `  (${file})` : ""}`);
+        }
+        if (members.length > cap) lines.push(`  … ${members.length - cap} more (raise \`limit\`)`);
+        sections.push(lines.join("\n"));
+      }
+      return textResult(sections.join("\n\n"));
+    },
+  );
+
+  // ── Tool: graph_change_impact ─────────────────────────────────────────
+  // Diff-level blast radius. Forge-agnostic replacement for graphify's
+  // GitHub-only `get_pr_impact`: git names the files, graph.json maps them
+  // to symbols and communities, the AST call cache finds who reaches into
+  // them from OUTSIDE the branch. See change-impact.ts.
+  const changeImpactTool = tool(
+    "graph_change_impact",
+    "Blast radius of a whole branch / diff / MR: which code symbols the changed files define, which communities they belong to, whether any is a god node, and — the part to review first — every caller OUTSIDE the changed files that reaches into them, with file and line. Call with no arguments to analyse the current branch against its base (working tree + untracked included); pass `files` to analyse an explicit change set. Use in Phase 3 impact analysis for any multi-file change and at the start of a pre-landing review. Per-symbol detail is graph_affected; this is the aggregate. Code scope only.",
+    {
+      files: z
+        .array(z.string().min(1))
+        .max(500)
+        .optional()
+        .describe("Changed files, repo-relative. Omit to diff the current branch against `base`."),
+      base: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Base ref for the diff, e.g. 'origin/main'. Default: origin/HEAD, then origin/main / main."),
+      limit: z.number().int().min(1).max(200).optional().describe("Max external callers to list. Default 40."),
+    },
+    async ({ files, base, limit }) => {
+      const index = buildCallIndex(workDir);
+      if (index.files === 0) {
+        return errorResult(
+          "No graphify extraction cache at graphify-out/cache/ — change impact needs it. " +
+            "Build the code graph first: `graphify . --code-only`.",
+        );
+      }
+      let changed = files ?? [];
+      let resolvedBase: string | undefined;
+      if (!files) {
+        try {
+          const r = await changedFilesOnBranch(workDir, base);
+          changed = r.files;
+          resolvedBase = r.base;
+        } catch (err) {
+          return errorResult(`git diff failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (changed.length === 0) {
+        return textResult(resolvedBase ? `No changes on this branch relative to ${resolvedBase}.` : "No files given.");
+      }
+      const report = changeImpact({
+        workDir,
+        graphPath: graphPathForScope(workDir, "code"),
+        index,
+        files: changed,
+      });
+      return textResult(renderChangeImpact(report, { base: resolvedBase, limit: limit ?? 40 }));
+    },
+  );
+
   return createSdkMcpServer({
     name: "marvin-graph",
-    version: "0.0.3",
+    version: "0.0.4",
     // ADR-0073 — Agent SDK 0.3 DEFERS MCP tools behind ToolSearch by default.
     // These are the graphify-first tools (Golden Rule 7): the design hooks
     // hard-deny Read/Grep/Glob until a graph call has happened, so if the
@@ -707,6 +826,8 @@ export function createGraphMcpServer(workDir: string) {
       pathTool,
       queryTool,
       affectedTool,
+      changeImpactTool,
+      communityTool,
       saveResultTool,
       reflectTool,
     ],
