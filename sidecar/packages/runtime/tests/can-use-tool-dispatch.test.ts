@@ -678,3 +678,30 @@ describe("makeGatedCanUseTool (gated mode)", () => {
     }
   });
 });
+
+// ADR-0088 — the canary must fire at the REAL decision point.
+// classifyToolCall blanket-allows anything not in KNOWN_TOOL_NAMES, and that
+// allow is precisely what ADR-0079's rename fell through. A dispatch-shaped
+// call must never reach it.
+describe("unknown dispatch tool is gated, not blanket-allowed (ADR-0088)", () => {
+  it("a renamed dispatch tool with an unknown subagent_type confirms", () => {
+    const r = classifyToolCall("Delegate", { subagent_type: "rogue", prompt: "x" });
+    expect(r.decision).toBe("confirm");
+    expect(r.reason).not.toContain("not in the gated set");
+  });
+
+  it("a renamed dispatch tool with a sanctioned type still auto-allows", () => {
+    expect(classifyToolCall("Delegate", { subagent_type: "scout" }).decision).toBe("allow");
+  });
+
+  it("the subagent read-only collapse applies to it too", () => {
+    const r = classifyToolCall("Delegate", { subagent_type: "rogue" }, { agentID: "a1" });
+    expect(r.decision).toBe("deny");
+  });
+
+  it("an ordinary unknown tool is still blanket-allowed — the canary is narrow", () => {
+    const r = classifyToolCall("SomeFutureTool", { foo: "bar" });
+    expect(r.decision).toBe("allow");
+    expect(r.reason).toContain("not in the gated set");
+  });
+});

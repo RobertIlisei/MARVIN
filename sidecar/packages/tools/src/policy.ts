@@ -101,6 +101,31 @@ export function isSubagentDispatch(name: string): boolean {
 }
 
 /**
+ * Rename canary (ADR-0088).
+ *
+ * `isSubagentDispatch` matches names we already know. ADR-0079 is the record
+ * of what a name we DIDN'T know costs: five guards went dead and dispatch ran
+ * ungated for months, because every check was written against a literal.
+ * Matching the name is inherently one rename behind.
+ *
+ * The tool's SHAPE is not. A call carrying `subagent_type` is a subagent
+ * dispatch whatever it is called, so an unrecognised tool with that input is
+ * almost certainly the next rename. Treat it as a dispatch — which routes it
+ * through the sanctioned-type check rather than the not-in-the-gated-set
+ * blanket-allow — and say so loudly enough to be found.
+ */
+export function looksLikeSubagentDispatch(
+  name: string,
+  input: Record<string, unknown> | undefined | null,
+): boolean {
+  if (isSubagentDispatch(name)) return false;
+  // `classifyToolCall` is reachable with no input at all (the SDK omits it
+  // for some calls) — a canary that throws would take the turn with it.
+  const type = input?.subagent_type;
+  return typeof type === "string" && type.length > 0;
+}
+
+/**
  * Subagent types MARVIN may dispatch via `Task` / `Agent` without a confirm
  * prompt. The set is small and ADR-bound:
  *   - `scout`           — read-only research subagent (ADR-0014).
@@ -410,7 +435,7 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
     }
     return { class: "confirm", reason: "Bash command not in the auto-allow list." };
   }
-  if (isSubagentDispatch(name)) {
+  if (isSubagentDispatch(name) || looksLikeSubagentDispatch(name, input)) {
     // ADR-0007 (advisor) and ADR-0014 (scout) sanction two
     // `subagent_type` values; everything else is a bare delegate that
     // inherits the parent's permission posture, which in `auto` mode

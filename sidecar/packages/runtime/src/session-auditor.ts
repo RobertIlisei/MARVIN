@@ -42,6 +42,7 @@ import { latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
 import { readAuthConfig } from "./auth-config";
+import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 
 /** Caps — the packet is bounded so an audit can't blow up cost or context. */
 export const AUDIT_CAPS = {
@@ -389,10 +390,10 @@ export const AUDITOR_DISALLOWED_TOOLS: readonly string[] = [
   "Bash",
   "WebFetch",
   "WebSearch",
-  // Both spellings — the SDK renamed Task → Agent, and disallowedTools
-  // matches on the literal name the model emits.
-  "Task",
-  "Agent",
+  // Every spelling of the dispatch tool, DERIVED from the one definition
+  // (ADR-0088). Re-listing them here is how ADR-0079 happened: the canonical
+  // set gained a name and the copies did not.
+  ...SUBAGENT_DISPATCH_TOOLS,
   "TodoWrite",
 ];
 
