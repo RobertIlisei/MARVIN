@@ -174,6 +174,9 @@ final class MarvinBridge {
     /// `residentContextTokens`). The AppStatusBar's "graph N · reads M"
     /// chip reads these to surface live drift between the graphify
     /// protocol and observed behaviour.
+    /// The context window the SDK reported on the last result event — the
+    /// authoritative figure, preferred over inferring one from the model id.
+    var reportedContextWindow: Int? = nil
     var sessionGraphCalls: Int = 0
     var sessionFileReadCalls: Int = 0
     var sessionGraphSummaryCalls: Int = 0

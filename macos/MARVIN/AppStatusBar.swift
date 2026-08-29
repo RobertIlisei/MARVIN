@@ -278,7 +278,10 @@ struct AppStatusBar: View {
     @ViewBuilder
     private var contextSegment: some View {
         if let resident = bridge.residentContextTokens {
-            let window = ContextUsageReader.contextWindow(forModelId: currentModelId)
+            // Prefer what the SDK reported for the running model over an
+            // estimate derived from the model id (ADR-0087).
+            let window = bridge.reportedContextWindow
+                ?? ContextUsageReader.contextWindow(forModelId: currentModelId)
             let band = ContextUsageReader.band(forTokens: resident, window: window)
             let kCtx = (Double(resident) / 1000.0).rounded()
             let billable = bridge.billableThisTurn

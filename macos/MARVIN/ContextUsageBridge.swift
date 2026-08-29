@@ -14,6 +14,8 @@ extension ContextUsageReader {
     /// bridge field names. ADR-0022 §2.
     @MainActor
     static func applyTo(bridge: MarvinBridge, cliEventData data: Data) {
+        // The SDK's own number, when the event carries it (result events).
+        if let w = reportedContextWindow(cliEventData: data) { bridge.reportedContextWindow = w }
         let parsed = read(cliEventData: data)
         if let r = parsed.resident { bridge.residentContextTokens = r }
         if let b = parsed.billable { bridge.billableThisTurn = b }
