@@ -9,6 +9,40 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-29 — v0.1.69: a real terminal, subagent stats, Claude plan usage like the CLI, graphify-out visible.**
+
+  **The terminal is a terminal** ([ADR-0078](../decisions/0078-pty-terminal-in-process.md)).
+  A persistent login shell on a pty spawned by the app — `posix_openpt` +
+  `posix_spawn` with `POSIX_SPAWN_SETSID` and the slave opened as fd 0 in
+  the child, which is what makes it the controlling tty and makes Ctrl-C
+  work (a test spawns `sleep 30`, sends `0x03`, requires an answer in 3 s).
+  SwiftTerm renders; MARVIN owns the pty, env scrubbing (no `ANTHROPIC_*`
+  or OAuth token reaches `printenv`), teardown on quit and the tests.
+  Sessions live outside the view so hiding the pane no longer kills the
+  shell; build tasks type into the same shell; the whole pane takes focus.
+  Replaces the `$SHELL -c` command runner — `/api/terminal/run`,
+  `ANSIParser` and the `@xterm/*` deps are gone. The `[exit 0]` line and
+  the lost-focus-on-Enter complaint disappear by construction.
+
+  **Subagent stats in the status bar.** "agents N · M running" with a
+  breakdown by type (scout / advisor / implementer / graph-extractor /
+  Explore …), background count, completed, failed — from a pure
+  `SubagentLedger` over the event stream. Before this the only trace of
+  subagent use was a sidecar log line.
+
+  **Claude plan usage now matches the CLI's Usage tab.** The
+  `rate_limit_event` carries `unifiedWindows` (undeclared in the SDK types,
+  observed live): current session 13 %, current week 46 %, per-model
+  weeks — the same numbers Claude Code and the desktop app show. On a
+  subscription the `$` figures are labelled API-equivalent, not a bill.
+
+  **graphify-out is visible** in the explorer; only its extraction cache is
+  skipped (the 12k-file truncation that got the whole folder hidden stays
+  fixed) and it remains write-denied.
+
+  Verification: 900 vitest / 57 files, 341 Swift assertions (PTY suite
+  included), SPM build; `xcodebuild` unavailable on the build machine.
+
 - **2026-08-29 — v0.1.68: subagent gate rename fix, background scouts, worktree implementers, working terminal, Claude plan usage.**
 
   **The subagent gate was dead** ([ADR-0079](../decisions/0079-subagent-tool-rename-and-rails.md)).
