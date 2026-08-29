@@ -19,6 +19,7 @@
  *   - No deep probe on every health check.
  */
 
+import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -255,6 +256,22 @@ export function getAnthropicAuth(): AnthropicAuthStatus {
  * Build the environment a Claude CLI subprocess should inherit.
  * Strips nesting markers and normalizes the key/token variables per mode.
  */
+/**
+ * Shared secret binding the OpenRouter proxy route to the CLI subprocesses
+ * this sidecar spawned.
+ *
+ * Per PROCESS, not persisted: a token on disk is a token an attacker can
+ * read, and there is nothing to survive a restart — the CLI is always
+ * spawned by the same process that mints it.
+ */
+export const PROXY_TOKEN_HEADER = "X-Marvin-Proxy";
+let cachedProxyToken: string | null = null;
+
+export function proxyToken(): string {
+  if (!cachedProxyToken) cachedProxyToken = randomBytes(32).toString("hex");
+  return cachedProxyToken;
+}
+
 export function buildSubprocessEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   // Remove nesting markers so the spawned CLI doesn't think it's a nested
@@ -298,6 +315,15 @@ export function buildSubprocessEnv(): NodeJS.ProcessEnv {
         env.ANTHROPIC_API_KEY = key ? `sk-ant-api03-${key}` : undefined;
         const port = process.env.PORT || "3030";
         env.ANTHROPIC_BASE_URL = `http://localhost:${port}/api/proxy/openrouter`;
+        // Bind the proxy to THIS sidecar's own subprocesses. Without it the
+        // route is reachable by any local process — it cannot require
+        // `X-Marvin-Client` (the CLI does not send it), so the CSRF gate
+        // there is Origin + Sec-Fetch-Site only, which stops a browser tab
+        // but not a local script spending the user's OpenRouter credit.
+        // `ANTHROPIC_CUSTOM_HEADERS` is honoured by the Claude CLI and
+        // forwarded on every upstream request — verified empirically against
+        // an echo server before this was relied on, not inferred from docs.
+        env.ANTHROPIC_CUSTOM_HEADERS = `${PROXY_TOKEN_HEADER}: ${proxyToken()}`;
       } else {
         env.ANTHROPIC_API_KEY = key;
       }
