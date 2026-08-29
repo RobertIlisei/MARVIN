@@ -4,6 +4,7 @@ import {
   MARVIN_CLIENT_HEADER,
   MARVIN_CLIENT_VALUE,
   marvinFetch,
+  requireLoopbackClient,
   requireMarvinClient,
 } from "../src/lib/csrf";
 
@@ -164,5 +165,51 @@ describe("marvinFetch", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("requireLoopbackClient", () => {
+  // For routes whose real client is a local non-browser process (the
+  // Claude CLI hitting the OpenRouter proxy), the custom-header check
+  // can't apply — the CLI will never send X-Marvin-Client. The loopback
+  // guard runs only the Origin + Sec-Fetch-Site halves of the CSRF
+  // gate, which still kill the drive-by tab (browsers always attach
+  // those to cross-origin POSTs) while letting header-less CLI
+  // requests through.
+
+  it("passes a header-less CLI request (no Origin, no Sec-Fetch-Site)", () => {
+    const res = requireLoopbackClient(makeReq({}) as any);
+    expect(res).toBeNull();
+  });
+
+  it("blocks a drive-by cross-origin POST (Origin + Sec-Fetch-Site: cross-site)", async () => {
+    const res = requireLoopbackClient(
+      makeReq({ origin: "https://evil.com", "sec-fetch-site": "cross-site" }) as any,
+    );
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(403);
+    const body = (await res!.json()) as { error: string };
+    expect(body.error).toBe("csrf-guard-origin");
+  });
+
+  it("blocks a same-site request from another localhost port", () => {
+    const res = requireLoopbackClient(
+      makeReq({ origin: "http://localhost:8080", "sec-fetch-site": "same-site" }) as any,
+    );
+    expect(res).not.toBeNull();
+  });
+
+  it("passes a same-origin UI request", () => {
+    const res = requireLoopbackClient(
+      makeReq({ origin: "http://localhost:3030", "sec-fetch-site": "same-origin" }) as any,
+    );
+    expect(res).toBeNull();
+  });
+
+  it("passes a user-typed navigation (Sec-Fetch-Site: none)", () => {
+    const res = requireLoopbackClient(
+      makeReq({ "sec-fetch-site": "none" }) as any,
+    );
+    expect(res).toBeNull();
   });
 });

@@ -9,6 +9,55 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-29 — v0.1.67: OpenRouter BYOK, Markdown preview, colour swatches.**
+
+  **OpenRouter as a provider** (`feature/add-openrouter-support`, merged).
+  BYOK through a local proxy: the Claude SDK insists an API key starts with
+  `sk-ant-` and sends it as `x-api-key`, while OpenRouter wants
+  `Authorization: Bearer` — so the key is prefixed on the way out and
+  un-prefixed by a loopback route. Model discovery reads OpenRouter's
+  catalogue; account balance polls `/credits`.
+
+  The cost fix is the substantial part. The SDK's `total_cost_usd` prices
+  every model off the Claude rate card, which for a BYOK model is fiction —
+  measured ~10× over: a 4.3M-token glm turn recorded **$4.21 against ~$0.33
+  actual**. Per-turn cost is now computed from OpenRouter's own pricing, with
+  cache reads billed at `input_cache_read` and cache writes at
+  `input_cache_write` (a *premium* over prompt price, not a discount — easy to
+  get backwards). Nine tests pin it against real pricing fixtures.
+
+  **Two changes made to the branch before merging.**
+
+  *Security.* The proxy route cannot require `X-Marvin-Client` — the CLI, its
+  only client, does not send it — so its gate was Origin + `Sec-Fetch-Site`,
+  which stops a browser tab but not another local process. A plain `curl` with
+  no MARVIN header reached OpenRouter and could spend the user's credit. It is
+  now bound to a secret minted per sidecar process, never persisted, handed to
+  the CLI via `ANTHROPIC_CUSTOM_HEADERS`, compared in constant time and
+  stripped before the request goes upstream. The env var was verified against a
+  local echo server rather than assumed from documentation.
+
+  *Runtime.* The route moved off the edge runtime. MARVIN's sidecar IS a Node
+  server, every other route is `nodejs`, and an edge route cannot import the
+  runtime package — `node:crypto` is unavailable there and the build fails
+  collecting page data.
+
+  The branch predated ADR-0075, so ~55 of its lines edited the deleted browser
+  UI. Those were dropped; `page.tsx` and `file-viewer.tsx` stay deleted.
+
+  **Markdown preview + colour swatches.** ⇧⌘V renders a `.md` file with the
+  same parser the chat uses — no second Markdown implementation to drift.
+  Preview replaces the editor rather than splitting it: the pane is already one
+  column of three, and half of it is too narrow for prose. YAML front matter
+  renders as a key/value table, since `DESIGN.md` opens with 60 lines of it.
+  Colour chips now sit beside every hex / `rgb()` literal, applied as an
+  attribute on the literal's first character — `textView.string` stays
+  byte-identical to disk, so cursor offsets and every save path are untouched.
+
+  Verified: 855 vitest tests / 54 files, 281 Swift assertions, `tsc` clean ×4,
+  `swift build` clean, standalone build clean, and the proxy gate exercised on
+  the built server (unauthorised local caller 403, was 401).
+
 - **2026-08-29 — v0.1.66: the Antigravity pass, and four bugs the instrumentation named.**
 
   **The macOS shell now looks like the reference.** The icon port had been

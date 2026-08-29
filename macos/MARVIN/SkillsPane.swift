@@ -533,7 +533,10 @@ struct SkillsPane: View {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
         req.timeoutInterval = 130
-        let body: [String: Any] = ["workDir": workDir]
+        var body: [String: Any] = ["workDir": workDir]
+        if let executor = bridge.executorModel {
+            body["model"] = executor
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             _ = try await URLSession.shared.data(for: req)
