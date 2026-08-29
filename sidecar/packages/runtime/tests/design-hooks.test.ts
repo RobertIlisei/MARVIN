@@ -14,6 +14,8 @@ import {
   recordAllowedTool,
   runDesignHooks,
   checkGraphDrift,
+  checkGraphDriftDeny,
+  GRAPH_DRIFT_DENY_THRESHOLD,
   GRAPH_DRIFT_MAX_NUDGES,
   GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
   logDesignTurnSummary,
@@ -791,5 +793,83 @@ describe("implementation refund (ADR-0060 addendum 2)", () => {
     recordAllowedTool(ctx, "Edit", { file_path: f });
     expect(ctx.novelFilesSinceGraph).toBe(0);
     expect(ctx.driftRefunds).toBe(0); // charge was already cleared, not refunded
+  });
+});
+
+// ADR-0083 — the drift rail re-arms on compliance and escalates when ignored.
+// Measured cause: the nudge budget was monotonic per turn and spent in five
+// seconds, after which 100+ file operations ran unchallenged (8:1–38:1
+// read:graph across four real sessions; >8:1 is "critical" by MARVIN's own
+// ToolUseCounter bands).
+describe("graph drift — re-arm and escalation (ADR-0083)", () => {
+  const cwd = "/proj";
+
+  function ctxWithGraph() {
+    const ctx = createTurnDesignContext("t-0083", cwd);
+    ctx.hasGraph = true;
+    return ctx;
+  }
+
+  /** Open `n` never-before-seen source files, as the hook records them. */
+  function readNovelFiles(ctx: ReturnType<typeof ctxWithGraph>, n: number, from = 0) {
+    for (let i = from; i < from + n; i++) {
+      recordAllowedTool(ctx, "Read", { file_path: join(cwd, "src", `f${i}.ts`) });
+    }
+  }
+
+  it("a graph call resets the nudge budget, so a long turn keeps its coverage", () => {
+    const ctx = ctxWithGraph();
+    // Spend the whole budget.
+    for (let i = 0; i < GRAPH_DRIFT_MAX_NUDGES; i++) {
+      readNovelFiles(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD, i * 100);
+      expect(checkGraphDrift(ctx, "Grep", { pattern: "x", path: cwd })).not.toBeNull();
+    }
+    readNovelFiles(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD, 900);
+    expect(checkGraphDrift(ctx, "Grep", { pattern: "x", path: cwd })).toBeNull(); // exhausted
+
+    // The model complies. That is the rail working — give the budget back.
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", {});
+    expect(ctx.graphifyNudgeCount).toBe(0);
+    readNovelFiles(ctx, GRAPH_DRIFT_NOVEL_FILE_THRESHOLD, 1000);
+    expect(checkGraphDrift(ctx, "Grep", { pattern: "x", path: cwd })).not.toBeNull();
+    expect(ctx.graphifyNudgeTotal).toBe(GRAPH_DRIFT_MAX_NUDGES + 1);
+  });
+
+  it("denies a structural read once drift runs far past the advisory", () => {
+    const ctx = ctxWithGraph();
+    readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD);
+    const deny = checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd });
+    expect(deny?.behavior).toBe("deny");
+    expect(deny?.message).toContain("graph_summary");
+    // One deny per stretch — it must not wall the model in.
+    expect(checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd })).toBeNull();
+  });
+
+  it("a graph call clears the deny, so complying always unblocks", () => {
+    const ctx = ctxWithGraph();
+    readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD);
+    expect(checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd })).not.toBeNull();
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_summary", {});
+    expect(ctx.graphDriftDenyFired).toBe(false);
+    expect(ctx.novelFilesSinceGraph).toBe(0);
+    readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD, 500);
+    expect(checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd })).not.toBeNull();
+  });
+
+  it("never blocks implementation: mutators, and re-reads of files in play", () => {
+    const ctx = ctxWithGraph();
+    readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD);
+    for (const tool of ["Edit", "Write", "Bash", "NotebookEdit"]) {
+      expect(checkGraphDriftDeny(ctx, tool, { file_path: join(cwd, "src", "f0.ts"), command: "ls" }), tool).toBeNull();
+    }
+    // f0.ts is already in play — re-reading it is work, not exploration.
+    expect(checkGraphDriftDeny(ctx, "Read", { file_path: join(cwd, "src", "f0.ts") })).toBeNull();
+  });
+
+  it("stays silent on a project with no graph", () => {
+    const ctx = createTurnDesignContext("t-nograph", cwd);
+    ctx.hasGraph = false;
+    readNovelFiles(ctx, GRAPH_DRIFT_DENY_THRESHOLD);
+    expect(checkGraphDriftDeny(ctx, "Grep", { pattern: "x", path: cwd })).toBeNull();
   });
 });

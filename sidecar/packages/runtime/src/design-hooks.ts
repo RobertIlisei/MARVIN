@@ -88,6 +88,13 @@ export interface DesignTurnContext {
   /** ADR-0060 — how many drift nudges have fired this turn (capped, so a long
    *  legitimate implementation turn can't be nagged repeatedly). */
   graphifyNudgeCount: number;
+  /** ADR-0083 — total nudges this turn, across re-arms. Telemetry only; the
+   *  cap reads `graphifyNudgeCount`. */
+  graphifyNudgeTotal: number;
+  /** ADR-0083 — has the escalated drift DENY already fired for the current
+   *  stretch? Cleared by any graph call, so a turn can be stopped more than
+   *  once but never twice without an intervening graph query. */
+  graphDriftDenyFired: boolean;
 }
 
 /** ADR-0060 — novel source files that may be opened after the last graph call
@@ -100,6 +107,14 @@ export const GRAPH_DRIFT_NOVEL_FILE_THRESHOLD = 7;
  *  repeating it every 7 files in an 80-op turn would become noise the model
  *  learns to skip. */
 export const GRAPH_DRIFT_MAX_NUDGES = 3;
+
+/** ADR-0083 — novel files since the last graph call at which the advisory
+ *  nudge escalates to a hard deny. Set well above the nudge threshold (7) so
+ *  it can only fire after the model has been nudged and kept going: at 7
+ *  files it is a suggestion; at 25 unguided novel files in one stretch it is
+ *  the "grep and pray" failure Golden Rule 7 exists to stop. One deny per
+ *  stretch — any graph call clears it. */
+export const GRAPH_DRIFT_DENY_THRESHOLD = 25;
 
 /** Resolve enforcement level from env, exported so tests can pin it. */
 export function readDesignHooksMode(): DesignHooksMode {
@@ -199,6 +214,8 @@ export function createTurnDesignContext(
     driftCharges: 0,
     driftRefunds: 0,
     graphifyNudgeCount: 0,
+    graphifyNudgeTotal: 0,
+    graphDriftDenyFired: false,
     advisorCallCount: 0,
     sourceFilesRead: 0,
     graphifyHookFired: false,
@@ -234,6 +251,14 @@ export function recordAllowedTool(
     // the graph N times", it's "don't explore blind for long stretches".
     ctx.novelFilesSinceGraph = 0;
     ctx.chargedFiles.clear();
+    // ADR-0083 — the model complied, so RE-ARM the rail. The nudge budget
+    // used to be monotonic per turn: measured on turn 7082aa17 it was spent
+    // in five seconds (20:26:48 → 20:26:53) and the remaining ~100 file
+    // operations ran unchallenged, giving 8:1–38:1 read:graph ratios that
+    // MARVIN's own ToolUseCounter calls critical. Resetting on compliance
+    // makes coverage proportional to turn length instead.
+    ctx.graphifyNudgeCount = 0;
+    ctx.graphDriftDenyFired = false;
     return;
   }
 
@@ -355,6 +380,7 @@ export function checkGraphDrift(
   }
 
   ctx.graphifyNudgeCount += 1;
+  ctx.graphifyNudgeTotal += 1;
   const n = ctx.novelFilesSinceGraph;
   return (
     `[graphify drift — advisory, your call] You have opened ${n} previously ` +
@@ -366,6 +392,55 @@ export function checkGraphDrift(
     `hundred tokens instead of thousands per file, and catches couplings a ` +
     `grep cannot see. Golden Rule 7.`
   );
+}
+
+/**
+ * ADR-0083 — the escalated drift deny.
+ *
+ * `checkGraphifyFirst` denies once at the head of a turn and `checkGraphDrift`
+ * nudges; measured sessions still ran 8:1 to 38:1 file-ops-to-graph, and
+ * MARVIN's own `ToolUseCounter` calls anything over 8:1 critical. An advisory
+ * that has been ignored repeatedly is not a rail. This is the floor: once
+ * `GRAPH_DRIFT_DENY_THRESHOLD` novel files have been opened with no graph
+ * query, the next structural read is denied.
+ *
+ * Deliberately narrow so it cannot block implementation:
+ *   - novel files only — a file already in play never counts;
+ *   - structural tools only, never Edit / Write / Bash;
+ *   - one deny per stretch, cleared by any graph call, so complying always
+ *     unblocks immediately and the model can never be stuck.
+ *
+ * Exported for tests.
+ */
+export function checkGraphDriftDeny(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (!ctx.hasGraph) return null;
+  if (ctx.graphDriftDenyFired) return null;
+  if (ctx.novelFilesSinceGraph < GRAPH_DRIFT_DENY_THRESHOLD) return null;
+  if (toolName !== "Read" && toolName !== "Grep" && toolName !== "Glob") return null;
+  if (toolName === "Read") {
+    const target = pickPath(toolInput, ["file_path", "path"]);
+    if (!target || !isSourceFile(target) || !isInsideCwd(ctx.cwd, target)) return null;
+    if (ctx.seenSourceFiles.has(target)) return null;
+  }
+  ctx.graphDriftDenyFired = true;
+  return {
+    behavior: "deny",
+    message:
+      `graphify-drift: ${ctx.novelFilesSinceGraph} previously unseen source ` +
+      `files/searches since your last graph query, after ${ctx.graphifyNudgeCount} ` +
+      `advisory nudge(s). This is the "grep and pray" pattern Golden Rule 7 ` +
+      "exists to eliminate. Run ONE `mcp__marvin-graph__` query before " +
+      "continuing: `graph_summary` to orient, `graph_search` to locate, " +
+      "`graph_affected` for who-calls-this, `graph_change_impact` for the " +
+      "blast radius of a whole branch. Any graph call clears this and re-arms " +
+      "the advisory budget. If you are IMPLEMENTING against files you already " +
+      "located, those reads are not novel and never trip this — the rule only " +
+      "counts files you have not opened this turn.",
+  };
 }
 
 /**
@@ -558,6 +633,21 @@ export function runDesignHooks(args: {
 
   // Hook 1 — graphify-first.
   const graphifyDeny = checkGraphifyFirst(ctx, toolName, toolInput);
+  const driftDeny = checkGraphDriftDeny(ctx, toolName, toolInput);
+  if (driftDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({
+        kind: "graph.drift.deny.measured",
+        turnId: ctx.turnId,
+        tool: toolName,
+        novelFilesSinceGraph: ctx.novelFilesSinceGraph,
+        graphCallCount: ctx.graphCallCount,
+      });
+    } else {
+      return driftDeny;
+    }
+  }
+
   if (graphifyDeny) {
     if (mode === "measure") {
       // Caller is responsible for logging; we just don't deny.
