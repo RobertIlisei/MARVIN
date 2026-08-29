@@ -1182,6 +1182,24 @@ final class ChatPreviewModel {
     private func attachLive(marvinSessionId: String) {
         resumeTask?.cancel()
         resumeTask = Task { @MainActor in
+            // Symmetric with the POST-driven `activeTask` defer below. Nothing
+            // used to clear `isSending` for a turn we ATTACHED to rather than
+            // started: `turn.completed` idles the brain (`marvinState`), but
+            // the footer spinner reads `isSending`, so the two disagreed —
+            // brain "idle" while the footer still said "Working…" (user,
+            // 2026-08-29). The comment at `turn.completed` even asserts "the
+            // activeTask chain set isSending=false in its defer before this
+            // event fires", which is true only on the POST path.
+            //
+            // Guarded on `activeTask` so a turn the user started while this
+            // one was unwinding is not falsely reported as finished.
+            defer {
+                if activeTask == nil {
+                    isSending = false
+                    currentActivity = nil
+                    MarvinBridge.shared.isBusy = false
+                }
+            }
             do {
                 let stream = ChatService.shared.attachLive(
                     marvinSessionId: marvinSessionId
@@ -1250,7 +1268,15 @@ final class ChatPreviewModel {
     /// reaches us at idle is genuinely server-initiated.
     private func onAnnouncement(_ ann: TurnAnnouncement) {
         guard ann.marvinSessionId == loadedSessionId else { return }
-        guard !isSending else { return }
+        // `isSending` normally means "our own stream is carrying this turn", so
+        // re-attaching would double-render it. But if it is set with NO stream
+        // behind it, it is stale — and the guard then swallows every
+        // announcement for the rest of the session, leaving the brain idle
+        // while the server works and the footer spins forever. Treat the
+        // no-stream case as idle and attach: `attachLive` cancels any prior
+        // `resumeTask`, so this cannot double-subscribe.
+        let hasLiveStream = activeTask != nil || resumeTask != nil
+        guard !isSending || !hasLiveStream else { return }
         tailingServerTurn = true
         attachLive(marvinSessionId: ann.marvinSessionId)
     }

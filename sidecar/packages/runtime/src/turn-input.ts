@@ -29,6 +29,22 @@ export class TurnInputChannel {
   private closed = false;
   /** Messages accepted by `push` but never yielded (turn closed first). */
   private unconsumed: string[] = [];
+  /**
+   * The message currently handed to the consumer but not yet PROVEN taken.
+   *
+   * An async generator that resumes from an internal `await` runs forward to
+   * its next `yield` on its own. If the consumer has stopped iterating, that
+   * yielded value fulfils an abandoned request and is held nowhere this class
+   * can see: it is already out of `queue`, and `drainUnconsumed` returns
+   * nothing. That is how a message POSTed 12 ms before a turn ended was
+   * accepted (202 `injected: true`), persisted as `turn.user`, rendered to the
+   * user — and never seen by the model. No `turn.started` ever followed it.
+   *
+   * Holding it here until the generator resumes past the `yield` — which only
+   * happens when the consumer asks for the NEXT message, i.e. proof it took
+   * this one — makes it recoverable by `close()`.
+   */
+  private inFlight: string | null = null;
   /** Count of messages yielded to the SDK after the first one. */
   injectedCount = 0;
 
@@ -54,6 +70,15 @@ export class TurnInputChannel {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    // `inFlight` first — it was pushed before anything still in `queue`, and
+    // the drain replays in order. Recovering it may re-deliver a message the
+    // consumer took in the microtask gap between fulfilling its request and
+    // issuing the next one; that window is vanishingly small, and ADR-0069 is
+    // explicit that a duplicate is the acceptable failure and a loss is not.
+    if (this.inFlight !== null) {
+      this.unconsumed.push(this.inFlight);
+      this.inFlight = null;
+    }
     this.unconsumed.push(...this.queue);
     this.queue = [];
     this.waiter?.();
@@ -72,8 +97,15 @@ export class TurnInputChannel {
     while (true) {
       if (this.queue.length > 0) {
         const next = this.queue.shift() as string;
-        this.injectedCount += 1;
+        this.inFlight = next;
         yield wrap(next);
+        // Reached only when the consumer requests ANOTHER message, which it
+        // does only after taking this one. Counting the injection here rather
+        // than before the `yield` keeps `injectedCount` a record of messages
+        // the SDK actually received, not of messages this class handed to a
+        // request that may already have been abandoned.
+        this.inFlight = null;
+        this.injectedCount += 1;
         continue;
       }
       if (this.closed) return;

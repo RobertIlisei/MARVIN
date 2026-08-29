@@ -69,6 +69,56 @@ describe("TurnInputChannel", () => {
     expect(ch.drainUnconsumed()).toEqual([]);
   });
 
+  // REGRESSION (2026-08-29). A message POSTed 12 ms before a turn ended was
+  // accepted (202 `injected: true`), written to the transcript as `turn.user`,
+  // rendered to the user — and never reached the model. No `turn.started`
+  // followed it. The cause is below: an async generator resuming from its
+  // internal `await` runs forward to the next `yield` on its own, so the item
+  // left `queue` and fulfilled a request the SDK had already abandoned. It was
+  // then in neither `queue` nor `unconsumed`, so `drainUnconsumed` — the whole
+  // no-message-is-ever-lost mechanism — returned nothing.
+  it("recovers a message stranded on a request the consumer abandoned", async () => {
+    const ch = new TurnInputChannel();
+    const it = ch.stream("first")[Symbol.asyncIterator]();
+    expect((await it.next()).value?.message.content).toBe("first");
+
+    // The SDK asks for another message, then its turn completes and it stops
+    // caring about the answer. The request stays pending forever.
+    void it.next();
+    await new Promise((r) => setTimeout(r, 5));
+
+    // The user POSTs here. The channel is open, so `push` — and therefore the
+    // route's `inflight.inject?.(message)` — reports success.
+    expect(ch.push("how are we looking so far ?")).toBe(true);
+    await new Promise((r) => setTimeout(r, 5));
+
+    // What `runAgent` sees at the terminal `result`: nothing pending, so it
+    // treats the result as final and closes. This is why the turn ended.
+    expect(ch.pending).toBe(0);
+    // And the message was never proven taken, so it is not counted as injected.
+    expect(ch.injectedCount).toBe(0);
+
+    ch.close();
+    expect(ch.drainUnconsumed()).toEqual(["how are we looking so far ?"]);
+  });
+
+  it("does not re-queue a message the consumer actually took", async () => {
+    const ch = new TurnInputChannel();
+    const it = ch.stream("first")[Symbol.asyncIterator]();
+    await it.next();
+    const request = it.next();
+    ch.push("second");
+    expect((await request).value?.message.content).toBe("second");
+    // The driver immediately asks for the next message — proof it took this
+    // one. Only then is the injection counted and the in-flight slot released.
+    void it.next();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(ch.injectedCount).toBe(1);
+
+    ch.close();
+    expect(ch.drainUnconsumed()).toEqual([]);
+  });
+
   it("pending reflects what the SDK has not yet consumed", async () => {
     const ch = new TurnInputChannel();
     const gen = ch.stream("first");
