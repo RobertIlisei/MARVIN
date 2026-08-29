@@ -22,6 +22,7 @@ import { touchProject } from "@marvin/runtime/projects";
 import {
   type AgentMode,
   type PermissionStrategy,
+  clampEffort,
   runAgent,
 } from "@marvin/runtime/sdk-runner";
 import {
@@ -33,9 +34,15 @@ import {
   type LiveTurn,
   emitTurnEvent,
   endLiveTurn,
+  getLiveTurn,
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
-import { drainPending, renderPendingPrompt } from "@marvin/runtime/pending-input";
+import {
+  drainPending,
+  enqueuePending,
+  renderPendingPrompt,
+} from "@marvin/runtime/pending-input";
+import { TurnInputChannel } from "@marvin/runtime/turn-input";
 import {
   autoContinueDelaySeconds,
   autoContinuePrompt,
@@ -43,6 +50,7 @@ import {
   MAX_AUTO_CONTINUES,
 } from "@marvin/runtime/transient-errors";
 import {
+  deferIfSessionBusy,
   noteMachineTurnStarted,
   scheduleWakeup,
   setWakeupFireHandler,
@@ -183,8 +191,14 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     wakeupDepth,
   } = params;
 
+  // ADR-0076 — streaming input: messages POSTed while this turn runs are
+  // delivered into it (`liveTurn.inject`) rather than queued behind it.
+  const inputChannel = new TurnInputChannel();
+  liveTurn.inject = (text) => inputChannel.push(text);
+
   const result = await runAgent({
     message,
+    inputChannel,
     cwd,
     model,
     ...(advisorModel ? { advisorModel } : {}),
@@ -219,6 +233,15 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     },
     signal: liveTurn.abortController.signal,
   });
+
+  // ADR-0076 — the turn is over; stop accepting input, and hand anything
+  // that was accepted but never reached the SDK to the durable queue so
+  // the drain below runs it (ADR-0069: no user message is ever lost).
+  liveTurn.inject = undefined;
+  inputChannel.close();
+  for (const text of inputChannel.drainUnconsumed()) {
+    enqueuePending(projectId, marvinSessionId, text);
+  }
 
   if (!result.ok) {
     const payload = { error: result.error ?? "Unknown error" };
@@ -336,6 +359,15 @@ function drainQueuedInput(params: DetachedTurnParams): void {
  * turn's own drain finds nothing unless the user queued again meanwhile.
  */
 async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promise<void> {
+  // Same eviction hazard as `startScheduledTurn`, smaller window: between
+  // the previous turn ending and this drain, a fresh POST may have
+  // registered its own human turn. Never evict it — put the drained text
+  // back on the durable queue and let THAT turn's own drain pick it up.
+  const inflight = getLiveTurn(prev.marvinSessionId);
+  if (inflight && !inflight.ended) {
+    enqueuePending(prev.projectId, prev.marvinSessionId, message);
+    return;
+  }
   const turnId = randomUUID();
   const liveTurn = registerLiveTurn({
     turnId,
@@ -388,6 +420,16 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
 
   const sdkResumeId = lastSdkSessionId(projectId, marvinSessionId) ?? undefined;
 
+  // Re-check at the point of registration, not just at fire time: the
+  // awaits above take seconds, and a human message that arrived meanwhile
+  // has already registered its own live turn. Registering now would EVICT
+  // it ("replaced by a newer turn on the same session"). Yield instead —
+  // `deferIfSessionBusy` re-persists + re-arms the record, so the wakeup
+  // still runs once the session is free. Must happen BEFORE the
+  // `turn.user` append so a deferred wakeup leaves no orphan prompt in the
+  // transcript.
+  if (deferIfSessionBusy(record)) return;
+
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.user",
     at: new Date().toISOString(),
@@ -403,6 +445,11 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   // ADR-0069 — record the start so the scheduler can space the NEXT one.
   noteMachineTurnStarted(marvinSessionId);
 
+  // Dynamic effort: whoever armed this wakeup may have asked for less than
+  // the user's ceiling (a check-and-report turn, a job that succeeded).
+  // The clamp is the guarantee that "less" is the only direction.
+  const effectiveEffort = clampEffort(record.effort, record.thinkingMode, record.model);
+
   const turnStartedPayload = {
     marvinSessionId,
     projectId,
@@ -411,7 +458,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     runtimeMode: (record.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
     personality: record.personality,
     permissionStrategy: record.permissionStrategy,
-    thinkingMode: record.thinkingMode,
+    thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
@@ -434,7 +481,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     advisorModel: record.advisorModel ?? undefined,
     permissionStrategy: record.permissionStrategy,
     playwrightEnabled: record.playwrightEnabled,
-    thinkingMode: record.thinkingMode,
+    thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode,
     sessionId: sdkResumeId,
     appendSystemPrompt,
