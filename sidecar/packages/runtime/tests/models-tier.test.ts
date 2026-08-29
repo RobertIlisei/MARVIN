@@ -50,11 +50,22 @@ describe("newestOfTier", () => {
 });
 
 describe("fallbackNewestOfTier", () => {
-  it("resolves a tier from the static list without network", () => {
-    // The static FALLBACK_MODELS carries one entry per tier; opus is the
-    // newest known Opus (4.8 at time of writing).
-    expect(fallbackNewestOfTier("opus")).toBe("claude-opus-4-8");
-    expect(fallbackNewestOfTier("sonnet")).toBe("claude-sonnet-4-6");
-    expect(fallbackNewestOfTier("haiku")).toBe("claude-haiku-4-5-20251001");
+  // Deliberately NOT pinned to literal ids. The previous version asserted
+  // `claude-opus-4-8`, which is exactly what let the list rot: the About
+  // panel reported that model for months while turns ran on Sonnet 5, and
+  // the test passed the whole time because it agreed with the stale value
+  // (2026-08-30). Assert the CONTRACT — one resolvable entry per tier, of
+  // the right tier — so a version bump is a one-line source edit and a
+  // missing tier is still a failure.
+  it("resolves every tier from the static list, without network", () => {
+    for (const tier of ["opus", "sonnet", "haiku"] as const) {
+      const id = fallbackNewestOfTier(tier);
+      expect(id, tier).toBeTruthy();
+      expect(id, tier).toContain(tier);
+    }
+  });
+
+  it("has no entry for an unknown tier", () => {
+    expect(fallbackNewestOfTier("other")).toBeNull();
   });
 });

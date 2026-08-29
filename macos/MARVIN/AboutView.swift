@@ -160,7 +160,16 @@ struct AboutView: View {
             VStack(alignment: .leading, spacing: 4) {
                 aboutRow("URL", ServerConfig.baseURLString)
                 aboutRow("auth", s.auth?.mode ?? "unknown")
-                aboutRow("model", s.model ?? "unknown")
+                // The DEFAULT model — what a turn would use if nothing were
+                // picked. "Active models" below is what this session runs.
+                // Labelled explicitly because showing a bare "model" next to
+                // a different executor read as a contradiction (user,
+                // 2026-08-30): the row said claude-opus-4-8 from a stale
+                // hardcoded list while turns ran on Sonnet 5.
+                aboutRow(
+                    "default model",
+                    (s.model ?? "unknown") + (s.modelIsLive == false ? "  (fallback)" : "")
+                )
                 aboutRow("data dir", s.dataDir ?? "unknown")
                 if let bin = s.claudeBinary {
                     aboutRow("claude", bin)
