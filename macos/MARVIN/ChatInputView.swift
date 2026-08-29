@@ -34,6 +34,7 @@
 // tool-call cards, and confirm prompts are at parity.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -713,12 +714,14 @@ struct ChatInputBar: View {
                         if dragStartHeight == nil {
                             dragStartHeight = editorHeight
                         }
-                        // SwiftUI's translation.height is positive
-                        // when dragging DOWN — invert so dragging
-                        // UP grows the editor.
-                        let next = (dragStartHeight ?? editorHeight)
-                            - Double(value.translation.height)
-                        editorHeight = max(60, min(600, next))
+                        // Shared rule for bottom-anchored panes — see
+                        // MARVINLogic.DragResize.
+                        editorHeight = DragResize.height(
+                            start: dragStartHeight ?? editorHeight,
+                            translation: Double(value.translation.height),
+                            min: 60,
+                            max: 600
+                        )
                     }
                     .onEnded { _ in
                         dragStartHeight = nil
