@@ -25,6 +25,11 @@ export interface CostEntry {
 
 interface CostFileShape {
   entries: CostEntry[];
+  openRouter?: {
+    totalCredits: number;
+    totalUsage: number;
+    fetchedAt: string;
+  };
 }
 
 function readCostFile(): CostFileShape {
@@ -33,7 +38,8 @@ function readCostFile(): CostFileShape {
   try {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw) as CostFileShape;
-    if (!parsed || !Array.isArray(parsed.entries)) return { entries: [] };
+    if (!parsed) return { entries: [] };
+    if (!Array.isArray(parsed.entries)) parsed.entries = [];
     return parsed;
   } catch {
     return { entries: [] };
@@ -73,12 +79,52 @@ export function recordTurnCost(input: RecordTurnInput): void {
   writeCostFile(file);
 }
 
+export function recordOpenRouterBalance(totalCredits: number, totalUsage: number): void {
+  const file = readCostFile();
+  file.openRouter = {
+    totalCredits,
+    totalUsage,
+    fetchedAt: new Date().toISOString(),
+  };
+  writeCostFile(file);
+}
+
+export async function pollOpenRouterBalance(): Promise<void> {
+  const { readAuthConfig } = await import("./auth-config");
+  const cfg = readAuthConfig();
+  if (cfg?.provider !== "openrouter" || !cfg.apiKey) return;
+  try {
+    // Bounded — this poll is awaited inside GET /api/cost, which the UI
+    // polls; an unbounded fetch would hang the popover on a slow
+    // openrouter.ai (same pattern as listModels' 6s AbortController).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    let body: { data?: { total_credits?: number; total_usage?: number } };
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/credits", {
+        headers: { Authorization: `Bearer ${cfg.apiKey.trim()}` },
+        signal: controller.signal,
+      });
+      if (!res.ok) return;
+      body = await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+    if (body?.data?.total_credits !== undefined && body?.data?.total_usage !== undefined) {
+      recordOpenRouterBalance(body.data.total_credits, body.data.total_usage);
+    }
+  } catch {
+    /* ignore fetch errors in background */
+  }
+}
+
 export interface CostSummary {
   today: CostAggregate;
   week: CostAggregate;
   lifetime: CostAggregate;
   /** Newest 12 day buckets (UTC) for the active project, oldest→newest. */
   daily: Array<{ day: string; costUsd: number; turns: number }>;
+  openRouter?: { totalCredits: number; totalUsage: number } | null;
 }
 
 export interface CostAggregate {
@@ -147,5 +193,5 @@ export function summarizeCost(options: { projectId?: string } = {}): CostSummary
     .slice(-12)
     .map(([day, v]) => ({ day, costUsd: v.costUsd, turns: v.turns }));
 
-  return { today, week, lifetime, daily };
+  return { today, week, lifetime, daily, openRouter: file.openRouter ?? null };
 }

@@ -35,9 +35,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 export type AuthConfigMode = "cli" | "api-key";
+export type AuthProvider = "anthropic" | "openrouter";
 
 export interface AuthConfig {
   mode: AuthConfigMode;
+  /** Present iff mode === "api-key". The chosen LLM provider. Default: anthropic. */
+  provider?: AuthProvider;
   /** Present iff mode === "api-key". sk-ant-* / OAuth-shaped tokens both ok. */
   apiKey?: string;
   /** ISO timestamp of last write. Diagnostic only. */
@@ -47,6 +50,8 @@ export interface AuthConfig {
 export interface AuthConfigStatus {
   /** Mode the user has explicitly chosen. `null` if no config file exists. */
   mode: AuthConfigMode | null;
+  /** The configured API provider, defaulting to "anthropic" if unspecified. Null if no file exists. */
+  provider: AuthProvider | null;
   /** Last-4 hint (e.g. `…wxyz`) for UI display. Null when no key is stored. */
   keyHint: string | null;
   /** ISO timestamp of last write. Null when no config file exists. */
@@ -89,6 +94,7 @@ export function readAuthConfig(): AuthConfig | null {
     }
     return {
       mode: raw.mode,
+      provider: typeof raw.provider === "string" && raw.provider === "openrouter" ? "openrouter" : "anthropic",
       apiKey: typeof raw.apiKey === "string" ? raw.apiKey : undefined,
       savedAt: typeof raw.savedAt === "string" ? raw.savedAt : undefined,
     };
@@ -99,6 +105,8 @@ export function readAuthConfig(): AuthConfig | null {
 
 export interface WriteAuthConfigInput {
   mode: AuthConfigMode;
+  /** Optional provider override when mode === "api-key" */
+  provider?: AuthProvider;
   /** Required when mode === "api-key". Trimmed before write. */
   apiKey?: string;
 }
@@ -125,6 +133,7 @@ export function writeAuthConfig(input: WriteAuthConfigInput): WriteAuthConfigRes
 
   const next: AuthConfig = {
     mode: input.mode,
+    ...(input.provider ? { provider: input.provider } : {}),
     ...(apiKey ? { apiKey } : {}),
     savedAt: new Date().toISOString(),
   };
@@ -157,10 +166,11 @@ export function authConfigStatus(): AuthConfigStatus {
   const p = authConfigPath();
   const cfg = readAuthConfig();
   if (!cfg) {
-    return { mode: null, keyHint: null, savedAt: null, path: p };
+    return { mode: null, provider: null, keyHint: null, savedAt: null, path: p };
   }
   return {
     mode: cfg.mode,
+    provider: cfg.provider ?? "anthropic",
     keyHint: cfg.mode === "api-key" ? keyHint(cfg.apiKey) : null,
     savedAt: cfg.savedAt ?? null,
     path: p,

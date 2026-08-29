@@ -643,6 +643,21 @@ struct CostHistoryPopover: View {
             }
             .font(.callout.monospaced())
 
+            if let or = summary.openRouter {
+                VStack(alignment: .leading, spacing: 4) {
+                    Divider()
+                        .padding(.vertical, 2)
+                    Text("openrouter account")
+                        .font(.caption.monospaced())
+                        .tracking(2)
+                        .textCase(.uppercase)
+                        .foregroundStyle(.tertiary)
+                    row("total credits", currency: or.totalCredits)
+                    row("total usage", currency: or.totalUsage)
+                }
+                .font(.callout.monospaced())
+            }
+
             if !summary.daily.isEmpty {
                 dailyChart
             }

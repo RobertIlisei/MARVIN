@@ -30,6 +30,8 @@ export type AuthMode = "host-credentials" | "oauth" | "api-key" | "none";
 
 export interface AnthropicAuthStatus {
   mode: AuthMode;
+  /** The API provider when mode is api-key (e.g. 'openrouter', 'anthropic') */
+  provider?: string;
   /** Credential masked for display (e.g. `sk-ant-api-xxx…abcd`). */
   credentialHint: string | null;
   /** Specific human-readable reason when `mode === "none"`. */
@@ -176,6 +178,7 @@ export function getAnthropicAuth(): AnthropicAuthStatus {
     if (cfg.mode === "api-key" && cfg.apiKey) {
       return {
         mode: isOAuthToken(cfg.apiKey) ? "oauth" : "api-key",
+        provider: cfg.provider,
         credentialHint: maskKey(cfg.apiKey),
         error: null,
       };
@@ -289,8 +292,15 @@ export function buildSubprocessEnv(): NodeJS.ProcessEnv {
       const key =
         (cfg?.mode === "api-key" ? cfg.apiKey : undefined) ||
         trimEnv("ANTHROPIC_API_KEY");
-      env.ANTHROPIC_API_KEY = key;
+      
       delete env.CLAUDE_CODE_OAUTH_TOKEN;
+      if (cfg?.mode === "api-key" && cfg.provider === "openrouter") {
+        env.ANTHROPIC_API_KEY = key ? `sk-ant-api03-${key}` : undefined;
+        const port = process.env.PORT || "3030";
+        env.ANTHROPIC_BASE_URL = `http://localhost:${port}/api/proxy/openrouter`;
+      } else {
+        env.ANTHROPIC_API_KEY = key;
+      }
       return env;
     }
     case "none":
