@@ -24,7 +24,14 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    workspace** — the permission gate hard-denies Write/Edit/NotebookEdit and
    unsafe Bash from any call that carries an SDK `agentID`. Parallel
    *implementation* remains forbidden; that's the failure this rule exists to
-   prevent. Any new subagent type requires a new ADR; these carve-outs are
+   prevent.
+   **What this rule does NOT forbid ([ADR-0077](./docs/decisions/0077-ai-native-sdlc-selective-adoption.md)):**
+   the banned shape is *model dispatching model* on shared state — a flat
+   swarm with no human between the agents. It is not "more than one session
+   exists". A human running several MARVIN sessions in parallel, each on its
+   own project or worktree and each steered by them, is N independent
+   single-assistant loops — this topology multiplied, not violated. The one
+   constraint is that two sessions must not point at the same working tree. Any new subagent type requires a new ADR; these carve-outs are
    not a precedent for general multi-agent dispatch.
    **A standing supervisor agent was considered and rejected** (2026-07-24) —
    that's ADR-0001's camp 2, the shape this project was rebuilt to escape, and
@@ -110,6 +117,7 @@ reads at turn time.
 | Rule | Location | Purpose |
 |---|---|---|
 | **Graphify first** | Cross-phase rule 6 in `personality.ts`; Golden Rule 7 above; "Per-tool MUST triggers" section in `personality.ts` | When to consult the graph before reading source files. The 2026-05-27 audit found ~7:1 file-ops to graph-ops drift and that `graph_search` was overused as a glorified grep while `graph_summary` / `graph_query` / `graph_save_result` were near-zero. Each of the 6 graph_* MCP tools now has its own enumerated MUST trigger + MUST-NOT bypass list; AppStatusBar surfaces the live ratio. |
+| **Simplicity + surgical edits** | "Simplicity first — and surgical edits" section in `personality.ts` | What MARVIN MUST NOT ship (features beyond the ask, single-call-site abstractions, unrequested configurability, handling for impossible states) and how it MUST edit (no drive-by improvements to adjacent code, match the file's existing style, delete only the orphans its own change created). Adapted from the Karpathy coding guidelines (`multica-ai/andrej-karpathy-skills`, MIT); its other two principles were rejected — "ask when unclear" contradicts ADR-0067's measured anti-stall rules, and "goal-driven execution" is already Phase 5a's Definition of Done. Before this, the only coverage of overcomplication was one soft line ("Don't over-engineer") — the shape the 2026-05-22 audit found fires ~0×. |
 | **Advisor triggers** | Cross-phase rule 7 + "Advisor protocol — registered subagent on the Task tool" section | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. |
 | **Scout triggers** | "Scout protocol — read-only parallel research" section | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3 deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **Dynamic workflows** | "Dynamic workflows — read-only fan-out only" section in `personality.ts` | When `effort: xhigh` may fan out parallel subagents — read-only audit / research / discovery ONLY, opt-in, never parallel implementation. Enforced by the subagent read-only invariant in `classifyToolCall` (any `agentID` call that mutates is hard-denied). See [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md). |
@@ -131,15 +139,18 @@ macos/                       # SwiftUI macOS app (Xcode / SPM)
   MARVIN/                    # Swift sources
   project.yml                # xcodegen manifest
   Package.swift              # SPM manifest (swift build fallback)
-sidecar/                     # Next.js 16 sidecar, port 3030
-  src/                       # Next.js app (API routes + React UI)
+sidecar/                     # Next.js 16 sidecar, port 3030 — API-ONLY
+  src/                       # Next.js app (app/api/** route handlers only;
+                             #   the browser UI was removed, ADR-0075 — the
+                             #   native macOS app is the only client)
   packages/
     runtime/                 # Claude CLI wrapper + auth + session + personality
     tools/                   # Tool policy — auto / confirm / deny
     project-context/         # spec + infra-probes injection
     graphify-bridge/         # knowledge-graph read + refresh
     git-watch/               # commit stream
-    ui/                      # shadcn primitives
+    ui/                      # shadcn primitives — orphaned since ADR-0075,
+                             #   pending removal (nothing left imports it)
 .claude/                     # Claude Code project surface (shared)
   commands/                  # repo-specific slash commands
                              #   /graph-refresh — rebuild code + knowledge
@@ -156,7 +167,7 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 
 | Path | Responsibility |
 |---|---|
-| `sidecar/` | Next.js 16 shell (chat, files, terminal, preview, picker). |
+| `sidecar/` | Next.js 16 API-only backend for the native macOS app ([ADR-0075](./docs/decisions/0075-sidecar-drops-browser-ui.md)) — no browser UI. |
 | `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.245**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
 | `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
 | `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
@@ -390,7 +401,7 @@ repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
   files. 6905 nodes · 13419 edges · 393 named communities (2026-08-24
-  rebuild on graphify 0.9.48; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  rebuild on graphify 0.9.48 — CLI now 0.9.51, 2026-08-29; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
   graph anyway. (`graphify update .` is the incremental path and needs no
@@ -449,6 +460,18 @@ code graph as before. Two further tools landed with
 - **`graph_reflect({scope?})`** — aggregates the outcomes recorded by
   `graph_save_result` into `graphify-out/reflections/LESSONS.md`.
   Deterministic, no LLM.
+- **`graph_change_impact({files?, base?, limit?})`** — blast radius of a
+  whole branch / diff (2026-08-29): symbols and communities the changed files
+  define, god nodes among them, and every caller *outside* the branch with
+  file and line. No args = current branch vs its base, working tree and
+  untracked included. Forge-agnostic by construction — graphify's own PR tools
+  (`get_pr_impact` / `triage_prs`) shell out to `gh` and are GitHub-only, and
+  the project MARVIN works on is on GitLab. Aggregate counterpart of
+  `graph_affected`; wired into the `pr-review` skill and the Phase 3 MUST list.
+- **`graph_community({community, limit?, scope?})`** — members of one
+  community by id or labelled name, the one lookup `graph_summary` names but
+  couldn't open. `graph_query` also gained `context: [...]` (the CLI's
+  `--context` edge filter) for questions drowning in `references` noise.
 
 `graph_save_result` now takes **`outcome: useful | dead_end | corrected`**
 (plus `correction`). Send it every time: without an outcome the save is a
