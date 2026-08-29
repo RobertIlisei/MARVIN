@@ -97,6 +97,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0082](./0082-claude-plan-usage-from-rate-limit-events.md) | Claude plan usage (5-hour / weekly windows) from the SDK's `rate_limit_event`, shown beside OpenRouter credits; per-turn tokens on the completed row | Accepted | 2026-08-29 |
 | [0083](./0083-graph-drift-rail-rearms-and-escalates.md) | The graph-drift rail re-arms on compliance and escalates to a deny when ignored — measured 8:1–38:1 read:graph, critical by MARVIN's own bands | Accepted | 2026-08-30 |
 | [0084](./0084-blast-radius-and-pre-ship-impact-nudges.md) | Mechanical triggers for `graph_affected` (0.4 % of 5,823 calls) and `graph_change_impact` (0) — advisory first, with telemetry to decide escalation | Accepted | 2026-08-30 |
+| [0085](./0085-graphify-beyond-search.md) | Graphify beyond search: god-nodes + multigraph diagnose, live Postgres schema into the graph, git hooks for freshness, and LESSONS.md injected to close the work-memory loop | Accepted | 2026-08-30 |
 
 ## Template
 
