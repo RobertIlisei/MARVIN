@@ -81,31 +81,36 @@ final class CostService {
             struct DailyWire: Codable {
                 let day: String; let costUsd: Double; let turns: Int
             }
+            struct AggregateWire: Codable {
+                let costUsd: Double
+                let turns: Int
+                let inputTokens: Int
+                let outputTokens: Int
+            }
             struct Wire: Codable {
-                let today: Double?
-                let week: Double?
-                let lifetime: Double?
-                let turns: Int?
-                let inputTokens: Int?
-                let outputTokens: Int?
+                let today: AggregateWire?
+                let week: AggregateWire?
+                let lifetime: AggregateWire?
                 let daily: [DailyWire]?
+                let openRouter: CostSummary.OpenRouterBalance?
             }
             let w = try JSONDecoder().decode(Wire.self, from: data)
-            guard let today = w.today else {
+            guard let todayAgg = w.today else {
                 MarvinBridge.shared.costSummary = nil
                 consecutiveFailures = 0
                 return
             }
             MarvinBridge.shared.costSummary = CostSummary(
-                today: today,
-                week: w.week ?? 0,
-                lifetime: w.lifetime ?? 0,
-                turns: w.turns ?? 0,
-                inputTokens: w.inputTokens ?? 0,
-                outputTokens: w.outputTokens ?? 0,
+                today: todayAgg.costUsd,
+                week: w.week?.costUsd ?? 0,
+                lifetime: w.lifetime?.costUsd ?? 0,
+                turns: w.lifetime?.turns ?? 0,
+                inputTokens: w.lifetime?.inputTokens ?? 0,
+                outputTokens: w.lifetime?.outputTokens ?? 0,
                 daily: (w.daily ?? []).map {
                     CostSummary.DailyEntry(day: $0.day, costUsd: $0.costUsd, turns: $0.turns)
-                }
+                },
+                openRouter: w.openRouter
             )
             consecutiveFailures = 0
         } catch {

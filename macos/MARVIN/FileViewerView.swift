@@ -666,6 +666,27 @@ struct FileViewerNSView: NSViewRepresentable {
                 range: span.range
             )
         }
+        applyColorSwatches(to: textView, fullLength: fullRange.length)
+    }
+
+    /// Inline colour chips beside hex / rgb() literals (ColorSwatch).
+    ///
+    /// Applied as an ATTRIBUTE on the literal's first character, never as an
+    /// inserted character — `textView.string` stays byte-identical to the file
+    /// on disk, so cursor offsets, the status bar's row:col and every save
+    /// path are unaffected. Only the drawing changes.
+    private func applyColorSwatches(to textView: STTextView, fullLength: Int) {
+        for hit in ColorSwatch.scan(content) {
+            guard hit.range.location >= 0,
+                  hit.range.location + hit.range.length <= fullLength
+            else { continue }
+            let attachment = NSTextAttachment()
+            attachment.attachmentCell = ColorSwatchCell(color: hit.color)
+            textView.addAttributes(
+                [.marvinColorSwatch: attachment],
+                range: NSRange(location: hit.range.location, length: 1)
+            )
+        }
     }
 }
 
@@ -682,6 +703,10 @@ struct FileViewerView: View {
     /// M5: per-file diff markers. Refreshed on file open and save.
     @State private var diffLines: [Int: DiffLineStatus] = [:]
     /// M6: file history popover state.
+    /// Markdown preview mode for the active tab. Per-path so switching tabs
+    /// doesn't carry one file's preview state onto another (a .swift tab has
+    /// no preview and must not inherit a .md tab's toggle).
+    @State private var previewPaths: Set<String> = []
     @State private var historyPopoverOpen = false
     @State private var historyCommits: [GitCommit] = []
     @State private var historyLoading = false
@@ -694,6 +719,8 @@ struct FileViewerView: View {
         let id = UUID()
         let path: String
     }
+
+    @State private var unsavedClosePath: String? = nil
 
     var body: some View {
         // Phase 5f — the per-editor status bar moved to the global
@@ -748,13 +775,44 @@ struct FileViewerView: View {
                 staleConflict = nil
             }
             Button("Overwrite") {
-                Task { await performSave(force: true) }
+                Task { let _ = await performSave(force: true, targetPath: nil) }
                 staleConflict = nil
             }
             Button("Cancel", role: .cancel) { staleConflict = nil }
         } message: { _ in
             Text("Another process modified this file since you opened it. Reload to discard your edits, or Overwrite to keep them and replace the on-disk version.")
         }
+        // Unsaved changes alert.
+        .background(
+            EmptyView()
+                .alert(
+                    "Unsaved Changes",
+                    isPresented: Binding(
+                        get: { unsavedClosePath != nil },
+                        set: { if !$0 { unsavedClosePath = nil } }
+                    ),
+                    presenting: unsavedClosePath
+                ) { path in
+                    Button("Save") {
+                        Task {
+                            let ok = await performSave(force: false, targetPath: path)
+                            if ok {
+                                commitClose(path: path)
+                            }
+                            unsavedClosePath = nil
+                        }
+                    }
+                    Button("Discard", role: .destructive) {
+                        commitClose(path: path)
+                        unsavedClosePath = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        unsavedClosePath = nil
+                    }
+                } message: { path in
+                    Text("Do you want to save the changes made to \((path as NSString).lastPathComponent)? Your changes will be lost if you don't save them.")
+                }
+        )
     }
 
     // MARK: - Tab bar
@@ -794,8 +852,7 @@ struct FileViewerView: View {
                     .frame(width: 6, height: 6)
             }
             Button {
-                bridge.closeFile(path)
-                model.dropBuffer(path: path)
+                requestClose(path: path)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .medium))
@@ -863,6 +920,24 @@ struct FileViewerView: View {
                     .clipShape(Capsule())
             }
             Spacer()
+            // Markdown preview toggle (⇧⌘V), shown only for files that have
+            // a preview. Rendering replaces the editor rather than splitting
+            // it: the pane is already one column of a three-pane window, and
+            // half of it is too narrow to read prose in.
+            if let path = bridge.selectedFilePath, Self.isPreviewable(path) {
+                Button {
+                    togglePreview(path)
+                } label: {
+                    Label(
+                        isPreviewing ? "Show Source" : "Preview",
+                        systemImage: isPreviewing ? "chevron.left.forwardslash.chevron.right" : "doc.richtext"
+                    )
+                    .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .help(isPreviewing ? "Show the Markdown source (⇧⌘V)" : "Preview the rendered Markdown (⇧⌘V)")
+            }
             // Find in file (⌘F). The menu command alone is invisible — twice
             // now a capability has shipped with no on-screen affordance and
             // gone unfound. The button and Edit ▸ Find drive the same
@@ -920,7 +995,7 @@ struct FileViewerView: View {
             // .keyboardShortcut so the user has both pointer + key
             // affordance.
             Button {
-                Task { await performSave(force: false) }
+                Task { let _ = await performSave(force: false, targetPath: nil) }
             } label: {
                 if let buffer = activeBuffer, buffer.isSaving {
                     ProgressView()
@@ -938,8 +1013,7 @@ struct FileViewerView: View {
             // expected macOS shortcut for "close current document".
             Button {
                 if let path = bridge.selectedFilePath {
-                    bridge.closeFile(path)
-                    model.dropBuffer(path: path)
+                    requestClose(path: path)
                 }
             } label: {
                 Image(systemName: "xmark")
@@ -961,6 +1035,26 @@ struct FileViewerView: View {
         "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tiff", "tif",
     ]
 
+    /// Files worth a rendered view. Markdown only for now — the renderer is
+    /// `ChatMarkdown`, which is a Markdown parser; pointing it at anything
+    /// else would render garbage confidently.
+    static func isPreviewable(_ path: String) -> Bool {
+        ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
+    }
+
+    private var isPreviewing: Bool {
+        guard let path = bridge.selectedFilePath else { return false }
+        return previewPaths.contains(path)
+    }
+
+    private func togglePreview(_ path: String) {
+        if previewPaths.contains(path) {
+            previewPaths.remove(path)
+        } else {
+            previewPaths.insert(path)
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         if let path = bridge.selectedFilePath {
@@ -977,6 +1071,11 @@ struct FileViewerView: View {
                     }
                 } else if let err = buffer.error, !buffer.canEdit {
                     placeholder("Failed to load: \(err)")
+                } else if isPreviewing {
+                    MarkdownFilePreview(
+                        text: buffer.content,
+                        workDir: bridge.projectWorkDir
+                    )
                 } else {
                     FileViewerNSView(
                         path: path,
@@ -1087,21 +1186,41 @@ struct FileViewerView: View {
         model.ensureLoaded(cwd: cwd, path: path)
     }
 
-    private func performSave(force: Bool) async {
+    @MainActor
+    private func requestClose(path: String) {
+        if let buffer = model.buffer(for: path), buffer.isDirty {
+            unsavedClosePath = path
+        } else {
+            commitClose(path: path)
+        }
+    }
+
+    @MainActor
+    private func commitClose(path: String) {
+        bridge.closeFile(path)
+        model.dropBuffer(path: path)
+    }
+
+    @MainActor
+    private func performSave(force: Bool, targetPath: String?) async -> Bool {
         guard let cwd = bridge.projectWorkDir,
-              let path = bridge.selectedFilePath else { return }
+              let path = targetPath ?? bridge.selectedFilePath else { return false }
         let result = await model.save(cwd: cwd, path: path, force: force)
         switch result {
         case .ok:
             // Refresh diff markers after a clean save — the new
             // content may have moved or closed hunks.
-            diffLines = await DiffGutterService.load(path: path, workDir: cwd)
+            if path == bridge.selectedFilePath {
+                diffLines = await DiffGutterService.load(path: path, workDir: cwd)
+            }
+            return true
         case .stale:
             staleConflict = StaleConflict(path: path)
+            return false
         case .failed:
             // Error is already surfaced on the buffer; the inline
             // header band picks it up via activeBuffer.error.
-            break
+            return false
         }
     }
 }

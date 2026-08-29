@@ -80,6 +80,61 @@ function isAllowedOrigin(originValue: string | null): boolean {
   }
 }
 
+// Checks 2 + 3 of the CSRF gate, shared by both guards below: the
+// Origin allowlist and the Sec-Fetch-Site metadata check.
+function loopbackOriginChecks(req: NextRequest): NextResponse | null {
+  // Origin allowlist. Browsers send Origin on all cross-origin
+  // requests AND on same-origin POSTs. Curl + Electron + scripts
+  // can spoof it but must do so explicitly — the bar is meaningfully
+  // higher than nothing.
+  const origin = req.headers.get("origin");
+  const referer = req.headers.get("referer");
+  // Most browser requests carry Origin. CLI clients sometimes only
+  // carry Referer (rare for POSTs but possible). Accept either.
+  const candidate = origin ?? referer;
+  if (candidate !== null && !isAllowedOrigin(candidate)) {
+    return NextResponse.json(
+      {
+        error: "csrf-guard-origin",
+        detail: `Origin "${candidate}" not in the allowlist (localhost / 127.0.0.1 / [::1])`,
+      },
+      { status: 403 },
+    );
+  }
+
+  // Sec-Fetch-Site — set by every modern browser. Acceptable
+  // values for our case: `same-origin` (UI calling its own
+  // sidecar) and `none` (user-typed URL, browser extension, or
+  // server-initiated request that has no referrer). Cross-origin
+  // fetches set `cross-site` or `same-site` — both rejected.
+  const sfs = req.headers.get("sec-fetch-site");
+  if (sfs !== null && sfs !== "same-origin" && sfs !== "none") {
+    return NextResponse.json(
+      {
+        error: "csrf-guard-fetch-site",
+        detail: `Sec-Fetch-Site "${sfs}" indicates a cross-origin request`,
+      },
+      { status: 403 },
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Loopback-service guard for mutating routes whose real client is a
+ * local NON-BROWSER process — e.g. the Claude CLI subprocess hitting
+ * `/api/proxy/openrouter` as its `ANTHROPIC_BASE_URL`. The CLI never
+ * sends `X-Marvin-Client`, so the full `requireMarvinClient` gate
+ * would 403 it; this variant runs only the Origin + Sec-Fetch-Site
+ * halves, which still kill the drive-by tab (a browser always
+ * attaches both to a cross-origin POST) while letting header-less
+ * CLI requests through.
+ */
+export function requireLoopbackClient(req: NextRequest): NextResponse | null {
+  return loopbackOriginChecks(req);
+}
+
 /**
  * Server-side guard. Call at the top of every mutating route handler.
  * Returns a 403 NextResponse when the request fails any of:
@@ -109,42 +164,9 @@ export function requireMarvinClient(req: NextRequest): NextResponse | null {
     );
   }
 
-  // 2. Origin allowlist. Browsers send Origin on all cross-origin
-  //    requests AND on same-origin POSTs. Curl + Electron + scripts
-  //    can spoof it but must do so explicitly — combined with #1
-  //    the bar is meaningfully higher than header-only.
-  const origin = req.headers.get("origin");
-  const referer = req.headers.get("referer");
-  // Most browser requests carry Origin. CLI clients sometimes only
-  // carry Referer (rare for POSTs but possible). Accept either.
-  const candidate = origin ?? referer;
-  if (candidate !== null && !isAllowedOrigin(candidate)) {
-    return NextResponse.json(
-      {
-        error: "csrf-guard-origin",
-        detail: `Origin "${candidate}" not in the allowlist (localhost / 127.0.0.1 / [::1])`,
-      },
-      { status: 403 },
-    );
-  }
-
-  // 3. Sec-Fetch-Site — set by every modern browser. Acceptable
-  //    values for our case: `same-origin` (UI calling its own
-  //    sidecar) and `none` (user-typed URL, browser extension, or
-  //    server-initiated request that has no referrer). Cross-origin
-  //    fetches set `cross-site` or `same-site` — both rejected.
-  const sfs = req.headers.get("sec-fetch-site");
-  if (sfs !== null && sfs !== "same-origin" && sfs !== "none") {
-    return NextResponse.json(
-      {
-        error: "csrf-guard-fetch-site",
-        detail: `Sec-Fetch-Site "${sfs}" indicates a cross-origin request`,
-      },
-      { status: 403 },
-    );
-  }
-
-  return null;
+  // 2 + 3. Origin allowlist + Sec-Fetch-Site metadata (shared with
+  // requireLoopbackClient).
+  return loopbackOriginChecks(req);
 }
 
 /**

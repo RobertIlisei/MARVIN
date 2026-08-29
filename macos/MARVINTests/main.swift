@@ -1376,6 +1376,96 @@ runner.suite("PlanParser · reference section (ADR-0068 add.4)") {
     }
 }
 
+// MARK: - Source decorations (colour swatches + Markdown front matter)
+
+runner.suite("SourceDecorations") {
+    runner.test("hex literals scan in every accepted width") {
+        let hits = ColorLiteralScanner.scan("a #285232 b #abc c #11223344 d 0xFF8800")
+        runner.expect(hits.count, equals: 4, "four literals")
+        // #285232 -> 40/82/50
+        runner.expect(Int((hits[0].red * 255).rounded()), equals: 40, "6-digit red")
+        runner.expect(Int((hits[0].green * 255).rounded()), equals: 82, "6-digit green")
+        // #abc expands to #aabbcc
+        runner.expect(Int((hits[1].red * 255).rounded()), equals: 170, "3-digit expands each nibble")
+        // 8 digits are RRGGBBAA, so alpha is the LAST byte
+        runner.expect(Int((hits[2].alpha * 255).rounded()), equals: 68, "8-digit alpha is trailing")
+        runner.expect(Int((hits[3].red * 255).rounded()), equals: 255, "0x prefix accepted")
+    }
+
+    runner.test("a hex run glued to a word, or of the wrong width, is not a colour") {
+        runner.expect(ColorLiteralScanner.scan("id#123456x").isEmpty, "trailing word char rejected")
+        runner.expect(ColorLiteralScanner.scan("#12345").isEmpty, "5 digits is not a colour")
+        runner.expect(ColorLiteralScanner.scan("#1234567").isEmpty, "7 digits is not a colour")
+    }
+
+    runner.test("rgb() and rgba() parse, and out-of-range channels are refused") {
+        let hits = ColorLiteralScanner.scan("rgb(255, 0, 136) and rgba(0,0,0,0.5) and rgb(300,0,0)")
+        runner.expect(hits.count, equals: 2, "the 300 channel is not a colour")
+        runner.expect(Int((hits[0].blue * 255).rounded()), equals: 136, "rgb blue")
+        runner.expect(hits[1].alpha, equals: 0.5, "rgba alpha")
+    }
+
+    runner.test("the scan is capped so a generated palette cannot stall a keystroke") {
+        let many = Array(repeating: "#285232", count: 900).joined(separator: " ")
+        runner.expect(ColorLiteralScanner.scan(many, limit: 100).count, equals: 100, "limit honoured")
+    }
+
+    runner.test("ranges point at the literal in the original string") {
+        let text = "primary: \"#285232\""
+        let hit = ColorLiteralScanner.scan(text)[0]
+        let ns = text as NSString
+        runner.expect(ns.substring(with: NSRange(location: hit.location, length: hit.length)),
+                      equals: "#285232", "range round-trips")
+    }
+
+    runner.test("front matter flattens nested keys and returns the body") {
+        let doc = """
+        ---
+        name: AgriCore OS
+        colors:
+          primary: "#285232"
+          state-success: "#18794e"
+        ---
+        # Heading
+
+        Body text.
+        """
+        let out = MarkdownFrontMatterParser.split(doc)
+        runner.expect(out.frontMatter.count, equals: 3, "three leaf values")
+        runner.expect(out.frontMatter[0].key, equals: "name", "top-level key")
+        runner.expect(out.frontMatter[1].key, equals: "colors.primary", "nested key is dotted")
+        runner.expect(out.frontMatter[1].value, equals: "#285232", "quotes stripped")
+        runner.expect(out.body.hasPrefix("# Heading"), "body starts after the closing fence")
+    }
+
+    runner.test("a document without front matter is returned untouched") {
+        let doc = "# Just a heading\n\nBody."
+        let out = MarkdownFrontMatterParser.split(doc)
+        runner.expect(out.frontMatter.isEmpty, "no pairs")
+        runner.expect(out.body, equals: doc, "body is the whole document")
+    }
+
+    runner.test("an unclosed opening fence is a rule, not front matter") {
+        let doc = "---\nname: x\n\nstill body"
+        let out = MarkdownFrontMatterParser.split(doc)
+        runner.expect(out.frontMatter.isEmpty, "no pairs without a closing fence")
+        runner.expect(out.body, equals: doc, "nothing consumed")
+    }
+
+    runner.test("dedent closes a nested scope so a later top-level key is not dotted") {
+        let doc = """
+        ---
+        colors:
+          primary: "#111111"
+        typography: sans
+        ---
+        body
+        """
+        let out = MarkdownFrontMatterParser.split(doc)
+        runner.expect(out.frontMatter[1].key, equals: "typography", "scope popped on dedent")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
