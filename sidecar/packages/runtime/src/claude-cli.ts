@@ -23,6 +23,47 @@ const COMMON_CLAUDE_PATHS = [
 
 let cachedBinary: string | null = null;
 
+/** `2.1.251 (Claude Code)` → `[2, 1, 251]`; null when unreadable. */
+export function claudeCliVersion(bin: string): number[] | null {
+  try {
+    const out = execSync(`${JSON.stringify(bin)} --version`, {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const m = out.match(/(\d+)\.(\d+)\.(\d+)/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  } catch {
+    return null;
+  }
+}
+
+function newer(a: number[] | null, b: number[] | null): boolean {
+  if (!a) return false;
+  if (!b) return true;
+  for (let i = 0; i < 3; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+/**
+ * Find the Claude CLI — the NEWEST one installed, not the first one found.
+ *
+ * This used to return the first existing path in `COMMON_CLAUDE_PATHS`,
+ * which put `/opt/homebrew/bin/claude` ahead of everything else. On a
+ * machine with both, MARVIN ran **2.1.92** while the user's own shell had
+ * **2.1.251** (observed 2026-08-30) — 159 versions behind, silently. The
+ * visible symptom was the Claude plan-usage block staying blank: the newer
+ * CLI reports `unifiedWindows` on its rate-limit events and the old one does
+ * not, so MARVIN's usage bars had no numbers to show and nothing said why.
+ * Version skew like that also quietly changes tool names (ADR-0079) and
+ * available flags.
+ *
+ * `MARVIN_CLAUDE_BIN` still wins outright — an explicit pin is a decision.
+ */
 export function discoverClaudeBinary(): string {
   if (cachedBinary) return cachedBinary;
   const override = process.env.MARVIN_CLAUDE_BIN?.trim();
@@ -30,21 +71,34 @@ export function discoverClaudeBinary(): string {
     cachedBinary = override;
     return override;
   }
-  for (const p of COMMON_CLAUDE_PATHS) {
-    if (existsSync(p)) {
-      cachedBinary = p;
-      return p;
-    }
-  }
+
+  const candidates: string[] = [...COMMON_CLAUDE_PATHS];
   try {
     const which = execSync("command -v claude", { encoding: "utf-8" }).trim();
-    if (which && existsSync(which)) {
-      cachedBinary = which;
-      return which;
-    }
+    if (which) candidates.push(which);
   } catch {
-    // fall through
+    // No `claude` on PATH — the fixed list may still have one.
   }
+
+  let best: string | null = null;
+  let bestVersion: number[] | null = null;
+  const seen = new Set<string>();
+  for (const p of candidates) {
+    if (!p || seen.has(p) || !existsSync(p)) continue;
+    seen.add(p);
+    const v = claudeCliVersion(p);
+    // First existing candidate wins until something provably newer appears,
+    // so an unreadable --version never beats a known-good binary.
+    if (best === null || newer(v, bestVersion)) {
+      best = p;
+      bestVersion = v;
+    }
+  }
+  if (best) {
+    cachedBinary = best;
+    return best;
+  }
+
   throw new Error(
     "Claude CLI binary not found. Install it (https://docs.claude.com/en/docs/claude-code) or set MARVIN_CLAUDE_BIN.",
   );
