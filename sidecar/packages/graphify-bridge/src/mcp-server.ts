@@ -810,6 +810,123 @@ export function createGraphMcpServer(workDir: string) {
     },
   );
 
+  // ── ADR-0085 — graph health + live schema ────────────────────────────
+  //
+  // Three graphify capabilities MARVIN never surfaced. Measured 2026-08-30
+  // over 5,823 real graph calls: graph_search was 75 % of them and these
+  // were 0 %, because there was no way to reach them.
+
+  const godNodesTool = tool(
+    "graph_god_nodes",
+    "List the most-connected symbols in the code graph — the architectural hubs a change is most likely to ripple through. Use when orienting in an unfamiliar area, before a refactor, or when deciding where a new concern belongs. Cheap and deterministic (no LLM). These are the nodes worth running graph_affected on before you touch them.",
+    {
+      top: z.number().int().min(1).max(50).default(10).describe("How many hubs to return."),
+    },
+    async ({ top }) => {
+      try {
+        const { stdout } = await pExecFile(
+          graphifyBin(),
+          ["god-nodes", "--top", String(top), "--graph", graphPathForScope(workDir, "code"), "--json"],
+          { cwd: workDir, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+        );
+        return { content: [{ type: "text", text: stdout.trim() || "No god nodes reported." }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `graph_god_nodes failed: ${(err instanceof Error ? err.message : String(err))}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const diagnoseTool = tool(
+    "graph_diagnose",
+    "Health check on the code graph: reports same-endpoint edge-collapse risk, i.e. places where several distinct relationships between the same two nodes were flattened into one and the graph is quietly lying about structure. Run when graph answers look thin or wrong on a large graph, and after a big rebuild. Read-only.",
+    {
+      maxExamples: z.number().int().min(1).max(20).default(5).describe("Same-endpoint examples to print."),
+    },
+    async ({ maxExamples }) => {
+      try {
+        const { stdout } = await pExecFile(
+          graphifyBin(),
+          [
+            "diagnose",
+            "multigraph",
+            "--graph",
+            graphPathForScope(workDir, "code"),
+            "--max-examples",
+            String(maxExamples),
+          ],
+          { cwd: workDir, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
+        );
+        return { content: [{ type: "text", text: stdout.trim() || "No collapse risk reported." }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `graph_diagnose failed: ${(err instanceof Error ? err.message : String(err))}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const schemaTool = tool(
+    "graph_index_schema",
+    "Index a live PostgreSQL schema into the project's code graph — tables, views, functions and their foreign-key relationships — so structural questions can cross the code/database boundary ('what reads this table', 'what does deleting this column touch'). Column-level detail is NOT represented. The connection string is read from an ENVIRONMENT VARIABLE you name; MARVIN never stores it. Slow (a full re-extract) and rarely needed: run it when the schema has changed, not per turn.",
+    {
+      dsnEnv: z
+        .string()
+        .regex(/^[A-Z_][A-Z0-9_]*$/)
+        .default("MARVIN_GRAPH_POSTGRES_DSN")
+        .describe(
+          "Name of the environment variable holding the libpq DSN. Never pass the DSN itself — it carries credentials that would land in the transcript.",
+        ),
+    },
+    async ({ dsnEnv }) => {
+      const dsn = process.env[dsnEnv];
+      if (!dsn) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `${dsnEnv} is not set in the sidecar's environment, so there is no database to index. ` +
+                `Ask the user to export it (e.g. ${dsnEnv}=postgresql://user:pass@host:5432/db) and restart MARVIN. ` +
+                `Do not ask them to paste the DSN into the chat — it would be written to the transcript.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const { stdout, stderr } = await pExecFile(
+          graphifyBin(),
+          ["extract", workDir, "--postgres", dsn, "--code-only"],
+          { cwd: workDir, timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+        );
+        // The DSN is in argv; keep it out of anything we hand back.
+        const clean = (t: string) => t.split(dsn).join(`$${dsnEnv}`).trim();
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Schema indexed into the code graph.\n${clean(stdout).slice(-4000)}` +
+                (stderr.trim() ? `\n[stderr] ${clean(stderr).slice(-1000)}` : ""),
+            },
+          ],
+        };
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            { type: "text", text: `graph_index_schema failed: ${raw.split(dsn).join(`$${dsnEnv}`)}` },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "marvin-graph",
     version: "0.0.4",
@@ -830,6 +947,9 @@ export function createGraphMcpServer(workDir: string) {
       communityTool,
       saveResultTool,
       reflectTool,
+      godNodesTool,
+      diagnoseTool,
+      schemaTool,
     ],
   });
 }

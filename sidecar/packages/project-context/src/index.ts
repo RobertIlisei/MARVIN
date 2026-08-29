@@ -63,6 +63,14 @@ const MEMORY_TAIL_TOKENS = 8000;
 /** How much of the backlog index to inject (open items are small). ADR-0044. */
 const BACKLOG_TAIL_TOKENS = 4000;
 const DEFAULT_BACKLOG_FILE = ".marvin/backlog.md";
+
+/** ADR-0085 — graphify's own lessons file, produced by `graph_reflect` from
+ *  the outcomes `graph_save_result` records. Injecting it is what closes the
+ *  work-memory loop: measured 2026-08-30, MARVIN had made 12 saves and ZERO
+ *  reflections, so nothing it learned about the graph ever came back. Small
+ *  by construction (deterministic aggregation, decayed by half-life). */
+const LESSONS_FILE = "graphify-out/reflections/LESSONS.md";
+const LESSONS_TAIL_TOKENS = 1200;
 /**
  * Soft ceiling for the whole first-message context (ADR-0041). The curated
  * project docs are kept whole (golden rule 5) and ADRs are already titles-only,
@@ -326,6 +334,31 @@ export async function buildProjectContext(
     }
   } catch {
     // No memory file yet — fine; MARVIN will create it at first Ship.
+  }
+
+  // Graph lessons — what past sessions learned about THIS graph (ADR-0085).
+  // `graph_save_result --outcome useful|dead_end|corrected` records whether a
+  // graph answer held up; `graph_reflect` aggregates those into LESSONS.md
+  // with half-life decay. Without injecting it the loop had an input and no
+  // output, which is why it went unused. Anthropic's context-engineering
+  // guidance calls this shape "structured note-taking… persisted outside the
+  // context window" and pulled back in later.
+  try {
+    const lessonsPath = join(options.workDir, LESSONS_FILE);
+    const lessons = (await readFile(lessonsPath, "utf-8")).trim();
+    if (lessons) {
+      const { text, clipped } = tailByTokens(lessons, LESSONS_TAIL_TOKENS);
+      sections.push(
+        `## Graph lessons (\`${LESSONS_FILE}\`)${clipped ? " — recent tail" : ""}\n\n` +
+          `What earlier sessions learned about THIS project's graph — which nodes ` +
+          `answered well, which led nowhere, and corrections. Trust a "corrected" ` +
+          `entry over your own first guess. When a graph query settles a question ` +
+          `or wastes your time, record it with \`graph_save_result\` and an ` +
+          `\`outcome\`; \`graph_reflect\` folds it back in here.\n\n${text}`,
+      );
+    }
+  } catch {
+    // No reflections yet — expected until graph_reflect has run once.
   }
 
   // Project backlog — open deferred-work items parked across sessions (ADR-0044).

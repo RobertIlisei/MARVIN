@@ -1018,6 +1018,43 @@ cmd_uninstall_macos_app() {
 # Inputs default to: CLAUDE.md, README.md, docs/, .marvin/memory.md.
 # Override with --inputs:
 #   bin/marvin knowledge-graph . --inputs CLAUDE.md docs/ ARCHITECTURE.md
+# ADR-0085 — keep a project's graph fresh outside MARVIN, and stop
+# graph.json conflicting on every branch merge.
+#
+# MARVIN's own watchdog only refreshes while the IDE is OPEN on that project
+# (ADR-0041), so a commit made from a terminal or another editor silently
+# leaves the graph stale. graphify ships both fixes; nothing was wiring them.
+cmd_graph_hooks() {
+  local target="${1:-$PWD}" action="${2:-install}"
+  if ! command -v graphify >/dev/null 2>&1; then
+    err "graphify CLI not found — install it first (uv tool install graphifyy)"
+    return 1
+  fi
+  if [ ! -d "$target/.git" ]; then
+    err "not a git repository: $target"
+    return 1
+  fi
+  case "$action" in
+    install)
+      info "installing graphify git hooks in $target"
+      ( cd "$target" && graphify hook install ) || return 1
+      ok "post-commit / post-checkout hooks installed — the graph now rebuilds on commit"
+      info "graph.json also gets a union merge driver, so branch merges stop conflicting on it"
+      ;;
+    uninstall)
+      ( cd "$target" && graphify hook uninstall ) || return 1
+      ok "graphify git hooks removed from $target"
+      ;;
+    status)
+      ( cd "$target" && graphify hook status )
+      ;;
+    *)
+      err "usage: bin/marvin graph-hooks [path] [install|uninstall|status]"
+      return 1
+      ;;
+  esac
+}
+
 cmd_knowledge_graph() {
   local target="${1:-.}"
   shift 2>/dev/null || true
@@ -1094,6 +1131,7 @@ case "$subcommand" in
   install-macos-app)    cmd_install_macos_app "$@"   ;;
   uninstall-macos-app)  cmd_uninstall_macos_app      ;;
   knowledge-graph)      cmd_knowledge_graph "$@"     ;;
+  graph-hooks)          cmd_graph_hooks "$@"         ;;
   help|-h|--help)  cmd_help ;;
   *)
     fail "unknown subcommand: $subcommand"
