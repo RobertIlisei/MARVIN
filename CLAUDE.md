@@ -21,10 +21,14 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    and **plugin-shipped agents** (opt-in per project, dispatch confirm-gated,
    analyse-and-report only — [ADR-0054](./docs/decisions/0054-plugin-agents-read-only-hooks-stay-stripped.md)).
    All of them share one enforced invariant: **a subagent cannot mutate the
-   workspace** — the permission gate hard-denies Write/Edit/NotebookEdit and
-   unsafe Bash from any call that carries an SDK `agentID`. Parallel
-   *implementation* remains forbidden; that's the failure this rule exists to
-   prevent.
+   main working tree** — the permission gate hard-denies Write/Edit/NotebookEdit
+   and unsafe Bash from any call that carries an SDK `agentID`. The single
+   amendment ([ADR-0081](./docs/decisions/0081-implementer-subagents-on-isolated-worktrees.md),
+   2026-08-29): an **implementer** bound to a git worktree MARVIN created may
+   mutate *that* tree — its own checkout, its own branch, the user merges.
+   Parallel implementation on **shared** state remains forbidden; that's the
+   failure this rule exists to prevent, and a worktree is what removes the
+   sharing.
    **What this rule does NOT forbid ([ADR-0077](./docs/decisions/0077-ai-native-sdlc-selective-adoption.md)):**
    the banned shape is *model dispatching model* on shared state — a flat
    swarm with no human between the agents. It is not "more than one session
@@ -344,9 +348,17 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   no graph tools would deadlock. `alwaysLoad` also blocks startup until the
   server is connected, which closes the 0.2.142 background-connect race.
 
-Verified live, not inferred: a 0.3.245 `system/init` on `claude-sonnet-5`
-with the flags reports the subagent tool as **`Task`** (what the gate matches
-on) and the todo family as **`TodoWrite`** only. Migrating the spine to Task
+Verified live: a 0.3.245 `system/init` on `claude-sonnet-5` with the flags
+reports the todo family as **`TodoWrite`** only.
+
+> **The same check got the subagent tool wrong** ([ADR-0079](./docs/decisions/0079-subagent-tool-rename-and-rails.md)).
+> `system/init` says `Task`; the `tool_use` blocks the gate actually sees say
+> **`Agent`** — Claude Code renamed it in v2.1.63, and 200 of 200 dispatches in
+> real transcripts used the new name. Five guards matched the literal `"Task"`
+> and went dead, including the one that kept `Agent` out of `KNOWN_TOOL_NAMES`,
+> which left subagent dispatch ungated entirely. The gate now matches **both**
+> via `isSubagentDispatch()`. Verify a tool-name contract against a `tool_use`
+> block from a real transcript, never against `system/init`. Migrating the spine to Task
 ids — which is what retires the ADR-0068 bug class — is a separate, non-neutral
 ADR, deliberately not bundled with the upgrade.
 
@@ -400,16 +412,19 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 6905 nodes · 13419 edges · 393 named communities (2026-08-24
-  rebuild on graphify 0.9.48 — CLI now 0.9.51, 2026-08-29; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  files. 7000 nodes · 13558 edges · 401 communities (2026-08-29
+  rebuild on graphify 0.9.51; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
   graph anyway. (`graphify update .` is the incremental path and needs no
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1484 nodes · 1818 edges · 128 named communities
-  (built 2026-08-24).
+  `.marvin/memory.md`. 1557 nodes · 1984 edges · 138 communities
+  (built 2026-08-29). **Community labels are stale** — both counts moved on
+  this rebuild, so graphify has renamed every community after its hub node;
+  re-run `graphify label . --backend=claude-cli` (an LLM pass) to restore
+  concept names.
 
 **Community names.** Both graphs were 100 % `Community N` placeholders until
 2026-08-15, which made `graph_summary`'s community section unreadable. They

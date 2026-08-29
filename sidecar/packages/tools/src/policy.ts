@@ -20,6 +20,7 @@ export type ToolName =
   | "WebFetch"
   | "WebSearch"
   | "Task"
+  | "Agent"
   | "NotebookEdit";
 
 /**
@@ -43,6 +44,7 @@ export const KNOWN_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
   "WebFetch",
   "WebSearch",
   "Task",
+  "Agent",
   "NotebookEdit",
 ]);
 
@@ -65,16 +67,41 @@ const BASE: Record<ToolName, ToolPolicyClass> = {
   Edit: "confirm",
   Write: "confirm",
   Bash: "confirm",
-  // Task is special-cased below — sanctioned `subagent_type` values
-  // (`scout`, `general-purpose`) auto-allow; bare/unknown subagents
-  // require a confirm. This `BASE` entry is the fallback when the
-  // special case does not match.
+  // Task / Agent are special-cased below — sanctioned `subagent_type`
+  // values (`scout`, `general-purpose`) auto-allow; bare/unknown
+  // subagents require a confirm. These `BASE` entries are the fallback
+  // when the special case does not match. Both spellings are listed
+  // because the SDK renamed the tool (see SUBAGENT_DISPATCH_TOOLS).
   Task: "confirm",
+  Agent: "confirm",
   NotebookEdit: "confirm",
 };
 
 /**
- * Subagent types MARVIN may dispatch via `Task` without a confirm
+ * The tool names that dispatch a subagent.
+ *
+ * Claude Code renamed this tool `Task` → `Agent` in v2.1.63. MARVIN's gate,
+ * design hooks and ADR-0058 model remap all matched the literal `"Task"`, so
+ * every one of them became dead code the moment the rename landed — a scan of
+ * 12 real transcripts found **200 dispatches, all named `Agent`, none named
+ * `Task`**. Worse, `Agent` was absent from `KNOWN_TOOL_NAMES`, so
+ * `classifyToolCall` fell through to its not-in-the-gated-set blanket-allow
+ * and subagent dispatch was ungated entirely.
+ *
+ * `system/init` still advertises the old name, which is why the earlier
+ * verification recorded in CLAUDE.md concluded `Task`; the `tool_use` blocks
+ * that the gate actually sees carry the new one. Match BOTH — the old name
+ * costs nothing and keeps older SDK pins working.
+ */
+export const SUBAGENT_DISPATCH_TOOLS: ReadonlySet<string> = new Set(["Task", "Agent"]);
+
+/** True when `name` is the subagent-dispatch tool under either spelling. */
+export function isSubagentDispatch(name: string): boolean {
+  return SUBAGENT_DISPATCH_TOOLS.has(name);
+}
+
+/**
+ * Subagent types MARVIN may dispatch via `Task` / `Agent` without a confirm
  * prompt. The set is small and ADR-bound:
  *   - `scout`           — read-only research subagent (ADR-0014).
  *   - `advisor`         — registered second-opinion agent carrying its
@@ -96,6 +123,15 @@ const SANCTIONED_SUBAGENT_TYPES: ReadonlySet<string> = new Set([
   // ADR-0058 — cheap, parallel graph-extraction subagent (Haiku tier). Its
   // writes are gate-scoped to graphify-out/; read-only discovery otherwise.
   "graph-extractor",
+  // ADR-0080 — Claude Code's built-in READ-ONLY agents. Six real dispatches in
+  // the 2026-08-29 transcript scan; confirm-gating them added a click to a
+  // codebase search with no security value. Both are read-only by the SDK's
+  // own definition, and the agentID invariant applies regardless.
+  "Explore",
+  "Plan",
+  // ADR-0081 — the worktree-isolated builder. Its writes are allowed ONLY
+  // inside a MARVIN-created worktree (see `implementerWorktreePolicy`).
+  "implementer",
 ]);
 
 // Narrow regex whitelist for Bash commands that are safe enough to auto-run.
@@ -374,7 +410,7 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
     }
     return { class: "confirm", reason: "Bash command not in the auto-allow list." };
   }
-  if (name === "Task") {
+  if (isSubagentDispatch(name)) {
     // ADR-0007 (advisor) and ADR-0014 (scout) sanction two
     // `subagent_type` values; everything else is a bare delegate that
     // inherits the parent's permission posture, which in `auto` mode
@@ -392,7 +428,7 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
       class: "confirm",
       reason: sub
         ? `Unknown subagent_type "${sub}" — confirm before dispatch.`
-        : "Bare Task call without subagent_type — confirm before dispatch.",
+        : `Bare ${name} call without subagent_type — confirm before dispatch.`,
     };
   }
   if (name === "Edit" || name === "Write" || name === "NotebookEdit") {

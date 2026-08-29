@@ -210,6 +210,51 @@ describe("classifyToolCall", () => {
   });
 });
 
+// Regression: Claude Code renamed the subagent tool Task → Agent in v2.1.63.
+// Both the gate's dispatch classification and the ADR-0058 model remap matched
+// the literal "Task", so both went dead — a scan of 12 real transcripts found
+// 200 dispatches, every one named `Agent`. Pin the new spelling everywhere the
+// old one is pinned.
+describe("subagent dispatch under the `Agent` tool name (Task → Agent rename)", () => {
+  it("confirms an unknown subagent_type, exactly as it does for Task", () => {
+    const r = classifyToolCall("Agent", {
+      subagent_type: "claude-security:scan-researcher",
+      prompt: "scan the repo",
+    });
+    expect(r.decision).toBe("confirm");
+    expect(r).toEqual(
+      classifyToolCall("Task", {
+        subagent_type: "claude-security:scan-researcher",
+        prompt: "scan the repo",
+      }),
+    );
+  });
+
+  it("auto-allows a sanctioned scout, and does not blanket-allow as an unknown tool", () => {
+    const r = classifyToolCall("Agent", { subagent_type: "scout", prompt: "look" });
+    expect(r.decision).toBe("allow");
+    // The bug's signature: an unrecognised name falls through to
+    // "not in the gated set", which would allow a `rogue` subagent too.
+    expect(r.reason).not.toContain("not in the gated set");
+    expect(classifyToolCall("Agent", { subagent_type: "rogue" }).decision).toBe("confirm");
+  });
+
+  it("collapses to deny inside a subagent, like every other gated tool", () => {
+    const r = classifyToolCall("Agent", { subagent_type: "rogue" }, { agentID: "scout-1" });
+    expect(r.decision).toBe("deny");
+  });
+
+  it("remaps a stock extraction dispatch under the new name", () => {
+    const out = remapGraphExtractionDispatch("Agent", {
+      subagent_type: "general-purpose",
+      prompt:
+        "Extract entities and relations from these 22 files. Write your chunk " +
+        "output to graphify-out/.chunks/chunk_3.json as JSON nodes/edges.",
+    });
+    expect(out?.subagent_type).toBe("graph-extractor");
+  });
+});
+
 describe("remapGraphExtractionDispatch — stock graphify fan-out → Haiku (ADR-0058 addendum)", () => {
   const stockPrompt =
     "Extract entities and relations from these 22 files. Write your chunk " +

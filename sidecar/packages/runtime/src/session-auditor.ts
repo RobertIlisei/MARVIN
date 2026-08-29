@@ -376,7 +376,8 @@ export function renderAuditPrompt(packet: AuditPacket): string {
 
 /**
  * Tools the auditor session refuses at the SDK layer (ADR-0059 §2). Every
- * mutator plus the web (exfil, per the scout) plus `Task` (an auditor must not
+ * mutator plus the web (exfil, per the scout) plus the subagent-dispatch tool under both its spellings,
+ * `Task`/`Agent` (an auditor must not
  * spawn agents — that would recreate the model→model edge this ADR forbids).
  * Read/Grep/Glob stay so it can verify claims against the real workspace.
  * Exported so the read-only contract is test-pinned rather than assumed.
@@ -388,7 +389,10 @@ export const AUDITOR_DISALLOWED_TOOLS: readonly string[] = [
   "Bash",
   "WebFetch",
   "WebSearch",
+  // Both spellings — the SDK renamed Task → Agent, and disallowedTools
+  // matches on the literal name the model emits.
   "Task",
+  "Agent",
   "TodoWrite",
 ];
 

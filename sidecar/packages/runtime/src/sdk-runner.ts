@@ -49,7 +49,10 @@ import {
 import { readPlanState } from "./plan-state";
 import { saveSlashCommands } from "./slash-commands";
 import { recordPreImage } from "./change-checkpoints";
-import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks";
+import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
+import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
+import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, isSubagentDispatch, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
@@ -71,7 +74,7 @@ import { defaultModel } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { markTurnMutated } from "./turn-registry";
-import type { TurnInputChannel } from "./turn-input";
+import { TurnInputChannel } from "./turn-input";
 import { buildSubprocessEnv } from "./auth";
 
 export type RuntimeMode = "opus" | "advisor";
@@ -361,6 +364,19 @@ export interface RunAgentResult {
 // `model: "inherit"` keeps scout cost at the parent turn's model tier.
 // Opus-escalation is the advisor's job (ADR-0007), not the scout's.
 export const SCOUT_AGENT: AgentDefinition = {
+  // RUNAWAY RAIL (ADR-0079). A scout returns a synthesis; it does not
+  // implement. Before this, nothing bounded one — a scout that kept finding
+  // "one more thing to check" burned the parent turn's budget with no ceiling
+  // and no signal to the user. 40 round-trips is far above what a real
+  // breadth-first sweep of this repo takes and far below a runaway.
+  maxTurns: 40,
+  // ADR-0080 — run in the background. The SDK's default is FOREGROUND: the
+  // parent turn blocked until the scout returned, which made MARVIN's one
+  // sanctioned form of parallelism execute serially ("waiting for 1 agent to
+  // finish before continuing kills our speed" — user, 2026-08-29). Now the
+  // parent keeps working; the completion re-prompts it. Verified live that
+  // background agents keep their MCP tools, so graph-first still holds.
+  background: true,
   description:
     "Read-only research scout. Spawn for breadth-first exploration " +
     "(parallel searches across a codebase, competing-hypothesis " +
@@ -407,7 +423,7 @@ export const SCOUT_AGENT: AgentDefinition = {
     "",
     "4. **Stay in scope.** One brief, one answer. If the brief asks",
     "   several unrelated questions, answer each briefly rather than",
-    "   spawning more subagents. No nested Task calls.",
+    "   spawning more subagents. No nested subagent dispatches.",
     "",
     "# Output shape",
     "",
@@ -453,6 +469,13 @@ export function buildGraphExtractorAgent(args: {
     // WebFetch blocked (exfil, per the scout). Write stays available — the gate
     // scopes it to graphify-out/; a write elsewhere is hard-denied there.
     disallowedTools: ["WebFetch"],
+    // Bounded by construction: read an assigned chunk, write one output file,
+    // stop. A run that needs more than this has misunderstood its brief, and
+    // the fan-out means the cost of a runaway is multiplied by the chunk count.
+    maxTurns: 15,
+    // ADR-0080 — the extraction fan-out is the textbook case for background
+    // execution: N independent chunks, parent has nothing to wait for.
+    background: true,
     model: args.model ?? "inherit",
     prompt: [
       "You are a MARVIN graph-extraction subagent (ADR-0058) — a cheap,",
@@ -503,6 +526,9 @@ export function buildAdvisorAgent(args: {
     mcpServers: ["marvin-graph"],
     model: args.model ?? "inherit",
     effort: args.effort,
+    // One critique, one answer — and this is the Opus-tier agent, so it is the
+    // expensive one to leave unbounded (ADR-0079).
+    maxTurns: 20,
     prompt: [
       "You are an advisor consulted by MARVIN's executor for a second",
       "opinion. You are not MARVIN; the user does not see you directly.",
@@ -516,6 +542,57 @@ export function buildAdvisorAgent(args: {
       "Ground claims in the provided context; consult the marvin-graph",
       "MCP tools or read files when the question is structural. Return",
       "the critique and nothing else.",
+    ].join("\n"),
+  };
+}
+
+/**
+ * Build the registered `implementer` agent (ADR-0081).
+ *
+ * The ONE subagent allowed to write — and only inside a worktree MARVIN
+ * created for it. It is a bounded builder: one task, one branch, commits its
+ * work, reports. It never merges; the user does. Background, so the main
+ * loop keeps going while it builds.
+ *
+ * Model inherits the executor's: implementation quality is the point, and
+ * Anthropic's 2026-08 data shows collaborative coding only holds up on the
+ * current model generation.
+ */
+export function buildImplementerAgent(): AgentDefinition {
+  return {
+    description:
+      "Isolated implementer (ADR-0081). Builds ONE bounded task in a git " +
+      "worktree MARVIN created for it — its own checkout, its own branch — " +
+      "commits the work and reports. Never touches the main tree; never " +
+      "merges. Dispatch only after `worktree_create`, with the worktree path " +
+      "in the prompt.",
+    disallowedTools: ["WebFetch", "NotebookEdit"],
+    mcpServers: ["marvin-graph"],
+    model: "inherit",
+    background: true,
+    maxTurns: 60,
+    prompt: [
+      "You are a MARVIN implementer subagent (ADR-0081) — a bounded builder",
+      "working in an ISOLATED git worktree. You are not MARVIN; the user does",
+      "not see you. Your brief names your worktree path. That path is your",
+      "entire world.",
+      "",
+      "# Hard rules — enforced by the permission gate, not just asked",
+      "1. Every file you read or edit: use the ABSOLUTE path under your",
+      "   worktree. Relative paths resolve against the MAIN tree, which you",
+      "   cannot write to, and reading from it shows you a stale checkout.",
+      "2. Every shell command runs inside your worktree — the gate pins it",
+      "   there. Do not `cd` elsewhere, do not use `..`, do not reference",
+      "   paths outside your worktree.",
+      "3. Commit on your branch when the task is done (`git add` + `git commit`",
+      "   with a clear message). Do NOT push, merge, rebase, or switch branch.",
+      "4. Stay in scope: the brief is the task. Noticed-but-out-of-scope",
+      "   items go in your report, not in the diff.",
+      "",
+      "# Output shape",
+      "Return: what you built (files + commit hash), how you verified it",
+      "(tests run and their result), and anything the reviewer must know.",
+      "Concise prose; the parent integrates it.",
     ].join("\n"),
   };
 }
@@ -677,11 +754,46 @@ export function writesUnderGraphOut(
  * Returns the rewritten input, or null to leave the dispatch untouched.
  * Exported for tests.
  */
+/**
+ * One line per gated subagent call (ADR-0081 observability). Before this,
+ * a subagent deny reached the model as the SDK's generic "the user doesn't
+ * want to take this action" and left no trace of WHICH rule fired or whether
+ * the agent was even recognised — the exact blind spot that cost the first
+ * live implementer run.
+ */
+function logSubagentGate(args: {
+  turnId: string;
+  agentID: string;
+  binding: SubagentBinding | undefined;
+  toolName: string;
+  decision: string;
+  reason: string;
+}): void {
+  try {
+    console.info(
+      "[marvin.telemetry] " +
+        JSON.stringify({
+          kind: "gate.subagent",
+          turnId: args.turnId,
+          agentID: args.agentID,
+          subagentType: args.binding?.subagentType ?? null,
+          worktree: args.binding?.worktree ?? null,
+          tool: args.toolName,
+          decision: args.decision,
+          reason: args.reason.slice(0, 160),
+          at: new Date().toISOString(),
+        }),
+    );
+  } catch {
+    /* never break on serialisation */
+  }
+}
+
 export function remapGraphExtractionDispatch(
   toolName: string,
   input: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  if (toolName !== "Task") return null;
+  if (!isSubagentDispatch(toolName)) return null;
   if (input.subagent_type !== "general-purpose") return null;
   const brief = [input.prompt, input.description]
     .filter((v): v is string => typeof v === "string")
@@ -703,8 +815,14 @@ export function classifyToolCall(
      *  ladder exactly like the subagent invariant: auto-class allows,
      *  anything that would confirm or deny is hard-denied. */
     readOnly?: boolean;
+    /** ADR-0081 — the worktree an implementer subagent is bound to. Only the
+     *  registry sets this, only for `implementer`, only when its dispatch
+     *  prompt named exactly one registered worktree. */
+    worktree?: string;
+    /** The project root, for resolving relative targets in the worktree check. */
+    workDir?: string;
   },
-): { decision: "allow" | "confirm" | "deny"; reason: string } {
+): { decision: "allow" | "confirm" | "deny"; reason: string; updatedInput?: Record<string, unknown> } {
   // Resolve a base decision + reason from EITHER the named-tool policy OR an
   // external-MCP classifier, then share the collapse + mapping tail below.
   let baseDecision: "allow" | "confirm" | "deny";
@@ -817,6 +935,16 @@ export function classifyToolCall(
   // that would otherwise confirm OR deny (Write / Edit / NotebookEdit /
   // unsafe or destructive Bash) is hard-denied. There is no per-subagent
   // confirm UI, and "confirm" must never silently become "allow" here.
+  // IMPLEMENTER WORKTREE ALLOWANCE (ADR-0081). The one amendment to the
+  // invariant below: an implementer bound to a MARVIN-created worktree may
+  // mutate THAT tree — Edit/Write/NotebookEdit under its path, Bash pinned to
+  // it. The main tree stays exactly as protected as before; the deliverable
+  // is a branch the user merges. Not granted in Ask mode.
+  if (opts?.agentID && opts.worktree && !opts.readOnly && opts.workDir) {
+    const wt = implementerWorktreePolicy(name, input, opts.worktree, opts.workDir);
+    if (wt) return wt;
+  }
+
   if (opts?.agentID && baseDecision !== "allow") {
     return {
       decision: "deny",
@@ -1087,7 +1215,13 @@ export function makeAutoModeLogger(args: {
     // AskUserQuestion always reaches the user, even in auto mode (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (ask) return ask;
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
+    const binding = lookupSubagent(agentID);
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
+      agentID,
+      readOnly,
+      ...(binding?.worktree ? { worktree: binding.worktree, workDir: cwd } : {}),
+    });
+    if (agentID) logSubagentGate({ turnId, agentID, binding, toolName, decision: cls.decision, reason: cls.reason });
     if (cls.decision !== "deny") {
       maybeRecordPreImage({ checkpoint, cwd, turnId, toolName, input: safeInput, agentID });
       // ADR-0069 — the preemption safety flag. Set the INSTANT a mutating call
@@ -1108,7 +1242,7 @@ export function makeAutoModeLogger(args: {
     // graph-extraction dispatch is rewritten to the Haiku `graph-extractor`
     // at the gate — the model saving no longer depends on the prose steer.
     const remapped = remapGraphExtractionDispatch(toolName, safeInput);
-    const finalInput = remapped ?? safeInput;
+    const finalInput = remapped ?? cls.updatedInput ?? safeInput;
     appendAutoAuditEntry(cwd, {
       tool: toolName as AutoAuditEntryKind,
       reason:
@@ -1150,7 +1284,13 @@ export function makeGatedCanUseTool(args: {
     // AskUserQuestion routes to the same confirm channel (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (ask) return ask;
-    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, { agentID, readOnly });
+    const binding = lookupSubagent(agentID);
+    const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
+      agentID,
+      readOnly,
+      ...(binding?.worktree ? { worktree: binding.worktree, workDir: cwd } : {}),
+    });
+    if (agentID) logSubagentGate({ turnId, agentID, binding, toolName, decision: cls.decision, reason: cls.reason });
     if (cls.decision !== "deny") {
       // Pre-image BEFORE the confirm round-trip too: if the user allows,
       // the write executes inside the SDK with no further hook here.
@@ -1162,7 +1302,7 @@ export function makeGatedCanUseTool(args: {
       // mode — sanctioned Task dispatches auto-allow under gated too, so the
       // remap must live here as well or gated sessions lose the Haiku saving.
       const remapped = remapGraphExtractionDispatch(toolName, safeInput);
-      const finalInput = remapped ?? safeInput;
+      const finalInput = remapped ?? cls.updatedInput ?? safeInput;
       // Audit-log mutators that auto-allow under `gated` too. Read /
       // Grep / Glob fall through `appendAutoAuditEntry`'s
       // TOOLS_WORTH_LOGGING filter, so only Edit / Write / Bash
@@ -1250,6 +1390,21 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
     // when MARVIN was launched from Finder with the minimal launchd PATH.
     PATH: enrichedToolPath(),
+    // SUBAGENT RAILS (ADR-0079). MARVIN's sanctioned subagents — advisor,
+    // scout, graph-extractor, plugin agents, dynamic-workflow children — are
+    // all ONE level deep by design: `personality.ts` tells a scout "no nested
+    // subagent dispatches", and Golden Rule 1 forbids model-dispatching-model
+    // trees outright. Until now that was prose only; the SDK's own defaults
+    // (depth 3, 20 concurrent) are what actually applied, so a misbehaving
+    // turn could grow a tree the rule forbids and nothing would stop it.
+    // Depth 2 leaves one level of slack for a plugin agent that legitimately
+    // fans out; concurrency 8 is above graphify's extraction fan-out and well
+    // under the "spawned 50 subagents for a simple query" failure Anthropic
+    // documents. A user who sets either var keeps their own value.
+    CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH:
+      process.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH ?? "2",
+    CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:
+      process.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS ?? "8",
   };
 
   const abortController = new AbortController();
@@ -1475,6 +1630,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // semantic pass so it fans out on a low-cost model instead of running
       // serially on the executor.
       "graph-extractor": buildGraphExtractorAgent({ model: graphExtractorModel }),
+      // ADR-0081: the worktree-isolated builder. Writes are gate-scoped to
+      // the worktree its dispatch prompt names; the main tree stays sealed.
+      [IMPLEMENTER_TYPE]: buildImplementerAgent(),
     },
     includePartialMessages: false,
     // Reasoning-effort selection → SDK effort. Accepts the full ladder
@@ -1521,6 +1679,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastTodoPayload: unknown = undefined;
   const editedAdrPaths = new Set<string>();
   let watchdogTimer: NodeJS.Timeout | null = null;
+  // ADR-0080 — background subagents outlive the main turn's `result`. While
+  // the SDK reports any as live, a `result` is intermediate: the CLI will
+  // re-prompt the model with the completion and produce another. Closing the
+  // channel + arming the 5 s watchdog at the FIRST result would kill the scout
+  // it was waiting for. The ledger is fed by `background_tasks_changed`.
+  const bgLedger = new BackgroundTaskLedger();
+  let bgDrainTimer: NodeJS.Timeout | null = null;
+  // Upper bound on how long a deferred result may wait for its background
+  // tasks. Scouts are `maxTurns: 40`; nothing legitimate needs this long.
+  const BG_DRAIN_MAX_MS = (() => {
+    const raw = process.env.MARVIN_BACKGROUND_DRAIN_MAX_MS;
+    const n = raw ? Number(raw) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : 15 * 60_000;
+  })();
   // Watchdog window. Tunable via env in case a future SDK version
   // needs longer post-`result` cleanup; the default is generous
   // enough that any honest cleanup completes naturally.
@@ -1532,7 +1704,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   })();
 
   // ADR-0076 — hoisted above `try` so `finally` can close it.
-  const channel = input.inputChannel;
+  //
+  // ALWAYS a channel (ADR-0081). Without one the SDK runs in single-message
+  // mode, and in that mode it stops servicing permission requests after the
+  // first `result` — every background subagent tool call is then denied with
+  // the SDK's generic "the user doesn't want to take this action", before
+  // MARVIN's hooks or gate ever see it. Found the hard way: four live runs of
+  // an implementer died on their first call with no MARVIN code involved.
+  // The orchestrator always passes a channel; this default makes it a
+  // property of `runAgent` rather than of its caller.
+  const channel = input.inputChannel ?? new TurnInputChannel();
   try {
     // ADR-0051 — inject the live active-plan snapshot as a `<system-reminder>`
     // suffix on THIS user turn. It rides the new message (the uncached volatile
@@ -1570,6 +1751,41 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         });
       }
       onEvent(ev);
+      // ADR-0080 — level signal, REPLACE semantics (see background-tasks.ts).
+      const bgTasks = backgroundTasksPayload(ev);
+      if (bgTasks) bgLedger.replace(bgTasks);
+      // ADR-0081 — remember which subagent this task_id is, and bind an
+      // implementer to the worktree its dispatch prompt names.
+      const started = taskStartedPayload(ev);
+      if (started) {
+        const known = listWorktrees(cwd).map((w) => w.path);
+        const binding = registerSubagent({
+          turnId,
+          taskId: started.task_id,
+          subagentType: started.subagent_type ?? "",
+          ...(started.prompt ? { prompt: started.prompt } : {}),
+          worktrees: known,
+        });
+        // Observability: whether an implementer got bound is the single fact
+        // that decides if its writes are allowed or collapsed. Log it.
+        try {
+          console.info(
+            "[marvin.telemetry] " +
+              JSON.stringify({
+                kind: "subagent.registered",
+                turnId,
+                taskId: started.task_id,
+                subagentType: binding.subagentType,
+                worktree: binding.worktree ?? null,
+                knownWorktrees: known.length,
+                promptHasPath: known.some((w) => (started.prompt ?? "").includes(w)),
+                at: new Date().toISOString(),
+              }),
+          );
+        } catch {
+          /* never break on serialisation */
+        }
+      }
       // Check-back guard bookkeeping (ADR-0055): capture the latest assistant
       // text and note if a follow-through tool was called this turn.
       if (ev.type === "assistant") {
@@ -1689,6 +1905,38 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           // is intermediate, not terminal. Keep iterating; don't arm the
           // watchdog. (Cost/usage above are overwritten by the final one.)
           continue;
+        } else if (bgLedger.hasLive) {
+          // ADR-0080 — a background subagent (scout / graph-extractor) is
+          // still running. Same shape as the injected-message case: this
+          // `result` is intermediate. The CLI re-prompts the model when the
+          // task settles (verified live: second assistant turn + second
+          // `result` in the same query), so keep iterating, keep the channel
+          // open, and do NOT arm the kill-watchdog. A drain bound guards
+          // against a subagent that never settles.
+          try {
+            console.info(
+              "[marvin.telemetry] " +
+                JSON.stringify({
+                  kind: "runagent.result.deferred",
+                  turnId,
+                  live: bgLedger.live,
+                  tasks: bgLedger.describe(),
+                  at: new Date().toISOString(),
+                }),
+            );
+          } catch {
+            /* never break on serialisation */
+          }
+          if (!bgDrainTimer) {
+            bgDrainTimer = setTimeout(() => {
+              try {
+                abortController.abort();
+              } catch {
+                /* subprocess is wedged */
+              }
+            }, BG_DRAIN_MAX_MS);
+          }
+          continue;
         } else {
           // Successful result. Arm the watchdog: if the iterator
           // doesn't terminate naturally within WATCHDOG_MS, force-
@@ -1696,6 +1944,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           // throw, but the catch block treats the abort as benign
           // (we already captured the result + token usage above).
           seenSuccessfulResult = true;
+          if (bgDrainTimer) {
+            clearTimeout(bgDrainTimer);
+            bgDrainTimer = null;
+          }
           // ADR-0076 — nothing pending: end the input stream so the SDK
           // terminates the query the way single-message mode did.
           channel?.close();
@@ -1744,8 +1996,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       clearTimeout(watchdogTimer);
       watchdogTimer = null;
     }
+    if (bgDrainTimer) {
+      clearTimeout(bgDrainTimer);
+      bgDrainTimer = null;
+    }
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
+    clearSubagentsForTurn(turnId);
     // ADR-0060 follow-up — emit the turn's graph:file summary BEFORE dropping
     // the context, so the ratio is readable from the sidecar log instead of
     // reconstructed from session transcripts.
