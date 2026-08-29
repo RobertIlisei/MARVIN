@@ -17,6 +17,27 @@
 import Foundation
 import MARVINLogic
 
+/// Minimal box for values written from the watcher's queue and read from the
+/// test thread. `@State`-free, lock-based — the tests are not @MainActor.
+/// Runs the main run loop for `seconds` instead of blocking it. Anything that
+/// delivers via `DispatchQueue.main.async` — which is every callback aimed at
+/// SwiftUI — is invisible to a test that sleeps or waits on a semaphore.
+func pumpRunLoop(for seconds: TimeInterval) {
+    let end = Date().addingTimeInterval(seconds)
+    while Date() < end {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+}
+
+final class Locked<T>: @unchecked Sendable {
+    private var value: T
+    private let lock = NSLock()
+    init(_ v: T) { value = v }
+    func get() -> T { lock.lock(); defer { lock.unlock() }; return value }
+    func set(_ v: T) { lock.lock(); value = v; lock.unlock() }
+}
+
+
 // MARK: - Tiny test harness
 
 private struct TestFailure {
@@ -1463,6 +1484,59 @@ runner.suite("SourceDecorations") {
         """
         let out = MarkdownFrontMatterParser.split(doc)
         runner.expect(out.frontMatter[1].key, equals: "typography", "scope popped on dedent")
+    }
+}
+
+// MARK: - FileSystemWatcher (real FSEvents against a temp directory)
+
+runner.suite("FileSystemWatcher") {
+    runner.test("ignores paths the file tree would never render") {
+        let w = FileSystemWatcher(path: "/tmp") {}
+        runner.expect(w.isRelevant("/p/src/main.swift"), "a source file is relevant")
+        runner.expect(w.isRelevant("/p/.marvin/backlog/x.md"), ".marvin IS shown, so it counts")
+        runner.expect(!w.isRelevant("/p/.git/index.lock"), ".git churn is ignored")
+        runner.expect(!w.isRelevant("/p/node_modules/x/y.js"), "node_modules ignored")
+        runner.expect(!w.isRelevant("/p/graphify-out/cache/a.json"), "graph cache ignored")
+        runner.expect(!w.isRelevant("/p/apps/web/dist/bundle.js"), "nested build output ignored")
+    }
+
+    runner.test("fires on a real file creation inside the watched directory") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("marvin-fswatch-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let fired = Locked(false)
+        let w = FileSystemWatcher(path: dir.path) { fired.set(true) }
+        w.start()
+        // FSEvents needs a beat to register the stream before writes count.
+        pumpRunLoop(for: 0.4)
+        try? "hello".write(to: dir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        // The watcher delivers on the MAIN queue (its consumer is SwiftUI), so
+        // the wait has to RUN the main run loop rather than block it. Blocking
+        // on a semaphore here reported a false failure and sent the first
+        // investigation after a decoding bug that did not exist.
+        let deadline = Date().addingTimeInterval(5)
+        while !fired.get(), Date() < deadline { pumpRunLoop(for: 0.05) }
+        w.stop()
+        runner.expect(fired.get(), "watcher reported the new file within 5s")
+    }
+
+    runner.test("stops delivering after stop()") {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("marvin-fswatch-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let count = Locked(0)
+        let w = FileSystemWatcher(path: dir.path) { count.set(count.get() + 1) }
+        w.start()
+        pumpRunLoop(for: 0.4)
+        w.stop()
+        try? "x".write(to: dir.appendingPathComponent("after-stop.txt"), atomically: true, encoding: .utf8)
+        pumpRunLoop(for: 1.0)
+        runner.expect(count.get(), equals: 0, "no callbacks after stop")
     }
 }
 

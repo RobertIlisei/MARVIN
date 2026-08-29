@@ -153,6 +153,16 @@ struct FileTreeView: View {
     @State private var trashContext: FileNode? = nil
     /// Surface mutation errors (HTTP 4xx/5xx, transport) inline.
     @State private var mutationError: String? = nil
+    /// FSEvents watcher on the active project (see FileSystemWatcher). Held
+    /// here so its lifetime matches the view's, and torn down on project
+    /// switch — a watcher left on the previous project would refetch a tree
+    /// nobody is looking at.
+    @State private var watcher: FileSystemWatcher? = nil
+    /// Coalesces the watcher's callbacks. FSEvents already batches at the
+    /// kernel, but a `git checkout` or an agent's multi-file edit still
+    /// arrives as several callbacks; without this each one is a whole-tree
+    /// refetch.
+    @State private var refreshDebounce: Task<Void, Never>? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -210,9 +220,18 @@ struct FileTreeView: View {
         // standalone preview window in 3b; that window retired in
         // 3d so the floor goes away.
         .preferredColorScheme(bridge.preferredColorScheme)
-        .onAppear { syncFetchFromBridge() }
+        .onAppear {
+            syncFetchFromBridge()
+            startWatching()
+        }
         .onChange(of: bridge.projectWorkDir) { _, _ in
             syncFetchFromBridge()
+            startWatching()
+        }
+        .onDisappear {
+            refreshDebounce?.cancel()
+            watcher?.stop()
+            watcher = nil
         }
         // Phase 3h — Finder-style space-bar Quick Look. `.focusable()`
         // makes the tree key-targetable; `.focusEffectDisabled()`
@@ -293,6 +312,35 @@ struct FileTreeView: View {
             return
         }
         model.refresh(cwd: cwd)
+    }
+
+    /// Watch the active project so an agent's file changes reach the tree
+    /// without a manual refresh. Idempotent: re-called on every project
+    /// switch, and always replaces the previous watcher.
+    private func startWatching() {
+        refreshDebounce?.cancel()
+        watcher?.stop()
+        watcher = nil
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+        let w = FileSystemWatcher(path: cwd) {
+            scheduleWatchedRefresh(cwd: cwd)
+        }
+        w.start()
+        watcher = w
+    }
+
+    /// Debounced whole-tree refetch. `force: true` because the model's
+    /// short-circuit ("same cwd, already loaded → do nothing") is exactly what
+    /// makes a manual refresh necessary in the first place.
+    private func scheduleWatchedRefresh(cwd: String) {
+        refreshDebounce?.cancel()
+        refreshDebounce = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            // The project may have changed while the debounce was pending.
+            guard bridge.projectWorkDir == cwd else { return }
+            model.refresh(cwd: cwd, force: true)
+        }
     }
 
     private var header: some View {
