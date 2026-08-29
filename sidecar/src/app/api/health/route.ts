@@ -1,5 +1,6 @@
 import { getAnthropicAuth } from "@marvin/runtime/auth";
-import { defaultModel, discoverClaudeBinary } from "@marvin/runtime/claude-cli";
+import { discoverClaudeBinary } from "@marvin/runtime/claude-cli";
+import { defaultModelIsLive, resolveDefaultModel } from "@marvin/runtime/models";
 import { getMarvinDataDir } from "@marvin/runtime/paths";
 import { NextResponse } from "next/server";
 
@@ -21,7 +22,16 @@ export async function GET() {
       auth,
       claudeBinary: binaryPath,
       binaryError,
-      model: defaultModel(),
+      // The model a turn would use if the user picked nothing. Resolved
+      // LIVE (cached discovery, falling back to the static list only when
+      // the API is unreachable) — it used to be the sync `defaultModel()`,
+      // whose answer is the newest entry of a hardcoded list. That list had
+      // gone stale, so the About panel reported `claude-opus-4-8` while
+      // turns actually ran on Sonnet 5 (user, 2026-08-30).
+      model: await resolveDefaultModel(),
+      /** True when `model` came from the live catalogue rather than the
+       *  hardcoded fallback, so the UI can say which it is. */
+      modelIsLive: await defaultModelIsLive(),
       dataDir: getMarvinDataDir(),
       // ADR-0035 — the app version this sidecar was spawned by.
       // SidecarManager injects MARVIN_APP_VERSION at spawn; null means a

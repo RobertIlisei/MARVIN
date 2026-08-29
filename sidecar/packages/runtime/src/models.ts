@@ -60,15 +60,15 @@ export interface ListModelsResult {
  */
 const FALLBACK_MODELS: ModelInfo[] = [
   {
-    id: "claude-opus-4-8",
-    displayName: "Claude Opus 4.8",
+    id: "claude-opus-5",
+    displayName: "Claude Opus 5",
     tier: "opus",
     createdAt: null,
     live: false,
   },
   {
-    id: "claude-sonnet-4-6",
-    displayName: "Claude Sonnet 4.6",
+    id: "claude-sonnet-5",
+    displayName: "Claude Sonnet 5",
     tier: "sonnet",
     createdAt: null,
     live: false,
@@ -328,6 +328,28 @@ async function cachedListModels(): Promise<ListModelsResult> {
  * counterpart to the picker's `pickTierId` — both answer "what's the
  * current best <tier> model" without any hardcoded version number.
  */
+/**
+ * The default model, resolved against the LIVE catalogue.
+ *
+ * `defaultModel()` in `claude-cli.ts` is the synchronous last resort: it
+ * answers from the hardcoded `FALLBACK_MODELS` list, which is only as fresh
+ * as the last time someone edited it. Anything that DISPLAYS a model to the
+ * user should call this instead — the About panel reported `claude-opus-4-8`
+ * for months while turns ran on Sonnet 5 (2026-08-30).
+ */
+export async function resolveDefaultModel(): Promise<string> {
+  const override = process.env.MARVIN_MODEL?.trim();
+  if (override) return override;
+  return (await latestForTier("opus")) ?? fallbackNewestOfTier("opus") ?? "claude-opus-5";
+}
+
+/** True when `resolveDefaultModel` answered from the live catalogue. */
+export async function defaultModelIsLive(): Promise<boolean> {
+  if (process.env.MARVIN_MODEL?.trim()) return false;
+  const result = await cachedListModels();
+  return newestOfTier(result.models, "opus") !== null;
+}
+
 export async function latestForTier(
   tier: ModelInfo["tier"],
 ): Promise<string | null> {

@@ -54,6 +54,9 @@ struct SidecarHealth: Equatable, Codable {
     let claudeBinary: String?
     let binaryError: String?
     let model: String?
+    /// True when `model` came from Anthropic's live catalogue rather than
+    /// MARVIN's hardcoded fallback list. Absent on older sidecars.
+    let modelIsLive: Bool?
     let dataDir: String?
 
     struct Auth: Equatable, Codable {
