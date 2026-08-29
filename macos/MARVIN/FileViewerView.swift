@@ -666,6 +666,27 @@ struct FileViewerNSView: NSViewRepresentable {
                 range: span.range
             )
         }
+        applyColorSwatches(to: textView, fullLength: fullRange.length)
+    }
+
+    /// Inline colour chips beside hex / rgb() literals (ColorSwatch).
+    ///
+    /// Applied as an ATTRIBUTE on the literal's first character, never as an
+    /// inserted character — `textView.string` stays byte-identical to the file
+    /// on disk, so cursor offsets, the status bar's row:col and every save
+    /// path are unaffected. Only the drawing changes.
+    private func applyColorSwatches(to textView: STTextView, fullLength: Int) {
+        for hit in ColorSwatch.scan(content) {
+            guard hit.range.location >= 0,
+                  hit.range.location + hit.range.length <= fullLength
+            else { continue }
+            let attachment = NSTextAttachment()
+            attachment.attachmentCell = ColorSwatchCell(color: hit.color)
+            textView.addAttributes(
+                [.marvinColorSwatch: attachment],
+                range: NSRange(location: hit.range.location, length: 1)
+            )
+        }
     }
 }
 
@@ -682,6 +703,10 @@ struct FileViewerView: View {
     /// M5: per-file diff markers. Refreshed on file open and save.
     @State private var diffLines: [Int: DiffLineStatus] = [:]
     /// M6: file history popover state.
+    /// Markdown preview mode for the active tab. Per-path so switching tabs
+    /// doesn't carry one file's preview state onto another (a .swift tab has
+    /// no preview and must not inherit a .md tab's toggle).
+    @State private var previewPaths: Set<String> = []
     @State private var historyPopoverOpen = false
     @State private var historyCommits: [GitCommit] = []
     @State private var historyLoading = false
@@ -895,6 +920,24 @@ struct FileViewerView: View {
                     .clipShape(Capsule())
             }
             Spacer()
+            // Markdown preview toggle (⇧⌘V), shown only for files that have
+            // a preview. Rendering replaces the editor rather than splitting
+            // it: the pane is already one column of a three-pane window, and
+            // half of it is too narrow to read prose in.
+            if let path = bridge.selectedFilePath, Self.isPreviewable(path) {
+                Button {
+                    togglePreview(path)
+                } label: {
+                    Label(
+                        isPreviewing ? "Show Source" : "Preview",
+                        systemImage: isPreviewing ? "chevron.left.forwardslash.chevron.right" : "doc.richtext"
+                    )
+                    .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .help(isPreviewing ? "Show the Markdown source (⇧⌘V)" : "Preview the rendered Markdown (⇧⌘V)")
+            }
             // Find in file (⌘F). The menu command alone is invisible — twice
             // now a capability has shipped with no on-screen affordance and
             // gone unfound. The button and Edit ▸ Find drive the same
@@ -992,6 +1035,26 @@ struct FileViewerView: View {
         "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tiff", "tif",
     ]
 
+    /// Files worth a rendered view. Markdown only for now — the renderer is
+    /// `ChatMarkdown`, which is a Markdown parser; pointing it at anything
+    /// else would render garbage confidently.
+    static func isPreviewable(_ path: String) -> Bool {
+        ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
+    }
+
+    private var isPreviewing: Bool {
+        guard let path = bridge.selectedFilePath else { return false }
+        return previewPaths.contains(path)
+    }
+
+    private func togglePreview(_ path: String) {
+        if previewPaths.contains(path) {
+            previewPaths.remove(path)
+        } else {
+            previewPaths.insert(path)
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         if let path = bridge.selectedFilePath {
@@ -1008,6 +1071,11 @@ struct FileViewerView: View {
                     }
                 } else if let err = buffer.error, !buffer.canEdit {
                     placeholder("Failed to load: \(err)")
+                } else if isPreviewing {
+                    MarkdownFilePreview(
+                        text: buffer.content,
+                        workDir: bridge.projectWorkDir
+                    )
                 } else {
                     FileViewerNSView(
                         path: path,
