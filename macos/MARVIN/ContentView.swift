@@ -658,6 +658,10 @@ struct CostHistoryPopover: View {
                 .font(.callout.monospaced())
             }
 
+            if !summary.claudeWindows.isEmpty {
+                claudePlanUsage
+            }
+
             if !summary.daily.isEmpty {
                 dailyChart
             }
@@ -665,6 +669,29 @@ struct CostHistoryPopover: View {
         .padding(16)
         .frame(width: 340)
     }
+
+    /// ADR-0082 — the Claude-subscription analogue of the OpenRouter credits
+    /// block. The SDK reports each rate-limit window on every turn; this shows
+    /// the newest snapshot per window as a bar, with the refill time. A window
+    /// the API has not sized (`utilization` absent) shows its status only —
+    /// never a fabricated number.
+    @ViewBuilder
+    private var claudePlanUsage: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+                .padding(.vertical, 2)
+            Text("claude plan usage")
+                .font(.caption.monospaced())
+                .tracking(2)
+                .textCase(.uppercase)
+                .foregroundStyle(.tertiary)
+            ForEach(summary.claudeWindows) { w in
+                ClaudeWindowRow(window: w)
+            }
+        }
+        .font(.callout.monospaced())
+    }
+
 
     @ViewBuilder
     private var dailyChart: some View {
@@ -764,6 +791,71 @@ struct CostHistoryPopover: View {
 /// overkill — we want the bespoke micro-cent rendering. Lives at
 /// file scope so both CostToolbarItem and CostHistoryPopover share
 /// the same formatter.
+/// One Claude plan window: label, percentage, bar, refill time (ADR-0082).
+private struct ClaudeWindowRow: View {
+    let window: CostSummary.ClaudeWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(window.label)
+                Spacer()
+                if let u = window.utilization {
+                    Text(percentLabel(u))
+                        .foregroundStyle(tint(u))
+                } else {
+                    Text(window.status.replacingOccurrences(of: "_", with: " "))
+                        .foregroundStyle(window.status == "allowed" ? Color.secondary : Color.orange)
+                }
+            }
+            if let u = window.utilization {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.secondary.opacity(0.18))
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(tint(u))
+                            .frame(width: max(2, geo.size.width * min(max(u, 0), 1)))
+                    }
+                }
+                .frame(height: 5)
+            }
+            HStack(spacing: 6) {
+                if let r = window.resetsAt {
+                    Text("resets \(resetLabel(epoch: r))")
+                }
+                if window.isUsingOverage == true {
+                    Text("· using overage").foregroundStyle(Color.orange)
+                }
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+        }
+        .font(.callout.monospaced())
+    }
+
+    private func percentLabel(_ u: Double) -> String {
+        "\(Int((u * 100).rounded()))%"
+    }
+
+    private func tint(_ u: Double) -> Color {
+        if window.status == "rejected" || u >= 0.9 { return .red }
+        if window.status == "allowed_warning" || u >= 0.7 { return .orange }
+        return .green
+    }
+
+    private func resetLabel(epoch: Double) -> String {
+        let date = Date(timeIntervalSince1970: epoch)
+        let remaining = date.timeIntervalSinceNow
+        let clock = date.formatted(date: .omitted, time: .shortened)
+        if remaining <= 0 { return "now" }
+        let h = Int(remaining) / 3600
+        let m = (Int(remaining) % 3600) / 60
+        let span = h > 0 ? "\(h)h \(m)m" : "\(m)m"
+        return remaining < 86_400 ? "in \(span) (\(clock))" : date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
 private func fmtUsd(_ v: Double) -> String {
     if v == 0 { return "$0.00" }
     if v < 0.01 { return String(format: "$%.4f", v) }

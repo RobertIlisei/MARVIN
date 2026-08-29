@@ -211,6 +211,15 @@ enum ChatStreamReducer {
         // error paths omit them; the footer degrades to duration-only.
         let marvin_started_at: String?
         let marvin_ended_at: String?
+        /// ADR-0082 — per-turn tokens, shown on the completed row. Recorded
+        /// since the cost tracker existed; never displayed until now.
+        let usage: Usage?
+        struct Usage: Codable {
+            let input_tokens: Int?
+            let output_tokens: Int?
+            let cache_read_input_tokens: Int?
+            let cache_creation_input_tokens: Int?
+        }
     }
 
     /// One inner content block. Tagged by `type`; we use ChatJSON
@@ -428,6 +437,14 @@ enum ChatStreamReducer {
                let end = env.marvin_ended_at.flatMap({ ClockFormat.time(iso: $0) }) {
                 s += " · \(start) → \(end)"
             }
+            if let u = env.usage {
+                let parts = [
+                    u.input_tokens.map { "\(compactTokens($0)) in" },
+                    u.output_tokens.map { "\(compactTokens($0)) out" },
+                    (u.cache_read_input_tokens ?? 0) > 0 ? "\(compactTokens(u.cache_read_input_tokens ?? 0)) cached" : nil,
+                ].compactMap { $0 }
+                if !parts.isEmpty { s += " · " + parts.joined(separator: " / ") }
+            }
             text = s
         } else if let r = env.result {
             text = "ended: \(r)"
@@ -442,6 +459,14 @@ enum ChatStreamReducer {
             createdAt: Date()
         ))
         return out
+    }
+
+    /// `12345` → `12.3k`; the completed row is one line and tokens are a
+    /// glance, not an audit — the exact numbers are in the cost popover.
+    private static func compactTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fk", Double(n) / 1_000) }
+        return String(n)
     }
 
     /// Tool result `content` is either a string or an array of
