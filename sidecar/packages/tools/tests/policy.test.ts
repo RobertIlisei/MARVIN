@@ -481,3 +481,33 @@ describe("looksLikeSubagentDispatch — missing input", () => {
     expect(looksLikeSubagentDispatch("Delegate", null)).toBe(false);
   });
 });
+
+// ADR-0089 — marvin-obsidian was registered in sdk-runner.ts but missing from
+// the trusted prefix list, so every vault call was gated like an untrusted
+// plugin. Trusting it must NOT auto-allow the one tool that writes into the
+// user's own repository.
+describe("marvin-obsidian trust (ADR-0089)", () => {
+  it("obsidian_status is read-only and takes the fast path", () => {
+    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_status")).toBeNull();
+  });
+
+  it("obsidian_init still confirms — it writes .obsidian/ into the user's repo", () => {
+    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_init")).toBe("confirm");
+  });
+
+  it("the other in-process servers are unchanged", () => {
+    for (const t of [
+      "mcp__marvin-graph__graph_search",
+      "mcp__marvin-memory__remember",
+      "mcp__marvin-backlog__backlog_add",
+      "mcp__marvin-control__schedule_wakeup",
+    ]) {
+      expect(mcpToolPolicy(t), t).toBeNull();
+    }
+  });
+
+  it("external servers are still gated", () => {
+    expect(mcpToolPolicy("mcp__some_plugin__do_thing")).toBe("confirm");
+    expect(mcpToolPolicy("mcp__playwright__browser_run_code_unsafe")).toBe("deny");
+  });
+});

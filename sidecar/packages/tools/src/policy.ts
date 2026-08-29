@@ -484,15 +484,34 @@ function defaultReason(name: ToolName, cls: ToolPolicyClass): string {
 // blanket-allowed plugin MCP tools ungated even in gated mode. The inversion
 // closes that hole at the source rather than per-server.
 
-/** Prefixes of MARVIN's trusted, read-only, in-process MCP servers. Tools under
- *  these keep the blanket-allow; nothing else does. Keep in lockstep with the
- *  `mcpServers` MARVIN registers in `sdk-runner.ts`. */
+/** Prefixes of MARVIN's trusted in-process MCP servers. Tools under these keep
+ *  the blanket-allow; nothing else does. Keep in lockstep with the `mcpServers`
+ *  MARVIN registers in `sdk-runner.ts` — `marvin-obsidian` was registered there
+ *  and missing here, so every vault call was confirm-gated as if it came from
+ *  an untrusted plugin (ADR-0089). */
 const TRUSTED_INPROCESS_MCP_PREFIXES: readonly string[] = [
   "mcp__marvin-graph__",
   "mcp__marvin-memory__",
   "mcp__marvin-backlog__",
   "mcp__marvin-control__",
+  "mcp__marvin-obsidian__",
 ];
+
+/**
+ * Trusted-server tools that are NOT blanket-allowed (ADR-0089).
+ *
+ * The servers above write only under `.marvin/` — a directory MARVIN owns.
+ * `obsidian_init` is different: it writes `.obsidian/` into the USER's
+ * repository. ADR-0065 makes that an explicit opt-in in terms —
+ * "writing config into someone's repository as a side effect of a turn is not
+ * ours to do" — and `personality.ts` carries it as a MUST NOT. Trusting the
+ * server must not quietly convert that into an auto-allow.
+ *
+ * `obsidian_status` is read-only and stays on the fast path.
+ */
+const TRUSTED_MCP_CONFIRM_EXCEPTIONS: ReadonlySet<string> = new Set([
+  "mcp__marvin-obsidian__obsidian_init",
+]);
 
 /** The mcpServers key MARVIN registers Playwright under → tools arrive as
  *  `mcp__playwright__browser_*`. Shared with sdk-runner's registration. */
@@ -528,7 +547,10 @@ const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]
 export function mcpToolPolicy(name: string): ToolPolicyClass | null {
   if (!name.startsWith("mcp__")) return null;
   // MARVIN's own in-process servers stay blanket-allowed.
-  if (TRUSTED_INPROCESS_MCP_PREFIXES.some((p) => name.startsWith(p))) return null;
+  if (TRUSTED_INPROCESS_MCP_PREFIXES.some((p) => name.startsWith(p))) {
+    // A trusted server can still hold one tool that needs consent.
+    return TRUSTED_MCP_CONFIRM_EXCEPTIONS.has(name) ? "confirm" : null;
+  }
   if (name.startsWith(PLAYWRIGHT_PREFIX)) {
     const tool = name.slice(PLAYWRIGHT_PREFIX.length);
     if (PLAYWRIGHT_DENY.has(tool)) return "deny";
