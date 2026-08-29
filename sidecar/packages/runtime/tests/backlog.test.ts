@@ -13,6 +13,8 @@ import {
   RELATED_MAX,
   addBacklogItem,
   backlogSimilarity,
+  NEAR_DUPLICATE_SCORE,
+  RELATED_MIN_SCORE,
   classifyBacklogText,
   listBacklog,
   relatedBacklogItems,
@@ -290,6 +292,50 @@ describe("backlog overlap — similarity calibration", () => {
     // Same file AND overlapping vocabulary — reported.
     const closer = item({ title: "Cache the sidebar indent guides", body: "FileTreeView.swift" });
     expect(backlogSimilarity(shared, closer)).toBeGreaterThanOrEqual(0.5);
+  });
+
+  // Regression corpus from the 2026-08-29 ownership-repair incident, where one
+  // real duplicate slipped the gate. Titles verbatim — their LENGTH is the
+  // point: everything that proves the first pair identical sits past character
+  // 60, which `slugify` used to cut off.
+  const SECDEF_A =
+    "Audit SECURITY DEFINER functions in public now owned by BYPASSRLS agricore_migrate post-ADR-0363 transfer";
+  const SECDEF_B =
+    "SECURITY DEFINER function ownership escalated agricore_app to agricore_migrate on V202608281000 routine transfer";
+
+  it("catches a duplicate whose distinguishing tokens sit past the slug cutoff", () => {
+    const a = item({ id: "a", title: SECDEF_A });
+    const b = item({ id: "b", title: SECDEF_B });
+    expect(backlogSimilarity(a, b)).toBeGreaterThanOrEqual(NEAR_DUPLICATE_SCORE);
+  });
+
+  it("does not fire on items that merely share one common role name", () => {
+    // Both name `agricore_app`; they are different work. One shared identifier
+    // must not be enough, or every item in this project would look alike.
+    const a = item({
+      id: "a",
+      title:
+        "Decide platform_audit DML posture: existing tables full DML to agricore_app vs ADP SELECT,INSERT tamper-evidence posture",
+    });
+    const b = item({
+      id: "b",
+      title:
+        "Verify MAINTAIN grant to agricore_app on consultant_portfolio_summary does not reverse V202606101400 matview hardening",
+    });
+    expect(backlogSimilarity(a, b)).toBeLessThan(NEAR_DUPLICATE_SCORE);
+  });
+
+  it("keeps unrelated items from the same session far apart", () => {
+    const a = item({
+      id: "a",
+      title: "prod-backup-dump.sh fails on consultant_grants - FORCE RLS blocks agricore_app pg_dump",
+    });
+    const b = item({
+      id: "b",
+      title:
+        "Extend RolePermissionsIT to guard against per-table-vs-per-grantee re-grant regressions on ownership transfer",
+    });
+    expect(backlogSimilarity(a, b)).toBeLessThan(RELATED_MIN_SCORE);
   });
 
   it("is not fooled by shared imperative verbs alone", () => {
