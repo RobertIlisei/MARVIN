@@ -79,7 +79,7 @@ struct GitConfirmSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            Divider()
+            MarvinDivider()
             reasonBlock
             if !paths.isEmpty { pathsBlock }
             Spacer(minLength: 0)

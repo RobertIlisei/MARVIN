@@ -49,9 +49,14 @@ indirect enum GitStatusBadge: Equatable {
 
     var colour: Color {
         switch self {
-        case .modified, .renamed: return .orange
-        case .added, .untracked: return .green
-        case .deleted, .conflicted: return .red
+        // VS Code's git decoration palette — muted, not the system's fully
+        // saturated `.orange` / `.green` / `.red` (user: "colours on
+        // antigravity are a bit faded … in marvin they seem very bright").
+        // Nudged a step more saturated than VS Code's defaults after the
+        // first cut read as "way too faded" against the flat chrome.
+        case .modified, .renamed: return Color(red: 0.910, green: 0.740, blue: 0.470)  // ~#E8BD78
+        case .added, .untracked: return Color(red: 0.420, green: 0.820, blue: 0.560)   // ~#6BD18F
+        case .deleted, .conflicted: return Color(red: 0.850, green: 0.330, blue: 0.250) // ~#D95440
         case .other: return .gray
         case .directoryRollup(let inner): return inner.colour
         }

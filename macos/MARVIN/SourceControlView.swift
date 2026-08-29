@@ -471,25 +471,25 @@ struct SourceControlView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             content
             if let err = model.lastMutationError {
-                Divider()
+                MarvinDivider()
                 mutationErrorBanner(err)
             }
             if let err = model.remoteError {
-                Divider()
+                MarvinDivider()
                 remoteBanner(text: err, isError: true)
             } else if let note = model.remoteNote, !note.isEmpty {
-                Divider()
+                MarvinDivider()
                 remoteBanner(text: note, isError: false)
             }
             if let err = model.lastError {
-                Divider()
+                MarvinDivider()
                 errorBanner(err)
             }
             if model.response?.enabled == true {
-                Divider()
+                MarvinDivider()
                 commitArea
             }
         }

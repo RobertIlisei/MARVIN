@@ -75,7 +75,7 @@ enum FileTypeIcon {
     /// doc; images use `photo`; archives use `archivebox`; etc.
     static func symbol(for kind: Kind) -> String {
         switch kind {
-        case .directory:    return "folder.fill"
+        case .directory:    return "folder"   // outlined, VS Code / Seti style
         case .swiftCode,
              .typescript,
              .javascript,
@@ -127,7 +127,7 @@ enum FileTypeIcon {
     static func color(for kind: Kind) -> Color {
         switch kind {
         case .directory:
-            return .blue
+            return MarvinTheme.textMuted   // grey outline folders, not saturated blue
         case .swiftCode:
             return Color(red: 0.95, green: 0.45, blue: 0.30)   // Swift orange
         case .typescript, .javascript:

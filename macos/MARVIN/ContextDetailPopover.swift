@@ -61,7 +61,7 @@ struct ContextDetailPopover: View {
                 }
             }
 
-            Divider()
+            MarvinDivider()
 
             HStack {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
@@ -130,7 +130,7 @@ struct ContextDetailPopover: View {
                 row(s.label, s.approxTokens, estimated: true, indent: true)
             }
             row("transcript", transcript, estimated: true)
-            Divider().padding(.vertical, 2)
+            MarvinDivider().padding(.vertical, 2)
             row("free", free, estimated: false)
         }
         .font(.callout.monospaced())

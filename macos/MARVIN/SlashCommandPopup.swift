@@ -203,7 +203,7 @@ struct SlashCommandPopup: View {
                     withAnimation(.none) { proxy.scrollTo(matches[new].id, anchor: .center) }
                 }
             }
-            Divider()
+            MarvinDivider()
             HStack(spacing: 10) {
                 hint("↑↓", "navigate")
                 hint("⇥", "complete")

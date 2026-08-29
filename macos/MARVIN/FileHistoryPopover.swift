@@ -17,7 +17,7 @@ struct FileHistoryPopover: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
-            Divider()
+            MarvinDivider()
 
             if isLoading {
                 ProgressView("Loading…")
@@ -33,7 +33,7 @@ struct FileHistoryPopover: View {
                     LazyVStack(spacing: 0) {
                         ForEach(commits) { commit in
                             commitRow(commit)
-                            Divider()
+                            MarvinDivider()
                         }
                     }
                 }

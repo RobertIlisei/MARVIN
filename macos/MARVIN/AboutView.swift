@@ -46,7 +46,7 @@ struct AboutView: View {
                 Spacer()
             }
 
-            Divider()
+            MarvinDivider()
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sidecar")
@@ -61,7 +61,7 @@ struct AboutView: View {
             // that's only otherwise visible in the BranchBadge
             // tooltip in the web TopBar.
             if bridge.projectName != nil {
-                Divider()
+                MarvinDivider()
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Active project")
                         .font(.callout.weight(.semibold))
@@ -77,7 +77,7 @@ struct AboutView: View {
             // nothing's been selected — Sidecar default is the
             // implicit answer in that case.
             if bridge.executorModel != nil || bridge.advisorModel != nil {
-                Divider()
+                MarvinDivider()
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Active models")
                         .font(.callout.weight(.semibold))
@@ -90,11 +90,11 @@ struct AboutView: View {
             // and the user shouldn't have to dig in there to confirm
             // which voice MARVIN is currently using.
             if let personality = bridge.personality {
-                Divider()
+                MarvinDivider()
                 aboutRow("personality", personality)
             }
 
-            Divider()
+            MarvinDivider()
 
             HStack(spacing: 4) {
                 Text("Migration plan:")

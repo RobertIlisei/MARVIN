@@ -161,12 +161,43 @@ struct ChatAttachmentsBar: View {
 
     private func chip(_ att: ChatAttachment) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: att.iconName)
-                .font(.system(size: 10))
-                .foregroundStyle(att.iconTint)
-            Text(att.label)
-                .font(.system(size: 11, design: .monospaced))
-                .lineLimit(1)
+            if case .image(let path) = att.kind, let thumb = AttachmentThumbnail.image(forPath: path) {
+                // A picture of the picture, not a generic "photo" glyph — and
+                // a click opens the real file in Quick Look at full size
+                // (user, 2026-08-29: "the attached images have no preview").
+                Image(nsImage: thumb)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 44, height: 30)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .stroke(MarvinTheme.border, lineWidth: 0.5)
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        QuickLookCoordinator.shared.show(url: URL(fileURLWithPath: path))
+                    }
+                    .onHover { inside in
+                        if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                    }
+                    .help("\(att.label) — click to preview")
+            } else {
+                Image(systemName: att.iconName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(att.iconTint)
+            }
+            // A pasted screenshot's name is a UUID — the thumbnail IS the
+            // label (Antigravity shows only the picture). The name stays in
+            // the tooltip for the rare case it matters.
+            if case .image = att.kind {
+                EmptyView()
+            } else {
+                Text(att.label)
+                    .font(.system(size: 11, design: .monospaced))
+                    .lineLimit(1)
+            }
             Button {
                 attachments.removeAll { $0.id == att.id }
             } label: {
@@ -186,6 +217,33 @@ struct ChatAttachmentsBar: View {
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
                 )
         )
+    }
+}
+
+// MARK: - Attachment thumbnails
+
+/// Small, cached bitmaps for image chips. The pasted file can be a 5 MB
+/// screenshot; decoding it on every chip render (SwiftUI re-renders the bar
+/// on each keystroke in the input beside it) is the difference between a
+/// thumbnail and a stutter. One decode per path, downscaled to chip size.
+enum AttachmentThumbnail {
+    private static let cache = NSCache<NSString, NSImage>()
+    private static let maxEdge: CGFloat = 88  // 2× the 44pt chip, for Retina
+
+    static func image(forPath path: String) -> NSImage? {
+        if let hit = cache.object(forKey: path as NSString) { return hit }
+        guard let full = NSImage(contentsOfFile: path), full.size.width > 0, full.size.height > 0 else {
+            return nil
+        }
+        let scale = min(1, maxEdge / max(full.size.width, full.size.height))
+        let size = NSSize(width: full.size.width * scale, height: full.size.height * scale)
+        let thumb = NSImage(size: size)
+        thumb.lockFocus()
+        full.draw(in: NSRect(origin: .zero, size: size),
+                  from: .zero, operation: .copy, fraction: 1)
+        thumb.unlockFocus()
+        cache.setObject(thumb, forKey: path as NSString)
+        return thumb
     }
 }
 
@@ -264,7 +322,7 @@ struct FileMentionPicker: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Color(nsColor: .underPageBackgroundColor))
-            Divider()
+            MarvinDivider()
             if let err = loadError {
                 Text("Failed to load tree: \(err)")
                     .font(.caption.monospaced())

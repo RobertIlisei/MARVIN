@@ -622,13 +622,13 @@ struct ChatInputBar: View {
                     atPickerOpen = false
                 }
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(MarvinTheme.elevated)
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(
                         isDropTargeted
                             ? Color.accentColor
-                            : Color(nsColor: .separatorColor),
+                            : MarvinTheme.border,
                         lineWidth: isDropTargeted ? 2 : 1
                     )
             )

@@ -35,7 +35,7 @@ struct BuildTaskSheet: View {
             .padding(.vertical, 10)
             .background(Color(nsColor: .underPageBackgroundColor))
 
-            Divider()
+            MarvinDivider()
 
             if tasks.isEmpty {
                 VStack(spacing: 8) {

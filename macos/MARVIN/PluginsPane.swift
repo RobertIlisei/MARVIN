@@ -175,7 +175,7 @@ struct PluginsPane: View {
                 }
 
                 if !catalog.isEmpty {
-                    Divider()
+                    MarvinDivider()
                     catalogSection
                 }
             }
@@ -469,7 +469,7 @@ struct PluginsPane: View {
                 .onSubmit { Task { await install() } }
 
             if !marketplacePlugins.isEmpty {
-                Divider()
+                MarvinDivider()
                 Text("Marketplace \(marketplaceName.map { "“\($0)”" } ?? "") — pick a plugin to install:")
                     .font(.caption.weight(.medium))
                 ScrollView {

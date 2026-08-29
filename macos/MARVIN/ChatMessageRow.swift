@@ -81,12 +81,16 @@ struct ChatMessageRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        // Neutral lifted card, not an accent-tinted one. Background-job
+        // completion prompts (ADR-0038) are injected as USER messages, so
+        // with the old accent tint every job report rendered as a large
+        // navy block — the "weird colors" finding, 2026-08-29.
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.accentColor.opacity(0.12))
+                .fill(MarvinTheme.elevated)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+                        .stroke(MarvinTheme.border, lineWidth: 1)
                 )
         )
     }
@@ -111,9 +115,9 @@ struct ChatMessageRow: View {
     private var roleColor: Color {
         switch message.role {
         case .user: .accentColor
-        case .assistant: .primary
-        case .system: .secondary
-        case .result: Color.secondary.opacity(0.6)
+        case .assistant: MarvinTheme.textPrimary
+        case .system: MarvinTheme.textMuted
+        case .result: MarvinTheme.textMuted.opacity(0.7)
         }
     }
 
@@ -456,7 +460,7 @@ private struct ToolOutputView: View {
                 .padding(8)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.4))
+                        .fill(MarvinTheme.elevated)
                 )
                 .textSelection(.enabled)
             if output.count > inlineLimit {

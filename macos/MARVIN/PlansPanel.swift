@@ -24,7 +24,7 @@ struct PlansPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             content
         }
         .frame(minWidth: 560, idealWidth: 640, minHeight: 380, idealHeight: 520)
