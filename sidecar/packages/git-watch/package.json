@@ -1,6 +1,6 @@
 {
   "name": "@marvin/git-watch",
-  "version": "0.1.71",
+  "version": "0.1.72",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",

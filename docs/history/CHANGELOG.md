@@ -9,6 +9,47 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.72: MARVIN installs its own toolchain, keeps graphs fresh, and tells you when it's out of date.**
+
+  **graphify was "advisory"** — a dim line in `doctor` — while Golden Rule 7
+  makes the graph the first thing MARVIN consults on any structural question.
+  A fresh machine ran that rule with no way to build a graph and nothing
+  saying so. `bin/marvin deps [check|install]` now installs the whole external
+  toolchain (graphify via uv/pipx, the Claude CLI, the skill bundle) and runs
+  as part of `install-macos-app`; `scripts/install.sh` gained the same step.
+
+  **`bin/marvin graph-hooks`** installs graphify's post-commit / post-checkout
+  rebuild and the `graph.json` union merge driver. ADR-0041's watchdog only
+  runs while the IDE is open, so commits from a terminal left the graph stale.
+  Verified: all three were missing on both this repo and the active project.
+
+  **An update check.** Daily and on demand (`Check for Updates…`), comparing
+  the newest release tag to the running bundle. The comparison is test-pinned
+  because it is easy to get quietly wrong: numeric per-component compare so
+  `0.1.9 < 0.1.10`, the `+sha` suffix stripped, a dev build ahead of the
+  release never told to downgrade, an unparseable version deciding nothing,
+  and skip that is per-version rather than permanent. It does **not**
+  auto-install — swapping the bundle under a live turn kills work that
+  reports nothing back (ADR-0038) — so the prompt hands over
+  `brew upgrade --cask marvin-ai` and says to quit first.
+
+  **A cancelled request is no longer an error.** `Task.cancel()` on a
+  URLSession call surfaces as `URLError(.cancelled)` / −999, not
+  `CancellationError`, so the file tree's catch missed it and the FSEvents
+  auto-refresh produced a red "Fetch error … cancelled" banner for something
+  that had worked.
+
+  Also in this release: graph health tools (`graph_god_nodes`,
+  `graph_diagnose`), live PostgreSQL schema into the graph
+  (`graph_index_schema`, DSN read from a named env var and scrubbed from every
+  output path), `LESSONS.md` injected to close the work-memory loop
+  ([ADR-0085](../decisions/0085-graphify-beyond-search.md)), mechanical
+  triggers for `graph_affected` / `graph_change_impact`
+  ([ADR-0084](../decisions/0084-blast-radius-and-pre-ship-impact-nudges.md)),
+  extensionless files (Makefile / Dockerfile / .env) finally syntax-highlighted,
+  and the About panel reporting the live default model instead of a stale
+  hardcoded constant.
+
 - **2026-08-30 — v0.1.71: the graphify rail actually holds for a whole turn.**
 
   Measured four real sessions of the user's project: 8:1, 38:1, 13:1 and 15:1
