@@ -44,9 +44,9 @@ struct TerminalPaneView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             scrollback
-            Divider()
+            MarvinDivider()
             inputBar
         }
         .background(Color(nsColor: .textBackgroundColor))

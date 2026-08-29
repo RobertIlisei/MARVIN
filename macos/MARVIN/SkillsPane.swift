@@ -263,7 +263,7 @@ struct SkillsPane: View {
 
             // Marketplace (phase B): pick a plugin → installs its skills.
             if !addPlugins.isEmpty {
-                Divider()
+                MarvinDivider()
                 Text("Marketplace \(addMarketplace.map { "“\($0)”" } ?? "") — pick a plugin to install its skills:")
                     .font(.caption.weight(.medium))
                 ScrollView {
@@ -288,7 +288,7 @@ struct SkillsPane: View {
             }
             // Multi-skill repo: pick which skills.
             if !addCandidates.isEmpty {
-                Divider()
+                MarvinDivider()
                 Text("This repo has several skills — pick which to install:")
                     .font(.caption.weight(.medium))
                 ScrollView {
@@ -491,7 +491,7 @@ struct SkillsPane: View {
             }
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))
-            Divider()
+            MarvinDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -618,7 +618,7 @@ struct SkillsPane: View {
             }
             .padding(12)
             .background(Color(nsColor: .controlBackgroundColor))
-            Divider()
+            MarvinDivider()
             ScrollView {
                 Text(skill.content)
                     .font(.system(.body, design: .monospaced))
@@ -642,11 +642,11 @@ struct SkillsPane: View {
                 // on → recommended to add. (Was five flat, overlapping
                 // sections that read as "all over the place".)
                 activeSection(idx)
-                Divider()
+                MarvinDivider()
                 availableSection(idx)
-                Divider()
+                MarvinDivider()
                 recommendedSection(idx)
-                Divider()
+                MarvinDivider()
                 auditFooter(idx.audit)
             }
             .padding(.horizontal, 12)

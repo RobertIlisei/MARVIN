@@ -312,7 +312,7 @@ struct ReviewChangesScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            Divider()
+            MarvinDivider()
             if model.files.isEmpty {
                 emptyState
             } else {
@@ -349,7 +349,7 @@ struct ReviewChangesScreen: View {
             .pickerStyle(.segmented)
             .frame(width: 92)
             .help("Split — side-by-side. Inline — unified single column.")
-            Divider().frame(height: 16)
+            MarvinDivider().frame(height: 16)
             Button("Reject all") { model.resolve(action: "reject") }
                 .disabled(model.busy || model.files.isEmpty)
             Button("Accept all") { model.resolve(action: "accept") }
@@ -428,7 +428,7 @@ struct ReviewChangesScreen: View {
                 // ScrollView below is .clipped() and given a lower zIndex.
                 .background(Color(nsColor: .windowBackgroundColor))
                 .zIndex(1)
-                Divider()
+                MarvinDivider()
                     .zIndex(1)
                 // Fix 1 — an added/deleted file has no counterpart side, so it
                 // renders single-column (like GitHub) regardless of the toggle;
@@ -437,10 +437,10 @@ struct ReviewChangesScreen: View {
                 let unified = isUnified(diff)
                 if diff.status == "added" || diff.status == "deleted" {
                     addedDeletedBanner(diff.status).zIndex(1)
-                    Divider().zIndex(1)
+                    MarvinDivider().zIndex(1)
                 } else if model.viewMode == .split {
                     columnHeader.zIndex(1)
-                    Divider().zIndex(1)
+                    MarvinDivider().zIndex(1)
                 }
                 // Fix 3 — hold a very large diff behind a "Show anyway" gate so
                 // a huge generated file can't lock the window on open.
@@ -547,7 +547,7 @@ struct ReviewChangesScreen: View {
     private func splitRowView(_ row: SBRow) -> some View {
         HStack(spacing: 0) {
             sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind))
-            Divider()
+            MarvinDivider()
             sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind))
         }
     }

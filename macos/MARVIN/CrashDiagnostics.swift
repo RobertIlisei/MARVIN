@@ -216,7 +216,7 @@ enum ExceptionLog {
     static func recordWindowTree() {
         var out = "\n----- window/view tree at crash -----\n"
         for w in NSApplication.shared.windows {
-            out += "window \(type(of: w)) frame=\(w.frame) visible=\(w.isVisible)\n"
+            out += "window \(objcClassName(w)) frame=\(w.frame) visible=\(w.isVisible)\n"
             if let root = w.contentView { out += describe(root, depth: 1, limit: 400) }
         }
         append(out)
@@ -230,7 +230,7 @@ enum ExceptionLog {
             if emitted >= limit { return "" }
             emitted += 1
             let pad = String(repeating: "  ", count: d)
-            var line = "\(pad)\(type(of: v)) frame=\(v.frame) constraints=\(v.constraints.count) needsUpdate=\(v.needsUpdateConstraints)\n"
+            var line = "\(pad)\(objcClassName(v)) frame=\(v.frame) constraints=\(v.constraints.count) needsUpdate=\(v.needsUpdateConstraints)\n"
             for sub in v.subviews { line += walk(sub, d + 1) }
             return line
         }
@@ -374,12 +374,12 @@ enum ConstraintStorm {
 
     private static func report(_ view: NSView, withStack: Bool) {
         var out = "\n----- constraint storm: \(threshold) invalidations in <\(windowSeconds)s -----\n"
-        out += "trigger view: \(type(of: view)) frame=\(view.frame)\n"
+        out += "trigger view: \(objcClassName(view)) frame=\(view.frame)\n"
         out += "ancestry:\n"
         var node: NSView? = view
         var depth = 0
         while let n = node, depth < 24 {
-            out += "  \(String(repeating: " ", count: depth))\(type(of: n)) constraints=\(n.constraints.count)\n"
+            out += "  \(String(repeating: " ", count: depth))\(objcClassName(n)) constraints=\(n.constraints.count)\n"
             node = n.superview
             depth += 1
         }
@@ -432,4 +432,20 @@ extension NSSplitViewController {
         SplitViewRebuilds.note()
         marvin_loadView()
     }
+}
+
+/// Class name via the ObjC runtime, NOT Swift string interpolation of the
+/// metatype. Interpolating `type(of: view)` calls `_typeName`, which walks
+/// Swift type metadata — and segfaults on a view whose class was created
+/// at runtime (`objc_allocateClassPair`) or otherwise lacks that metadata.
+/// That turned a recoverable constraints-loop report into a hard crash of
+/// the crash logger itself on 2026-08-29. Only the diagnostic text changes.
+///
+/// `class_getName` and not `NSStringFromClass`: the former is a plain C call
+/// into the ObjC runtime that returns the class's stored name, the latter goes
+/// through Foundation and is one refactor away from touching Swift metadata
+/// again. On the crash path, "cannot itself fault" beats "prettier name".
+private func objcClassName(_ object: AnyObject) -> String {
+    guard let cls = object_getClass(object) else { return "<no class>" }
+    return String(cString: class_getName(cls))
 }

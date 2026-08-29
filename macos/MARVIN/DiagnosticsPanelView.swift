@@ -11,7 +11,7 @@ struct DiagnosticsPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             body_
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -130,7 +130,7 @@ struct DiagnosticsPanelView: View {
         }
         .buttonStyle(.plain)
         .background(RowHoverBG())
-        Divider().padding(.leading, 10)
+        MarvinDivider().padding(.leading, 10)
     }
 }
 

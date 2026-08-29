@@ -1,27 +1,14 @@
-// ContentView — Phase 1a window.
+// ContentView — main window.
 //
 // Three states wired to HealthMonitor.state:
 //   • connecting — soft "starting up" message + spinner
-//   • online     — full-bleed WKWebView pointed at the sidecar
-//                  (`http://localhost:3030`). The web app renders
-//                  here unchanged. Later phases replace pieces of
-//                  this WebView with native AppKit views.
+//   • online     — native SwiftUI chat/file-tree/terminal/source-control
+//                  shell, talking to the sidecar's `/api/**` routes over
+//                  `http://localhost:3030`. No browser or WKWebView is
+//                  involved — the sidecar's own UI was removed (ADR-0075);
+//                  it's an API-only backend now.
 //   • offline    — the failure reason, plus a copyable command for
 //                  starting the sidecar.
-//
-// Phase 1a tradeoff (intentional, documented for future iteration):
-// every transition online → offline → online tears down the
-// WebView, losing scroll position / form input / chat focus. The
-// alternative — keep the WebView always mounted under a ZStack
-// overlay — is straightforward but means the WebView attempts to
-// load `localhost:3030` while the sidecar is still booting, which
-// shows WebKit's ugly "can't connect" error page on cold start.
-// Trading the cold-start ugliness for the rare-mid-session-drop
-// regression. Re-evaluate if the drop becomes painful in practice.
-//
-// Visual style is deliberately minimal — Phase 1a is about proving
-// the WebView island works inside the SwiftUI shell. Native menu
-// bar, toolbar, window-state restoration land in 1b/1c/1d.
 
 import SwiftUI
 
@@ -60,6 +47,12 @@ struct ContentView: View {
         // content to chrome is one visual surface.
         VStack(spacing: 0) {
             mainContent
+                // Hairline under the title bar — the toolbar and the
+                // content are the same fill now (flat theme), so without
+                // this the top edge has no definition (user, 2026-08-29).
+                .overlay(alignment: .top) {
+                    Rectangle().fill(MarvinTheme.border).frame(height: 1)
+                }
             AppStatusBar()
                 .environment(bridge)
                 .environment(health)
@@ -68,8 +61,21 @@ struct ContentView: View {
         .preferredColorScheme(bridge.preferredColorScheme)
         .background(WindowAccessor { window in
             window.setFrameAutosaveName("MARVINMainWindow")
+            // Match the window's own fill to the theme so the split
+            // views' live-resize gaps and the title bar blend instead of
+            // flashing the system window color.
+            window.backgroundColor = MarvinTheme.backgroundNSColor
         })
         .toolbar { toolbarContent }
+        // Flat solid title bar instead of the system's translucent
+        // material — matches the rest of the Antigravity-redesign
+        // pass. Traffic lights / drag region are untouched; only the
+        // fill color changes. Bundled into one ViewModifier (rather
+        // than two chained `.toolbarBackground` calls) because the
+        // outer body is already a very long modifier chain and two
+        // more generic calls pushed the type-checker over its time
+        // budget ("unable to type-check in reasonable time").
+        .modifier(FlatToolbarBackground())
         .sheet(isPresented: $quickOpenOpen) {
             QuickOpenSheet()
                 .environment(bridge)
@@ -130,7 +136,7 @@ struct ContentView: View {
     @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            MarvinTheme.background
                 .ignoresSafeArea()
             switch health.state {
             case .connecting:
@@ -167,7 +173,13 @@ struct ContentView: View {
                     // brain actually stops its Metal render loop.
                     if bridge.panes.files {
                         LeftPane()
-                            .frame(minWidth: 200, idealWidth: 260)
+                            // minWidth is the RAIL's width, not the sidebar's:
+                            // dragging the divider left past LeftPane's own
+                            // collapse threshold hides the content and leaves
+                            // the icon rail, the way VS Code / Antigravity do.
+                            // Clamping at 200 was what made the pane "remain at
+                            // an exact size" (user, 2026-08-29).
+                            .frame(minWidth: 45, idealWidth: 260)
                             .background(SplitViewAutosave(name: "marvin.main"))
                     }
                     webIsland
@@ -189,6 +201,10 @@ struct ContentView: View {
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
+                // NB: no `.animation(value: bridge.panes)` on the split —
+                // animating an NSSplitView-backed layout feeds AppKit's
+                // update-constraints loop (ADR-0062); it crashed at launch
+                // on 2026-08-29. Pane toggles snap; contents animate.
                 } // end else (project active)
             case .offline(let reason):
                 offlineView(reason: reason)
@@ -496,7 +512,7 @@ struct ContentView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Divider()
+            MarvinDivider()
             VStack(alignment: .leading, spacing: 6) {
                 Text("Start the sidecar")
                     .font(.callout.weight(.semibold))
@@ -579,6 +595,14 @@ struct ContentView: View {
 
 }
 
+private struct FlatToolbarBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .toolbarBackground(MarvinTheme.background, for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
+    }
+}
+
 // Phase 5f retired CostToolbarItem and ConnectionStatusToolbarItem.
 // Both used to live in the toolbar's primary-action slot; the global
 // AppStatusBar now hosts the cost segment (with the same daily-
@@ -611,7 +635,7 @@ struct CostHistoryPopover: View {
                 row("today", currency: summary.today)
                 row("7 days", currency: summary.week)
                 row("lifetime", currency: summary.lifetime)
-                Divider()
+                MarvinDivider()
                     .padding(.vertical, 2)
                 row("turns", text: summary.turns.formatted())
                 row("in / out tokens",

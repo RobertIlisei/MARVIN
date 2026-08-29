@@ -711,11 +711,11 @@ struct FileViewerView: View {
             // so the ruler can't draw outside the scroll view's own frame.
             tabBar
                 .zIndex(1)
-            Divider()
+            MarvinDivider()
                 .zIndex(1)
             header
                 .zIndex(1)
-            Divider()
+            MarvinDivider()
                 .zIndex(1)
             content
                 .zIndex(0)

@@ -89,7 +89,7 @@ struct AskQuestionSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+            MarvinDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ForEach(Array(questions.enumerated()), id: \.offset) { qi, q in
@@ -103,7 +103,7 @@ struct AskQuestionSheet: View {
                 }
                 .padding(16)
             }
-            Divider()
+            MarvinDivider()
             footer
         }
         .frame(width: 520)

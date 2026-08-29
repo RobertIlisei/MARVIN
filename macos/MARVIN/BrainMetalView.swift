@@ -139,6 +139,16 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             if isOccluded != oldValue { applyVisibility() }
         }
     }
+    /// True while the window is in a live resize (pane drag / window
+    /// edge drag). The GPU sim + three render passes at 60 fps compete
+    /// with AppKit's layout on every frame of the drag — part of the
+    /// "resizing is sluggish" finding (2026-08-29). Drop to 10 fps for
+    /// the duration; restore on end.
+    var isLiveResizing: Bool = false {
+        didSet {
+            if isLiveResizing != oldValue { applyFrameRate() }
+        }
+    }
 
     // MARK: Internal flags
 
@@ -214,30 +224,25 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         self.weakView = view
         view.preferredFramesPerSecond = 60
         if let layer = view.layer as? CAMetalLayer {
-            // Opaque so the composite pass doesn't mix with window
-            // background. NSView's `isOpaque` is read-only on macOS
-            // — CAMetalLayer's flag is the toggle Metal honours.
-            layer.isOpaque = true
+            // TRANSPARENT (2026-08-29, user: "the background should be
+            // invisible, only the particles should be seen"). The layer
+            // used to be opaque and the trails faded toward a copy of the
+            // window colour, which read as a darker square behind the
+            // particles once the theme went flat. Now the accumulation
+            // texture is premultiplied RGBA that decays to fully
+            // transparent, and the layer lets the pane's own fill show
+            // through wherever there is no particle.
+            layer.isOpaque = false
+            layer.backgroundColor = NSColor.clear.cgColor
         }
         view.clearColor = backgroundClearColor()
     }
 
-    /// Phase 5e — match the brain's clear color to the system
-    /// window background so the brain pane blends with the rest of
-    /// the chrome instead of reading as a punched-out black hole.
-    /// Reads NSColor.windowBackgroundColor in the current
-    /// appearance and converts to its sRGB components for the
-    /// MTLClearColor (Metal works in linear / sRGB only).
+    /// Fully transparent clear. The accumulation texture is premultiplied
+    /// RGBA; "no particle here" is (0, 0, 0, 0), so whatever SwiftUI draws
+    /// behind the MTKView is what the eye sees around the brain.
     private func backgroundClearColor() -> MTLClearColor {
-        // Resolve NSColor.windowBackgroundColor in the view's effective
-        // appearance so per-window light/dark overrides are honoured.
-        let appearance = weakView?.effectiveAppearance ?? NSApp.effectiveAppearance
-        var r: CGFloat = 0.95, g: CGFloat = 0.95, b: CGFloat = 0.95, a: CGFloat = 1
-        appearance.performAsCurrentDrawingAppearance {
-            let ns = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? .white
-            ns.getRed(&r, green: &g, blue: &b, alpha: &a)
-        }
-        return MTLClearColor(red: Double(r), green: Double(g), blue: Double(b), alpha: Double(a))
+        MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
     }
 
     // MARK: Perf controls (Phase 4h)
@@ -256,7 +261,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     private func applyFrameRate() {
         guard let view = weakView else { return }
         let target: Int
-        if reduceMotion {
+        if reduceMotion || isLiveResizing {
             target = 10
         } else if brainState == .idle {
             target = 30
@@ -309,8 +314,12 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].isBlendingEnabled = true
         desc.colorAttachments[0].rgbBlendOperation = .add
         desc.colorAttachments[0].alphaBlendOperation = .add
-        desc.colorAttachments[0].sourceRGBBlendFactor = .one
-        desc.colorAttachments[0].sourceAlphaBlendFactor = .one
+        // Pure decay: dst *= (1 - fadeAlpha) on ALL channels, alpha
+        // included. The previous source-over toward an opaque background
+        // colour drove alpha to 1 every frame, which is exactly the solid
+        // square the transparent layer must not have.
+        desc.colorAttachments[0].sourceRGBBlendFactor = .zero
+        desc.colorAttachments[0].sourceAlphaBlendFactor = .zero
         desc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         desc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         return try? device.makeRenderPipelineState(descriptor: desc)
@@ -416,17 +425,11 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             // so a 1.0 slider doesn't freeze the trail forever.
             let effTrail = min(0.99, max(0, profile.trail))
             let fadeAlpha = Float(1.0 - effTrail)
-            // Fade toward the window background (not black). The shader
-            // reads this as float4(bgR*a, bgG*a, bgB*a, a) in pre-
-            // multiplied source-over, so accumulation converges to the
-            // window background color rather than to a black hole.
-            let bg = backgroundClearColor()
-            var fadeParams = SIMD4<Float>(
-                Float(bg.red)   * fadeAlpha,
-                Float(bg.green) * fadeAlpha,
-                Float(bg.blue)  * fadeAlpha,
-                fadeAlpha
-            )
+            // Fade toward TRANSPARENT. The fade pipeline's blend is a pure
+            // decay (src ×0, dst ×(1−a)), so only the alpha component
+            // matters here: every channel of the accumulation shrinks by
+            // fadeAlpha per frame and empty space returns to (0,0,0,0).
+            var fadeParams = SIMD4<Float>(0, 0, 0, fadeAlpha)
             memcpy(
                 fadeAlphaBuffer.contents(), &fadeParams,
                 MemoryLayout<SIMD4<Float>>.stride
@@ -594,7 +597,24 @@ struct BrainMetalView: NSViewRepresentable {
             // occluded at bind-time would otherwise wait for the
             // next change to update.
             renderer?.isOccluded = !window.occlusionState.contains(.visible)
+
+            // Live-resize throttle (see `isLiveResizing`).
+            for t in liveResizeTokens { NotificationCenter.default.removeObserver(t) }
+            liveResizeTokens = [
+                (NSWindow.willStartLiveResizeNotification, true),
+                (NSWindow.didEndLiveResizeNotification, false),
+            ].map { name, flag in
+                NotificationCenter.default.addObserver(
+                    forName: name, object: window, queue: .main
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.renderer?.isLiveResizing = flag
+                    }
+                }
+            }
         }
+
+        private var liveResizeTokens: [NSObjectProtocol] = []
 
         deinit {
             // Tokens are removed safely from any thread —
@@ -602,6 +622,7 @@ struct BrainMetalView: NSViewRepresentable {
             if let token = occlusionToken {
                 NotificationCenter.default.removeObserver(token)
             }
+            for t in liveResizeTokens { NotificationCenter.default.removeObserver(t) }
         }
     }
 }
