@@ -40,6 +40,8 @@ import type {
 import { appendAutoAuditEntry, type AutoAuditEntryKind } from "./auto-audit";
 import { isSubagentDispatch } from "@marvin/tools/policy";
 
+import type { AdvisorVerdict } from "./advisor-verdict";
+
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
  * union here so callers don't need to type-narrow in the deny branch when
@@ -65,6 +67,20 @@ export interface DesignTurnContext {
    *  reads in the same turn even if the graph stays unqueried — that
    *  becomes a measurement signal, not a wall. */
   graphifyHookFired: boolean;
+  /** ADR-0095 — what the advisor actually SAID, once a consult has returned.
+   *  Written by the advisor-verdict PostToolUse hook; `undefined` until then.
+   *  Before this, the gate observed only the dispatch, so a `reject`
+   *  discharged it exactly like a `go`. */
+  advisorVerdict?: AdvisorVerdict;
+  /** ADR-0095 — has the `reject` deny already fired this turn? Fired-once, in
+   *  the same spirit as `advisorHookFiredForPaths`: the verdict must be READ,
+   *  but a subagent does not get a veto over the user's working tree. */
+  advisorRejectDenyFired: boolean;
+  /** ADR-0095 amendment — advisor consults dispatched AFTER a verdict landed.
+   *  "Do not re-run the advisor for a friendlier answer" was prose in
+   *  `personality.ts`, and the 2026-05-22 audit measured what soft-nudge
+   *  language is worth: it fires ~0×. This makes it mechanical. */
+  advisorReconsultDenyFired: boolean;
   /** Has the advisor-on-ADR hook already fired-and-blocked once for this
    *  same target path? Same logic — first deny carries the steering
    *  signal, subsequent calls don't keep tripping. */
@@ -115,6 +131,12 @@ export interface DesignTurnContext {
    *  file twice is one decision, not two. */
   editedFilesThisTurn: Set<string>;
 }
+
+/** ADR-0094 — the registered advisor agent's `subagent_type` (ADR-0033).
+ *  Exported and consumed as the `agents:` map key in `sdk-runner.ts` so the
+ *  name the gate prescribes and the name the SDK registers cannot drift —
+ *  ADR-0079 is what a stale literal in this file costs. */
+export const ADVISOR_SUBAGENT_TYPE = "advisor";
 
 /** ADR-0060 — novel source files that may be opened after the last graph call
  *  before the drift nudge fires. Tuned from measured sessions: real drift ran
@@ -260,6 +282,8 @@ export function createTurnDesignContext(
     saveResultNudgeFired: false,
     editedFilesThisTurn: new Set<string>(),
     advisorCallCount: 0,
+    advisorRejectDenyFired: false,
+    advisorReconsultDenyFired: false,
     sourceFilesRead: 0,
     graphifyHookFired: false,
     advisorHookFiredForPaths: new Set(),
@@ -333,9 +357,20 @@ export function recordAllowedTool(
   }
   // Both spellings: the SDK renamed Task → Agent (see SUBAGENT_DISPATCH_TOOLS).
   if (isSubagentDispatch(toolName)) {
+    // ADR-0094: two routes count as a consult. The registered `advisor` agent
+    // (ADR-0033) is the prescribed one — it carries the effort, the read-only
+    // denylist, marvin-graph and the turn cap. The `advisor:` description
+    // prefix is ADR-0007's `general-purpose` spawn, still policy-sanctioned,
+    // and a consult run that way is still a consult. Keying on the prefix
+    // ALONE was the bug: the gate's own remedy would not have discharged it.
+    const subagentType =
+      typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
     const description =
       typeof toolInput.description === "string" ? toolInput.description : "";
-    if (description.trim().toLowerCase().startsWith("advisor:")) {
+    if (
+      subagentType.trim().toLowerCase() === ADVISOR_SUBAGENT_TYPE ||
+      description.trim().toLowerCase().startsWith("advisor:")
+    ) {
       ctx.advisorCallCount += 1;
     }
     return;
@@ -841,6 +876,33 @@ export function runDesignHooks(args: {
     }
   }
 
+  // Hook 2a — ADR-0095 amendment: a SECOND consult once a verdict is in.
+  // One consult, one answer. Re-rolling the dice until the advisor agrees is
+  // the failure mode a second opinion exists to prevent.
+  const reconsultDeny = checkAdvisorReconsult(ctx, toolName, toolInput);
+  if (reconsultDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "advisor.reconsult.deny.measured", turnId: ctx.turnId, tool: toolName });
+    } else {
+      ctx.advisorReconsultDenyFired = true;
+      return reconsultDeny;
+    }
+  }
+
+  // Hook 2b — ADR-0095: the advisor REJECTED this. Deny once, quoting the
+  // verdict, then let it through. A hard block would hand a subagent a veto
+  // over the user's tree; staying silent would leave the gate's teeth entirely
+  // in the dispatch, which is the status quo ADR-0095 exists to change.
+  const rejectDeny = checkAdvisorRejectDeny(ctx, toolName, toolInput);
+  if (rejectDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "advisor.reject.deny.measured", turnId: ctx.turnId, tool: toolName });
+    } else {
+      ctx.advisorRejectDenyFired = true;
+      return rejectDeny;
+    }
+  }
+
   // Hook 2 — advisor-on-ADR-trigger.
   const advisorDeny = checkAdvisorOnAdrTrigger(ctx, toolName, toolInput);
   if (advisorDeny) {
@@ -928,6 +990,69 @@ function truncate(s: string, max: number): string {
   return `${s.slice(0, max - 1)}…`;
 }
 
+/** ADR-0095 amendment — deny a re-consult once a verdict has landed.
+ *
+ *  Fires once, and only when a verdict is actually recorded: a consult on a
+ *  DIFFERENT question is legitimate, so the deny explains how to proceed
+ *  rather than sealing the tool. Pure; does not mutate ctx. */
+function checkAdvisorReconsult(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (!ctx.advisorVerdict || ctx.advisorVerdict === "unparsed") return null;
+  if (ctx.advisorReconsultDenyFired) return null;
+  if (!isSubagentDispatch(toolName)) return null;
+  const type = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
+  const description = typeof toolInput.description === "string" ? toolInput.description : "";
+  const isAdvisor =
+    type.trim().toLowerCase() === ADVISOR_SUBAGENT_TYPE ||
+    description.trim().toLowerCase().startsWith("advisor:");
+  if (!isAdvisor) return null;
+  return {
+    behavior: "deny",
+    message:
+      `advisor re-consult: an advisor already returned "${ctx.advisorVerdict}" this turn. ` +
+      "One consult, one answer — re-running it until the verdict is friendlier " +
+      "is precisely what a second opinion exists to prevent, and the first " +
+      "answer is the one on the record.\n\n" +
+      "If you disagree with it, say so in your reply and proceed — that is " +
+      "the user's call to make, in the open. If this consult is about a " +
+      "GENUINELY different question, retry: this deny fires once.",
+    interrupt: false,
+  };
+}
+
+/** ADR-0095 — returns the deny for a REJECTED verdict, otherwise null.
+ *  Fires at most once per turn; pure, does not mutate ctx. */
+function checkAdvisorRejectDeny(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (ctx.advisorVerdict !== "reject") return null;
+  if (ctx.advisorRejectDenyFired) return null;
+  if (toolName !== "Edit" && toolName !== "Write") return null;
+  const target = pickPath(toolInput, ["file_path", "path"]);
+  if (!target) return null;
+  if (isExemptFromAdrTriggers(target)) return null;
+  const triggerLabel = matchAdrTrigger(ctx.cwd, target);
+  if (!triggerLabel) return null;
+  return {
+    behavior: "deny",
+    message:
+      "advisor verdict: REJECT. The advisor you consulted this turn rejected " +
+      `this approach, and you are about to write to a "${triggerLabel}" ` +
+      "trigger path anyway. This deny fires ONCE — retry and it proceeds. " +
+      "The decision is the user's, not the advisor's.\n\n" +
+      "Before retrying: say plainly, in your reply, that the advisor " +
+      "rejected this and why you are overriding it — or change the approach. " +
+      "Its caveats are parked in the backlog (ADR-0095); do not silently " +
+      "drop them. Do NOT re-run the advisor to get a better answer.",
+    interrupt: false,
+  };
+}
+
 /** Returns the deny PermissionResult when the advisor-on-ADR-trigger rule
  *  should fire, otherwise null. Pure — does not mutate ctx. */
 function checkAdvisorOnAdrTrigger(
@@ -948,16 +1073,19 @@ function checkAdvisorOnAdrTrigger(
     message:
       `advisor-on-ADR-trigger: the target path matches the "${triggerLabel}" ` +
       "ADR trigger pattern, and no advisor consult has fired this turn. " +
-      "Spawn a subagent first:\n\n" +
+      "Spawn the registered advisor first:\n\n" +
       "    tool_use Agent:\n" +
-      '      subagent_type: "general-purpose"\n' +
-      '      model:          "opus"\n' +
+      `      subagent_type: "${ADVISOR_SUBAGENT_TYPE}"\n` +
       '      description:    "advisor: <one-line topic>"\n' +
       "      prompt: |\n" +
-      "        You are an advisor consulted by MARVIN's executor on a hard\n" +
-      "        step. Be blunt. Structure: ## Risks / ## Alternatives /\n" +
-      "        ## Pushback / ## Verdict (go|go-with-caveats|reject).\n" +
-      "        Full context: <PASTE_PLAN_OR_DIFF>\n\n" +
+      "        <the full plan / diff / decision, and what you want judged>\n\n" +
+      "The registered agent (ADR-0033) already carries its own model, " +
+      "reasoning effort, read-only tool policy and turn cap — do NOT spawn " +
+      "`general-purpose` with a model hint, and do not restate its system " +
+      "prompt. It starts with a FRESH context and cannot see this " +
+      "conversation, so the prompt must carry the whole situation. It " +
+      "returns Risks / Alternatives / Pushback / Verdict " +
+      "(go|go-with-caveats|reject).\n\n" +
       "Then cite the advisor's substantive input in your reply and apply " +
       "the edit. Personality §Advisor protocol requires this for ADR-trigger " +
       "paths. (Bypass with MARVIN_DESIGN_HOOKS=measure if the user has " +
