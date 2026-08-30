@@ -539,7 +539,21 @@ struct SkillsPane: View {
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            _ = try await URLSession.shared.data(for: req)
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+                // The route's 500 carries `{error: "discovery failed: …"}` —
+                // usually the CLI's message (OpenRouter 429 rate-limiting is
+                // the common case). Non-2xx must surface like buildDiscovered;
+                // swallowing it read as "Discover silently does nothing".
+                let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                    ?? "HTTP \(http.statusCode)"
+                await MainActor.run {
+                    self.pasteboardToast = "Discovery failed: \(detail)"
+                }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                await MainActor.run { self.pasteboardToast = nil }
+                return
+            }
             await refresh()  // re-read /api/skills which now includes the cached discovery
         } catch {
             await MainActor.run {

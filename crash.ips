@@ -1,0 +1,292 @@
+{"app_name":"MARVIN","timestamp":"2026-08-28 19:46:46.00 +0300","app_version":"0.1.65+f8176f6","slice_uuid":"9bcc748e-0d98-3e94-a6a3-dd914b795dcd","build_version":"0.1.65+f8176f6","platform":1,"bundleID":"net.marvin.macos","share_with_app_devs":1,"is_first_party":0,"bug_type":"309","os_version":"macOS 26.6.2 (25G83)","roots_installed":0,"name":"MARVIN","incident_id":"7CFBCD43-5B80-4ACA-B407-CE61D111AFB3"}
+{
+  "uptime" : 26000,
+  "procRole" : "Background",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "MacBookPro18,1",
+  "coalitionID" : 4559,
+  "osVersion" : {
+    "train" : "macOS 26.6.2",
+    "build" : "25G83",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-08-28 19:46:45.5352 +0300",
+  "codeSigningMonitor" : 2,
+  "incident" : "7CFBCD43-5B80-4ACA-B407-CE61D111AFB3",
+  "pid" : 58798,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-08-28 19:46:02.1411 +0300",
+  "procStartAbsTime" : 629145322286,
+  "procExitAbsTime" : 630186599644,
+  "procName" : "MARVIN",
+  "procPath" : "\/Users\/USER\/*\/MARVIN.app\/Contents\/MacOS\/MARVIN",
+  "bundleInfo" : {"CFBundleShortVersionString":"0.1.65+f8176f6","CFBundleVersion":"0.1.65+f8176f6","CFBundleIdentifier":"net.marvin.macos"},
+  "storeInfo" : {"deviceIdentifierForVendor":"DFE3A2BC-F42B-521C-BAF8-359B2921AD41","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "net.marvin.macos",
+  "crashReporterKey" : "6A04BFCD-07AA-8A66-948A-14FB25E70CEA",
+  "appleIntelligenceStatus" : {"state":"unavailable","reasons":["selectedLanguageDoesNotMatchSelectedSiriLanguage","selectedLanguageDoesNotMatchSelectedSiriLanguageInfo(system: en-GB, siri: en)"]},
+  "developerMode" : 1,
+  "codeSigningID" : "net.marvin.macos",
+  "codeSigningTeamID" : "",
+  "codeSigningFlags" : 570425857,
+  "codeSigningValidationCategory" : 10,
+  "codeSigningTrustLevel" : 4294967295,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"AIA0kR3I5ZfgAxOqUus5lOK\/NJBCABeR\/wE6lG7nN5QI7jOwAB0E+Q==","atPC":"IAAg1PMDAKrhAQA04AMTqpt+I5T\/AwD5AACA0g3I5Ze7fiOUIAAg1A=="},
+  "bootSessionUUID" : "599CD8CB-D75C-4CDB-9477-8C8D5EF309CC",
+  "wakeTime" : 1000,
+  "sleepWakeUUID" : "F63C9382-817E-4C66-A4DC-81F783C2F35C",
+  "sip" : "enabled",
+  "exception" : {"codes":"0x0000000000000001, 0x000000018defb6b4","rawCodes":[1,6676264628],"type":"EXC_BREAKPOINT","signal":"SIGTRAP"},
+  "termination" : {"flags":0,"code":5,"namespace":"SIGNAL","indicator":"Trace\/BPT trap: 5","byProc":"exc handler","byPid":58798},
+  "os_fault" : {"process":"MARVIN"},
+  "asiBacktraces" : ["0   CoreFoundation                      0x000000018934f1f0 __exceptionPreprocess + 176\n1   libobjc.A.dylib                     0x0000000188dca91c objc_exception_throw + 88\n2   CoreFoundation                      0x000000018934f0e0 +[NSException exceptionWithName:reason:userInfo:] + 0\n3   AppKit                              0x000000018e372458 -[NSWindow(NSDisplayCycle) _postWindowNeedsUpdateConstraints] + 1716\n4   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n5   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n6   AppKit                              0x000000018e7c4138 -[_NSConstraintBasedLayoutHostingView _informContainerThatSubviewsNeedUpdateConstraints] + 52\n7   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n8   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n9   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n10  AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n11  AppKit                              0x000000018d730ec0 -[NSView setNeedsUpdateConstraints:] + 468\n12  MARVIN                              0x00000001022f822c $sSo6NSViewC6MARVINE32marvin_setNeedsUpdateConstraintsyySbFTo + 48\n13  SwiftUI                             0x00000001beed39b4 $s7SwiftUI13NSHostingViewC14setNeedsUpdateyyF + 176\n14  SwiftUI                             0x00000001beee7190 $s7SwiftUI13NSHostingViewC13requestUpdate5afterySd_tF + 676\n15  SwiftUICore                         0x00000002373be0f4 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE14graphDidChangeyyF + 108\n16  SwiftUICore                         0x0000000236e54d98 $s7SwiftUI9GraphHostC17graphInvalidation4fromySo11AGAttributeaSg_tF + 324\n17  SwiftUICore                         0x0000000236e56bec $s7SwiftUI9GraphHostC4dataA2C4DataV_tcfcySo11AGAttributeacfU0_ + 72\n18  AttributeGraph                      0x00000001bfdcbb5c _ZN2AG5Graph7Context17call_invalidationENS_11AttributeIDE + 116\n19  AttributeGraph                      0x00000001bfdc6778 _ZN2AG5Graph15propagate_dirtyENS_11AttributeIDE + 720\n20  SwiftUICore                         0x0000000237167fac $s7SwiftUI19LazyLayoutViewCacheC14invalidateSize14layoutComputer9animationy14AttributeGraph0L0VyAA0dJ0VG_AA9AnimationVSgtFyycfU_ + 56\n21  SwiftUICore                         0x0000000236bd4d44 $s7SwiftUI6UpdateO15dispatchActionsyyFZ + 1660\n22  SwiftUICore                         0x00000002373bed80 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE6render8interval17updateDisplayList15targetTimestampySd_SbAA4TimeVSgtFyyXEfU_ + 876\n23  SwiftUICore                         0x00000002373bcf7c $s7SwiftUI25ViewGraphRootValueUpdaterPAAE6render8interval17updateDisplayList15targetTimestampySd_SbAA4TimeVSgtF + 584\n24  SwiftUI                             0x00000001beee4d6c $s7SwiftUI13NSHostingViewC6layoutyyFySo18NSAnimationContextCXEfU_ + 484\n25  SwiftUI                             0x00000001beefffcc $sSo14NSItemProviderC7SwiftUIE32loadFileSystemItemAsynchronously33_0BC2519238CC4854E8BA774CC855AC9ALL3for_17completionHandleryxm_22UniformTypeIdentifiers6UTTypeVyAC13LoadingResultAELLCyxGctAC17PasteboardUtilityV0fgH0RzlFyAMcfU_AO0F0C_Tg5TA + 28\n26  SwiftUI                             0x00000001beedf084 $sSo13RBDisplayListCIegg_ABIyBy_TR + 44\n27  AppKit                              0x000000018d72cf58 +[NSAnimationContext runAnimationGroup:] + 56\n28  SwiftUI                             0x00000001beee4ae4 $s7SwiftUI13NSHostingViewC6layoutyyF + 480\n29  SwiftUI                             0x00000001beee5060 $s7SwiftUI13NSHostingViewC6layoutyyFTo + 28\n30  AppKit                              0x000000018dc4150c __getCGDisplayListGetHashSymbolLoc_block_invoke + 1516\n31  AppKit                              0x000000018dc41534 __getCGDisplayListGetHashSymbolLoc_block_invoke + 1556\n32  AppKit                              0x000000018dc067a0 block_destroy_helper + 9428\n33  AppKit                              0x000000018dc06dec block_destroy_helper + 11040\n34  AppKit                              0x000000018e44a078 ___NSViewLayout_block_invoke + 624\n35  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n36  AppKit                              0x000000018d75bc10 _NSViewLayout + 96\n37  AppKit                              0x000000018e43fd6c __36-[NSView _layoutSubtreeWithOldSize:]_block_invoke + 372\n38  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n39  AppKit                              0x000000018d75bba4 -[NSView _layoutSubtreeWithOldSize:] + 100\n40  AppKit                              0x000000018e43fea4 __36-[NSView _layoutSubtreeWithOldSize:]_block_invoke + 684\n41  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n42  AppKit                              0x000000018d75bba4 -[NSView _layoutSubtreeWithOldSize:] + 100\n43  AppKit                              0x000000018e44093c __56-[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:]_block_invoke + 908\n44  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n45  AppKit                              0x000000018d75b780 -[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:] + 100\n46  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n47  AppKit                              0x000000018d75b710 -[NSView layoutSubtreeIfNeeded] + 96\n48  AppKit                              0x000000018e71e958 -[NSWindow(NSConstraintBasedLayoutInternal) _layoutViewTree] + 120\n49  AppKit                              0x000000018e71eb70 -[NSWindow(NSConstraintBasedLayoutInternal) layoutIfNeeded] + 240\n50  AppKit                              0x000000018d7b9e60 __NSWindowGetDisplayCycleObserverForLayout_block_invoke + 364\n51  AppKit                              0x000000018d7b9364 NSDisplayCycleObserverInvoke + 168\n52  AppKit                              0x000000018d7b8fe0 NSDisplayCycleFlush + 656\n53  QuartzCore                          0x0000000193316d9c _ZN2CA11Transaction19run_commit_handlersE18CATransactionPhase + 120\n54  QuartzCore                          0x00000001933153d8 _ZN2CA11Transaction6commitEv + 324\n55  QuartzCore                          0x00000001935132bc _ZN2CA11Transaction25flush_as_runloop_observerEb + 140\n56  AppKit                              0x000000018e0500c8 stepTransactionFlush + 220\n57  UpdateCycle                         0x000000028129d2f4 _ZN2UC10DriverCore18continueProcessingEv + 84\n58  CoreFoundation                      0x00000001892e0344 __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__ + 36\n59  CoreFoundation                      0x00000001892e0240 __CFRunLoopDoObservers + 648\n60  CoreFoundation                      0x00000001893b2234 _CFRunLoopRunSpecificWithOptions + 484\n61  HIToolbox                           0x00000001960cb560 RunCurrentEventLoopInMode + 320\n62  HIToolbox                           0x00000001960ce8bc ReceiveNextEventCommon + 488\n63  HIToolbox                           0x000000019625814c _BlockUntilNextEventMatchingListInMode + 48\n64  AppKit                              0x000000018ddc23d0 _DPSBlockUntilNextEventMatchingListInMode + 228\n65  AppKit                              0x000000018d716084 _DPSNextEvent + 576\n66  AppKit                              0x000000018e2ab96c -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 688\n67  AppKit                              0x000000018e2ab678 -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 72\n68  AppKit                              0x000000018d70913c -[NSApplication run] + 368\n69  AppKit                              0x000000018d6e17b0 NSApplicationMain + 880\n70  SwiftUI                             0x00000001be775af8 $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140\n71  SwiftUI                             0x00000001beb308d8 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104\n72  SwiftUI                             0x00000001bedfc778 $s7SwiftUI3AppPAAE4mainyyFZ + 224\n73  MARVIN                              0x0000000102386e38 MARVIN_main + 64\n74  dyld                                0x0000000188e584e4 start + 6992","0   CoreFoundation                      0x000000018934f1f0 __exceptionPreprocess + 176\n1   libobjc.A.dylib                     0x0000000188dca91c objc_exception_throw + 88\n2   CoreFoundation                      0x000000018934f0e0 +[NSException exceptionWithName:reason:userInfo:] + 0\n3   AppKit                              0x000000018e372458 -[NSWindow(NSDisplayCycle) _postWindowNeedsUpdateConstraints] + 1716\n4   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n5   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n6   AppKit                              0x000000018e7c4138 -[_NSConstraintBasedLayoutHostingView _informContainerThatSubviewsNeedUpdateConstraints] + 52\n7   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n8   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n9   AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n10  AppKit                              0x000000018d730f3c -[NSView _informContainerThatSubviewsNeedUpdateConstraints] + 64\n11  AppKit                              0x000000018d730ec0 -[NSView setNeedsUpdateConstraints:] + 468\n12  MARVIN                              0x00000001022f822c $sSo6NSViewC6MARVINE32marvin_setNeedsUpdateConstraintsyySbFTo + 48\n13  SwiftUI                             0x00000001beed39b4 $s7SwiftUI13NSHostingViewC14setNeedsUpdateyyF + 176\n14  SwiftUI                             0x00000001beee7190 $s7SwiftUI13NSHostingViewC13requestUpdate5afterySd_tF + 676\n15  SwiftUICore                         0x00000002373be0f4 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE14graphDidChangeyyF + 108\n16  SwiftUICore                         0x0000000236e54d98 $s7SwiftUI9GraphHostC17graphInvalidation4fromySo11AGAttributeaSg_tF + 324\n17  SwiftUICore                         0x0000000236e56bec $s7SwiftUI9GraphHostC4dataA2C4DataV_tcfcySo11AGAttributeacfU0_ + 72\n18  AttributeGraph                      0x00000001bfdcbb5c _ZN2AG5Graph7Context17call_invalidationENS_11AttributeIDE + 116\n19  AttributeGraph                      0x00000001bfdc6778 _ZN2AG5Graph15propagate_dirtyENS_11AttributeIDE + 720\n20  SwiftUICore                         0x0000000237167fac $s7SwiftUI19LazyLayoutViewCacheC14invalidateSize14layoutComputer9animationy14AttributeGraph0L0VyAA0dJ0VG_AA9AnimationVSgtFyycfU_ + 56\n21  SwiftUICore                         0x0000000236bd4d44 $s7SwiftUI6UpdateO15dispatchActionsyyFZ + 1660\n22  SwiftUICore                         0x00000002373bed80 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE6render8interval17updateDisplayList15targetTimestampySd_SbAA4TimeVSgtFyyXEfU_ + 876\n23  SwiftUICore                         0x00000002373bcf7c $s7SwiftUI25ViewGraphRootValueUpdaterPAAE6render8interval17updateDisplayList15targetTimestampySd_SbAA4TimeVSgtF + 584\n24  SwiftUI                             0x00000001beee4d6c $s7SwiftUI13NSHostingViewC6layoutyyFySo18NSAnimationContextCXEfU_ + 484\n25  SwiftUI                             0x00000001beefffcc $sSo14NSItemProviderC7SwiftUIE32loadFileSystemItemAsynchronously33_0BC2519238CC4854E8BA774CC855AC9ALL3for_17completionHandleryxm_22UniformTypeIdentifiers6UTTypeVyAC13LoadingResultAELLCyxGctAC17PasteboardUtilityV0fgH0RzlFyAMcfU_AO0F0C_Tg5TA + 28\n26  SwiftUI                             0x00000001beedf084 $sSo13RBDisplayListCIegg_ABIyBy_TR + 44\n27  AppKit                              0x000000018d72cf58 +[NSAnimationContext runAnimationGroup:] + 56\n28  SwiftUI                             0x00000001beee4ae4 $s7SwiftUI13NSHostingViewC6layoutyyF + 480\n29  SwiftUI                             0x00000001beee5060 $s7SwiftUI13NSHostingViewC6layoutyyFTo + 28\n30  AppKit                              0x000000018dc4150c __getCGDisplayListGetHashSymbolLoc_block_invoke + 1516\n31  AppKit                              0x000000018dc41534 __getCGDisplayListGetHashSymbolLoc_block_invoke + 1556\n32  AppKit                              0x000000018dc067a0 block_destroy_helper + 9428\n33  AppKit                              0x000000018dc06dec block_destroy_helper + 11040\n34  AppKit                              0x000000018e44a078 ___NSViewLayout_block_invoke + 624\n35  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n36  AppKit                              0x000000018d75bc10 _NSViewLayout + 96\n37  AppKit                              0x000000018e43fd6c __36-[NSView _layoutSubtreeWithOldSize:]_block_invoke + 372\n38  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n39  AppKit                              0x000000018d75bba4 -[NSView _layoutSubtreeWithOldSize:] + 100\n40  AppKit                              0x000000018e43fea4 __36-[NSView _layoutSubtreeWithOldSize:]_block_invoke + 684\n41  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n42  AppKit                              0x000000018d75bba4 -[NSView _layoutSubtreeWithOldSize:] + 100\n43  AppKit                              0x000000018e44093c __56-[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:]_block_invoke + 908\n44  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n45  AppKit                              0x000000018d75b780 -[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:] + 100\n46  AppKit                              0x000000018d7572d8 NSPerformVisuallyAtomicChange + 128\n47  AppKit                              0x000000018d75b710 -[NSView layoutSubtreeIfNeeded] + 96\n48  AppKit                              0x000000018e71e958 -[NSWindow(NSConstraintBasedLayoutInternal) _layoutViewTree] + 120\n49  AppKit                              0x000000018e71eb70 -[NSWindow(NSConstraintBasedLayoutInternal) layoutIfNeeded] + 240\n50  AppKit                              0x000000018d7b9e60 __NSWindowGetDisplayCycleObserverForLayout_block_invoke + 364\n51  AppKit                              0x000000018d7b9364 NSDisplayCycleObserverInvoke + 168\n52  AppKit                              0x000000018d7b8fe0 NSDisplayCycleFlush + 656\n53  QuartzCore                          0x0000000193316d9c _ZN2CA11Transaction19run_commit_handlersE18CATransactionPhase + 120\n54  QuartzCore                          0x00000001933153d8 _ZN2CA11Transaction6commitEv + 324\n55  QuartzCore                          0x00000001935132bc _ZN2CA11Transaction25flush_as_runloop_observerEb + 140\n56  AppKit                              0x000000018e0500c8 stepTransactionFlush + 220\n57  UpdateCycle                         0x000000028129d2f4 _ZN2UC10DriverCore18continueProcessingEv + 84\n58  CoreFoundation                      0x00000001892e0344 __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__ + 36\n59  CoreFoundation                      0x00000001892e0240 __CFRunLoopDoObservers + 648\n60  CoreFoundation                      0x00000001893b2234 _CFRunLoopRunSpecificWithOptions + 484\n61  HIToolbox                           0x00000001960cb560 RunCurrentEventLoopInMode + 320\n62  HIToolbox                           0x00000001960ce8bc ReceiveNextEventCommon + 488\n63  HIToolbox                           0x000000019625814c _BlockUntilNextEventMatchingListInMode + 48\n64  AppKit                              0x000000018ddc23d0 _DPSBlockUntilNextEventMatchingListInMode + 228\n65  AppKit                              0x000000018d716084 _DPSNextEvent + 576\n66  AppKit                              0x000000018e2ab96c -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 688\n67  AppKit                              0x000000018e2ab678 -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 72\n68  AppKit                              0x000000018d70913c -[NSApplication run] + 368\n69  AppKit                              0x000000018d6e17b0 NSApplicationMain + 880\n70  SwiftUI                             0x00000001be775af8 $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140\n71  SwiftUI                             0x00000001beb308d8 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104\n72  SwiftUI                             0x00000001bedfc778 $s7SwiftUI3AppPAAE4mainyyFZ + 224\n73  MARVIN                              0x0000000102386e38 MARVIN_main + 64\n74  dyld                                0x0000000188e584e4 start + 6992"],
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":739643,"threadState":{"x":[{"value":36149936128},{"value":36218773853},{"value":18446744073709551612},{"value":36149944636},{"value":68829185},{"value":32},{"value":36149936128},{"value":8572},{"value":8418738176,"symbolLocation":8,"symbol":"OBJC_METACLASS_$_NSWMDeferredTransactionQueue"},{"value":15992178649664061637},{"value":15992178649664061637},{"value":127},{"value":56},{"value":36130675568},{"value":72057602456430409,"symbolLocation":72057594037927937,"symbol":"OBJC_CLASS_$___NSCFString"},{"value":8418502472,"symbolLocation":0,"symbol":"OBJC_CLASS_$___NSCFString"},{"value":6595728224,"symbolLocation":0,"symbol":"_platform_memmove"},{"value":8441700592},{"value":0},{"value":36098894000},{"value":36155034112},{"value":4347976304},{"value":11407836888,"symbolLocation":0,"symbol":"value witness table for ObservationTracking._AccessList"},{"value":36057170496},{"value":8418370144,"symbolLocation":224,"symbol":"_main_thread"},{"value":36057170432},{"value":11407836944,"symbolLocation":56,"symbol":"value witness table for ObservationTracking._AccessList"},{"value":0},{"value":6136667328}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6676264620},"cpsr":{"value":1610616832},"fp":{"value":6136667248},"sp":{"value":6136667184},"esr":{"value":4060086273,"description":"(Breakpoint) brk 1"},"pc":{"value":6676264628,"matchesCrashFrame":1},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":8513204,"symbol":"+[NSApplication _crashOnException:]","symbolLocation":256,"imageIndex":3},{"symbol":"static NSApplication.marvin_crashOnException(_:)","inline":true,"imageIndex":0,"imageOffset":1421128,"symbolLocation":32,"sourceLine":72,"sourceFile":"CrashDiagnostics.swift"},{"imageOffset":1421128,"sourceLine":69,"sourceFile":"\/<compiler-generated>","symbol":"@objc static NSApplication.marvin_crashOnException(_:)","imageIndex":0,"symbolLocation":76},{"imageOffset":5413880,"imageIndex":3},{"imageOffset":5414380,"imageIndex":3},{"imageOffset":14078072,"symbol":"___NSViewLayout_block_invoke","symbolLocation":624,"imageIndex":3},{"imageOffset":500440,"symbol":"NSPerformVisuallyAtomicChange","symbolLocation":128,"imageIndex":3},{"imageOffset":519184,"symbol":"_NSViewLayout","symbolLocation":96,"imageIndex":3},{"imageOffset":14036332,"symbol":"__36-[NSView _layoutSubtreeWithOldSize:]_block_invoke","symbolLocation":372,"imageIndex":3},{"imageOffset":500440,"symbol":"NSPerformVisuallyAtomicChange","symbolLocation":128,"imageIndex":3},{"imageOffset":519076,"symbol":"-[NSView _layoutSubtreeWithOldSize:]","symbolLocation":100,"imageIndex":3},{"imageOffset":14036644,"symbol":"__36-[NSView _layoutSubtreeWithOldSize:]_block_invoke","symbolLocation":684,"imageIndex":3},{"imageOffset":500440,"symbol":"NSPerformVisuallyAtomicChange","symbolLocation":128,"imageIndex":3},{"imageOffset":519076,"symbol":"-[NSView _layoutSubtreeWithOldSize:]","symbolLocation":100,"imageIndex":3},{"imageOffset":14039356,"symbol":"__56-[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:]_block_invoke","symbolLocation":908,"imageIndex":3},{"imageOffset":500440,"symbol":"NSPerformVisuallyAtomicChange","symbolLocation":128,"imageIndex":3},{"imageOffset":518016,"symbol":"-[NSView _layoutSubtreeIfNeededAndAllowTemporaryEngine:]","symbolLocation":100,"imageIndex":3},{"imageOffset":500440,"symbol":"NSPerformVisuallyAtomicChange","symbolLocation":128,"imageIndex":3},{"imageOffset":517904,"symbol":"-[NSView layoutSubtreeIfNeeded]","symbolLocation":96,"imageIndex":3},{"imageOffset":17045848,"symbol":"-[NSWindow(NSConstraintBasedLayoutInternal) _layoutViewTree]","symbolLocation":120,"imageIndex":3},{"imageOffset":17046384,"symbol":"-[NSWindow(NSConstraintBasedLayoutInternal) layoutIfNeeded]","symbolLocation":240,"imageIndex":3},{"imageOffset":904800,"symbol":"__NSWindowGetDisplayCycleObserverForLayout_block_invoke","symbolLocation":364,"imageIndex":3},{"imageOffset":901988,"symbol":"NSDisplayCycleObserverInvoke","symbolLocation":168,"imageIndex":3},{"imageOffset":901088,"symbol":"NSDisplayCycleFlush","symbolLocation":656,"imageIndex":3},{"imageOffset":15772,"symbol":"CA::Transaction::run_commit_handlers(CATransactionPhase)","symbolLocation":120,"imageIndex":4},{"imageOffset":9176,"symbol":"CA::Transaction::commit()","symbolLocation":324,"imageIndex":4},{"imageOffset":2097852,"symbol":"CA::Transaction::flush_as_runloop_observer(bool)","symbolLocation":140,"imageIndex":4},{"imageOffset":9908424,"symbol":"stepTransactionFlush","symbolLocation":220,"imageIndex":3},{"imageOffset":4852,"symbol":"UC::DriverCore::continueProcessing()","symbolLocation":84,"imageIndex":5},{"imageOffset":512836,"symbol":"__CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__","symbolLocation":36,"imageIndex":6},{"imageOffset":512576,"symbol":"__CFRunLoopDoObservers","symbolLocation":648,"imageIndex":6},{"imageOffset":1372724,"symbol":"_CFRunLoopRunSpecificWithOptions","symbolLocation":484,"imageIndex":6},{"imageOffset":775520,"symbol":"RunCurrentEventLoopInMode","symbolLocation":320,"imageIndex":7},{"imageOffset":788668,"symbol":"ReceiveNextEventCommon","symbolLocation":488,"imageIndex":7},{"imageOffset":2400588,"symbol":"_BlockUntilNextEventMatchingListInMode","symbolLocation":48,"imageIndex":7},{"imageOffset":7230416,"symbol":"_DPSBlockUntilNextEventMatchingListInMode","symbolLocation":228,"imageIndex":3},{"imageOffset":233604,"symbol":"_DPSNextEvent","symbolLocation":576,"imageIndex":3},{"imageOffset":12380524,"symbol":"-[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:]","symbolLocation":688,"imageIndex":3},{"imageOffset":12379768,"symbol":"-[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:]","symbolLocation":72,"imageIndex":3},{"imageOffset":180540,"symbol":"-[NSApplication run]","symbolLocation":368,"imageIndex":3},{"imageOffset":18352,"symbol":"NSApplicationMain","symbolLocation":880,"imageIndex":3},{"imageOffset":1096440,"symbol":"specialized runApp(_:)","symbolLocation":140,"imageIndex":8},{"imageOffset":5007576,"symbol":"runApp<A>(_:)","symbolLocation":104,"imageIndex":8},{"imageOffset":7939960,"symbol":"static App.main()","symbolLocation":224,"imageIndex":8},{"imageOffset":2010680,"sourceFile":"MARVINApp.swift","symbol":"static MARVINApp.$main()","imageIndex":0,"symbolLocation":52,"inline":true},{"imageOffset":2010680,"sourceFile":"MARVINApp.swift","symbol":"MARVIN_main","symbolLocation":64,"imageIndex":0},{"imageOffset":132324,"symbol":"start","symbolLocation":6992,"imageIndex":9}]},{"id":739672,"frames":[],"threadState":{"x":[{"value":6138949632},{"value":22531},{"value":6138413056},{"value":0},{"value":409603},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6138949632},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6595669000},"far":{"value":0}}},{"id":739673,"threadState":{"x":[{"value":18446744073709551612},{"value":0},{"value":257},{"value":0},{"value":8418388736,"symbolLocation":0,"symbol":"_dispatch_main_q"},{"value":18},{"value":18446744072631617535},{"value":18446726482597246976},{"value":1},{"value":3},{"value":36129836422},{"value":4},{"value":5},{"value":0},{"value":8418388784,"symbolLocation":48,"symbol":"_dispatch_main_q"},{"value":36129836422},{"value":515},{"value":8441705464},{"value":0},{"value":6139520864},{"value":1},{"value":17409},{"value":6139523296},{"value":6139520816},{"value":36169651968},{"value":6720102400},{"value":0},{"value":36147740728},{"value":9223372036867189349}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6593877592},"cpsr":{"value":1073745920},"fp":{"value":6139520688},"sp":{"value":6139520656},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6595418872},"far":{"value":0}},"queue":"com.apple.libtrace.state.block-list","frames":[{"imageOffset":11000,"symbol":"__ulock_wait","symbolLocation":8,"imageIndex":12},{"imageOffset":13912,"symbol":"_dispatch_thread_main_event_wait_slow","symbolLocation":76,"imageIndex":13},{"imageOffset":71372,"symbol":"__DISPATCH_WAIT_FOR_QUEUE__","symbolLocation":464,"imageIndex":13},{"imageOffset":70136,"symbol":"_dispatch_sync_f_slow","symbolLocation":140,"imageIndex":13},{"imageOffset":49616,"symbol":"___os_state_request_for_self_block_invoke","symbolLocation":372,"imageIndex":14},{"imageOffset":6696,"symbol":"_dispatch_call_block_and_release","symbolLocation":32,"imageIndex":13},{"imageOffset":111792,"symbol":"_dispatch_client_callout","symbolLocation":16,"imageIndex":13},{"imageOffset":41008,"symbol":"_dispatch_lane_serial_drain","symbolLocation":740,"imageIndex":13},{"imageOffset":43876,"symbol":"_dispatch_lane_invoke","symbolLocation":448,"imageIndex":13},{"imageOffset":85556,"symbol":"_dispatch_root_queue_drain_deferred_wlh","symbolLocation":284,"imageIndex":13},{"imageOffset":83764,"symbol":"_dispatch_workloop_worker_thread","symbolLocation":720,"imageIndex":13},{"imageOffset":11968,"symbol":"_pthread_wqthread","symbolLocation":292,"imageIndex":15},{"imageOffset":7184,"symbol":"start_wqthread","symbolLocation":8,"imageIndex":15}]},{"id":739675,"frames":[],"threadState":{"x":[{"value":6140669952},{"value":0},{"value":6140133376},{"value":0},{"value":278532},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6140669952},"esr":{"value":0},"pc":{"value":6595669000},"far":{"value":0}}},{"id":739679,"name":"com.apple.NSEventThread","threadState":{"x":[{"value":268451845},{"value":21592279046},{"value":8589934592},{"value":131954280235008},{"value":0},{"value":131954280235008},{"value":2},{"value":4294967295},{"value":0},{"value":17179869184},{"value":0},{"value":2},{"value":0},{"value":0},{"value":30723},{"value":0},{"value":18446744073709551569},{"value":8441707112},{"value":0},{"value":4294967295},{"value":2},{"value":131954280235008},{"value":0},{"value":131954280235008},{"value":21592279046},{"value":6141239432},{"value":8589934592},{"value":18446744073709550527},{"value":4412409862}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6595487140},"cpsr":{"value":4096},"fp":{"value":6141239280},"sp":{"value":6141239200},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6595410996},"far":{"value":0}},"frames":[{"imageOffset":3124,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":12},{"imageOffset":79268,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":12},{"imageOffset":39360,"symbol":"mach_msg_overwrite","symbolLocation":480,"imageIndex":12},{"imageOffset":4032,"symbol":"mach_msg","symbolLocation":24,"imageIndex":12},{"imageOffset":516360,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":160,"imageIndex":6},{"imageOffset":510452,"symbol":"__CFRunLoopRun","symbolLocation":1188,"imageIndex":6},{"imageOffset":1372772,"symbol":"_CFRunLoopRunSpecificWithOptions","symbolLocation":532,"imageIndex":6},{"imageOffset":1420460,"symbol":"_NSEventThread","symbolLocation":184,"imageIndex":3},{"imageOffset":27736,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":15},{"imageOffset":7196,"symbol":"thread_start","symbolLocation":8,"imageIndex":15}]},{"id":739904,"name":"CVDisplayLink","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":65704},{"value":0},{"value":7336167},{"value":1257217},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8441705232},{"value":0},{"value":36126565432},{"value":36126565496},{"value":1},{"value":7336167},{"value":0},{"value":0},{"value":1257217},{"value":1257472},{"value":8375696216,"symbolLocation":0,"symbol":"kZeroVideoTime"},{"value":630186636495}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6595690836},"cpsr":{"value":2684358656},"fp":{"value":6141816240},"sp":{"value":6141816096},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6595425548},"far":{"value":0}},"frames":[{"imageOffset":17676,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":12},{"imageOffset":29012,"symbol":"_pthread_cond_wait","symbolLocation":1024,"imageIndex":15},{"imageOffset":15172,"symbol":"CVDisplayLink::waitUntil(unsigned long long)","symbolLocation":336,"imageIndex":17},{"imageOffset":11308,"symbol":"CVDisplayLink::runIOThread()","symbolLocation":452,"imageIndex":17},{"imageOffset":27736,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":15},{"imageOffset":7196,"symbol":"thread_start","symbolLocation":8,"imageIndex":15}]},{"id":740916,"name":"HIE: M_ 190b0af91a5d5c5 2026-08-28 19:46:45.515","threadState":{"x":[{"value":0},{"value":8589934595},{"value":103079220499},{"value":353849470635527},{"value":15483357102080},{"value":353849470615552},{"value":44},{"value":0},{"value":6595624960,"symbolLocation":564,"symbol":"mach_voucher_debug_info"},{"value":1},{"value":49892785320},{"value":7},{"value":2},{"value":36161795472},{"value":8418376712,"symbolLocation":0,"symbol":"_NSConcreteMallocBlock"},{"value":8418376712,"symbolLocation":0,"symbol":"_NSConcreteMallocBlock"},{"value":18446744073709551569},{"value":8441710320},{"value":0},{"value":0},{"value":44},{"value":353849470615552},{"value":15483357102080},{"value":353849470635527},{"value":8589934595},{"value":6137228560},{"value":103079220499},{"value":18446744073709550527},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6595487140},"cpsr":{"value":2147487744},"fp":{"value":6137228544},"sp":{"value":6137228464},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":6595410996},"far":{"value":0}},"frames":[{"imageOffset":3124,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":12},{"imageOffset":79268,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":12},{"imageOffset":201028,"symbol":"thread_suspend","symbolLocation":108,"imageIndex":12},{"imageOffset":222236,"symbol":"SOME_OTHER_THREAD_SWALLOWED_AT_LEAST_ONE_EXCEPTION","symbolLocation":20,"imageIndex":16},{"imageOffset":342908,"symbol":"__NSThread__start__","symbolLocation":732,"imageIndex":18},{"imageOffset":27736,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":15},{"imageOffset":7196,"symbol":"thread_start","symbolLocation":8,"imageIndex":15}]}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4330209280,
+    "CFBundleShortVersionString" : "0.1.65+f8176f6",
+    "CFBundleIdentifier" : "net.marvin.macos",
+    "size" : 18022400,
+    "uuid" : "9bcc748e-0d98-3e94-a6a3-dd914b795dcd",
+    "path" : "\/Users\/USER\/*\/MARVIN.app\/Contents\/MacOS\/MARVIN",
+    "name" : "MARVIN",
+    "CFBundleVersion" : "0.1.65+f8176f6"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4364353536,
+    "size" : 49152,
+    "uuid" : "690edff1-56be-3018-bec2-9f63287ceb2d",
+    "path" : "\/usr\/lib\/libobjc-trampolines.dylib",
+    "name" : "libobjc-trampolines.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4693164032,
+    "CFBundleShortVersionString" : "353.14",
+    "CFBundleIdentifier" : "com.apple.AGXMetalG13X",
+    "size" : 7913472,
+    "uuid" : "e368c402-9a93-35f5-ae47-b1e561825a06",
+    "path" : "\/System\/Library\/Extensions\/AGXMetalG13X.bundle\/Contents\/MacOS\/AGXMetalG13X",
+    "name" : "AGXMetalG13X",
+    "CFBundleVersion" : "353.14"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6667751424,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.AppKit",
+    "size" : 24261792,
+    "uuid" : "b6b4bdad-6428-3e64-8747-275700109b46",
+    "path" : "\/System\/Library\/Frameworks\/AppKit.framework\/Versions\/C\/AppKit",
+    "name" : "AppKit",
+    "CFBundleVersion" : "2685.70.101"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6764441600,
+    "CFBundleShortVersionString" : "1195.17",
+    "CFBundleIdentifier" : "com.apple.QuartzCore",
+    "size" : 4283968,
+    "uuid" : "98cb7012-30e5-3bdd-8c84-cdbda9db3017",
+    "path" : "\/System\/Library\/Frameworks\/QuartzCore.framework\/Versions\/A\/QuartzCore",
+    "name" : "QuartzCore",
+    "CFBundleVersion" : "1195.17"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 10756931584,
+    "CFBundleShortVersionString" : "1",
+    "CFBundleIdentifier" : "com.apple.UpdateCycle",
+    "size" : 8704,
+    "uuid" : "365e81b9-b9ba-3f4f-83fd-86a35cfbc8ac",
+    "path" : "\/System\/Library\/PrivateFrameworks\/UpdateCycle.framework\/Versions\/A\/UpdateCycle",
+    "name" : "UpdateCycle",
+    "CFBundleVersion" : "1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6595948544,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.CoreFoundation",
+    "size" : 5629376,
+    "uuid" : "9b672762-7b1f-30bc-96de-f176b372d66d",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/Versions\/A\/CoreFoundation",
+    "name" : "CoreFoundation",
+    "CFBundleVersion" : "5026.6.7"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6811607040,
+    "CFBundleShortVersionString" : "2.1.1",
+    "CFBundleIdentifier" : "com.apple.HIToolbox",
+    "size" : 3125536,
+    "uuid" : "38408482-ce3b-359e-9465-7feb4bb79b54",
+    "path" : "\/System\/Library\/Frameworks\/Carbon.framework\/Versions\/A\/Frameworks\/HIToolbox.framework\/Versions\/A\/HIToolbox",
+    "name" : "HIToolbox"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7489363968,
+    "CFBundleShortVersionString" : "7.6.1",
+    "CFBundleIdentifier" : "com.apple.SwiftUI",
+    "size" : 24440928,
+    "uuid" : "53e79875-60e4-3b8d-ba48-02f6a4cbc429",
+    "path" : "\/System\/Library\/Frameworks\/SwiftUI.framework\/Versions\/A\/SwiftUI",
+    "name" : "SwiftUI",
+    "CFBundleVersion" : "7.6.1"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6591578112,
+    "size" : 734464,
+    "uuid" : "74e52480-c2bd-3c8d-812d-95fe2b74a096",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6595715072,
+    "size" : 35172,
+    "uuid" : "edb83a19-ec17-32de-9350-6145970a85d6",
+    "path" : "\/usr\/lib\/system\/libsystem_platform.dylib",
+    "name" : "libsystem_platform.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6595407872,
+    "size" : 250600,
+    "uuid" : "c6a4a4cb-92e6-3baf-aae0-e8306259209a",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6593863680,
+    "size" : 291392,
+    "uuid" : "b2000cd5-f580-314a-a141-e036719d854e",
+    "path" : "\/usr\/lib\/system\/libdispatch.dylib",
+    "name" : "libdispatch.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6592679936,
+    "size" : 133632,
+    "uuid" : "93f1dd8c-6cd9-32b9-b222-d23da5d161b4",
+    "path" : "\/usr\/lib\/system\/libsystem_trace.dylib",
+    "name" : "libsystem_trace.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6595661824,
+    "size" : 52028,
+    "uuid" : "a373f0b0-9880-326a-88b4-dd8be4e33072",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6720102400,
+    "CFBundleShortVersionString" : "1.22",
+    "CFBundleIdentifier" : "com.apple.HIServices",
+    "size" : 439200,
+    "uuid" : "cd16c3fb-d2a0-3f68-98dc-ce67fcbfdff2",
+    "path" : "\/System\/Library\/Frameworks\/ApplicationServices.framework\/Versions\/A\/Frameworks\/HIServices.framework\/Versions\/A\/HIServices",
+    "name" : "HIServices"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6773682176,
+    "CFBundleShortVersionString" : "1.8",
+    "CFBundleIdentifier" : "com.apple.CoreVideo",
+    "size" : 527296,
+    "uuid" : "0616af41-149e-3f4a-906e-56e2642457be",
+    "path" : "\/System\/Library\/Frameworks\/CoreVideo.framework\/Versions\/A\/CoreVideo",
+    "name" : "CoreVideo",
+    "CFBundleVersion" : "0.0"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6621569024,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.Foundation",
+    "size" : 16661152,
+    "uuid" : "91dace39-fa28-3191-818d-1fcc6a0e615a",
+    "path" : "\/System\/Library\/Frameworks\/Foundation.framework\/Versions\/C\/Foundation",
+    "name" : "Foundation",
+    "CFBundleVersion" : "5026.6.7"
+  }
+],
+  "sharedCache" : {
+  "base" : 6590447616,
+  "size" : 6010847232,
+  "uuid" : "f2e86c53-6052-388b-ba71-5a0c9b569413"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=1.8G resident=0K(0%) swapped_out_or_unallocated=1.8G(100%)\nWritable regions: Total=272.0M written=673K(0%) resident=673K(0%) swapped_out=0K(0%) unallocated=271.3M(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nAccelerate framework               128K        1 \nActivity Tracing                   256K        1 \nAttributeGraph Data               1024K        1 \nCG image                           112K        6 \nColorSync                           16K        1 \nCoreAnimation                     3232K      158 \nCoreGraphics                        48K        2 \nCoreUI image data                  368K        3 \nFoundation                          16K        1 \nIOAccelerator                       48K        1 \nIOAccelerator (graphics)            32K        2 \nIOKit                              160K       10 \nIOSurface                         1728K       14 \nKernel Alloc Once                   32K        1 \nMALLOC                           185.9M       56 \nMALLOC guard page                 4016K        4 \nMemory Tag 22                     64.0M        1 \nSQLite page cache                  384K        3 \nSTACK GUARD                       56.1M        7 \nStack                             11.2M        7 \nVM_ALLOCATE                       3424K       11 \n__AUTH                            5967K      630 \n__AUTH_CONST                      88.7M     1014 \n__CTF                               824        1 \n__DATA                            34.4M      963 \n__DATA_CONST                      34.6M     1021 \n__DATA_DIRTY                      8334K      870 \n__FONT_DATA                        2352        1 \n__LINKEDIT                       585.9M        4 \n__OBJC_RO                         79.2M        1 \n__OBJC_RW                         2599K        1 \n__TEXT                             1.2G     1043 \n__TPRO_CONST                       128K        2 \nmapped file                      394.6M       44 \npage table in kernel               673K        1 \nshared memory                     2432K       15 \n===========                     =======  ======= \nTOTAL                              2.7G     5902 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "a5ed12b7b0c1393a3e4420301aac6aa2089ae55e",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "699d4a6bb3c59721f0815d4a",
+      "factorPackIds" : [
+        "6a1e847dfae8a60fe3d88f20",
+        "6a1e847ffae8a60fe3d88f21",
+        "6a1e847fe5700036461dd986",
+        "6a1e848059a97e607a107573"
+      ],
+      "deploymentId" : 240000041
+    },
+    {
+      "rolloutId" : "68095e8ecb2a9d1eaa8463c9",
+      "factorPackIds" : [
+        "68bf4eacb556ea03e19aed49"
+      ],
+      "deploymentId" : 240000008
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}
