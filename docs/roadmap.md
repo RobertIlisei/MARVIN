@@ -123,6 +123,63 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
+**v0.1.86** — a day spent on failures that looked like nothing happening.
+
+Ten releases in one day (v0.1.77 → v0.1.86), and almost every one was the same
+shape: a feature that appeared dead, wasn't broken where it looked broken, and
+had been quietly wrong for a while. Worth reading as a set, because the lesson
+repeats.
+
+**Verify against what runs, not what reports** ([ADR-0097](decisions/0097-verify-against-what-runs.md)).
+The Claude-plan usage bars had survived two fixes. Neither worked, because the
+SDK never resolves `claude` from `PATH` — it spawns the native binary its own
+package links to, and `bundle-sidecar.sh` picked that with `find | head -n1`.
+A bundle whose SDK was 0.3.251 linked **0.2.113**, so every turn ran a CLI 138
+versions behind. ADR-0087 fixed the *reporting* and ADR-0093 fixed `PATH`;
+both left the spawn untouched, and the About panel showing the right version
+actively confirmed the wrong thing. Same pass: `Skill` had been called **29
+times across every transcript ever recorded, failing every time, with zero
+successes** — the pane listed skills the loader had skipped, because
+`description:` (not `name:`) is the load-bearing frontmatter key and the
+registered identity is always the directory.
+
+**A rail keyed on vendor tool names is only as durable as those names**
+([ADR-0098](decisions/0098-the-rail-must-outlive-the-tool-surface.md)). That
+CLI upgrade silently removed `Grep` and `Glob`. All four graphify-first guards
+keyed on `Read`/`Grep`/`Glob` with no `Bash` branch, so searching moved to
+`Bash` where the rail is blind: **15 of 18 Bash calls search-shaped against 2
+graph calls** in the next four hours. Golden Rule 7's enforcement stopped
+applying and nothing said so — ADR-0079's lesson a second time.
+
+**Silent failure as a recurring class.** A `ScrollView` under a flexible frame
+with no `idealHeight` forwarded the VStack's ideal-size query into the
+transcript and measured every message — eight 61-second main-thread hangs. The
+bottom panel mounted tabs only on an `activeTab` *change*, so opening it on the
+already-selected tab rendered an empty pane with no shell behind it. Extended
+thinking arrived as `unhandled block: thinking` over a struct dump.
+`_ = try await URLSession.data(for:)` treated an HTTP 500 as success, so
+"Discover" spent two minutes and then showed nothing. `which("tsc")` ran with a
+Finder-launched app's bare launchd `PATH` and returned `[]` — rendered as "No
+problems detected", identical to a clean build. And the terminal broke on a
+project switch: sessions are keyed by `workDir`, SwiftUI kept the
+representable's identity, and `updateNSView` reassigned the coordinator's
+session without swapping the view — keystrokes to the new shell, old shell on
+screen.
+
+**What the day is actually about.** Every one of these was invisible from the
+inside. The fixes that stuck were the ones that made the failure *say
+something*: a missing tool surfaced as a diagnostic, a non-2xx surfaced as an
+error, a blocked skill shown as NOT LOADED, a search-shaped `Bash` counted by
+the rail that governs it.
+
+## Recent milestones` entry (with the cask + tag + ADR if any)._
+
+- **Editor AI smart actions + IDE gap analysis** — right-click a selection in the file viewer for **Explain this code · Review & improve · Generate docstring · Add selection to chat**. Each anchors the prompt to `file:line` so the reply's citations are clickable, appends to the native context menu rather than replacing it (Cut/Copy/Paste survive), and falls back to the whole file when nothing is selected. `review` and `docstring` are read-only-first: a context-menu click carries no confirmation step, so they propose and wait. Companion research at [`docs/reference/ide-feature-gap-2026-08.md`](reference/ide-feature-gap-2026-08.md) — MARVIN already matches Cursor/VS Code on the *hard* parts (agent, multi-file review, codebase context, MCP); the gaps are concentrated in editor-level interaction. Next up there: AI commit message, fix-from-diagnostic, inline edit (⌘K). Deliberate non-goals recorded too — ghost-text Tab completion needs a second fast model provider off the Agent SDK hot path, which cuts against the local-first trust model.
+
+- **Obsidian vault — the project directory IS the vault ([ADR-0065](decisions/0065-obsidian-vault-project-as-vault.md))** — measuring first changed the answer: one real project already held **819 markdown files MARVIN wrote** (79 memory facts, 437 backlog items, 303 plans), all with frontmatter Obsidian reads as properties. A vault is just a folder with `.obsidian/`, so content and container both existed. The actual gap was **links** — all 79 memory files had *zero* `[[wikilinks]]`, so the graph view would have shown 819 disconnected dots. Markdown links render in Obsidian but create no graph edges, which is why the index would have *looked* connected while the graph stayed empty. Both indexes now emit wikilinks; `obsidian_init` writes `.obsidian/` + a `MARVIN.md` front door and exports the code graph as notes. Opt-in and non-destructive: never created unasked, an existing vault's settings are merged not clobbered, a corrupt `app.json` is left alone, and MARVIN edits nothing outside `.marvin/`, `MARVIN.md` and `graphify-out/`. Phase 2 (MARVIN reading your own notes as context) deliberately unbuilt — it hits the ADR-0041 context budget and needs a consent model.
+
+## Current version
+
 **v0.1.65** — The SDK catches up, and two things that only *looked* broken.
 **Agent SDK 0.2.113 → 0.3.245 ([ADR-0073](decisions/0073-agent-sdk-0-3-upgrade.md)):**
 found while chasing a plan bug — the official docs say `TodoWrite` is
