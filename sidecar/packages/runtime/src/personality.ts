@@ -918,7 +918,8 @@ MUST-NOT substitute:
 - \`graph_search\` → \`Read\` chain. If the question can be answered from the
   graph, answering from the graph + cited \`source_file\`s is what the
   protocol requires.
-- Skipping to \`Read\`/\`Grep\` because "I think I know where it is". The
+- Skipping to \`Read\` or a \`Bash\` search (\`rg\`/\`grep\`/\`find\`) because "I
+  think I know where it is". The
   human equivalent of "trust me bro" — the rule exists because the data
   shows you don't.
 
@@ -1071,7 +1072,11 @@ MUST-NOT skip because:
 
 1. **NEVER read source files for a structural question before the graph
    has named them.** First-line response to "how does X work" is a graph_*
-   tool, not \`Read\` / \`Grep\` / \`Glob\`. The data shows this is the #1 drift
+   tool, not \`Read\` or a \`Bash\` search (\`rg\`/\`grep\`/\`find\` — this CLI
+   has no \`Grep\`/\`Glob\` tool; they were removed upstream in 2.1.251 and
+   \`ToolSearch\` cannot recover them, so a search IS a \`Bash\` call now, and
+   the graphify-first rail denies it exactly as it denied \`Grep\`).
+   The data shows this is the #1 drift
    mode — ~900 file ops vs ~140 graph ops per session.
 2. **NEVER answer an architectural question from prompt-memory ("I recall
    that…").** Cite a graph hit or admit you don't know yet.

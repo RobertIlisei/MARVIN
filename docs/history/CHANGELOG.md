@@ -9,6 +9,59 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.82: the graphify-first rail went quiet when the CLI took `Grep` away.**
+
+  ADR-0097's CLI upgrade (2.1.113 → 2.1.251) fixed the plan-usage bars and
+  silently removed two tools. Probed on both bundled binaries, no MARVIN
+  config involved:
+
+  ```
+  CLI 2.1.113 → Grep: True   Glob: True
+  CLI 2.1.251 → Grep: False  Glob: False
+  ```
+
+  Gone, not deferred — `ToolSearch` answered `select:Grep,Glob` with "No
+  matching deferred tools found", twice in one session, and MARVIN's
+  `disallowedTools` carries only `ScheduleWakeup`.
+
+  The visible symptom was mild: MARVIN told the user it had answered "*
+  methodologically rather than with a fresh sweep*" because it couldn't load
+  a grep tool. Honest, and a downgraded answer.
+
+  **The invisible one is why this shipped.** All four graphify-first guards —
+  the drift tally, `checkGraphifyFirst`, `checkGraphDrift`,
+  `checkGraphDriftDeny` — key on `Read`/`Grep`/`Glob`, with no `Bash` branch
+  by design (Bash is mostly implementation, and the rails must never
+  interrupt work). With `Grep`/`Glob` gone, searching moves to `Bash`, where
+  the rail is blind. Measured over the four hours after the upgrade: **15 of
+  18 Bash calls were search-shaped, against 2 graph calls.** "Grep and pray" —
+  the exact failure Golden Rule 7 exists to eliminate — routing around the
+  mechanism built to stop it, with nothing to say the rule had stopped
+  applying.
+
+  ADR-0079's lesson a second time: there, five guards matched the literal
+  `"Task"` and died when it became `Agent`; here, four matched `"Grep"` and
+  died when it was removed. A rail keyed on vendor tool names is only as
+  durable as those names.
+
+  `bashSearchTarget` now classifies a search-shaped Bash and one
+  `isStructuralSearch` predicate feeds all four sites. Deliberately
+  conservative, because denying a test run would be worse than the bug it
+  fixes: a search binary must lead its list segment's **first pipeline
+  stage**, so splitting is on `&&`/`||`/`;`/newline and never on `|` — `rg
+  "x" src | head` searches the tree, `make smoke 2>&1 | grep FAIL` filters
+  output and must never be denied. The first version *did* split on `|`,
+  which made a filter indistinguishable from a search; the test written for
+  that case caught it before it shipped and is kept. The negative cases are
+  the load-bearing assertions here.
+
+  Prompt text corrected too — `personality.ts` and the scout brief were still
+  saying "Grep and Glob are second-line tools", naming tools that do not
+  exist, which is how the session burned two `ToolSearch` calls before giving
+  up. [ADR-0098](../decisions/0098-the-rail-must-outlive-the-tool-surface.md).
+  9 new assertions; 1018 vitest, typecheck clean.
+
+
 - **2026-08-30 — v0.1.81: `unhandled block: thinking`, and a "streaming…" pip against an idle brain.**
 
   **Extended thinking rendered as a debug dump.** The transcript showed

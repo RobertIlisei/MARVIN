@@ -393,6 +393,25 @@ export function recordAllowedTool(
     }
     return;
   }
+  // A search-shaped `Bash` call is the SAME act as a Grep — and since CLI
+  // 2.1.251 dropped `Grep`/`Glob` it is the only way left to run one. Counted
+  // here so the tally survives the tool surface changing under it
+  // (`bashSearchTarget` explains the measurement).
+  if (toolName === "Bash") {
+    const target = bashSearchTarget(toolInput, ctx.cwd);
+    if (target) {
+      ctx.sourceFilesRead += 1;
+      const key = `Bash:${target}`;
+      if (!ctx.seenSourceFiles.has(key)) {
+        ctx.seenSourceFiles.add(key);
+        ctx.novelFilesSinceGraph += 1;
+        ctx.driftCharges += 1;
+        // Not refundable, same reasoning as Grep below: a search has no file
+        // to edit, so it can never resolve into implementation.
+      }
+    }
+    return;
+  }
   // Grep / Glob count toward the same "first structural search" tally so
   // the hook stays one-shot per turn whichever tool the model reaches for.
   if (toolName === "Grep" || toolName === "Glob") {
@@ -416,6 +435,30 @@ export function recordAllowedTool(
       }
     }
   }
+}
+
+/**
+ * Is this call a STRUCTURAL SEARCH — the act Golden Rule 7 governs?
+ *
+ * `Read` of a source file, `Grep`, `Glob`, or a search-shaped `Bash`. One
+ * predicate so the drift nudge and the drift deny cannot drift apart, and so
+ * the next tool-surface change (2.1.251 removed `Grep`/`Glob` outright) has a
+ * single place to land.
+ */
+function isStructuralSearch(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): boolean {
+  if (toolName === "Grep" || toolName === "Glob") return true;
+  if (toolName === "Bash") return bashSearchTarget(toolInput, ctx.cwd) !== null;
+  if (toolName === "Read") {
+    const target = pickPath(toolInput, ["file_path", "path"]);
+    // A file already in play is work, not exploration — don't nudge on it.
+    return !!target && isSourceFile(target) && isInsideCwd(ctx.cwd, target)
+      && !ctx.seenSourceFiles.has(target);
+  }
+  return false;
 }
 
 /**
@@ -452,14 +495,10 @@ export function checkGraphDrift(
   if (ctx.graphifyNudgeCount >= GRAPH_DRIFT_MAX_NUDGES) return null;
   if (ctx.novelFilesSinceGraph < GRAPH_DRIFT_NOVEL_FILE_THRESHOLD) return null;
 
-  // Only nudge on a structural tool — never interrupt an Edit/Write/Bash.
-  if (toolName !== "Read" && toolName !== "Grep" && toolName !== "Glob") return null;
-  if (toolName === "Read") {
-    const target = pickPath(toolInput, ["file_path", "path"]);
-    if (!target || !isSourceFile(target) || !isInsideCwd(ctx.cwd, target)) return null;
-    // A file already in play is work — don't nudge on it.
-    if (ctx.seenSourceFiles.has(target)) return null;
-  }
+  // Only nudge on a structural tool — never interrupt an Edit/Write, nor a
+  // Bash doing actual WORK. A search-shaped Bash is structural, though, and
+  // since 2.1.251 removed Grep/Glob it is the usual shape (`bashSearchTarget`).
+  if (!isStructuralSearch(ctx, toolName, toolInput)) return null;
 
   ctx.graphifyNudgeCount += 1;
   ctx.graphifyNudgeTotal += 1;
@@ -502,12 +541,7 @@ export function checkGraphDriftDeny(
   if (!ctx.hasGraph) return null;
   if (ctx.graphDriftDenyFired) return null;
   if (ctx.novelFilesSinceGraph < GRAPH_DRIFT_DENY_THRESHOLD) return null;
-  if (toolName !== "Read" && toolName !== "Grep" && toolName !== "Glob") return null;
-  if (toolName === "Read") {
-    const target = pickPath(toolInput, ["file_path", "path"]);
-    if (!target || !isSourceFile(target) || !isInsideCwd(ctx.cwd, target)) return null;
-    if (ctx.seenSourceFiles.has(target)) return null;
-  }
+  if (!isStructuralSearch(ctx, toolName, toolInput)) return null;
   ctx.graphDriftDenyFired = true;
   return {
     behavior: "deny",
@@ -936,7 +970,7 @@ function checkGraphifyFirst(
   if (ctx.graphCallCount > 0) return null;
   if (ctx.sourceFilesRead > 0) return null;
 
-  let triggered: { kind: "Read" | "Grep" | "Glob"; target: string } | null = null;
+  let triggered: { kind: "Read" | "Grep" | "Glob" | "Bash search"; target: string } | null = null;
   if (toolName === "Read") {
     const target = pickPath(toolInput, ["file_path", "path"]);
     if (target && isInsideCwd(ctx.cwd, target) && isSourceFile(target)) {
@@ -953,6 +987,10 @@ function checkGraphifyFirst(
     if (isInsideCwd(ctx.cwd, path)) {
       triggered = { kind: "Grep", target: path };
     }
+  } else if (toolName === "Bash") {
+    // The only search route left on CLI 2.1.251. Same rule, same deny.
+    const target = bashSearchTarget(toolInput, ctx.cwd);
+    if (target) triggered = { kind: "Bash search", target };
   } else if (toolName === "Glob") {
     // Glob input: { pattern, path? }. The pattern is often a path glob
     // ("**/*.ts"). When the path is omitted, the search root defaults
@@ -983,6 +1021,73 @@ function checkGraphifyFirst(
       "to bypass for an approved exception.)",
     interrupt: false,
   };
+}
+
+/** Search commands that ARE structural exploration of the tree. */
+const BASH_SEARCH_COMMANDS = new Set([
+  "rg", "grep", "egrep", "fgrep", "ack", "ag", "find", "fd", "ripgrep",
+]);
+
+/**
+ * The search root of a search-shaped `Bash` command, or null when the call is
+ * not structural exploration.
+ *
+ * Why this exists (2026-08-30). Golden Rule 7's mechanical half keyed on
+ * `Read` / `Grep` / `Glob`. Claude Code **2.1.251 removed `Grep` and `Glob`
+ * from the main agent's tool surface** — verified by probing both bundled
+ * CLIs directly: 2.1.113 reports them, 2.1.251 does not, and `ToolSearch`
+ * answers `select:Grep,Glob` with "No matching deferred tools found", so they
+ * are gone rather than deferred. Searching therefore moves to `Bash`, which
+ * this rail could not see: measured across every session in the four hours
+ * after the CLI upgrade, **15 of 18 Bash calls were search-shaped against 2
+ * graph calls**. That is the "grep and pray" pattern the rule exists to
+ * eliminate, routing around the mechanism built to stop it.
+ *
+ * Conservative on purpose, because `Bash` is mostly IMPLEMENTATION here
+ * (tests, git, make) and the drift rails deliberately never interrupt that:
+ *
+ *   - only when a search binary LEADS a pipeline segment, so
+ *     `make smoke | grep -i fail` (filtering command output) never fires
+ *     while `grep -rn "x" src/` does;
+ *   - only when the search root resolves inside `cwd`, matching what the
+ *     `Grep` branch already required.
+ */
+export function bashSearchTarget(
+  toolInput: Record<string, unknown>,
+  cwd: string,
+): string | null {
+  const command = typeof toolInput.command === "string" ? toolInput.command : "";
+  if (!command.trim()) return null;
+
+  // Split on LIST separators only (`&&`, `||`, `;`, newline) — never on `|`.
+  // A pipe is the whole distinction: `rg "x" src | head` searches the tree,
+  // `make smoke | grep FAIL` filters command output and must never be denied.
+  // So within each list segment we look at the FIRST pipeline stage only; a
+  // search binary downstream of a pipe is a filter, not a search.
+  for (const listSegment of command.split(/&&|\|\||;|\n/)) {
+    const rawSegment = listSegment.split("|")[0] ?? "";
+    const words = rawSegment.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+    // Skip a leading `cd <dir>` — MARVIN's Bash calls routinely open with one.
+    let i = 0;
+    if (words[i] === "cd") i += 2;
+    // Skip env assignments (FOO=bar) and common prefixes.
+    while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]!) || words[i] === "command" || words[i] === "sudo")) i += 1;
+    const head = (words[i] ?? "").split("/").pop() ?? "";
+    if (!BASH_SEARCH_COMMANDS.has(head)) continue;
+
+    // The first non-flag argument after the binary is the closest thing to a
+    // search root. `grep -rn "pat" src/` → "src/"; `find . -name x` → ".".
+    // `grep` takes the PATTERN first, so prefer the last path-ish argument;
+    // `find` takes the path first. Either way, default to cwd, which is what
+    // the `Grep` branch did when `path` was omitted.
+    const args = words.slice(i + 1).filter((w) => !w.startsWith("-"));
+    const pathish = head === "find" ? args[0] : args.slice(1).find((a) => a.includes("/") || a === "." || a === "..");
+    const target = pathish ?? cwd;
+    const resolved = target === "." || target === ".." ? cwd : target;
+    if (isInsideCwd(cwd, resolved)) return `${head} ${truncate(rawSegment.trim(), 60)}`;
+  }
+  return null;
 }
 
 function truncate(s: string, max: number): string {

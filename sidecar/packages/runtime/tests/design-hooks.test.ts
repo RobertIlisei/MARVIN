@@ -24,6 +24,7 @@ import {
   SAVE_RESULT_GRAPH_THRESHOLD,
   GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
   logDesignTurnSummary,
+  bashSearchTarget,
 } from "../src/design-hooks";
 
 /**
@@ -1138,5 +1139,102 @@ describe("record-the-outcome nudge (ADR-0091)", () => {
     ctx.hasGraph = false;
     for (let i = 0; i < 10; i++) recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", {});
     expect(checkSaveResult(ctx, "Edit")).toBeNull();
+  });
+});
+
+// 2026-08-30 — Claude Code 2.1.251 removed `Grep` and `Glob` from the main
+// agent's tool surface (probed against both bundled CLIs: 2.1.113 reports
+// them, 2.1.251 does not, and `ToolSearch` answers `select:Grep,Glob` with
+// "No matching deferred tools found"). Searching therefore moves to `Bash`,
+// which this rail could not see — 15 of 18 Bash calls in the four hours after
+// the upgrade were search-shaped, against 2 graph calls. These pin the rail
+// against the tool surface changing under it, and — more important — pin the
+// false positives, because `Bash` is mostly implementation here and denying
+// a test run would be far worse than the bug.
+describe("design-hooks · Bash searches are structural (post-2.1.251)", () => {
+  let cleanup: () => void;
+  let cwd: string;
+  const turnId = "test-turn-bash-search";
+
+  beforeEach(() => {
+    ({ cwd, cleanup } = withTmpCwd());
+  });
+  afterEach(() => {
+    clearTurnDesignContext(turnId);
+    cleanup();
+  });
+
+  const deny = (command: string) => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    return runDesignHooks({ ctx, toolName: "Bash", toolInput: { command }, mode: "enforce" });
+  };
+
+  it("denies a project-tree rg as the first structural search of a turn", () => {
+    const r = deny(`rg -n "validateProjectCwd" ${join(cwd, "src")}`);
+    expect(r?.behavior).toBe("deny");
+    expect(r?.message).toContain("graphify-first");
+  });
+
+  it("denies grep and find the same way — the whole search family", () => {
+    expect(deny(`grep -rn "foo" ${join(cwd, "src")}`)?.behavior).toBe("deny");
+    clearTurnDesignContext(turnId);
+    expect(deny(`find ${join(cwd, "src")} -name "*.ts"`)?.behavior).toBe("deny");
+  });
+
+  it("denies a search behind a leading `cd`, the shape MARVIN actually writes", () => {
+    expect(deny(`cd ${cwd} && rg -n "pattern"`)?.behavior).toBe("deny");
+  });
+
+  it("allows grep FILTERING command output — that is work, not exploration", () => {
+    // The single most important negative: denying this would block test runs.
+    expect(deny(`cd ${cwd} && make smoke 2>&1 | grep -i "FAIL"`)).toBeNull();
+    clearTurnDesignContext(turnId);
+    expect(deny("ps -Ao pid,command | grep java")).toBeNull();
+  });
+
+  it("allows a search rooted OUTSIDE the project", () => {
+    expect(deny('rg -n "x" /etc')).toBeNull();
+  });
+
+  it("allows ordinary non-search Bash", () => {
+    expect(deny(`cd ${cwd} && git status --short`)).toBeNull();
+    clearTurnDesignContext(turnId);
+    expect(deny(`cd ${cwd} && make fast`)).toBeNull();
+  });
+
+  it("allows the search once the graph has been queried", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "auth" });
+    const r = runDesignHooks({
+      ctx,
+      toolName: "Bash",
+      toolInput: { command: `rg -n "auth" ${join(cwd, "src")}` },
+      mode: "enforce",
+    });
+    expect(r).toBeNull();
+  });
+
+  it("classifier: a search binary must LEAD its pipeline segment", () => {
+    expect(bashSearchTarget({ command: `rg "x" ${cwd}` }, cwd)).not.toBeNull();
+    expect(bashSearchTarget({ command: `cat foo.txt | rg "x"` }, cwd)).toBeNull();
+    expect(bashSearchTarget({ command: "" }, cwd)).toBeNull();
+    expect(bashSearchTarget({}, cwd)).toBeNull();
+  });
+
+  it("a search-shaped Bash charges the drift budget like a Grep did", () => {
+    seedGraph(cwd);
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "seed" });
+    const before = ctx.novelFilesSinceGraph;
+    recordAllowedTool(ctx, "Bash", { command: `rg -n "alpha" ${join(cwd, "src")}` });
+    expect(ctx.novelFilesSinceGraph).toBe(before + 1);
+    // Same search again is not new exploration.
+    recordAllowedTool(ctx, "Bash", { command: `rg -n "alpha" ${join(cwd, "src")}` });
+    expect(ctx.novelFilesSinceGraph).toBe(before + 1);
+    // A build command charges nothing.
+    recordAllowedTool(ctx, "Bash", { command: `cd ${cwd} && make fast` });
+    expect(ctx.novelFilesSinceGraph).toBe(before + 1);
   });
 });

@@ -107,6 +107,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0092](./0092-canvas-only-export.md) | `obsidian_init` wrote 34,463 files and truncated the file tree — the canvas function added in ADR-0091 was never wired to the call site; stage in temp, keep one canvas | Accepted | 2026-08-30 |
 | [0093](./0093-spawn-the-cli-we-resolved.md) | ADR-0087 fixed what MARVIN *said* about the CLI and not what it *ran* — the SDK resolves `claude` from PATH, which led with Homebrew's 2.1.92 | Accepted | 2026-08-30 |
 | [0097](./0097-verify-against-what-runs.md) | The SDK spawns its own bundled native CLI, so ADR-0087/0093 both missed it — the bundle linked 0.2.113 beside a 0.3.251 SDK; and the Skills pane listed skills the loader had skipped (29 `Unknown skill` calls) | Accepted | 2026-08-30 |
+| [0098](./0098-the-rail-must-outlive-the-tool-surface.md) | CLI 2.1.251 removed `Grep`/`Glob`, so searching moved to `Bash` where the graphify-first rail could not see it — 15 of 18 Bash calls search-shaped against 2 graph calls | Accepted | 2026-08-30 |
 
 ## Template
 
