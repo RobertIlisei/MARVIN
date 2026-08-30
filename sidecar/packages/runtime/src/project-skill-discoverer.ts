@@ -259,6 +259,15 @@ export async function discoverProjectSkills(
         // overkill at ~10× the price.
         model: discoveryModel,
         maxTurns: 1,
+        // One-shot means one turn for ANY model. `allowedTools: []` is only
+        // a permission list — the CLI still OFFERS its built-in tools, so a
+        // tool-happy model (observed on OpenRouter non-Claude models:
+        // glm/qwen emit a tool_use to explore the project) needs a second
+        // turn and maxTurns: 1 aborts with "Reached maximum number of turns
+        // (1)". `tools: []` removes built-in tools from the model's context
+        // entirely (SDK contract: "[] - Disable all built-in tools"), so no
+        // model can burn the turn on a tool call.
+        tools: [],
         allowedTools: [],
         mcpServers: {},
         permissionMode: "bypassPermissions",

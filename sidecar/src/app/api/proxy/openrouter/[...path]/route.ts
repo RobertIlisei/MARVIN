@@ -73,6 +73,17 @@ export async function POST(
     // or pathString is empty, make it "v1/"
     pathString = pathString ? `v1/${pathString}` : "v1/messages";
   }
+
+  // OpenRouter does not support the Anthropic count_tokens endpoint.
+  // The Claude CLI uses this to verify model existence and context limits.
+  // When it 404s, the CLI aborts with "There's an issue with the selected model".
+  // Intercept and return a dummy token count to allow the CLI to proceed.
+  if (pathString === "v1/messages/count_tokens") {
+    return new Response(
+      JSON.stringify({ input_tokens: 0 }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
   
   const targetUrl = `https://openrouter.ai/api/${pathString}`;
 
