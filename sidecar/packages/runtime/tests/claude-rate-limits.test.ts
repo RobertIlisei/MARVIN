@@ -22,6 +22,33 @@ describe("claude rate limits", () => {
     expect(s.claudeRateLimits[0]?.resetsAt).toBeUndefined(); // newest snapshot wins, fields are not merged
   });
 
+  // A headline-only event (the 2.1.92 CLI reports no `unifiedWindows`,
+  // ADR-0087/0093) used to ERASE the percentage a newer CLI had recorded —
+  // the live symptom on 2026-08-30 was `five_hour` reading "no % yet" with a
+  // NEWER timestamp than the weekly window's 49%.
+  it("keeps a known utilization when a later snapshot omits it", () => {
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.42 });
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", resetsAt: 1_800_000_000 });
+    const s = summarizeCost();
+    expect(s.claudeRateLimits[0]?.utilization).toBe(0.42);
+    expect(s.claudeRateLimits[0]?.resetsAt).toBe(1_800_000_000);
+  });
+
+  it("a newer utilization still replaces an older one", () => {
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.42 });
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.11 });
+    expect(summarizeCost().claudeRateLimits[0]?.utilization).toBe(0.11);
+  });
+
+  // Time-sensitive fields keep the original "newest snapshot wins" rule:
+  // carrying a stale resetsAt forward would state a refill time that already
+  // passed. Only `utilization` — a gauge — is carried.
+  it("does NOT carry a stale resetsAt forward", () => {
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.42, resetsAt: 1_800_000_000 });
+    recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.5 });
+    expect(summarizeCost().claudeRateLimits[0]?.resetsAt).toBeUndefined();
+  });
+
   it("a bare status with no window type never overwrites a typed window", () => {
     recordClaudeRateLimit({ status: "allowed", rateLimitType: "five_hour", utilization: 0.1 });
     expect(recordClaudeRateLimit({ status: "allowed" })).toBeNull();

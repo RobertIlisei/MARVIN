@@ -10,7 +10,7 @@
 import { execSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { buildSubprocessEnv } from "./auth";
-import { fallbackNewestOfTier } from "./models";
+import { ensureProviderModelId, fallbackNewestOfTier } from "./models";
 
 /* ── CLI binary discovery ──────────────────────────────────────────────── */
 
@@ -113,9 +113,13 @@ export function defaultModel(): string {
   // latestForTier) picks the freshest Opus when online; this sync path is
   // the last resort (env override, else the newest entry in the single
   // hardcoded fallback list in models.ts). No version id lives here. ADR-0029.
+  // ADR-0096: `fallbackNewestOfTier` is provider-scoped, and the literal last
+  // resort is rewritten for OpenRouter rather than sent as a bare Anthropic id.
   return (
     process.env.MARVIN_MODEL?.trim() ||
     fallbackNewestOfTier("opus") ||
+    // Provider-scoped above; this literal is the type-level floor only.
+    ensureProviderModelId("claude-opus-4-8") ||
     "claude-opus-4-8"
   );
 }

@@ -1749,6 +1749,27 @@ runner.suite("SubagentLedger") {
         runner.expect(l.summary.completed, equals: 1, "completed 1")
         runner.expect(!l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_notification","task_id":"zzz","status":"completed"}"#)), "unknown task ignored")
     }
+    // The graphify fan-out shape: several graph-extractor chunks dispatched in
+    // ONE assistant message, interleaved with a thinking block. The popover
+    // showed zero for these — not because the ledger missed them, but because
+    // nothing fed it live (only the transcript-replay path called `apply`).
+    // The wiring itself lives in a SwiftUI view and is not reachable from this
+    // runner; this pins the parsing the wiring now depends on.
+    runner.test("counts a fan-out of several subagents in one message, past a thinking block") {
+        var l = SubagentLedger()
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"thinking"},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"graph-extractor","description":"graphify semantic extraction chunk 1/5"}},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"graph-extractor","description":"graphify semantic extraction chunk 2/5"}},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"advisor","description":"advisor: schema"}}
+        ]}}
+        """#
+        runner.expect(l.apply(cliEventData: ev(json)), "fan-out counted")
+        runner.expect(l.summary.dispatchedByType["graph-extractor"], equals: 2, "both chunks")
+        runner.expect(l.summary.dispatchedByType["advisor"], equals: 1, "advisor alongside")
+        runner.expect(l.summary.dispatched, equals: 3, "total across types")
+    }
     runner.test("pre-rename Task dispatches and untyped dispatches still count") {
         var l = SubagentLedger()
         l.apply(cliEventData: ev(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Task","input":{"subagent_type":"advisor"}},{"type":"tool_use","name":"Agent","input":{"prompt":"p"}}]}}"#))
@@ -1864,7 +1885,231 @@ runner.suite("LanguageDetection") {
     }
 }
 
+/// Mirrors `FilesServiceError` / `ChatServiceError` from the MARVIN app
+/// target, which `MARVINTests` cannot import (executable targets can't be
+/// linked). The SHAPE is what matters: a Swift enum carrying the transport
+/// failure as an associated value. Bridging one of these to NSError yields an
+/// empty userInfo — which is why the first version of BenignCancellation,
+/// written against a hand-built NSError with NSUnderlyingErrorKey, never
+/// matched anything the app actually threw.
+enum ProbeServiceError: Error {
+    case transport(underlying: Error)
+    case http(status: Int)
+    case badURL
+}
+
+/// Accept-and-never-respond TCP listener on an ephemeral port. Makes a request
+/// hang so `cancel()` deterministically wins the race — the test then reads a
+/// REAL URLSession cancellation instead of asserting against a fixture we
+/// invented. That substitution is the bug this suite exists to prevent.
+private func withHangingListener(_ body: (UInt16) -> Void) {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    var yes: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = 0
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    _ = withUnsafePointer(to: &addr) { p in
+        p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    listen(fd, 8)
+    var bound = sockaddr_in()
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    _ = withUnsafeMutablePointer(to: &bound) { p in
+        p.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+    }
+    let port = UInt16(bigEndian: bound.sin_port)
+    DispatchQueue.global().async {
+        while true {
+            let conn = accept(fd, nil, nil)
+            if conn < 0 { return }
+            // Held open, never written to.
+        }
+    }
+    body(port)
+    close(fd)
+}
+
+/// Fire a request at the hanging listener, cancel it, and return the error
+/// URLSession actually produced.
+private func realCancelledRequestError() -> Error? {
+    var captured: Error?
+    withHangingListener { port in
+        let sem = DispatchSemaphore(value: 0)
+        let url = URL(string: "http://127.0.0.1:\(port)/api/files/tree")!
+        let task = URLSession.shared.dataTask(with: url) { _, _, err in
+            captured = err
+            sem.signal()
+        }
+        task.resume()
+        Thread.sleep(forTimeInterval: 0.05)
+        task.cancel()
+        _ = sem.wait(timeout: .now() + 5)
+    }
+    return captured
+}
+
+runner.suite("AttachmentMentions") {
+    runner.test("pulls an image mention out of the surrounding prose") {
+        let segs = AttachmentMentions.split("@/Users/x/.marvin/attachments/AB-CD.png\n\nprepare a plan.")
+        runner.expect(segs.count, equals: 2, "one image + one text segment")
+        runner.expect(segs.first == .image(path: "/Users/x/.marvin/attachments/AB-CD.png"), "image first")
+        if case .text(let body) = segs[1] {
+            runner.expect(body.contains("prepare a plan."), "prose preserved")
+        } else {
+            runner.expect(false, "second segment is text")
+        }
+    }
+    runner.test("keeps order across several mentions") {
+        let segs = AttachmentMentions.split("before @/a/one.png middle @/b/two.jpg after")
+        runner.expect(segs.count, equals: 5, "text/image/text/image/text")
+        runner.expect(segs[1] == .image(path: "/a/one.png"), "first image")
+        runner.expect(segs[3] == .image(path: "/b/two.jpg"), "second image")
+    }
+    runner.test("only treats a token-leading @ as a mention") {
+        // `foo@/bar.png` is an email-ish string, not an attachment.
+        runner.expect(!AttachmentMentions.containsImage("mail me at bob@/x.png"), "mid-token @ ignored")
+        runner.expect(AttachmentMentions.containsImage("look @/x.png"), "space-preceded @ matched")
+        runner.expect(AttachmentMentions.containsImage("@/x.png"), "start-of-string @ matched")
+    }
+    runner.test("ignores non-image and relative paths") {
+        runner.expect(!AttachmentMentions.containsImage("@/src/main.swift"), "source file is not an image")
+        runner.expect(!AttachmentMentions.containsImage("@relative/x.png"), "relative path is not a mention")
+        runner.expect(!AttachmentMentions.containsImage("no mentions here"), "plain prose")
+    }
+    runner.test("is case-insensitive on the extension") {
+        runner.expect(AttachmentMentions.containsImage("@/a/SHOT.PNG"), "uppercase extension")
+    }
+    runner.test("returns the whole string as one text segment when there is nothing to split") {
+        let segs = AttachmentMentions.split("just words")
+        runner.expect(segs.count, equals: 1, "single segment")
+        runner.expect(segs.first == .text("just words"), "unchanged")
+    }
+}
+
+runner.suite("AdvisorTierFloor") {
+    runner.test("warns when the second opinion is weaker than the executor") {
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "opus", advisorTier: "sonnet") != nil,
+            "opus executor + sonnet advisor"
+        )
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "sonnet", advisorTier: "haiku") != nil,
+            "sonnet executor + haiku advisor"
+        )
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "opus", advisorTier: "haiku") != nil,
+            "opus executor + haiku advisor"
+        )
+        // The message must name both sides, or it isn't actionable.
+        let msg = AdvisorTierFloor.warning(executorTier: "opus", advisorTier: "haiku") ?? ""
+        runner.expect(msg.contains("haiku") && msg.contains("opus"), "names both tiers")
+    }
+    runner.test("stays quiet when the advisor is equal or stronger") {
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "sonnet", advisorTier: "opus") == nil,
+            "stronger advisor is the intended shape"
+        )
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "opus", advisorTier: "opus") == nil,
+            "same tier"
+        )
+    }
+    runner.test("stays quiet when either side is unset or unrankable") {
+        // Unset advisor resolves to the latest Opus; unset executor to the
+        // runtime default. Neither is a choice made in this dialog.
+        runner.expect(AdvisorTierFloor.warning(executorTier: "opus", advisorTier: nil) == nil, "advisor unset")
+        runner.expect(AdvisorTierFloor.warning(executorTier: nil, advisorTier: "haiku") == nil, "executor unset")
+        // A third-party / OpenRouter model has no position on this scale;
+        // guessing one would produce confident nonsense.
+        runner.expect(AdvisorTierFloor.warning(executorTier: "opus", advisorTier: "other") == nil, "unrankable advisor")
+        runner.expect(AdvisorTierFloor.warning(executorTier: "other", advisorTier: "haiku") == nil, "unrankable executor")
+    }
+    // OpenRouter's catalogue: `tierFor()` in models.ts derives the tier by
+    // substring, so every non-Anthropic id lands in `other` and the tier
+    // comparison can say nothing. Price is the only objective signal there —
+    // and it is a proxy, so the margin is wide and the wording is honest
+    // about what it measures.
+    runner.test("falls back to price when the models have no comparable tier") {
+        // openai/gpt-5 (executor) vs a cheap open model (advisor).
+        let warn = AdvisorTierFloor.warning(
+            executorTier: "other", advisorTier: "other",
+            executorPrice: 0.00001, advisorPrice: 0.0000002
+        )
+        runner.expect(warn != nil, "50× cheaper advisor warns")
+        runner.expect(warn?.contains("Price isn't capability") ?? false, "says what it measures")
+    }
+    runner.test("does not nag on a small price gap") {
+        runner.expect(
+            AdvisorTierFloor.warning(
+                executorTier: "other", advisorTier: "other",
+                executorPrice: 0.00001, advisorPrice: 0.000008
+            ) == nil,
+            "within the ratio floor — different pricing, not a weaker model"
+        )
+    }
+    runner.test("price never overrides a tier comparison both sides can answer") {
+        // A cheap Opus is still an Opus; tier is exact where it applies.
+        runner.expect(
+            AdvisorTierFloor.warning(
+                executorTier: "sonnet", advisorTier: "opus",
+                executorPrice: 0.00001, advisorPrice: 0.0000001
+            ) == nil,
+            "stronger tier wins over a lower price"
+        )
+    }
+    runner.test("stays quiet when price is missing or zero on either side") {
+        runner.expect(
+            AdvisorTierFloor.warning(
+                executorTier: "other", advisorTier: "other",
+                executorPrice: 0.00001, advisorPrice: nil
+            ) == nil,
+            "no advisor price"
+        )
+        runner.expect(
+            AdvisorTierFloor.warning(
+                executorTier: "other", advisorTier: "other",
+                executorPrice: 0, advisorPrice: 0
+            ) == nil,
+            "a free model divides by zero and proves nothing"
+        )
+    }
+    runner.test("compares a tiered executor against an untiered advisor by price") {
+        // The realistic OpenRouter mistake: Claude executor, cheap third-party
+        // advisor. Neither the tier map nor the old code could see it.
+        runner.expect(
+            AdvisorTierFloor.warning(
+                executorTier: "opus", advisorTier: "other",
+                executorPrice: 0.000075, advisorPrice: 0.0000006
+            ) != nil,
+            "opus executor + cheap untiered advisor"
+        )
+    }
+    runner.test("is case-insensitive on the tier strings") {
+        runner.expect(
+            AdvisorTierFloor.warning(executorTier: "OPUS", advisorTier: "Haiku") != nil,
+            "tiers arrive from JSON; casing is not guaranteed"
+        )
+    }
+}
+
 runner.suite("BenignCancellation") {
+    runner.test("matches the error a REAL cancelled URLSession request produces") {
+        guard let real = realCancelledRequestError() else {
+            runner.expect(false, "expected an error from the cancelled request")
+            return
+        }
+        runner.expect(BenignCancellation.matches(real), "raw error from a real cancel")
+        // The shape the user actually saw on 2026-08-30: the service wraps
+        // that same error in its own enum before it reaches the view.
+        runner.expect(
+            BenignCancellation.matches(ProbeServiceError.transport(underlying: real)),
+            "service enum wrapping a real cancel"
+        )
+    }
     runner.test("recognises every shape a cancelled request arrives in") {
         runner.expect(BenignCancellation.matches(CancellationError()), "Swift CancellationError")
         runner.expect(BenignCancellation.matches(URLError(.cancelled)), "URLError.cancelled")
@@ -1872,7 +2117,19 @@ runner.suite("BenignCancellation") {
             BenignCancellation.matches(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)),
             "raw NSURLErrorDomain -999"
         )
-        // The shape the user actually saw: a transport error wrapping -999.
+        runner.expect(
+            BenignCancellation.matches(ProbeServiceError.transport(underlying: URLError(.cancelled))),
+            "service enum wrapping URLError.cancelled"
+        )
+        runner.expect(
+            BenignCancellation.matches(
+                ProbeServiceError.transport(
+                    underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)
+                )
+            ),
+            "service enum wrapping raw -999"
+        )
+        // Foundation's own nesting still works.
         let wrapped = NSError(
             domain: "MarvinTransport", code: 1,
             userInfo: [NSUnderlyingErrorKey: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)]
@@ -1886,6 +2143,20 @@ runner.suite("BenignCancellation") {
             !BenignCancellation.matches(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)),
             "bad response is real"
         )
+        // A real failure wrapped in the service enum must stay visible —
+        // reflection must not turn the unwrap into a blanket "swallow it".
+        runner.expect(
+            !BenignCancellation.matches(ProbeServiceError.transport(underlying: URLError(.timedOut))),
+            "service enum wrapping timeout is real"
+        )
+        runner.expect(
+            !BenignCancellation.matches(
+                ProbeServiceError.transport(underlying: URLError(.cannotConnectToHost))
+            ),
+            "service enum wrapping connect failure is real"
+        )
+        runner.expect(!BenignCancellation.matches(ProbeServiceError.http(status: 500)), "http 500 is real")
+        runner.expect(!BenignCancellation.matches(ProbeServiceError.badURL), "payload-free case is real")
     }
 }
 

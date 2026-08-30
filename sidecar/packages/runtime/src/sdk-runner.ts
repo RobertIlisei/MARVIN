@@ -62,7 +62,9 @@ import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
+import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
 import {
+  ADVISOR_SUBAGENT_TYPE,
   clearTurnDesignContext,
   createTurnDesignContext,
   type DesignTurnContext,
@@ -70,8 +72,8 @@ import {
   makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
-import { latestForTier } from "./models";
-import { defaultModel } from "./claude-cli";
+import { ensureProviderModelId, latestForTier } from "./models";
+import { defaultModel, discoverClaudeBinary } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { markTurnMutated } from "./turn-registry";
@@ -95,7 +97,24 @@ export type RuntimeMode = "opus" | "advisor";
  * after the prepended ones.
  */
 export function enrichedToolPath(base: string = process.env.PATH ?? ""): string {
-  const prepend = [dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
+  // ADR-0093 — the DIRECTORY of the resolved Claude CLI goes first.
+  //
+  // MARVIN never passes the binary to the SDK; the SDK resolves `claude` from
+  // PATH itself. With `/opt/homebrew/bin` prepended, every turn spawned
+  // Homebrew's 2.1.92 while `discoverClaudeBinary()` — and therefore the About
+  // panel — reported the user's 2.1.251. ADR-0087 fixed the reporting and left
+  // the spawn untouched, so the symptom (blank plan-usage bars: 2.1.92
+  // predates `unifiedWindows`) survived that fix entirely.
+  //
+  // Resolution failures are non-fatal: PATH enrichment must not throw on a
+  // machine with no CLI, or nothing runs at all.
+  let claudeDir: string[] = [];
+  try {
+    claudeDir = [dirname(discoverClaudeBinary())];
+  } catch {
+    claudeDir = [];
+  }
+  const prepend = [...claudeDir, dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of [...prepend, ...base.split(":")]) {
@@ -145,12 +164,12 @@ export async function resolveRuntimeMode(mode: RuntimeMode): Promise<{
       latestForTier("opus"),
     ]);
     return {
-      model: sonnet ?? defaultModel(),
-      advisorModel: opus ?? undefined,
+      model: ensureProviderModelId(sonnet ?? defaultModel()) ?? defaultModel(),
+      advisorModel: ensureProviderModelId(opus) ?? undefined,
     };
   }
   const opus = await latestForTier("opus");
-  return { model: opus ?? defaultModel() };
+  return { model: ensureProviderModelId(opus ?? defaultModel()) ?? defaultModel() };
 }
 
 /**
@@ -543,6 +562,20 @@ export function buildAdvisorAgent(args: {
       "Ground claims in the provided context; consult the marvin-graph",
       "MCP tools or read files when the question is structural. Return",
       "the critique and nothing else.",
+      "",
+      "Then END your reply with this block, verbatim in this shape. It is",
+      "read by machine (ADR-0095): the executor parks each caveat as a",
+      "backlog item so your advice survives a context compaction. Prose is",
+      "for the human; this block is the contract. Emit it even for a clean",
+      "`go` (with no caveats), and put EVERY condition you attached to a",
+      "`go-with-caveats` in it — a caveat you mention only in prose is one",
+      "that can be lost.",
+      "",
+      "```marvin-verdict",
+      "verdict: go | go-with-caveats | reject",
+      "caveats:",
+      "- one line per caveat, imperative, self-contained",
+      "```",
     ].join("\n"),
   };
 }
@@ -1386,10 +1419,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // opinion should always come from the strongest model, even when a cheaper
   // model drives the loop (e.g. runtime "advisor" mode). Tier-resolved per
   // ADR-0029 (no hardcoded version id); `defaultModel()` is the last resort.
-  const advisorModelResolved = advisorModel ?? (await latestForTier("opus")) ?? defaultModel();
+  // ADR-0096 — the backstop: a bare Anthropic id must never reach an
+  // OpenRouter session, whichever branch produced it.
+  const advisorModelResolved =
+    ensureProviderModelId(advisorModel ?? (await latestForTier("opus")) ?? defaultModel()) ??
+    defaultModel();
   // Haiku-tier model for the graph-extractor subagent (ADR-0058). Falls back to
   // "inherit" (the parent tier) only if Haiku discovery is unavailable.
-  const graphExtractorModel = (await latestForTier("haiku")) ?? "inherit";
+  const graphExtractorModel = ensureProviderModelId(await latestForTier("haiku")) ?? "inherit";
 
   // Wire Honeycomb telemetry per-turn. `computeHoneycombTelemetryEnv`
   // is the pure form — it reads the saved config at
@@ -1454,6 +1491,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const outputGovernorHook = makeOutputGovernorPostToolUse({
     marvinSessionId: input.marvinSessionId ?? "unscoped",
     turnId,
+  });
+  // ADR-0095 — read the advisor's verdict and park its caveats. The dispatch
+  // was already counted in PreToolUse; this is the half that looks at the
+  // ANSWER, so a `reject` stops discharging the gate like a `go` and the
+  // caveats outlive the context window.
+  const advisorVerdictHook = makeAdvisorVerdictPostToolUse({
+    workDir: cwd,
+    marvinSessionId: input.marvinSessionId ?? "unscoped",
+    turnId,
+    advisorModel: advisorModelResolved,
   });
 
   // Both factories live at module scope so tests can pin the dispatch
@@ -1586,7 +1633,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
-      PostToolUse: [{ hooks: [outputGovernorHook] }],
+      PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook] }],
     },
     systemPrompt: {
       type: "preset",
@@ -1643,7 +1690,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // model-hint spawn (still policy-sanctioned for back-compat).
     agents: {
       scout: SCOUT_AGENT,
-      advisor: buildAdvisorAgent({
+      [ADVISOR_SUBAGENT_TYPE]: buildAdvisorAgent({
         model: advisorModelResolved,
         // Default the advisor to the EXECUTOR's effort when no separate
         // advisor effort was picked — exactly the pre-ADR-0033 behaviour.

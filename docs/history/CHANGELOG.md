@@ -9,6 +9,106 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.77: the advisor's answer is read, and OpenRouter gets its own model ids.**
+
+  **The advisor was consulted and then ignored — mechanically.** The gate had
+  only ever observed the *dispatch*: `recordToolCall` counted the `Agent` call
+  and stopped, so a `reject` discharged the obligation exactly as a `go` did,
+  and the advice lived only as long as the context window. Caught on a real
+  incident (session `711b8605`, a prod `platform_audit` migration): the advisor
+  returned **go-with-caveats** with four caveats — including the finding that
+  the ~23-hour gap in the tamper-evident audit chain, not the visible 500, was
+  the compliance-relevant part — and the session hit `compacting` **seven
+  seconds** after the executor started acting on the fourth. All four landed,
+  on model diligence rather than on anything the system did.
+
+  Two ADRs. [ADR-0094](../decisions/0094-advisor-dispatch-uses-the-registered-agent.md):
+  the deny message still prescribed the pre-ADR-0033 shape (`general-purpose`
+  + a `model: opus` hint), so every gate-triggered consult silently lost its
+  reasoning effort, read-only `disallowedTools`, `marvin-graph` server and turn
+  cap — the gate was steering MARVIN away from the agent ADR-0033 built for
+  this call. Both halves ship together, because prescribing the registered
+  agent while counting only the `advisor:` description prefix would have left
+  the gate unable to see its own remedy discharged.
+  [ADR-0095](../decisions/0095-advisor-verdict-is-read-and-caveats-persist.md):
+  a `PostToolUse` hook parses the verdict, parks each caveat as a
+  **provisional** backlog item (ADR-0047 capture-at-discovery, keep/dismiss at
+  the scope-met handoff), and appends one line via `additionalContext` — not
+  `updatedToolOutput`, because here the advisor's own words are the payload,
+  the opposite of the output governor's case. `reject` denies the next
+  trigger-path write **once**: enough to force the verdict to be read, without
+  handing a subagent a veto over the user's tree.
+
+  Worth recording for the next time: the public hooks page documents neither
+  `updatedToolOutput` nor `additionalContext` on `PostToolUse`, and the SDK
+  0.3.245 `.d.ts` documents both — *"Replaces the tool output before it is sent
+  to the model"*. MARVIN's own output governor already shipped on it. That is
+  ADR-0073 and ADR-0079's lesson a third time: verify against the artifact, not
+  the prose about it.
+
+  Amended the same day, after the three soft spots were called out. Caveat
+  splitting was a regex over model prose, so the advisor now ends every reply
+  on a ```` ```marvin-verdict ```` block — the prompt is ours, so the contract
+  moved to the source. The prose parser stays as a **live** fallback, not a
+  legacy one: the advisor model is the user's pick from the Settings picker,
+  not fixed at Opus, so the block parser tolerates what a smaller model emits
+  and the telemetry carries the model beside `structured`. The swallowed
+  `catch` is gone and, more seriously, `addBacklogItem`'s `{ok:false}` (the
+  200-item cap, validation) was never an exception and had been vanishing
+  silently — refusals now log their reason, oversized bodies truncate rather
+  than get refused (the whole-verdict fallback is exactly the shape that blows
+  the 2,000-char cap, so the safety net was the likeliest thing to fail), and
+  `.marvin/advisor-caveats.md` is the floor. And "don't re-run the advisor for
+  a friendlier verdict" moved from `personality.ts` prose to a hook deny — the
+  2026-05-22 audit already measured soft-nudge language at ~0× firing.
+
+  **OpenRouter sessions were being handed Anthropic model ids.** OpenRouter
+  addresses models by vendor-prefixed slug (`anthropic/claude-sonnet-4.5`);
+  Anthropic's API uses a bare id. The live catalogue already produced the right
+  shape on each provider — but every *fallback* path returned bare Anthropic
+  ids regardless, and `listModels` returns the fallback on any credential or
+  network hiccup. A transient failure therefore swapped a working OpenRouter
+  session onto ids OpenRouter cannot resolve, for the executor, the advisor,
+  the graph-extractor, the session auditor and skill discovery.
+
+  Skill discovery carried a second bug on top, and it is the answer to "why
+  don't skills work on OpenRouter":
+  `(isOpenRouter && model) ? model : … ?? "claude-sonnet-4-6"` reads as "prefer
+  the caller's model on OpenRouter" and means "if we are on OpenRouter **and**
+  got a model" — so the OpenRouter-aware branch was the first thing dropped
+  when the caller omitted one, which the Skills pane does whenever the executor
+  picker sits on "default". `session-auditor.ts` repeated it verbatim. The
+  skills machinery itself is CLI-side and provider-independent; it was never
+  the problem.
+  [ADR-0096](../decisions/0096-provider-aware-model-resolution.md) fixes it in
+  one layer rather than six call sites — `activeProvider()`, provider-scoped
+  `fallbackModelsForProvider()`, and an `ensureProviderModelId()` boundary
+  guard that rewrites a bare id to the live OpenRouter slug of the same tier
+  (static map when the catalogue is down — the case where a guard actually
+  matters) and logs every rewrite. Both inverted conditions were deleted rather
+  than patched: `latestForTier` is now provider-correct, so neither site needs
+  a provider branch at all. Probed directly: OpenRouter's Anthropic-format
+  `POST /v1/messages` is real (401 unauthenticated), while
+  `/v1/messages/count_tokens` **404s** — recorded, out of scope.
+
+  **Two smaller fixes.** ADR-0086's cancelled-request guard unwrapped only
+  `NSUnderlyingErrorKey`, but `FilesServiceError.transport(underlying:)` is a
+  Swift enum whose `NSError` bridge has an empty `userInfo` — so `-999
+  "cancelled"` kept reaching the file tree's red banner, and the test passed
+  because it built the fixture by hand in a shape the app never produces. The
+  matcher now reflects over associated values (`Mirror` yields the payload
+  *tuple*, not the error), and the fixture is a real cancelled `URLSession`
+  request against an accept-and-never-respond listener. And the model picker
+  now warns, without blocking, when the advisor is weaker than the executor —
+  by tier for the Claude family, and by price for the OpenRouter catalogue,
+  where `tierFor()`'s substring matching leaves every non-Anthropic id
+  unrankable.
+
+  **Verification.** sidecar 998/998 across 61 files, MARVINTests 448/448,
+  `tsc --noEmit` clean. Every fix in this release was confirmed **red against
+  its own disabled implementation** before being called done — the discipline
+  the `BenignCancellation` fixture failure taught, applied to all of it.
+
 - **2026-08-30 — v0.1.76: two fixes for bugs the previous release introduced.**
 
   **`obsidian_init` wrote 34,463 files** into `graphify-out/obsidian/` and

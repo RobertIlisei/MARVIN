@@ -105,6 +105,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0090](./0090-vault-live-views-and-graph-note-filter.md) | Live Dataview tables in the vault index (only when the plugin is enabled), and `graphify-out/obsidian/` filtered so a 32k-note code export can't drown the graph view | Accepted | 2026-08-30 |
 | [0091](./0091-vault-plans-canvas-and-the-memory-loop-input.md) | 353 plans had no vault index; the graph canvas (one file, not 32k notes) was never wired; and the work-memory loop had an output but no input | Accepted | 2026-08-30 |
 | [0092](./0092-canvas-only-export.md) | `obsidian_init` wrote 34,463 files and truncated the file tree — the canvas function added in ADR-0091 was never wired to the call site; stage in temp, keep one canvas | Accepted | 2026-08-30 |
+| [0093](./0093-spawn-the-cli-we-resolved.md) | ADR-0087 fixed what MARVIN *said* about the CLI and not what it *ran* — the SDK resolves `claude` from PATH, which led with Homebrew's 2.1.92 | Accepted | 2026-08-30 |
 
 ## Template
 

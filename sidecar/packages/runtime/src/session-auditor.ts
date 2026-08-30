@@ -38,10 +38,9 @@ import { listChanges, type ChangedFile } from "./change-checkpoints";
 import { collectCiStatus, renderCiStatus, type CiStatus } from "./ci-status";
 import { readAutoAuditTail, type AutoAuditEntry } from "./auto-audit";
 import { buildSubprocessEnv } from "./auth";
-import { latestForTier } from "./models";
+import { ensureProviderModelId, latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
-import { readAuthConfig } from "./auth-config";
 import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 
 /** Caps — the packet is bounded so an audit can't blow up cost or context. */
@@ -653,9 +652,9 @@ export async function runSessionAudit(args: {
     return { ok: false, error: "nothing to audit — this session has no recorded messages yet." };
   }
 
-  const auth = readAuthConfig();
-  const isOpenRouter = auth?.mode === "api-key" && auth?.provider === "openrouter";
-  const finalModel = (isOpenRouter && args.model) ? args.model : (await latestForTier("sonnet")) ?? undefined;
+  // ADR-0096 — same inverted condition as the skill discoverer had; same fix.
+  const finalModel =
+    ensureProviderModelId(args.model ?? (await latestForTier("sonnet"))) ?? undefined;
   const prompt = renderAuditPrompt(packet);
 
   let text = "";

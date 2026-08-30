@@ -92,5 +92,9 @@ wrapped-underlying-error form the user actually saw.
       both this repo and the active project
 - [x] Update check daily + on demand, with a non-auto-installing prompt
 - [x] Version comparison, scheduling and per-version skip are test-pinned
-- [x] Cancelled requests no longer surface as errors
+- [x] Cancelled requests no longer surface as errors — *the first
+      implementation unwrapped only `NSUnderlyingErrorKey` and so never
+      matched the Swift enum the services actually throw; the banner
+      kept appearing. Corrected 2026-08-30 (reflection over associated
+      values), with the test fixture rebuilt from a real cancelled request.*
 - [ ] Not in scope: auto-update, a Sparkle-style delta updater, notarization
