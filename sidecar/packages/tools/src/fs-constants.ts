@@ -46,9 +46,24 @@ export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
  * reason the whole folder was hidden; hiding only the cache keeps the fix.
  */
 export const GRAPHIFY_OUT_DIR = "graphify-out";
-export const GRAPHIFY_OUT_SKIP: ReadonlySet<string> = new Set(["cache", ".chunks", "chunks", "reflections"]);
+export const GRAPHIFY_OUT_SKIP: ReadonlySet<string> = new Set([
+  "cache",
+  ".chunks",
+  "chunks",
+  "reflections",
+  // ADR-0092 — `graphify export obsidian` writes ONE NOTE PER GRAPH NODE:
+  // 34,463 files on a real project, which is the ENTIRE 20,000-entry tree
+  // budget and then some ("Tree truncated" — user, 2026-08-30). Exactly the
+  // failure that got `cache` skipped (12,195 files, 2026-08-15), repeated by
+  // a folder that did not exist then. The canvas beside them —
+  // `graph.canvas`, one file — is the artefact worth browsing, and a file is
+  // not a directory, so it survives this filter.
+  "obsidian",
+]);
 
-/** True when `name` under `parentName` is a graphify cache the tree hides. */
+/** True when `name` under `parentName` is generated graphify bulk the tree
+ *  hides. `graphify-out/` itself stays browsable — `graph.json`,
+ *  `GRAPH_REPORT.md` and `obsidian/graph.canvas` are things people open. */
 export function isGraphifyCacheDir(parentName: string, name: string): boolean {
   return parentName === GRAPHIFY_OUT_DIR && GRAPHIFY_OUT_SKIP.has(name);
 }
