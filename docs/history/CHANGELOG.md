@@ -9,6 +9,47 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.75: the vault and the graph, joined up.**
+
+  A measured audit of what MARVIN was actually doing with graphify and
+  Obsidian, and five gaps closed.
+
+  **353 plans had zero inbound links.** `memory.md` and `backlog.md` each
+  wikilink their notes (105 and 47), so both are hubs in the Obsidian graph.
+  `.marvin/plans/` had no index at all — every plan invisible to the graph
+  view, backlinks and Dataview. `rewritePlansIndex` mirrors the memory index:
+  title from the `# Plan —` heading, progress from checkbox counts at any
+  indent, newest first.
+
+  **The usable graph export was never wired.** The per-symbol note export
+  writes one file per node — 7,604 for MARVIN's repo, ~32k for a large
+  project, which is why ADR-0090 filters it out of the vault. The same command
+  emits `graph.canvas`: **one 1.5 MB file, 6,811 nodes**, rendered natively by
+  Obsidian. Same graph, no flooding.
+
+  **The work-memory loop had no input.** `graph_save_result` sat at 12 calls
+  across every session ever, `graph_reflect` at zero. ADR-0085 gave the loop
+  its output by injecting `LESSONS.md`; it now has a trigger — one nudge per
+  turn on the first edit after four graph calls, when MARVIN has stopped
+  looking and knows whether the answers held up.
+
+  **Three more read tools** — `graph_explain`, `graph_benchmark` (the token
+  saving for *this* project, not a number measured on another repo),
+  `graph_export_callflow`. `graph_search` was 75 % of 5,823 calls largely
+  because it was the only door.
+
+  **A stuck "Working…" indicator.** `turn.completed` now clears the composer's
+  busy flag. The handler assumed the POST stream's `defer` had already done it
+  — true for a turn this client started, false for one it attached to, since
+  the resume stream need not end when the turn does. A session showed
+  "Working…" with only Stop/Queue for 8½ hours after the server had recorded
+  `turn.completed` and `/api/chat/resume` was answering 204.
+
+  Also: the plan pane's resize grip was inverted (dragging down grew it
+  upward, because the tray is bottom-anchored and the grip cannot follow the
+  pointer); the rule now lives once in `MARVINLogic.DragResize` and both grips
+  use it.
+
 - **2026-08-30 — v0.1.74: Agent SDK 0.3.245 → 0.3.251.**
 
   Routine patch bump (peer `@anthropic-ai/sdk` 0.120 → 0.122). The type diff
