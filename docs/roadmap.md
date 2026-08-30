@@ -123,7 +123,7 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.86** — a day spent on failures that looked like nothing happening.
+**v0.1.88** — a day spent on failures that looked like nothing happening.
 
 Ten releases in one day (v0.1.77 → v0.1.86), and almost every one was the same
 shape: a feature that appeared dead, wasn't broken where it looked broken, and
