@@ -66,6 +66,9 @@ export interface VaultStatus {
   notes: { memory: number; backlog: number; plans: number };
   /** graphify's per-node note export is present. */
   graphNotes: boolean;
+  /** ADR-0091 — the single-file Canvas export. Unlike the per-symbol notes it
+   *  is usable at any graph size, so it is what the index points at. */
+  graphCanvas: boolean;
   /**
    * Whether a plugin is enabled that makes dot-prefixed folders visible.
    *
@@ -115,6 +118,7 @@ export async function vaultStatus(workDir: string): Promise<VaultStatus> {
       plans: await countMd(join(workDir, ".marvin", "plans")),
     },
     graphNotes: existsSync(join(workDir, "graphify-out", "obsidian")),
+    graphCanvas: existsSync(join(workDir, "graphify-out", "obsidian", "graph.canvas")),
     hiddenFolderPlugin: await hasHiddenFolderPlugin(dot),
     dataviewPlugin: await hasEnabledPlugin(dot, DATAVIEW_PLUGIN_IDS),
   };
@@ -191,11 +195,11 @@ ${status.hiddenFolderPlugin ? "" : `> [!warning] Most of these notes are invisib
 
 - **[[memory]]** — ${memory} durable fact${memory === 1 ? "" : "s"}: invariants, gotchas and constraints the next session can't re-derive from the code.
 - **[[backlog]]** — ${backlog} parked item${backlog === 1 ? "" : "s"}: work noticed in flight and deliberately deferred.
-- **Plans** — ${plans} in \`.marvin/plans/\`, one per piece of planned work.
-${status.graphNotes ? "- **Code graph** — one note per symbol under `graphify-out/obsidian/`, linked by call and import.\n" : ""}
+- **[[plans]]** — ${plans} plan${plans === 1 ? "" : "s"}, newest first, with checkbox progress.
+${status.graphCanvas ? "- **Code graph canvas** — the whole graph as one Obsidian Canvas: `graphify-out/obsidian/graph.canvas`. Open it directly; the per-symbol notes beside it are filtered out of the vault on purpose (ADR-0090).\n" : ""}
 ## How to read it
 
-Open the graph view. The two hubs are \`memory\` and \`backlog\`; each links out
+Open the graph view. The three hubs are \`memory\`, \`backlog\` and \`plans\`; each links out
 to its individual notes. Frontmatter (\`type\`, \`severity\`, \`kind\`, \`status\`)
 shows as properties, so Obsidian's search and Dataview can filter on them.
 

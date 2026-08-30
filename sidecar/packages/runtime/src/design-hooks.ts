@@ -107,6 +107,10 @@ export interface DesignTurnContext {
   changeImpactCallCount: number;
   /** ADR-0084 — has the pre-ship impact nudge already fired this turn? */
   shipImpactNudgeFired: boolean;
+  /** ADR-0091 — `graph_save_result` calls this turn. */
+  saveResultCallCount: number;
+  /** ADR-0091 — has the record-the-outcome nudge already fired this turn? */
+  saveResultNudgeFired: boolean;
   /** ADR-0084 — files this turn has already been nudged about. Editing a
    *  file twice is one decision, not two. */
   editedFilesThisTurn: Set<string>;
@@ -135,6 +139,12 @@ export const GRAPH_DRIFT_DENY_THRESHOLD = 25;
  *  question is per-symbol), but a 40-file refactor should not carry 40
  *  reminders. */
 export const BLAST_RADIUS_MAX_NUDGES = 2;
+
+/** ADR-0091 — graph calls in a turn before MARVIN is asked to record whether
+ *  they actually helped. Set above a single orienting query: one graph call
+ *  is not a lesson, several in one turn is a research thread with an outcome
+ *  worth keeping. */
+export const SAVE_RESULT_GRAPH_THRESHOLD = 4;
 
 /** ADR-0084 — Bash commands that mean "this work is going out": a commit, a
  *  push, an MR. Before one of these, `graph_change_impact` answers "what does
@@ -246,6 +256,8 @@ export function createTurnDesignContext(
     blastRadiusNudgeCount: 0,
     changeImpactCallCount: 0,
     shipImpactNudgeFired: false,
+    saveResultCallCount: 0,
+    saveResultNudgeFired: false,
     editedFilesThisTurn: new Set<string>(),
     advisorCallCount: 0,
     sourceFilesRead: 0,
@@ -281,6 +293,7 @@ export function recordAllowedTool(
     // ADR-0084 — track the two specific tools the measurement found unused.
     if (toolName.endsWith("__graph_affected")) ctx.affectedCallCount += 1;
     if (toolName.endsWith("__graph_change_impact")) ctx.changeImpactCallCount += 1;
+    if (toolName.endsWith("__graph_save_result")) ctx.saveResultCallCount += 1;
     // ADR-0060 — re-orienting clears the drift budget. The rule isn't "query
     // the graph N times", it's "don't explore blind for long stretches".
     ctx.novelFilesSinceGraph = 0;
@@ -523,6 +536,43 @@ export function checkBlastRadius(
 }
 
 /**
+ * ADR-0091 — the record-the-outcome nudge.
+ *
+ * `graph_save_result --outcome useful|dead_end|corrected` and `graph_reflect`
+ * are graphify's self-improving loop, and ADR-0085 gave it its output side by
+ * injecting `LESSONS.md`. It still had no INPUT: measured 2026-08-30, **12
+ * saves across every session ever, and zero reflections**. A loop with no
+ * input writes an empty file.
+ *
+ * Fires once per turn, after enough graph work that there is something worth
+ * recording, on a mutating call — the point where MARVIN has stopped looking
+ * and started acting, so it knows whether the graph answers held up. A wrong
+ * graph answer recorded as `corrected` is the highest-value signal there is.
+ *
+ * Exported for tests.
+ */
+export function checkSaveResult(
+  ctx: DesignTurnContext,
+  toolName: string,
+): string | null {
+  if (!ctx.hasGraph) return null;
+  if (ctx.saveResultNudgeFired) return null;
+  if (ctx.saveResultCallCount > 0) return null;
+  if (ctx.graphCallCount < SAVE_RESULT_GRAPH_THRESHOLD) return null;
+  if (toolName !== "Edit" && toolName !== "Write") return null;
+  ctx.saveResultNudgeFired = true;
+  return (
+    `[graph memory — advisory] You have made ${ctx.graphCallCount} graph queries ` +
+    "this turn and are now editing, so you know whether they held up. " +
+    "`mcp__marvin-graph__graph_save_result` with an `outcome` " +
+    "(`useful` / `dead_end` / `corrected`, plus `correction` when the graph was " +
+    "wrong) is what `graph_reflect` later turns into LESSONS.md for future " +
+    "sessions. A wrong answer recorded as `corrected` is the most valuable " +
+    "signal there is; without an outcome the save is just a cache entry."
+  );
+}
+
+/**
  * ADR-0084 (B) — the pre-ship impact nudge.
  *
  * `graph_change_impact` gives the blast radius of a whole branch — the
@@ -697,6 +747,7 @@ export function makeDesignHooksPreToolUse(args: {
     // (0 calls, ever) before the work ships. Advisory, like the drift nudge.
     const blast = mode === "enforce" ? checkBlastRadius(designCtx, evt.tool_name, safeInput) : null;
     const ship = mode === "enforce" ? checkShipImpact(designCtx, evt.tool_name, safeInput) : null;
+    const save = mode === "enforce" ? checkSaveResult(designCtx, evt.tool_name) : null;
 
     // No design-hook deny — record the tool as allowed-from-our-POV so
     // state advances. (canUseTool may still deny for safety reasons; if
@@ -707,6 +758,7 @@ export function makeDesignHooksPreToolUse(args: {
     for (const [advice, kind] of [
       [blast, "blast.radius.nudge"],
       [ship, "ship.impact.nudge"],
+      [save, "save.result.nudge"],
     ] as const) {
       if (!advice) continue;
       logDesignHookEvent({
