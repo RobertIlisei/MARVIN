@@ -141,9 +141,24 @@ export function recordClaudeRateLimit(info: {
   const type = info.rateLimitType ?? "unknown";
   let headline: ClaudeRateLimitWindow | null = null;
   if (type !== "unknown" || Object.keys(existing).length === 0) {
+    // "Newest snapshot wins, fields are not merged" is the rule, and it is the
+    // right one for TIME-SENSITIVE fields: carrying a stale `resetsAt` forward
+    // would state a refill time that has already passed. `utilization` is the
+    // exception — it is a gauge, and a slightly old percentage is strictly
+    // better than the blank one it was being replaced with.
+    //
+    // Seen live 2026-08-30: `five_hour` showed "no % yet" with a NEWER
+    // timestamp than `seven_day`'s 49%. The 2.1.92 CLI does not report
+    // `unifiedWindows` (ADR-0087/0093), so its headline-only event carried
+    // status + resetsAt but no percentage — and erased the one the newer CLI
+    // had recorded. `seven_day` survived purely because it is only ever
+    // written through the merging `unifiedWindows` loop below.
+    const carriedUtilization =
+      typeof info.utilization === "number" ? undefined : next[type]?.utilization;
     headline = {
       type,
       status,
+      ...(typeof carriedUtilization === "number" ? { utilization: carriedUtilization } : {}),
       ...(typeof info.utilization === "number" ? { utilization: info.utilization } : {}),
       ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
       ...(typeof info.overageStatus === "string" ? { overageStatus: info.overageStatus } : {}),

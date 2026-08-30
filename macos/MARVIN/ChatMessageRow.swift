@@ -18,6 +18,8 @@
 // for NSCollectionView.
 
 import SwiftUI
+import AppKit
+import MARVINLogic
 
 struct ChatMessageRow: View {
     let message: ChatMessage
@@ -167,12 +169,36 @@ private struct TextBlockView: View {
         // reinterpreted (a leading `#` becoming a heading) would misrepresent
         // what they sent.
         if isInBubble {
-            Text(text)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: nil, alignment: .leading)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            // A pasted image is carried as an `@/abs/path.png` token, so the
+            // bubble used to show the raw path — the preview vanished at
+            // exactly the moment the user pressed send (2026-08-30). Render the
+            // picture, the way the composer chip already does.
+            if AttachmentMentions.containsImage(text) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(AttachmentMentions.split(text).enumerated()), id: \.offset) { _, segment in
+                        switch segment {
+                        case .text(let body):
+                            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                Text(trimmed)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        case .image(let path):
+                            SentAttachmentImage(path: path)
+                        }
+                    }
+                }
+            } else {
+                Text(text)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: nil, alignment: .leading)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } else {
             MarkdownView(
                 text: text,
@@ -181,6 +207,45 @@ private struct TextBlockView: View {
                 baseColor: role == .system || role == .result ? .secondary : .primary,
                 workDir: MarvinBridge.shared.projectWorkDir
             )
+        }
+    }
+}
+
+/// One image attachment inside a sent user message.
+///
+/// Falls back to the plain `@path` token when the file will not load — a
+/// mention of a deleted or non-image file must still read correctly rather
+/// than leaving a blank gap.
+private struct SentAttachmentImage: View {
+    let path: String
+
+    var body: some View {
+        if let thumb = AttachmentThumbnail.image(forPath: path, maxEdge: AttachmentThumbnail.bubbleMaxEdge) {
+            Image(nsImage: thumb)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 320, maxHeight: 220, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(MarvinTheme.border, lineWidth: 0.5)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    QuickLookCoordinator.shared.show(url: URL(fileURLWithPath: path))
+                }
+                .onHover { inside in
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .help("\((path as NSString).lastPathComponent) — click to preview")
+                .accessibilityLabel("Attached image \((path as NSString).lastPathComponent)")
+        } else {
+            Text("@\(path)")
+                .font(.body.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

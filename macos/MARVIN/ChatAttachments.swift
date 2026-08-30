@@ -228,10 +228,16 @@ struct ChatAttachmentsBar: View {
 /// thumbnail and a stutter. One decode per path, downscaled to chip size.
 enum AttachmentThumbnail {
     private static let cache = NSCache<NSString, NSImage>()
-    private static let maxEdge: CGFloat = 88  // 2× the 44pt chip, for Retina
+    /// 2× the 44pt composer chip, for Retina. The sent-message bubble asks for
+    /// a bigger one (it renders the picture, not a chip), so the cache key
+    /// carries the edge — otherwise the first caller's size would be served to
+    /// the second and one of them would look wrong.
+    static let chipMaxEdge: CGFloat = 88
+    static let bubbleMaxEdge: CGFloat = 480
 
-    static func image(forPath path: String) -> NSImage? {
-        if let hit = cache.object(forKey: path as NSString) { return hit }
+    static func image(forPath path: String, maxEdge: CGFloat = chipMaxEdge) -> NSImage? {
+        let key = "\(Int(maxEdge))|\(path)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
         guard let full = NSImage(contentsOfFile: path), full.size.width > 0, full.size.height > 0 else {
             return nil
         }
@@ -242,7 +248,7 @@ enum AttachmentThumbnail {
         full.draw(in: NSRect(origin: .zero, size: size),
                   from: .zero, operation: .copy, fraction: 1)
         thumb.unlockFocus()
-        cache.setObject(thumb, forKey: path as NSString)
+        cache.setObject(thumb, forKey: key)
         return thumb
     }
 }
