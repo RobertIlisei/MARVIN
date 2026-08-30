@@ -1931,6 +1931,44 @@ private func realCancelledRequestError() -> Error? {
     return captured
 }
 
+runner.suite("AttachmentMentions") {
+    runner.test("pulls an image mention out of the surrounding prose") {
+        let segs = AttachmentMentions.split("@/Users/x/.marvin/attachments/AB-CD.png\n\nprepare a plan.")
+        runner.expect(segs.count, equals: 2, "one image + one text segment")
+        runner.expect(segs.first == .image(path: "/Users/x/.marvin/attachments/AB-CD.png"), "image first")
+        if case .text(let body) = segs[1] {
+            runner.expect(body.contains("prepare a plan."), "prose preserved")
+        } else {
+            runner.expect(false, "second segment is text")
+        }
+    }
+    runner.test("keeps order across several mentions") {
+        let segs = AttachmentMentions.split("before @/a/one.png middle @/b/two.jpg after")
+        runner.expect(segs.count, equals: 5, "text/image/text/image/text")
+        runner.expect(segs[1] == .image(path: "/a/one.png"), "first image")
+        runner.expect(segs[3] == .image(path: "/b/two.jpg"), "second image")
+    }
+    runner.test("only treats a token-leading @ as a mention") {
+        // `foo@/bar.png` is an email-ish string, not an attachment.
+        runner.expect(!AttachmentMentions.containsImage("mail me at bob@/x.png"), "mid-token @ ignored")
+        runner.expect(AttachmentMentions.containsImage("look @/x.png"), "space-preceded @ matched")
+        runner.expect(AttachmentMentions.containsImage("@/x.png"), "start-of-string @ matched")
+    }
+    runner.test("ignores non-image and relative paths") {
+        runner.expect(!AttachmentMentions.containsImage("@/src/main.swift"), "source file is not an image")
+        runner.expect(!AttachmentMentions.containsImage("@relative/x.png"), "relative path is not a mention")
+        runner.expect(!AttachmentMentions.containsImage("no mentions here"), "plain prose")
+    }
+    runner.test("is case-insensitive on the extension") {
+        runner.expect(AttachmentMentions.containsImage("@/a/SHOT.PNG"), "uppercase extension")
+    }
+    runner.test("returns the whole string as one text segment when there is nothing to split") {
+        let segs = AttachmentMentions.split("just words")
+        runner.expect(segs.count, equals: 1, "single segment")
+        runner.expect(segs.first == .text("just words"), "unchanged")
+    }
+}
+
 runner.suite("AdvisorTierFloor") {
     runner.test("warns when the second opinion is weaker than the executor") {
         runner.expect(
