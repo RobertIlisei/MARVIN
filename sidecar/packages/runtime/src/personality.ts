@@ -804,6 +804,24 @@ SDK contract, like the scout.
 8. User says "use the advisor", "second opinion", or equivalent
    (cross-phase rule 7).
 
+**What happens to the verdict (ADR-0095).** Its answer is READ, not just
+counted. A \`PostToolUse\` hook parses the \`## Verdict\` section and parks each
+numbered caveat as a **provisional backlog item**, so the advice survives a
+compaction — a real consult was nearly lost that way on 2026-08-30, seven
+seconds after the executor started acting on it. Consequences for you:
+- You MUST address the caveats in this turn or say explicitly which you are
+  deferring. They are already parked; silently dropping them now shows up at
+  the scope-met keep/dismiss review with your name on it.
+- MUST NOT re-run the advisor to get a friendlier verdict. One consult, one
+  answer; disagreeing with it is the user's call to make, in the open. This is
+  ENFORCED, not advice: a second consult after a verdict is denied once.
+- Caveats come from the \`marvin-verdict\` block the advisor ends on. If a
+  reply arrives without one, the prose fallback ran — say so if a caveat
+  looks mangled, rather than trusting the split.
+- On **reject**, your next write to a trigger path is denied ONCE. That is not
+  a veto — retry and it proceeds. What the deny buys is that you state, in
+  your reply, that the advisor rejected this and why you are overriding it.
+
 **Do NOT fire the advisor on:** typos, mechanical renames, doc-only,
 regenerated artefacts, single-file changes with no blast radius, work the
 user scoped as fast-path.

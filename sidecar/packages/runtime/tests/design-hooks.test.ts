@@ -403,6 +403,157 @@ describe("design-hooks · advisor-on-ADR-trigger", () => {
     expect(result?.behavior).toBe("deny");
   });
 
+  // ADR-0094: the deny message now prescribes the REGISTERED advisor agent.
+  // Before this, it told MARVIN to spawn `general-purpose` with a model hint —
+  // the pre-ADR-0033 shape — which silently discarded the advisor's effort,
+  // read-only denylist, marvin-graph server and turn cap.
+  it("prescribes the registered advisor agent, not general-purpose", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    const result = runDesignHooks({
+      ctx,
+      toolName: "Write",
+      toolInput: { file_path: join(cwd, "db", "migrations", "V1__init.sql") },
+      mode: "enforce",
+    });
+    expect(result?.behavior).toBe("deny");
+    expect(result?.message).toContain('subagent_type: "advisor"');
+    expect(result?.message).not.toContain('subagent_type: "general-purpose"');
+    // The registered definition owns the model and the system prompt; the
+    // message must not re-specify either.
+    expect(result?.message).not.toContain('model:          "opus"');
+    expect(result?.message).not.toContain("You are an advisor consulted by");
+    // A fresh subagent sees none of this conversation — the message has to
+    // say so, or the executor pastes a stub and gets a uselessly shallow read.
+    expect(result?.message).toContain("FRESH context");
+  });
+
+  // ADR-0094, the other half: keying the counter on the `advisor:` description
+  // prefix ALONE meant the gate could not see its own prescribed remedy. A
+  // dispatch of the registered agent with a natural description must count.
+  it("counts a registered-advisor dispatch with no `advisor:` description prefix", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", {
+      subagent_type: "advisor",
+      description: "review the platform_audit migration",
+    });
+    expect(ctx.advisorCallCount).toBe(1);
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Write",
+        toolInput: { file_path: join(cwd, "db", "migrations", "V1__init.sql") },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  // Back-compat: ADR-0007's `general-purpose` + `advisor:` prefix spawn is
+  // still policy-sanctioned, and a consult run that way is still a consult.
+  it("still counts the ADR-0007 general-purpose spawn via the description prefix", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", {
+      subagent_type: "general-purpose",
+      description: "advisor: review the migration",
+    });
+    expect(ctx.advisorCallCount).toBe(1);
+  });
+
+  // ADR-0095: the gate now reads the VERDICT, not just the dispatch. A reject
+  // denies the next trigger-path mutation exactly once — enough to force the
+  // verdict to be read, without handing a subagent a veto over the user's tree.
+  it("denies once when the advisor rejected, then lets the retry through", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", { subagent_type: "advisor", description: "advisor: the migration" });
+    ctx.advisorVerdict = "reject";
+
+    const target = { file_path: join(cwd, "db", "migrations", "V1__init.sql") };
+    const first = runDesignHooks({ ctx, toolName: "Write", toolInput: target, mode: "enforce" });
+    expect(first?.behavior).toBe("deny");
+    expect(first?.message).toContain("REJECT");
+    expect(first?.message).toContain("fires ONCE");
+
+    // Fired-once: the same write now proceeds, and the reply is expected to
+    // own the override.
+    expect(runDesignHooks({ ctx, toolName: "Write", toolInput: target, mode: "enforce" })).toBeNull();
+  });
+
+  it("does not fire the reject deny on a go-with-caveats verdict", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", { subagent_type: "advisor", description: "advisor: the migration" });
+    ctx.advisorVerdict = "go-with-caveats";
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Write",
+        toolInput: { file_path: join(cwd, "db", "migrations", "V1__init.sql") },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fire the reject deny on a benign path", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", { subagent_type: "advisor", description: "advisor: the migration" });
+    ctx.advisorVerdict = "reject";
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Write",
+        toolInput: { file_path: join(cwd, "src", "components", "Button.tsx") },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  // ADR-0095 amendment: "don't re-run the advisor for a friendlier verdict"
+  // used to be prose in personality.ts. The 2026-05-22 audit measured what
+  // soft-nudge language is worth — it fires ~0×. Now it's mechanical.
+  it("denies a second advisor consult once a verdict has landed", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    recordAllowedTool(ctx, "Agent", { subagent_type: "advisor", description: "advisor: the migration" });
+    ctx.advisorVerdict = "reject";
+
+    const second = runDesignHooks({
+      ctx,
+      toolName: "Agent",
+      toolInput: { subagent_type: "advisor", description: "advisor: the migration, again" },
+      mode: "enforce",
+    });
+    expect(second?.behavior).toBe("deny");
+    expect(second?.message).toContain("One consult, one answer");
+
+    // Fires once — a consult on a genuinely different question gets through.
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Agent",
+        toolInput: { subagent_type: "advisor", description: "advisor: a different question" },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not block the FIRST advisor consult, or a scout after a verdict", () => {
+    const ctx = createTurnDesignContext(turnId, cwd);
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Agent",
+        toolInput: { subagent_type: "advisor", description: "advisor: first look" },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+    ctx.advisorVerdict = "go-with-caveats";
+    expect(
+      runDesignHooks({
+        ctx,
+        toolName: "Agent",
+        toolInput: { subagent_type: "scout", description: "scout: enumerate call sites" },
+        mode: "enforce",
+      }),
+    ).toBeNull();
+  });
+
   it("allows edits on benign paths regardless of advisor state", () => {
     const ctx = createTurnDesignContext(turnId, cwd);
     for (const target of [
