@@ -51,17 +51,34 @@ struct TerminalPaneView: View {
                 .tracking(2)
                 .foregroundStyle(.tertiary)
             if let cwd = bridge.projectWorkDir {
+                // `layoutPriority(-1)` is load-bearing, not cosmetic.
+                //
+                // A project path is long ("/Users/x/Projects/agri-saas-platform"),
+                // and with equal priority this Text claimed the row's width and
+                // starved the trailing buttons to **0×0**. A SwiftUI Button laid
+                // out at zero size does not merely disappear: its AppKit backing
+                // re-resolves its style, removes and re-adds its host view, and
+                // invalidates constraints — forever. The constraint-storm monitor
+                // caught it live on 2026-08-31 at **150 invalidations in under
+                // 0.5s**, trigger view `SwiftUIAppKitButton.ContentViewHost
+                // frame=(0.0, 0.0, 0.0, 0.0)`, 100% CPU and a 48s hang.
+                //
+                // It also explains the user report that the Stop/Restart buttons
+                // were "missing": they were not missing, they were zero-width.
+                // The path yields space first and truncates; the controls keep
+                // their intrinsic size.
                 Text(cwd)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                    .layoutPriority(-1)
             } else {
                 Text("(no project)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let session {
                 if session.isRunning {
                     Button {
@@ -72,6 +89,7 @@ struct TerminalPaneView: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.red)
+                    .fixedSize()
                     .help("Send Ctrl-C to the shell")
                 } else {
                     Button {
@@ -81,6 +99,7 @@ struct TerminalPaneView: View {
                             .font(.system(size: 11))
                     }
                     .buttonStyle(.borderless)
+                    .fixedSize()
                     .help("Start a new shell")
                 }
                 Button {
@@ -90,6 +109,7 @@ struct TerminalPaneView: View {
                 }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("k", modifiers: [.command])
+                .fixedSize()
                 .help("Clear (⌘K)")
             }
         }

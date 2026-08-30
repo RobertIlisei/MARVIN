@@ -9,6 +9,54 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-31 — v0.1.88: a zero-width button was burning a core.**
+
+  Reported as two separate things — *"we can't stop and start a terminal,
+  buttons are missing"* and, later that night, *"marvin seems stuck"*. They
+  were the same defect.
+
+  MARVIN's own constraint-storm monitor (ADR-0062) caught it live, and it
+  logged the one thing that made this findable in a single pass — the trigger
+  view **and its frame**:
+
+  ```
+  trigger view: SwiftUIAppKitButton.ContentViewHost   frame=(0.0, 0.0, 0.0, 0.0)
+    → NSButtonCell setBordered:
+    → invalidateResolvedButtonStyleInControlView:
+    → NSView removeFromSuperview
+    → setNeedsUpdateConstraints          ← 150 invalidations in <0.5s
+    ← StackLayout.makeChildren / HVStack.makeCache
+  ```
+
+  The terminal header lays out `Text(cwd)` with `.lineLimit(1)` and no layout
+  priority, then a `Spacer()`, then the Stop / Restart / Clear controls. A
+  project path is long — `/Users/robertilisei/Projects/agri-saas-platform` —
+  so with equal priority the label claimed the row and starved the buttons to
+  **0×0**. A SwiftUI Button at zero size does not merely disappear: its AppKit
+  backing re-resolves its style, removes and re-adds its host view, and
+  invalidates constraints, forever. 99–100% CPU, two 48.9-second hangs, and
+  the app died twice.
+
+  So the buttons were never missing. They were zero-width, and being
+  zero-width is what burned the core. Both machines that hit it have long
+  project paths.
+
+  Fix: `.layoutPriority(-1)` on the path so it yields space and truncates,
+  `.fixedSize()` on each control so no ancestor can compress it below its
+  intrinsic size, and `Spacer(minLength: 8)`.
+
+  Verified before shipping, not asserted: CPU 99–100% → 4–16% idle-normal, no
+  further hangs, **0 new constraint storms in 20 seconds at idle**, and the
+  zero-frame button trigger gone from the log entirely. The ~1,675 storms that
+  remain are all logged during first paint and stop once the window settles —
+  a monitor armed at 150 invalidations/0.5s catching startup churn, not the
+  pathological loop.
+
+  Not fixed here: the same shape (`truncationMode(.head)` beside controls)
+  exists in seven other views. None has shown the symptom, so none was
+  touched — but they are the first place to look if it resurfaces.
+
+
 - **2026-08-30 — v0.1.87: the advisor's caveats stop flooding the backlog.**
 
   ADR-0095 parked one provisional backlog item **per caveat**. Measured on a
