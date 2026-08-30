@@ -2,9 +2,24 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.55
-(2026-07-02). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v0.1.88
+(2026-08-31). Where this document and the repository disagree, the
 repository wins.*
+
+> **Since v0.1.55.** Subsystems added after this document's original scope,
+> each with its own decision record: the in-process **pty terminal**
+> (ADR-0078), **background subagents** and built-in read-only agents
+> (ADR-0080), **implementer subagents on isolated git worktrees** (ADR-0081
+> — the one amendment to the single-assistant rule), **Claude plan usage**
+> from `rate_limit_event` (ADR-0082), the **escalating graph-drift rail**
+> (ADR-0083), **blast-radius and pre-ship impact** queries (ADR-0084/0085),
+> **dependency bootstrap and update checks** (ADR-0086), **Obsidian vault
+> integration** and the plans canvas (ADR-0089 → 0092), the **advisor
+> verdict parser** and its caveat record (ADR-0094/0095, amended
+> 2026-08-31), and **provider-aware model resolution** for OpenRouter
+> (ADR-0096). Two cross-cutting lessons are recorded as ADR-0097 (verify
+> against the surface that *runs*, not the one that *reports*) and ADR-0098
+> (a rail keyed on vendor tool names is only as durable as those names).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at

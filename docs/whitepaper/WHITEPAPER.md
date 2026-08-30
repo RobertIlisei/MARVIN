@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · July 2026 · v0.1.55 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · August 2026 · v0.1.88 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -134,7 +134,7 @@ work — per turn, debounced, while the project is open — at zero LLM cost.⁵
 
 The economics are the point. A graph query answering "what depends on this
 service" costs a fraction of the tokens of opening a dozen candidate files
-— internally estimated at ~36× cheaper per structural question — and
+— measured at 27.5× cheaper per structural question — and
 catches couplings a keyword grep cannot see, because the graph encodes
 *edges*, not text matches. The discipline is graph-to-locate, files-to-
 verify: the graph points at two files out of hundreds; the assistant reads
@@ -359,10 +359,13 @@ budgeted as a project grows, instead of one that degrades back.
 
 **Structural questions at graph prices (estimated).** The graph-first rule
 replaces open-ended file exploration with one ranked query plus targeted
-reads. Our internal token-cost estimate is ~36× per structural question —
-an engineering heuristic, not a benchmark⁵ — but the qualitative property
-holds regardless of the multiplier: answers arrive with `file:line`
-citations instead of synthesized guesses.
+reads. This is now **measured, not estimated**: `graphify benchmark` on
+MARVIN's own repository (2026-08-15) puts it at **27.5×** — 268,066 tokens
+for a naive full-corpus read against ~9,763 per graph query.⁵ The earlier
+~36× figure that appeared here was an engineering estimate that had never
+been run against this repo, and is retired. The qualitative property holds
+regardless of the multiplier: answers arrive with `file:line` citations
+instead of synthesized guesses.
 
 **Plans that survive days, not turns (design property, with transcripts).**
 The durable-plan spine is the difference between "the assistant forgot the
@@ -370,11 +373,43 @@ plan after lunch" and a multi-day, dozens-of-turns execution that resumes
 itself on every Continue. This is MARVIN's most visible end-result in
 daily use, and the anonymized transcripts show it running on real work.¹¹
 
+**Capabilities added since v0.1.55 (design properties).** Four are worth
+naming because each extends a bet rather than decorating it.
+*Provider independence* — an OpenRouter BYOK path with provider-aware model
+resolution, so the assistant is not welded to one vendor's catalogue
+([ADR-0096](../decisions/0096-provider-aware-model-resolution.md)).
+*A real terminal* — a persistent login shell on a pty, in-process, so `cd`
+persists, Ctrl-C interrupts, and a shell dies with the app rather than
+orphaning ([ADR-0078](../decisions/0078-pty-terminal-in-process.md)).
+*Parallel implementation without shared state* — the single amendment to
+Bet 1: an implementer subagent bound to a git worktree MARVIN created may
+mutate *that* checkout, because a worktree removes the sharing that makes
+parallel agents dangerous
+([ADR-0081](../decisions/0081-implementer-subagents-on-isolated-worktrees.md)).
+*Blast radius before the edit* — directed call-graph queries answering "who
+calls this, at which line" and "what does this branch touch outside itself",
+which is Bet 2 applied to change rather than to search
+([ADR-0084](../decisions/0084-blast-radius-and-pre-ship-impact-nudges.md),
+[ADR-0085](../decisions/0085-graphify-beyond-search.md)).
+
+**Guardrails that get measured, and corrected (worked example).** The
+advisor originally persisted each caveat as its own backlog item. One
+session produced **12 items in about a minute; 10 were dismissed at the
+review and 2 kept** — the 10 were advice the executor had already acted on
+in the same turn, arriving pre-satisfied. The cost was never the writes; it
+was that two genuine blockers sat among ten dismissible ones. The design was
+amended the same day to one durable record plus one review item, with
+promotion deferred to the point where the user has the context to judge
+([ADR-0095](../decisions/0095-advisor-verdict-is-read-and-caveats-persist.md)).
+This is the intended failure mode of the whole approach: a deterministic
+contract produces a number, the number contradicts the design, and the
+design loses.
+
 **Decisions that bind (design property).** Architecture decision records
 written at decision time are re-read at the start of every future session
 and cross-checked
 during impact analysis. Month-eight work is confronted with month-two
-constraints mechanically, not by luck. Fifty-one ADRs govern MARVIN's own
+constraints mechanically, not by luck. Ninety-seven ADRs govern MARVIN's own
 development — the tool is built under its own discipline, and several of
 its subsystems (the memory redesign, the context budget, the verify-then-
 remediate contract) exist because that discipline surfaced a real failure
@@ -480,7 +515,7 @@ Honest positioning, category by category:
   your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
-  51 ADRs are public; so are the audits that found real flaws — including
+  97 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -535,7 +570,9 @@ ad-hoc signed — no paid developer program — and installs to
 5. Graph architecture and lifecycle:
    [ADR-0028](../decisions/0028-multi-graph-architecture.md),
    [ADR-0041](../decisions/0041-project-graph-lifecycle-and-context-budget.md).
-   The ~36× figure is an internal estimate of per-question token cost,
+   The 27.5× figure is `graphify benchmark` run on this repository
+   (2026-08-15), replacing an earlier ~36× estimate that was never measured
+   here. It is one repo's number,
    graph query vs. multi-file reading; treat it as an engineering
    heuristic, not a benchmark.
 6. The firm-surfaces catalogue: `CLAUDE.md` ("The firm surfaces") and
@@ -569,4 +606,4 @@ ad-hoc signed — no paid developer program — and installs to
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.60; the repository is the authoritative, current reference.*
+v0.1.88; the repository is the authoritative, current reference.*

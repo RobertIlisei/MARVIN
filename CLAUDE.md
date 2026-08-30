@@ -412,7 +412,7 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 7000 nodes · 13558 edges · 401 communities (2026-08-29
+  files. 7397 nodes · 14392 edges · 501 communities (2026-08-31
   rebuild on graphify 0.9.51; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
@@ -420,8 +420,8 @@ repo:
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1557 nodes · 1984 edges · 138 communities
-  (built 2026-08-29). **Community labels are stale** — both counts moved on
+  `.marvin/memory.md`. 1683 nodes · 2193 edges · 150 communities
+  (built 2026-08-31). **Community labels are stale** — both counts moved on
   this rebuild, so graphify has renamed every community after its hub node;
   re-run `graphify label . --backend=claude-cli` (an LLM pass) to restore
   concept names.
