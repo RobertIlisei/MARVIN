@@ -1490,6 +1490,7 @@ final class ChatPreviewModel {
                 if let label = peek.activity { currentActivity = label }
                 ContextUsageReader.applyTo(bridge: b, cliEventData: data)
                 ToolUseCounter.applyTo(bridge: b, cliEventData: data)
+                SubagentLedger.applyTo(bridge: b, cliEventData: data)
                 // ADR-0034 — keep the "N files changed" strip live while
                 // the agent streams edits. Throttled inside (2 s), so
                 // calling per-event is cheap.

@@ -1749,6 +1749,27 @@ runner.suite("SubagentLedger") {
         runner.expect(l.summary.completed, equals: 1, "completed 1")
         runner.expect(!l.apply(cliEventData: ev(#"{"type":"system","subtype":"task_notification","task_id":"zzz","status":"completed"}"#)), "unknown task ignored")
     }
+    // The graphify fan-out shape: several graph-extractor chunks dispatched in
+    // ONE assistant message, interleaved with a thinking block. The popover
+    // showed zero for these — not because the ledger missed them, but because
+    // nothing fed it live (only the transcript-replay path called `apply`).
+    // The wiring itself lives in a SwiftUI view and is not reachable from this
+    // runner; this pins the parsing the wiring now depends on.
+    runner.test("counts a fan-out of several subagents in one message, past a thinking block") {
+        var l = SubagentLedger()
+        let json = #"""
+        {"type":"assistant","message":{"content":[
+          {"type":"thinking"},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"graph-extractor","description":"graphify semantic extraction chunk 1/5"}},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"graph-extractor","description":"graphify semantic extraction chunk 2/5"}},
+          {"type":"tool_use","name":"Agent","input":{"subagent_type":"advisor","description":"advisor: schema"}}
+        ]}}
+        """#
+        runner.expect(l.apply(cliEventData: ev(json)), "fan-out counted")
+        runner.expect(l.summary.dispatchedByType["graph-extractor"], equals: 2, "both chunks")
+        runner.expect(l.summary.dispatchedByType["advisor"], equals: 1, "advisor alongside")
+        runner.expect(l.summary.dispatched, equals: 3, "total across types")
+    }
     runner.test("pre-rename Task dispatches and untyped dispatches still count") {
         var l = SubagentLedger()
         l.apply(cliEventData: ev(#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Task","input":{"subagent_type":"advisor"}},{"type":"tool_use","name":"Agent","input":{"prompt":"p"}}]}}"#))
