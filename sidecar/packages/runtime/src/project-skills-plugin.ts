@@ -45,6 +45,11 @@ import { validateProjectCwd } from "./projects";
  * For non-projects (or invalid paths), we return null and the SDK
  * runs with user-global skills only.
  */
+/** The plugin name in the generated manifest. Project-local skills are
+ *  therefore invoked as `marvin-project-local:<directory-name>` — the
+ *  `Skill` tool does not accept the bare name. */
+export const PROJECT_SKILLS_PLUGIN = "marvin-project-local";
+
 export function projectSkillsPluginConfig(
   workDir: string,
 ): { type: "local"; path: string } | null {
@@ -72,7 +77,7 @@ export function projectSkillsPluginConfig(
         manifestPath,
         JSON.stringify(
           {
-            name: "marvin-project-local",
+            name: PROJECT_SKILLS_PLUGIN,
             version: "0.1.0",
             description:
               "Project-local skills committed to <workDir>/.marvin/skills/. " +
@@ -132,11 +137,91 @@ function hasAnySkill(skillsDir: string): boolean {
  *
  * Returns `[]` on any error — never throws.
  */
-export function listProjectSkills(
-  workDir: string,
-): Array<{ name: string; description: string; path: string }> {
+/**
+ * Why the agent's skill loader will not register this SKILL.md, or will
+ * register it under a different name than its frontmatter claims.
+ *
+ * `blocked` skills are invisible to the `Skill` tool entirely. MARVIN used
+ * to list them as active anyway — `listProjectSkills` fell back to the
+ * directory name when frontmatter was missing, so a runbook with no
+ * frontmatter appeared in the active-skills prompt block, and the model
+ * dutifully called it. Measured across every MARVIN transcript on
+ * 2026-08-30: 29 `Skill` calls to one such entry, every one answered
+ * `Unknown skill`, each followed by a find/Read hunt for the file. Zero
+ * successful `Skill` calls in the whole history.
+ */
+export interface SkillLoadIssue {
+  /** True when the loader skips the file outright. */
+  blocked: boolean;
+  reason: string;
+}
+
+export interface ProjectSkillEntry {
+  /** The name the loader registers, which is ALWAYS the directory name —
+   *  a frontmatter `name:` that disagrees is ignored (probed against the
+   *  0.3.251 loader, 2026-08-30). Invoked as `marvin-project-local:<name>`. */
+  name: string;
+  description: string;
+  path: string;
+  loadIssue?: SkillLoadIssue;
+}
+
+/**
+ * What the loader actually requires, probed rather than assumed
+ * (2026-08-30, SDK 0.3.251, five variants under one local plugin):
+ *
+ *   registered: `good`, `name-mismatch` (under its DIRECTORY name), `no-name`
+ *   skipped:    `no-fm` (no frontmatter), `no-desc` (no `description:`)
+ *
+ * So `description:` is the load-bearing key; `name:` is optional and, when
+ * present and different, ignored. Both non-registering shapes are reported
+ * as `blocked`, and a misleading `name:` as an advisory.
+ */
+function classifySkillMd(
+  dirName: string,
+  text: string,
+): { description: string; loadIssue?: SkillLoadIssue } {
+  if (!text.startsWith("---\n") || text.indexOf("\n---", 4) < 0) {
+    return {
+      description: "",
+      loadIssue: {
+        blocked: true,
+        reason:
+          "no YAML frontmatter — the skill loader skips this file, so MARVIN " +
+          "cannot invoke it. Add `---` / `name:` / `description:` / `---` at the top.",
+      },
+    };
+  }
+  const fm = parseFrontmatter(text);
+  if (!fm.description) {
+    return {
+      description: "",
+      loadIssue: {
+        blocked: true,
+        reason:
+          "frontmatter has no `description:` — the loader requires it and " +
+          "skips the file without it, so MARVIN cannot invoke this skill.",
+      },
+    };
+  }
+  if (fm.name && fm.name !== dirName) {
+    return {
+      description: fm.description,
+      loadIssue: {
+        blocked: false,
+        reason:
+          `frontmatter says \`name: ${fm.name}\` but the loader registers the ` +
+          `DIRECTORY name — this skill is invoked as \`${dirName}\`. Rename the ` +
+          "directory or the key so they agree.",
+      },
+    };
+  }
+  return { description: fm.description };
+}
+
+export function listProjectSkills(workDir: string): ProjectSkillEntry[] {
   const skillsDir = join(workDir, ".marvin", "skills");
-  const out: Array<{ name: string; description: string; path: string }> = [];
+  const out: ProjectSkillEntry[] = [];
   let entries: string[];
   try {
     const st = statSync(skillsDir);
@@ -148,17 +233,22 @@ export function listProjectSkills(
   for (const name of entries) {
     if (name.startsWith(".")) continue;
     const skillMd = join(skillsDir, name, "SKILL.md");
+    let text: string;
     try {
-      const text = readFileSync(skillMd, "utf-8");
-      const fm = parseFrontmatter(text);
-      out.push({
-        name: fm.name ?? name,
-        description: fm.description ?? "",
-        path: skillMd,
-      });
+      text = readFileSync(skillMd, "utf-8");
     } catch {
-      /* skip unreadable */
+      // No SKILL.md at all — not a skill directory and not a mistake. The
+      // skill-creator writes `<name>-workspace/` eval trees in here; those
+      // are working files, not broken skills, so they are not reported.
+      continue;
     }
+    const { description, loadIssue } = classifySkillMd(name, text);
+    out.push({
+      name,
+      description,
+      path: skillMd,
+      ...(loadIssue ? { loadIssue } : {}),
+    });
   }
   return out;
 }

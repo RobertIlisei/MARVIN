@@ -9,6 +9,68 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.78: verify against what runs — the CLI MARVIN actually spawned, and the skills the loader actually registered.**
+
+  Two symptoms that looked unrelated, one shared mistake: in both, the surface
+  that *agreed* was checked and the surface that *decides* was not.
+
+  **The plan-usage bars stayed blank through two fixes.** ADR-0087 found MARVIN
+  reporting one Claude CLI and running another, and fixed the reporting.
+  ADR-0093 found the spawn still wrong and put the resolved binary's directory
+  first on `PATH`. Neither worked, because **the SDK never resolves `claude`
+  from `PATH`** — it spawns the native binary its own package links to. `ps` on
+  the running app is what finally said so:
+
+  ```
+  88076 …/MARVIN.app/…/@anthropic-ai+claude-agent-sdk-darwin-arm64@0.2.113/…/claude
+  ```
+
+  0.2.113 (CLI `2.1.113`) beside a 0.3.251 SDK. The cause was one line in
+  `scripts/bundle-sidecar.sh`, which recreates the pnpm sibling symlink Next's
+  tracer drops: `find -name "…-${TRIPLE}@*" | head -n1` is directory order, and
+  pnpm's store keeps every version ever installed, so the bundle linked the
+  oldest of three. `2.1.113` predates `unifiedWindows`, the field carrying the
+  percentages — so `recordClaudeRateLimit` got a headline event with `resetsAt`
+  and no `utilization`, and the popover honestly rendered "no % yet" while the
+  Claude app showed 28 % / 54 %. Third "first, not newest" in this repo after
+  ADR-0086 (release versions) and ADR-0087 (CLI paths). Now resolved by
+  matching the SDK's own version, replacing a link that points elsewhere (the
+  old `[ ! -e ]` guard preserved a wrong one forever), and warning loudly when
+  no version-matched native package exists. Verified: the rebuilt bundle
+  reports `2.1.251 (Claude Code)`, and a live `rate_limit_event` from it
+  carries `unifiedWindows: { five_hour: 0.28, seven_day: 0.54 }`.
+
+  **`Skill` had never once succeeded.** Across every MARVIN transcript ever
+  recorded: **29 `Skill` calls, 29 `Unknown skill` errors, zero successes** —
+  each failure followed by a `find` + `Read` hunt for the file, which is what
+  the user noticed as wasted tokens. `listProjectSkills` named a skill
+  `fm.name ?? name`, so `.marvin/skills/hetzner-ssh/SKILL.md` — which has no
+  frontmatter at all — was listed under its directory name, marked always-active
+  per ADR-0037, and printed into the active-skills prompt block as
+  `` - `hetzner-ssh` — (no description) `` under the heading *reach for them per
+  their own triggers*. The model did exactly that. The loader had skipped the
+  file entirely.
+
+  The loader was probed rather than assumed — five variants under one local
+  plugin, SDK 0.3.251 — and the results changed the design: `description:` is
+  the load-bearing key, `name:` is **optional**, a `name:` that disagrees with
+  the directory is **ignored**, and the registered identity is always the
+  directory. Plugin-scoped skills also only answer to
+  `marvin-project-local:<dir>`, so the block had been printing an unusable name
+  for every project-local skill whether or not it loaded. Now: names come from
+  the directory, a `loadIssue` records what the loader will do, blocked skills
+  are dropped from the active set *including against an explicit `skills.json`
+  choice*, the Skills pane shows them NOT LOADED with the reason, and the prompt
+  block prints real invocation names and lists non-loading files as things to
+  read rather than call. `<name>-workspace/` eval trees are ignored, not
+  flagged — those are skill-creator working files.
+
+  [ADR-0097](../decisions/0097-verify-against-what-runs.md) records both and
+  corrects ADR-0087 and ADR-0093 without superseding them: each remains right
+  about what it changed, and both were wrong that it governed the spawn. 7 new
+  assertions; 1009 tests green.
+
+
 - **2026-08-30 — v0.1.77: the advisor's answer is read, and OpenRouter gets its own model ids.**
 
   **The advisor was consulted and then ignored — mechanically.** The gate had

@@ -25,7 +25,7 @@ import {
   toSourceInfo,
 } from "./install-provenance";
 import { readCachedDiscovery } from "./project-skill-discoverer";
-import { listProjectSkills } from "./project-skills-plugin";
+import { listProjectSkills, type SkillLoadIssue } from "./project-skills-plugin";
 import {
   applySuggestionRules,
   type SuggestionVerb,
@@ -46,6 +46,11 @@ export interface ProjectLocalSkill extends InstalledSkill {
   /** True iff a user-global skill of the same name also exists.
    *  Project-local SHADOWS user-global on conflict (ADR-0024). */
   shadowsUserGlobal: boolean;
+  /** Set when the agent's skill loader will skip this SKILL.md, or will
+   *  register it under a name its frontmatter disagrees with. The pane
+   *  renders it; a `blocked` skill is kept out of the active set so it is
+   *  never advertised to the model as invocable. */
+  loadIssue?: SkillLoadIssue;
 }
 
 export interface SkillSuggestion {

@@ -96,12 +96,22 @@ private struct SkillsIndexResponse: Decodable {
         var id: String { path }
     }
 
+    /// Why the agent's skill loader will skip a SKILL.md, or register it
+    /// under a name its frontmatter disagrees with. `blocked` means the
+    /// `Skill` tool has never heard of it — the pane used to show these as
+    /// active, which is how MARVIN came to call one 29 times.
+    struct SkillLoadIssue: Decodable {
+        let blocked: Bool
+        let reason: String
+    }
+
     struct ProjectLocalSkill: Decodable, Identifiable {
         let name: String
         let description: String
         let path: String
         let shadowsUserGlobal: Bool
         let source: SkillSourceInfo?
+        let loadIssue: SkillLoadIssue?
         var id: String { path }
     }
 
@@ -723,9 +733,13 @@ struct SkillsPane: View {
     @ViewBuilder
     private func activeSection(_ idx: SkillsIndexResponse) -> some View {
         let active = idx.userGlobal.filter { activeSkillNames.contains($0.name) }
+        // A blocked project-local skill is NOT active — the loader never
+        // registered it. It still shows in the list, flagged, because this
+        // pane is where you would go to find out why.
+        let loadable = idx.projectLocal.filter { $0.loadIssue?.blocked != true }
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("checkmark.seal.fill", .green, "Active in this project",
-                          count: active.count + idx.projectLocal.count)
+                          count: active.count + loadable.count)
             Text("What MARVIN uses here — the fingerprint picks these automatically; toggle to change. Skills that aren't active aren't offered to MARVIN for this project (ADR-0037).")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -741,9 +755,11 @@ struct SkillsPane: View {
                 }
                 ForEach(idx.projectLocal) { skill in
                     // Project-local skills are authored FOR this project — always
-                    // active, no toggle.
+                    // active, no toggle. Invoked as `marvin-project-local:<name>`.
                     installedRow(name: skill.name, description: skill.description, path: skill.path,
-                                 badge: "local", scope: "project-local", source: skill.source)
+                                 badge: skill.loadIssue?.blocked == true ? "not loaded" : "local",
+                                 scope: "project-local", source: skill.source,
+                                 loadIssue: skill.loadIssue)
                 }
             }
         }
@@ -1050,7 +1066,8 @@ struct SkillsPane: View {
         scope: String,
         source: SkillSourceInfo?,
         active: Bool? = nil,
-        onToggle: (() -> Void)? = nil
+        onToggle: (() -> Void)? = nil,
+        loadIssue: SkillsIndexResponse.SkillLoadIssue? = nil
     ) -> some View {
         HStack(alignment: .top, spacing: 8) {
             if let active, let onToggle {
@@ -1072,7 +1089,7 @@ struct SkillsPane: View {
                             .font(.caption2)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(.orange.opacity(0.18))
+                            .background((loadIssue?.blocked == true ? Color.red : .orange).opacity(0.18))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
@@ -1081,6 +1098,14 @@ struct SkillsPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                }
+                if let loadIssue {
+                    Label(loadIssue.reason,
+                          systemImage: loadIssue.blocked
+                            ? "exclamationmark.triangle.fill" : "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(loadIssue.blocked ? Color.red : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()

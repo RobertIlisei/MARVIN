@@ -27,6 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { buildSkillsIndex, type SkillsIndex } from "./skills-index";
 
 /**
@@ -119,7 +120,14 @@ export function selectActiveSkills(
       if (s.verb === "install" && installed.has(s.name)) set.add(s.name);
     }
   }
-  for (const s of index.projectLocal) set.add(s.name); // always active
+  // Always active — EXCEPT the ones the loader will not register. Listing a
+  // blocked skill as active is what produced 29 `Unknown skill` calls (see
+  // `classifySkillMd`): the model was told to reach for something the `Skill`
+  // tool had never heard of.
+  for (const s of index.projectLocal) {
+    if (s.loadIssue?.blocked) continue;
+    set.add(s.name);
+  }
   return [...set].sort();
 }
 
@@ -147,20 +155,43 @@ export function formatActiveSkillsBlock(workDir: string): string {
   if (all.length === 0) return "";
 
   const activeSet = new Set(active);
-  const activeLines = all
-    .filter((s) => activeSet.has(s.name))
-    .map((s) => `- \`${s.name}\` — ${s.description || "(no description)"}`)
+  // Project-local skills come from a plugin, so the `Skill` tool only accepts
+  // them NAMESPACED — `marvin-project-local:adr-gate`, never `adr-gate`. The
+  // block used to print bare names for both trees, which is unusable for half
+  // of them; user-global skills stay bare, which is correct for those.
+  const invocationName = (s: { name: string }, projectLocal: boolean) =>
+    projectLocal ? `${PROJECT_SKILLS_PLUGIN}:${s.name}` : s.name;
+  const activeLines = [
+    ...index.userGlobal.filter((s) => activeSet.has(s.name)).map((s) => [s, false] as const),
+    ...index.projectLocal.filter((s) => activeSet.has(s.name)).map((s) => [s, true] as const),
+  ]
+    .map(([s, pl]) => `- \`${invocationName(s, pl)}\` — ${s.description || "(no description)"}`)
     .join("\n");
   const inactive = index.userGlobal.filter((s) => !activeSet.has(s.name)).map((s) => s.name);
+  const blocked = index.projectLocal.filter((s) => s.loadIssue?.blocked);
 
   const lines = [
     "## Active skills for this project",
     "",
     "Of the skills installed on this machine, these are the ones relevant " +
-      "to THIS project — reach for them per their own triggers:",
+      "to THIS project — reach for them per their own triggers. Invoke each " +
+      "by EXACTLY the name below: project-local skills are plugin-scoped and " +
+      "the `Skill` tool rejects the bare name.",
     "",
     activeLines || "- (none active)",
   ];
+  if (blocked.length > 0) {
+    lines.push(
+      "",
+      "These files live in `.marvin/skills/` but are NOT registered skills — " +
+        "the `Skill` tool does not know them, so calling it will fail. Read " +
+        "the file directly if you need it, and tell the user it needs fixing:",
+      "",
+      blocked
+        .map((s) => `- \`${s.name}\` — ${s.path} (${s.loadIssue?.reason ?? "not loaded"})`)
+        .join("\n"),
+    );
+  }
   if (inactive.length > 0) {
     lines.push(
       "",

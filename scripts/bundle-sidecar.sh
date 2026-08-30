@@ -118,17 +118,32 @@ SDK_PNPM_PARENT="$(find "$TARGET/sidecar/node_modules/.pnpm" \
   -maxdepth 4 -type d -name "@anthropic-ai" \
   -path "*@anthropic-ai+claude-agent-sdk@*/node_modules/@anthropic-ai" \
   2>/dev/null | head -n1)"
+#
+# The native package MUST match the SDK package's own version. `find |
+# head -n1` is version-blind, and pnpm's store keeps every version ever
+# installed: on 2026-08-30 a bundle whose SDK was 0.3.251 got its native
+# link pointed at **0.2.113** (directory order), so every turn spawned a
+# CLI 138 versions behind and the plan-usage bars stayed blank — the exact
+# symptom ADR-0087/0093 had already "fixed" twice, in the reporting and in
+# PATH, neither of which the SDK consults: it spawns its own bundled
+# native binary. Resolve by version, and repair a link that points
+# elsewhere rather than leaving the wrong one in place.
 if [ -n "$SDK_PNPM_PARENT" ] && [ -d "$SDK_PNPM_PARENT" ]; then
-  NATIVE_PKG="$(basename "$(find "$TARGET/sidecar/node_modules/.pnpm" \
-    -maxdepth 1 -type d \
-    -name "@anthropic-ai+claude-agent-sdk-${TRIPLE}@*" 2>/dev/null | head -n1)")"
-  if [ -n "$NATIVE_PKG" ]; then
+  # ".../@anthropic-ai+claude-agent-sdk@0.3.251_<peers>/node_modules/@anthropic-ai"
+  SDK_PKG_DIR="$(basename "$(dirname "$(dirname "$SDK_PNPM_PARENT")")")"
+  SDK_VERSION="${SDK_PKG_DIR#@anthropic-ai+claude-agent-sdk@}"
+  SDK_VERSION="${SDK_VERSION%%_*}"
+  NATIVE_PKG="@anthropic-ai+claude-agent-sdk-${TRIPLE}@${SDK_VERSION}"
+  if [ -d "$TARGET/sidecar/node_modules/.pnpm/$NATIVE_PKG" ]; then
     LINK_TARGET="../../../$NATIVE_PKG/node_modules/@anthropic-ai/claude-agent-sdk-${TRIPLE}"
     LINK_PATH="$SDK_PNPM_PARENT/claude-agent-sdk-${TRIPLE}"
-    if [ ! -e "$LINK_PATH" ]; then
+    if [ "$(readlink "$LINK_PATH" 2>/dev/null)" != "$LINK_TARGET" ]; then
+      rm -f "$LINK_PATH"
       ln -s "$LINK_TARGET" "$LINK_PATH"
-      echo "bundle-sidecar: restored claude-agent-sdk-${TRIPLE} symlink"
+      echo "bundle-sidecar: linked claude-agent-sdk-${TRIPLE} @ ${SDK_VERSION}"
     fi
+  else
+    echo "bundle-sidecar: WARNING no native CLI for SDK ${SDK_VERSION} (${TRIPLE}) in the bundle" >&2
   fi
 fi
 
