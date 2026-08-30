@@ -21,6 +21,7 @@ import { z } from "zod";
 import { initVault, vaultStatus } from "./obsidian-vault";
 import { relinkBacklogNotes, rewriteBacklogIndex } from "./backlog";
 import { rewriteMemoryIndex } from "./memory-mcp";
+import { rewritePlansIndex } from "./plans-index";
 
 const run = promisify(execFile);
 
@@ -42,6 +43,33 @@ function errorResult(message: string) {
  * `graph.json`. A missing export degrades the vault (no code notes) but must
  * never fail the init — the note families MARVIN writes are the point.
  */
+/**
+ * Export the code graph as an Obsidian **Canvas** (ADR-0091).
+ *
+ * The note export writes ONE FILE PER NODE — 7,604 for MARVIN's own repo,
+ * ~32k for a 31,863-node project — which is why ADR-0090 filters it out of the
+ * vault. The canvas is the same graph as a SINGLE file (1.5 MB, 6,811 nodes)
+ * that Obsidian renders natively. Same information, no flooding: this is the
+ * graphify↔Obsidian bridge in the form that is actually usable.
+ *
+ * Best-effort, like the note export: graphify may be absent or the graph
+ * unbuilt, and a missing canvas degrades the vault without failing the init.
+ */
+export async function exportGraphCanvas(cwd: string): Promise<{ ok: boolean; detail: string }> {
+  try {
+    // The canvas is written alongside the notes; we keep only the canvas and
+    // let ADR-0090's ignore filter hide the rest.
+    await run("graphify", ["export", "obsidian", "--dir", "graphify-out/obsidian"], {
+      cwd,
+      timeout: 300_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { ok: true, detail: "code graph canvas at graphify-out/obsidian/graph.canvas" };
+  } catch (err) {
+    return { ok: false, detail: `graph canvas export skipped (${(err as Error).message.split("\n")[0]})` };
+  }
+}
+
 export async function exportGraphNotes(cwd: string): Promise<{ ok: boolean; detail: string }> {
   try {
     await run("graphify", ["export", "obsidian", "--dir", "graphify-out/obsidian"], {
@@ -107,6 +135,11 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
       let relinked = 0;
       try { relinked += await rewriteBacklogIndex(cwd); } catch { /* no backlog yet */ }
       try { relinked += await rewriteMemoryIndex(cwd); } catch { /* no memory yet */ }
+      // ADR-0091 — plans had no index, so 353 notes on a real project had not
+      // one inbound link: invisible to the graph view, backlinks and Dataview.
+      let plansLinked = 0;
+      try { plansLinked = await rewritePlansIndex(cwd); } catch { /* no plans yet */ }
+      relinked += plansLinked;
       // Existing notes predate the derived link trailer, so without this pass
       // the graph stays two starbursts until each item happens to be touched
       // again. Regenerating is safe: the trailer is delimited and recomputed,

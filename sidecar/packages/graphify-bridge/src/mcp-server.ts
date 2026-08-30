@@ -927,6 +927,75 @@ export function createGraphMcpServer(workDir: string) {
     },
   );
 
+  // ── ADR-0091 — the rest of graphify's read surface ──────────────────
+  //
+  // Measured 2026-08-30: `graph_search` was 75 % of 5,823 calls, largely
+  // because it was the only door. These are the remaining CLI capabilities
+  // with no MARVIN equivalent.
+
+  const explainTool = tool(
+    "graph_explain",
+    "Plain-language explanation of ONE node and its neighbourhood — what it is, what it connects to, and why. Use when you have a name and need orientation before reading code. Cheaper than graph_neighbors + several reads, and unlike graph_neighbors it is written to be read rather than parsed.",
+    { node: z.string().min(1).describe("Node label or id, e.g. `PlanDefaultsService` or `charge()`.") },
+    async ({ node }) => {
+      try {
+        const { stdout } = await pExecFile(
+          graphifyBin(),
+          ["explain", node, "--graph", graphPathForScope(workDir, "code")],
+          { cwd: workDir, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+        );
+        return { content: [{ type: "text", text: stdout.trim() || `No node matching "${node}".` }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `graph_explain failed: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const benchmarkTool = tool(
+    "graph_benchmark",
+    "Measure how many tokens the graph saves versus reading the whole corpus, for THIS project. Deterministic, no LLM. Use when the user asks whether the graph is worth it, or to sanity-check a claim about token cost — MARVIN's docs quote a number measured on a different repo.",
+    {},
+    async () => {
+      try {
+        const { stdout } = await pExecFile(
+          graphifyBin(),
+          ["benchmark", graphPathForScope(workDir, "code")],
+          { cwd: workDir, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+        );
+        return { content: [{ type: "text", text: stdout.trim() || "No benchmark output." }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `graph_benchmark failed: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const callflowTool = tool(
+    "graph_export_callflow",
+    "Render the architecture / call flow as a Mermaid-based HTML page under graphify-out/. Use when the user asks to SEE the structure rather than query it — a review, an onboarding walkthrough, an ADR that needs a diagram. Writes one file; does not change the graph.",
+    {},
+    async () => {
+      try {
+        const { stdout } = await pExecFile(graphifyBin(), ["export", "callflow-html"], {
+          cwd: workDir,
+          timeout: 120_000,
+          maxBuffer: 8 * 1024 * 1024,
+        });
+        return { content: [{ type: "text", text: stdout.trim() || "Call-flow HTML written under graphify-out/." }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `graph_export_callflow failed: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "marvin-graph",
     version: "0.0.4",
@@ -950,6 +1019,9 @@ export function createGraphMcpServer(workDir: string) {
       godNodesTool,
       diagnoseTool,
       schemaTool,
+      explainTool,
+      benchmarkTool,
+      callflowTool,
     ],
   });
 }

@@ -17,9 +17,11 @@ import {
   checkBlastRadius,
   checkGraphDrift,
   checkGraphDriftDeny,
+  checkSaveResult,
   checkShipImpact,
   GRAPH_DRIFT_DENY_THRESHOLD,
   GRAPH_DRIFT_MAX_NUDGES,
+  SAVE_RESULT_GRAPH_THRESHOLD,
   GRAPH_DRIFT_NOVEL_FILE_THRESHOLD,
   logDesignTurnSummary,
 } from "../src/design-hooks";
@@ -939,5 +941,51 @@ describe("blast radius + pre-ship impact nudges (ADR-0084)", () => {
     ctx.hasGraph = false;
     expect(checkBlastRadius(ctx, "Edit", { file_path: join(cwd, "src", "a.ts") })).toBeNull();
     expect(checkShipImpact(ctx, "Bash", { command: "git commit -m x" })).toBeNull();
+  });
+});
+
+// ADR-0091 — the work-memory loop had an output (LESSONS.md, ADR-0085) and no
+// input: 12 saves across every session ever, zero reflections.
+describe("record-the-outcome nudge (ADR-0091)", () => {
+  const cwd = "/proj";
+  function ctxWithGraph(graphCalls: number) {
+    const ctx = createTurnDesignContext("t-0091", cwd);
+    ctx.hasGraph = true;
+    for (let i = 0; i < graphCalls; i++) {
+      recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", {});
+    }
+    return ctx;
+  }
+
+  it("fires on the first edit once the turn has done real graph work", () => {
+    const ctx = ctxWithGraph(SAVE_RESULT_GRAPH_THRESHOLD);
+    const n = checkSaveResult(ctx, "Edit");
+    expect(n).toContain("graph_save_result");
+    expect(n).toContain("corrected");
+  });
+
+  it("stays quiet on a turn that barely touched the graph", () => {
+    expect(checkSaveResult(ctxWithGraph(SAVE_RESULT_GRAPH_THRESHOLD - 1), "Edit")).toBeNull();
+  });
+
+  it("stays quiet once an outcome has been recorded", () => {
+    const ctx = ctxWithGraph(SAVE_RESULT_GRAPH_THRESHOLD);
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_save_result", {});
+    expect(checkSaveResult(ctx, "Edit")).toBeNull();
+  });
+
+  it("fires at most once per turn, and only on a mutation", () => {
+    const ctx = ctxWithGraph(SAVE_RESULT_GRAPH_THRESHOLD);
+    expect(checkSaveResult(ctx, "Read")).toBeNull();
+    expect(checkSaveResult(ctx, "Bash")).toBeNull();
+    expect(checkSaveResult(ctx, "Write")).not.toBeNull();
+    expect(checkSaveResult(ctx, "Edit")).toBeNull();
+  });
+
+  it("stays quiet on a project with no graph", () => {
+    const ctx = createTurnDesignContext("t-nograph", cwd);
+    ctx.hasGraph = false;
+    for (let i = 0; i < 10; i++) recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", {});
+    expect(checkSaveResult(ctx, "Edit")).toBeNull();
   });
 });

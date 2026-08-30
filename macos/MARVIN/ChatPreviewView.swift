@@ -1529,6 +1529,19 @@ final class ChatPreviewModel {
             b.appendNotification(prompt)
             lastSentMessage = nil
             currentActivity = nil
+            // Clear the composer's busy flag HERE, not only in the stream's
+            // `defer`. The comment further down assumed "the activeTask chain
+            // set isSending=false before this event fires" — true for a turn
+            // this client POSTed, false for one it ATTACHED to: the resume
+            // stream need not end when the turn does, so the defer may never
+            // run. Observed 2026-08-30: a session showed "Working…" with only
+            // Stop/Queue for 8½ hours after the server had recorded
+            // turn.completed and `/api/chat/resume` was answering 204.
+            // `turn.completed` is the authoritative end of the turn — treat it
+            // as one. Guarded so a turn started meanwhile is not cut short.
+            if activeTask == nil {
+                isSending = false
+            }
             // The SDK's finally block auto-denies and clears any
             // unresolved confirms before turn.completed fires; if any
             // sheet is still open client-side it's now stale (clicking
