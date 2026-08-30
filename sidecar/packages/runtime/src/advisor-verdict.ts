@@ -236,11 +236,11 @@ export function advisorFallbackPath(workDir: string): string {
 }
 
 /** Last-resort sink. Called only when a backlog write was refused or threw. */
-async function writeFallback(
+async function recordCaveats(
   workDir: string,
   topic: string,
   entries: { title: string; body: string }[],
-  reason: string,
+  note: string | null,
 ): Promise<boolean> {
   try {
     const path = advisorFallbackPath(workDir);
@@ -248,8 +248,7 @@ async function writeFallback(
     const stamp = new Date().toISOString();
     const lines = [
       `## ${stamp} — advisor caveats on ${topic}`,
-      `_Not parked to the backlog: ${reason}_`,
-      "",
+      ...(note ? [`_${note}_`, ""] : [""]),
       ...entries.map((e) => `- **${e.title}** — ${e.body}`),
       "",
     ];
@@ -261,7 +260,11 @@ async function writeFallback(
 }
 
 export interface ParkOutcome {
-  /** Backlog ids successfully parked. */
+  /** Caveats written to `.marvin/advisor-caveats.md` — the durable record. */
+  recorded: number;
+  /** True when that write succeeded. */
+  recordedOk: boolean;
+  /** Backlog ids successfully parked. At most ONE — the consult summary. */
   parked: string[];
   /** Human-readable reasons for each item that did NOT reach the backlog. */
   failures: string[];
@@ -269,13 +272,38 @@ export interface ParkOutcome {
   fellBack: boolean;
 }
 
-/** Park each advisor caveat as a provisional backlog item (ADR-0047: un-gated
- *  at discovery, keep/dismiss at the scope-met handoff).
+/** Record the advisor's caveats durably, and park ONE provisional backlog item
+ *  per consult that points at them (ADR-0095 amendment, 2026-08-30).
  *
- *  Every refusal path is surfaced, never swallowed. `addBacklogItem` returns
- *  `{ok:false}` for the open-item cap and for validation, and those are NOT
- *  exceptions — an earlier version dropped them silently, which made the
- *  200-item cap a quiet destroyer of advisor advice. */
+ *  The original shape parked one item PER CAVEAT. Measured on a real session
+ *  the same day: **12 items parked in 60 seconds, 10 dismissed at the handoff,
+ *  2 kept.** The 10 were not bad advice — they were advice the executor had
+ *  already acted on in that same turn (`additionalContext` does reach it), so
+ *  they arrived pre-satisfied and still had to be closed one at a time. The
+ *  cost is not the writes; it is that the 2 real deploy-prerequisite items sat
+ *  among 10 dismissible ones, which is how a real item gets missed.
+ *
+ *  Anthropic's long-running-agent guidance is explicit that "compaction isn't
+ *  sufficient" and that state should be externalised — but the artefact it
+ *  describes is a FILE (a progress log, a spec), not a queue of tickets. This
+ *  implements that literally:
+ *
+ *    1. every caveat goes to `.marvin/advisor-caveats.md` immediately —
+ *       durable, survives compaction, zero review burden;
+ *    2. ONE provisional backlog item summarises the consult and points there,
+ *       so "the advisor said X, we shipped without X" is still visible;
+ *    3. promotion to individual items happens at the scope-met review, where
+ *       the user already has the context to say which caveats are still open.
+ *
+ *  Every ADR-0095 property is preserved. What changes is granularity, and only
+ *  the granularity was wrong. Deliberately NOT added: any check that a caveat
+ *  was implemented — that is the correctness oracle a hook cannot be, and the
+ *  original ADR was right to refuse it.
+ *
+ *  Refusals are still surfaced, never swallowed: `addBacklogItem` returns
+ *  `{ok:false}` for the open-item cap and for validation, and an earlier
+ *  version dropped those silently, making the cap a quiet destroyer of advice.
+ */
 async function parkCaveats(args: {
   workDir: string;
   caveats: string[];
@@ -284,53 +312,51 @@ async function parkCaveats(args: {
   topic: string;
 }): Promise<ParkOutcome> {
   const { workDir, caveats, verdictText, marvinSessionId, topic } = args;
-  // Fail toward keeping too much: an unparsed verdict is parked whole rather
+  // Fail toward keeping too much: an unparsed verdict is recorded whole rather
   // than dropped. A lost caveat is the failure this ADR exists to prevent.
   const entries = caveats.length
     ? caveats.map((c) => ({ title: caveatTitle(c), body: c }))
     : [{ title: `Advisor caveats on ${topic}`, body: verdictText }];
 
-  const parked: string[] = [];
+  // 1. The durable record, always, before anything can refuse.
+  const recordedOk = await recordCaveats(workDir, topic, entries, null);
+
+  // 2. One summary item. Its body carries the caveat TITLES so the review is
+  //    actionable without opening the file, and the file holds the full text.
   const failures: string[] = [];
-  const unparked: { title: string; body: string }[] = [];
+  const parked: string[] = [];
+  const suffix =
+    `\n\nFull text: \`.marvin/advisor-caveats.md\`` +
+    `\n\n_Raised by the advisor (ADR-0095) on: ${topic}._` +
+    `\n_At the scope-met review, promote only the caveats still open._`;
+  const list = entries.map((e, i) => `${i + 1}. ${e.title}`).join("\n");
+  const room = MAX_BODY_CHARS - suffix.length - TRUNCATION_MARKER.length;
+  const body =
+    list.length > room ? `${list.slice(0, room)}${TRUNCATION_MARKER}${suffix}` : `${list}${suffix}`;
 
-  for (const entry of entries) {
-    // The body cap is a hard limit in the backlog store. Truncating HERE, with
-    // a marker, is the difference between a shortened item and a refused one —
-    // and the fallback path (a whole verdict section) is exactly the shape
-    // most likely to exceed it.
-    const suffix = `\n\n_Raised by the advisor (ADR-0095) on: ${topic}._`;
-    const room = MAX_BODY_CHARS - suffix.length - TRUNCATION_MARKER.length;
-    const body =
-      entry.body.length > room
-        ? `${entry.body.slice(0, room)}${TRUNCATION_MARKER}${suffix}`
-        : `${entry.body}${suffix}`;
-
-    let result: Awaited<ReturnType<typeof addBacklogItem>>;
-    try {
-      result = await addBacklogItem(workDir, {
-        title: entry.title,
-        body,
-        kind: "investigate",
-        severity: "med",
-        sessionId: marvinSessionId,
-        provisional: true,
-      });
-    } catch (err) {
-      // The reason matters. Discarding it left `parked: 0` in telemetry with
-      // nothing to act on.
-      result = { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-
-    if (result.ok) parked.push(result.item.id);
-    else {
-      failures.push(`${entry.title}: ${result.error}`);
-      unparked.push(entry);
-    }
+  let result: Awaited<ReturnType<typeof addBacklogItem>>;
+  try {
+    result = await addBacklogItem(workDir, {
+      title:
+        entries.length === 1
+          ? entries[0]!.title
+          : `Advisor: ${entries.length} caveats on ${topic}`,
+      body,
+      kind: "investigate",
+      severity: "med",
+      sessionId: marvinSessionId,
+      provisional: true,
+    });
+  } catch (err) {
+    // The reason matters. Discarding it left `parked: 0` in telemetry with
+    // nothing to act on.
+    result = { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
-  const fellBack = unparked.length > 0 && (await writeFallback(workDir, topic, unparked, failures.join("; ")));
-  return { parked, failures, fellBack };
+  if (result.ok) parked.push(result.item.id);
+  else failures.push(`${entries.length} caveat(s): ${result.error}`);
+
+  return { recorded: entries.length, recordedOk, parked, failures, fellBack: recordedOk };
 }
 
 /**
@@ -384,7 +410,7 @@ export function makeAdvisorVerdictPostToolUse(args: {
         : ""
       ).replace(/^advisor:\s*/i, "").trim() || "an advisor consult";
 
-    let outcome: ParkOutcome = { parked: [], failures: [], fellBack: false };
+    let outcome: ParkOutcome = { recorded: 0, recordedOk: true, parked: [], failures: [], fellBack: false };
     if (parsed.verdict !== "go") {
       outcome = await parkCaveats({
         workDir,
@@ -423,23 +449,36 @@ export function advisorContextLine(verdict: AdvisorVerdict, outcome: ParkOutcome
   if (verdict === "go") {
     return `${head} No caveats raised. Proceed, and cite the advisor's substantive input in your reply.`;
   }
-  const { parked, failures, fellBack } = outcome;
+  const { recorded, recordedOk, parked, failures } = outcome;
   const parts: string[] = [];
+  if (recordedOk) {
+    parts.push(
+      `${recorded} caveat(s) recorded in .marvin/advisor-caveats.md — durable, so they survive a compaction.`,
+    );
+  } else {
+    // The file is the floor. If it did not write, the caveats exist ONLY here.
+    parts.push(
+      `The caveat record could NOT be written. ${recorded} caveat(s) exist ONLY in this context window: act on them in this turn or restate them to the user now.`,
+    );
+  }
   if (parked.length) {
     parts.push(
-      `${parked.length} caveat(s) parked to the backlog as ${parked.join(", ")} — they come back at the scope-met keep/dismiss review, so they survive a compaction.`,
+      `A summary item (${parked.join(", ")}) comes back at the scope-met review — promote only what is still open there.`,
     );
   }
   if (failures.length) {
     // Name the reason. "Could not be parked" with no cause is not actionable.
     parts.push(
-      `${failures.length} caveat(s) were REFUSED by the backlog (${failures.join("; ")})` +
-        (fellBack
-          ? ` and were appended to .marvin/advisor-caveats.md instead — tell the user, they are outside the review flow.`
-          : ` and could NOT be written anywhere. They exist ONLY in this context window: act on them in this turn or restate them to the user now.`),
+      `The backlog REFUSED the summary item (${failures.join("; ")})` +
+        (recordedOk
+          ? `, so the caveats are in the file but outside the review flow — tell the user.`
+          : ` and nothing was recorded anywhere.`),
     );
   }
-  const captured = parts.join(" ") || "No caveats to persist.";
+  parts.push(
+    "Act on them in THIS turn where they apply; the record is a safety net, not a substitute.",
+  );
+  const captured = parts.join(" ");
   if (verdict === "reject") {
     return `${head} The advisor rejected this. ${captured} Your next mutation of a trigger path will be blocked once so the verdict is read, then it proceeds — the decision is the user's, not the advisor's. State plainly whether you are overriding, and why.`;
   }

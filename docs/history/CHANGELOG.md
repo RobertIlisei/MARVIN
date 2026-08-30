@@ -9,6 +9,41 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.87: the advisor's caveats stop flooding the backlog.**
+
+  ADR-0095 parked one provisional backlog item **per caveat**. Measured on a
+  real session the same day it shipped: **12 items parked in about 60 seconds,
+  10 dismissed at the scope-met review, 2 kept.**
+
+  The 10 were not bad advice. They were advice the executor had *already acted
+  on in that same turn* — the `additionalContext` path works — so they arrived
+  pre-satisfied and still had to be closed one at a time. The cost was never
+  the writes; it was that the 2 genuine deploy-prerequisite items sat among 10
+  dismissible ones, which is how a real item gets missed.
+
+  Anthropic's [long-running-agent guidance](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+  is explicit that **"compaction isn't sufficient"** and that state should be
+  externalised — which is what ADR-0095 got right. But the artefact it
+  describes is a **file** (a progress log, a spec), not a queue of tickets. We
+  had implemented "externalise durable state" as "create backlog items". That
+  was the mismatch, and it was purely one of granularity.
+
+  Now: every caveat is written to `.marvin/advisor-caveats.md` immediately
+  (durable, uncapped, zero review burden), **one** provisional item per consult
+  summarises them and points at the file, and promotion to individual items
+  happens at the scope-met review — where the user already has the context to
+  say which are still open. On the measured session that yields exactly the 2
+  that mattered.
+
+  Runtime handling is restated as the PRIMARY path in the appended line ("Act
+  on them in THIS turn where they apply; the record is a safety net, not a
+  substitute") — the original wording let the durable half read like the
+  mechanism. Unchanged and still load-bearing: no check that a caveat was
+  *implemented*. That is a correctness oracle a hook cannot be. Also rejected:
+  severity-filtering at parse time, since the hook has no LLM and guessing
+  would silently drop the important one.
+
+
 - **2026-08-30 — v0.1.86: the terminal died on a project switch, and Run diagnostics was a dead button.**
 
   **The terminal.** Reported as "typing isn't seen, and Enter does nothing",

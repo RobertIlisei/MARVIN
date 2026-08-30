@@ -173,3 +173,74 @@ consult on a genuinely different question proceeds on retry.
 - [x] Re-consulting the advisor after a verdict is denied by a hook, not prose
 - [ ] Not in scope: verifying caveats were implemented, blocking on `reject`
       permanently, surfacing the verdict in the macOS UI
+
+## Amendment — 2026-08-30: one record, one item, promote at the review
+
+**What was wrong: the granularity, and only the granularity.**
+
+Decision 2 parked one provisional backlog item *per caveat*. Measured on a
+real session the same day the ADR shipped:
+
+| | |
+|---|---|
+| Items parked in ~60 seconds | **12** |
+| Dismissed at the scope-met review | **10** |
+| Kept | **2** |
+
+The 10 were not bad advice. They were advice the executor had **already acted
+on in that same turn** — decision 3's `additionalContext` does reach it, and it
+works. They arrived pre-satisfied and still had to be closed one at a time. The
+cost is not the writes; it is that the 2 genuine deploy-prerequisite items sat
+among 10 dismissible ones, which is how a real item gets missed.
+
+The user put it directly: *"if we park all items returned by advisor, then we
+can add 10-15 or a large number of items in the backlog… then we need to handle
+them one by one."*
+
+**What the guidance actually says.** Anthropic's
+[Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+is explicit that **"compaction isn't sufficient"** and that state should be
+externalised so a fresh context window can pick it up. That is the premise this
+ADR was right about. But the artefact it describes is a **file** — a progress
+log, a spec — not a queue of tickets. We implemented "externalise durable
+state" as "create backlog items", and that is the mismatch.
+
+**Amended decision.**
+
+2a. **Every caveat is written to `.marvin/advisor-caveats.md` immediately**, before
+    anything can refuse it. Durable, survives compaction, no cap, zero review
+    burden. This file was already the fallback; it is now the primary record.
+2b. **ONE provisional backlog item per consult**, titled `Advisor: N caveats on
+    <topic>`, whose body lists the caveat titles and points at the file — so the
+    review is actionable without opening it, and "the advisor said X, we shipped
+    without X" stays visible.
+2c. **Promotion happens at the scope-met review**, where the user already has the
+    context to say which caveats are still open. Only survivors become items.
+    On the measured session this would have produced exactly the 2 that mattered.
+
+Decisions 1, 3 and 4 are unchanged. **Runtime handling remains the primary
+path** — the record is a safety net, and the appended line now says so in as
+many words ("Act on them in THIS turn where they apply; the record is a safety
+net, not a substitute"), because the original wording let the durable half read
+like the mechanism.
+
+**Still explicitly not decided:** any check that a caveat was *implemented*.
+The original refusal stands and is load-bearing — that is a correctness oracle
+a hook cannot be, and it drifts toward the supervisor shape Golden Rule 1
+exists to prevent. Promotion is a judgement, and the judgement stays with the
+user.
+
+**Also rejected:** severity-filtering caveats at parse time. The hook is
+deterministic string work with no LLM; it cannot tell which caveat matters, and
+guessing would silently drop the important one — the exact failure this ADR was
+written to prevent.
+
+### Scope of Done (amendment)
+
+- [x] Caveats recorded to `.marvin/advisor-caveats.md` on every consult
+- [x] Exactly one provisional backlog item per consult, pointing at the record
+- [x] Item body lists caveat titles and stays under the body cap by construction
+- [x] Appended line states runtime handling is primary
+- [x] Record-write failure is the loud case (caveats exist only in context)
+- [x] 28 assertions green, including an oversized verdict surviving in full
+

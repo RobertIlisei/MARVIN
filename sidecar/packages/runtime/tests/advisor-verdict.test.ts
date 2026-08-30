@@ -151,24 +151,40 @@ describe("advisor-verdict · PostToolUse hook", () => {
       tool_response: { content: [{ type: "text", text: reply }] },
     }) as never;
 
-  it("parks every caveat from the real reply as a provisional backlog item", async () => {
+  // ADR-0095 amendment (2026-08-30). The original contract was one backlog
+  // item PER CAVEAT. Measured on a real session that day: 12 items parked in
+  // 60 seconds, 10 dismissed at the handoff, 2 kept — the 10 were advice the
+  // executor had ALREADY acted on via `additionalContext`, arriving
+  // pre-satisfied. The 2 that mattered sat among them. Now: every caveat to
+  // the durable file, ONE summary item for the review.
+  it("records every caveat to the file and parks exactly ONE summary item", async () => {
     const ctx = createTurnDesignContext(turnId, workDir);
     const out = (await hook()(event(FIXTURE), undefined as never, {} as never)) as Record<string, never>;
 
     const items = await listBacklog(workDir);
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(1);
     expect(items.every((i) => i.status === "provisional")).toBe(true);
     expect(ctx.advisorVerdict).toBe("go-with-caveats");
+
+    // All four caveats survive — in the file, which is the durable record.
+    const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
+    expect(record).toContain("advisor caveats on");
+    expect(record.match(/^- \*\*/gm) ?? []).toHaveLength(4);
+
+    // The summary item is actionable without opening the file: it lists the
+    // caveat titles and says where the full text lives.
+    const first = items[0];
+    expect(first).toBeDefined();
+    expect(first!.title).toContain("4 caveats");
+    const body = await readFile(join(workDir, ".marvin", "backlog", `${first!.id}.md`), "utf-8");
+    expect(body).toContain("1.");
+    expect(body).toContain("advisor-caveats.md");
 
     const context = (out.hookSpecificOutput as unknown as { additionalContext: string }).additionalContext;
     expect(context).toContain("go-with-caveats");
     expect(context).toContain("scope-met");
-
-    // The caveat body keeps the advisor's own words, not just the title.
-    const first = items[0];
-    expect(first).toBeDefined();
-    const body = await readFile(join(workDir, ".marvin", "backlog", `${first!.id}.md`), "utf-8");
-    expect(body).toContain("advisor");
+    // Runtime handling stays the PRIMARY path — the record is a safety net.
+    expect(context).toContain("THIS turn");
   });
 
   it("records a reject and says the next write will be blocked once", async () => {
@@ -181,16 +197,16 @@ describe("advisor-verdict · PostToolUse hook", () => {
     expect(context).toContain("blocked once");
   });
 
-  it("parks the verdict verbatim when no caveat parses, rather than dropping it", async () => {
+  it("records the verdict verbatim when no caveat parses, rather than dropping it", async () => {
     createTurnDesignContext(turnId, workDir);
     const reply = "## Verdict\n\n**Go-with-caveats.** Be careful about the rollout window.";
     await hook()(event(reply), undefined as never, {} as never);
     const items = await listBacklog(workDir);
     expect(items).toHaveLength(1);
-    const only = items[0];
-    expect(only).toBeDefined();
-    const body = await readFile(join(workDir, ".marvin", "backlog", `${only!.id}.md`), "utf-8");
-    expect(body).toContain("rollout window");
+    // The advisor's own words live in the durable record. The backlog item is
+    // the pointer, so the words are asserted where they actually are.
+    const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
+    expect(record).toContain("rollout window");
   });
 
   it("parks nothing on a clean go", async () => {
@@ -222,7 +238,12 @@ describe("advisor-verdict · PostToolUse hook", () => {
 
 describe("advisor-verdict · the line appended to the result", () => {
   it("warns loudly when caveats could not be persisted", () => {
+    // ADR-0095 amendment: the FILE is the floor. Caveats exist only in the
+    // context window when the record itself failed to write — that is the one
+    // case worth shouting about, not a refused backlog item.
     const line = advisorContextLine("go-with-caveats", {
+      recorded: 3,
+      recordedOk: false,
       parked: [],
       failures: ["quantify the gap: backlog already has 200 open items"],
       fellBack: false,
@@ -235,6 +256,8 @@ describe("advisor-verdict · the line appended to the result", () => {
 
   it("names the fallback file when the backlog refused but disk caught it", () => {
     const line = advisorContextLine("go-with-caveats", {
+      recorded: 2,
+      recordedOk: true,
       parked: [],
       failures: ["x: cap reached"],
       fellBack: true,
@@ -329,10 +352,12 @@ describe("advisor-verdict · nothing is lost silently", () => {
     await rm(workDir, { recursive: true, force: true });
   });
 
-  it("truncates an oversized caveat body instead of letting the backlog refuse it", async () => {
+  it("keeps an oversized verdict in full in the record, and still parks a usable item", async () => {
     createTurnDesignContext(turnId, workDir);
-    // The fallback path parks a whole verdict SECTION — the shape most likely
-    // to exceed the body cap, which would have lost the entire verdict.
+    // A whole verdict SECTION is the shape most likely to exceed the backlog's
+    // body cap — which under the old one-item-per-caveat design would have
+    // lost the entire verdict. The file has no such cap, so the full text
+    // survives there and the item stays small by construction.
     const huge = "x".repeat(MAX_BODY_CHARS * 2);
     const reply = `## Verdict\n\n**Go-with-caveats.** ${huge}`;
     const hook = makeAdvisorVerdictPostToolUse({ workDir, marvinSessionId: "s", turnId });
@@ -348,8 +373,11 @@ describe("advisor-verdict · nothing is lost silently", () => {
     );
     const items = await listBacklog(workDir);
     expect(items).toHaveLength(1);
+    const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
+    expect(record.length).toBeGreaterThan(MAX_BODY_CHARS);
     const body = await readFile(join(workDir, ".marvin", "backlog", `${items[0]!.id}.md`), "utf-8");
-    expect(body).toContain("truncated to fit");
+    expect(body.length).toBeLessThan(MAX_BODY_CHARS);
+    expect(body).toContain("advisor-caveats.md");
   });
 
   it("writes the fallback file when the backlog cannot take the item", async () => {
