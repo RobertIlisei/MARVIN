@@ -284,10 +284,13 @@ export async function discoverProjectSkills(
   let text = "";
   let costCents: number | null = null;
   const abort = new AbortController();
-  // 120s hard cap. Next.js API routes are short-lived; without this the
-  // request would hang indefinitely if the SDK's spawned Claude CLI got
-  // stuck waiting on something.
-  const timeoutId = setTimeout(() => abort.abort(), 120_000);
+  // Hard cap so a stuck CLI can't hang the route forever. Raised 120s → 180s
+  // on 2026-08-30: a successful Sonnet discovery on a large project measured
+  // **90s**, which left only 30s of head-room, and anything slower aborted
+  // with "Claude Code process aborted by user" — indistinguishable, from the
+  // outside, from a hang. The cap is a backstop against a wedged process, not
+  // a latency budget, so it should sit well clear of a normal run.
+  const timeoutId = setTimeout(() => abort.abort(), 180_000);
   try {
     for await (const evt of query({
       prompt,

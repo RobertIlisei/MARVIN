@@ -9,6 +9,41 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.84: "I click Discover and nothing happens" — on both providers.**
+
+  Reproduced against the running sidecar, and the two halves are independent:
+
+  ```
+  model: claude-opus-5  -> http=500  time=122.09s  "Claude Code process aborted by user"
+  model omitted         -> http=200  time= 90.60s  4 suggestions
+  ```
+
+  **1. The pane overrode the model.** `runDiscovery` sent
+  `bridge.executorModel`, so discovery ran on whatever the user had selected —
+  against the discoverer's own deliberate choice, stated in a comment three
+  lines above the call: *"Sonnet is enough for a structured one-shot — opus
+  would be overkill at ~10× the price."* With Opus on a large project the run
+  exceeded the 120 s `AbortController` cap and 500'd. On OpenRouter the same
+  override handed discovery a non-Claude executor, which is the other half of
+  why it failed there. Provider-correct resolution already happens server-side
+  (ADR-0096), so the client had nothing to contribute — it now sends only
+  `workDir`.
+
+  **2. The 500 was swallowed whole.** `_ = try await URLSession.shared.data(for: req)`
+  ignores the status code, and a 500 carrying a JSON body is not a
+  `URLSession` error — so the `catch` never ran, no toast appeared, and
+  `refresh()` re-read an unchanged cache. Click, wait two minutes, nothing.
+  That is the entire user-visible symptom, and it would have hidden any future
+  server-side failure just as completely. The status is now checked and the
+  server's own `error` string is surfaced.
+
+  **3. The cap was too tight to distinguish slow from stuck.** A *successful*
+  Sonnet discovery measured **90 s** against a 120 s cap — 30 s of head-room,
+  and anything slower aborted with a message indistinguishable from a hang.
+  Raised to 180 s: the cap is a backstop against a wedged process, not a
+  latency budget.
+
+
 - **2026-08-30 — v0.1.83: skills work on OpenRouter, and the context gauge stops crying wolf.**
 
   **Skills on OpenRouter.** Two independent breaks, both on the discovery path.

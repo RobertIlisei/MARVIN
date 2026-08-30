@@ -533,6 +533,19 @@ struct SkillsPane: View {
         return iso
     }
 
+    /// A non-2xx from `/api/skills/discover`. Its own type so the message the
+    /// user sees names the status and the server's reason, rather than the
+    /// generic URLError text that a swallowed 500 would never have produced.
+    private enum DiscoveryError: LocalizedError {
+        case server(status: Int, detail: String?)
+        var errorDescription: String? {
+            switch self {
+            case let .server(status, detail):
+                return detail.map { "\($0) (HTTP \(status))" } ?? "server returned HTTP \(status)"
+            }
+        }
+    }
+
     private func runDiscovery() async {
         guard let workDir = bridge.projectWorkDir else { return }
         await MainActor.run { self.discovering = true }
@@ -542,14 +555,29 @@ struct SkillsPane: View {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
-        req.timeoutInterval = 130
-        var body: [String: Any] = ["workDir": workDir]
-        if let executor = bridge.executorModel {
-            body["model"] = executor
-        }
+        req.timeoutInterval = 200
+        // Deliberately does NOT send the executor model. The discoverer picks
+        // Sonnet on purpose ("enough for a structured one-shot — opus would be
+        // overkill at ~10× the price"), and this pane was overriding that with
+        // whatever the user had selected. Measured 2026-08-30 on a large
+        // project: `model: claude-opus-5` → HTTP 500 after 122s, "Claude Code
+        // process aborted by user" (the discoverer's own 120s cap firing);
+        // no model → HTTP 200 in 90s with suggestions. Same failure on
+        // OpenRouter with a non-Claude executor. Provider-correct resolution
+        // already happens server-side (ADR-0096), so there is nothing this
+        // side needs to contribute.
+        let body: [String: Any] = ["workDir": workDir]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            _ = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            // A 500 carrying a JSON body is NOT a URLSession error, so without
+            // this check the failure was swallowed whole: no toast, no error,
+            // and `refresh()` re-read an unchanged cache. That is exactly what
+            // "I click it and nothing happens" was.
+            if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+                throw DiscoveryError.server(status: http.statusCode, detail: detail)
+            }
             await refresh()  // re-read /api/skills which now includes the cached discovery
         } catch {
             await MainActor.run {
