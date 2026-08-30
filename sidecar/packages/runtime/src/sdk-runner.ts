@@ -71,7 +71,7 @@ import {
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { latestForTier } from "./models";
-import { defaultModel } from "./claude-cli";
+import { defaultModel, discoverClaudeBinary } from "./claude-cli";
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { markTurnMutated } from "./turn-registry";
@@ -95,7 +95,24 @@ export type RuntimeMode = "opus" | "advisor";
  * after the prepended ones.
  */
 export function enrichedToolPath(base: string = process.env.PATH ?? ""): string {
-  const prepend = [dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
+  // ADR-0093 — the DIRECTORY of the resolved Claude CLI goes first.
+  //
+  // MARVIN never passes the binary to the SDK; the SDK resolves `claude` from
+  // PATH itself. With `/opt/homebrew/bin` prepended, every turn spawned
+  // Homebrew's 2.1.92 while `discoverClaudeBinary()` — and therefore the About
+  // panel — reported the user's 2.1.251. ADR-0087 fixed the reporting and left
+  // the spawn untouched, so the symptom (blank plan-usage bars: 2.1.92
+  // predates `unifiedWindows`) survived that fix entirely.
+  //
+  // Resolution failures are non-fatal: PATH enrichment must not throw on a
+  // machine with no CLI, or nothing runs at all.
+  let claudeDir: string[] = [];
+  try {
+    claudeDir = [dirname(discoverClaudeBinary())];
+  } catch {
+    claudeDir = [];
+  }
+  const prepend = [...claudeDir, dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of [...prepend, ...base.split(":")]) {

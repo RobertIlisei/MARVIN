@@ -64,6 +64,11 @@ struct CostSummary: Equatable {
             case "overage": return "overage"
             default:
                 if type.hasPrefix("seven_day_") {
+                    // Per-model weekly windows (`seven_day_fable`,
+                    // `seven_day_opus`, …). They appear in `unifiedWindows`
+                    // only once that model has been used against the plan, so
+                    // a row missing here means the API has not reported it —
+                    // not that MARVIN dropped it.
                     let model = String(type.dropFirst("seven_day_".count))
                     return "current week (\(model.prefix(1).uppercased() + model.dropFirst()))"
                 }
