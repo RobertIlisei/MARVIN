@@ -1530,18 +1530,25 @@ final class ChatPreviewModel {
             lastSentMessage = nil
             currentActivity = nil
             // Clear the composer's busy flag HERE, not only in the stream's
-            // `defer`. The comment further down assumed "the activeTask chain
-            // set isSending=false before this event fires" — true for a turn
-            // this client POSTed, false for one it ATTACHED to: the resume
-            // stream need not end when the turn does, so the defer may never
-            // run. Observed 2026-08-30: a session showed "Working…" with only
-            // Stop/Queue for 8½ hours after the server had recorded
-            // turn.completed and `/api/chat/resume` was answering 204.
-            // `turn.completed` is the authoritative end of the turn — treat it
-            // as one. Guarded so a turn started meanwhile is not cut short.
-            if activeTask == nil {
-                isSending = false
-            }
+            // `defer`. That defer runs when the SSE stream ENDS, which is not
+            // the same moment the turn ends — the server can hold the stream
+            // open, and for a turn this client ATTACHED to rather than POSTed
+            // it may never end at all. Observed twice on 2026-08-30: a session
+            // stuck on "Working…" with only Stop/Queue for 8½ hours after the
+            // server had recorded turn.completed and /api/chat/resume was
+            // answering 204.
+            //
+            // UNCONDITIONAL, deliberately. The first attempt guarded this with
+            // `if activeTask == nil`, which is wrong: for a turn this client
+            // started, `activeTask` is non-nil for the whole turn — the common
+            // case — so the guard skipped exactly when it was needed and the
+            // symptom survived the fix.
+            //
+            // Safe against the queued-message drain below: that dispatches
+            // `sendInternal` inside a `Task`, so it runs on a later tick and
+            // sets `isSending = true` again after this line.
+            isSending = false
+            activeTask = nil
             // The SDK's finally block auto-denies and clears any
             // unresolved confirms before turn.completed fires; if any
             // sheet is still open client-side it's now stale (clicking
