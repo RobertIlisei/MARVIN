@@ -9,6 +9,46 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.80: the Terminal tab that opened onto nothing.**
+
+  Reported as "terminal is not working again" on 0.1.79, after it had
+  "seemed to work" on 0.1.78 and not on 0.1.77 — which is what a bug looks
+  like when it depends on click order rather than on the build.
+
+  It was never the PTY. The screenshot showed the panel's tab strip with
+  Terminal selected and an empty body — **including no `TERMINAL <cwd>`
+  header**, which `TerminalPaneView` renders unconditionally. So the pane
+  itself was not in the hierarchy, and `pgrep -P <marvin>` confirmed the
+  other half: MARVIN's only child was the sidecar. No shell had ever been
+  asked to start, which is also why there was no error to see — the spawn
+  failure path writes `[MARVIN] could not start …` into the view, and the
+  exit path writes `[shell … — press ⏎ to restart]`. Neither fired.
+
+  The panes mount lazily and stay mounted, gated on a `mountedBottomTabs`
+  set. Its only writer was:
+
+  ```swift
+  .onChange(of: panel.activeTab, initial: true) { _, tab in
+      if panel.isOpen { mountedBottomTabs.insert(tab) }
+  }
+  ```
+
+  And `bottomPanesArea` stays in the hierarchy even while the panel is shut —
+  deliberately, so the `VSplitView` keeps its divider position (it collapses
+  to zero height instead). So that observer fires ONCE at launch, with the
+  panel closed, and inserts nothing. Opening the panel does not change
+  `activeTab`, so it never fires again, and the ZStack renders an empty
+  pane. Clicking any other tab and back mounts it — which is exactly why it
+  read as intermittent and version-dependent when it was neither.
+
+  The rule now lives in `MARVINLogic` as a pure function
+  (`BottomPanelMounting.mounted(_:after:)`, ADR-0022) and both transitions
+  feed it, each from the new value it was handed. Four assertions pin it,
+  including the one that was missing: closed-then-opened with the tab
+  unchanged. A view-local `onChange` is precisely the thing that could not
+  be tested before, which is why this shipped at all. 473 Swift assertions.
+
+
 - **2026-08-30 — v0.1.79: the "MARVIN stopped responding" dialog, and a usage panel that polled only when you were looking at it.**
 
   **The hang.** Eight `.hang` reports on 2026-08-29 between 00:44 and 02:38,

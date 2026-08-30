@@ -73,6 +73,38 @@ public struct BottomPanelState: Equatable, Sendable {
     }
 }
 
+/// Which bottom tabs have earned a mount.
+///
+/// The panes are mounted lazily — an unopened Graph tab should never pay for
+/// a `WKWebView` it may never show — and stay mounted once activated, so
+/// terminal scrollback and scroll offsets survive a tab switch. The set of
+/// tabs that have been activated is the whole rule.
+///
+/// It was previously maintained by a single `onChange(of: activeTab,
+/// initial: true)` guarded on `isOpen`, and that misses the most ordinary
+/// case there is. `bottomPanesArea` stays in the view hierarchy even when
+/// the panel is shut (it collapses to zero height, so the `VSplitView` keeps
+/// its divider position) — so the observer fires ONCE at launch, with the
+/// panel closed, and mounts nothing. Opening the panel does not change
+/// `activeTab`, so it never fired again: the panel opened onto an empty
+/// ZStack. A Terminal tab with no header and no shell, no error anywhere,
+/// because nothing had been asked to run. Clicking any other tab and back
+/// fixed it, which is exactly why it read as intermittent (2026-08-30).
+///
+/// Pure (ADR-0022) so the open-transition case is pinned without a running
+/// app — a view-local `onChange` is precisely what could not be tested.
+public enum BottomPanelMounting {
+    /// The mounted set after observing `state`. Monotonic: tabs are never
+    /// unmounted, and a closed panel mounts nothing new.
+    public static func mounted(
+        _ current: Set<BottomPanelTab>,
+        after state: BottomPanelState
+    ) -> Set<BottomPanelTab> {
+        guard state.isOpen else { return current }
+        return current.union([state.activeTab])
+    }
+}
+
 /// Reading the persisted `marvin.panes` payload, old shape or new.
 ///
 /// An existing user has `{files, brain, graph, preview, terminal, problems}`

@@ -405,8 +405,22 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // Both transitions mount, via the one pure rule (BottomPanelMounting).
+        // Watching `activeTab` alone was the bug: this area stays in the
+        // hierarchy while the panel is shut (see `workPaneSplit`), so that
+        // observer fired once at launch with the panel closed and mounted
+        // nothing, and OPENING the panel does not change `activeTab` — so the
+        // Terminal tab rendered an empty ZStack with no shell behind it.
+        // Each observer builds the state from the NEW value it was handed,
+        // rather than trusting what `panel` captured — the two must not
+        // disagree about which transition just happened.
         .onChange(of: panel.activeTab, initial: true) { _, tab in
-            if panel.isOpen { mountedBottomTabs.insert(tab) }
+            mountedBottomTabs = BottomPanelMounting.mounted(
+                mountedBottomTabs, after: BottomPanelState(isOpen: panel.isOpen, activeTab: tab))
+        }
+        .onChange(of: panel.isOpen, initial: true) { _, open in
+            mountedBottomTabs = BottomPanelMounting.mounted(
+                mountedBottomTabs, after: BottomPanelState(isOpen: open, activeTab: panel.activeTab))
         }
     }
 

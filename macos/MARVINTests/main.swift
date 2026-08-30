@@ -1990,6 +1990,42 @@ runner.suite("AttachmentMentions") {
     }
 }
 
+runner.suite("BottomPanelMounting") {
+    // The bug this pins (2026-08-30): the bottom panes area stays mounted
+    // while the panel is SHUT, so an `onChange(of: activeTab, initial: true)`
+    // fired once at launch with the panel closed, mounted nothing, and never
+    // fired again — opening the panel does not change the active tab. The
+    // Terminal tab opened onto an empty ZStack: no header, no shell, no
+    // error. Clicking another tab and back fixed it, which is why it looked
+    // intermittent across versions rather than like a bug.
+    runner.test("opening the panel mounts the already-selected tab") {
+        // Launch: panel closed, terminal remembered as the active tab.
+        var mounted = BottomPanelMounting.mounted([], after: BottomPanelState(isOpen: false, activeTab: .terminal))
+        runner.expect(mounted.isEmpty, "a closed panel mounts nothing")
+        // The user opens it. `activeTab` has NOT changed.
+        mounted = BottomPanelMounting.mounted(mounted, after: BottomPanelState(isOpen: true, activeTab: .terminal))
+        runner.expect(mounted.contains(.terminal), "opening mounts the selected tab")
+    }
+
+    runner.test("switching tabs while open mounts the new one and keeps the old") {
+        var mounted = BottomPanelMounting.mounted([], after: BottomPanelState(isOpen: true, activeTab: .terminal))
+        mounted = BottomPanelMounting.mounted(mounted, after: BottomPanelState(isOpen: true, activeTab: .graph))
+        runner.expect(mounted.contains(.terminal), "terminal stays mounted — scrollback survives a switch")
+        runner.expect(mounted.contains(.graph), "graph mounts on activation")
+    }
+
+    runner.test("closing never unmounts, and mounts nothing new") {
+        var mounted = BottomPanelMounting.mounted([], after: BottomPanelState(isOpen: true, activeTab: .terminal))
+        mounted = BottomPanelMounting.mounted(mounted, after: BottomPanelState(isOpen: false, activeTab: .preview))
+        runner.expect(mounted == [.terminal], "preview never became visible, so it never mounted")
+    }
+
+    runner.test("an unopened tab never mounts — the WKWebView it would cost") {
+        let mounted = BottomPanelMounting.mounted([], after: BottomPanelState(isOpen: true, activeTab: .terminal))
+        runner.expect(!mounted.contains(.graph), "graph stays unmounted until activated")
+    }
+}
+
 runner.suite("AdvisorTierFloor") {
     runner.test("warns when the second opinion is weaker than the executor") {
         runner.expect(
