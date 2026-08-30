@@ -1712,8 +1712,23 @@ struct ChatPreviewView: View {
             MarvinDivider()
             // The message log OWNS the flexible vertical space — it expands
             // and contracts so the docked tray below never overlaps it.
+            //
+            // `idealHeight` is load-bearing, not decoration. Without it this
+            // flexible frame forwards the VStack's IDEAL-size query (a nil
+            // proposal, from `StackLayout.sizeChildrenIdeally`) straight into
+            // the ScrollView — and a ScrollView's ideal height is its whole
+            // content, so the LazyVStack inside runs `measureEstimates` over
+            // EVERY message and the laziness is gone. Eight 60-second main-
+            // thread hangs on 2026-08-29 (v0.1.65) sampled inside exactly
+            // that chain: ScrollViewUtilities.sizeThatFits →
+            // LazyStack.measureEstimates → ForEachList.applyNodes, CPU pegged,
+            // macOS showing the app as not responding while nothing was
+            // actually broken. `_FlexFrameLayout` answers a nil proposal from
+            // `idealHeight` WITHOUT consulting its child, which cuts the walk
+            // out. Real layout passes carry a definite proposal, so nothing
+            // about the rendered result changes.
             messagesPane
-                .frame(minHeight: 140, maxHeight: .infinity)
+                .frame(minHeight: 140, idealHeight: 140, maxHeight: .infinity)
             if let err = model.lastError {
                 errorBanner(err)
             }

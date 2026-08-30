@@ -9,6 +9,51 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.79: the "MARVIN stopped responding" dialog, and a usage panel that polled only when you were looking at it.**
+
+  **The hang.** Eight `.hang` reports on 2026-08-29 between 00:44 and 02:38,
+  all v0.1.65, each ~61 s with the main thread CPU-pegged — and no crash,
+  which is exactly what the user described: the dialog appears, nothing is
+  actually broken. The sampled stack is the same every time:
+
+  ```
+  ScrollViewLayoutComputer.Engine.sizeThatFits
+    → ScrollViewUtilities.sizeThatFits
+      → LazyStack.sizeThatFits → LazyStack.measureEstimates
+        → ForEachList.applyNodes  (× the whole transcript)
+  ```
+
+  The chat transcript is `ScrollView { LazyVStack { ForEach(messages) } }`
+  under `.frame(minHeight: 140, maxHeight: .infinity)`. That flexible frame
+  is the problem: the enclosing `VStack` runs `sizeChildrenIdeally`, and a
+  `_FlexFrameLayout` with no `idealHeight` forwards that nil proposal
+  straight to the child. A ScrollView's ideal height is its *entire*
+  content — so the LazyVStack measured every message, and the laziness that
+  makes a long transcript viable was silently gone. `sizeChildrenIdeally`
+  is right there in the stack.
+
+  Fix is one word: `idealHeight: 140`. `_FlexFrameLayout` answers a nil
+  proposal from its ideal value **without consulting the child**, which cuts
+  the whole-list walk out of the ideal-size pass. Real layout passes carry a
+  definite proposal, so nothing about the rendered result changes. Scoped to
+  the one frame the stack names — the other `maxHeight: .infinity` frames in
+  the app are fill-parent frames in containers that don't run an ideal-size
+  pass, and were left alone. Not reproduced on 0.1.79 (no hang report since
+  2026-08-29 02:38, thirteen versions back), so this is a fix to the
+  mechanism the stack shows, not a verified-by-repro fix.
+
+  **The usage panel.** ADR-0097 got the plan-usage numbers flowing —
+  `/api/cost` served `five_hour 0.35 / seven_day 0.55` — and the popover
+  still showed `49 %` and "no % yet". `CostService.poll()` opens with
+  `guard NSApp.isActive else { return }`, and nothing fetches when the panel
+  opens. For anyone driving MARVIN from a terminal the app is almost never
+  frontmost, so a panel whose entire job is showing current limits was
+  refreshed by a timer that pauses whenever you look away. `refreshNow()`
+  polls regardless of focus and the cost button calls it on open. Everything
+  else in the popover (lifetime, turns, tokens) matched the API exactly,
+  which is what ruled out a decode bug and pointed at staleness.
+
+
 - **2026-08-30 — v0.1.78: verify against what runs — the CLI MARVIN actually spawned, and the skills the loader actually registered.**
 
   Two symptoms that looked unrelated, one shared mistake: in both, the surface

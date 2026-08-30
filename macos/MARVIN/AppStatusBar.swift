@@ -462,6 +462,10 @@ struct AppStatusBar: View {
     private var costSegment: some View {
         if let cost = bridge.costSummary {
             Button {
+                // Opening the panel asks for current numbers — the background
+                // poll is paused whenever MARVIN is not frontmost, which is
+                // most of the time for a terminal-driven session.
+                if !costPopoverOpen { CostService.shared.refreshNow() }
                 costPopoverOpen.toggle()
             } label: {
                 HStack(spacing: 4) {

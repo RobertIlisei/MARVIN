@@ -39,6 +39,19 @@ final class CostService {
 
     // MARK: - External triggers
 
+    /// Fetch once, right now, regardless of whether MARVIN is frontmost.
+    ///
+    /// The 30 s poll is `NSApp.isActive`-gated, which is right for a
+    /// background timer and wrong for a panel the user just opened: someone
+    /// driving MARVIN from a terminal is never frontmost, so the plan-usage
+    /// bars showed whatever was true the last time the app had focus. Seen
+    /// 2026-08-30 — `/api/cost` served `five_hour 0.35 / seven_day 0.55`
+    /// while the popover still displayed the pre-refresh `49 %` and
+    /// "no % yet". Opening a usage panel is a request for current numbers.
+    func refreshNow() {
+        Task { await poll(force: true) }
+    }
+
     /// Called by ProjectsService when the active project changes.
     /// Clears the stale cost summary immediately, then starts polling
     /// the new project.
@@ -63,8 +76,8 @@ final class CostService {
         }
     }
 
-    private func poll() async {
-        guard NSApp.isActive else { return }
+    private func poll(force: Bool = false) async {
+        guard force || NSApp.isActive else { return }
         guard let pid = currentProjectId,
               let encoded = pid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "\(ServerConfig.baseURLString)/api/cost?projectId=\(encoded)") else { return }
