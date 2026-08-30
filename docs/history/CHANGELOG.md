@@ -9,6 +9,26 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.76: two fixes for bugs the previous release introduced.**
+
+  **`obsidian_init` wrote 34,463 files** into `graphify-out/obsidian/` and
+  truncated MARVIN's file tree at its 20,000-entry cap. Three changes lined
+  up: ADR-0086 made `graphify-out/` visible, ADR-0091 added
+  `exportGraphCanvas` and **never switched the call site** — so the 34k-note
+  exporter still ran and the canvas function was dead code — and
+  `graphify export obsidian` has no canvas-only flag. The export now stages in
+  a temp directory and copies out only `graph.canvas`; the note exporter is
+  deleted rather than left as the trap it proved to be; and
+  `graphify-out/obsidian/` is skipped by the tree as a belt
+  ([ADR-0092](../decisions/0092-canvas-only-export.md)).
+
+  **The stuck "Working…" indicator survived its own fix.** v0.1.75 guarded the
+  clear with `if activeTask == nil`, which is backwards: for a turn this
+  client POSTed, `activeTask` is non-nil for the whole turn — the common case
+  — so the guard skipped precisely when it was needed. `turn.completed` now
+  clears the flag unconditionally, which is safe because the queued-message
+  drain dispatches `sendInternal` on a later tick and re-sets it itself.
+
 - **2026-08-30 — v0.1.75: the vault and the graph, joined up.**
 
   A measured audit of what MARVIN was actually doing with graphify and
