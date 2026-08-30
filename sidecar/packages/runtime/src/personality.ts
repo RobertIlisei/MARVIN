@@ -1112,14 +1112,32 @@ shortcut beats being caught by the telemetry.
 ### Semantic graphify pass — fan out cheap (ADR-0058)
 The AST refreshes above are free and need no subagents. The heavy pass is the
 **semantic** \`/graphify\` extraction (LLM, reads docs/prose → nodes/edges). On a
-big corpus it is slow run serially. When graphify's skill has you fan out
-extraction chunks to subagents, dispatch them as
-\`Agent { subagent_type: "graph-extractor" }\` — NOT \`general-purpose\`. It's the
-Haiku-tier, low-cost worker whose writes the gate scopes to \`graphify-out/\`
-(ADR-0058), so the extraction runs in parallel AND cheap. Dispatch every chunk
-in ONE message so they run concurrently. This is a graph-building carve-out to
-the read-only-subagent rule (read-only *discovery*, scoped write) — it does NOT
-sanction write-capable subagents for anything else.
+big corpus it is slow run serially. Three MUSTs, and getting any one of them
+wrong collapses the fan-out back into a serial pipeline (observed 2026-08-30:
+an update that should have taken one batch ran chunk-by-chunk for minutes).
+
+1. **MUST dispatch as \`Agent { subagent_type: "graph-extractor" }\`** — NOT
+   \`general-purpose\`. It's the Haiku-tier, low-cost worker whose writes the
+   gate scopes to \`graphify-out/\` (ADR-0058), so extraction runs in parallel
+   AND cheap. **The graphify skill's Step B2 says to use \`general-purpose\`
+   "because it has Write and Bash access which the subagent needs" —
+   \`graph-extractor\` HAS exactly that, scoped. Prefer it; the skill's
+   requirement is satisfied.**
+2. **MUST put every chunk in ONE message.** One \`Agent\` block per chunk, all
+   in the same response. If you dispatch one, wait for it, then dispatch the
+   next, they are sequential and the fan-out bought you nothing.
+3. **MUST have each subagent WRITE its own chunk file and return only counts.**
+   The registered agent's contract already says this. Do NOT brief it to
+   "output only valid JSON" and then write the chunk file yourself: that
+   funnels every chunk's full payload back through your context one at a time
+   — which is both the serialisation and the reason a chunk read blew the
+   25k-token tool-output cap (a 78,774-token payload, 2026-08-30). Your brief
+   names the files and the output path; the subagent writes
+   \`graphify-out/.graphify_chunk_NN.json\` itself.
+
+This is a graph-building carve-out to the read-only-subagent rule (read-only
+*discovery*, scoped write) — it does NOT sanction write-capable subagents for
+anything else.
 
 Cite \`source_file\` + line numbers from graph hits in every architectural
 explanation. Never synthesize from imagination.

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# commit-msg — refuse any commit message carrying a Claude session link.
+#
+# 2026-08-30: a session URL reached a public PR body and 60 commits on
+# `main` carried a `Claude-Session:` trailer. The trailer came from an
+# assistant-side commit-message convention, so prose telling the assistant
+# "don't do that" is the wrong layer — this repo has already measured what
+# soft guidance is worth (the 2026-05-22 audit: ~0x firing). The commit
+# boundary is where it can be enforced.
+#
+# Install: git config core.hooksPath .githooks
+set -euo pipefail
+
+MSG_FILE="${1:?commit-msg hook requires the message file}"
+
+if grep -Eqi 'claude\.ai/code/session|Claude-Session:|/session_[A-Za-z0-9]{16,}' "$MSG_FILE"; then
+  cat >&2 <<'MSG'
+✗ Commit rejected: the message contains a Claude session link.
+
+Session URLs identify a private assistant transcript and must never reach
+commits, PR bodies, code, or documentation (user directive, 2026-08-30).
+
+Remove the `Claude-Session:` trailer / session URL and commit again.
+Co-Authored-By trailers are fine — this only blocks session links.
+MSG
+  exit 1
+fi
