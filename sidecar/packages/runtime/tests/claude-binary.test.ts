@@ -48,3 +48,25 @@ describe("claudeCliVersion", () => {
     expect((newVer as number[])[2] ?? 0).toBeGreaterThan((oldVer as number[])[2] ?? 0);
   });
 });
+
+// ADR-0093 — MARVIN never passes the binary to the SDK; the SDK resolves
+// `claude` from PATH itself. With /opt/homebrew/bin prepended, every turn
+// spawned 2.1.92 while discoverClaudeBinary() (and the About panel) reported
+// 2.1.251. ADR-0087 fixed the REPORTING and left the SPAWN untouched, so the
+// symptom survived that fix entirely.
+describe("enrichedToolPath (ADR-0093)", () => {
+  it("leads with the directory of the CLI we actually resolved", async () => {
+    const { enrichedToolPath } = await import("../src/sdk-runner");
+    const { discoverClaudeBinary } = await import("../src/claude-cli");
+    const expected = discoverClaudeBinary().replace(/\/[^/]+$/, "");
+    expect(enrichedToolPath("/usr/bin:/bin").split(":")[0]).toBe(expected);
+  });
+
+  it("still enriches for a Finder launch, and never duplicates an entry", async () => {
+    const { enrichedToolPath } = await import("../src/sdk-runner");
+    const parts = enrichedToolPath("/usr/bin:/bin").split(":");
+    expect(parts).toContain("/opt/homebrew/bin");
+    expect(parts).toContain("/usr/bin");
+    expect(new Set(parts).size).toBe(parts.length);
+  });
+});
