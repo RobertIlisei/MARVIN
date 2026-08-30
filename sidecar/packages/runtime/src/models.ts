@@ -82,6 +82,100 @@ const FALLBACK_MODELS: ModelInfo[] = [
   },
 ];
 
+/** Which catalogue is in play. Derived from the auth config, so every
+ *  resolution path agrees without threading a flag through six call sites. */
+export type ModelProvider = "anthropic" | "openrouter";
+
+export function activeProvider(): ModelProvider {
+  const cfg = readAuthConfig();
+  return cfg?.mode === "api-key" && cfg.provider === "openrouter" ? "openrouter" : "anthropic";
+}
+
+/**
+ * OpenRouter fallback list — the same bargain as `FALLBACK_MODELS`, in the
+ * only addressing scheme OpenRouter accepts.
+ *
+ * OpenRouter names models by vendor-prefixed slug; Anthropic's API uses a bare
+ * id. Returning the bare ids here is what silently broke an OpenRouter session
+ * on any catalogue hiccup (ADR-0096) — the executor, the advisor, the
+ * graph-extractor and skill discovery all landed on ids OpenRouter cannot
+ * resolve. These will age like every fallback list; `live: false` says so, and
+ * they are only consulted when live discovery has already failed.
+ */
+const OPENROUTER_FALLBACK_MODELS: ModelInfo[] = [
+  {
+    id: "anthropic/claude-opus-4.1",
+    displayName: "Claude Opus 4.1 (OpenRouter)",
+    tier: "opus",
+    createdAt: null,
+    live: false,
+  },
+  {
+    id: "anthropic/claude-sonnet-4.5",
+    displayName: "Claude Sonnet 4.5 (OpenRouter)",
+    tier: "sonnet",
+    createdAt: null,
+    live: false,
+  },
+  {
+    id: "anthropic/claude-haiku-4.5",
+    displayName: "Claude Haiku 4.5 (OpenRouter)",
+    tier: "haiku",
+    createdAt: null,
+    live: false,
+  },
+];
+
+/** The fallback list addressable by the provider that will receive it. */
+export function fallbackModelsForProvider(provider: ModelProvider = activeProvider()): ModelInfo[] {
+  return provider === "openrouter" ? OPENROUTER_FALLBACK_MODELS : FALLBACK_MODELS;
+}
+
+/** True for a bare Anthropic id — no vendor prefix, so unusable on OpenRouter. */
+export function isBareAnthropicId(id: string): boolean {
+  return /^claude-/i.test(id) && !id.includes("/");
+}
+
+/**
+ * Boundary guard: never hand a bare Anthropic id to OpenRouter (ADR-0096).
+ *
+ * Prefers a match from the live catalogue — the ids there are current, which a
+ * static map can never be — and falls back to the tier-matched slug. Returns
+ * the id unchanged for Anthropic, for an already-prefixed id, and when no
+ * sensible equivalent exists (a wrong rewrite would be worse than the original
+ * error, which at least names the real id).
+ *
+ * This is the backstop for resolution paths added later that forget the rule.
+ * The failure this exists to end is a SILENT provider mismatch, so every
+ * rewrite is logged.
+ */
+export function ensureProviderModelId(
+  id: string | null | undefined,
+  catalogue: ModelInfo[] = [],
+  provider: ModelProvider = activeProvider(),
+): string | null {
+  if (!id) return id ?? null;
+  if (provider !== "openrouter") return id;
+  if (!isBareAnthropicId(id)) return id;
+
+  const tier = tierFor(id);
+  const fromLive = newestOfTier(catalogue.filter((m) => m.id.includes("/")), tier);
+  const replacement = fromLive ?? newestOfTier(OPENROUTER_FALLBACK_MODELS, tier);
+  if (!replacement) return id;
+
+  console.log(
+    `[marvin.telemetry] ${JSON.stringify({
+      kind: "model.provider.rewrite",
+      provider,
+      from: id,
+      to: replacement,
+      source: fromLive ? "live-catalogue" : "fallback",
+      at: new Date().toISOString(),
+    })}`,
+  );
+  return replacement;
+}
+
 function tierFor(id: string): ModelInfo["tier"] {
   const lower = id.toLowerCase();
   if (lower.includes("opus")) return "opus";
@@ -178,7 +272,7 @@ export async function listModels(options: {
   const headers = buildAuthHeaders();
   if (!headers) {
     return {
-      models: FALLBACK_MODELS,
+      models: fallbackModelsForProvider(),
       source: "fallback",
       error:
         auth.mode === "host-credentials"
@@ -215,7 +309,7 @@ export async function listModels(options: {
       });
       if (!res.ok) {
         return {
-          models: FALLBACK_MODELS,
+          models: fallbackModelsForProvider(),
           source: "fallback",
           error: `anthropic /v1/models returned ${res.status}`,
           fetchedAt,
@@ -256,14 +350,14 @@ export async function listModels(options: {
     });
 
     return {
-      models: collected.length > 0 ? collected : FALLBACK_MODELS,
+      models: collected.length > 0 ? collected : fallbackModelsForProvider(),
       source: collected.length > 0 ? "anthropic-api" : "fallback",
       error: collected.length > 0 ? null : "empty response from /v1/models",
       fetchedAt,
     };
   } catch (err) {
     return {
-      models: FALLBACK_MODELS,
+      models: fallbackModelsForProvider(),
       source: "fallback",
       error: err instanceof Error ? err.message : String(err),
       fetchedAt,
@@ -340,7 +434,17 @@ async function cachedListModels(): Promise<ListModelsResult> {
 export async function resolveDefaultModel(): Promise<string> {
   const override = process.env.MARVIN_MODEL?.trim();
   if (override) return override;
-  return (await latestForTier("opus")) ?? fallbackNewestOfTier("opus") ?? "claude-opus-5";
+  // ADR-0096: the literal is an Anthropic id, so it must not be handed to
+  // OpenRouter unrewritten. `ensureProviderModelId` is a no-op on Anthropic.
+  // `fallbackNewestOfTier` is provider-scoped (ADR-0096), so the last resort
+  // is already addressable by whichever provider will receive it. The literal
+  // is unreachable while the fallback list covers the opus tier — which the
+  // provider tests pin — and exists only to satisfy the return type.
+  return (
+    ensureProviderModelId((await latestForTier("opus")) ?? fallbackNewestOfTier("opus")) ??
+    fallbackNewestOfTier("opus") ??
+    "claude-opus-5"
+  );
 }
 
 /** True when `resolveDefaultModel` answered from the live catalogue. */
@@ -356,7 +460,7 @@ export async function latestForTier(
   const result = await cachedListModels();
   const live = newestOfTier(result.models, tier);
   if (live) return live;
-  return newestOfTier(FALLBACK_MODELS, tier);
+  return newestOfTier(fallbackModelsForProvider(), tier);
 }
 
 /** Test seam: drop the TTL cache so a test can force a fresh resolve. */
@@ -462,5 +566,5 @@ export async function calculateEstimatedCost(
  * FALLBACK_MODELS above. ADR-0029.
  */
 export function fallbackNewestOfTier(tier: ModelInfo["tier"]): string | null {
-  return newestOfTier(FALLBACK_MODELS, tier);
+  return newestOfTier(fallbackModelsForProvider(), tier);
 }
