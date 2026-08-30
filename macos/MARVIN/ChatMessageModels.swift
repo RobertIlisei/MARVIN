@@ -79,6 +79,14 @@ enum ChatBlock: Identifiable, Equatable {
         result: ChatToolResult?
     )
     case orphanToolResult(id: String, toolUseId: String, output: String, isError: Bool)
+    /// Extended thinking. The model's reasoning arrives as its own block
+    /// type; it was falling through to `.unknown` and rendering as
+    /// `unhandled block: thinking` above a `ContentBlock(type: "thinking",
+    /// text: nil, …)` debug dump — nil because the prose is in `thinking`,
+    /// not `text`, so the fallback could not even show it (user, 2026-08-30).
+    /// `redacted` is the encrypted `redacted_thinking` variant, which carries
+    /// no readable text by design.
+    case thinking(id: String, text: String, redacted: Bool)
     /// Anything we don't yet recognise in the wire — surfaced as a
     /// monospace dump so we can see what's flowing without forcing
     /// every future block type to ship a renderer first.
@@ -89,6 +97,7 @@ enum ChatBlock: Identifiable, Equatable {
         case .text(let id, _): return "text-\(id)"
         case .toolCall(let id, _, _, _): return "tool-\(id)"
         case .orphanToolResult(let id, _, _, _): return "orphan-\(id)"
+        case .thinking(let id, _, _): return "think-\(id)"
         case .unknown(let id, _, _): return "unk-\(id)"
         }
     }
@@ -237,6 +246,10 @@ enum ChatStreamReducer {
         let tool_use_id: String?
         let content: ChatJSON?
         let is_error: Bool?
+        // thinking block — the prose is `thinking`, NOT `text`.
+        let thinking: String?
+        // redacted_thinking block — encrypted, nothing readable in it.
+        let data: String?
     }
 
     private static func peekType(in data: Data) -> String? {
@@ -254,6 +267,18 @@ enum ChatStreamReducer {
                 return .text(
                     id: block.id ?? UUID().uuidString,
                     text: block.text ?? ""
+                )
+            case "thinking":
+                return .thinking(
+                    id: block.id ?? UUID().uuidString,
+                    text: block.thinking ?? "",
+                    redacted: false
+                )
+            case "redacted_thinking":
+                return .thinking(
+                    id: block.id ?? UUID().uuidString,
+                    text: "",
+                    redacted: true
                 )
             case "tool_use":
                 // Phase 2d — toolCall blocks ship with no result;

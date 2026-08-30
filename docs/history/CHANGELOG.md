@@ -9,6 +9,45 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.81: `unhandled block: thinking`, and a "streaming…" pip against an idle brain.**
+
+  **Extended thinking rendered as a debug dump.** The transcript showed
+
+  ```
+  marvin  unhandled block: thinking
+          ContentBlock(type: "thinking", text: nil, id: nil, name: nil, …)
+  ```
+
+  `reduceAssistant` mapped `text` and `tool_use` and sent everything else to
+  `.unknown`, whose renderer is a deliberate escape hatch — "surfaced as a
+  monospace dump so we can see what's flowing without forcing every future
+  block type to ship a renderer first". Thinking was never given that
+  renderer. Note `text: nil` in the dump: the prose is in `thinking`, not
+  `text`, so the fallback could not have shown it even in principle. With
+  extended thinking on, this fired on essentially every turn.
+
+  `ChatBlock.thinking(id:text:redacted:)` now exists, `thinking` and
+  `redacted_thinking` both decode, and the row is one dim collapsed
+  disclosure — reasoning is long and it is not the answer, so it stays out of
+  the way, but it is not a struct dump either. `redacted_thinking` carries no
+  readable text by design and says so instead of pretending to expand.
+
+  **The "streaming…" pip on a finished turn.** A turn ends on five paths —
+  `turn.completed`, `turn.error`, a transport failure, an explicit cancel,
+  and the attach stream unwinding — and three of them carried their own copy
+  of the loop that seals still-streaming rows. `.turnCompleted` did not: it
+  assumed the SDK's `result` cli.event had already sealed them in
+  `reduceResult`. For a turn this client ATTACHED to rather than POSTed, that
+  `result` may have been emitted *before* the attach, so it never reaches the
+  reducer — and the last assistant row kept its pip while the brain read idle
+  and nothing was running. `attachLive`'s defer had the same hole.
+
+  Exactly the shape of the `isSending` desync fixed at that same call site a
+  release earlier: the fix went to the busy flag and not to the rows. Now one
+  `sealStreamingRows()` with the reasoning at its definition, called from all
+  five paths, so the next terminal path cannot quietly omit it.
+
+
 - **2026-08-30 — v0.1.80: the Terminal tab that opened onto nothing.**
 
   Reported as "terminal is not working again" on 0.1.79, after it had

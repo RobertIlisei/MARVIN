@@ -816,9 +816,7 @@ final class ChatPreviewModel {
                 // with a stale confirm sheet open or a streaming
                 // pip on the latest assistant row.
                 pendingConfirms.removeAll()
-                for i in messages.indices where messages[i].isStreaming {
-                    messages[i].isStreaming = false
-                }
+                sealStreamingRows()
                 MarvinBridge.shared.marvinState = "error"
                 MarvinBridge.shared.isBusy = false
             }
@@ -850,6 +848,27 @@ final class ChatPreviewModel {
         }
     }
 
+    /// Seal every row still claiming to be mid-write.
+    ///
+    /// A turn ends on five paths — `turn.completed`, `turn.error`, a
+    /// transport failure, an explicit cancel, and the attach stream
+    /// unwinding — and each one used to carry its own copy of this loop.
+    /// Two of them did not: `.turnCompleted` (which assumed the SDK's
+    /// `result` cli.event had already sealed the rows via `reduceResult`)
+    /// and `attachLive`'s defer. For a turn this client ATTACHED to rather
+    /// than POSTed, `result` may have been emitted BEFORE the attach, so it
+    /// never reaches the reducer — and the row sat on a "streaming…" pip
+    /// while the brain read idle and nothing was running (user, 2026-08-30).
+    /// Same shape as the `isSending` desync fixed at `.turnCompleted`: the
+    /// fix went to the busy flag and not to the rows. One helper, every
+    /// terminal path, so the next one cannot forget.
+    private func sealStreamingRows() {
+        for i in messages.indices where messages[i].isStreaming {
+            messages[i].isStreaming = false
+        }
+    }
+
+
     /// Stop consuming the local stream WITHOUT telling the sidecar to end the
     /// turn. `runDetachedTurn` runs the SDK to completion independent of the
     /// HTTP/SSE lifecycle by design (see `turn-orchestrator.ts`) specifically
@@ -870,9 +889,7 @@ final class ChatPreviewModel {
         queuedMessages.removeAll()
         // Seal any still-streaming rows so the chat doesn't sit there
         // showing "streaming…" forever on the row that was mid-write.
-        for i in messages.indices where messages[i].isStreaming {
-            messages[i].isStreaming = false
-        }
+        sealStreamingRows()
         // Drop any open confirm sheet for the session we're leaving —
         // hydrate() is about to load a different session's own state.
         pendingConfirms.removeAll()
@@ -1218,6 +1235,12 @@ final class ChatPreviewModel {
                     isSending = false
                     currentActivity = nil
                     MarvinBridge.shared.isBusy = false
+                    // The attach stream ended and nothing else is running, so
+                    // nothing can still be mid-write. This is the path where
+                    // the `result` cli.event is most likely to have been
+                    // emitted before we attached, i.e. never seen by the
+                    // reducer that would otherwise seal these.
+                    sealStreamingRows()
                 }
             }
             do {
@@ -1550,6 +1573,12 @@ final class ChatPreviewModel {
             // sets `isSending = true` again after this line.
             isSending = false
             activeTask = nil
+            // The rows too, not just the busy flag. `reduceResult` seals them
+            // when the SDK's `result` cli.event arrives, but a turn this
+            // client ATTACHED to may have had its `result` emitted before the
+            // attach — so it never reaches the reducer and the last row keeps
+            // a "streaming…" pip against an idle brain.
+            sealStreamingRows()
             // The SDK's finally block auto-denies and clears any
             // unresolved confirms before turn.completed fires; if any
             // sheet is still open client-side it's now stale (clicking
@@ -1639,9 +1668,7 @@ final class ChatPreviewModel {
             // event leaves the latest assistant message stuck on a
             // "streaming…" pip with no way for the user to know it's
             // done.
-            for i in messages.indices where messages[i].isStreaming {
-                messages[i].isStreaming = false
-            }
+            sealStreamingRows()
             // The SDK auto-denies all pending confirms in its finally
             // block before this event fires. Drop the local sheet
             // queue so an Allow/Deny click after the error doesn't

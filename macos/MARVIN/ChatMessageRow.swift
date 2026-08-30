@@ -144,6 +144,8 @@ struct ChatMessageRow: View {
             ToolCallBlockView(name: name, input: input, result: result)
         case .orphanToolResult(_, let toolUseId, let output, let isError):
             OrphanToolResultBlockView(toolUseId: toolUseId, output: output, isError: isError)
+        case .thinking(_, let text, let redacted):
+            ThinkingBlockView(text: text, redacted: redacted)
         case .unknown(_, let kind, let raw):
             UnknownBlockView(kind: kind, raw: raw)
         }
@@ -554,6 +556,54 @@ private struct OrphanToolResultBlockView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.tertiary)
             ToolOutputView(output: output, isError: isError)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// Extended thinking, collapsed by default.
+///
+/// Reasoning is long and it is not the answer, so it stays out of the way —
+/// but it is not noise either, and it certainly is not what it used to
+/// render as: `unhandled block: thinking` over a struct dump whose `text`
+/// was nil. One dim disclosure row, expandable, matching how the tool cards
+/// already hide their payload.
+private struct ThinkingBlockView: View {
+    let text: String
+    let redacted: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                if !redacted { expanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain")
+                        .font(.system(size: 10))
+                    Text(redacted ? "thinking (redacted)" : "thinking")
+                        .font(.caption.monospaced())
+                    if !redacted {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8))
+                    }
+                }
+                .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .disabled(redacted)
+            .help(redacted
+                  ? "This reasoning was encrypted by the API — there is nothing to show."
+                  : "The model's reasoning for this step.")
+            if expanded && !text.isEmpty {
+                Text(text)
+                    .font(.caption)
+                    .italic()
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 15)
+            }
         }
         .padding(.vertical, 2)
     }
