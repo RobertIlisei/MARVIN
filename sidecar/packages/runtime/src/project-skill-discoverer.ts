@@ -30,8 +30,7 @@ import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { detectFingerprint } from "@marvin/project-context";
 
 import { buildSubprocessEnv } from "./auth";
-import { readAuthConfig } from "./auth-config";
-import { latestForTier } from "./models";
+import { ensureProviderModelId, fallbackNewestOfTier, latestForTier } from "./models";
 
 const pExecFile = promisify(execFile);
 
@@ -228,10 +227,18 @@ export async function discoverProjectSkills(
   // Newest live Sonnet — tier-resolved (ADR-0029) so a new Sonnet ships
   // into this call automatically. Falls back to the static list's newest
   // Sonnet when discovery is unavailable.
-  const auth = readAuthConfig();
-  const isOpenRouter = auth?.mode === "api-key" && auth?.provider === "openrouter";
+  // ADR-0096: no provider branch here any more. `latestForTier` resolves from
+  // whichever catalogue is active, so it already returns an OpenRouter slug on
+  // an OpenRouter session. The old condition read as "prefer the caller's model
+  // on OpenRouter" but meant "if we are on OpenRouter AND got a model" — so the
+  // OpenRouter-aware branch was the first thing dropped when the caller omitted
+  // one (the Skills pane omits it whenever the executor picker is on
+  // "default"), landing on a hardcoded bare Anthropic id that OpenRouter
+  // cannot resolve. That is why skill discovery failed on OpenRouter.
   const discoveryModel =
-    (isOpenRouter && model) ? model : (await latestForTier("sonnet")) ?? "claude-sonnet-4-6";
+    ensureProviderModelId(model ?? (await latestForTier("sonnet")) ?? fallbackNewestOfTier("sonnet")) ??
+    fallbackNewestOfTier("sonnet") ??
+    "claude-sonnet-4-6";
 
   // One-shot Agent SDK call. No tools, no MCP, no permission machinery
   // — pure prompt-in / text-out. The SDK still routes through the same
