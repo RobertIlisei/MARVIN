@@ -9,6 +9,52 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.86: the terminal died on a project switch, and Run diagnostics was a dead button.**
+
+  **The terminal.** Reported as "typing isn't seen, and Enter does nothing",
+  then narrowed by the user to the detail that cracked it: *"the issue happens
+  when switching projects."*
+
+  `TerminalSessionStore` keys sessions by `workDir`, so a project switch hands
+  the pane a DIFFERENT `TerminalSession` with a different `TerminalView`. But
+  SwiftUI keeps `PTYTerminalView`'s identity across the switch, so only
+  `updateNSView` runs — never `makeNSView`. And `updateNSView` reassigned the
+  coordinator's session and stopped there:
+
+  ```swift
+  context.coordinator.session = session          // keystrokes -> NEW shell
+  if let tv = container.terminal { applyTheme(tv) }   // screen still shows OLD view
+  ```
+
+  So keystrokes went to the new shell while the old shell's view stayed in the
+  hierarchy. The new shell's output fed a view nobody could see. `markAttached()`
+  was `makeNSView`-only too, so the new session never left its `pending`
+  buffer — it would have stayed blank even if it had been shown. Now the
+  container swaps its subview when the session's view changes, through the
+  same `mount()` the initial path uses, so a swap can never do less than the
+  first mount did.
+
+  **Run diagnostics.** `guard let tsc = which("tsc") else { return [] }`, and
+  `which` runs with the app's inherited PATH — a Finder-launched app gets the
+  bare launchd `/usr/bin:/bin:/usr/sbin:/sbin`, so Homebrew and node tooling
+  are invisible to it (the same class `enrichedToolPath()` fixes on the
+  sidecar). Worse, a TypeScript project almost never installs `tsc` globally:
+  it lives in `node_modules/.bin`. So the lookup failed on a perfectly normal
+  project and returned `[]` — which the pane renders as **"No problems
+  detected"**, identical to a clean build. Tool-missing and all-clear were the
+  same picture, which is the same silent-failure shape as v0.1.84's swallowed
+  HTTP 500.
+
+  Lookup now goes project-local → common absolute paths → `which`, and a tool
+  it cannot find is surfaced AS a warning diagnostic naming where it looked.
+  Verified: `tsc` resolves to `node_modules/.bin/tsc` in this repo, where it
+  previously found nothing at all.
+
+  Not unit-tested: `MARVINTests` links `MARVINLogic`, and both of these live in
+  the app target, which an executable target cannot link. Verified by
+  construction and by the path probe above.
+
+
 - **2026-08-30 — v0.1.85: discovery runs on the model you picked, with a cap that is a backstop rather than a budget.**
 
   v0.1.84 fixed the *symptom* by taking the model override away. That was the

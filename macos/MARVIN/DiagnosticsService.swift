@@ -78,8 +78,50 @@ final class DiagnosticsService {
 
     // MARK: - tsc
 
+    /// Locate a project tool, in the order a developer would expect.
+    ///
+    /// `which` alone was not enough, for two compounding reasons. A
+    /// Finder-launched app inherits the minimal launchd PATH
+    /// (`/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew and node tooling are
+    /// invisible to it — the same class of problem `enrichedToolPath()` solves
+    /// on the sidecar. And a TypeScript project almost never installs `tsc`
+    /// globally: it lives in `node_modules/.bin`. So the lookup failed on a
+    /// perfectly normal project, `runTSC` returned `[]`, and the pane rendered
+    /// "No problems detected" — identical to a clean build. Clicking
+    /// "Run diagnostics" looked like a dead button (reported 2026-08-30).
+    private static nonisolated func locate(_ cmd: String, workDir: String) -> String? {
+        let fm = FileManager.default
+        // 1. The project's own dependency — what the project actually builds with.
+        let local = workDir + "/node_modules/.bin/" + cmd
+        if fm.isExecutableFile(atPath: local) { return local }
+        // 2. Common absolute locations, since our PATH may be the bare launchd one.
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            let p = dir + "/" + cmd
+            if fm.isExecutableFile(atPath: p) { return p }
+        }
+        // 3. Whatever PATH we do have.
+        return which(cmd)
+    }
+
+    /// A tool we needed and could not find, surfaced AS a diagnostic.
+    ///
+    /// Returning `[]` for "no tool" is indistinguishable from "no problems",
+    /// which is how this failed silently. The pane is the right place to say
+    /// so: it is the thing the user is looking at when they wonder why
+    /// nothing happened.
+    private static nonisolated func toolMissing(_ cmd: String, workDir: String) -> [DiagnosticItem] {
+        [DiagnosticItem(
+            severity: .warning,
+            message: "\(cmd) not found — looked in node_modules/.bin, /opt/homebrew/bin and /usr/local/bin. "
+                + "Install it in the project (or on PATH) to get diagnostics here.",
+            filePath: workDir,
+            line: 0,
+            col: 0,
+        )]
+    }
+
     private static nonisolated func runTSC(workDir: String) -> [DiagnosticItem] {
-        guard let tsc = which("tsc") else { return [] }
+        guard let tsc = locate("tsc", workDir: workDir) else { return toolMissing("tsc", workDir: workDir) }
         let out = shell(tsc, args: ["--noEmit", "--pretty", "false"], cwd: workDir, timeout: 30)
         return parseTSC(out ?? "", workDir: workDir)
     }
@@ -113,7 +155,7 @@ final class DiagnosticsService {
     // MARK: - eslint
 
     private static nonisolated func runESLint(workDir: String) -> [DiagnosticItem] {
-        guard let eslint = which("eslint") else { return [] }
+        guard let eslint = locate("eslint", workDir: workDir) else { return toolMissing("eslint", workDir: workDir) }
         let out = shell(eslint, args: [".", "--format", "compact", "--max-warnings", "200"], cwd: workDir, timeout: 30)
         return parseESLint(out ?? "", workDir: workDir)
     }

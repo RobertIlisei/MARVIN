@@ -19,7 +19,38 @@ struct PTYTerminalView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let container = FocusingContainer()
-        let tv = session.view
+        mount(session.view, in: container, context: context)
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.session = session
+        guard let container = nsView as? FocusingContainer else { return }
+        // SESSION SWAP. Sessions are keyed by workDir, so switching projects
+        // hands us a DIFFERENT TerminalSession with a different TerminalView —
+        // and SwiftUI keeps this representable's identity, so only this method
+        // runs, never `makeNSView`.
+        //
+        // This used to reassign the coordinator's session and stop there: the
+        // keystrokes went to the NEW shell while the OLD shell's view stayed
+        // on screen. Typing showed nothing and Enter appeared to do nothing,
+        // because the new shell's output was feeding a view that was not in
+        // the hierarchy. `markAttached()` was `makeNSView`-only too, so the
+        // new session never left its `pending` buffer either — it would have
+        // stayed blank even once shown. Reported 2026-08-30 and narrowed to
+        // "happens when switching projects", which is exactly this path.
+        if container.terminal !== session.view {
+            container.terminal?.removeFromSuperview()
+            mount(session.view, in: container, context: context)
+        } else {
+            applyTheme(session.view)
+        }
+    }
+
+    /// Put `tv` in `container` edge-to-edge, wire the delegate, and let the
+    /// session flush anything it buffered while detached. One path, so a swap
+    /// can never do less than the initial mount did.
+    private func mount(_ tv: TerminalView, in container: FocusingContainer, context: Context) {
         tv.terminalDelegate = context.coordinator
         applyTheme(tv)
         tv.translatesAutoresizingMaskIntoConstraints = false
@@ -33,12 +64,6 @@ struct PTYTerminalView: NSViewRepresentable {
         container.terminal = tv
         session.markAttached()
         DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
-        return container
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.session = session
-        if let tv = (nsView as? FocusingContainer)?.terminal { applyTheme(tv) }
     }
 
     private func applyTheme(_ tv: TerminalView) {
