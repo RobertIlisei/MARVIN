@@ -31,27 +31,33 @@ function project(files: Record<string, string>): string {
 }
 
 const skill = (name: string) => `.marvin/skills/${name}/SKILL.md`;
-const byName = (dir: string) =>
-  Object.fromEntries(listProjectSkills(dir).map((s) => [s.name, s]));
+
+/** The one entry named `name` — throws rather than returning undefined, so a
+ *  listing regression fails on the lookup instead of on a null assertion. */
+function only(dir: string, name: string) {
+  const hit = listProjectSkills(dir).find((s) => s.name === name);
+  if (!hit) throw new Error(`no project skill named ${name}`);
+  return hit;
+}
 
 describe("listProjectSkills — registration reality", () => {
   it("blocks a SKILL.md with no frontmatter", () => {
     const dir = project({ [skill("hetzner-ssh")]: "# Skill: hetzner-ssh\n\nssh prod\n" });
-    const s = byName(dir)["hetzner-ssh"];
+    const s = only(dir, "hetzner-ssh");
     expect(s.loadIssue?.blocked).toBe(true);
     expect(s.loadIssue?.reason).toMatch(/no YAML frontmatter/);
   });
 
   it("blocks frontmatter that omits `description:` — the load-bearing key", () => {
     const dir = project({ [skill("no-desc")]: "---\nname: no-desc\n---\n\nbody\n" });
-    const s = byName(dir)["no-desc"];
+    const s = only(dir, "no-desc");
     expect(s.loadIssue?.blocked).toBe(true);
     expect(s.loadIssue?.reason).toMatch(/description/);
   });
 
   it("accepts frontmatter with only `description:` — `name:` is optional", () => {
     const dir = project({ [skill("no-name")]: '---\ndescription: "Does a thing."\n---\n\nbody\n' });
-    const s = byName(dir)["no-name"];
+    const s = only(dir, "no-name");
     expect(s.loadIssue).toBeUndefined();
     expect(s.description).toBe("Does a thing.");
   });
@@ -60,12 +66,12 @@ describe("listProjectSkills — registration reality", () => {
     const dir = project({
       [skill("real-dir")]: '---\nname: something-else\ndescription: "d"\n---\n\nbody\n',
     });
-    const listed = listProjectSkills(dir);
     // The loader ignores the frontmatter name; so must we, or the pane shows a
     // name the `Skill` tool will reject.
-    expect(listed.map((s) => s.name)).toEqual(["real-dir"]);
-    expect(listed[0].loadIssue?.blocked).toBe(false);
-    expect(listed[0].loadIssue?.reason).toMatch(/real-dir/);
+    expect(listProjectSkills(dir).map((s) => s.name)).toEqual(["real-dir"]);
+    const s = only(dir, "real-dir");
+    expect(s.loadIssue?.blocked).toBe(false);
+    expect(s.loadIssue?.reason).toMatch(/real-dir/);
   });
 
   it("ignores directories with no SKILL.md — skill-creator eval workspaces", () => {
