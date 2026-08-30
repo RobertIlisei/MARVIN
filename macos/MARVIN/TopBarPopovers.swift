@@ -23,6 +23,7 @@
 
 import SwiftUI
 import AppKit
+import MARVINLogic
 
 // MARK: - Layout popover
 
@@ -360,6 +361,29 @@ struct ModelsDialog: View {
                 )
             }
 
+            // Soft floor (ADR-0033 rationale): the advisor exists to be the
+            // stronger read. Warn, never block — a cheap advisor is a valid
+            // choice, just rarely an accidental one.
+            if let floorWarning = AdvisorTierFloor.warning(
+                executorTier: tier(of: executor),
+                advisorTier: tier(of: advisor),
+                executorPrice: completionPrice(of: executor),
+                advisorPrice: completionPrice(of: advisor)
+            ) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(floorWarning)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+
             HStack {
                 Button("Reset to default") {
                     executor = nil
@@ -386,6 +410,23 @@ struct ModelsDialog: View {
             advisor = bridge.advisorModel
             Task { await loadModels() }
         }
+    }
+
+    /// Tier of a selected model id, from the list `/api/models` returned.
+    /// nil for "default" (the runtime picks) and for an id we have no row for.
+    private func tier(of modelId: String?) -> String? {
+        guard let modelId else { return nil }
+        return available.first(where: { $0.id == modelId })?.tier
+    }
+
+    /// Per-output-token price, when the catalogue reports one. Only OpenRouter
+    /// does; the Anthropic list carries no pricing, so this is nil there and
+    /// the tier comparison is the only signal — which is correct, since every
+    /// Anthropic model has a tier.
+    private func completionPrice(of modelId: String?) -> Double? {
+        guard let modelId else { return nil }
+        guard let raw = available.first(where: { $0.id == modelId })?.completionPrice else { return nil }
+        return Double(raw)
     }
 
     private func pickerRow(
@@ -431,17 +472,26 @@ struct ModelsDialog: View {
         do {
             let (data, _) = try await URLSession.shared.data(for: req)
             struct Wire: Codable {
+                struct Pricing: Codable {
+                    let completion: String?
+                }
                 struct Model: Codable {
                     let id: String
                     let displayName: String
                     let tier: String
+                    let pricing: Pricing?
                 }
                 let models: [Model]
                 let source: String
             }
             let parsed = try JSONDecoder().decode(Wire.self, from: data)
             available = parsed.models.map {
-                ModelInfoLite(id: $0.id, displayName: $0.displayName, tier: $0.tier)
+                ModelInfoLite(
+                    id: $0.id,
+                    displayName: $0.displayName,
+                    tier: $0.tier,
+                    completionPrice: $0.pricing?.completion
+                )
             }
             source = parsed.source
         } catch {
@@ -455,5 +505,8 @@ struct ModelsDialog: View {
         let id: String
         let displayName: String
         let tier: String
+        /// Per-output-token price as the catalogue reports it (a decimal
+        /// string). OpenRouter populates this; the Anthropic list does not.
+        let completionPrice: String?
     }
 }
