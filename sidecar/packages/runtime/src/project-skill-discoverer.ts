@@ -272,10 +272,27 @@ export async function discoverProjectSkills(
   // one (the Skills pane omits it whenever the executor picker is on
   // "default"), landing on a hardcoded bare Anthropic id that OpenRouter
   // cannot resolve. That is why skill discovery failed on OpenRouter.
-  const discoveryModel =
-    ensureProviderModelId(model ?? (await latestForTier("sonnet")) ?? fallbackNewestOfTier("sonnet")) ??
-    fallbackNewestOfTier("sonnet") ??
-    "claude-sonnet-4-6";
+  // The CALLER'S model wins, verbatim. Discovery runs on whatever executor the
+  // user selected — that is the point: on OpenRouter the executor may be
+  // `z-ai/glm-5.3-flash` or any other slug, and second-guessing it here is how
+  // this call ends up addressing a model the active provider cannot resolve.
+  //
+  // Only when no model is supplied do we resolve one, and that path is
+  // provider-aware end to end (`latestForTier` reads whichever catalogue is
+  // active — ADR-0096). There is deliberately NO hardcoded id at the end of
+  // the chain: the previous `?? "claude-sonnet-4-6"` was a bare Anthropic id
+  // that OpenRouter cannot resolve, so the one case it existed to rescue was
+  // the one case it was guaranteed to break. If nothing resolves, say so —
+  // an honest error beats a request addressed to a model that isn't there.
+  const discoveryModel = ensureProviderModelId(
+    model?.trim() || (await latestForTier("sonnet")) || fallbackNewestOfTier("sonnet"),
+  );
+  if (!discoveryModel) {
+    throw new Error(
+      "no model available for skill discovery — the live catalogue returned nothing " +
+        "and no executor model was supplied. Check the provider credentials in Settings.",
+    );
+  }
 
   // One-shot Agent SDK call. No tools, no MCP, no permission machinery
   // — pure prompt-in / text-out. The SDK still routes through the same
@@ -284,13 +301,16 @@ export async function discoverProjectSkills(
   let text = "";
   let costCents: number | null = null;
   const abort = new AbortController();
-  // Hard cap so a stuck CLI can't hang the route forever. Raised 120s → 180s
-  // on 2026-08-30: a successful Sonnet discovery on a large project measured
-  // **90s**, which left only 30s of head-room, and anything slower aborted
-  // with "Claude Code process aborted by user" — indistinguishable, from the
-  // outside, from a hang. The cap is a backstop against a wedged process, not
-  // a latency budget, so it should sit well clear of a normal run.
-  const timeoutId = setTimeout(() => abort.abort(), 180_000);
+  // Hard cap so a stuck CLI can't hang the route forever — 10 minutes.
+  //
+  // It is a backstop against a WEDGED process, not a latency budget, and it
+  // was previously being used as the latter: at 120s a successful Sonnet run
+  // measured 90s and an Opus run aborted at 122s with "Claude Code process
+  // aborted by user" — a message indistinguishable, from the outside, from a
+  // hang, which is how a working feature came to look broken. Discovery is a
+  // user-initiated one-shot on a large codebase and its cost is one LLM call,
+  // so waiting is cheap and a false abort is expensive.
+  const timeoutId = setTimeout(() => abort.abort(), 600_000);
   try {
     for await (const evt of query({
       prompt,

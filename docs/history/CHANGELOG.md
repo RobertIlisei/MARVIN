@@ -9,6 +9,37 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.85: discovery runs on the model you picked, with a cap that is a backstop rather than a budget.**
+
+  v0.1.84 fixed the *symptom* by taking the model override away. That was the
+  wrong half. Measured against the raised cap, `claude-opus-5` returns 4
+  suggestions in **81s** — the model was never too big, the 120s cap was too
+  tight, and the swallowed 500 made a timeout look like a dead button.
+
+  So the override is back and is now the intended behaviour: **the caller's
+  model wins, verbatim.** Discovery answers on whatever executor the user
+  selected, including any OpenRouter slug, because second-guessing it here is
+  precisely how the call ends up addressed to a model the active provider
+  cannot resolve.
+
+  The hardcoded tail is gone. `?? "claude-sonnet-4-6"` was a bare Anthropic id
+  sitting at the end of the resolution chain, so the one case it existed to
+  rescue — nothing resolving — was the one case it was guaranteed to break on
+  OpenRouter. When no model is supplied the chain stays provider-aware
+  (`latestForTier` reads whichever catalogue is active, ADR-0096) and, if that
+  yields nothing, it now says so instead of inventing an id.
+
+  Cap raised to **10 minutes** (`maxDuration = 660` on the route to clear it).
+  It exists to stop a wedged CLI hanging the route, not to bound latency: at
+  120s a *successful* Sonnet run measured 90s, leaving 30s of head-room, and
+  anything slower aborted with "Claude Code process aborted by user" — a
+  message indistinguishable from a hang. Discovery is a user-initiated
+  one-shot costing one LLM call; waiting is cheap and a false abort is not.
+
+  Verified live end-to-end after install: `model: claude-opus-5` → HTTP 200 in
+  82s with four project-specific suggestions.
+
+
 - **2026-08-30 — v0.1.84: "I click Discover and nothing happens" — on both providers.**
 
   Reproduced against the running sidecar, and the two halves are independent:

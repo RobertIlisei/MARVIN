@@ -25,7 +25,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Discovery can do real work (LLM call, git log) — allow up to 60s.
-export const maxDuration = 60;
+// Must clear the discoverer's own 600s abort cap, or Next kills the route
+// first and the client sees a truncated response instead of the real result
+// (or the real error).
+export const maxDuration = 660;
 
 export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);

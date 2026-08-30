@@ -555,18 +555,23 @@ struct SkillsPane: View {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "X-Marvin-Client")
-        req.timeoutInterval = 200
-        // Deliberately does NOT send the executor model. The discoverer picks
-        // Sonnet on purpose ("enough for a structured one-shot — opus would be
-        // overkill at ~10× the price"), and this pane was overriding that with
-        // whatever the user had selected. Measured 2026-08-30 on a large
-        // project: `model: claude-opus-5` → HTTP 500 after 122s, "Claude Code
-        // process aborted by user" (the discoverer's own 120s cap firing);
-        // no model → HTTP 200 in 90s with suggestions. Same failure on
-        // OpenRouter with a non-Claude executor. Provider-correct resolution
-        // already happens server-side (ADR-0096), so there is nothing this
-        // side needs to contribute.
-        let body: [String: Any] = ["workDir": workDir]
+        // Clears the discoverer's own 600s cap so a slow-but-working run is
+        // never cut off client-side and reported as a failure.
+        req.timeoutInterval = 660
+        // Discovery runs on the SELECTED EXECUTOR. Sending it is the point:
+        // whatever the user picked — including any OpenRouter slug — is what
+        // should answer, and the server passes a supplied model through
+        // verbatim rather than second-guessing it.
+        //
+        // This briefly looked like the bug. It was not: measured 2026-08-30,
+        // `claude-opus-5` 500'd at 122s against the then-120s cap, and the
+        // same model against the raised cap returned 4 suggestions in **81s**.
+        // The model was never too big; the cap was too tight, and the swallowed
+        // 500 below made a timeout look like a dead button.
+        var body: [String: Any] = ["workDir": workDir]
+        if let executor = bridge.executorModel, !executor.isEmpty {
+            body["model"] = executor
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
