@@ -14,7 +14,10 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { existsSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
@@ -56,29 +59,33 @@ function errorResult(message: string) {
  * unbuilt, and a missing canvas degrades the vault without failing the init.
  */
 export async function exportGraphCanvas(cwd: string): Promise<{ ok: boolean; detail: string }> {
+  // Stage in a THROWAWAY directory and keep only the canvas (ADR-0092).
+  //
+  // `graphify export obsidian` emits the canvas AND one note per graph node in
+  // the same run, with no canvas-only flag. Writing that into the project put
+  // **34,463 files** under `graphify-out/obsidian/` and truncated MARVIN's own
+  // file tree at its 20,000-entry cap ("Tree truncated", user 2026-08-30).
+  // Filtering them from the tree is a plaster; not creating them is the fix.
+  const stage = await mkdtemp(join(tmpdir(), "marvin-canvas-"));
+  const destDir = join(cwd, "graphify-out", "obsidian");
   try {
-    // The canvas is written alongside the notes; we keep only the canvas and
-    // let ADR-0090's ignore filter hide the rest.
-    await run("graphify", ["export", "obsidian", "--dir", "graphify-out/obsidian"], {
+    await run("graphify", ["export", "obsidian", "--dir", stage], {
       cwd,
       timeout: 300_000,
       maxBuffer: 16 * 1024 * 1024,
     });
+    const canvas = join(stage, "graph.canvas");
+    if (!existsSync(canvas)) {
+      return { ok: false, detail: "graph canvas export produced no graph.canvas" };
+    }
+    await mkdir(destDir, { recursive: true });
+    await copyFile(canvas, join(destDir, "graph.canvas"));
     return { ok: true, detail: "code graph canvas at graphify-out/obsidian/graph.canvas" };
   } catch (err) {
     return { ok: false, detail: `graph canvas export skipped (${(err as Error).message.split("\n")[0]})` };
-  }
-}
-
-export async function exportGraphNotes(cwd: string): Promise<{ ok: boolean; detail: string }> {
-  try {
-    await run("graphify", ["export", "obsidian", "--dir", "graphify-out/obsidian"], {
-      cwd,
-      timeout: 120_000,
-    });
-    return { ok: true, detail: "code graph exported to graphify-out/obsidian/" };
-  } catch (err) {
-    return { ok: false, detail: `graph note export skipped (${(err as Error).message.split("\n")[0]})` };
+  } finally {
+    // Never leave the staged notes behind, whatever happened above.
+    await rm(stage, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -148,7 +155,7 @@ export function createObsidianMcpServer(ctx: ObsidianToolContext) {
       try { itemsLinked = await relinkBacklogNotes(cwd); } catch { /* best effort */ }
       const graph = exportGraph === false
         ? { ok: false, detail: "code-graph export skipped (not requested)" }
-        : await exportGraphNotes(cwd);
+        : await exportGraphCanvas(cwd);
       const { memory, backlog, plans } = res.status.notes;
       return textResult(
         (res.created

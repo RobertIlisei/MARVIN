@@ -113,3 +113,27 @@ describe("graphify-out visibility", () => {
     expect(HARD_DENY_DIR_SEGMENTS.has("graphify-out")).toBe(true);
   });
 });
+
+// ADR-0092 — obsidian_init wrote 34,463 notes into graphify-out/obsidian/ and
+// the file tree truncated at its 20,000-entry cap. Same failure that got
+// `cache` skipped in 2026-08-15, in a folder that did not exist then.
+describe("graphify-out bulk output stays out of the tree", () => {
+  it("skips every generated-bulk subdirectory, including the note export", () => {
+    for (const dir of ["cache", ".chunks", "chunks", "reflections", "obsidian"]) {
+      expect(isGraphifyCacheDir("graphify-out", dir), dir).toBe(true);
+    }
+  });
+
+  it("keeps the things people actually open", () => {
+    // Not directories under graphify-out, so never filtered — the knowledge
+    // graph, the report, and the single-file canvas.
+    expect(isGraphifyCacheDir("graphify-out", "knowledge")).toBe(false);
+    expect(isGraphifyCacheDir("graphify-out", "graph.json")).toBe(false);
+    expect(isGraphifyCacheDir("graphify-out", "GRAPH_REPORT.md")).toBe(false);
+  });
+
+  it("only applies directly under graphify-out", () => {
+    expect(isGraphifyCacheDir("src", "obsidian")).toBe(false);
+    expect(isGraphifyCacheDir("docs", "cache")).toBe(false);
+  });
+});
