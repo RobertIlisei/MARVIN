@@ -1067,7 +1067,7 @@ cmd_deps() {
   if command -v claude >/dev/null 2>&1; then
     ok "claude $(claude --version 2>/dev/null | head -1)"
   else
-    err "claude CLI not found — MARVIN cannot run a turn without it"
+    fail "claude CLI not found — MARVIN cannot run a turn without it"
     dim "  install: https://claude.com/claude-code"
     rc=1
   fi
