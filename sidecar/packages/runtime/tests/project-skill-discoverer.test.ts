@@ -38,6 +38,20 @@ vi.mock("@marvin/project-context", () => ({
   detectFingerprint: vi.fn(() => ({ tags: [] })),
 }));
 
+// `recentCommits` shells out to `git -C <workDir> log` with its own 5s
+// timeout, against a tmpdir that is not a repo. Alone that resolves in
+// milliseconds; inside the full 63-file suite the spawn races vitest's 5s
+// default and the test flakes on load — nothing to do with the contract it
+// asserts. Stub the subprocess so this stays a pure options test.
+vi.mock("node:child_process", () => ({
+  execFile: (
+    _cmd: string,
+    _args: string[],
+    _opts: unknown,
+    cb: (err: Error | null) => void,
+  ) => cb(new Error("git stubbed in test")),
+}));
+
 import { discoverProjectSkills } from "../src/project-skill-discoverer";
 
 // Minimal SDK event stream: one result event, no assistant text. The

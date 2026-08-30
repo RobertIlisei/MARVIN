@@ -84,6 +84,28 @@ public enum ContextUsageReader {
         return 200_000
     }
 
+    /// The window to divide by, in order of authority.
+    ///
+    /// `reported` is what the model that just ran actually said (ADR-0087) and
+    /// always wins. `server` is `/api/context`'s figure. The model-id guess is
+    /// the last resort, and it is a GUESS: it returns 200K for anything
+    /// without a `[1m]` marker, so `claude-opus-5` — a 1M-window model whose
+    /// id carries no marker — comes back 200K.
+    ///
+    /// That is not hypothetical. On 2026-08-30 the status-bar chip preferred
+    /// `reported` and was right, while `ContextDetailPopover` consulted only
+    /// the server figure and the id guess and rendered **441K / 200K, 100 %,
+    /// "Approaching limit — start a new session"** for a session whose every
+    /// turn reported `contextWindow: 1000000` — 44 % used, no errors, turns
+    /// completing normally. The panel was telling the user to throw away a
+    /// session that was fine. One resolver, so the two surfaces cannot
+    /// disagree again.
+    public static func resolveWindow(reported: Int?, server: Int?, modelId: String?) -> Int {
+        if let reported, reported > 0 { return reported }
+        if let server, server > 0 { return server }
+        return contextWindow(forModelId: modelId)
+    }
+
     /// The context window the SDK ITSELF reported for this turn.
     ///
     /// Every `result` event carries `modelUsage[<model>].contextWindow` — the

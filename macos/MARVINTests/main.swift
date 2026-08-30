@@ -1990,6 +1990,40 @@ runner.suite("AttachmentMentions") {
     }
 }
 
+runner.suite("ContextUsageReader.resolveWindow") {
+    // 2026-08-30: the status-bar chip preferred the SDK-reported window and was
+    // right; ContextDetailPopover consulted only the server figure and the
+    // id-based guess, and rendered "441K / 200K · 100% · start a new session"
+    // for a claude-opus-5 session whose every turn reported contextWindow
+    // 1000000. 44% used, no errors — the panel was telling the user to discard
+    // a healthy session. ADR-0087 landed on one surface and not the other.
+    runner.test("the SDK's reported window wins over the server and the id guess") {
+        runner.expect(
+            ContextUsageReader.resolveWindow(reported: 1_000_000, server: 200_000, modelId: "claude-opus-5") == 1_000_000,
+            "reported beats a disagreeing server figure")
+    }
+
+    runner.test("claude-opus-5 without a reported window falls to the 200K guess — the bug's shape") {
+        // The id carries no [1m] marker, so the guess is 200K even though the
+        // real window is 1M. This is WHY reported must win, not a bug in the guess.
+        runner.expect(
+            ContextUsageReader.resolveWindow(reported: nil, server: nil, modelId: "claude-opus-5") == 200_000,
+            "id guess is 200K for an unmarked id")
+        runner.expect(
+            ContextUsageReader.resolveWindow(reported: nil, server: 1_000_000, modelId: "claude-opus-5") == 1_000_000,
+            "server figure beats the id guess when nothing was reported")
+    }
+
+    runner.test("zero and negative windows never win — they fall through") {
+        runner.expect(
+            ContextUsageReader.resolveWindow(reported: 0, server: 1_000_000, modelId: "claude-opus-5") == 1_000_000,
+            "a zero reported window is not a window")
+        runner.expect(
+            ContextUsageReader.resolveWindow(reported: nil, server: 0, modelId: "claude-opus-4-8[1m]") == 1_000_000,
+            "a zero server figure falls through to the marked-id guess")
+    }
+}
+
 runner.suite("BottomPanelMounting") {
     // The bug this pins (2026-08-30): the bottom panes area stays mounted
     // while the panel is SHUT, so an `onChange(of: activeTab, initial: true)`

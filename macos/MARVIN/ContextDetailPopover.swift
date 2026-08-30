@@ -17,6 +17,9 @@ struct ContextDetailPopover: View {
     let billable: Int?
     let workDir: String?
     let model: String?
+    /// The SDK's own figure for the running model (ADR-0087). Authoritative;
+    /// the status-bar chip already preferred it and this panel did not.
+    let reportedWindow: Int?
     let personality: String?
     let graphCalls: Int
     let fileReadCalls: Int
@@ -25,9 +28,10 @@ struct ContextDetailPopover: View {
     @State private var loadFailed = false
 
     private var window: Int {
-        // Prefer the server's window (authoritative) once loaded; fall back to
-        // the client-side model lookup so the headline is right immediately.
-        estimate?.contextWindow ?? ContextUsageReader.contextWindow(forModelId: model)
+        ContextUsageReader.resolveWindow(
+            reported: reportedWindow,
+            server: estimate?.contextWindow,
+            modelId: model)
     }
     private var band: ContextBand {
         ContextUsageReader.band(forTokens: resident, window: window)

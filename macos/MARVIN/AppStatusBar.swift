@@ -30,6 +30,21 @@
 import SwiftUI
 import MARVINLogic
 
+/// Which edge these popovers emerge from.
+///
+/// `AppStatusBar` is the GLOBAL BOTTOM STRIP, so `.bottom` — the SwiftUI
+/// default direction for "below the anchor" — pushes a popover off the bottom
+/// of the screen and behind the Dock. Four of the five were `.bottom` and
+/// opened into the Dock, clipped and unreachable: the context-window panel
+/// lost its lower half, which is exactly where its per-section numbers live
+/// (user, 2026-08-30). The bell was already `.top` and was the one nobody
+/// reported. A bar pinned to the bottom opens UPWARD; there is no case here
+/// where `.bottom` is right, so it is a constant rather than a per-call
+/// choice.
+private let statusBarPopoverEdge: Edge = .top
+
+
+
 struct AppStatusBar: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(HealthMonitor.self) private var health
@@ -244,7 +259,7 @@ struct AppStatusBar: View {
         }
         .buttonStyle(.plain)
         .help("Background jobs, scheduled wakeups, and recent auto-allowed mutations")
-        .popover(isPresented: $activityPopoverOpen, arrowEdge: .bottom) {
+        .popover(isPresented: $activityPopoverOpen, arrowEdge: statusBarPopoverEdge) {
             ActivityPopover(
                 projectId: bridge.activeProjectId,
                 sessionId: bridge.activeMarvinSessionId,
@@ -297,12 +312,13 @@ struct AppStatusBar: View {
             }
             .buttonStyle(.plain)
             .help(hoverText(resident: resident, billable: billable, band: band))
-            .popover(isPresented: $contextPopoverOpen, arrowEdge: .bottom) {
+            .popover(isPresented: $contextPopoverOpen, arrowEdge: statusBarPopoverEdge) {
                 ContextDetailPopover(
                     resident: resident,
                     billable: billable,
                     workDir: bridge.projectWorkDir,
                     model: currentModelId,
+                    reportedWindow: bridge.reportedContextWindow,
                     personality: bridge.personality,
                     graphCalls: bridge.sessionGraphCalls,
                     fileReadCalls: bridge.sessionFileReadCalls
@@ -370,7 +386,7 @@ struct AppStatusBar: View {
             }
             .buttonStyle(.plain)
             .help("Subagents dispatched this session · click for the breakdown")
-            .popover(isPresented: $subagentPopoverOpen, arrowEdge: .bottom) {
+            .popover(isPresented: $subagentPopoverOpen, arrowEdge: statusBarPopoverEdge) {
                 SubagentStatsPopover(summary: s)
             }
             MarvinDivider().frame(height: 10)
@@ -476,7 +492,7 @@ struct AppStatusBar: View {
             }
             .buttonStyle(.plain)
             .help("Spend today (this project) · click for history")
-            .popover(isPresented: $costPopoverOpen, arrowEdge: .bottom) {
+            .popover(isPresented: $costPopoverOpen, arrowEdge: statusBarPopoverEdge) {
                 CostHistoryPopover(summary: cost, subscription: onSubscription)
             }
         }
@@ -495,7 +511,7 @@ struct AppStatusBar: View {
         }
         .buttonStyle(.plain)
         .help("Notifications (\(bridge.unreadNotificationCount) unread)")
-        .popover(isPresented: $bellPopoverOpen, arrowEdge: .top) {
+        .popover(isPresented: $bellPopoverOpen, arrowEdge: statusBarPopoverEdge) {
             NotificationLogPopover(notifications: bridge.notifications)
         }
     }

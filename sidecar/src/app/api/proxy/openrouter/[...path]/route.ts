@@ -74,15 +74,37 @@ export async function POST(
     pathString = pathString ? `v1/${pathString}` : "v1/messages";
   }
 
-  // OpenRouter does not support the Anthropic count_tokens endpoint.
-  // The Claude CLI uses this to verify model existence and context limits.
-  // When it 404s, the CLI aborts with "There's an issue with the selected model".
-  // Intercept and return a dummy token count to allow the CLI to proceed.
+  // OpenRouter has no Anthropic-format count_tokens endpoint — it 404s
+  // (verified 2026-08-30, alongside `POST /v1/messages` which is real). The
+  // Claude CLI calls it to verify the model and to size the prompt, and on a
+  // 404 aborts with "There's an issue with the selected model", which is what
+  // made skills unusable on OpenRouter. So the proxy has to answer it.
+  //
+  // It answers with an ESTIMATE, not a zero. The first version returned
+  // `{input_tokens: 0}`, which unblocks the CLI and then lies to it for the
+  // rest of the session: this endpoint feeds context accounting, so a constant
+  // zero tells the CLI every prompt is empty — context-pressure tracking and
+  // the auto-compaction trigger would both read as "no pressure" right up to
+  // a hard overflow. A rough number degrades gracefully; zero fails silently
+  // and in the dangerous direction.
+  //
+  // ~4 chars per token is the standard rough ratio and is what MARVIN's own
+  // context estimator already uses for its category rows. It will be off by
+  // some percent; it will not be off by everything.
   if (pathString === "v1/messages/count_tokens") {
-    return new Response(
-      JSON.stringify({ input_tokens: 0 }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    let estimated = 0;
+    try {
+      const raw = await req.clone().text();
+      estimated = Math.max(1, Math.ceil(raw.length / 4));
+    } catch {
+      // Body unreadable — fall back to a non-zero floor rather than 0, for
+      // the same reason: a wrong-but-plausible number beats a confident lie.
+      estimated = 1;
+    }
+    return new Response(JSON.stringify({ input_tokens: estimated }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }
   
   const targetUrl = `https://openrouter.ai/api/${pathString}`;

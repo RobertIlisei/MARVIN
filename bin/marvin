@@ -1041,23 +1041,23 @@ cmd_deps() {
   local mode="${1:-install}" rc=0
   case "$mode" in
     check|install) ;;
-    *) err "usage: bin/marvin deps [check|install]"; return 1 ;;
+    *) fail "usage: bin/marvin deps [check|install]"; return 1 ;;
   esac
 
   # graphify — the Python CLI that BUILDS the graph MARVIN reads.
   if command -v graphify >/dev/null 2>&1; then
     ok "graphify $(graphify --version 2>/dev/null | head -1)"
   elif [ "$mode" = "check" ]; then
-    err "graphify not installed — run: bin/marvin deps install"
+    fail "graphify not installed — run: bin/marvin deps install"
     rc=1
   else
     info "installing graphify"
     if command -v uv >/dev/null 2>&1; then
-      uv tool install graphifyy && ok "graphify installed (uv)" || { err "uv tool install graphifyy failed"; rc=1; }
+      uv tool install graphifyy && ok "graphify installed (uv)" || { fail "uv tool install graphifyy failed"; rc=1; }
     elif command -v pipx >/dev/null 2>&1; then
-      pipx install graphifyy && ok "graphify installed (pipx)" || { err "pipx install graphifyy failed"; rc=1; }
+      pipx install graphifyy && ok "graphify installed (pipx)" || { fail "pipx install graphifyy failed"; rc=1; }
     else
-      err "neither uv nor pipx found — install one, then re-run: bin/marvin deps install"
+      fail "neither uv nor pipx found — install one, then re-run: bin/marvin deps install"
       dim "  brew install uv     (recommended — graphify's own docs use it)"
       rc=1
     fi
@@ -1098,11 +1098,11 @@ cmd_deps() {
 cmd_graph_hooks() {
   local target="${1:-$PWD}" action="${2:-install}"
   if ! command -v graphify >/dev/null 2>&1; then
-    err "graphify CLI not found — install it first (uv tool install graphifyy)"
+    fail "graphify CLI not found — install it first (uv tool install graphifyy)"
     return 1
   fi
   if [ ! -d "$target/.git" ]; then
-    err "not a git repository: $target"
+    fail "not a git repository: $target"
     return 1
   fi
   case "$action" in
@@ -1120,7 +1120,7 @@ cmd_graph_hooks() {
       ( cd "$target" && graphify hook status )
       ;;
     *)
-      err "usage: bin/marvin graph-hooks [path] [install|uninstall|status]"
+      fail "usage: bin/marvin graph-hooks [path] [install|uninstall|status]"
       return 1
       ;;
   esac

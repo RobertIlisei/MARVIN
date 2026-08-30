@@ -9,6 +9,64 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 ---
 
 
+- **2026-08-30 — v0.1.83: skills work on OpenRouter, and the context gauge stops crying wolf.**
+
+  **Skills on OpenRouter.** Two independent breaks, both on the discovery path.
+
+  `discoverProjectSkills` is a one-shot query (`maxTurns: 1`) and passed
+  `allowedTools: []` — which is a PERMISSION list, not availability. The CLI
+  still *offered* its built-ins, a tool-happy model reached for one to explore
+  the project, the CLI needed a second turn, and `maxTurns: 1` aborted with
+  "Reached maximum number of turns (1)". Differential evidence, same endpoint
+  and prompt: `anthropic/claude-sonnet-4-6` → 200 with suggestions;
+  `z-ai/glm-5.3-flash` → 500. The SDK switch that removes built-ins from the
+  model's context is `tools: []` (`sdk.d.ts`: *"`[]` (empty array) - Disable
+  all built-in tools"*), so no model can burn the turn on a tool call.
+
+  Second: OpenRouter has no Anthropic-format `count_tokens` endpoint — it
+  404s, and the CLI aborts with "There's an issue with the selected model".
+  The proxy now answers it. **With an estimate, not a zero.** The first
+  version returned `{input_tokens: 0}`, which unblocks the CLI and then lies
+  to it for the rest of the session: that endpoint feeds context accounting,
+  so a constant zero reads as "no pressure" right up to a hard overflow.
+  ~4 chars/token — off by some percent, not off by everything.
+
+  **The context gauge.** The status-bar panel rendered **441K / 200K · 100 % ·
+  "start a new session"** for a session at 44 %. `ContextDetailPopover`
+  resolved its window as `estimate?.contextWindow ?? contextWindow(forModelId:)`
+  — never `bridge.reportedContextWindow`, which the status-bar CHIP already
+  preferred. ADR-0087 landed on one surface and not the other, and the id-based
+  fallback returns 200K for anything without a `[1m]` marker: `claude-opus-5`
+  is a 1M model whose id carries no marker.
+
+  That claim was challenged and re-verified rather than defended, which was
+  worth doing — the session's own data showed the *same* model id reporting
+  both 200K and 1M. The split turned out to be exact and entirely explained by
+  the CLI upgrade at 11:33Z (2.1.113 reported 200K for everything; 2.1.251
+  reports per-model), and a direct probe settled that 2.1.251 is telling the
+  truth rather than returning a ceiling: **Haiku 4.5 → 200000, Sonnet 5 →
+  1000000** on the same binary. One `resolveWindow(reported:server:modelId:)`
+  in `MARVINLogic` now fixes the precedence for both surfaces, with the
+  `claude-opus-5 → 200K` guess pinned as a test.
+
+  Worth recording: `/api/models` carries only `id` and `tier` — MARVIN has no
+  dynamic discovery of context windows at all. The SDK's per-turn report is
+  the only live source, which is exactly what the panel was ignoring.
+
+  **The popovers opened into the Dock.** `AppStatusBar` is the bottom strip and
+  four of its five popovers used `arrowEdge: .bottom`, placing them below the
+  anchor and off the bottom of the screen — the context panel lost the half
+  where its numbers live. The bell was already `.top` and was the one nobody
+  reported. Now one `statusBarPopoverEdge` constant: a bar pinned to the bottom
+  opens upward, and there is no case here where `.bottom` is right.
+
+  Also: every `err "…"` call in `bin/marvin` invoked a function that does not
+  exist (`fail()` is defined, `err()` never was) — 8 call sites that would have
+  died at the moment they tried to report an error. And the new discoverer test
+  was racing a real `git` subprocess against vitest's 5 s default under full-suite
+  load; stubbed, so it stays a pure options test. 1019 vitest, 478 Swift.
+
+
 - **2026-08-30 — v0.1.82: the graphify-first rail went quiet when the CLI took `Grep` away.**
 
   ADR-0097's CLI upgrade (2.1.113 → 2.1.251) fixed the plan-usage bars and
