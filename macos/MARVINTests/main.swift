@@ -2678,6 +2678,65 @@ runner.suite("workspace-relative-path") {
 }
 
 
+runner.suite("sidebar-collapse") {
+    func next(_ w: CGFloat, _ c: Bool) -> Bool {
+        SidebarCollapse.next(paneWidth: w, collapsed: c)
+    }
+
+    runner.test("collapses when the content is narrow, expands when it is wide") {
+        runner.expect(next(100, false), equals: true, "55pt of content collapses")
+        runner.expect(next(400, true), equals: false, "355pt of content expands")
+        runner.expect(next(400, false), equals: false, "wide and open stays open")
+    }
+
+    runner.test("the deadband holds a decision that a single threshold would flip") {
+        // Content between 110 and 150. Whichever way the pane is, it STAYS —
+        // this is the band a one-threshold latch oscillated across, and each
+        // oscillation was a SwiftUI update, a split-view re-form, and a
+        // constraint invalidation.
+        for width in [CGFloat(160), 175, 194] {
+            runner.expect(next(width, true), equals: true, "\(width): collapsed stays collapsed")
+            runner.expect(next(width, false), equals: false, "\(width): open stays open")
+        }
+    }
+
+    runner.test("expanding needs more room than collapsing gave up") {
+        // The load-bearing property: the width a COLLAPSE produces must not
+        // by itself satisfy the expand test. Otherwise the loop returns.
+        runner.expect(SidebarCollapse.expandAbove > SidebarCollapse.collapseBelow,
+                      equals: true, "there is a deadband at all")
+        let justCollapsed = SidebarCollapse.railWidth + SidebarCollapse.collapseBelow - 1
+        runner.expect(next(justCollapsed, true), equals: true,
+                      "the width collapsing produces does not re-expand")
+    }
+
+    runner.test("an unmeasured layout gets no vote") {
+        runner.expect(next(0, false), equals: false, "zero width changes nothing")
+        runner.expect(next(-1, true), equals: true, "nor does a negative one")
+    }
+}
+
+
+runner.suite("brain-state-gate") {
+    runner.test("a session that is not on screen cannot drive the brain") {
+        runner.expect(BrainStateGate.accepts(writer: "b", active: "a"), equals: false,
+                      "another session's turn is an answer to a different question")
+        runner.expect(BrainStateGate.accepts(writer: "a", active: "a"), equals: true,
+                      "the selected session drives it")
+    }
+
+    runner.test("nil on either side is allowed") {
+        // Teardown must still be able to idle, and a brand-new chat reports
+        // progress before the server has given it an id.
+        runner.expect(BrainStateGate.accepts(writer: nil, active: "a"), equals: true,
+                      "no session in particular")
+        runner.expect(BrainStateGate.accepts(writer: "a", active: nil), equals: true,
+                      "nothing selected to contradict")
+        runner.expect(BrainStateGate.accepts(writer: nil, active: nil), equals: true, "boot")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -366,15 +366,13 @@ enum CommandRegistry {
         })
         c.append(AppCommand(
             id: "run.stopAll", title: "Stop Session & All Work…",
-            slot: .run, keywords: ["kill", "abort", "cancel", "background", "wakeup"],
+            slot: .run, shortcut: "⇧⌘.",
+            keywords: ["kill", "abort", "cancel", "background", "wakeup"],
             isEnabled: { MarvinBridge.shared.activeMarvinSessionId != nil }
         ) {
-            // Opens the Activity popover, which lists the jobs and wakeups
-            // and owns the confirmation. Deliberately not a second confirm
-            // flow: the user should be looking at what they are killing.
-            NotificationCenter.default.post(
-                name: .marvinRequestActivityPopover, object: nil
-            )
+            // The chat view owns the confirmation and knows which session is
+            // on screen; this is the same flow the footer's Stop All runs.
+            NotificationCenter.default.post(name: .marvinRequestStopAll, object: nil)
         })
         c.append(AppCommand(
             id: "run.auditSession", title: "Audit Session…",

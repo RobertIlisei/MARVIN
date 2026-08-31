@@ -28,6 +28,10 @@ extension Notification.Name {
     /// growing a second copy of that flow — and the user confirms while
     /// LOOKING at the jobs and wakeups they are about to kill.
     static let marvinRequestActivityPopover = Notification.Name("marvin.requestActivityPopover")
+    /// Posted by the Run-menu / palette "Stop Session & All Work" entry;
+    /// observed by the chat view, which owns the confirmation and knows which
+    /// session is on screen.
+    static let marvinRequestStopAll = Notification.Name("marvin.requestStopAll")
 }
 
 /// Commands that act on the open editors.

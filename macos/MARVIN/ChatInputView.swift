@@ -398,6 +398,15 @@ struct ChatInputBar: View {
     /// stop affordance — used in surfaces where cancel isn't
     /// supported).
     let onStop: (() -> Void)?
+    /// Stop the SESSION — the turn plus the background jobs and scheduled
+    /// wakeups it leaves behind. Beside Stop rather than buried in a popover,
+    /// because "make it all stop" is something a user reaches for in a hurry
+    /// and should not have to go hunting for (user, 2026-09-01: "i don't like
+    /// where you placed the button, i need to open a new menu to click stop,
+    /// user experience is not good"). Always shown when supplied, not gated on
+    /// `isSending`: jobs and wakeups outlive the turn, so the moment they most
+    /// need stopping is exactly when no turn is running. nil hides it.
+    var onStopAll: (() -> Void)? = nil
     let isSending: Bool
     /// Replaces the static "Sending…" indicator with whatever MARVIN
     /// is doing right now — "Thinking…", "Using Bash", "Writing
@@ -673,6 +682,16 @@ struct ChatInputBar: View {
                     }
                     .keyboardShortcut(".", modifiers: [.command])
                     .help("Cancel the in-flight turn. ⌘.")
+                }
+                if let onStopAll {
+                    Button(role: .destructive) {
+                        onStopAll()
+                    } label: {
+                        Label("Stop All", systemImage: "stop.circle")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .keyboardShortcut(".", modifiers: [.command, .shift])
+                    .help("Stop this session: the turn, its background jobs and its scheduled wakeups. ⇧⌘.")
                 }
                 Button(isSending ? "Queue" : "Send") {
                     onSubmit()

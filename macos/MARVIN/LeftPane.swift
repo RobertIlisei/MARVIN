@@ -11,6 +11,7 @@
 // tiny bit of background work (the inactive child still polls its
 // endpoint) for crisp tab switches with no fetch flash.
 
+import MARVINLogic
 import SwiftUI
 
 private enum LeftPaneTab: String, CaseIterable, Identifiable {
@@ -123,12 +124,8 @@ struct LeftPane: View {
             )
     }
 
-    /// Width below which the content half of the pane is dropped and only the
-    /// rail remains — VS Code / Antigravity collapse the sidebar when you drag
-    /// it narrow instead of clamping it at a minimum (user, 2026-08-29: "the
-    /// pane gets hidden, but in marvin it remains at an exact size"). Measured
-    /// on the content, not the whole pane, so the rail's 44pt never counts.
-    private static let collapseBelow: CGFloat = 110
+    // The collapse thresholds and the deadband between them live in
+    // `MARVINLogic.SidebarCollapse`, where they are tested.
 
     /// Latched from the width measurement below. Kept as state, not derived
     /// inline, so the pane re-renders when the collapse decision *changes* —
@@ -136,51 +133,90 @@ struct LeftPane: View {
     @State private var collapsed = false
 
     var body: some View {
-        // Measurement is a `.background` layer, NOT a root GeometryReader.
+        // Width measurement, and why it is `onGeometryChange` rather than a
+        // GeometryReader in a `.background`.
         //
-        // Two separate problems, fixed in two passes on 2026-08-29:
+        // The background-layer version was itself a fix (2026-08-29) for two
+        // real problems: a ROOT GeometryReader is greedy — it swallows the
+        // proposal, so the hosting view exposes no intrinsic width for the
+        // enclosing NSSplitView and dragging the divider went sluggish — and
+        // `pane()` must depend on a latched Bool, not a raw width, or every
+        // frame of a drag re-evaluates a subtree that keeps all five panes
+        // mounted to preserve their @State.
         //
-        // 1. PERFORMANCE. A root GeometryReader is greedy — it swallows the
-        //    proposal and reports it, so the SwiftUI hosting view exposes no
-        //    intrinsic width for the enclosing NSSplitView to size against.
-        //    Dragging the divider was visibly sluggish while the right pane's
-        //    VSplitView, whose children have natural intrinsic sizes, stayed
-        //    fluid. Measuring from a background layer leaves the pane's own
-        //    sizing intact.
+        // What it did NOT fix is that a preference is read and a state is
+        // written DURING the update pass. Collapsing changes what the pane
+        // renders, which changes the width that gets measured, which — with
+        // one threshold used in both directions — can cross back and expand
+        // it again. Every cycle is a fresh SwiftUI update, and a split view
+        // re-forms its panes and re-sets each hosting view's root on every
+        // one, which is the constraint storm this repo has been chasing
+        // since 2026-08-29. Usually ~5 a session; with two sessions running,
+        // updates arrived twice as fast and it stopped converging at all —
+        // 100 % CPU on the main thread, the app unresponsive (user,
+        // 2026-08-31: "i just started 2 sessions and marvin and it seems now
+        // it's stuck"). The stack named the loop precisely:
+        // `SystemSplitView.updateNSViewController` →
+        // `SplitViewCoordinator.formCurrentItems` → `updateRootViewForItem`
+        // → `NSHostingView.setRootView` → `setNeedsUpdate`.
         //
-        // 2. CORRECTNESS. `pane()` must depend on a latched Bool, not on the
-        //    raw width, or every frame of a drag re-evaluates a subtree that
-        //    keeps all five panes mounted (files, search, SCM, skills,
-        //    plugins) to preserve their @State.
+        // Two changes, and both are needed:
         //
-        // The obvious version of this is a bug, and shipped as one: with a
-        // PreferenceKey defaultValue of 0, `onPreferenceChange` fires once
-        // BEFORE any real layout, `0 - 45 < 110` latches `collapsed = true`,
-        // and the sidebar renders rail-only at full width. Hence the sentinel
-        // default of -1 and the `width > 0` guard below — an unmeasured pane
-        // is never a collapsed pane.
+        //   1. `onGeometryChange` reports geometry WITHOUT inserting a view.
+        //      This is what `WidthReporter` was reaching for in v0.1.93 —
+        //      that experiment did eliminate the storm, proved by stack diff,
+        //      and then crashed because it added subviews in three places and
+        //      AppKit counts update passes against the view count. This is
+        //      the same fix without the extra views.
+        //   2. `SidebarCollapse` supplies a DEADBAND. A single threshold with
+        //      a state write on either side is an oscillator; the width that
+        //      collapsing produces must not by itself satisfy the expand
+        //      test. Pinned by tests, since it is exactly the logic a running
+        //      app cannot demonstrate.
         //
-        // `onGeometryChange(for:)` expresses all of this directly but is
-        // macOS 15+; the deployment target is 14.0 (`macos/project.yml`).
-        pane(collapsed: collapsed)
-            .frame(minWidth: 45)
-            .background {
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: LeftPaneWidthKey.self,
-                        value: geo.size.width,
-                    )
-                }
+        // macOS 14 keeps the old path — `onGeometryChange` is 15+, and the
+        // deployment target is 14.0 (`macos/project.yml`). It still gets the
+        // deadband, which is the half that matters most.
+        Group {
+            if #available(macOS 15.0, *) {
+                pane(collapsed: collapsed)
+                    .frame(minWidth: 45)
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.width
+                    } action: { width in
+                        updateCollapsed(paneWidth: width)
+                    }
+            } else {
+                pane(collapsed: collapsed)
+                    .frame(minWidth: 45)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: LeftPaneWidthKey.self,
+                                value: geo.size.width,
+                            )
+                        }
+                    }
+                    .onPreferenceChange(LeftPaneWidthKey.self) { width in
+                        updateCollapsed(paneWidth: width)
+                    }
             }
-            .onPreferenceChange(LeftPaneWidthKey.self) { width in
-                // The sentinel: -1 means "not measured yet". Only a real
-                // layout gets to decide whether the pane is collapsed.
-                guard width > 0 else { return }
-                // Measured on the content, not the whole pane, so the rail's
-                // 45pt never counts toward the threshold.
-                let next = width - 45 < Self.collapseBelow
-                if next != collapsed { collapsed = next }
-            }
+        }
+    }
+
+    /// Latch the collapse decision, with the deadband doing the deciding.
+    ///
+    /// The `next != collapsed` guard is not decoration: without it every
+    /// measurement writes state, and a state write per layout is the loop
+    /// this is here to break.
+    private func updateCollapsed(paneWidth: CGFloat) {
+        // A pane that has not been measured is never a collapsed pane — the
+        // PreferenceKey's -1 sentinel and this guard both exist because the
+        // obvious version latched `collapsed = true` from a default of 0
+        // before any real layout, and rendered rail-only at full width.
+        guard paneWidth > 0 else { return }
+        let next = SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed)
+        if next != collapsed { collapsed = next }
     }
 
     private func pane(collapsed: Bool) -> some View {
@@ -328,7 +364,7 @@ struct LeftPane: View {
             SplitPaneResizer.expandIfCollapsed(
                 from: view,
                 restoreTo: Self.restoreWidth,
-                threshold: Self.collapseBelow + 45
+                threshold: SidebarCollapse.collapseBelow + SidebarCollapse.railWidth
             )
         }
     }

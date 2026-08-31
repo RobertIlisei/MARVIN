@@ -817,7 +817,7 @@ final class ChatPreviewModel {
                 // pip on the latest assistant row.
                 pendingConfirms.removeAll()
                 sealStreamingRows()
-                MarvinBridge.shared.marvinState = "error"
+                MarvinBridge.shared.setMarvinState("error", forSession: marvinSessionId)
                 MarvinBridge.shared.isBusy = false
             }
         }
@@ -831,10 +831,10 @@ final class ChatPreviewModel {
     func cancel() {
         detachLocalStream()
         // ADR-0021 M4: brief cancelling state → idle.
-        MarvinBridge.shared.marvinState = "cancelling"
+        MarvinBridge.shared.setMarvinState("cancelling", forSession: marvinSessionId)
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(400))
-            MarvinBridge.shared.marvinState = "idle"
+            MarvinBridge.shared.setMarvinState("idle", forSession: marvinSessionId)
             MarvinBridge.shared.isBusy = false
         }
         if let id = marvinSessionId {
@@ -910,7 +910,7 @@ final class ChatPreviewModel {
         detachLocalStream()
         // The brain reflects the session ON SCREEN, which is about to be an
         // empty one — idle it locally without touching the turn left behind.
-        MarvinBridge.shared.marvinState = "idle"
+        MarvinBridge.shared.setMarvinState("idle", forSession: marvinSessionId)
         MarvinBridge.shared.isBusy = false
         resumeTask?.cancel()
         resumeTask = nil
@@ -927,6 +927,7 @@ final class ChatPreviewModel {
         resolvedConfirms.removeAll()
         lastError = nil
         marvinSessionId = nil
+        MarvinBridge.shared.setActiveMarvinSession(nil)
         lastSentMessage = nil
         loadedProjectId = nil
         loadedSessionId = nil
@@ -1030,6 +1031,7 @@ final class ChatPreviewModel {
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
         marvinSessionId = sessionId
+        MarvinBridge.shared.setActiveMarvinSession(sessionId)
         lastSentMessage = nil
         // Plan / todo / changed-files strips are per-session — clear the
         // leaving session's before the new one's changed set refreshes below.
@@ -1264,7 +1266,7 @@ final class ChatPreviewModel {
                         isSending = true
                         MarvinBridge.shared.isBusy = true
                         if MarvinBridge.shared.marvinState == "idle" {
-                            MarvinBridge.shared.marvinState = "thinking"
+                            MarvinBridge.shared.setMarvinState("thinking", forSession: marvinSessionId)
                         }
                     }
                     handle(event: event)
@@ -1440,6 +1442,7 @@ final class ChatPreviewModel {
             // Phase 2f — capture the marvinSessionId so cancel can
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId
+            MarvinBridge.shared.setActiveMarvinSession(s.marvinSessionId)
             // First turn on a new session has no loadedSessionId yet —
             // adopt the server-minted id so relaunch can autoHydrate
             // back into this conversation.
@@ -1454,7 +1457,7 @@ final class ChatPreviewModel {
                 ensureAnnounceLoop(projectId: pid)
             }
             // ADR-0021 M4: drive brain profile natively from SSE.
-            b.marvinState = "thinking"
+            b.setMarvinState("thinking", forSession: marvinSessionId)
             b.isBusy = true
             // ADR-0022 §3 follow-up: when the sidecar started this
             // turn with a fresh SDK session (either a brand-new
@@ -1509,7 +1512,7 @@ final class ChatPreviewModel {
             // itself. See crash report MARVIN-2026-05-07-014721.ips.
             let peek = peekCLIEvent(data)
             Task { @MainActor in
-                if let s = peek.state { b.marvinState = s }
+                if let s = peek.state { b.setMarvinState(s, forSession: marvinSessionId) }
                 if let label = peek.activity { currentActivity = label }
                 ContextUsageReader.applyTo(bridge: b, cliEventData: data)
                 ToolUseCounter.applyTo(bridge: b, cliEventData: data)
@@ -1586,7 +1589,7 @@ final class ChatPreviewModel {
             // the sheet auto-closes.
             pendingConfirms.removeAll()
             // ADR-0021 M4: reset brain to idle natively.
-            b.marvinState = "idle"
+            b.setMarvinState("idle", forSession: marvinSessionId)
             b.isBusy = false
             // ADR-0036 (revised) — a Plan-mode turn just finished presenting a
             // plan (read-only). Surface the inline Approve & execute affordance,
@@ -1675,7 +1678,7 @@ final class ChatPreviewModel {
             // hit /api/confirm with an empty registry.
             pendingConfirms.removeAll()
             // ADR-0021 M4: signal error state natively.
-            b.marvinState = "error"
+            b.setMarvinState("error", forSession: marvinSessionId)
             b.isBusy = false
             // Don't dispatch queued messages after an error — the user
             // may want to read the error and decide whether the queue
@@ -1707,6 +1710,85 @@ struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.openWindow) private var openWindow
     @State private var model = ChatPreviewModel()
+    /// Pending "stop this session" confirmation, captured at confirm time so
+    /// the alert and the action cannot disagree about the scope.
+    @State private var stopAllPlan: StopAllPlan? = nil
+
+    struct StopAllPlan: Identifiable {
+        let id = UUID()
+        let sessionId: String
+        let summary: String
+        let terminalRunning: Bool
+    }
+
+    /// Ask the server what this session has running, then confirm against
+    /// THAT — not against anything cached in the view.
+    ///
+    /// The session id comes from `model.marvinSessionId`, the id of the
+    /// session actually on screen. It used to come from
+    /// `bridge.activeMarvinSessionId`, which **nothing has set since the
+    /// WebView was removed** — the property is permanently nil, so the button
+    /// was permanently disabled and clicking it did nothing (user,
+    /// 2026-09-01: "the button to stop session is gried out, i clicked it and
+    /// nothing happened"). Reading the model also makes the scope right by
+    /// construction with several sessions open: the one on screen is the one
+    /// that stops.
+    @MainActor
+    private func beginStopAll() async {
+        guard let sessionId = model.marvinSessionId else {
+            model.lastError = "No session is loaded yet."
+            return
+        }
+        guard let scope = await SessionStopService.preview(
+            sessionId: sessionId, projectId: bridge.activeProjectId
+        ) else {
+            model.lastError = "Could not read what this session has running."
+            return
+        }
+        // Terminal shells are the user's own processes, so they are named
+        // separately — and scoped to this project's workDir, never all of
+        // them.
+        let terminalRunning = bridge.projectWorkDir.map {
+            TerminalSessionStore.shared.isRunning(workDir: $0)
+        } ?? false
+        var parts: [String] = []
+        if let summary = scope.summary { parts.append(summary) }
+        if terminalRunning { parts.append("this project's terminal session") }
+        guard !parts.isEmpty else {
+            model.lastError = "Nothing is running in this session."
+            return
+        }
+        let joined = parts.count == 1
+            ? parts[0]
+            : parts.dropLast().joined(separator: ", ") + " and " + (parts.last ?? "")
+        stopAllPlan = StopAllPlan(
+            sessionId: sessionId, summary: joined, terminalRunning: terminalRunning
+        )
+    }
+
+    @MainActor
+    private func performStopAll(_ plan: StopAllPlan) async {
+        let result = await SessionStopService.stop(
+            sessionId: plan.sessionId, projectId: bridge.activeProjectId
+        )
+        // Terminals are client-side; the sidecar never had a handle on them.
+        if plan.terminalRunning, let workDir = bridge.projectWorkDir {
+            TerminalSessionStore.shared.terminate(workDir: workDir)
+        }
+        guard let result else {
+            model.lastError = "Stop failed."
+            return
+        }
+        // Bring the local view into line with what the server just did — the
+        // turn is gone, so the footer must stop claiming otherwise.
+        if result.turnCancelled { model.cancel() }
+        var bits: [String] = []
+        if result.turnCancelled { bits.append("turn aborted") }
+        if result.jobsCancelled > 0 { bits.append("\(result.jobsCancelled) job(s) killed") }
+        if result.wakeupsCancelled > 0 { bits.append("\(result.wakeupsCancelled) wakeup(s) cancelled") }
+        if plan.terminalRunning { bits.append("terminal closed") }
+        model.lastError = bits.isEmpty ? nil : "Stopped: " + bits.joined(separator: ", ") + "."
+    }
     /// ADR-0044 — backlog browser sheet.
     @State private var backlogPanelOpen = false
     @State private var plansPanelOpen = false
@@ -1769,6 +1851,7 @@ struct ChatPreviewView: View {
                 text: Bindable(model).draft,
                 onSubmit: { model.send(cwd: bridge.projectWorkDir) },
                 onStop: { model.cancel() },
+                onStopAll: { Task { await beginStopAll() } },
                 isSending: model.isSending,
                 activityLabel: model.currentActivity,
                 queuedCount: model.queuedMessages.count,
@@ -1781,6 +1864,26 @@ struct ChatPreviewView: View {
         }
         .frame(minWidth: 280, minHeight: 200)
         .preferredColorScheme(bridge.preferredColorScheme)
+        // Names the scope by count before anything dies. "Stop everything?"
+        // is a question a user cannot answer — one of those jobs might be a
+        // forty-minute build they forgot was running.
+        .alert(
+            "Stop this session?",
+            isPresented: Binding(
+                get: { stopAllPlan != nil },
+                set: { if !$0 { stopAllPlan = nil } }
+            ),
+            presenting: stopAllPlan
+        ) { plan in
+            Button("Stop Everything", role: .destructive) {
+                let confirmed = plan
+                stopAllPlan = nil
+                Task { await performStopAll(confirmed) }
+            }
+            Button("Cancel", role: .cancel) { stopAllPlan = nil }
+        } message: { plan in
+            Text("This will stop \(plan.summary).\n\nOnly THIS session — other sessions, their jobs and their wakeups are untouched. This cannot be undone.")
+        }
         // Phase 2h — hydrate the message list when the bridge
         // reports a (projectId, marvinSessionId) we haven't loaded
         // yet. Three triggers funnel through the same code path:
@@ -1899,6 +2002,9 @@ struct ChatPreviewView: View {
         // reference, which survives being captured in an escaping closure.
         // `backlogPanelOpen` is @State on this struct, and assigning to it from
         // a captured copy is the kind of thing that silently does nothing.
+        .onReceive(NotificationCenter.default.publisher(for: .marvinRequestStopAll)) { _ in
+            Task { await beginStopAll() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
             backlogPanelOpen = true
         }

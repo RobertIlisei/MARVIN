@@ -164,7 +164,36 @@ final class MarvinBridge {
     /// the right particle profile. One of: idle | thinking | tool |
     /// writing | error | cancelling. ADR-0021 M4: written by
     /// ChatPreviewModel directly from the SSE stream.
-    var marvinState: String = "idle"
+    ///
+    /// Write through `setMarvinState(_:forSession:)`, not directly, so the
+    /// brain can only ever show the state of the session ON SCREEN — see
+    /// there for why.
+    private(set) var marvinState: String = "idle"
+
+    /// The session `marvinState` describes.
+    private(set) var marvinStateSessionId: String? = nil
+
+    /// Set the brain's state, tagged with the session it belongs to.
+    ///
+    /// Several sessions run at once, and a turn that is not on screen still
+    /// streams: background-job completions and wakeups fire against sessions
+    /// the user is not looking at. With one untagged global, whichever
+    /// session wrote last owned the brain — so it showed "something general"
+    /// rather than the selected session (user, 2026-09-01: "brain status
+    /// should reflect the session i select, not something general").
+    ///
+    /// A write from a session that is not the active one is DROPPED rather
+    /// than queued: the brain is a picture of what the user is looking at,
+    /// and a state from elsewhere is not a stale version of that, it is an
+    /// answer to a different question. `sessionId == nil` means "no session
+    /// in particular" (teardown, boot) and is always allowed, so idling still
+    /// works when nothing is loaded.
+    func setMarvinState(_ state: String, forSession sessionId: String?) {
+        guard BrainStateGate.accepts(writer: sessionId, active: activeMarvinSessionId)
+        else { return }
+        marvinStateSessionId = sessionId
+        if marvinState != state { marvinState = state }
+    }
 
     /// Resident-context tokens (ADR-0022 §2). The bytes the model
     /// walks every turn — drives latency. `cache_read + input` from
@@ -505,7 +534,20 @@ final class MarvinBridge {
     /// previous value when the web side reports null — that signals
     /// a project clear or fresh start, and the native list should
     /// follow.
+    /// The session on screen.
+    ///
+    /// Was written only by the WebView and has been **permanently nil since
+    /// that was removed** — a dead property that still had readers, which is
+    /// how the Stop-All button shipped permanently disabled (2026-09-01).
+    /// `ChatPreviewModel` now publishes to it whenever its own session id
+    /// changes, so menu commands and status surfaces can ask the bridge
+    /// instead of reaching into the view model.
     private(set) var activeMarvinSessionId: String? = nil
+
+    func setActiveMarvinSession(_ id: String?) {
+        guard activeMarvinSessionId != id else { return }
+        activeMarvinSessionId = id
+    }
 
     /// Phase 5a — currently-selected file path in the native file
     /// tree. Drives the native file viewer's content. The native
