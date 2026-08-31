@@ -158,8 +158,26 @@ struct LeftPane: View {
                 // tree keeps the whole pane until someone opens one.
                 paneSlot(
                     VSplitView {
+                        // `idealHeight` is load-bearing, not decoration. A
+                        // minHeight-only frame forwards the ideal-size query
+                        // straight through to the child, and this child's
+                        // ideal height is a ScrollView's — which is its ENTIRE
+                        // content, every file in the project. `VSplitView`
+                        // asks for ideal sizes, so the tree was laid out
+                        // taller than the pane; a VStack centres, so the
+                        // overflow split top and bottom and pushed the tree's
+                        // own header off the top edge (user, 2026-08-31: "on
+                        // top the file explorer, the items are going out of
+                        // bounds"). An explicit ideal lets `_FlexFrameLayout`
+                        // answer that query without consulting the child.
+                        // Definite proposals are unaffected, so the rendered
+                        // size is unchanged — this is the same fix the chat
+                        // transcript needed on 2026-08-29.
                         FileTreeView()
-                            .frame(minHeight: 120)
+                            .frame(minHeight: 120, idealHeight: 400)
+                            // Belt and braces: whatever the proposal, the tree
+                            // must not paint outside the space it was given.
+                            .clipped()
                         // The ideal is STABLE and the minimum MOVES, and the
                         // asymmetry between those two is the whole design.
                         //
