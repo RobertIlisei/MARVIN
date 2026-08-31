@@ -861,9 +861,68 @@ private struct FileTreeRow: View {
                     )
                 }
             }
+            // Open With — the applications macOS itself says can handle
+            // this file, in its own preference order. Built from
+            // `urlsForApplications(toOpen:)` rather than a hardcoded list,
+            // so it is right on any machine and needs no maintenance.
+            if !node.isDirectory {
+                let apps = NSWorkspace.shared.urlsForApplications(
+                    toOpen: URL(fileURLWithPath: node.path)
+                )
+                if !apps.isEmpty {
+                    Menu("Open With") {
+                        ForEach(apps, id: \.self) { app in
+                            Button(
+                                FileManager.default.displayName(atPath: app.path)
+                            ) {
+                                NSWorkspace.shared.open(
+                                    [URL(fileURLWithPath: node.path)],
+                                    withApplicationAt: app,
+                                    configuration: NSWorkspace.OpenConfiguration()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            // Open in Integrated Terminal — MARVIN's own terminal, not
+            // Terminal.app (that is what "Open Terminal Here" in the File
+            // menu does). A file opens its containing directory, which is
+            // what every IDE does and what the user means by it.
+            Button("Open in Integrated Terminal") {
+                let dir = node.isDirectory
+                    ? node.path
+                    : (node.path as NSString).deletingLastPathComponent
+                guard let workDir = MarvinBridge.shared.projectWorkDir, !workDir.isEmpty
+                else { return }
+                NativePrefs.shared.revealPane(.terminal)
+                TerminalSessionStore.shared.session(for: workDir)
+                    .run(command: "cd \(RunFileCommand.shellQuoted(dir))")
+            }
+            Divider()
+            Button("Copy") {
+                // The file itself, not its path — so a paste in Finder or
+                // any other app copies the file. `Copy Path` below is the
+                // string version, and both are worth having: they are what
+                // two different pastes expect.
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects(
+                    [URL(fileURLWithPath: node.path) as NSURL]
+                )
+            }
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(node.path, forType: .string)
+            }
+            // The form people actually paste into a message, an issue or a
+            // commit — and the one that means the same thing on someone
+            // else's machine.
+            if let root = MarvinBridge.shared.projectWorkDir,
+               let rel = WorkspaceRelativePath.of(node.path, in: root), !rel.isEmpty {
+                Button("Copy Relative Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(rel, forType: .string)
+                }
             }
             Button("Copy Name") {
                 NSPasteboard.general.clearContents()

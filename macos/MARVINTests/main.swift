@@ -2625,6 +2625,59 @@ runner.suite("run-active-file") {
 }
 
 
+runner.suite("message-plain-text") {
+    typealias K = MessagePlainText.BlockKind
+
+    runner.test("prose and tool calls join; empties and noise drop out") {
+        let out = MessagePlainText.joined([
+            .text("  Hello there.  "),
+            .toolCall(name: "Bash", input: "ls -la"),
+            .text("   "),
+            .unknown,
+            .text("Done."),
+        ])
+        runner.expect(out, equals: "Hello there.\n\n$ Bash ls -la\n\nDone.",
+                      "trimmed, joined by blank lines, blanks and unknowns skipped")
+    }
+
+    runner.test("a tool call with no input still names the tool") {
+        runner.expect(MessagePlainText.text(forBlockKind: K.toolCall(name: "Read", input: nil)),
+                      equals: "$ Read", "the command is still worth copying")
+        runner.expect(MessagePlainText.text(forBlockKind: K.toolCall(name: "Read", input: "   ")),
+                      equals: "$ Read", "whitespace-only input is no input")
+    }
+
+    runner.test("redacted thinking copies nothing") {
+        runner.expect(MessagePlainText.text(forBlockKind: K.thinking("abc", redacted: true)) == nil,
+                      equals: true, "encrypted by design — a placeholder would be copying our own UI")
+        runner.expect(MessagePlainText.text(forBlockKind: K.thinking(" abc ", redacted: false)),
+                      equals: "abc", "ordinary thinking copies as prose")
+    }
+
+    runner.test("a message with nothing readable yields an empty string") {
+        runner.expect(MessagePlainText.joined([.unknown, .text("  ")]), equals: "",
+                      "so the Copy command can disable itself rather than copying nothing")
+    }
+}
+
+
+runner.suite("workspace-relative-path") {
+    runner.test("ordinary paths, and a root with a trailing slash") {
+        runner.expect(WorkspaceRelativePath.of("/a/b/src/x.ts", in: "/a/b"), equals: "src/x.ts", "plain")
+        runner.expect(WorkspaceRelativePath.of("/a/b/src/x.ts", in: "/a/b/"), equals: "src/x.ts",
+                      "a trailing slash on the root changes nothing")
+        runner.expect(WorkspaceRelativePath.of("/a/b", in: "/a/b"), equals: "", "the root itself")
+    }
+
+    runner.test("a sibling that merely shares a name prefix is not inside") {
+        runner.expect(WorkspaceRelativePath.of("/a/bc/d.ts", in: "/a/b") == nil, equals: true,
+                      "without the separator check this would return 'c/d.ts'")
+        runner.expect(WorkspaceRelativePath.of("/other/x.ts", in: "/a/b") == nil, equals: true, "elsewhere")
+        runner.expect(WorkspaceRelativePath.of("/a/b/x.ts", in: "") == nil, equals: true, "no root")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

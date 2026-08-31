@@ -25,6 +25,14 @@ struct ChatMessageRow: View {
     let message: ChatMessage
 
     var body: some View {
+        // One context menu over both branches. Copy reads the MODEL, not
+        // the rendered view: prose renders through an AppKit `NSTextView`
+        // (`RichText`), and whatever is wrong with drag-selection there,
+        // "I want to copy this" should not depend on it (user, 2026-08-31:
+        // "i can't select the text, reason is i want to copy it from here").
+        // It also copies the WHOLE message, which is what dragging across
+        // it was trying to achieve.
+        Group {
         // User messages right-align in an accent-tinted bubble
         // (chat-UI convention; matches the web `<MessageView>`'s
         // `justify-end` + `bg-[color:var(--color-accent-glow)]`
@@ -59,6 +67,14 @@ struct ChatMessageRow: View {
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 6)
+        }
+        }
+        .contextMenu {
+            Button("Copy Message") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(plainText, forType: .string)
+            }
+            .disabled(plainText.isEmpty)
         }
     }
 
@@ -121,6 +137,25 @@ struct ChatMessageRow: View {
         case .system: MarvinTheme.textMuted
         case .result: MarvinTheme.textMuted.opacity(0.7)
         }
+    }
+
+    /// This message as plain text for the clipboard.
+    ///
+    /// Reads the MODEL, not the rendered view, so copying works regardless
+    /// of what drag-selection does in the AppKit text view underneath.
+    private var plainText: String {
+        MessagePlainText.joined(message.blocks.map { block in
+            switch block {
+            case .text(_, let text):
+                return .text(text)
+            case .thinking(_, let text, let redacted):
+                return .thinking(text, redacted: redacted)
+            case .toolCall(_, let name, let input, _):
+                return .toolCall(name: name, input: input?.summaryLine)
+            case .orphanToolResult, .unknown:
+                return .unknown
+            }
+        })
     }
 
     @ViewBuilder
@@ -390,15 +425,27 @@ private struct ToolCallBlockView: View {
     /// file tools, `pattern` for Grep, `url` for web. Falls back to
     /// the first-line of the full JSON.
     private var inputSummary: String {
-        guard let input else { return "" }
-        if case let .object(dict) = input {
+        input?.summaryLine ?? ""
+    }
+}
+
+extension ChatJSON {
+    /// The most useful single line of a tool's input — `command` for Bash,
+    /// `file_path` for the file tools, `pattern` for Grep, `url` for web,
+    /// falling back to the first line of the pretty JSON.
+    ///
+    /// Shared by the collapsed tool header and the row's Copy command, so
+    /// what you copy is what you were looking at.
+    var summaryLine: String? {
+        if case let .object(dict) = self {
             for key in ["command", "file_path", "path", "pattern", "url", "query"] {
                 if case let .string(s) = dict[key] ?? .null {
                     return s
                 }
             }
         }
-        return prettyJSON(input).split(separator: "\n").first.map(String.init) ?? ""
+        let pretty = prettyJSON(self)
+        return pretty.split(separator: "\n").first.map(String.init)
     }
 }
 
