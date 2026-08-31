@@ -158,7 +158,7 @@ final class MarvinBridge {
     /// swaps between the idle and active Brain Circuit SVGs based on
     /// this. Phase 1d.20. ADR-0021 M4: written by ChatPreviewModel
     /// directly from the SSE stream.
-    var isBusy: Bool = false
+    private(set) var isBusy: Bool = false
 
     /// Fine-grained marvinState mirror. The brain reads this to pick
     /// the right particle profile. One of: idle | thinking | tool |
@@ -193,6 +193,16 @@ final class MarvinBridge {
         else { return }
         marvinStateSessionId = sessionId
         if marvinState != state { marvinState = state }
+    }
+
+    /// Busy flag, under the same gate and for the same reason: it is written
+    /// from the same eight sites as `marvinState` and feeds the same brain.
+    /// Leaving one gated and the other not would show a calm brain with a
+    /// spinning footer, which is worse than either being wrong.
+    func setBusy(_ busy: Bool, forSession sessionId: String?) {
+        guard BrainStateGate.accepts(writer: sessionId, active: activeMarvinSessionId)
+        else { return }
+        if isBusy != busy { isBusy = busy }
     }
 
     /// Resident-context tokens (ADR-0022 §2). The bytes the model

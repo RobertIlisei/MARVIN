@@ -818,7 +818,7 @@ final class ChatPreviewModel {
                 pendingConfirms.removeAll()
                 sealStreamingRows()
                 MarvinBridge.shared.setMarvinState("error", forSession: marvinSessionId)
-                MarvinBridge.shared.isBusy = false
+                MarvinBridge.shared.setBusy(false, forSession: marvinSessionId)
             }
         }
     }
@@ -835,7 +835,7 @@ final class ChatPreviewModel {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(400))
             MarvinBridge.shared.setMarvinState("idle", forSession: marvinSessionId)
-            MarvinBridge.shared.isBusy = false
+            MarvinBridge.shared.setBusy(false, forSession: marvinSessionId)
         }
         if let id = marvinSessionId {
             Task { @MainActor in
@@ -911,7 +911,7 @@ final class ChatPreviewModel {
         // The brain reflects the session ON SCREEN, which is about to be an
         // empty one — idle it locally without touching the turn left behind.
         MarvinBridge.shared.setMarvinState("idle", forSession: marvinSessionId)
-        MarvinBridge.shared.isBusy = false
+        MarvinBridge.shared.setBusy(false, forSession: marvinSessionId)
         resumeTask?.cancel()
         resumeTask = nil
         // ADR-0043 — drop the announce subscription; a fresh hydrate / first
@@ -1236,7 +1236,7 @@ final class ChatPreviewModel {
                 if activeTask == nil {
                     isSending = false
                     currentActivity = nil
-                    MarvinBridge.shared.isBusy = false
+                    MarvinBridge.shared.setBusy(false, forSession: marvinSessionId)
                     // The attach stream ended and nothing else is running, so
                     // nothing can still be mid-write. This is the path where
                     // the `result` cli.event is most likely to have been
@@ -1264,7 +1264,7 @@ final class ChatPreviewModel {
                     // live, so reaching this line IS the liveness signal.
                     if !isSending {
                         isSending = true
-                        MarvinBridge.shared.isBusy = true
+                        MarvinBridge.shared.setBusy(true, forSession: marvinSessionId)
                         if MarvinBridge.shared.marvinState == "idle" {
                             MarvinBridge.shared.setMarvinState("thinking", forSession: marvinSessionId)
                         }
@@ -1458,7 +1458,7 @@ final class ChatPreviewModel {
             }
             // ADR-0021 M4: drive brain profile natively from SSE.
             b.setMarvinState("thinking", forSession: marvinSessionId)
-            b.isBusy = true
+            b.setBusy(true, forSession: marvinSessionId)
             // ADR-0022 §3 follow-up: when the sidecar started this
             // turn with a fresh SDK session (either a brand-new
             // transcript or because we asked it to reset), clear the
@@ -1590,7 +1590,7 @@ final class ChatPreviewModel {
             pendingConfirms.removeAll()
             // ADR-0021 M4: reset brain to idle natively.
             b.setMarvinState("idle", forSession: marvinSessionId)
-            b.isBusy = false
+            b.setBusy(false, forSession: marvinSessionId)
             // ADR-0036 (revised) — a Plan-mode turn just finished presenting a
             // plan (read-only). Surface the inline Approve & execute affordance,
             // and capture the plan text (the turn's final assistant reply) so it
@@ -1679,7 +1679,7 @@ final class ChatPreviewModel {
             pendingConfirms.removeAll()
             // ADR-0021 M4: signal error state natively.
             b.setMarvinState("error", forSession: marvinSessionId)
-            b.isBusy = false
+            b.setBusy(false, forSession: marvinSessionId)
             // Don't dispatch queued messages after an error — the user
             // may want to read the error and decide whether the queue
             // is still relevant. Cancel-from-bar drops the queue
