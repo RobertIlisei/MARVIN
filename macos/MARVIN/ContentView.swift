@@ -41,6 +41,8 @@ struct ContentView: View {
     @State private var quickOpenOpen = false
     @State private var symbolSearchOpen = false
     @State private var buildTaskOpen = false
+    @State private var commandPaletteOpen = false
+    @State private var goToLineOpen = false
     @State private var shortcutsOpen = false
 
     var body: some View {
@@ -112,6 +114,13 @@ struct ContentView: View {
         .sheet(isPresented: $shortcutsOpen) {
             ShortcutsHelpSheet()
         }
+        .modifier(
+            CommandSurfaces(
+                bridge: bridge,
+                paletteOpen: $commandPaletteOpen,
+                goToLineOpen: $goToLineOpen
+            )
+        )
         .onChange(of: bridge.shortcutsTriggerCount) { _, _ in
             shortcutsOpen = true
         }
@@ -141,6 +150,10 @@ struct ContentView: View {
             updateRepresentedURL(workDir: newWorkDir.isEmpty ? nil : newWorkDir)
             if !newWorkDir.isEmpty {
                 Task { await DiagnosticsService.shared.refresh(workDir: newWorkDir) }
+                // Language servers are per-project: the old project's
+                // servers are shut down and its diagnostics dropped, or
+                // they would keep publishing about a tree nobody has open.
+                LSPService.shared.activate(root: newWorkDir)
             }
         }
         .onChange(of: health.state.isOffline) { _, isOffline in
@@ -266,7 +279,7 @@ struct ContentView: View {
             } label: {
                 Label("Quick Open", systemImage: "magnifyingglass")
             }
-            .keyboardShortcut("p", modifiers: [.command])
+            // ⌘P is owned by Window ▸ Quick Open File….
             .disabled(bridge.projectWorkDir == nil)
             .help("Quick Open file (⌘P)")
         }
@@ -1004,3 +1017,36 @@ private struct CodeBlock: View {
 // to plain Command Line Tools / `swift build`. CI compiles via
 // SPM (no Xcode), so a #Preview block would break that path. Add
 // previews locally when iterating in Xcode and don't commit them.
+
+
+/// The ⇧⌘P / ^G / ⌘O surfaces, lifted out of `ContentView.body`.
+///
+/// Not a style choice: that body already sits near SwiftUI's type-checking
+/// budget (it blew it once before, recorded in the roadmap), and six more
+/// chained modifiers tipped it over with "unable to type-check this
+/// expression in reasonable time". A `ViewModifier` is a separate
+/// type-checking context, so its cost is paid separately.
+private struct CommandSurfaces: ViewModifier {
+    let bridge: MarvinBridge
+    @Binding var paletteOpen: Bool
+    @Binding var goToLineOpen: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $paletteOpen) {
+                CommandPaletteSheet().environment(bridge)
+            }
+            .sheet(isPresented: $goToLineOpen) {
+                GoToLineSheet().environment(bridge)
+            }
+            .onChange(of: bridge.commandPaletteTriggerCount) { _, _ in
+                paletteOpen = true
+            }
+            .onChange(of: bridge.goToLineTriggerCount) { _, _ in
+                if bridge.selectedFilePath != nil { goToLineOpen = true }
+            }
+            .onChange(of: bridge.openProjectTriggerCount) { _, _ in
+                openProjectWithPanel()
+            }
+    }
+}

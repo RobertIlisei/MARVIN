@@ -241,3 +241,127 @@ struct GitConfirmTokenResponse: Codable, Equatable {
     let severity: String?
     let reason: String?
 }
+
+// MARK: - Branch / ref listing (GET /api/git/branch)
+
+/// Wire response for GET /api/git/branch — everything the branch
+/// picker renders. `enabled: false` comes back for non-git cwds,
+/// with the ref lists absent, so every list field is optional.
+struct GitBranchListResponse: Codable, Equatable {
+    let enabled: Bool
+    let reason: String?
+    let current: String?
+    /// True when HEAD is not on a branch. `current` then carries the
+    /// short sha instead of a name, so the UI has something to show.
+    let detached: Bool?
+    let locals: [GitBranchEntry]?
+    let remotes: [GitRefEntry]?
+    let tags: [GitRefEntry]?
+}
+
+/// One local branch. The last-commit fields (`sha` / `author` /
+/// `subject` / `relativeDate`) are what turn the picker from a list
+/// of names into something a user can actually choose from — they
+/// come from the same `for-each-ref` pass, not N extra `git log`s.
+struct GitBranchEntry: Codable, Equatable, Identifiable {
+    let name: String
+    let isCurrent: Bool
+    let upstream: String?
+    let ahead: Int?
+    let behind: Int?
+    let sha: String?
+    let author: String?
+    let relativeDate: String?
+    let subject: String?
+
+    var id: String { name }
+}
+
+/// A remote-tracking ref or a tag. Same last-commit columns as
+/// `GitBranchEntry` minus the tracking fields, which don't apply.
+struct GitRefEntry: Codable, Equatable, Identifiable {
+    let name: String
+    let sha: String?
+    let author: String?
+    let relativeDate: String?
+    let subject: String?
+
+    var id: String { name }
+}
+
+// MARK: - Commit graph (GET /api/git/graph)
+
+struct GitGraphResponse: Codable, Equatable {
+    let enabled: Bool
+    let reason: String?
+    let error: String?
+    let commits: [GitGraphCommit]?
+}
+
+/// One commit in the DAG. `parents` is what draws the rails —
+/// `count > 1` is a merge; `refs` are the branch/tag chips.
+struct GitGraphCommit: Codable, Equatable, Identifiable {
+    let sha: String
+    let shortSha: String
+    let author: String
+    let date: String
+    let relativeDate: String
+    let refs: [String]
+    let parents: [String]
+    let subject: String
+
+    var id: String { sha }
+}
+
+// MARK: - Stash (GET/POST /api/git/stash)
+
+struct GitStashListResponse: Codable, Equatable {
+    let enabled: Bool
+    let entries: [GitStashEntry]?
+}
+
+struct GitStashEntry: Codable, Equatable, Identifiable {
+    let ref: String
+    let index: Int
+    let message: String
+    let relativeDate: String
+    let sha: String
+
+    var id: String { ref }
+}
+
+// MARK: - Repositories / worktrees (GET /api/git/repos)
+
+struct GitReposResponse: Codable, Equatable {
+    let enabled: Bool
+    let reason: String?
+    let repos: [GitRepoEntry]?
+}
+
+/// One working tree of the open repo — the main checkout plus every
+/// linked worktree. MARVIN creates worktrees for implementer
+/// subagents (ADR-0081), so a second entry here is a normal state,
+/// not an exotic one.
+struct GitRepoEntry: Codable, Equatable, Identifiable {
+    let path: String
+    let name: String
+    let branch: String?
+    let head: String?
+    let detached: Bool
+    let isCurrent: Bool
+    let isMain: Bool
+    let dirtyCount: Int
+    let locked: Bool
+
+    var id: String { path }
+}
+
+// MARK: - Generated commit message (POST /api/git/commit-message)
+
+struct GitCommitMessageResponse: Codable, Equatable {
+    let ok: Bool?
+    let message: String?
+    let truncated: Bool?
+    let costUsd: Double?
+    let error: String?
+}

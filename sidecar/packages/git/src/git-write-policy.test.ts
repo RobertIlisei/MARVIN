@@ -210,3 +210,92 @@ describe("gitWritePolicy — push / pull / fetch", () => {
     ).toBe("deny");
   });
 });
+
+describe("gitWritePolicy — discard untracked (`git clean`)", () => {
+  it("is confirm DANGER, not warn — there is no reflog behind it", () => {
+    const d = gitWritePolicy({
+      kind: "discard",
+      paths: ["scratch.txt"],
+      mode: "untracked",
+    });
+    expect(d.class).toBe("confirm");
+    // The distinction from mode:"working" is the whole point: a
+    // restored file can be dug out of the reflog, a cleaned one cannot.
+    expect(d.severity).toBe("danger");
+  });
+
+  it("deny on empty path list, same as the other modes", () => {
+    expect(
+      gitWritePolicy({ kind: "discard", paths: [], mode: "untracked" }).class,
+    ).toBe("deny");
+  });
+});
+
+describe("gitWritePolicy — detached checkout", () => {
+  it("confirm warn on a clean tree", () => {
+    const d = gitWritePolicy({
+      kind: "branch-switch",
+      name: "v1.2.0",
+      workingTreeClean: true,
+      detach: true,
+    });
+    expect(d.class).toBe("confirm");
+    expect(d.severity).toBe("warn");
+  });
+
+  it("still auto when detach is absent — the default path is unchanged", () => {
+    expect(
+      gitWritePolicy({
+        kind: "branch-switch",
+        name: "main",
+        workingTreeClean: true,
+      }).class,
+    ).toBe("auto");
+  });
+
+  it("dirty tree denies before detach is even considered", () => {
+    expect(
+      gitWritePolicy({
+        kind: "branch-switch",
+        name: "v1.2.0",
+        workingTreeClean: false,
+        detach: true,
+      }).class,
+    ).toBe("deny");
+  });
+});
+
+describe("gitWritePolicy — stash", () => {
+  it("push is auto even with an empty stash — it CREATES the first entry", () => {
+    expect(
+      gitWritePolicy({ kind: "stash", action: "push", entryCount: 0 }).class,
+    ).toBe("auto");
+  });
+
+  it("pop / apply are auto when there is something to restore", () => {
+    expect(
+      gitWritePolicy({ kind: "stash", action: "pop", entryCount: 2 }).class,
+    ).toBe("auto");
+    expect(
+      gitWritePolicy({ kind: "stash", action: "apply", entryCount: 2 }).class,
+    ).toBe("auto");
+  });
+
+  it("deny pop / apply / drop against an empty stash", () => {
+    for (const action of ["pop", "apply", "drop"] as const) {
+      expect(
+        gitWritePolicy({ kind: "stash", action, entryCount: 0 }).class,
+      ).toBe("deny");
+    }
+  });
+
+  it("drop is confirm danger — the entry is gone", () => {
+    const d = gitWritePolicy({
+      kind: "stash",
+      action: "drop",
+      entryCount: 1,
+    });
+    expect(d.class).toBe("confirm");
+    expect(d.severity).toBe("danger");
+  });
+});

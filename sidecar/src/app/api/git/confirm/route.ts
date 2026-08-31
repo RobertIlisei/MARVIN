@@ -90,6 +90,14 @@ export async function POST(req: NextRequest) {
  * Strict structural validator for `GitOp`. Returns the parsed op on
  * success, `null` on any mismatch. Keeping this inline rather than a
  * zod dep since the shape is small and audit-visible here.
+ *
+ * **Every field of every op must be reproduced here.** The op is
+ * re-classified from THIS parse, not from the client's JSON — that is
+ * what stops "mint a token for a harmless op, replay it against a
+ * dangerous one". The cost is that a field dropped here silently
+ * declassifies the op: `detach` was missing when it was added, so
+ * `branch-switch --detach` re-classified as a plain switch, came back
+ * `policy-auto`, and the confirm round trip could never complete.
  */
 function parseGitOp(raw: unknown): GitOp | null {
   if (!raw || typeof raw !== "object") return null;
@@ -102,7 +110,13 @@ function parseGitOp(raw: unknown): GitOp | null {
     }
     case "discard": {
       if (!isStringArray(r.paths) || r.paths.length === 0) return null;
-      if (r.mode !== "working" && r.mode !== "staged") return null;
+      if (
+        r.mode !== "working" &&
+        r.mode !== "staged" &&
+        r.mode !== "untracked"
+      ) {
+        return null;
+      }
       return { kind: "discard", paths: r.paths, mode: r.mode };
     }
     case "commit": {
@@ -123,10 +137,12 @@ function parseGitOp(raw: unknown): GitOp | null {
     case "branch-switch": {
       if (typeof r.name !== "string") return null;
       if (typeof r.workingTreeClean !== "boolean") return null;
+      if (r.detach !== undefined && typeof r.detach !== "boolean") return null;
       return {
         kind: "branch-switch",
         name: r.name,
         workingTreeClean: r.workingTreeClean,
+        detach: r.detach as boolean | undefined,
       };
     }
     case "branch-delete": {
@@ -146,11 +162,15 @@ function parseGitOp(raw: unknown): GitOp | null {
         return null;
       }
       if (typeof r.upstreamAhead !== "number") return null;
+      if (r.setUpstream !== undefined && typeof r.setUpstream !== "boolean") {
+        return null;
+      }
       return {
         kind: "push",
         branch: r.branch,
         force: r.force,
         upstreamAhead: r.upstreamAhead,
+        setUpstream: r.setUpstream as boolean | undefined,
       };
     }
     case "pull": {
@@ -162,6 +182,18 @@ function parseGitOp(raw: unknown): GitOp | null {
     case "fetch": {
       if (typeof r.remote !== "string") return null;
       return { kind: "fetch", remote: r.remote };
+    }
+    case "stash": {
+      if (
+        r.action !== "push" &&
+        r.action !== "pop" &&
+        r.action !== "apply" &&
+        r.action !== "drop"
+      ) {
+        return null;
+      }
+      if (typeof r.entryCount !== "number") return null;
+      return { kind: "stash", action: r.action, entryCount: r.entryCount };
     }
     default:
       return null;

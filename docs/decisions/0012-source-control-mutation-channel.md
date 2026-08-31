@@ -160,6 +160,76 @@ The cwd anchor is the **one shared primitive** — [`checkFsPath`](../../package
 - Unit tests on `gitWritePolicy` cover every branch of the `GitOp` union including every `push.force` × `upstreamAhead` combination and every `branch-delete` × `merged` × `isCurrent` combination.
 - Manual (M2+): MARVIN `Bash("git checkout -b foo")` during an open panel — panel refreshes within 2 s.
 
+## Amendment — 2026-08-31: the deferred half, and the routes nobody called
+
+Two things forced this open again.
+
+**The panel could not reach its own backend.** M2 shipped
+`/api/git/branch` (list), `/branch/create`, `/branch/switch` and
+`/branch/delete`. `rg` across `macos/` found **zero** Swift callers for
+any of them. The branch name rendered as a `Text` in both the SCM panel
+and the status bar, so clicking it did nothing — the feature existed,
+was tested, was documented as shipped, and was unreachable from the
+product. Worth naming as a class: a route with no caller looks identical
+to a working feature in every artefact except the running app.
+
+**The "out of scope entirely (v2+)" list had become the gap.** Measured
+against the reference IDE, the missing surface was almost exactly that
+list. Two of its four items are now in:
+
+- **Stash — adopted.** It was deferred as "own surface, own failure
+  modes", but the `branch-switch` policy *denies a dirty tree and names
+  stashing as the remedy*. Deferring the remedy left the deny at a dead
+  end, which is worse than either shipping it or not having the deny.
+- **History / graph view — adopted, read-only.** `GET /api/git/graph`
+  returns commits with parents + `%D` decorations; lane assignment is a
+  pure client-side pass (`GitGraphLayout`). No new mutation surface.
+- **Hunk-level staging — still deferred.** Unchanged reasoning: it is a
+  patch editor, not a panel feature.
+- **Rebase / merge / cherry-pick / conflict UI — still deferred.** Chat
+  handles these; the panel flags the state.
+
+### New and changed ops
+
+| Op | Class | Note |
+|---|---|---|
+| `stash{action:"push"}` | auto | Reversible via `pop`. |
+| `stash{action:"pop"\|"apply"}` | auto | Nothing is lost on conflict; deny when the stash is empty. |
+| `stash{action:"drop"}` | confirm **danger** | Recovery needs a dangling-commit hunt. |
+| `discard{mode:"untracked"}` | confirm **danger** | `git clean -f -d`. The only op here with no reflog behind it — git never hashed the file. Split from `mode:"working"` (confirm *warn*) so "Discard all changes" issues two calls and the permanent half gets its own decision. |
+| `branch-switch{detach:true}` | confirm **warn** | `git switch --detach`. Also the only way to check out a tag or remote-tracking ref, which git refuses to switch to plainly. |
+| `push{setUpstream:true}` | auto | `git push -u` — "Publish Branch". A branch with no upstream cannot be pushed usefully without it. |
+
+### Two failures the smoke tests caught, both silent
+
+Both succeeded at the HTTP layer and were wrong underneath, which is why
+they are recorded rather than just fixed.
+
+1. **`parseGitOp` in `/api/git/confirm` must reproduce every field of
+   every op.** It is deliberately a re-parse, not a pass-through — that
+   is what stops mint-for-harmless/replay-with-dangerous. The cost is
+   that a field dropped there silently *declassifies* the op: `detach`
+   was missing, so `branch-switch --detach` re-classified as a plain
+   switch and the mint returned `policy-auto`. The confirm round trip
+   could never complete, and nothing logged an error.
+2. **Git's format placeholders are per-command dialects.**
+   `for-each-ref` reads `%00` as a NUL byte; `--pretty=format:` (log,
+   show, `stash list`) does not — it emits the literal text `%00`. The
+   stash list came back with every field parsed as an empty string, HTTP
+   200, no error anywhere. Use `%x00` with `--pretty`.
+
+### Cost note
+
+`/api/git/commit-message` drafts a message from the staged diff. It runs
+on the **cheapest tier** (`fallbackNewestOfTier("haiku")`), not the
+session's executor: measured on a one-line diff, an Opus draft cost
+**$0.22** against Haiku's **$0.036** for the same sentence. It also
+spawns with `allowedTools: []` — `runClaudeCli` always passes
+`--dangerously-skip-permissions`, so without an explicit empty allow-list
+a button labelled "write me a sentence" is an unrestricted agent standing
+in the user's working tree. Prompts do not constrain tools.
+
+
 ## Related
 
 - [ADR-0004 — Structural confirm gate](./0004-structural-confirm-gate.md) — the LLM channel's policy enforcement; template for this ADR's confirm-at-the-boundary pattern.

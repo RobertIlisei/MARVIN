@@ -1,92 +1,111 @@
-// SourceControlView — Phase 3e. Native equivalent of the web
-// `<SourceControlPanel>` (sidecar/src/components/source-control/
-// source-control-panel.tsx).
+// SourceControlView — the Source Control panel.
 //
-// Read-only in 3e per ADR-0018 §3 — clicking a row does nothing yet.
-// 3f wires the diff viewer; 3g adds stage / unstage / commit. We
-// land the read-only surface first so the daily-driver experience
-// recovers from the 3d→3e gap (where the user lost web SCM access
-// when the file-tree panel got hidden).
+// Rebuilt to the VS Code / Antigravity shape. The previous cut showed
+// porcelain-v2 two-column codes on the left of every row and pinned a
+// commit box to the bottom with a plain Commit button; the branch
+// routes that had shipped with ADR-0012 M2 had no caller at all, so
+// nothing in the app could switch, create or delete a branch.
 //
-// ## Section model
+// ## Layout
 //
-// Porcelain v2 entries land in three buckets per the web parity:
+//   Source Control                                     [ … ]
+//   ── Changes ──────────────────────────────────────────────
+//    ▾ repo-name   branch ▾              ⟳  ✓  ↻  …
+//      ┌ Message (⌘Enter to commit on "branch")   ✨ Generate ┐
+//      [ ✓ Commit                                          ▾ ]
+//      ▾ Staged Changes                                    (3)
+//      ▾ Changes                                         (477)
+//    ▸ other-worktree   branch                          (12)
+//   ── Graph ────────────────────────────────────── ↓ ↑ ⟳ ──
+//    ●─┐ chore: backlog audit — 8 easy wins   [chore/…]  6c8f907
 //
-//   • Staged (`indexStatus != "."` AND ordinary/rename-copy)
-//   • Changes (`workingStatus != "."` AND ordinary/rename-copy)
-//   • Untracked (entryType = "untracked")
+// Three things drive the shape:
 //
-// Conflicted files (entryType = "unmerged") get their own fourth
-// section when present — matches Xcode's source-control behaviour
-// of surfacing conflicts above everything else.
+//   • **Composer on top.** The reference puts it above the file list
+//     because the list is unbounded — 477 rows push a bottom-anchored
+//     box off screen exactly when you have the most to say about it.
 //
-// ## Why this lives next to FileTreeView
+//   • **One primary action that changes identity.** With something
+//     staged it is `Commit` (+ a split menu for the & Push / & Sync /
+//     Amend variants). With nothing staged and a diverged branch it
+//     becomes `Sync Changes 10↓ 5↑`. Two buttons where only one is
+//     ever live is the thing the reference avoids.
 //
-// The web app puts both surfaces under one column behind a tab
-// switch (LeftColumnTabs). Native does the same — a Picker at the
-// top of the left pane swaps the body between FileTreeView and
-// SourceControlView. ContentView's HSplitView treats the whole
-// pane as one unit; the Picker just flips which body renders.
+//   • **Untracked files live inside Changes**, with a `U` letter
+//     rather than in a section of their own — that is what the
+//     reference does, and a separate section splits "what did I
+//     touch" across two lists for no gain.
+//
+// Every mutation goes through `GitOpRunner` (confirm-token round trip,
+// ADR-0012). Worktrees come from `/api/git/repos`, so an implementer
+// subagent's checkout (ADR-0081) shows up as its own group instead of
+// being invisible.
 
+import AppKit
 import SwiftUI
 
-/// View-model for the SCM panel. Owns the in-flight fetch state +
-/// the rendered status. Mirrors FileTreeModel's idempotence: the
-/// view's bridge-change observer can fire repeatedly without re-
-/// fetching when the cwd hasn't changed.
+/// View-model for the SCM panel. Owns the status fetch, the repo list,
+/// the stash list, and the commit composer state. Mutations delegate to
+/// `runner`.
 @MainActor
 @Observable
 final class SourceControlModel {
-    /// Last successful response. Nil until first fetch completes.
     private(set) var response: GitStatusResponse? = nil
     private(set) var isLoading: Bool = false
     private(set) var lastError: String? = nil
     private(set) var loadedCwd: String? = nil
 
+    /// Worktrees of the open repo — the main checkout first.
+    private(set) var repos: [GitRepoEntry] = []
+    private(set) var stashes: [GitStashEntry] = []
+
     private var fetchTask: Task<Void, Never>?
 
-    /// Phase 3g — commit message input. Bound by ChatPreviewModel-
-    /// style Bindable in the view; reset to "" after a successful
-    /// commit. Persisted only in-memory; users can copy from here
-    /// to a notes file if they want to preserve a draft across
-    /// app restarts.
+    /// Commit message input. Reset to "" after a successful commit.
+    /// In-memory only; a draft does not survive a relaunch.
     var commitMessage: String = ""
 
-    /// Phase 3g — row-level action in flight (stage / unstage /
-    /// discard / commit). Tracked by repo-relative path + verb so
-    /// the row can show a per-row spinner and the panel can disable
-    /// the global commit button while individual rows mutate.
-    private(set) var inFlightOps: Set<String> = []
+    /// True while `/api/git/commit-message` is drafting one. The
+    /// request spawns a model turn server-side, so it is slow enough
+    /// to need its own visible state rather than the generic spinner.
+    private(set) var isGenerating = false
+    var generateError: String? = nil
 
-    /// Phase 3g — confirm dialog state. When non-nil, the SCM panel
-    /// presents `GitConfirmSheet`; the user's response triggers the
-    /// stored `onConfirm` callback (which mints a token + retries
-    /// the original mutation). Cleared on dismiss.
-    var pendingConfirm: PendingGitConfirm? = nil
+    let runner = GitOpRunner()
 
-    /// Phase 3g — last terminal failure for a mutation. Surfaces as
-    /// a banner above the commit area. Cleared when the user
-    /// dismisses or starts a new mutation.
-    var lastMutationError: String? = nil
-
-    /// Kick off a fetch for `cwd`. Idempotent: re-calls with the
-    /// most-recently loaded cwd are no-ops unless `force: true`.
-    func refresh(cwd: String, force: Bool = false) {
-        if !force, response != nil, loadedCwd == cwd, !isLoading {
-            return
+    init() {
+        runner.onDidMutate = { [weak self] in
+            guard let self, let cwd = self.loadedCwd else { return }
+            self.refresh(cwd: cwd, force: true)
         }
+    }
+
+    // MARK: - Reads
+
+    /// Kick off a status fetch for `cwd`. Idempotent unless forced.
+    /// The repo + stash lists ride along — all three change together
+    /// (a commit moves status AND the graph; a stash moves status AND
+    /// the stash list), so refreshing them separately would guarantee
+    /// one of them is stale on screen.
+    func refresh(cwd: String, force: Bool = false) {
+        if !force, response != nil, loadedCwd == cwd, !isLoading { return }
         fetchTask?.cancel()
         isLoading = true
         lastError = nil
         fetchTask = Task { @MainActor in
             defer { isLoading = false }
             do {
-                let res = try await FilesService.shared.fetchGitStatus(cwd: cwd)
+                async let status = FilesService.shared.fetchGitStatus(cwd: cwd)
+                async let repoList = FilesService.shared.fetchRepos(cwd: cwd)
+                async let stashList = FilesService.shared.fetchStashes(cwd: cwd)
+                let res = try await status
                 guard !Task.isCancelled else { return }
                 response = res
                 loadedCwd = cwd
+                repos = (try? await repoList)?.repos ?? []
+                stashes = (try? await stashList)?.entries ?? []
             } catch is CancellationError {
-                /* racing with a project switch — quiet */
+                /* racing a project switch — quiet */
             } catch {
                 lastError = "\(error)"
             }
@@ -97,6 +116,8 @@ final class SourceControlModel {
         fetchTask?.cancel()
         fetchTask = nil
         response = nil
+        repos = []
+        stashes = []
         loadedCwd = nil
         lastError = nil
         isLoading = false
@@ -104,433 +125,304 @@ final class SourceControlModel {
 
     // MARK: - Section partitioning
 
-    /// Conflicted files first — matches Xcode's "fix this before
-    /// anything else" surface. Phase 3e renders these in their own
-    /// section header when non-empty.
+    /// Conflicts first — nothing else can be committed until they are
+    /// resolved, so they go above everything.
     var conflicted: [GitStatusFile] {
         response?.files?.filter { $0.entryType == "unmerged" } ?? []
     }
 
-    /// Staged changes — index column non-".". Excludes unmerged
-    /// (those carry both columns set, but live in their own section
-    /// so users don't try to commit a conflict).
     var staged: [GitStatusFile] {
         response?.files?.filter {
             $0.entryType != "unmerged" && $0.indexStatus != "."
         } ?? []
     }
 
-    /// Working-tree changes — working column non-".". Same exclusion
-    /// for unmerged entries. A file modified-on-disk after a partial
-    /// staging shows up in BOTH `staged` and `changes` (the index has
-    /// one snapshot, the worktree another) — that's the correct
-    /// rendering, matching `git status` two-column output.
+    /// Working-tree changes INCLUDING untracked files, matching the
+    /// reference's single "Changes" list. A file that is partly staged
+    /// appears in both lists — that is `git status`'s two-column truth,
+    /// not a rendering bug.
     var changes: [GitStatusFile] {
         response?.files?.filter {
             $0.entryType != "unmerged"
-                && $0.entryType != "untracked"
-                && $0.workingStatus != "."
+                && ($0.entryType == "untracked" || $0.workingStatus != ".")
         } ?? []
     }
 
-    var untracked: [GitStatusFile] {
-        response?.files?.filter { $0.entryType == "untracked" } ?? []
+    var isClean: Bool {
+        conflicted.isEmpty && staged.isEmpty && changes.isEmpty
     }
 
-    // MARK: - Mutations (Phase 3g)
+    var branch: GitStatusBranch? { response?.branch }
+    var branchName: String { branch?.name ?? "(detached)" }
+    var ahead: Int { branch?.ahead ?? 0 }
+    var behind: Int { branch?.behind ?? 0 }
+    var hasUpstream: Bool { !(branch?.upstream ?? "").isEmpty }
+    var isDiverged: Bool { ahead > 0 || behind > 0 }
 
-    /// Stage one path — the repo-relative form. The button on the
-    /// row passes `relative` directly; SourceControlView strips the
-    /// cwd prefix before calling.
-    func stage(relative: String) {
-        runMutation(verb: "stage", path: relative) { cwd in
-            try await FilesService.shared.stage(cwd: cwd, paths: [relative])
+    // MARK: - Per-path mutations
+
+    func stage(_ paths: [String]) {
+        guard let cwd = loadedCwd, !paths.isEmpty else { return }
+        runner.run(verb: "stage", key: paths.first ?? "", cwd: cwd) { _ in
+            try await FilesService.shared.stage(cwd: cwd, paths: paths)
         }
     }
 
-    /// Unstage one path. Symmetric with `stage`.
-    func unstage(relative: String) {
-        runMutation(verb: "unstage", path: relative) { cwd in
-            try await FilesService.shared.unstage(cwd: cwd, paths: [relative])
+    func unstage(_ paths: [String]) {
+        guard let cwd = loadedCwd, !paths.isEmpty else { return }
+        runner.run(verb: "unstage", key: paths.first ?? "", cwd: cwd) { _ in
+            try await FilesService.shared.unstage(cwd: cwd, paths: paths)
         }
     }
 
-    /// Discard one path. `mode: "staged"` is auto; `mode: "working"`
-    /// goes through the confirm gate (the user has to OK the sheet).
-    func discard(relative: String, mode: String) {
-        runMutation(verb: "discard", path: relative) { cwd in
+    func discard(_ paths: [String], mode: String) {
+        guard let cwd = loadedCwd, !paths.isEmpty else { return }
+        runner.run(verb: "discard", key: paths.first ?? "", cwd: cwd) { token in
             try await FilesService.shared.discard(
-                cwd: cwd,
-                paths: [relative],
-                mode: mode
+                cwd: cwd, paths: paths, mode: mode, confirmToken: token
             )
         }
     }
 
-    /// Commit the staged changes with the current `commitMessage`.
-    /// No-op when there are no staged files or the message is empty
-    /// — the button itself is disabled in those states; this is a
-    /// defensive double-check.
-    func commit() {
-        let trimmed = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !staged.isEmpty else { return }
-        runMutation(verb: "commit", path: "") { cwd in
-            try await FilesService.shared.commit(
-                cwd: cwd,
-                message: trimmed,
-                amend: false
-            )
-        } onSuccess: { [weak self] in
-            self?.commitMessage = ""
-        }
+    // MARK: - Bulk mutations
+
+    /// `.` is the repo-root pathspec. It is what `git add .` means and
+    /// it keeps the request one call instead of one per file — on the
+    /// 477-file tree in the reference screenshot, per-file staging
+    /// would be 477 round trips.
+    func stageAll() { stage(["."]) }
+    func unstageAll() { unstage(["."]) }
+
+    /// "Discard all changes" is two policy decisions, not one: tracked
+    /// files are restorable-ish (confirm warn), untracked ones are
+    /// deleted outright (confirm danger). Issue them as separate calls
+    /// so the user confirms the permanent half on its own terms.
+    func discardAllTracked() { discard(["."], mode: "working") }
+    func deleteAllUntracked() { discard(["."], mode: "untracked") }
+
+    // MARK: - Commit
+
+    private var trimmedMessage: String {
+        commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Remote ops (fetch / pull / push)
-
-    private(set) var remoteOp: String? = nil   // "fetch" | "pull" | "push" — drives header spinner
-    var remoteNote: String? = nil              // last success note ("To github.com/…")
-    var remoteError: String? = nil             // last remote failure message
-
-    func fetch() {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        runRemoteOp(verb: "fetch") {
-            try await FilesService.shared.fetch(cwd: cwd)
-        }
+    var canCommit: Bool {
+        !trimmedMessage.isEmpty && !staged.isEmpty && !runner.isRunning("commit")
     }
 
-    func pull(strategy: String = "ff-only", confirmToken: String? = nil) {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        runRemoteOp(verb: "pull") {
-            try await FilesService.shared.pull(cwd: cwd, strategy: strategy, confirmToken: confirmToken)
-        }
+    /// Amend is allowed with an empty box — git keeps the old message.
+    var canAmend: Bool {
+        !runner.isRunning("commit") && response?.enabled == true
     }
 
-    func push(confirmToken: String? = nil) {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        runRemoteOp(verb: "push") {
-            try await FilesService.shared.push(cwd: cwd, confirmToken: confirmToken)
-        }
-    }
-
-    private func runRemoteOp(
-        verb: String,
-        body: @escaping () async throws -> FilesService.GitRemoteOutcome
-    ) {
-        guard remoteOp == nil else { return }
-        remoteOp = verb
-        remoteNote = nil
-        remoteError = nil
-        Task { @MainActor in
-            defer { remoteOp = nil }
-            do {
-                let outcome = try await body()
-                switch outcome {
-                case .ok(let note):
-                    remoteNote = note
-                    if let cwd = loadedCwd { refresh(cwd: cwd, force: true) }
-                case .needsConfirm(let severity, let reason, let op):
-                    presentConfirm(
-                        verb: verb,
-                        severity: severity,
-                        reason: reason,
-                        op: op,
-                        retry: { [weak self] token in
-                            self?.runRemoteWithToken(verb: verb, token: token)
-                        }
-                    )
-                }
-            } catch {
-                remoteError = "\(verb) failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func runRemoteWithToken(verb: String, token: String) {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        Task { @MainActor in
-            do {
-                let outcome: FilesService.GitRemoteOutcome
-                switch verb {
-                case "pull":
-                    outcome = try await FilesService.shared.pull(
-                        cwd: cwd, strategy: "rebase", confirmToken: token
-                    )
-                case "push":
-                    outcome = try await FilesService.shared.push(cwd: cwd, confirmToken: token)
-                default:
-                    return
-                }
-                if case .ok(let note) = outcome {
-                    remoteNote = note
-                    refresh(cwd: cwd, force: true)
-                }
-            } catch {
-                remoteError = "\(verb) (confirmed) failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    func dismissRemoteError() { remoteError = nil }
-
-    /// Shared mutation runner. Tracks in-flight state, surfaces
-    /// confirm-class results into `pendingConfirm`, refreshes the
-    /// status feed on success, and writes errors into
-    /// `lastMutationError`. Each public method above wires its
-    /// closure + verb here so the bookkeeping stays in one place.
-    private func runMutation(
-        verb: String,
-        path: String,
-        body: @escaping (_ cwd: String) async throws -> FilesService.GitMutationOutcome,
-        onSuccess: (() -> Void)? = nil
-    ) {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        let opKey = "\(verb):\(path)"
-        if inFlightOps.contains(opKey) { return }
-        inFlightOps.insert(opKey)
-        lastMutationError = nil
-        Task { @MainActor in
-            defer { inFlightOps.remove(opKey) }
-            do {
-                let outcome = try await body(cwd)
-                switch outcome {
-                case .ok:
-                    onSuccess?()
-                    refresh(cwd: cwd, force: true)
-                case .needsConfirm(let severity, let reason, let op):
-                    presentConfirm(
-                        verb: verb,
-                        severity: severity,
-                        reason: reason,
-                        op: op,
-                        retry: { [weak self] token in
-                            self?.runMutationWithToken(
-                                verb: verb,
-                                path: path,
-                                token: token,
-                                body: body,
-                                onSuccess: onSuccess
-                            )
-                        }
-                    )
-                }
-            } catch {
-                lastMutationError = "\(verb) failed: \(error)"
-            }
-        }
-    }
-
-    /// Retry the same mutation with the X-Marvin-Confirmed token.
-    /// Called by the GitConfirmSheet's confirm handler after a
-    /// successful mint round-trip. We re-issue the original closure
-    /// — but FilesService's per-method API takes the token directly
-    /// (the closure form here doesn't), so each verb gets a small
-    /// re-issue here. Less elegant than a single dispatcher but
-    /// keeps each method's request shape explicit.
-    private func runMutationWithToken(
-        verb: String,
-        path: String,
-        token: String,
-        body: @escaping (_ cwd: String) async throws -> FilesService.GitMutationOutcome,
-        onSuccess: (() -> Void)?
-    ) {
-        guard let cwd = loadedCwd, !cwd.isEmpty else { return }
-        Task { @MainActor in
-            do {
-                let outcome: FilesService.GitMutationOutcome
-                switch verb {
-                case "discard":
-                    // Path-keyed retries — the closure already
-                    // captures `relative` for discard; the only
-                    // mutation that needs a token retry today is
-                    // discard with mode=working. Re-call with token.
-                    outcome = try await FilesService.shared.discard(
-                        cwd: cwd,
-                        paths: [path],
-                        mode: "working",
-                        confirmToken: token
-                    )
-                case "commit":
-                    let msg = commitMessage.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    )
-                    outcome = try await FilesService.shared.commit(
-                        cwd: cwd,
-                        message: msg,
-                        amend: false,
-                        confirmToken: token
-                    )
-                default:
-                    NSLog("[SourceControl] unexpected confirm retry verb=\(verb)")
-                    return
-                }
-                switch outcome {
-                case .ok:
-                    onSuccess?()
-                    refresh(cwd: cwd, force: true)
-                case .needsConfirm:
-                    // The token was supposed to satisfy the gate.
-                    // If we still get a needs-confirm, something
-                    // changed under us — surface the failure rather
-                    // than loop.
-                    lastMutationError =
-                        "\(verb) still needs confirmation after token mint"
-                }
-            } catch {
-                lastMutationError = "\(verb) (with token) failed: \(error)"
-            }
-        }
-    }
-
-    /// Mint a token from /api/git/confirm, then call `retry(token)`
-    /// once it lands. Errors surface inline via `lastMutationError`.
-    private func presentConfirm(
-        verb: String,
-        severity: String,
-        reason: String,
-        op: ChatJSON,
-        retry: @escaping (String) -> Void
-    ) {
+    func commit(amend: Bool = false, then followUp: FollowUp = .none) {
         guard let cwd = loadedCwd else { return }
-        // Pull a paths preview out of the op echo so the sheet can
-        // show what's about to happen. Safe-falls to empty list.
-        let pathsPreview: [String] = {
-            guard case let .object(dict) = op,
-                  let pathsField = dict["paths"],
-                  case let .array(items) = pathsField else { return [] }
-            return items.compactMap {
-                if case let .string(s) = $0 { return s } else { return nil }
-            }
-        }()
-        pendingConfirm = PendingGitConfirm(
-            actionVerb: verb.capitalized,
-            reason: reason,
-            severity: severity,
-            paths: pathsPreview,
-            confirm: { [weak self] in
-                guard let self else { return }
-                self.pendingConfirm = nil
-                Task { @MainActor in
-                    do {
-                        let minted = try await FilesService.shared
-                            .mintGitConfirmToken(cwd: cwd, op: op)
-                        retry(minted.token)
-                    } catch {
-                        self.lastMutationError =
-                            "Token mint failed: \(error)"
-                    }
-                }
+        let message = trimmedMessage
+        guard amend || (!message.isEmpty && !staged.isEmpty) else { return }
+        runner.run(
+            verb: "commit",
+            key: "",
+            cwd: cwd,
+            body: { token in
+                try await FilesService.shared.commit(
+                    cwd: cwd, message: message, amend: amend, confirmToken: token
+                )
             },
-            cancel: { [weak self] in
-                self?.pendingConfirm = nil
+            onSuccess: { [weak self] in
+                self?.commitMessage = ""
+                switch followUp {
+                case .none: break
+                case .push: self?.push()
+                case .sync: self?.sync()
+                }
             }
         )
     }
 
-    func dismissError() {
-        lastMutationError = nil
+    /// What runs after a successful commit, for the split-button
+    /// variants. Modelled as a value rather than three near-identical
+    /// commit methods.
+    enum FollowUp { case none, push, sync }
+
+    /// Stage everything, then commit. VS Code's "Commit All".
+    func stageAllAndCommit() {
+        guard let cwd = loadedCwd else { return }
+        let message = trimmedMessage
+        guard !message.isEmpty else { return }
+        runner.run(
+            verb: "stage",
+            key: ".",
+            cwd: cwd,
+            body: { _ in
+                try await FilesService.shared.stage(cwd: cwd, paths: ["."])
+            },
+            onSuccess: { [weak self] in self?.commit() }
+        )
+    }
+
+    // MARK: - Remote
+
+    func fetchRemote() {
+        guard let cwd = loadedCwd else { return }
+        runner.runRemote(verb: "fetch", cwd: cwd) { _ in
+            try await FilesService.shared.fetch(cwd: cwd)
+        }
+    }
+
+    func pull(strategy: String = "ff-only") {
+        guard let cwd = loadedCwd else { return }
+        runner.runRemote(verb: "pull", cwd: cwd) { token in
+            try await FilesService.shared.pull(
+                cwd: cwd, strategy: strategy, confirmToken: token
+            )
+        }
+    }
+
+    func push(forceWithLease: Bool = false) {
+        guard let cwd = loadedCwd else { return }
+        runner.runRemote(verb: "push", cwd: cwd) { token in
+            try await FilesService.shared.push(
+                cwd: cwd, forceWithLease: forceWithLease, confirmToken: token
+            )
+        }
+    }
+
+    /// `git push -u` — the only shape that works for a branch with no
+    /// upstream, which is why it is a separate menu entry.
+    func publish() {
+        guard let cwd = loadedCwd else { return }
+        runner.runRemote(verb: "publish", cwd: cwd) { token in
+            try await FilesService.shared.push(
+                cwd: cwd, setUpstream: true, confirmToken: token
+            )
+        }
+    }
+
+    /// Pull then push, IN ORDER and only if the pull succeeded.
+    /// Firing both concurrently would push a branch the pull was about
+    /// to rebase, which is the exact failure this button exists to
+    /// prevent — hence `runRemoteAwaiting` rather than two `runRemote`
+    /// calls.
+    func sync() {
+        guard let cwd = loadedCwd else { return }
+        Task { @MainActor in
+            let pulled = await runner.runRemoteAwaiting(verb: "pull", cwd: cwd) { token in
+                try await FilesService.shared.pull(
+                    cwd: cwd, strategy: "ff-only", confirmToken: token
+                )
+            }
+            guard pulled else { return }
+            _ = await runner.runRemoteAwaiting(verb: "push", cwd: cwd) { token in
+                try await FilesService.shared.push(cwd: cwd, confirmToken: token)
+            }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
+    // MARK: - Stash
+
+    func stashPush(includeUntracked: Bool) {
+        guard let cwd = loadedCwd else { return }
+        let message = trimmedMessage.isEmpty ? nil : trimmedMessage
+        runner.run(verb: "stash", key: "push", cwd: cwd) { token in
+            try await FilesService.shared.stash(
+                cwd: cwd,
+                action: "push",
+                message: message,
+                includeUntracked: includeUntracked,
+                confirmToken: token
+            )
+        }
+    }
+
+    func stashAction(_ action: String, index: Int?) {
+        guard let cwd = loadedCwd else { return }
+        runner.run(verb: "stash", key: action, cwd: cwd) { token in
+            try await FilesService.shared.stash(
+                cwd: cwd, action: action, index: index, confirmToken: token
+            )
+        }
+    }
+
+    // MARK: - Generated commit message
+
+    func generateCommitMessage(amend: Bool = false) {
+        guard let cwd = loadedCwd, !isGenerating else { return }
+        isGenerating = true
+        generateError = nil
+        Task { @MainActor in
+            defer { isGenerating = false }
+            do {
+                commitMessage = try await FilesService.shared
+                    .generateCommitMessage(cwd: cwd, amend: amend)
+            } catch let FilesServiceError.httpStatus(_, body)
+                where (body ?? "").contains("nothing-staged") {
+                generateError = "Nothing staged — stage something first."
+            } catch {
+                generateError = "Could not draft a message: \(error.localizedDescription)"
+            }
+        }
     }
 }
 
-/// Pending guarded mutation — drives the GitConfirmSheet. The
-/// closures bind to the model's retry/cancel paths so the sheet
-/// itself stays state-free.
-struct PendingGitConfirm: Identifiable {
-    let id = UUID()
-    let actionVerb: String
-    let reason: String
-    let severity: String
-    let paths: [String]
-    let confirm: () -> Void
-    let cancel: () -> Void
-}
+// MARK: - View
 
-/// SCM panel view. Layout:
-///
-///   ┌──────────────────────────────────┐
-///   │ projectName · branch ●           │
-///   │ ↑2 ↓0                            │
-///   ├──────────────────────────────────┤
-///   │ ▾ Conflicted (1)                 │
-///   │   ▫ packages/ui/foo.ts           │
-///   │ ▾ Staged (3)                     │
-///   │   ▫ M  sidecar/page.tsx         │
-///   │ ▾ Changes (5)                    │
-///   │   ▫ M  macos/...                 │
-///   │ ▾ Untracked (2)                  │
-///   │   ▫ ?  notes.txt                 │
-///   ├──────────────────────────────────┤
-///   │ ⚠ error banner (if any)          │
-///   └──────────────────────────────────┘
 struct SourceControlView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = SourceControlModel()
-    /// Phase 3f — diff-sheet model. Set via row tap; the .sheet
-    /// modifier presents it and clears via Binding when dismissed.
+    @State private var graphModel = GitGraphModel()
+
     @State private var diffSheet: DiffSheetModel? = nil
+    @State private var branchPickerOpen = false
+
+    /// Collapsed section ids. Sections default to open; storing the
+    /// closed ones means a newly-added section is visible by default.
+    @State private var collapsed: Set<String> = []
+    @State private var graphShown = true
+    /// Focus on the commit box. ⌘⏎ is scoped to it — see `primaryAction`.
+    @FocusState private var composerFocused: Bool
+    @State private var graphHeight: CGFloat = 240
+
+    private var cwd: String { bridge.projectWorkDir ?? "" }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            panelHeader
             MarvinDivider()
-            content
-            if let err = model.lastMutationError {
-                MarvinDivider()
-                mutationErrorBanner(err)
+            if graphShown, model.response?.enabled == true {
+                changesArea
+                graphSplitter
+                graphSection
+                    .frame(height: graphHeight)
+            } else {
+                changesArea
+                if model.response?.enabled == true {
+                    MarvinDivider()
+                    graphHeaderRow
+                }
             }
-            if let err = model.remoteError {
-                MarvinDivider()
-                remoteBanner(text: err, isError: true)
-            } else if let note = model.remoteNote, !note.isEmpty {
-                MarvinDivider()
-                remoteBanner(text: note, isError: false)
-            }
-            if let err = model.lastError {
-                MarvinDivider()
-                errorBanner(err)
-            }
-            if model.response?.enabled == true {
-                MarvinDivider()
-                commitArea
-            }
+            banners
         }
         .frame(minWidth: 200)
+        .background(MarvinTheme.background)
         .preferredColorScheme(bridge.preferredColorScheme)
-        .onAppear { syncFetchFromBridge() }
-        .onChange(of: bridge.projectWorkDir) { _, _ in
-            syncFetchFromBridge()
-        }
-        .onChange(of: model.remoteError) { _, err in
-            if err != nil {
-                // Auto-dismiss after 6 s so the banner doesn't stick forever.
-                Task { try? await Task.sleep(nanoseconds: 6_000_000_000); model.dismissRemoteError() }
-            }
-        }
-        // Refresh whenever the bridge reports a turn finished —
-        // tool-driven file mutations land in working-tree status the
-        // moment the assistant message that performed them returns.
-        // Phase 1d.20's `busy-changed` flips false on idle; we re-
-        // fetch then. The web side does the same via `fsRefreshTick`.
+        .onAppear { syncFromBridge() }
+        .onChange(of: bridge.projectWorkDir) { _, _ in syncFromBridge() }
         .onChange(of: bridge.isBusy) { wasBusy, isBusy in
-            if wasBusy, !isBusy, let cwd = bridge.projectWorkDir {
+            // A finished turn is the moment tool-driven file writes
+            // become visible to `git status`.
+            if wasBusy, !isBusy, !cwd.isEmpty {
                 model.refresh(cwd: cwd, force: true)
+                graphModel.refresh(cwd: cwd, force: true)
             }
         }
-        // Phase 3f — present the diff sheet when a row is tapped.
-        // Bound via a custom Binding so dismissal (Esc / Done /
-        // backdrop click) clears the model. .sheet(item:) requires
-        // an Identifiable item but DiffSheetModel is a class; wrap
-        // in a thin id'd container instead.
         .sheet(item: Binding(
             get: { diffSheet.map(DiffSheetItem.init) },
-            set: { newValue in if newValue == nil { diffSheet = nil } }
+            set: { if $0 == nil { diffSheet = nil } }
         )) { item in
             DiffSheet(model: item.model, onDismiss: { diffSheet = nil })
         }
-        // Phase 3g — guarded-mutation confirm sheet. Driven by
-        // model.pendingConfirm; the user's response (confirm /
-        // cancel) is carried via the closures stored on the
-        // PendingGitConfirm value.
-        .sheet(item: Bindable(model).pendingConfirm) { pending in
+        .sheet(item: Bindable(model.runner).pendingConfirm) { pending in
             GitConfirmSheet(
                 actionVerb: pending.actionVerb,
                 reason: pending.reason,
@@ -540,116 +432,131 @@ struct SourceControlView: View {
                 onCancel: pending.cancel
             )
         }
+        .sheet(isPresented: $branchPickerOpen) {
+            GitRefPickerSheet(cwd: cwd) {
+                model.refresh(cwd: cwd, force: true)
+                graphModel.refresh(cwd: cwd, force: true)
+            }
+        }
     }
 
-    private func syncFetchFromBridge() {
-        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else {
+    private func syncFromBridge() {
+        guard !cwd.isEmpty else {
             model.clear()
+            graphModel.clear()
             return
         }
         model.refresh(cwd: cwd)
+        graphModel.refresh(cwd: cwd)
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(bridge.projectName ?? "no project active")
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                if model.isLoading || model.remoteOp != nil {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                // Fetch
-                Button {
-                    model.fetch()
-                } label: {
-                    Image(systemName: "arrow.down.to.line")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
-                .help("Fetch from origin")
-                // Pull
-                Button {
-                    model.pull()
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
-                .help("Pull (fast-forward only)")
-                // Push
-                Button {
-                    model.push()
-                } label: {
-                    Image(systemName: "arrow.up.circle")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(bridge.projectWorkDir == nil || model.remoteOp != nil)
-                .help("Push to origin")
-                // Refresh
-                Button {
-                    if let cwd = bridge.projectWorkDir {
-                        model.refresh(cwd: cwd, force: true)
-                    }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(bridge.projectWorkDir == nil)
-                .help("Refresh git status")
+    // MARK: - Panel header
+
+    private var panelHeader: some View {
+        HStack(spacing: 6) {
+            Text("Source Control")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MarvinTheme.textMuted)
+                .textCase(.uppercase)
+            Spacer()
+            if model.isLoading || model.runner.isBusy {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
             }
-            branchLine
+            overflowMenu
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .frame(height: MarvinTheme.paneHeaderHeight)
     }
 
-    @ViewBuilder
-    private var branchLine: some View {
-        if let branch = model.response?.branch {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.branch")
-                    .foregroundStyle(.secondary)
-                    .imageScale(.small)
-                Text(branch.name ?? "(detached)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if let upstream = branch.upstream, !upstream.isEmpty {
-                    Text("→ \(upstream)")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+    /// The `…` menu. This is where every git command that does not
+    /// earn a toolbar slot lives — the reference does the same, and it
+    /// is the difference between "the panel can commit" and "the panel
+    /// is a source control client".
+    private var overflowMenu: some View {
+        Menu {
+            Section("Changes") {
+                Button("Stage All Changes") { model.stageAll() }
+                    .disabled(model.changes.isEmpty)
+                Button("Unstage All Changes") { model.unstageAll() }
+                    .disabled(model.staged.isEmpty)
+                Button("Discard All Changes…", role: .destructive) {
+                    model.discardAllTracked()
                 }
-                Spacer()
-                if let ahead = branch.ahead, ahead > 0 {
-                    Label("\(ahead)", systemImage: "arrow.up")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.green)
-                        .labelStyle(.titleAndIcon)
+                .disabled(model.changes.isEmpty)
+                Button("Delete All Untracked Files…", role: .destructive) {
+                    model.deleteAllUntracked()
                 }
-                if let behind = branch.behind, behind > 0 {
-                    Label("\(behind)", systemImage: "arrow.down")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.orange)
-                        .labelStyle(.titleAndIcon)
+                .disabled(!model.changes.contains { $0.entryType == "untracked" })
+            }
+            Section("Commit") {
+                Button("Commit") { model.commit() }.disabled(!model.canCommit)
+                Button("Commit (Amend)") { model.commit(amend: true) }
+                    .disabled(!model.canAmend)
+                Button("Stage All & Commit") { model.stageAllAndCommit() }
+                    .disabled(model.commitMessage.trimmingCharacters(
+                        in: .whitespacesAndNewlines).isEmpty)
+            }
+            Section("Pull, Push") {
+                Button("Sync") { model.sync() }.disabled(!model.hasUpstream)
+                Button("Fetch") { model.fetchRemote() }
+                Button("Pull") { model.pull() }
+                Button("Pull (Rebase)") { model.pull(strategy: "rebase") }
+                Button("Push") { model.push() }
+                Button("Publish Branch") { model.publish() }
+                    .disabled(model.hasUpstream)
+                Button("Push (Force with Lease)…", role: .destructive) {
+                    model.push(forceWithLease: true)
                 }
             }
-        } else {
-            Text(" ").font(.caption.monospaced())
+            Section("Branch") {
+                Button("Checkout to…") { branchPickerOpen = true }
+                Button("Create Branch…") { branchPickerOpen = true }
+            }
+            Section("Stash") {
+                Button("Stash Changes") { model.stashPush(includeUntracked: false) }
+                    .disabled(model.isClean)
+                Button("Stash Changes (Include Untracked)") {
+                    model.stashPush(includeUntracked: true)
+                }
+                .disabled(model.isClean)
+                Button("Pop Latest Stash") { model.stashAction("pop", index: nil) }
+                    .disabled(model.stashes.isEmpty)
+                Button("Apply Latest Stash") { model.stashAction("apply", index: nil) }
+                    .disabled(model.stashes.isEmpty)
+                Button("Drop Latest Stash…", role: .destructive) {
+                    model.stashAction("drop", index: nil)
+                }
+                .disabled(model.stashes.isEmpty)
+            }
+            Section("View") {
+                Button(graphShown ? "Hide Graph" : "Show Graph") {
+                    graphShown.toggle()
+                    if graphShown, !cwd.isEmpty {
+                        graphModel.refresh(cwd: cwd, force: true)
+                    }
+                }
+                Button("Refresh") {
+                    guard !cwd.isEmpty else { return }
+                    model.refresh(cwd: cwd, force: true)
+                    graphModel.refresh(cwd: cwd, force: true)
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11))
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 18)
+        .disabled(cwd.isEmpty)
+        .help("More source control actions")
     }
 
+    // MARK: - Changes area
+
     @ViewBuilder
-    private var content: some View {
-        if bridge.projectWorkDir == nil {
+    private var changesArea: some View {
+        if cwd.isEmpty {
             placeholder("(no project active)")
         } else if let response = model.response {
             if response.enabled == false {
@@ -658,18 +565,18 @@ struct SourceControlView: View {
                     : "(git unavailable)")
             } else if let error = response.error, !error.isEmpty {
                 placeholder("git error: \(error)")
-            } else if isClean {
-                placeholder("(working tree clean)")
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        section("Conflicted", files: model.conflicted)
-                        section("Staged", files: model.staged)
-                        section("Changes", files: model.changes)
-                        section("Untracked", files: model.untracked)
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        repoGroup
+                        ForEach(otherRepos) { repo in
+                            otherRepoRow(repo)
+                        }
+                        if !model.stashes.isEmpty { stashSection }
                     }
-                    .padding(.vertical, 6)
+                    .padding(.bottom, 8)
                 }
+                .frame(maxHeight: .infinity)
             }
         } else if model.isLoading {
             placeholder("Loading…")
@@ -678,183 +585,589 @@ struct SourceControlView: View {
         }
     }
 
-    private var isClean: Bool {
-        model.conflicted.isEmpty
-            && model.staged.isEmpty
-            && model.changes.isEmpty
-            && model.untracked.isEmpty
+    /// Every worktree except the one the user has open. These are read
+    /// -only rows: switching MARVIN's active project is the way in.
+    private var otherRepos: [GitRepoEntry] {
+        model.repos.filter { !$0.isCurrent }
     }
 
-    @ViewBuilder
-    private func section(_ label: String, files: [GitStatusFile]) -> some View {
-        if !files.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(label) (\(files.count))")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                ForEach(files, id: \.path) { file in
-                    SourceControlRow(
-                        file: file,
-                        cwd: bridge.projectWorkDir ?? "",
-                        section: label,
-                        isInFlight: rowIsInFlight(file),
-                        onTap: { openDiff(for: file) },
-                        onStage: { mutate(.stage, file) },
-                        onUnstage: { mutate(.unstage, file) },
-                        onDiscard: { mutate(.discard, file) }
-                    )
-                    .padding(.horizontal, 8)
-                }
+    private var repoGroup: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            repoHeaderRow
+            composer
+            if !model.conflicted.isEmpty {
+                section("Merge Changes", id: "conflicted", files: model.conflicted)
+            }
+            if !model.staged.isEmpty {
+                section("Staged Changes", id: "staged", files: model.staged)
+            }
+            if !model.changes.isEmpty {
+                section("Changes", id: "changes", files: model.changes)
+            }
+            if model.isClean {
+                Text("No changes")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
             }
         }
     }
 
-    /// Phase 3g — true when any mutation is currently in flight
-    /// against this row. Drives the per-row spinner state.
-    private func rowIsInFlight(_ file: GitStatusFile) -> Bool {
-        let relative = repoRelative(file.path)
-        for verb in ["stage", "unstage", "discard"] {
-            if model.inFlightOps.contains("\(verb):\(relative)") { return true }
+    /// Repo name + branch chip + the four inline actions the reference
+    /// puts on this row (sync, commit, refresh, more).
+    private var repoHeaderRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(bridge.projectName ?? "repository")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MarvinTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            branchChip
+            Spacer(minLength: 4)
+            iconButton("arrow.triangle.2.circlepath", help: syncHelp) { model.sync() }
+                .disabled(!model.hasUpstream || model.runner.isBusy)
+            iconButton("checkmark", help: "Commit staged changes") { model.commit() }
+                .disabled(!model.canCommit)
+            iconButton("arrow.clockwise", help: "Refresh") {
+                model.refresh(cwd: cwd, force: true)
+                graphModel.refresh(cwd: cwd, force: true)
+            }
         }
-        return false
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
-    /// Available row actions. Routed through one helper so the row
-    /// view doesn't have to plumb three closures separately.
-    private enum RowAction { case stage, unstage, discard }
-
-    private func mutate(_ action: RowAction, _ file: GitStatusFile) {
-        let relative = repoRelative(file.path)
-        switch action {
-        case .stage:
-            model.stage(relative: relative)
-        case .unstage:
-            model.unstage(relative: relative)
-        case .discard:
-            // Section determines mode: staged-only changes get
-            // mode=staged (auto, just unstages); everything else
-            // (working-tree changes, untracked) goes mode=working
-            // (confirm-class).
-            let mode = (file.workingStatus == "." && file.indexStatus != "."
-                ? "staged" : "working")
-            model.discard(relative: relative, mode: mode)
-        }
+    private var syncHelp: String {
+        guard model.hasUpstream else { return "No upstream — publish the branch first" }
+        if !model.isDiverged { return "Sync — up to date with \(model.branch?.upstream ?? "upstream")" }
+        return "Sync — pull \(model.behind) and push \(model.ahead)"
     }
 
-    /// Strip the cwd prefix to produce a repo-relative path. Same
-    /// helper SourceControlRow uses internally; kept here so the
-    /// View → Model boundary speaks repo-relative paths.
-    private func repoRelative(_ path: String) -> String {
-        let cwd = bridge.projectWorkDir ?? ""
-        let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
-        if path.hasPrefix(root) {
-            return String(path.dropFirst(root.count))
+    /// The branch name, clickable. This is the affordance that was
+    /// missing entirely: the routes behind it shipped with ADR-0012 and
+    /// nothing in the app called them.
+    private var branchChip: some View {
+        Button {
+            branchPickerOpen = true
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 9))
+                Text(model.branchName)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if model.ahead > 0 || model.behind > 0 {
+                    Text(divergenceLabel)
+                        .font(.system(size: 9).monospaced())
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(MarvinTheme.elevated))
         }
-        return path
+        .buttonStyle(.plain)
+        .frame(maxWidth: 160)
+        .help("Checkout, create or delete a branch")
     }
 
-    /// Phase 3g — commit area pinned at the bottom. Two-line text
-    /// editor + Commit button. Disabled when there's nothing staged
-    /// (the button label flips to "(no staged changes)" so users
-    /// know why) or the message is whitespace-only.
-    private var commitArea: some View {
+    private var divergenceLabel: String {
+        var parts: [String] = []
+        if model.behind > 0 { parts.append("\(model.behind)↓") }
+        if model.ahead > 0 { parts.append("\(model.ahead)↑") }
+        return parts.joined(separator: " ")
+    }
+
+    private func iconButton(
+        _ symbol: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+    }
+
+    // MARK: - Composer
+
+    private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextEditor(text: Bindable(model).commitMessage)
-                .font(.body)
-                .frame(minHeight: 56, maxHeight: 96)
-                .padding(6)
+            ZStack(alignment: .topTrailing) {
+                TextField(
+                    composerPlaceholder,
+                    text: Bindable(model).commitMessage,
+                    axis: .vertical
+                )
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .lineLimit(1...6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .padding(.trailing, 74)
+                .focused($composerFocused)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(MarvinTheme.elevated)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(MarvinTheme.border, lineWidth: 1)
                         )
                 )
-                .overlay(alignment: .topLeading) {
-                    if model.commitMessage.isEmpty {
-                        Text("Commit message")
-                            .font(.body)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 12)
-                            .allowsHitTesting(false)
+                .onSubmit { if model.canCommit { model.commit() } }
+
+                generateButton
+                    .padding(.top, 4)
+                    .padding(.trailing, 4)
+            }
+            primaryAction
+            if let err = model.generateError {
+                Text(err)
+                    .font(.system(size: 10))
+                    .foregroundStyle(GitDecorationColor.modified)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+
+    /// The reference's placeholder names the branch, which is the one
+    /// piece of context that stops a commit landing somewhere you did
+    /// not mean.
+    private var composerPlaceholder: String {
+        "Message (⌘⏎ to commit on \"\(model.branchName)\")"
+    }
+
+    private var generateButton: some View {
+        Button {
+            model.generateCommitMessage()
+        } label: {
+            HStack(spacing: 3) {
+                if model.isGenerating {
+                    ProgressView().controlSize(.small).scaleEffect(0.55)
+                } else {
+                    Image(systemName: "sparkles").font(.system(size: 9))
+                }
+                Text("Generate").font(.system(size: 10, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.accentColor.opacity(model.isGenerating ? 0.10 : 0.18))
+            )
+            .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isGenerating || model.staged.isEmpty)
+        .help(model.staged.isEmpty
+            ? "Stage something to draft a message from"
+            : "Draft a commit message from the staged diff")
+    }
+
+    /// One primary button whose identity depends on state — Commit
+    /// when there is something to commit, Sync when there is not and
+    /// the branch has diverged. Two buttons with one perpetually
+    /// disabled is what the reference avoids.
+    @ViewBuilder
+    private var primaryAction: some View {
+        if model.staged.isEmpty && model.isDiverged {
+            Button {
+                model.sync()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10))
+                    Text("Sync Changes \(divergenceLabel)")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.runner.isBusy)
+        } else if !model.hasUpstream && model.isClean {
+            Button {
+                model.publish()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.to.line")
+                        .font(.system(size: 10))
+                    Text("Publish Branch")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.runner.isBusy)
+        } else {
+            HStack(spacing: 1) {
+                Button {
+                    model.commit()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark").font(.system(size: 10))
+                        Text(commitLabel).font(.system(size: 12, weight: .medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                }
+                .buttonStyle(.borderedProminent)
+                // ⌘⏎ only while the message box has focus, which is what the
+                // placeholder promises and what VS Code does. Declared
+                // unconditionally it is a GLOBAL key equivalent for as long
+                // as this pane is the visible one — so ⌘⏎ aimed at the chat
+                // composer (or at AskQuestionSheet's "Send choice", which
+                // also owns ⌘⏎) could commit instead. A shortcut that fires
+                // from the wrong surface is worse than no shortcut.
+                .modifier(CommitReturnShortcut(enabled: composerFocused))
+                .disabled(!model.canCommit)
+
+                Menu {
+                    Button("Commit & Push") { model.commit(then: .push) }
+                        .disabled(!model.canCommit)
+                    Button("Commit & Sync") { model.commit(then: .sync) }
+                        .disabled(!model.canCommit || !model.hasUpstream)
+                    Divider()
+                    Button("Stage All & Commit") { model.stageAllAndCommit() }
+                    Button("Commit (Amend)") { model.commit(amend: true) }
+                        .disabled(!model.canAmend)
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 9))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 22)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.accentColor.opacity(0.85))
+                )
+                .foregroundStyle(.white)
+                .help("Commit variants")
+            }
+        }
+    }
+
+    private var commitLabel: String {
+        if model.runner.isRunning("commit") { return "Committing…" }
+        if model.staged.isEmpty { return "Commit" }
+        return "Commit \(model.staged.count)"
+    }
+
+    // MARK: - Sections + rows
+
+    @ViewBuilder
+    private func section(_ label: String, id: String, files: [GitStatusFile]) -> some View {
+        let isCollapsed = collapsed.contains(id)
+        Button {
+            if isCollapsed { collapsed.remove(id) } else { collapsed.insert(id) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Spacer()
+                sectionActions(id: id, files: files)
+                Text("\(files.count)")
+                    .font(.system(size: 9.5, weight: .semibold).monospaced())
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(MarvinTheme.elevated))
+                    .foregroundStyle(MarvinTheme.textMuted)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+
+        if !isCollapsed {
+            ForEach(files, id: \.path) { file in
+                SourceControlRow(
+                    file: file,
+                    cwd: cwd,
+                    section: id,
+                    isInFlight: rowIsInFlight(file),
+                    onTap: { openDiff(for: file) },
+                    onStage: { model.stage([repoRelative(file.path)]) },
+                    onUnstage: { model.unstage([repoRelative(file.path)]) },
+                    onDiscard: { discardRow(file) },
+                    onReveal: { reveal(file) }
+                )
+            }
+        }
+    }
+
+    /// Bulk actions on the section header, hover-revealed the way the
+    /// reference does it.
+    @ViewBuilder
+    private func sectionActions(id: String, files: [GitStatusFile]) -> some View {
+        if id == "staged" {
+            iconButton("minus", help: "Unstage all") { model.unstageAll() }
+        } else if id == "changes" {
+            iconButton("arrow.uturn.backward", help: "Discard all changes") {
+                model.discardAllTracked()
+            }
+            iconButton("plus", help: "Stage all changes") { model.stageAll() }
+        }
+    }
+
+    private var stashSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                Text("Stashes")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Spacer()
+                Text("\(model.stashes.count)")
+                    .font(.system(size: 9.5, weight: .semibold).monospaced())
+                    .foregroundStyle(MarvinTheme.textMuted)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+
+            ForEach(model.stashes) { entry in
+                HStack(spacing: 6) {
+                    Text(entry.message)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(MarvinTheme.textPrimary)
+                    Spacer(minLength: 4)
+                    Text(entry.relativeDate)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .contextMenu {
+                    Button("Pop") { model.stashAction("pop", index: entry.index) }
+                    Button("Apply") { model.stashAction("apply", index: entry.index) }
+                    Divider()
+                    Button("Drop…", role: .destructive) {
+                        model.stashAction("drop", index: entry.index)
                     }
                 }
-            HStack {
-                Text(commitFooterLabel)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Button("Commit") { model.commit() }
-                    .keyboardShortcut(.return, modifiers: [.command])
-                    .disabled(!commitEnabled)
-                    .help("Commit staged changes. ⌘⏎")
             }
         }
-        .padding(10)
     }
 
-    private var commitEnabled: Bool {
-        let trimmed = model.commitMessage.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        return !trimmed.isEmpty
-            && !model.staged.isEmpty
-            && !model.inFlightOps.contains("commit:")
-    }
-
-    private var commitFooterLabel: String {
-        if model.inFlightOps.contains("commit:") {
-            return "committing…"
-        }
-        if model.staged.isEmpty {
-            return "no staged changes"
-        }
-        return "\(model.staged.count) staged"
-    }
-
-    private func mutationErrorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.octagon.fill")
-                .foregroundStyle(.red)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Mutation failed")
-                    .font(.caption.weight(.semibold))
-                Text(message)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+    /// A linked worktree. Read-only here — the row exists so a
+    /// checkout MARVIN created for an implementer subagent (ADR-0081)
+    /// is visible rather than silently absent.
+    private func otherRepoRow(_ repo: GitRepoEntry) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "square.split.2x1")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            Text(repo.name)
+                .font(.system(size: 11))
+                .foregroundStyle(MarvinTheme.textMuted)
+                .lineLimit(1)
+            Text(repo.detached ? "(detached)" : (repo.branch ?? "?"))
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            if repo.dirtyCount > 0 {
+                Text("\(repo.dirtyCount)")
+                    .font(.system(size: 9.5, weight: .semibold).monospaced())
+                    .padding(.horizontal, 5)
+                    .background(Capsule().fill(MarvinTheme.elevated))
+                    .foregroundStyle(GitDecorationColor.modified)
             }
-            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .help("Linked worktree at \(repo.path)")
+        .contextMenu {
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(repo.path, forType: .string)
+            }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(
+                    nil, inFileViewerRootedAtPath: repo.path
+                )
+            }
+        }
+    }
+
+    // MARK: - Graph
+
+    /// Drag handle between the changes list and the graph. Plain
+    /// gesture rather than a real split view: the panel is already
+    /// inside one, and nesting NSSplitViews is what produced the
+    /// divider crashes recorded in SplitDividerTheme.swift.
+    private var graphSplitter: some View {
+        MarvinDivider()
+            .frame(height: 5)
+            .background(MarvinTheme.background)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        graphHeight = min(max(graphHeight - value.translation.height, 90), 600)
+                    }
+            )
+    }
+
+    private var graphSection: some View {
+        VStack(spacing: 0) {
+            graphHeaderRow
+            MarvinDivider()
+            GitGraphView(cwd: cwd, model: graphModel)
+        }
+    }
+
+    private var graphHeaderRow: some View {
+        HStack(spacing: 6) {
             Button {
-                model.dismissError()
+                graphShown.toggle()
+                if graphShown, !cwd.isEmpty {
+                    graphModel.refresh(cwd: cwd, force: true)
+                }
             } label: {
-                Image(systemName: "xmark")
+                HStack(spacing: 4) {
+                    Image(systemName: graphShown ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                    Text("Graph")
+                        .font(.system(size: 11, weight: .semibold))
+                        .textCase(.uppercase)
+                }
+                .foregroundStyle(MarvinTheme.textMuted)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
+            Spacer()
+            iconButton("arrow.down.to.line", help: "Fetch from origin") {
+                model.fetchRemote()
+            }
+            iconButton("arrow.down.circle", help: "Pull (fast-forward only)") {
+                model.pull()
+            }
+            iconButton("arrow.up.circle", help: "Push to origin") { model.push() }
+            iconButton("arrow.clockwise", help: "Refresh graph") {
+                graphModel.refresh(cwd: cwd, force: true)
+            }
         }
-        .padding(10)
-        .background(Color.red.opacity(0.08))
+        .padding(.horizontal, 10)
+        .frame(height: 26)
+        .background(MarvinTheme.background)
     }
 
-    /// Phase 3f — open a diff sheet for one SCM row. The repo-
-    /// relative path is computed inside the row helper; the route's
-    /// isSafePathspec gate rejects absolute paths so we MUST strip
-    /// the cwd prefix here. `initialMode` picks Staged for staged-
-    /// only changes, Working for everything else.
-    private func openDiff(for file: GitStatusFile) {
-        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+    // MARK: - Banners
+
+    @ViewBuilder
+    private var banners: some View {
+        if let err = model.runner.lastError {
+            MarvinDivider()
+            banner(err, isError: true) { model.runner.dismissError() }
+        } else if let note = model.runner.lastNote, !note.isEmpty {
+            MarvinDivider()
+            banner(note, isError: false) { model.runner.dismissNote() }
+        }
+        if let err = model.lastError {
+            MarvinDivider()
+            banner("Status fetch error: \(err)", isError: true) {}
+        }
+    }
+
+    private func banner(
+        _ message: String,
+        isError: Bool,
+        dismiss: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isError
+                ? "exclamationmark.triangle.fill"
+                : "checkmark.circle.fill")
+                .foregroundStyle(isError
+                    ? GitDecorationColor.deleted : GitDecorationColor.added)
+            Text(message)
+                .font(.system(size: 10).monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(4)
+            Spacer()
+            Button { dismiss() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(
+            (isError ? GitDecorationColor.deleted : GitDecorationColor.added)
+                .opacity(0.08)
+        )
+    }
+
+    // MARK: - Helpers
+
+    private func rowIsInFlight(_ file: GitStatusFile) -> Bool {
+        let relative = repoRelative(file.path)
+        return ["stage", "unstage", "discard"].contains {
+            model.runner.isRunning("\($0):\(relative)")
+        }
+    }
+
+    /// Untracked rows are a `git clean`, not a `git restore` — the two
+    /// carry different policy severities for a reason.
+    private func discardRow(_ file: GitStatusFile) {
+        let relative = repoRelative(file.path)
+        if file.entryType == "untracked" {
+            model.discard([relative], mode: "untracked")
+        } else if file.workingStatus == "." && file.indexStatus != "." {
+            model.discard([relative], mode: "staged")
+        } else {
+            model.discard([relative], mode: "working")
+        }
+    }
+
+    private func repoRelative(_ path: String) -> String {
         let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
-        let relative = file.path.hasPrefix(root)
-            ? String(file.path.dropFirst(root.count))
-            : file.path
+        return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
+    }
+
+    private func openDiff(for file: GitStatusFile) {
+        guard !cwd.isEmpty else { return }
         let initial = DiffMode(rawValue: DiffSheet.initialMode(for: file)) ?? .working
         diffSheet = DiffSheetModel(
             cwd: cwd,
-            relativePath: relative,
+            relativePath: repoRelative(file.path),
             initialMode: initial
+        )
+    }
+
+    private func reveal(_ file: GitStatusFile) {
+        NSWorkspace.shared.selectFile(
+            file.path, inFileViewerRootedAtPath: cwd
         )
     }
 
@@ -862,62 +1175,33 @@ struct SourceControlView: View {
         VStack {
             Spacer()
             Text(text)
-                .font(.body.monospaced())
+                .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
         }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func remoteBanner(text: String, isError: Bool) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isError
-                ? "exclamationmark.triangle.fill"
-                : "checkmark.circle.fill")
-                .foregroundStyle(isError ? Color.orange : Color.green)
-            Text(text)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .lineLimit(4)
-            Spacer()
-            Button {
-                model.remoteNote = nil
-                model.dismissRemoteError()
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(10)
-        .background((isError ? Color.orange : Color.green).opacity(0.08))
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Status fetch error")
-                    .font(.caption.weight(.semibold))
-                Text(message)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(Color.orange.opacity(0.08))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// Identifiable wrapper for the diff-sheet model. SwiftUI's
-/// .sheet(item:) needs the item to be Identifiable; the model
-/// itself is a @MainActor class so we can't read its fields from
-/// the nonisolated `id` accessor. Capture the (cwd, path) at
-/// construction — those are immutable on the model anyway, and
-/// they're enough to identify a sheet for re-mount avoidance.
+/// Applies ⌘⏎ only while `enabled`. SwiftUI has no conditional
+/// `.keyboardShortcut`, and passing `nil` is not available on the
+/// deployment target, so the branch is on the view itself.
+private struct CommitReturnShortcut: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.keyboardShortcut(.return, modifiers: [.command])
+        } else {
+            content
+        }
+    }
+}
+
+/// Identifiable wrapper for the diff-sheet model — `.sheet(item:)`
+/// needs Identifiable and `DiffSheetModel` is a `@MainActor` class, so
+/// the id is captured from its immutable fields at construction.
 struct DiffSheetItem: Identifiable {
     let model: DiffSheetModel
     let id: String
@@ -928,158 +1212,165 @@ struct DiffSheetItem: Identifiable {
     }
 }
 
-/// One row in the SCM list. Phase 3f wires the row tap to open
-/// DiffSheet. Phase 3g adds per-row stage / unstage / discard
-/// actions — Stage on Changes/Untracked rows, Unstage on Staged
-/// rows, Discard on every row via context menu.
+/// One file row: `icon · filename · dimmed directory · [hover actions] ·
+/// status letter`. This is the reference's layout, and it is a
+/// different reading order from the porcelain two-column badge the
+/// panel used to lead with — the filename is what you scan for, so it
+/// goes first and the status code goes last.
 private struct SourceControlRow: View {
     let file: GitStatusFile
-    /// Active project's working directory. We strip it from the
-    /// per-file absolute path to produce a repo-relative label —
-    /// matches what the web SCM panel shows.
     let cwd: String
-    /// Section label this row belongs to ("Staged", "Changes",
-    /// "Untracked", "Conflicted") — drives which inline action
-    /// button shows up. Conflicted rows show no stage/unstage
-    /// affordance because the file needs resolving first.
+    /// Section id — decides which inline action is offered.
     let section: String
-    /// True while a mutation is in flight against this row. The
-    /// row dims its inline action button and shows a spinner.
     let isInFlight: Bool
     let onTap: () -> Void
     let onStage: () -> Void
     let onUnstage: () -> Void
     let onDiscard: () -> Void
+    let onReveal: () -> Void
 
     @State private var hovering = false
 
+    private static let rowHeight: CGFloat = 22
+
     var body: some View {
-        HStack(spacing: 8) {
-            Text(statusBadge)
-                .font(.system(size: 11, weight: .semibold).monospaced())
-                .foregroundStyle(badgeColor)
-                .frame(width: 26, alignment: .leading)
-            Text(displayPath)
-                .font(.system(size: 12).monospaced())
+        HStack(spacing: 6) {
+            icon
+            Text(fileName)
+                .font(.system(size: 12))
+                .foregroundStyle(nameColor)
                 .lineLimit(1)
-                .truncationMode(.middle)
-            if file.entryType == "rename-copy", let from = file.renamedFrom {
-                Text("← \(displayRelative(from))")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                .strikethrough(badge == .deleted, color: nameColor)
+            Text(directory)
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.head)
+            Spacer(minLength: 4)
+            if isInFlight {
+                ProgressView().controlSize(.small).scaleEffect(0.6)
+            } else if hovering {
+                hoverActions
             }
-            Spacer(minLength: 0)
-            actionButton
+            Text(badge.label)
+                .font(.system(size: 11, weight: .semibold).monospaced())
+                .foregroundStyle(badge.colour)
+                .frame(width: 12)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(hovering ? Color.accentColor.opacity(0.06) : .clear)
-        )
+        .padding(.horizontal, 12)
+        .frame(height: Self.rowHeight)
+        .background(hovering ? MarvinTheme.rowHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
-        .contextMenu {
-            // Phase 3g — context menu surfaces all three actions
-            // for both discoverability and keyboard-light flow.
-            // Stage / Unstage land contextually in their own sections
-            // already, but having them in the menu means a user who
-            // missed the inline button doesn't have to scrub for it.
-            if section != "Conflicted" {
-                if section == "Staged" {
-                    Button("Unstage", action: onUnstage)
-                } else {
-                    Button("Stage", action: onStage)
-                }
-                Divider()
-            }
-            Button("View diff…", action: onTap)
-            Divider()
-            // Discard is destructive — labelled clearly and
-            // separated from the auto-class actions above. The
-            // confirm sheet (for working-tree mode) re-emphasises
-            // the consequence.
-            Button(role: .destructive,
-                   action: onDiscard) {
-                Text(section == "Untracked" ? "Delete file…" : "Discard changes…")
-            }
-        }
+        .help(relativePath)
+        .contextMenu { menu }
         .accessibilityIdentifier("scm-row:\(file.path)")
     }
 
-    /// Inline action button — visible when the row is hovered, or
-    /// always when an op is in flight. Stage/Unstage are the
-    /// affordances; discard stays in the context menu only because
-    /// it's destructive and warrants a deliberate two-step.
+    /// Actions in the reference's order: open diff, discard, then
+    /// stage/unstage closest to the status letter.
+    private var hoverActions: some View {
+        HStack(spacing: 2) {
+            rowIcon("arrow.left.arrow.right", help: "Open changes", action: onTap)
+            if section != "conflicted" {
+                rowIcon(
+                    "arrow.uturn.backward",
+                    help: file.entryType == "untracked"
+                        ? "Delete file" : "Discard changes",
+                    action: onDiscard
+                )
+                if section == "staged" {
+                    rowIcon("minus", help: "Unstage", action: onUnstage)
+                } else {
+                    rowIcon("plus", help: "Stage", action: onStage)
+                }
+            }
+        }
+    }
+
+    private func rowIcon(
+        _ symbol: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 9))
+                .frame(width: 15, height: 15)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+    }
+
     @ViewBuilder
-    private var actionButton: some View {
-        if isInFlight {
-            ProgressView().controlSize(.small)
-        } else if section == "Conflicted" {
-            // Conflicted rows surface no inline action — resolve
-            // first, then stage. The diff sheet still opens via
-            // tap so the user can see what's in conflict.
-            EmptyView()
-        } else if section == "Staged" {
-            Button {
-                onUnstage()
-            } label: {
-                Image(systemName: "minus")
-                    .imageScale(.small)
+    private var menu: some View {
+        Button("Open Changes", action: onTap)
+        Button("Reveal in Finder", action: onReveal)
+        Divider()
+        if section != "conflicted" {
+            if section == "staged" {
+                Button("Unstage", action: onUnstage)
+            } else {
+                Button("Stage", action: onStage)
             }
-            .buttonStyle(.borderless)
-            .opacity(hovering ? 1 : 0.35)
-            .help("Unstage")
+        }
+        Button("Copy Path") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(relativePath, forType: .string)
+        }
+        Divider()
+        Button(role: .destructive, action: onDiscard) {
+            Text(file.entryType == "untracked"
+                ? "Delete File…" : "Discard Changes…")
+        }
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if let glyph = SymbolsIcon.image(
+            forPath: file.path, isDirectory: false, size: 15
+        ) {
+            Image(nsImage: glyph).frame(width: 16)
         } else {
-            Button {
-                onStage()
-            } label: {
-                Image(systemName: "plus")
-                    .imageScale(.small)
-            }
-            .buttonStyle(.borderless)
-            .opacity(hovering ? 1 : 0.35)
-            .help("Stage")
+            Image(systemName: "doc")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
         }
     }
 
-    /// Two-letter status display: index + working columns. Matches
-    /// `git status -s` output. "??" for untracked, "UU" for both-
-    /// modified merge conflict, "M " for staged-only, " M" for
-    /// unstaged-only modification. Spaces are visible.
-    private var statusBadge: String {
-        if file.entryType == "untracked" { return "??" }
-        return "\(file.indexStatus)\(file.workingStatus)"
+    /// Deleted files read as gone; everything else takes its status
+    /// colour on the NAME, which is the reference's decoration target.
+    private var nameColor: Color {
+        badge == .deleted ? .secondary : badge.colour
     }
 
-    /// Colour per status — green for staged, orange for working-
-    /// tree, red for conflicts, gray for untracked. The web side
-    /// uses the same palette so users switching between surfaces
-    /// don't have to remap.
-    private var badgeColor: Color {
-        switch file.entryType {
-        case "unmerged": return .red
-        case "untracked": return .secondary
-        default: break
-        }
-        if file.indexStatus != "." { return .green }
-        return .orange
+    private var badge: GitStatusBadge {
+        if file.entryType == "untracked" { return .untracked }
+        if file.entryType == "unmerged" { return .conflicted }
+        // A row lives in exactly one section, so read the column that
+        // section cares about — otherwise a file that is staged-modified
+        // AND working-deleted renders the same letter twice.
+        let code = section == "staged" ? file.indexStatus : file.workingStatus
+        return GitStatusBadge.category(forCode: code)
     }
 
-    private var displayPath: String {
-        displayRelative(file.path)
-    }
-
-    /// Trim the repo root from an absolute path; falls through to
-    /// the basename if cwd doesn't prefix-match (rare; defensive).
-    private func displayRelative(_ path: String) -> String {
+    private var relativePath: String {
         let root = cwd.hasSuffix("/") ? cwd : cwd + "/"
-        if path.hasPrefix(root) {
-            return String(path.dropFirst(root.count))
-        }
-        return path
+        return file.path.hasPrefix(root)
+            ? String(file.path.dropFirst(root.count))
+            : file.path
+    }
+
+    private var fileName: String {
+        (relativePath as NSString).lastPathComponent
+    }
+
+    private var directory: String {
+        let dir = (relativePath as NSString).deletingLastPathComponent
+        return dir.isEmpty ? "" : dir
     }
 }

@@ -8,6 +8,139 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.89: three surfaces that existed and could not be reached.**
+
+  Reported over one session as *"we are missing a lot of features in source
+  control"*, *"if I click the repo/branch name I get create/switch branches —
+  Marvin doesn't do anything"*, *"diagnostics doesn't seem to be doing
+  anything"* and *"many of them have missing functionalities or they are just
+  plain not working"*. Four reports, one shape: the feature was built, and the
+  path to it was not.
+
+  **Source control: a backend with no caller.** `/api/git/branch` (list),
+  `/branch/create`, `/branch/switch` and `/branch/delete` shipped with
+  ADR-0012 M2. `rg` across `macos/` found **zero** Swift callers. The branch
+  name rendered as a `Text` in both the SCM panel and the status bar, so
+  clicking it did nothing — the feature was complete, tested, documented as
+  shipped, and unreachable from the running app. Worth naming as a class: a
+  route with no caller is indistinguishable from a working feature in every
+  artefact except the app.
+
+  Also corrected in the same pass: `docs/roadmap.md` claimed a "third pass"
+  that had rebuilt the SCM panel to the VS Code shape, with a `Graph` section
+  backed by a new `GitHistoryService.repoHistory`. `git log` on
+  `SourceControlView.swift` showed its last touch was a six-line divider swap;
+  `rg repoHistory` returned nothing. The entry stayed as written — it is the
+  history — with the correction beside it.
+
+  What landed: a searchable ref picker (create / create-from /
+  checkout-detached, per-branch ahead-behind and an `author · sha · subject`
+  line, sorted by recency) reachable from both surfaces; the panel rebuilt to
+  the reference shape (composer on top, AI `Generate`, one primary button
+  that is Commit / Sync `10↓ 5↑` / Publish Branch by state, collapsible
+  sections, stash and linked-worktree groups); and a real commit **DAG** with
+  lane assignment and merge curves, checked against 300 commits of this
+  repo's own history (12 merges, max lane 8).
+
+  New backend: `/api/git/graph`, `/api/git/stash`, `/api/git/repos`,
+  `/api/git/commit-message`; `discard` gained `mode:"untracked"`
+  (`git clean -f -d`), `branch/switch` gained `detach`, `push` gained
+  `setUpstream`. ADR-0012 amended — stash and the graph view move off its
+  "out of scope entirely (v2+)" list; hunk staging and rebase/merge UI stay
+  off it.
+
+  **Two silent failures the smoke tests caught**, both HTTP 200 and wrong
+  underneath. `parseGitOp` in `/api/git/confirm` deliberately re-parses the op
+  rather than trusting the client's JSON — that is what stops
+  mint-for-harmless / replay-with-dangerous. The cost is that a field missing
+  there silently *declassifies* the op: `detach` was absent, so
+  `branch-switch --detach` re-classified as a plain switch, the mint answered
+  `policy-auto`, and the confirm round trip could never complete. And git's
+  format placeholders are per-command dialects — `for-each-ref` reads `%00` as
+  a NUL byte, `--pretty=format:` does not and emits the literal text — so
+  `stash list` returned entries whose every field parsed as an empty string.
+
+  **Diagnostics: searching one directory.** `detectAndRun` checked the repo
+  root only, for `tsconfig.json` / `Package.swift` / `.eslintrc*`. On a
+  monorepo with TypeScript at `apps/web/` (flat `eslint.config.js`, the ESLint
+  9 default, absent from the legacy name list) and Java at `apps/api/`, it
+  matched nothing, ran nothing, and returned `[]` — which rendered as the same
+  clean checkmark a genuinely clean project gets. Discovery is now a bounded
+  ignore-aware BFS across eight toolchains with project-local wrappers
+  (`./mvnw`, `./gradlew`) preferred, fast tools automatic and minute-scale
+  builds on demand, and **three distinct empty states**. Collapsing those
+  three into one checkmark is what let this hide.
+
+  `Shell.run` also slept until its deadline and only then drained the pipes,
+  so any tool emitting more than the 64 KB pipe buffer deadlocked writing into
+  a pipe nobody was reading and got killed with truncated output. It would
+  have bitten the moment discovery started working.
+
+  **Then the real answer: language servers ([ADR-0099](../decisions/0099-lsp-client-for-live-diagnostics.md)).**
+  A CLI runner reads from DISK, so the panel can describe a file the user has
+  already fixed — worse than stale, a wrong list that looks authoritative.
+  Added a real LSP client: a pure `Content-Length` framing codec in
+  `MARVINLogic` (9 tests — a framing bug desynchronises the stream
+  permanently and silently, and the recovery test caught a real one where
+  skipping a malformed header also swallowed the valid message behind it,
+  because "nothing yet" and "I skipped something" both returned `nil` and the
+  caller's `while let` could not tell them apart), full-text document sync,
+  the server→client requests a client MUST answer or a conforming server just
+  stalls, a three-strike crash budget, and missing servers surfaced AS
+  diagnostics rather than as silence. CLI and LSP findings are held
+  separately on the bridge and merged on read, so a slow `tsc` finishing
+  cannot erase what a server published two seconds ago.
+
+  Verified against a real `sourcekit-lsp`: after a `didChange` on an
+  **unsaved** buffer it published `error 1:15 — Cannot convert value of type
+  'String' to specified type 'Int'` while the file on disk still said
+  `let ok: Int = 1`. That is precisely what a CLI runner cannot do.
+
+  **Menus: eleven app surfaces in Window, and two double-bound keys.**
+  `CommandGroup(after: .windowList)` is the only built-in slot SwiftUI offers
+  without declaring a menu, so everything had accumulated there. A static
+  scan found ⌘G bound to Find Next **and** the graph pane, and ⇧⌘B to Run
+  Build Task **and** Backlog — SwiftUI silently keeps one. Four more keys had
+  2–4 competing declarations of the same action. Separately, four menu items
+  reading "Toggle …" called `selectBottomTab`, which hardcodes `isOpen: true`:
+  they could only ever open. The app's own `BottomPanel.swift` documents
+  `activating` as "what a toolbar button or ⌘-shortcut does"; the toolbar used
+  it, the menu did not.
+
+  Commands are now **values** in `CommandRegistry`, and the menus, a new
+  ⇧⌘P **Command Palette** and the ⌘/ help sheet are three renderings of that
+  one array — which made the audit mechanical and immediately surfaced two
+  further collisions. The help sheet is now derived rather than
+  hand-maintained; the old one listed five WebView-era bindings removed months
+  earlier, ⌘K as the project picker (it clears the terminal), ⌘J as "Terminal"
+  (it toggles the panel), and ⌘G twice with two meanings.
+
+  **One bug only a screenshot could find:** `CommandMenu("View")` always
+  creates a NEW top-level menu, and macOS auto-creates View for any app with a
+  sidebar — so the menu bar read `File Edit View View Go Run Window Help`.
+  `CommandGroup(after: .sidebar)` puts items in the system one.
+
+  Also: editor tab **‹ › scroll buttons** (user: *"I can scroll with my side
+  mouse scroll but we need buttons, not everybody has a mouse with side
+  scroller"*), selecting a file now scrolls its tab into view, Go to Symbol
+  and the Problems rows now jump to the **line** instead of opening at line 1,
+  line-level editor commands (move / copy / duplicate line, toggle comment —
+  pure, 14 tests, one of which caught a real last-line bug on files ending in
+  a newline), diagnostic squiggles in the editor, and Go to Definition over
+  LSP.
+
+  Full parity matrix against Antigravity's nine menus, with what each
+  remaining gap needs, at
+  [`docs/reference/ide-parity.md`](../reference/ide-parity.md). The honest
+  summary: the Run menu is empty and needs a DAP client; multi-cursor and
+  split editors are the next self-contained tranche.
+
+  Verified: `swift build` clean, 528 test assertions (61 sidecar), sidecar
+  `tsc` + biome clean on every touched file, every new read route smoke-tested
+  against real repos, destructive git ops exercised against a throwaway repo
+  and never against `~/marvin`, installed and relaunched with 1 constraint
+  storm and 0 fatals.
+
 
 - **2026-08-31 — v0.1.88: a zero-width button was burning a core.**
 

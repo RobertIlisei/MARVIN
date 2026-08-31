@@ -83,6 +83,9 @@ final class BranchService {
             struct Wire: Codable {
                 let isGit: Bool
                 let branch: String?
+                let upstream: String?
+                let ahead: Int?
+                let behind: Int?
                 let status: [String: String]?
             }
             let w = try JSONDecoder().decode(Wire.self, from: data)
@@ -96,10 +99,16 @@ final class BranchService {
                 // truth instead of an Optional the renderer would
                 // have to guard.
                 b.dirtyStatus = w.status ?? [:]
+                b.branchUpstream = w.upstream.flatMap { $0.isEmpty ? nil : $0 }
+                b.branchAhead = w.ahead ?? 0
+                b.branchBehind = w.behind ?? 0
             } else {
                 b.branch = nil
                 b.branchDirtyCount = 0
                 b.dirtyStatus = [:]
+                b.branchUpstream = nil
+                b.branchAhead = 0
+                b.branchBehind = 0
             }
             consecutiveFailures = 0
         } catch {
@@ -108,6 +117,9 @@ final class BranchService {
                 MarvinBridge.shared.branch = nil
                 MarvinBridge.shared.branchDirtyCount = 0
                 MarvinBridge.shared.dirtyStatus = [:]
+                MarvinBridge.shared.branchUpstream = nil
+                MarvinBridge.shared.branchAhead = 0
+                MarvinBridge.shared.branchBehind = 0
                 NSLog("[BranchService] 3 consecutive failures, cleared branch: \(error)")
             }
         }

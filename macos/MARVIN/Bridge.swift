@@ -121,6 +121,14 @@ final class MarvinBridge {
     var branch: String? = nil
     var branchDirtyCount: Int = 0
 
+    /// Upstream tracking state for the current branch, polled by
+    /// BranchService alongside the dirty count. Drives the status
+    /// bar's sync control — without ahead/behind it can only offer
+    /// "sync" as a verb, never as a count.
+    var branchUpstream: String? = nil
+    var branchAhead: Int = 0
+    var branchBehind: Int = 0
+
     /// User-selected executor + advisor model names, posted by the
     /// web side via `models-changed`. `nil` means "use sidecar
     /// default" (the user hasn't picked one yet). Phase 1d.15 —
@@ -293,6 +301,27 @@ final class MarvinBridge {
     /// M7 — command string to inject into the terminal pane.
     private(set) var pendingTerminalCommand: String? = nil
 
+    /// ⇧⌘P — the command palette (ADR-0099's sibling: one registry, two
+    /// renderings). Same one-shot counter pattern as the other triggers.
+    private(set) var commandPaletteTriggerCount: Int = 0
+    /// ^G — go to line/column.
+    private(set) var goToLineTriggerCount: Int = 0
+    /// ⌘O routed through the bridge so the palette and the menu share one path.
+    private(set) var openProjectTriggerCount: Int = 0
+    /// Which left-pane tab a command asked for. The pane observes this and
+    /// switches; nil means "no request outstanding".
+    var requestedLeftTab: String? = nil
+
+    func triggerCommandPalette() { commandPaletteTriggerCount &+= 1 }
+    func triggerGoToLine()       { goToLineTriggerCount       &+= 1 }
+    func triggerOpenProject()    { openProjectTriggerCount    &+= 1 }
+    func revealLeftTab(_ tab: String) {
+        // Revealing a tab in a collapsed pane must also open the pane, or
+        // the command silently switches a tab nobody can see.
+        if panes.files == false { NativePrefs.shared.togglePane("files") }
+        requestedLeftTab = tab
+    }
+
     func triggerShortcutsHelp()  { shortcutsTriggerCount   &+= 1 }
     func triggerQuickOpen()      { quickOpenTriggerCount    &+= 1 }
     func triggerSessionAudit()   { sessionAuditTriggerCount &+= 1 }
@@ -342,13 +371,48 @@ final class MarvinBridge {
     var errorCount: Int = 0
     var warningCount: Int = 0
 
-    /// M8: structured diagnostic items for the Problems panel.
-    var diagnosticItems: [DiagnosticItem] = []
+    /// The Problems panel's list — the MERGE of two independent producers,
+    /// held separately so neither can clobber the other (ADR-0099).
+    ///
+    /// A CLI run sees the whole project including files nobody opened; a
+    /// language server sees the open buffer, live and range-accurate. They
+    /// answer different questions and arrive on completely different
+    /// schedules, so one flat array written by both would mean whichever
+    /// finished last erased the other's findings.
+    private(set) var diagnosticItems: [DiagnosticItem] = []
+    private var cliDiagnostics: [DiagnosticItem] = []
+    /// Keyed by absolute file path, because that is the unit a language
+    /// server republishes: every `publishDiagnostics` REPLACES the list for
+    /// one file, and an empty list means "this file is clean now".
+    private var lspDiagnostics: [String: [DiagnosticItem]] = [:]
 
     func applyDiagnostics(_ items: [DiagnosticItem]) {
-        diagnosticItems = items
-        errorCount   = items.filter { $0.severity == .error }.count
-        warningCount = items.filter { $0.severity == .warning }.count
+        cliDiagnostics = items
+        recomputeDiagnostics()
+    }
+
+    /// One file's diagnostics from one language server. An empty `items`
+    /// clears that file — which is how a server says "you fixed it".
+    func applyLSPDiagnostics(file: String, items: [DiagnosticItem]) {
+        if items.isEmpty { lspDiagnostics.removeValue(forKey: file) }
+        else { lspDiagnostics[file] = items }
+        recomputeDiagnostics()
+    }
+
+    /// Drop everything a server had published — on shutdown, crash, or
+    /// project switch. Leaving them up would attribute a dead server's
+    /// stale opinion to the current project.
+    func clearLSPDiagnostics() {
+        guard !lspDiagnostics.isEmpty else { return }
+        lspDiagnostics.removeAll()
+        recomputeDiagnostics()
+    }
+
+    private func recomputeDiagnostics() {
+        let merged = cliDiagnostics + lspDiagnostics.values.flatMap { $0 }
+        diagnosticItems = DiagnosticsService.dedupeAndSort(merged)
+        errorCount   = diagnosticItems.filter { $0.severity == .error }.count
+        warningCount = diagnosticItems.filter { $0.severity == .warning }.count
     }
 
     /// ADR-0021 M2 — apply a full project-list load from ProjectsService.
@@ -465,6 +529,59 @@ final class MarvinBridge {
         if !openFiles.contains(path) {
             openFiles.append(path)
         }
+        recordNavigation(to: path)
+        selectedFilePath = path
+        persistFileState()
+    }
+
+    // MARK: - Editor navigation history (Go ▸ Back / Forward)
+
+    /// Visited files, oldest first, with `navIndex` pointing at the current
+    /// one. A browser-style stack: going Back then opening something NEW
+    /// truncates the forward half, because the branch you abandoned is not
+    /// somewhere "forward" any more.
+    private var navHistory: [String] = []
+    private var navIndex: Int = -1
+    /// Set while Back/Forward is driving, so the resulting `setSelectedFile`
+    /// does not push the destination onto the stack it came from — that is
+    /// the classic infinite-history bug.
+    private var isNavigating = false
+
+    var canNavigateBack: Bool { navIndex > 0 }
+    var canNavigateForward: Bool { navIndex >= 0 && navIndex < navHistory.count - 1 }
+
+    private func recordNavigation(to path: String) {
+        guard !isNavigating else { return }
+        if navIndex >= 0, navIndex < navHistory.count, navHistory[navIndex] == path {
+            return          // re-selecting the current file is not a move
+        }
+        if navIndex < navHistory.count - 1 {
+            navHistory.removeSubrange((navIndex + 1)...)
+        }
+        navHistory.append(path)
+        // Bounded: an all-day session must not accumulate an unbounded list.
+        if navHistory.count > 100 { navHistory.removeFirst(navHistory.count - 100) }
+        navIndex = navHistory.count - 1
+    }
+
+    func navigateBack() {
+        guard canNavigateBack else { return }
+        navIndex -= 1
+        jumpToHistoryEntry()
+    }
+
+    func navigateForward() {
+        guard canNavigateForward else { return }
+        navIndex += 1
+        jumpToHistoryEntry()
+    }
+
+    private func jumpToHistoryEntry() {
+        guard navHistory.indices.contains(navIndex) else { return }
+        isNavigating = true
+        defer { isNavigating = false }
+        let path = navHistory[navIndex]
+        if !openFiles.contains(path) { openFiles.append(path) }
         selectedFilePath = path
         persistFileState()
     }

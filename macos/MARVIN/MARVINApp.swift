@@ -119,6 +119,78 @@ private func openTerminalAt(workDir: String?) {
 /// Open an NSOpenPanel so the user can pick a folder to add as a project.
 /// Replaces the WebView's `open-project-picker` dispatch (ADR-0021 M5).
 @MainActor
+/// Renders every registry command filed under `slot` as menu items,
+/// deriving each key equivalent from the registry's own shortcut string so
+/// the menu and the palette can never disagree about a binding.
+@ViewBuilder
+func registryItems(_ slot: CommandMenuSlot) -> some View {
+    ForEach(CommandRegistry.commands(in: slot)) { cmd in
+        RegistryMenuItem(command: cmd)
+    }
+}
+
+/// One menu item. Split out because `.keyboardShortcut` takes a
+/// non-optional `KeyEquivalent`, so a command with no shortcut needs a
+/// different view — not a `nil` argument.
+struct RegistryMenuItem: View {
+    let command: AppCommand
+
+    var body: some View {
+        let button = Button(command.title) { command.run() }
+            .disabled(!command.isEnabled())
+        if let parsed = MenuShortcut.parse(command.shortcut) {
+            button.keyboardShortcut(parsed.key, modifiers: parsed.modifiers)
+        } else {
+            button
+        }
+    }
+}
+
+/// Turns `"⇧⌘P"` back into `(KeyEquivalent, EventModifiers)`.
+///
+/// The registry stores the display form because that is what a user reads;
+/// parsing it here means there is exactly ONE place a shortcut is written
+/// down. Storing both a display string and a separate binding is how the
+/// help sheet drifted three entries out of date.
+enum MenuShortcut {
+    static func parse(_ display: String?) -> (key: KeyEquivalent, modifiers: EventModifiers)? {
+        guard var s = display, !s.isEmpty else { return nil }
+        var mods: EventModifiers = []
+        let map: [(Character, EventModifiers)] = [
+            ("^", .control), ("⌥", .option), ("⇧", .shift), ("⌘", .command),
+        ]
+        var changed = true
+        while changed {
+            changed = false
+            for (symbol, mod) in map where s.first == symbol {
+                mods.insert(mod)
+                s.removeFirst()
+                changed = true
+            }
+        }
+        // Arrow keys are not characters. Without these, "⌥↑" fell through
+        // to `Character("↑")`, which macOS never matches — the menu item
+        // showed a shortcut that could not fire.
+        switch s {
+        case "↑": return (.upArrow, mods)
+        case "↓": return (.downArrow, mods)
+        case "←": return (.leftArrow, mods)
+        case "→": return (.rightArrow, mods)
+        case "⏎": return (.return, mods)
+        default: break
+        }
+        guard let first = s.first else { return nil }
+        // Function keys are spelled out, not single characters.
+        if s.hasPrefix("F"), let n = Int(s.dropFirst()), (1...12).contains(n) {
+            // SwiftUI has no `KeyEquivalent` for F-keys; those items stay
+            // menu-clickable and palette-runnable without a key equivalent
+            // rather than silently binding the letter "F".
+            return nil
+        }
+        return (KeyEquivalent(Character(first.lowercased())), mods)
+    }
+}
+
 func openProjectWithPanel() {
     let panel = NSOpenPanel()
     panel.title = "Open Project Folder"
@@ -484,18 +556,6 @@ struct MARVINApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
 
-            // Backlog panel (⌘⇧B). The tray chip is gated on there being open
-            // items, so an empty backlog left the panel — and the groomer's
-            // Review button inside it — completely unreachable. Same
-            // notification pattern as New Session: the menu can't touch the
-            // view's @State directly.
-            CommandGroup(after: .sidebar) {
-                Divider()
-                Button("Backlog") {
-                    NotificationCenter.default.post(name: .marvinRequestBacklogPanel, object: nil)
-                }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
-            }
 
             // Phase 1d.23 — File menu items that act on the active
             // project's workDir. Both depend on the bridge —
@@ -543,112 +603,71 @@ struct MARVINApp: App {
             // them discoverable for users who don't know the web
             // hotkey set yet. .windowList is the conventional slot
             // for "show me UI surfaces" actions.
+            // ── View menu ────────────────────────────────────────────
+            //
+            // These items used to live in **Window**, under
+            // `CommandGroup(after: .windowList)`, because that is the only
+            // built-in slot SwiftUI offers without declaring a menu of your
+            // own. But "show me the file tree / the terminal / the problems
+            // list" is not a window operation, and every editor the user
+            // compares us to — VS Code, Cursor, Antigravity, Xcode — files
+            // them under **View**. Window was carrying Minimize and Zoom
+            // alongside nine app surfaces, which is what made it unreadable.
+            //
+            // `CommandMenu` inserts before Window, which is where View
+            // belongs in the macOS menu order.
+            // ── The menu bar, rendered FROM the command registry ───────
+            //
+            // `CommandRegistry.all` is the single declaration of every
+            // command; the menus and the ⇧⌘P palette are two renderings of
+            // it. Before this, each command was a `Button` inline here, so
+            // it was reachable only by knowing which menu it lived under —
+            // and two keys ended up double-bound (⌘G, ⇧⌘B) with nothing to
+            // catch it.
+            //
+            // Key equivalents still live on the menu item, because that is
+            // what macOS dispatches; the registry's `shortcut` string is
+            // the label the palette and the help sheet show. `RegistryMenu`
+            // derives the binding FROM that string, so the two cannot drift.
+            // `CommandGroup(after: .sidebar)`, NOT `CommandMenu("View")`.
+            //
+            // macOS creates a View menu on its own for any app with a
+            // toolbar/sidebar, and `CommandMenu` always makes a NEW
+            // top-level menu — so declaring one produced a menu bar reading
+            // "File Edit View View Go Run Window Help", with the items split
+            // across two identically-named menus. Caught in one screenshot;
+            // no amount of code reading would have shown it. `.sidebar` is
+            // the placement that lands INSIDE the system View menu.
+            CommandGroup(after: .sidebar) {
+                Divider()
+                registryItems(.view)
+            }
+
+            CommandMenu("Go") {
+                registryItems(.go)
+            }
+
+            CommandMenu("Run") {
+                registryItems(.run)
+                Divider()
+                registryItems(.terminal)
+            }
+
+            // ── Window ──────────────────────────────────────────────────
+            //
+            // What is left is genuinely window- or app-scoped. Everything
+            // else moved to View / Go / Run, where the reference — and
+            // every other editor — files it.
             CommandGroup(after: .windowList) {
                 Divider()
-                Button("Toggle Theme") {
-                    let next = NativePrefs.shared.themeName == "dark" ? "light" : "dark"
-                    NativePrefs.shared.setTheme(next)
-                }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-
-                Button("Keyboard Shortcuts…") {
-                    // Phase 5d — fire native shortcuts sheet via the
-                    // bridge's one-shot trigger. ContentView observes
-                    // and flips its local sheet state. The web peer
-                    // is no longer needed because the swift shell
-                    // owns its own keymap surface.
-                    MarvinBridge.shared.triggerShortcutsHelp()
-                }
-                .keyboardShortcut("/", modifiers: [.command])
-
-                Button("Quick Open File…") {
-                    MarvinBridge.shared.triggerQuickOpen()
-                }
-                .keyboardShortcut("p", modifiers: [.command])
-                .disabled(!health.state.isOnline)
-
-                Button("Go to Symbol…") {
-                    MarvinBridge.shared.triggerSymbolSearch()
-                }
-                .keyboardShortcut("t", modifiers: [.command])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                Button("Run Build Task…") {
-                    MarvinBridge.shared.triggerBuildTask()
-                }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                // ADR-0059 — read-only session audit. The scope-met chip is
-                // the primary affordance (audit at the moment of the claim);
-                // this is the always-available one for mid-session "this feels
-                // like it's drifting" checks.
-                Button("Audit Session…") {
-                    MarvinBridge.shared.triggerSessionAudit()
-                }
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                Divider()
-
-                // Pane toggles. The TopBarPopover already advertises
-                // these as the canonical kbd hints (⌘B / ⌘G / ⌘J / ⌘⇧P);
-                // the bindings here are what makes those hints real.
-                // NativePrefs.togglePane writes the new state through
-                // both UserDefaults and bridge.panes so every reader
-                // (ContentView, TopBarPopover, the persisted prefs) sees
-                // the same value.
-                Button("Check for Updates…") {
-                    Task { await UpdateService.shared.check(userInitiated: true) }
-                }
-
-                Divider()
-
-                Button("Toggle File Tree") {
-                    NativePrefs.shared.togglePane("files")
-                }
-                .keyboardShortcut("b", modifiers: [.command])
-
-                Button("Toggle Knowledge Graph") {
-                    NativePrefs.shared.selectBottomTab(.graph)
-                }
-                .keyboardShortcut("g", modifiers: [.command])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                // Plan §D — ⌘J is now the PANEL toggle (VS Code), keeping
-                // whichever tab is selected; the tabs get their own keys.
-                Button("Toggle Bottom Panel") {
-                    NativePrefs.shared.toggleBottomPanel()
-                }
-                .keyboardShortcut("j", modifiers: [.command])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                Button("Terminal") {
-                    NativePrefs.shared.selectBottomTab(.terminal)
-                }
-                .keyboardShortcut("`", modifiers: [.control])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                Button("Problems") {
-                    NativePrefs.shared.selectBottomTab(.problems)
-                }
-                .keyboardShortcut("m", modifiers: [.command, .shift])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                Button("Toggle Browser Preview") {
-                    NativePrefs.shared.selectBottomTab(.preview)
-                }
-                .keyboardShortcut("p", modifiers: [.command, .shift])
-                .disabled(MarvinBridge.shared.projectWorkDir == nil)
-
-                // Phase 2g.3 retired the standalone "Native Chat
-                // (preview)" window. Phase 3d retired the standalone
-                // "Native Files (preview)" window. Phase 4g retired
-                // the standalone "Brain (preview)" window. Phase 5c
-                // retired the "File Viewer (preview)" window — the
-                // native viewer now overlays the middle pane inline.
-                // All four surfaces live inline as panes (or sub-
-                // panes / overlays) of the main window's HSplitView.
+                registryItems(.help)
             }
+
+            // ── Navigate menu ───────────────────────────────────────────
+            //
+            // The "take me somewhere / run something" family. VS Code files
+            // the first two under Go and the rest under Terminal; one menu
+            // is enough at this size.
 
             // Help menu — quick links out to the project. macOS
             // already auto-creates a Help menu with a search field

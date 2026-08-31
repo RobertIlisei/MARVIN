@@ -216,6 +216,13 @@ final class FileViewerModel {
                     isSaving: false,
                     error: nil
                 )
+                // Hand the buffer to a language server (ADR-0099). The
+                // server, not the disk, is what makes diagnostics live —
+                // and it needs the text we just read, not the file, so a
+                // reload has to re-announce it.
+                if !res.binary {
+                    LSPService.shared.didOpen(path: path, text: body)
+                }
             } catch {
                 if Task.isCancelled { return }
                 self.buffers[path] = Buffer(
@@ -243,6 +250,10 @@ final class FileViewerModel {
         // to recover, and stale errors muddle the next save attempt.
         buffer.error = nil
         buffers[path] = buffer
+        // The whole point of a language server: diagnostics for the text
+        // in front of you, not the text on disk. Debounced in the service
+        // — a keystroke is not a document version worth a round trip.
+        LSPService.shared.didChange(path: path, text: content)
     }
 
     /// Save outcome surfaced to the view layer so it can show a
@@ -377,6 +388,9 @@ struct FileViewerNSView: NSViewRepresentable {
     /// effect of the render rather than state mutated during one.
     var targetLine: Int? = nil
     var onTargetConsumed: () -> Void = {}
+    /// Diagnostics for THIS file, drawn as squiggles under the offending
+    /// line. Passed as a value so a change re-runs `applyHighlights`.
+    var diagnostics: [DiagnosticItem] = []
     /// Push edits back into the model. Closure (instead of an
     /// @Binding) so the wrapper stays a simple value type and the
     /// model gets the updates synchronously on the main thread.
@@ -463,8 +477,17 @@ struct FileViewerNSView: NSViewRepresentable {
 
         let pathChanged = context.coordinator.lastPath != path
         let contentDiffers = textView.string != content
+        // Diagnostics are a highlight input too: a language server can
+        // publish while the content and the path are both unchanged, and
+        // without this the squiggle would not appear until the next
+        // keystroke. Compared by a cheap fingerprint rather than by the
+        // array, which re-allocates on every publish.
+        let diagnosticsFingerprint = diagnostics
+            .map { "\($0.line):\($0.severity.rawValue)" }
+            .joined(separator: ",")
         let highlightInputsChanged = context.coordinator.lastExtension != fileExtension
             || context.coordinator.lastIsDark != isDark
+            || context.coordinator.lastDiagnostics != diagnosticsFingerprint
 
         // Editable flag tracks the buffer's canEdit. STTextView reads
         // this on every event hop; cheap to set unconditionally.
@@ -491,6 +514,7 @@ struct FileViewerNSView: NSViewRepresentable {
             context.coordinator.lastExtension = fileExtension
             context.coordinator.lastIsDark = isDark
             context.coordinator.lastPath = path
+            context.coordinator.lastDiagnostics = diagnosticsFingerprint
         }
 
         // Chat-link jump. Deferred until content is present: the first render
@@ -529,6 +553,9 @@ struct FileViewerNSView: NSViewRepresentable {
         var onContentChange: (String, String) -> Void = { _, _ in }
         var onSelectionChange: (Int, Int, Int) -> Void = { _, _, _ in }
         var lastExtension: String = ""
+        /// Fingerprint of the diagnostics last drawn, so a publish that
+        /// changes nothing does not force a full re-highlight.
+        var lastDiagnostics: String = ""
         var lastIsDark: Bool = false
         var lastPath: String = ""
         /// True for the immediate next change — set when WE
@@ -676,6 +703,65 @@ struct FileViewerNSView: NSViewRepresentable {
             )
         }
         applyColorSwatches(to: textView, fullLength: fullRange.length)
+        applySquiggles(to: textView, fullLength: fullRange.length)
+    }
+
+    /// Red/amber squiggles under the diagnostic's line.
+    ///
+    /// Underlining the LINE, not a sub-range: the CLI runners give one
+    /// point (`file:line:col`) and no end, so any range past the column
+    /// would be invented. A language server does send a real range — when
+    /// the LSP consumers land, this is where a precise range would go, and
+    /// underlining the whole line remains the honest fallback for the
+    /// runner-produced half of the list.
+    ///
+    /// Leading whitespace is skipped so the squiggle sits under the code
+    /// rather than trailing off into the indent.
+    private func applySquiggles(to textView: STTextView, fullLength: Int) {
+        guard !diagnostics.isEmpty, fullLength > 0 else { return }
+        let ns = content as NSString
+        for item in diagnostics where item.line > 0 {
+            guard let range = Self.lineRange(item.line, in: ns) else { continue }
+            let trimmed = Self.trimmingIndent(range, in: ns)
+            guard trimmed.length > 0,
+                  trimmed.location + trimmed.length <= fullLength else { continue }
+            let colour: NSColor = item.severity == .error
+                ? NSColor(red: 0.85, green: 0.33, blue: 0.25, alpha: 1)
+                : NSColor(red: 0.91, green: 0.74, blue: 0.47, alpha: 1)
+            textView.addAttributes([
+                .underlineStyle: NSUnderlineStyle.thick.rawValue
+                    | NSUnderlineStyle.patternDot.rawValue,
+                .underlineColor: colour,
+            ], range: trimmed)
+        }
+    }
+
+    /// Character range of a 1-indexed line, excluding its newline.
+    private static func lineRange(_ line: Int, in ns: NSString) -> NSRange? {
+        var current = 1
+        var location = 0
+        while current < line {
+            let r = ns.lineRange(for: NSRange(location: location, length: 0))
+            let next = r.location + r.length
+            if next >= ns.length || next == location { return nil }
+            location = next
+            current += 1
+        }
+        var r = ns.lineRange(for: NSRange(location: min(location, max(ns.length - 1, 0)), length: 0))
+        if r.length > 0, ns.character(at: r.location + r.length - 1) == 10 {
+            r.length -= 1
+        }
+        return r.length > 0 ? r : nil
+    }
+
+    private static func trimmingIndent(_ range: NSRange, in ns: NSString) -> NSRange {
+        var start = range.location
+        let end = range.location + range.length
+        while start < end {
+            let c = ns.character(at: start)
+            if c == 32 || c == 9 { start += 1 } else { break }
+        }
+        return NSRange(location: start, length: end - start)
     }
 
     /// Inline colour chips beside hex / rgb() literals (ColorSwatch).
@@ -826,17 +912,129 @@ struct FileViewerView: View {
 
     // MARK: - Tab bar
 
+    /// Intrinsic width of the tab row and of the space it has. Compared to
+    /// decide whether the ‹ › arrows are needed at all.
+    @State private var tabsContentWidth: CGFloat = 0
+    @State private var tabsViewportWidth: CGFloat = 0
+    /// Which tab the arrows last scrolled to. Its own cursor rather than the
+    /// selection: scrolling the strip must not change which file is open.
+    @State private var tabScrollIndex: Int = 0
+
+    /// The open-tabs strip.
+    ///
+    /// Horizontally scrollable, with **‹ › buttons** at the edges once the
+    /// tabs overflow. The scroll view alone was reachable only by a
+    /// horizontal wheel or a trackpad two-finger swipe — user, 2026-08-31:
+    /// *"I can scroll with my side mouse scroll but we need to add buttons,
+    /// not everybody has a mouse with side scroller."* A plain mouse had no
+    /// way to reach a tab past the right edge at all.
+    ///
+    /// Two behaviours worth naming:
+    ///
+    ///   • The buttons **appear only on overflow**. Two open tabs should not
+    ///     grow chrome they will never use, so the strip measures its content
+    ///     against its viewport and the arrows fade in when it does not fit.
+    ///   • Selecting a file **scrolls it into view**. Opening something via
+    ///     ⌘P or the file tree used to select a tab that could be entirely
+    ///     off-screen, which read as "the click did nothing".
     private var tabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 1) {
-                ForEach(bridge.openFiles, id: \.self) { path in
-                    tabButton(path: path)
+        ScrollViewReader { proxy in
+            HStack(spacing: 0) {
+                if tabsOverflow {
+                    tabScrollButton(.leading, proxy: proxy)
+                    MarvinDivider().frame(height: 18)
                 }
-                Spacer(minLength: 0)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 1) {
+                        ForEach(bridge.openFiles, id: \.self) { path in
+                            tabButton(path: path).id(path)
+                        }
+                    }
+                    // Measured WITHOUT a trailing Spacer: a Spacer would
+                    // stretch the row to the viewport, so content width would
+                    // always equal viewport width and overflow could never be
+                    // detected.
+                    .background(
+                        GeometryReader { g in
+                            Color.clear.preference(
+                                key: TabStripWidthKey.self, value: g.size.width
+                            )
+                        }
+                    )
+                }
+                .onPreferenceChange(TabStripWidthKey.self) { tabsContentWidth = $0 }
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(
+                            key: TabStripViewportKey.self, value: g.size.width
+                        )
+                    }
+                )
+                .onPreferenceChange(TabStripViewportKey.self) { tabsViewportWidth = $0 }
+                if tabsOverflow {
+                    MarvinDivider().frame(height: 18)
+                    tabScrollButton(.trailing, proxy: proxy)
+                }
+            }
+            .onChange(of: bridge.selectedFilePath) { _, path in
+                guard let path else { return }
+                // Re-anchor the arrow cursor on the selection. Without this,
+                // opening tab 8 via ⌘P and then pressing › would jump the
+                // strip back to tab 1 — the cursor would still be where the
+                // arrows last left it, not where the user is looking.
+                if let i = bridge.openFiles.firstIndex(of: path) {
+                    tabScrollIndex = i
+                }
+                withAnimation(MarvinTheme.transition) {
+                    proxy.scrollTo(path, anchor: .center)
+                }
+            }
+            .onChange(of: bridge.openFiles.count) { _, count in
+                // Closing tabs can strand the cursor past the end.
+                tabScrollIndex = min(tabScrollIndex, max(count - 1, 0))
             }
         }
         .frame(height: 30)
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    /// True when the tabs are wider than the space they have. The 1pt slack
+    /// absorbs sub-pixel rounding, which would otherwise flicker the arrows
+    /// on and off during a live resize.
+    private var tabsOverflow: Bool {
+        tabsContentWidth > tabsViewportWidth + 1
+    }
+
+    /// One edge arrow. Scrolls by a whole tab rather than a fixed number of
+    /// points, so a press always lands on a tab boundary instead of leaving
+    /// a half-clipped name at the edge.
+    private func tabScrollButton(
+        _ edge: HorizontalEdge,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        let tabs = bridge.openFiles
+        let cursor = min(max(tabScrollIndex, 0), max(tabs.count - 1, 0))
+        let atEnd = edge == .leading
+            ? cursor <= 0
+            : cursor >= tabs.count - 1
+        return Button {
+            let next = edge == .leading ? cursor - 1 : cursor + 1
+            let clamped = min(max(next, 0), max(tabs.count - 1, 0))
+            tabScrollIndex = clamped
+            guard tabs.indices.contains(clamped) else { return }
+            withAnimation(MarvinTheme.transition) {
+                proxy.scrollTo(tabs[clamped], anchor: edge == .leading ? .leading : .trailing)
+            }
+        } label: {
+            Image(systemName: edge == .leading ? "chevron.left" : "chevron.right")
+                .font(.system(size: 10, weight: .medium))
+                .frame(width: 22, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(atEnd ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.secondary))
+        .disabled(atEnd)
+        .help(edge == .leading ? "Scroll tabs left" : "Scroll tabs right")
     }
 
     private func tabButton(path: String) -> some View {
@@ -1095,6 +1293,10 @@ struct FileViewerView: View {
                         diffLines: diffLines,
                         targetLine: bridge.pendingEditorLine,
                         onTargetConsumed: { _ = bridge.consumePendingEditorLine() },
+                        // Only THIS file's diagnostics: the panel holds the
+                        // whole project's, and underlining another file's
+                        // line numbers here would be nonsense.
+                        diagnostics: bridge.diagnosticItems.filter { $0.filePath == path },
                         onContentChange: { p, c in
                             model.updateContent(path: p, content: c)
                             // Phase 5f — line count fed to global
@@ -1206,6 +1408,10 @@ struct FileViewerView: View {
 
     @MainActor
     private func commitClose(path: String) {
+        // Tell the server first: after `closeFile` the tab is gone, and a
+        // server still holding the document would keep republishing
+        // diagnostics for a file the user can no longer see.
+        LSPService.shared.didClose(path: path)
         bridge.closeFile(path)
         model.dropBuffer(path: path)
     }
@@ -1289,5 +1495,22 @@ private struct ImageFilePreview: View {
         }
         .background(Color(nsColor: .underPageBackgroundColor))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+
+/// Intrinsic width of the tab row.
+private struct TabStripWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Width of the scroll view showing it.
+private struct TabStripViewportKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

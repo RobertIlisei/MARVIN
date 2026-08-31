@@ -2313,6 +2313,201 @@ runner.suite("DragResize") {
     }
 }
 
+runner.suite("lsp-framing") {
+    func data(_ s: String) -> Data { Data(s.utf8) }
+    // Total accessor: a decoder miss must report as a failed expectation,
+    // not trap the whole suite on an out-of-range subscript.
+    func body(_ msgs: [Data], _ i: Int) -> String {
+        i < msgs.count ? String(decoding: msgs[i], as: UTF8.self) : "<missing message \(i) of \(msgs.count)>"
+    }
+
+    runner.test("encodes Content-Length in BYTES, not characters") {
+        // An em-dash is 3 bytes and 1 Character. Framing by Character
+        // count truncates the JSON and desynchronises the stream.
+        let body = data(#"{"m":"a — b"}"#)
+        runner.expect(body.count, equals: 15, "the body really is longer in bytes than characters")
+        var expected = Data("Content-Length: 15\r\n\r\n".utf8)
+        expected.append(body)
+        runner.expect(LSPMessageFraming.encode(body) == expected, equals: true,
+                      "framed bytes match header+body exactly")
+    }
+
+    runner.test("decodes one whole message") {
+        var d = LSPMessageFraming.Decoder()
+        let out = d.feed(LSPMessageFraming.encode(data(#"{"id":1}"#)))
+        runner.expect(out.count, equals: 1, "one message")
+        runner.expect(body(out, 0), equals: #"{"id":1}"#, "body intact")
+        runner.expect(d.pending, equals: 0, "buffer drained")
+    }
+
+    runner.test("two messages in ONE read both come out") {
+        var d = LSPMessageFraming.Decoder()
+        var buf = LSPMessageFraming.encode(data(#"{"id":1}"#))
+        buf.append(LSPMessageFraming.encode(data(#"{"id":2}"#)))
+        let out = d.feed(buf)
+        runner.expect(out.count, equals: 2, "both messages")
+        runner.expect(body(out, 1), equals: #"{"id":2}"#, "second body")
+    }
+
+    runner.test("a message SPLIT across reads is held, then yielded") {
+        var d = LSPMessageFraming.Decoder()
+        let framed = LSPMessageFraming.encode(data(#"{"id":7,"x":"yy"}"#))
+        // Split mid-header, the case a naive parser gets wrong.
+        let first = d.feed(framed.prefix(9))
+        runner.expect(first.isEmpty, equals: true, "nothing yet on a partial header")
+        let second = d.feed(framed.dropFirst(9))
+        runner.expect(second.count, equals: 1, "completes on the second read")
+        runner.expect(body(second, 0), equals: #"{"id":7,"x":"yy"}"#, "body intact")
+    }
+
+    runner.test("body split byte-by-byte still reassembles") {
+        var d = LSPMessageFraming.Decoder()
+        let framed = LSPMessageFraming.encode(data(#"{"id":9}"#))
+        var got: [Data] = []
+        for byte in framed { got += d.feed(Data([byte])) }
+        runner.expect(got.count, equals: 1, "exactly one message")
+        runner.expect(body(got, 0), equals: #"{"id":9}"#, "body intact")
+    }
+
+    runner.test("header keys are case-insensitive and extra headers survive") {
+        var d = LSPMessageFraming.Decoder()
+        let body = data(#"{"ok":true}"#)
+        var buf = Data("Content-Type: application/vscode-jsonrpc\r\ncontent-length: \(body.count)\r\n\r\n".utf8)
+        buf.append(body)
+        let out = d.feed(buf)
+        runner.expect(out.count, equals: 1, "lowercase content-length accepted")
+    }
+
+    runner.test("an unreadable header is skipped, not spun on forever") {
+        // A desynchronised stream must not wedge the decoder. Feeding
+        // garbage then a real message must still surface the real one.
+        var d = LSPMessageFraming.Decoder()
+        var buf = Data("Nonsense: 1\r\n\r\n".utf8)
+        buf.append(LSPMessageFraming.encode(data(#"{"id":3}"#)))
+        let out = d.feed(buf)
+        runner.expect(out.count, equals: 1, "recovers to the next valid message")
+        runner.expect(body(out, 0), equals: #"{"id":3}"#, "correct body")
+    }
+
+    runner.test("LSP zero-based positions become one-based display positions") {
+        runner.expect(LSPPosition.toDisplayLine(0), equals: 1, "line 0 is line 1")
+        runner.expect(LSPPosition.toDisplayColumn(0), equals: 1, "col 0 is col 1")
+        runner.expect(LSPPosition.fromDisplayLine(1), equals: 0, "round trip")
+        runner.expect(LSPPosition.fromDisplayLine(0), equals: 0, "never negative")
+    }
+
+    runner.test("unknown severity is treated as an error, not ignored") {
+        runner.expect(LSPSeverity.name(1), equals: "error", "1 = error")
+        runner.expect(LSPSeverity.name(2), equals: "warning", "2 = warning")
+        runner.expect(LSPSeverity.name(3), equals: "info", "3 = info")
+        runner.expect(LSPSeverity.name(4), equals: "hint", "4 = hint")
+        runner.expect(LSPSeverity.name(nil), equals: "error", "absent = error")
+        runner.expect(LSPSeverity.name(99), equals: "error", "unknown = error")
+    }
+}
+
+
+runner.suite("editor-text-ops") {
+    let doc = "alpha\nbravo\ncharlie\n"
+    func at(_ line: Int, in text: String) -> NSRange {
+        let lines = text.components(separatedBy: "\n")
+        var loc = 0
+        for i in 0..<line { loc += lines[i].count + 1 }
+        return NSRange(location: loc, length: 0)
+    }
+
+    runner.test("a selection ending ON a newline does not drag in the next line") {
+        // Whole-line selection: "alpha\n". The user means ONE line.
+        let span = EditorTextOps.lineSpan(in: doc, for: NSRange(location: 0, length: 6))
+        runner.expect(span.length, equals: 5, "span covers only 'alpha'")
+        runner.expect((doc as NSString).substring(with: span), equals: "alpha", "text is alpha")
+    }
+
+    runner.test("move line down swaps with the next line and the selection follows") {
+        let e = EditorTextOps.moveLine(doc, at(0, in: doc), .down)
+        runner.expect(e?.text, equals: "bravo\nalpha\ncharlie\n", "alpha moved below bravo")
+        // Selection must land ON alpha, or a second press moves something else.
+        let sel = e!.selection
+        runner.expect((e!.text as NSString).substring(with: sel), equals: "alpha", "selection followed the text")
+    }
+
+    runner.test("move line up is the exact inverse") {
+        let down = EditorTextOps.moveLine(doc, at(0, in: doc), .down)!
+        let back = EditorTextOps.moveLine(down.text, down.selection, .up)!
+        runner.expect(back.text, equals: doc, "round trip restores the document")
+    }
+
+    runner.test("move up at the first line and down at the last are no-ops") {
+        runner.expect(EditorTextOps.moveLine(doc, at(0, in: doc), .up) == nil, equals: true, "no line above the first")
+        let last = NSRange(location: 12, length: 0)   // inside "charlie"
+        runner.expect(EditorTextOps.moveLine(doc, last, .down) == nil, equals: true, "no line below the last")
+    }
+
+    runner.test("a file with NO trailing newline still moves its last line") {
+        let d = "one\ntwo"
+        let e = EditorTextOps.moveLine(d, at(0, in: d), .down)
+        runner.expect(e?.text, equals: "two\none", "swapped without inventing a newline")
+    }
+
+    runner.test("copy line down inserts a copy and selects the COPY") {
+        let e = EditorTextOps.copyLine(doc, at(0, in: doc), .down)
+        runner.expect(e.text, equals: "alpha\nalpha\nbravo\ncharlie\n", "duplicated")
+        runner.expect((e.text as NSString).substring(with: e.selection), equals: "alpha", "selection on the copy")
+        runner.expect(e.selection.location, equals: 6, "the SECOND alpha, not the first")
+    }
+
+    runner.test("duplicate with an empty selection duplicates the line") {
+        let e = EditorTextOps.duplicate(doc, at(1, in: doc))
+        runner.expect(e.text, equals: "alpha\nbravo\nbravo\ncharlie\n", "line duplicated")
+    }
+
+    runner.test("duplicate with a real selection duplicates exactly that") {
+        let e = EditorTextOps.duplicate("abcdef", NSRange(location: 1, length: 3))
+        runner.expect(e.text, equals: "abcdbcdef", "bcd duplicated in place")
+        runner.expect((e.text as NSString).substring(with: e.selection), equals: "bcd", "selection on the copy")
+    }
+
+    runner.test("toggle comment inserts at the COMMON indent, not column 0") {
+        let code = "    if (x) {\n        go()\n    }\n"
+        let e = EditorTextOps.toggleLineComment(code, NSRange(location: 0, length: (code as NSString).length), token: "//")
+        runner.expect(e.text.contains("    // if (x) {"), equals: true, "outer line keeps its indent")
+        runner.expect(e.text.contains("    //     go()"), equals: true, "inner line keeps its RELATIVE indent")
+    }
+
+    runner.test("a MIXED block comments fully rather than toggling per line") {
+        let code = "// a\nb\n"
+        let e = EditorTextOps.toggleLineComment(code, NSRange(location: 0, length: (code as NSString).length), token: "//")
+        // The trailing newline survives: lineSpan deliberately excludes it,
+        // so commenting a block never eats the document's final newline.
+        runner.expect(e.text, equals: "// // a\n// b\n", "not all commented, so comment everything")
+    }
+
+    runner.test("a fully commented block uncomments, and round-trips") {
+        let code = "let a = 1\nlet b = 2"
+        let full = NSRange(location: 0, length: (code as NSString).length)
+        let on = EditorTextOps.toggleLineComment(code, full, token: "//")
+        runner.expect(on.text, equals: "// let a = 1\n// let b = 2", "commented with one space")
+        let off = EditorTextOps.toggleLineComment(on.text, on.selection, token: "//")
+        runner.expect(off.text, equals: code, "uncommenting restores the original exactly")
+    }
+
+    runner.test("blank lines inside a block are left alone") {
+        let code = "a\n\nb"
+        let e = EditorTextOps.toggleLineComment(code, NSRange(location: 0, length: 3), token: "#")
+        runner.expect(e.text.components(separatedBy: "\n")[1], equals: "", "blank line untouched")
+    }
+
+    runner.test("comment tokens are per language, and unknown means no-op") {
+        runner.expect(EditorTextOps.lineCommentToken(forExtension: "swift"), equals: "//", "swift")
+        runner.expect(EditorTextOps.lineCommentToken(forExtension: "py"), equals: "#", "python")
+        runner.expect(EditorTextOps.lineCommentToken(forExtension: "sql"), equals: "--", "sql")
+        runner.expect(EditorTextOps.lineCommentToken(forExtension: "TS"), equals: "//", "case-insensitive")
+        runner.expect(EditorTextOps.lineCommentToken(forExtension: "png") == nil, equals: true,
+                      "unknown language inserts nothing rather than guessing")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

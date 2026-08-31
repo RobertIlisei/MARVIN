@@ -1,7 +1,12 @@
 /**
- * POST /api/git/branch/switch — body `{ cwd, name }`
+ * POST /api/git/branch/switch — body `{ cwd, name, detach? }`
  *
- * `git switch <name>`. Denied in v1 when the working tree is dirty
+ * `git switch <name>`, or `git switch --detach <name>` when `detach`
+ * is set — the "Checkout detached…" entry in the branch picker, which
+ * is also how a TAG or a remote-tracking ref gets checked out (git
+ * refuses a plain `switch` to either).
+ *
+ * Denied when the working tree is dirty
  * (see ADR-0012 rules-of-note); stash-on-switch is a v2 feature.
  *
  * Cleanness is probed via `git status --porcelain` (short form —
@@ -23,7 +28,7 @@ export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);
   if (guard) return guard;
 
-  let body: { cwd?: unknown; name?: unknown };
+  let body: { cwd?: unknown; name?: unknown; detach?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -32,6 +37,7 @@ export async function POST(req: NextRequest) {
 
   const cwd = typeof body.cwd === "string" ? body.cwd : null;
   const name = typeof body.name === "string" ? body.name : null;
+  const detach = body.detach === true;
   if (!cwd || !name) {
     return NextResponse.json(
       { error: "cwd and name required" },
@@ -83,12 +89,16 @@ export async function POST(req: NextRequest) {
 
   const gate = confirmGate(
     req,
-    { kind: "branch-switch", name, workingTreeClean },
+    { kind: "branch-switch", name, workingTreeClean, detach },
     root,
   );
   if (!gate.allow) return gate.response;
 
-  const res = await runGit(root, ["switch", name], { timeoutMs: 5000 });
+  const res = await runGit(
+    root,
+    detach ? ["switch", "--detach", name] : ["switch", name],
+    { timeoutMs: 5000 },
+  );
   if (!res.ok) {
     const stderr = "stderr" in res ? (res.stderr ?? "") : "";
     if (stderr.includes("did not match any file")) {
@@ -102,5 +112,5 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     );
   }
-  return NextResponse.json({ ok: true, name });
+  return NextResponse.json({ ok: true, name, detached: detach });
 }

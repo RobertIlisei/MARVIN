@@ -2116,7 +2116,10 @@ struct ChatPreviewView: View {
                     .frame(width: 24, height: 22)
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            // ⌘⇧N is owned by File ▸ New Session, which posts
+            // .marvinRequestNewSession to the observer above — the same
+            // action. Redeclaring it here made three buttons compete for
+            // one key.
             .help("New chat (⌘⇧N)")
             .padding(.trailing, 8)
         }
@@ -2645,7 +2648,6 @@ struct ChatPreviewView: View {
             Button("New") {
                 model.clear()
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
             .controlSize(.small)
             .disabled(model.messages.isEmpty && !model.isSending)
             .help("Reset preview state. ⌘⇧N")
@@ -2787,7 +2789,6 @@ struct ChatPreviewView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .keyboardShortcut("n", modifiers: [.command, .shift])
             .help("Clear the SDK session before the next message (⌘⇧N). memory.md auto-loads on the new session.")
             // ADR-0059 — the natural audit moment is right after a completion
             // claim. The mechanical guard (ADR-0057) already checked the

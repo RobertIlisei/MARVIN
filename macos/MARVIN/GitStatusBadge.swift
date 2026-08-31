@@ -21,6 +21,25 @@
 import MARVINLogic
 import SwiftUI
 
+/// The git decoration palette, named once.
+///
+/// VS Code's muted colours rather than the system's fully saturated
+/// `.orange` / `.green` / `.red` (user, 2026-08-29: "colours on
+/// antigravity are a bit faded … in marvin they seem very bright"),
+/// nudged a step back up after the first cut read as too faded
+/// against the flat chrome. Every git-coloured surface — tree badges,
+/// SCM status letters, ahead/behind chips, graph ref pills — reads
+/// them from here, because these values have already been re-tuned
+/// once and a second literal elsewhere would just restart the drift.
+enum GitDecorationColor {
+    /// Modified / renamed — amber.
+    static let modified = Color(red: 0.910, green: 0.740, blue: 0.470)  // ~#E8BD78
+    /// Added / untracked — green.
+    static let added = Color(red: 0.420, green: 0.820, blue: 0.560)     // ~#6BD18F
+    /// Deleted / conflicted — red.
+    static let deleted = Color(red: 0.850, green: 0.330, blue: 0.250)   // ~#D95440
+}
+
 indirect enum GitStatusBadge: Equatable {
     case modified
     case added
@@ -49,14 +68,9 @@ indirect enum GitStatusBadge: Equatable {
 
     var colour: Color {
         switch self {
-        // VS Code's git decoration palette — muted, not the system's fully
-        // saturated `.orange` / `.green` / `.red` (user: "colours on
-        // antigravity are a bit faded … in marvin they seem very bright").
-        // Nudged a step more saturated than VS Code's defaults after the
-        // first cut read as "way too faded" against the flat chrome.
-        case .modified, .renamed: return Color(red: 0.910, green: 0.740, blue: 0.470)  // ~#E8BD78
-        case .added, .untracked: return Color(red: 0.420, green: 0.820, blue: 0.560)   // ~#6BD18F
-        case .deleted, .conflicted: return Color(red: 0.850, green: 0.330, blue: 0.250) // ~#D95440
+        case .modified, .renamed: return GitDecorationColor.modified
+        case .added, .untracked: return GitDecorationColor.added
+        case .deleted, .conflicted: return GitDecorationColor.deleted
         case .other: return .gray
         case .directoryRollup(let inner): return inner.colour
         }

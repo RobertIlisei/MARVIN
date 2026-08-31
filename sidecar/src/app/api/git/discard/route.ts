@@ -1,5 +1,5 @@
 /**
- * POST /api/git/discard — body `{ cwd, paths: string[], mode: "working" | "staged" }`
+ * POST /api/git/discard — body `{ cwd, paths: string[], mode }`
  *
  *   - mode: "staged"  → `git restore --staged -- <paths>` — auto.
  *     (Same underlying git call as `/unstage`; the UX distinction is
@@ -7,6 +7,11 @@
  *   - mode: "working" → `git restore -- <paths>` — confirm warn;
  *     resets the working tree to match the index. Edits are gone
  *     after — only the reflog (or a re-edit) recovers.
+ *   - mode: "untracked" → `git clean -f -d -- <paths>` — confirm
+ *     danger. These files were never hashed, so there is no reflog and
+ *     no object to recover; the panel's "Discard all changes" issues
+ *     this as a SECOND call after the `working` one, so the user sees
+ *     the permanent half as its own decision.
  *
  * See [ADR-0012](../../../../../../../docs/decisions/0012-source-control-mutation-channel.md).
  */
@@ -36,7 +41,11 @@ export async function POST(req: NextRequest) {
     ? body.paths.filter((p): p is string => typeof p === "string")
     : null;
   const mode =
-    body.mode === "working" || body.mode === "staged" ? body.mode : null;
+    body.mode === "working" ||
+    body.mode === "staged" ||
+    body.mode === "untracked"
+      ? body.mode
+      : null;
   if (!cwd || !paths || paths.length === 0 || !mode) {
     return NextResponse.json(
       { error: "cwd, paths[], mode required" },
@@ -73,10 +82,15 @@ export async function POST(req: NextRequest) {
   );
   if (!gate.allow) return gate.response;
 
+  // `-d` so an untracked DIRECTORY is removed too — `git clean -f`
+  // alone skips directories, which would leave the panel showing the
+  // same rows after a "discard" the user watched succeed.
   const argv =
     mode === "staged"
       ? ["restore", "--staged", "--", ...paths]
-      : ["restore", "--", ...paths];
+      : mode === "untracked"
+        ? ["clean", "-f", "-d", "--", ...paths]
+        : ["restore", "--", ...paths];
   const res = await runGit(root, argv, { timeoutMs: 10_000 });
   if (!res.ok) {
     return NextResponse.json(

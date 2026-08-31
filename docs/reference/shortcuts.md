@@ -15,13 +15,35 @@ Wired in [`MARVINApp.swift`](../../macos/MARVIN/MARVINApp.swift) via `CommandGro
 | `⌘ P` | Quick Open File — fuzzy across the active project's tree | Window menu |
 | `⌘ T` | Go to Symbol — fuzzy across the project's `graphify-out/graph.json` | Window menu |
 | `⌘ ⇧ B` | Run Build Task — discovers tasks from `package.json` / `Makefile` / `Package.swift` / `Cargo.toml` and injects the chosen command into the terminal | Window menu |
+| `⌘ ⇧ K` | Backlog panel | View menu group |
+| `⌘ ⇧ N` | New session | File menu |
 | `⌘ ⇧ T` | Toggle theme (light / dark) | Window menu |
+| `⌘ F` / `⌘ G` / `⌘ ⇧ G` / `⌘ E` | Find / Find Next / Find Previous / Use Selection for Find | Edit menu |
+
+### Panes
+
+Each key **toggles**: pressing it while that tab is already the visible one closes the bottom panel (`BottomPanelState.activating`, VS Code semantics).
+
+| Keys | Action | Source |
+|---|---|---|
 | `⌘ B` | Toggle the file tree pane | Window menu |
-| `⌘ G` | Toggle the knowledge graph pane | Window menu |
-| `⌘ J` | Toggle the embedded terminal pane | Window menu |
-| `⌘ ⇧ P` | Toggle the browser preview pane | Window menu |
+| `⌘ J` | Open / close the bottom panel, keeping its current tab | Window menu |
+| `^ \`` | Terminal tab | Window menu |
+| `⌘ ⇧ M` | Problems tab | Window menu |
+| `⌘ ⇧ P` | Browser preview tab | Window menu |
+| `^ ⇧ G` | Knowledge graph tab | Window menu |
 
 Pane toggles persist across launches (`NativePrefs.shared.togglePane`, mirrored to `UserDefaults` under `marvin.panes`).
+
+> **Audited 2026-08-31.** Two keys were bound twice and one table row was
+> wrong. `⌘ G` was Find Next *and* the knowledge-graph pane — the graph moved
+> to `^ ⇧ G`, because `⌘ G` is Find Next across macOS. `⌘ ⇧ B` was Run Build
+> Task *and* the Backlog panel — the build task keeps it (VS Code's binding,
+> and the one this table already documented), Backlog moved to `⌘ ⇧ K`. And
+> `⌘ J` was described as "toggle the embedded terminal pane"; it toggles the
+> panel, whichever tab is showing. The four bottom-tab keys also could not
+> *close* the panel until this pass — they called a producer-semantics helper
+> that hardcodes "open".
 
 ## Chat
 

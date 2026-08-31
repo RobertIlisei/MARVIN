@@ -20,7 +20,18 @@ import { isSafeRef, isSafeRemote } from "./argv-guards";
 export type GitOp =
   | { kind: "stage"; paths: string[] }
   | { kind: "unstage"; paths: string[] }
-  | { kind: "discard"; paths: string[]; mode: "working" | "staged" }
+  | {
+      kind: "discard";
+      paths: string[];
+      /**
+       * `staged` unstages, `working` overwrites uncommitted edits, and
+       * `untracked` DELETES files git has never seen — the one mode with
+       * no reflog behind it. VS Code's "Discard all changes" is really
+       * `working` + `untracked` together; the panel issues two calls so
+       * each gets its own decision.
+       */
+      mode: "working" | "staged" | "untracked";
+    }
   | {
       kind: "commit";
       message: string;
@@ -34,6 +45,8 @@ export type GitOp =
       name: string;
       /** `true` when the working tree + index are both clean. */
       workingTreeClean: boolean;
+      /** `git switch --detach` — leaves HEAD off any branch. */
+      detach?: boolean;
     }
   | {
       kind: "branch-delete";
@@ -53,9 +66,17 @@ export type GitOp =
        * non-force push.
        */
       upstreamAhead: number;
+      /** `git push -u` — publishes a branch that has no upstream yet. */
+      setUpstream?: boolean;
     }
   | { kind: "pull"; strategy: "ff-only" | "rebase" | "merge" }
-  | { kind: "fetch"; remote: string };
+  | { kind: "fetch"; remote: string }
+  | {
+      kind: "stash";
+      action: "push" | "pop" | "apply" | "drop";
+      /** Stash entries present when the op was classified. */
+      entryCount: number;
+    };
 
 export type GitWriteClass = "auto" | "confirm" | "deny";
 export type GitWriteSeverity = "warn" | "danger";
@@ -102,6 +123,15 @@ export function gitWritePolicy(op: GitOp): GitWriteDecision {
           "discard --staged moves changes back to the working tree; reversible",
         );
       }
+      if (op.mode === "untracked") {
+        // `git clean` on files git has never hashed. There is no reflog
+        // entry, no object in the store, nothing to recover from — the
+        // only mode in this file whose consequence is unconditional.
+        return confirm(
+          `deleting ${op.paths.length} untracked file(s) is permanent — git has no copy of them`,
+          "danger",
+        );
+      }
       // mode === "working" — destroys unstaged edits.
       return confirm(
         `discarding working-tree changes to ${op.paths.length} file(s) is not recoverable without a reflog`,
@@ -134,9 +164,19 @@ export function gitWritePolicy(op: GitOp): GitWriteDecision {
         return deny(`branch-switch: invalid branch name \`${op.name}\``);
       }
       if (!op.workingTreeClean) {
-        // v1: hard-deny. v2 can surface a stash-on-switch prompt here.
+        // Still a hard-deny, but the panel now has a stash op to offer
+        // as the remedy instead of leaving the user at a dead end.
         return deny(
-          "branch-switch: working tree is dirty; commit or discard changes first",
+          "branch-switch: working tree is dirty; commit, stash or discard changes first",
+        );
+      }
+      if (op.detach) {
+        // Detached HEAD is recoverable (the branch ref never moved) but
+        // it is a state users land in by accident and then commit into,
+        // so it is worth one deliberate click.
+        return confirm(
+          `checking out \`${op.name}\` detached leaves HEAD off any branch — new commits there are unreachable once you switch away`,
+          "warn",
         );
       }
       return auto("branch-switch on a clean tree is reversible");
@@ -200,6 +240,24 @@ export function gitWritePolicy(op: GitOp): GitWriteDecision {
         return deny(`fetch: invalid remote name \`${op.remote}\``);
       }
       return auto("fetch is read-only on local refs");
+    }
+    case "stash": {
+      if (op.action === "push") {
+        return auto("stash push is reversible via stash pop");
+      }
+      if (op.entryCount === 0) {
+        return deny(`stash ${op.action}: no stash entries`);
+      }
+      if (op.action === "drop") {
+        return confirm(
+          "dropping a stash entry discards it; recovery needs a dangling-commit hunt",
+          "danger",
+        );
+      }
+      // pop / apply — replays the stash onto the working tree. Can
+      // conflict, but nothing is lost: `apply` keeps the entry, and a
+      // conflicting `pop` leaves it in place too.
+      return auto(`stash ${op.action} restores changes into the working tree`);
     }
   }
 }

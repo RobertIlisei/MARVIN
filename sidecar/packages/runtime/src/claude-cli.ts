@@ -206,6 +206,18 @@ export interface RunClaudeCliParams {
    * Useful for user-initiated cancellation from the UI.
    */
   signal?: AbortSignal;
+  /**
+   * Tool names to hand `--allowedTools`. Pass `[]` for "no tools at
+   * all" — the right containment for a one-shot text task like
+   * drafting a commit message, which needs the model and nothing else.
+   *
+   * This matters because every spawn here carries
+   * `--dangerously-skip-permissions`: without an explicit allow-list, a
+   * prompt-only "just write me a sentence" call is a fully-armed agent
+   * pointed at the user's repo. Prompts do not constrain tools; this
+   * flag does. Omit the field to keep the default full tool set.
+   */
+  allowedTools?: string[];
 }
 
 /**
@@ -221,6 +233,7 @@ export function runClaudeCli(params: RunClaudeCliParams): Promise<ClaudeCliResul
     appendSystemPrompt,
     onEvent,
     signal,
+    allowedTools,
   } = params;
 
   const binary = discoverClaudeBinary();
@@ -236,6 +249,9 @@ export function runClaudeCli(params: RunClaudeCliParams): Promise<ClaudeCliResul
     ...(appendSystemPrompt?.trim()
       ? ["--append-system-prompt", appendSystemPrompt.trim()]
       : []),
+    // `--allowedTools` with an empty value is how the CLI expresses
+    // "nothing is permitted"; omitting the flag means "everything".
+    ...(allowedTools ? ["--allowedTools", allowedTools.join(",")] : []),
     "--setting-sources",
     "user",
     "--dangerously-skip-permissions",

@@ -104,7 +104,8 @@ function opsEqual(a: GitOp, b: GitOp): boolean {
       return (
         b.kind === "branch-switch" &&
         a.name === b.name &&
-        a.workingTreeClean === b.workingTreeClean
+        a.workingTreeClean === b.workingTreeClean &&
+        a.detach === b.detach
       );
     case "branch-delete":
       return (
@@ -118,12 +119,19 @@ function opsEqual(a: GitOp, b: GitOp): boolean {
         b.kind === "push" &&
         a.force === b.force &&
         a.branch === b.branch &&
-        a.upstreamAhead === b.upstreamAhead
+        a.upstreamAhead === b.upstreamAhead &&
+        a.setUpstream === b.setUpstream
       );
     case "pull":
       return b.kind === "pull" && a.strategy === b.strategy;
     case "fetch":
       return b.kind === "fetch" && a.remote === b.remote;
+    case "stash":
+      return (
+        b.kind === "stash" &&
+        a.action === b.action &&
+        a.entryCount === b.entryCount
+      );
   }
 }
 

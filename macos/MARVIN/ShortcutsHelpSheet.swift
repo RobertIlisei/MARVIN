@@ -1,7 +1,25 @@
-// ShortcutsHelpSheet — Phase 5d. Native peer of the web app's
-// shortcuts-help. Shown via Window > Keyboard Shortcuts (⌘/) or
-// the `?` global key. Lists every binding the user can use across
-// MARVIN-Swift's surfaces.
+// ShortcutsHelpSheet — the ⌘/ reference card.
+//
+// **This list is a claim about the app and it must stay true.** Audited
+// 2026-08-31 against every `.keyboardShortcut` in `macos/MARVIN/` and
+// rewritten; the previous version had drifted badly enough to be
+// actively misleading:
+//
+//   • ⌘R "Reload", ⌘⇧R "Force Reload", ⌘0 / ⌘= / ⌘- zoom — all four were
+//     WebView-era bindings, removed with the browser UI (ADR-0021 M5 /
+//     ADR-0075). They had not existed for months.
+//   • ⌘K was listed as "Open project picker"; it clears the terminal.
+//   • ⌘J was listed as "Terminal"; it toggles the bottom panel, whatever
+//     tab is showing.
+//   • ⌘G appeared TWICE, as "Find next" and as "Graph" — which was not a
+//     typo but a real double-binding in the menus. Find Next kept ⌘G;
+//     the graph pane moved to ^⇧G.
+//   • ⌘T (Go to Symbol), ⇧⌘B (Run Build Task), ⇧⌘M (Problems), ^`
+//     (Terminal), ⇧⌘A (attach a file), ⇧⌘V (Markdown preview) were all
+//     real and all missing from the card.
+//
+// When you add or change a `.keyboardShortcut` anywhere in the app, change
+// it here and in `docs/reference/shortcuts.md` in the same commit.
 
 import SwiftUI
 
@@ -14,54 +32,56 @@ struct ShortcutsHelpSheet: View {
         let entries: [(keys: String, label: String)]
     }
 
+    /// Built FROM `CommandRegistry`, plus the responder-chain bindings the
+    /// registry deliberately does not own.
+    ///
+    /// The previous version was a hand-maintained second list, and it had
+    /// drifted badly: five WebView-era entries that had not existed for
+    /// months, ⌘K described as the project picker when it clears the
+    /// terminal, ⌘J as "Terminal" when it toggles the panel, and ⌘G listed
+    /// TWICE with two different meanings — which was not a typo but a real
+    /// double-binding nothing had caught. Deriving removes the drift by
+    /// construction: change a shortcut in the registry and this sheet, the
+    /// menu and the palette all move together.
     private var sections: [Section] {
-        [
-            Section(title: "Window", entries: [
-                ("⌘/", "Show this shortcuts sheet"),
-                ("⌘,", "Open Settings"),
-                ("⌘W", "Close active editor tab"),
-                ("⌘R", "Reload"),
-                ("⌘⇧R", "Force Reload (bypass cache)"),
-                ("⌘0", "Actual size"),
-                ("⌘=", "Zoom in"),
-                ("⌘-", "Zoom out"),
-                ("⌘F", "Find in page"),
-                ("⌘G", "Find next"),
-                ("⌘⇧G", "Find previous"),
-            ]),
-            Section(title: "Files", entries: [
-                ("⌘P", "Quick Open file"),
-                ("⌘O", "Open Project…"),
-                ("⌘B", "Toggle file tree"),
-                ("⌘S", "Save active file"),
-                ("⌫", "Move selected row to Trash (in tree)"),
-                ("↩", "Rename selected row (in tree)"),
-                ("Space", "Quick Look (in tree)"),
-            ]),
-            Section(title: "Session", entries: [
-                ("⌘⇧N", "New session"),
-                ("⌘.", "Cancel current turn"),
-                ("⌘K", "Open project picker"),
-                ("⌘⏎", "Send message"),
-            ]),
-            Section(title: "Panes", entries: [
-                ("⌘B", "Files"),
-                ("⌘G", "Graph"),
-                ("⌘J", "Terminal"),
-                ("⌘⇧P", "Preview"),
-            ]),
-            Section(title: "Theme", entries: [
-                ("⌘⇧T", "Toggle light / dark"),
-            ]),
-            Section(title: "macOS", entries: [
-                ("⌘Q", "Quit MARVIN"),
-                ("⌘H", "Hide MARVIN"),
-                ("⌘⌥H", "Hide others"),
-                ("⌘M", "Minimize"),
-                ("⌘⌥R", "Reveal project in Finder"),
-                ("⌘⌥T", "Open Terminal at project"),
-            ]),
-        ]
+        var out: [Section] = []
+        for slot in CommandMenuSlot.allCases where slot != .none {
+            let entries = CommandRegistry.commands(in: slot)
+                .compactMap { cmd -> (keys: String, label: String)? in
+                    guard let s = cmd.shortcut else { return nil }
+                    return (s, cmd.title)
+                }
+            if !entries.isEmpty {
+                out.append(Section(title: slot.rawValue, entries: entries))
+            }
+        }
+        // AppKit owns these — they act on whatever has focus, in any text
+        // view, and MARVIN does not redeclare them (see CommandRegistry).
+        out.append(Section(title: "Editing (any text view)", entries: [
+            ("⌘Z", "Undo"), ("⇧⌘Z", "Redo"),
+            ("⌘X", "Cut"), ("⌘C", "Copy"), ("⌘V", "Paste"),
+            ("⌘F", "Find in file"), ("⌘G", "Find next"),
+            ("⇧⌘G", "Find previous"), ("⌘E", "Use selection for find"),
+            ("⌘S", "Save active file"), ("⌘W", "Close active editor tab"),
+            ("⇧⌘V", "Toggle Markdown preview"),
+        ]))
+        out.append(Section(title: "Chat", entries: [
+            ("⌘⏎", "Send message"), ("⌘.", "Cancel current turn"),
+            ("⇧⌘A", "Attach a file"),
+        ]))
+        out.append(Section(title: "File tree", entries: [
+            ("⌫", "Move selected row to Trash"),
+            ("↩", "Rename selected row"),
+            ("Space", "Quick Look"),
+        ]))
+        out.append(Section(title: "Terminal", entries: [
+            ("⌘K", "Clear the terminal (when focused)"),
+        ]))
+        out.append(Section(title: "macOS", entries: [
+            ("⌘,", "Open Settings"), ("⌘Q", "Quit MARVIN"),
+            ("⌘H", "Hide MARVIN"), ("⌘⌥H", "Hide others"), ("⌘M", "Minimize"),
+        ]))
+        return out
     }
 
     var body: some View {

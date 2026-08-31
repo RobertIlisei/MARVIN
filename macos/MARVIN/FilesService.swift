@@ -445,19 +445,23 @@ final class FilesService {
         )
     }
 
-    /// POST /api/git/push — body `{ cwd, remote?, branch?, forceWithLease? }`.
+    /// POST /api/git/push — body `{ cwd, remote?, branch?, forceWithLease?, setUpstream? }`.
     /// Plain --force is hard-denied by the route. `forceWithLease` is
-    /// confirm-class; normal push is auto.
+    /// confirm-class; normal push is auto. `setUpstream` is the
+    /// panel's "Publish Branch" — a branch with no upstream needs
+    /// `push -u` or the next push has nothing to track.
     func push(
         cwd: String,
         remote: String = "origin",
         branch: String? = nil,
         forceWithLease: Bool = false,
+        setUpstream: Bool = false,
         confirmToken: String? = nil
     ) async throws -> GitRemoteOutcome {
         var body: [String: Any] = ["cwd": cwd, "remote": remote]
         if let branch { body["branch"] = branch }
         if forceWithLease { body["forceWithLease"] = true }
+        if setUpstream { body["setUpstream"] = true }
         return try await postRemote(
             path: "api/git/push",
             body: body,
@@ -613,7 +617,185 @@ final class FilesService {
         return .ok
     }
 
+    // MARK: - Branches, refs, graph, stash, worktrees
+
+    /// GET /api/git/branch?cwd=… — current branch + local branches
+    /// (with ahead/behind + last-commit line) + remote refs + tags.
+    /// One call backs the whole branch picker; the route resolves the
+    /// per-ref metadata with a single `for-each-ref`.
+    func fetchBranches(cwd: String) async throws -> GitBranchListResponse {
+        try await getJSON(
+            url: gitURL("api/git/branch", query: ["cwd": cwd]),
+            as: GitBranchListResponse.self
+        )
+    }
+
+    /// POST /api/git/branch/create — creates without switching. The
+    /// picker's "Create new branch…" follows it with a switch; the two
+    /// stay separate because only the switch needs a clean tree.
+    func createBranch(
+        cwd: String,
+        name: String,
+        from: String? = nil,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = ["cwd": cwd, "name": name]
+        if let from, !from.isEmpty { body["from"] = from }
+        return try await postMutation(
+            path: "api/git/branch/create",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/git/branch/switch — `git switch`, or `--detach` when
+    /// `detach` is set (also the only way to check out a tag or a
+    /// remote-tracking ref, which git refuses to switch to plainly).
+    /// Denied by policy on a dirty tree.
+    func switchBranch(
+        cwd: String,
+        name: String,
+        detach: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = ["cwd": cwd, "name": name]
+        if detach { body["detach"] = true }
+        return try await postMutation(
+            path: "api/git/branch/switch",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// POST /api/git/branch/delete. Unmerged branches are confirm-danger.
+    func deleteBranch(
+        cwd: String,
+        name: String,
+        force: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = ["cwd": cwd, "name": name]
+        if force { body["force"] = true }
+        return try await postMutation(
+            path: "api/git/branch/delete",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// GET /api/git/graph?cwd=&limit= — commits with parents + ref
+    /// decorations, `--topo-order`, all refs. Backs the Graph section.
+    func fetchGraph(cwd: String, limit: Int = 100) async throws -> GitGraphResponse {
+        try await getJSON(
+            url: gitURL(
+                "api/git/graph",
+                query: ["cwd": cwd, "limit": String(limit)]
+            ),
+            as: GitGraphResponse.self
+        )
+    }
+
+    /// GET /api/git/stash?cwd=…
+    func fetchStashes(cwd: String) async throws -> GitStashListResponse {
+        try await getJSON(
+            url: gitURL("api/git/stash", query: ["cwd": cwd]),
+            as: GitStashListResponse.self
+        )
+    }
+
+    /// POST /api/git/stash — `push` / `pop` / `apply` / `drop`.
+    /// Entries are addressed by integer `index`, never by a
+    /// `stash@{N}` string: that literal contains `@{`, which the ref
+    /// guard rejects as reflog syntax, so the route builds the ref
+    /// itself from the validated number.
+    func stash(
+        cwd: String,
+        action: String,
+        message: String? = nil,
+        index: Int? = nil,
+        includeUntracked: Bool = false,
+        confirmToken: String? = nil
+    ) async throws -> GitMutationOutcome {
+        var body: [String: Any] = ["cwd": cwd, "action": action]
+        if let message, !message.isEmpty { body["message"] = message }
+        if let index { body["index"] = index }
+        if includeUntracked { body["includeUntracked"] = true }
+        return try await postMutation(
+            path: "api/git/stash",
+            body: body,
+            confirmToken: confirmToken
+        )
+    }
+
+    /// GET /api/git/repos?cwd=… — the main working tree plus every
+    /// linked worktree, each with branch + dirty count.
+    func fetchRepos(cwd: String) async throws -> GitReposResponse {
+        try await getJSON(
+            url: gitURL("api/git/repos", query: ["cwd": cwd]),
+            as: GitReposResponse.self
+        )
+    }
+
+    /// POST /api/git/commit-message — drafts a message from the staged
+    /// diff. Spawns a Claude CLI turn server-side, so it gets its own
+    /// long-lived session rather than the shared 30 s one; a cold model
+    /// call routinely outlasts that.
+    func generateCommitMessage(
+        cwd: String,
+        amend: Bool = false
+    ) async throws -> String {
+        let url = baseURL.appendingPathComponent("api/git/commit-message")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        var body: [String: Any] = ["cwd": cwd]
+        if amend { body["amend"] = true }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 180
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 180
+        config.timeoutIntervalForResource = 240
+        let (data, response) = try await URLSession(configuration: config)
+            .data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let parsed = try? JSONDecoder().decode(
+                GitCommitMessageResponse.self, from: data
+            )
+            throw FilesServiceError.httpStatus(
+                http.statusCode,
+                body: parsed?.error ?? String(data: data, encoding: .utf8)
+            )
+        }
+        let parsed = try JSONDecoder().decode(
+            GitCommitMessageResponse.self, from: data
+        )
+        guard let message = parsed.message, !message.isEmpty else {
+            throw FilesServiceError.decode(underlying: URLError(.cannotParseResponse))
+        }
+        return message
+    }
+
+    /// Build a `/api/git/*` URL with percent-encoded query items.
+    /// Every git read route takes `cwd` and some take one more scalar;
+    /// URLComponents handles the encoding that hand-built strings get
+    /// wrong on paths with spaces.
+    private func gitURL(_ path: String, query: [String: String]) -> URL {
+        let url = baseURL.appendingPathComponent(path)
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return comps.url ?? url
+    }
+
     // MARK: - Private helpers
+
 
     /// Single-shot JSON GET. Adds the CSRF header, decodes into the
     /// requested type, and surfaces typed FilesServiceError cases.

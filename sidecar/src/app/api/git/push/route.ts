@@ -1,5 +1,5 @@
 /**
- * POST /api/git/push — body `{ cwd, remote?, branch?, forceWithLease? }`
+ * POST /api/git/push — body `{ cwd, remote?, branch?, forceWithLease?, setUpstream? }`
  *
  * Defaults: `remote = "origin"`, `branch = <current>`, `forceWithLease = false`.
  *
@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
     remote?: unknown;
     branch?: unknown;
     forceWithLease?: unknown;
+    setUpstream?: unknown;
   };
   try {
     body = (await req.json()) as typeof body;
@@ -54,6 +55,10 @@ export async function POST(req: NextRequest) {
       ? body.branch
       : null;
   const forceWithLease = body.forceWithLease === true;
+  // "Publish Branch" in the panel — `git push -u`. A branch with no
+  // upstream can't be pushed by `git push origin <branch>` alone in a
+  // way that makes the next push work, so the UI needs this variant.
+  const setUpstream = body.setUpstream === true;
   if (!cwd) {
     return NextResponse.json({ error: "cwd required" }, { status: 400 });
   }
@@ -102,10 +107,10 @@ export async function POST(req: NextRequest) {
   }
 
   // Probe upstreamAhead (commits in @{u} not in HEAD) for policy.
-  // No upstream → we don't know; treat as 0 for policy purposes.
-  // The terminal user's first push typically sets up tracking via
-  // `git push -u`, but we don't expose `-u` from this route for v1.
-  const upstreamAhead = await detectUpstreamAhead(root);
+  // No upstream → we don't know; treat as 0 for policy purposes. A
+  // `setUpstream` push is by definition the first one, so there is
+  // nothing upstream to be ahead of.
+  const upstreamAhead = setUpstream ? 0 : await detectUpstreamAhead(root);
 
   const gate = confirmGate(
     req,
@@ -114,6 +119,7 @@ export async function POST(req: NextRequest) {
       force: forceWithLease ? "with-lease" : "none",
       branch,
       upstreamAhead,
+      setUpstream,
     },
     root,
   );
@@ -121,6 +127,7 @@ export async function POST(req: NextRequest) {
 
   const argv = ["push"];
   if (forceWithLease) argv.push("--force-with-lease");
+  if (setUpstream) argv.push("--set-upstream");
   argv.push(remote, branch);
 
   const res = await runGit(root, argv, { timeoutMs: PUSH_TIMEOUT_MS });
@@ -134,6 +141,7 @@ export async function POST(req: NextRequest) {
     remote,
     branch,
     forced: forceWithLease,
+    setUpstream,
     note: res.stderr.trim() || null,
   });
 }

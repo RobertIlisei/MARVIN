@@ -36,17 +36,17 @@ struct ProjectPickerToolbarItem: View {
                 }
             }
             Divider()
+            // ⌘O / ⌘⌥R are owned by the File menu; this popup offers the
+            // same two actions without redeclaring their key equivalents.
             Button("Open Project…") {
                 openProjectWithPanel()
             }
-            .keyboardShortcut("o", modifiers: [.command])
             if let workDir = bridge.projectWorkDir {
                 Divider()
                 Button("Reveal in Finder") {
                     let url = URL(fileURLWithPath: workDir)
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
-                .keyboardShortcut("r", modifiers: [.command, .option])
             }
         } label: {
             HStack(spacing: 6) {

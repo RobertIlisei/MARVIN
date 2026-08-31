@@ -54,6 +54,14 @@ struct AppStatusBar: View {
     @State private var contextPopoverOpen = false
     @State private var activityPopoverOpen = false
     @State private var subagentPopoverOpen = false
+    /// Branch quick-pick. Hosted here as well as in the SCM panel
+    /// because the status bar is where the reference puts it — and
+    /// where the user went looking for it first.
+    @State private var branchPickerOpen = false
+    /// Sync runs from the bar too, so it needs its own confirm plumbing
+    /// rather than reaching into the panel's model (the panel may not
+    /// even be the visible tab).
+    @State private var statusBarRunner = GitOpRunner()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -73,6 +81,19 @@ struct AppStatusBar: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .foregroundStyle(.secondary)
+        .sheet(isPresented: $branchPickerOpen) {
+            GitRefPickerSheet(cwd: bridge.projectWorkDir ?? "")
+        }
+        .sheet(item: Bindable(statusBarRunner).pendingConfirm) { pending in
+            GitConfirmSheet(
+                actionVerb: pending.actionVerb,
+                reason: pending.reason,
+                severity: pending.severity,
+                paths: pending.paths,
+                onConfirm: pending.confirm,
+                onCancel: pending.cancel
+            )
+        }
     }
 
     // MARK: - Left cluster
@@ -83,6 +104,7 @@ struct AppStatusBar: View {
             if let branch = bridge.branch, !branch.isEmpty {
                 MarvinDivider().frame(height: 10)
                 branchSegment(branch: branch)
+                syncSegment
             }
             MarvinDivider().frame(height: 10)
             projectSegment
@@ -206,15 +228,104 @@ struct AppStatusBar: View {
         }
     }
 
+    /// Branch name — a BUTTON, opening the ref quick-pick.
+    ///
+    /// It rendered as a label until now, which is why clicking it did
+    /// nothing: `/api/git/branch`, `/branch/create`, `/branch/switch`
+    /// and `/branch/delete` had all shipped with ADR-0012 M2 and no
+    /// Swift caller ever reached them.
     private func branchSegment(branch: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 10))
-            Text(branch)
-            if bridge.branchDirtyCount > 0 {
-                Text("●")
-                    .foregroundStyle(.orange)
-                    .help("\(bridge.branchDirtyCount) uncommitted change\(bridge.branchDirtyCount == 1 ? "" : "s")")
+        Button {
+            branchPickerOpen = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10))
+                Text(branch)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                // `*` for a dirty tree, matching the reference's
+                // "chore/backlog-audit-and-easy-wins*". The old dot
+                // sat in the same place and meant the same thing.
+                if bridge.branchDirtyCount > 0 {
+                    Text("*").foregroundStyle(GitDecorationColor.modified)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(branchHelp)
+    }
+
+    private var branchHelp: String {
+        var parts = ["Checkout / create a branch"]
+        if bridge.branchDirtyCount > 0 {
+            parts.append(
+                "\(bridge.branchDirtyCount) uncommitted change\(bridge.branchDirtyCount == 1 ? "" : "s")"
+            )
+        }
+        if let upstream = bridge.branchUpstream {
+            parts.append("tracking \(upstream)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Sync control — the counts plus a one-click pull-then-push. The
+    /// reference shows this immediately right of the branch name and it
+    /// is the single most-used git affordance in the whole bar.
+    @ViewBuilder
+    private var syncSegment: some View {
+        if bridge.branchUpstream != nil {
+            Button {
+                runSync()
+            } label: {
+                HStack(spacing: 3) {
+                    if statusBarRunner.isBusy {
+                        ProgressView().controlSize(.small).scaleEffect(0.5)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 10))
+                    }
+                    if bridge.branchBehind > 0 {
+                        Text("\(bridge.branchBehind)↓").font(.system(size: 10, design: .monospaced))
+                    }
+                    if bridge.branchAhead > 0 {
+                        Text("\(bridge.branchAhead)↑").font(.system(size: 10, design: .monospaced))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(statusBarRunner.isBusy)
+            .help(syncHelp)
+        }
+    }
+
+    private var syncHelp: String {
+        guard let upstream = bridge.branchUpstream else { return "No upstream" }
+        if bridge.branchAhead == 0 && bridge.branchBehind == 0 {
+            return "Up to date with \(upstream) · click to fetch and sync"
+        }
+        return "Sync with \(upstream) — pull \(bridge.branchBehind), push \(bridge.branchAhead)"
+    }
+
+    /// Pull then push, sequenced. Same reasoning as the panel's Sync:
+    /// firing both at once pushes a branch the pull is still rewriting.
+    private func runSync() {
+        guard let cwd = bridge.projectWorkDir, !cwd.isEmpty else { return }
+        Task { @MainActor in
+            let pulled = await statusBarRunner.runRemoteAwaiting(
+                verb: "pull", cwd: cwd
+            ) { token in
+                try await FilesService.shared.pull(
+                    cwd: cwd, strategy: "ff-only", confirmToken: token
+                )
+            }
+            guard pulled else { return }
+            _ = await statusBarRunner.runRemoteAwaiting(
+                verb: "push", cwd: cwd
+            ) { token in
+                try await FilesService.shared.push(cwd: cwd, confirmToken: token)
             }
         }
     }

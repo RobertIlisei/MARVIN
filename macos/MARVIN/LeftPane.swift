@@ -62,6 +62,7 @@ struct LeftPane: View {
     /// it in @AppStorage because the daily-driver expectation is
     /// "files on launch, switch when you want SCM". Promote to
     /// AppStorage if user feedback says otherwise.
+    @Environment(MarvinBridge.self) private var bridge
     @State private var tab: LeftPaneTab = .files
 
     /// Width below which the content half of the pane is dropped and only the
@@ -166,6 +167,16 @@ struct LeftPane: View {
             .allowsHitTesting(!collapsed)
         }
         .clipped()
+        // A View-menu item or a Command Palette entry asks for a tab by
+        // name; the pane owns which one is showing, so the request arrives
+        // as bridge state and is cleared once honoured. A raw string rather
+        // than the enum because `LeftPaneTab` is private to this file and
+        // deliberately stays that way — the pane's tab set is not API.
+        .onChange(of: bridge.requestedLeftTab) { _, requested in
+            guard let requested, let want = LeftPaneTab(rawValue: requested) else { return }
+            tab = want
+            bridge.requestedLeftTab = nil
+        }
     }
 
     /// One tab's pane. Every pane stays MOUNTED so its @State (fetched tree,

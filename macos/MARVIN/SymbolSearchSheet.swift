@@ -227,8 +227,27 @@ struct SymbolSearchSheet: View {
     private func open(_ node: GraphNode) {
         guard let workDir = bridge.projectWorkDir else { return }
         let fullPath = workDir + "/" + node.sourceFile
-        bridge.setSelectedFile(fullPath)
+        // Jump to the symbol's LINE, not just its file. `setSelectedFile`
+        // opens at the top, so picking `checkFsPath` out of a 900-line file
+        // landed you at line 1 with no indication anything had happened —
+        // the same defect the Problems rows had. The graph has carried
+        // `source_location` all along; it was displayed in the row and then
+        // thrown away on selection.
+        bridge.openFileFromChat(path: fullPath, line: Self.line(from: node.sourceLocation))
         dismiss()
+    }
+
+    /// graphify writes `source_location` as `L<line>` (e.g. `L725`); a bare
+    /// number and a `L12-40` range both appear in older graphs, so take the
+    /// first run of digits and ignore the rest.
+    static func line(from location: String?) -> Int? {
+        guard let location else { return nil }
+        var digits = ""
+        for ch in location {
+            if ch.isNumber { digits.append(ch) }
+            else if !digits.isEmpty { break }
+        }
+        return digits.isEmpty ? nil : Int(digits)
     }
 
     // MARK: - Graph loading
