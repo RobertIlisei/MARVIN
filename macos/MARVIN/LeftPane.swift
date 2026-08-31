@@ -67,6 +67,14 @@ struct LeftPane: View {
     /// Expanded Outline/Timeline/Tasks sections, reported up by the panel.
     @State private var toolsOpenSections = 0
 
+    /// Floor for the tools panel: its three headers, plus room for whatever
+    /// is open. Capped so opening all three cannot crush the file tree.
+    private var toolsMinHeight: CGFloat {
+        let headers: CGFloat = 78
+        guard toolsOpenSections > 0 else { return headers }
+        return headers + min(CGFloat(toolsOpenSections) * 120, 260)
+    }
+
     /// Width below which the content half of the pane is dropped and only the
     /// rail remains — VS Code / Antigravity collapse the sidebar when you drag
     /// it narrow instead of clamping it at a minimum (user, 2026-08-29: "the
@@ -152,16 +160,31 @@ struct LeftPane: View {
                     VSplitView {
                         FileTreeView()
                             .frame(minHeight: 120)
-                        // A STABLE ideal, deliberately not one that tracks the
-                        // open-section count. A changing ideal makes the split
-                        // view re-apply it on every expand/collapse, which
-                        // yanks the divider back to a computed position after
-                        // the user has dragged it somewhere they wanted — the
-                        // "resizing feels weird" report. The panel scrolls its
-                        // own content instead, so opening a section never
-                        // moves the divider at all.
+                        // The ideal is STABLE and the minimum MOVES, and the
+                        // asymmetry between those two is the whole design.
+                        //
+                        // A changing *ideal* is what made resizing feel wrong:
+                        // the split view re-applies it on every expand and
+                        // collapse, so the divider snapped back to a computed
+                        // position after the user had dragged it where they
+                        // wanted it.
+                        //
+                        // But a fixed 76pt *minimum* is three section headers
+                        // and nothing else, so expanding one had no room to
+                        // render into — the section opened onto zero pixels
+                        // and read as "expand stopped working". The old
+                        // changing ideal had been hiding that by force-growing
+                        // the panel.
+                        //
+                        // A minimum only ever pushes: it claims room when a
+                        // section opens, and on collapse it simply stops
+                        // demanding — NSSplitView does not reel the divider
+                        // back in. So the panel can always show what it was
+                        // asked to show, and a position the user chose stays
+                        // chosen. Capped, because three open sections must not
+                        // crush the file tree above.
                         ProjectToolsPanel(openSections: $toolsOpenSections)
-                            .frame(minHeight: 76, idealHeight: 200)
+                            .frame(minHeight: toolsMinHeight, idealHeight: 200)
                     },
                     active: tab == .files
                 )
