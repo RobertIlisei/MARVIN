@@ -16,9 +16,9 @@ export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);
   if (guard) return guard;
 
-  let body: { marvinSessionId?: string };
+  let body: { marvinSessionId?: string; source?: string };
   try {
-    body = (await req.json()) as { marvinSessionId?: string };
+    body = (await req.json()) as { marvinSessionId?: string; source?: string };
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
@@ -29,6 +29,6 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  const cancelled = cancelLiveTurn(id);
+  const cancelled = cancelLiveTurn(id, body.source?.trim() || "api/chat/cancel");
   return NextResponse.json({ cancelled });
 }

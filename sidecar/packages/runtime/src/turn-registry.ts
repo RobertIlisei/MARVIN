@@ -208,9 +208,35 @@ export function endLiveTurn(
 }
 
 /** Explicit user cancel. Returns true when a live turn was force-ended. */
-export function cancelLiveTurn(marvinSessionId: string): boolean {
+/**
+ * Abort a session's live turn.
+ *
+ * `source` exists because a cancelled turn is otherwise anonymous. A turn
+ * that dies mid-thinking surfaces as the SDK's own "Claude Code process
+ * aborted by user" — the abort signal reaching the CLI — and NOT as the
+ * "cancelled by user" written below, because `endLiveTurn`'s `ended` guard
+ * keeps whichever terminal lands first. So the log showed a killed turn with
+ * no way to tell whether a person pressed Stop, a Stop-All ran, or a machine
+ * turn was preempted. Every caller now names itself, so the next occurrence
+ * identifies its own cause instead of needing to be guessed at
+ * (user, 2026-09-01: aborts appearing on session switch).
+ */
+export function cancelLiveTurn(
+  marvinSessionId: string,
+  source = "unspecified",
+): boolean {
   const turn = live.get(marvinSessionId);
   if (!turn || turn.ended) return false;
+  // eslint-disable-next-line no-console
+  console.log(
+    `[marvin.telemetry] ${JSON.stringify({
+      kind: "turn.cancelled",
+      marvinSessionId,
+      turnId: turn.turnId,
+      source,
+      at: new Date().toISOString(),
+    })}`,
+  );
   // Ask the agent to stop gracefully...
   turn.abortController.abort();
   // ...but do NOT wait for it. Force the turn terminal now so the session

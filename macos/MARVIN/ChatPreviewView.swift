@@ -828,7 +828,7 @@ final class ChatPreviewModel {
     /// sidecar actually stops (not just our consumer). The /cancel
     /// is fire-and-forget — failure is logged but doesn't block
     /// the local teardown; a refreshed window can always re-issue.
-    func cancel() {
+    func cancel(source: String = "stop-button") {
         detachLocalStream()
         // ADR-0021 M4: brief cancelling state → idle.
         MarvinBridge.shared.setMarvinState("cancelling", forSession: marvinSessionId)
@@ -840,7 +840,9 @@ final class ChatPreviewModel {
         if let id = marvinSessionId {
             Task { @MainActor in
                 do {
-                    _ = try await ChatService.shared.cancelTurn(marvinSessionId: id)
+                    _ = try await ChatService.shared.cancelTurn(
+                        marvinSessionId: id, source: source
+                    )
                 } catch {
                     NSLog("[ChatPreview] cancelTurn failed: \(error)")
                 }
@@ -1781,7 +1783,7 @@ struct ChatPreviewView: View {
         }
         // Bring the local view into line with what the server just did — the
         // turn is gone, so the footer must stop claiming otherwise.
-        if result.turnCancelled { model.cancel() }
+        if result.turnCancelled { model.cancel(source: "stop-all") }
         var bits: [String] = []
         if result.turnCancelled { bits.append("turn aborted") }
         if result.jobsCancelled > 0 { bits.append("\(result.jobsCancelled) job(s) killed") }
@@ -1850,7 +1852,7 @@ struct ChatPreviewView: View {
             ChatInputBar(
                 text: Bindable(model).draft,
                 onSubmit: { model.send(cwd: bridge.projectWorkDir) },
-                onStop: { model.cancel() },
+                onStop: { model.cancel(source: "stop-button") },
                 onStopAll: { Task { await beginStopAll() } },
                 isSending: model.isSending,
                 activityLabel: model.currentActivity,

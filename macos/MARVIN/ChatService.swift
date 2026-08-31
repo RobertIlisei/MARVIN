@@ -113,14 +113,19 @@ final class ChatService {
         return body?["injected"] as? Bool == true
     }
 
-    func cancelTurn(marvinSessionId: String) async throws -> Bool {
+    /// `source` names the affordance that asked, and is logged by the
+    /// sidecar as `turn.cancelled`. A cancelled turn is otherwise anonymous:
+    /// it surfaces as the SDK's own "Claude Code process aborted by user",
+    /// with nothing saying whether a person pressed Stop or something else
+    /// did it for them.
+    func cancelTurn(marvinSessionId: String, source: String = "unspecified") async throws -> Bool {
         let url = baseURL.appendingPathComponent("api/chat/cancel")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         req.httpBody = try JSONSerialization.data(
-            withJSONObject: ["marvinSessionId": marvinSessionId]
+            withJSONObject: ["marvinSessionId": marvinSessionId, "source": source]
         )
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {

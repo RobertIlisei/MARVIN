@@ -92,7 +92,7 @@ export function stopAll(input: {
     else failed.push(`job:${j.id}`);
   }
 
-  const turnCancelled = cancelLiveTurn(marvinSessionId);
+  const turnCancelled = cancelLiveTurn(marvinSessionId, "stop-all");
 
   return { turnCancelled, jobsCancelled, wakeupsCancelled, failed };
 }
