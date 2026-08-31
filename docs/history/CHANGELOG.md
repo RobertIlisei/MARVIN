@@ -8,6 +8,57 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.93: advisor caveats are conditions, not backlog items.**
+
+  ADR-0100 implemented. The user's objection was a content-class one: *"the
+  backlog should be for backlogged items as first proposed, in-flight items
+  that we discover. Advisor caveats seem like another kind of necessity."*
+
+  The repo already held the measurement. From ADR-0095's own 2026-08-30
+  amendment: **12 items parked in 60 seconds, 10 dismissed at the handoff, 2
+  kept** — and the 10 were not bad advice, they were advice the executor had
+  *already acted on in that same turn*, arriving pre-satisfied. The amendment
+  reduced the volume (one item per consult instead of per caveat) but left the
+  cause: parking before you can know whether the condition was met.
+
+  A caveat on a `go-with-caveats` is a **condition on a `go` already given**.
+  ADR-0044 built the backlog for **deferred work** and made `backlog_add`
+  reject the other content classes; a caveat is none of them. The
+  [gate-pattern literature](https://www.mindstudio.ai/blog/gate-pattern-ai-agents-prepare-not-submit)
+  draws the same line — a reviewer who records a concern while work proceeds is
+  performing *review*; one whose objection halts it is performing *approval*.
+
+  Caveats now attach to `DesignTurnContext.advisorConditions` and ride the turn
+  to its close. The **ADR-0057 workflow guard** — which already fires a
+  corrective turn when a close claims scope-met with plan items open or an ADR
+  unticked — treats an unanswered condition as the same shape of gap.
+  `WorkflowGap` gains an optional `openConditions`, and the reconcile prompt
+  asks `met` / `not met` / `waived, because …` per condition, instructing the
+  executor to park **only** the unmet and waived ones and stating explicitly
+  that a met condition needs no item.
+
+  Reusing the guard instead of building a transfer path put the judgement where
+  it belongs: the executor knows what it actually did; a hook does not. That is
+  the same division ADR-0095 drew when it refused to verify caveats, and the
+  same reason Golden Rule 1 forbids a model policing a model.
+
+  **A drafting assumption that did not survive the code.** The ADR worried
+  turn-scoped conditions would be lost if a turn died before its handoff, and
+  proposed firing the transfer on abnormal termination too. Reading the
+  implementation showed the mitigation was unnecessary: ADR-0095 already
+  appends every caveat to `.marvin/advisor-caveats.md` the instant it parses
+  one, before anything can refuse, and that write is untouched. A dying turn
+  loses the backlog transfer, not the advice. The extra hook was dropped rather
+  than built for a risk that was not there — recorded in the ADR so the
+  reasoning is not re-litigated.
+
+  `parkCaveats` deleted as orphaned by the change. Six new tests, including
+  that two consults in one turn *append* rather than replace (a lost obligation
+  with no error is the failure this ADR is about) and that a failed record
+  write is reported as "caveats exist ONLY in this context window", since the
+  record is now the only parse-time write and therefore the floor. 1043 sidecar
+  tests green, `tsc` and biome clean.
+
 - **2026-08-31 — v0.1.92: the fix had a hole, and the official docs said why.**
 
   v0.1.91 shipped a deny on backgrounded advisor dispatches, keyed on

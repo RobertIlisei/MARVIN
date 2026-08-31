@@ -28,20 +28,19 @@
  *      turn, a commit, or a scope-met.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
-
-import { listChanges, type ChangedFile } from "./change-checkpoints";
-import { collectCiStatus, renderCiStatus, type CiStatus } from "./ci-status";
-import { readAutoAuditTail, type AutoAuditEntry } from "./auto-audit";
+import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 import { buildSubprocessEnv } from "./auth";
+import { type AutoAuditEntry, readAutoAuditTail } from "./auto-audit";
+import { type ChangedFile, listChanges } from "./change-checkpoints";
+import { type CiStatus, collectCiStatus, renderCiStatus } from "./ci-status";
 import { ensureProviderModelId, latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
-import { SUBAGENT_DISPATCH_TOOLS } from "@marvin/tools/policy";
 
 /** Caps — the packet is bounded so an audit can't blow up cost or context. */
 export const AUDIT_CAPS = {
@@ -284,7 +283,7 @@ export function renderAuditPrompt(packet: AuditPacket): string {
   lines.push(`session: ${packet.sessionId}  ·  project: ${packet.projectId}`);
   lines.push(`workspace: ${packet.cwd}`);
   lines.push(
-    `MARVIN emitted a scope-met (\"done\") marker this session: ${packet.claimedScopeMet ? "YES" : "no"}`,
+    `MARVIN emitted a scope-met ("done") marker this session: ${packet.claimedScopeMet ? "YES" : "no"}`,
   );
   lines.push("");
 

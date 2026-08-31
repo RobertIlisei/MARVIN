@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-
+import type { ChangedFile } from "../src/change-checkpoints";
+import type { SessionTurn } from "../src/session";
 import {
   AUDIT_CAPS,
   AUDITOR_DISALLOWED_TOOLS,
@@ -8,14 +9,12 @@ import {
   computeGraphFreshness,
   countFindings,
   extractMessages,
+  extractPlanSteps,
   findingToBacklogSeverity,
   parseFindings,
-  extractPlanSteps,
   readAuditReport,
   renderAuditPrompt,
 } from "../src/session-auditor";
-import type { ChangedFile } from "../src/change-checkpoints";
-import type { SessionTurn } from "../src/session";
 
 // ADR-0059 — the auditor's pure core: packet assembly + prompt rendering.
 // The SDK dispatch itself is network-bound and covered manually.

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  LINK_MARKER,
+  type AdrIndex,
   deriveLinks,
+  LINK_MARKER,
   renderLinkTrailer,
   stripLinkTrailer,
-  type AdrIndex,
 } from "../src/note-links";
 
 // ADR-0065 addendum. Measured on a real project: 819 notes, 129 links, ALL of

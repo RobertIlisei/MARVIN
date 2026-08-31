@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-
+import { isMutatingToolCall } from "../src/sdk-runner";
 import {
   endLiveTurn,
   isPreemptible,
   markTurnMutated,
   registerLiveTurn,
 } from "../src/turn-registry";
-import { isMutatingToolCall } from "../src/sdk-runner";
 
 // ADR-0069. Preemption is the risky half of the fix: the 409 it replaces was
 // itself introduced to stop turns being evicted mid-work and left "silently

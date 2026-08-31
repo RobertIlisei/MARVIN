@@ -70,6 +70,19 @@ export interface DesignTurnContext {
    *  Before this, the gate observed only the dispatch, so a `reject`
    *  discharged it exactly like a `go`. */
   advisorVerdict?: AdvisorVerdict;
+  /**
+   * ADR-0100 — the advisor's caveats as CONDITIONS on this scope.
+   *
+   * Turn-scoped, because that is the obligation's natural lifetime: a caveat
+   * is a condition on a `go` already given, and it stops being one the moment
+   * the scope closes. It becomes deferred work — and only then belongs in the
+   * backlog — if the scope closes without it being met.
+   *
+   * They are NOT the durable record. `advisor-verdict.ts` still appends every
+   * caveat to `.marvin/advisor-caveats.md` the instant it parses one, so a
+   * turn that dies before its handoff loses nothing but the backlog transfer.
+   */
+  advisorConditions?: string[];
   /** ADR-0095 — has the `reject` deny already fired this turn? Fired-once, in
    *  the same spirit as `advisorHookFiredForPaths`: the verdict must be READ,
    *  but a subagent does not get a veto over the user's working tree. */

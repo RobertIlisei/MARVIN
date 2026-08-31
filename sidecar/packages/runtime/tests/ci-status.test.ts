@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { interpretCiRuns, renderCiStatus, type GhRun } from "../src/ci-status";
+import { type GhRun, interpretCiRuns, renderCiStatus } from "../src/ci-status";
 
 // ADR-0059 follow-up — CI as audit evidence, so "shipped on a red build"
 // becomes detectable. The interpreter is pure, so every case here runs with no

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -12,8 +12,8 @@ import {
   acceptHunk,
   diffFile,
   listChanges,
-  recordPreImage,
   reconcileCommitted,
+  recordPreImage,
   rejectAll,
   rejectFile,
   rejectHunk,

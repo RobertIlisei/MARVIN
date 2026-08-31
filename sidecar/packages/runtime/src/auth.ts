@@ -19,8 +19,8 @@
  *   - No deep probe on every health check.
  */
 
-import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

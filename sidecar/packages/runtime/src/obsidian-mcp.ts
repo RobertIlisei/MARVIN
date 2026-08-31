@@ -12,18 +12,17 @@
  * context-budget and consent questions — see ADR-0065 §"What this is not".
  */
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-
-import { initVault, vaultStatus } from "./obsidian-vault";
 import { relinkBacklogNotes, rewriteBacklogIndex } from "./backlog";
 import { rewriteMemoryIndex } from "./memory-mcp";
+import { initVault, vaultStatus } from "./obsidian-vault";
 import { rewritePlansIndex } from "./plans-index";
 
 const run = promisify(execFile);

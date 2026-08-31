@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   advisorContextLine,
   advisorFallbackPath,
-  parseVerdictBlock,
   caveatTitle,
   classifyVerdict,
   extractCaveats,
@@ -17,6 +16,7 @@ import {
   isAdvisorDispatch,
   makeAdvisorVerdictPostToolUse,
   parseAdvisorReply,
+  parseVerdictBlock,
   toolResponseText,
 } from "../src/advisor-verdict";
 import { listBacklog, MAX_BODY_CHARS } from "../src/backlog";
@@ -157,34 +157,35 @@ describe("advisor-verdict · PostToolUse hook", () => {
   // executor had ALREADY acted on via `additionalContext`, arriving
   // pre-satisfied. The 2 that mattered sat among them. Now: every caveat to
   // the durable file, ONE summary item for the review.
-  it("records every caveat to the file and parks exactly ONE summary item", async () => {
+  it("records every caveat durably and parks NOTHING at parse time (ADR-0100)", async () => {
     const ctx = createTurnDesignContext(turnId, workDir);
-    const out = (await hook()(event(FIXTURE), undefined as never, {} as never)) as Record<string, never>;
+    await hook()(event(FIXTURE), undefined as never, {} as never);
 
-    const items = await listBacklog(workDir);
-    expect(items).toHaveLength(1);
-    expect(items.every((i) => i.status === "provisional")).toBe(true);
-    expect(ctx.advisorVerdict).toBe("go-with-caveats");
-
-    // All four caveats survive — in the file, which is the durable record.
+    // The durable record is unchanged and still immediate — this is what
+    // makes a turn that dies before its handoff lose nothing.
     const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
     expect(record).toContain("advisor caveats on");
     expect(record.match(/^- \*\*/gm) ?? []).toHaveLength(4);
+    expect(ctx.advisorVerdict).toBe("go-with-caveats");
 
-    // The summary item is actionable without opening the file: it lists the
-    // caveat titles and says where the full text lives.
-    const first = items[0];
-    expect(first).toBeDefined();
-    expect(first!.title).toContain("4 caveats");
-    const body = await readFile(join(workDir, ".marvin", "backlog", `${first!.id}.md`), "utf-8");
-    expect(body).toContain("1.");
-    expect(body).toContain("advisor-caveats.md");
+    // The BACKLOG write is what moved. A caveat at parse time is a condition
+    // on a `go` already given, not deferred work — and ADR-0095's own
+    // measurement showed the cost of parking early: 12 parked, 10 dismissed
+    // as already-satisfied, 2 kept among them.
+    expect(await listBacklog(workDir)).toHaveLength(0);
 
-    const context = (out.hookSpecificOutput as unknown as { additionalContext: string }).additionalContext;
-    expect(context).toContain("go-with-caveats");
-    expect(context).toContain("scope-met");
-    // Runtime handling stays the PRIMARY path — the record is a safety net.
-    expect(context).toContain("THIS turn");
+    // Instead the caveats ride the turn as conditions, for the scope-met
+    // reconcile to ask an outcome on.
+    expect(ctx.advisorConditions).toHaveLength(4);
+  });
+
+  it("appends conditions across TWO consults rather than replacing them", async () => {
+    // Two advisor consults in one turn must not have the second silently drop
+    // the first's conditions — that would be a lost obligation with no error.
+    const ctx = createTurnDesignContext(turnId, workDir);
+    await hook()(event(FIXTURE), undefined as never, {} as never);
+    await hook()(event(FIXTURE), undefined as never, {} as never);
+    expect(ctx.advisorConditions).toHaveLength(8);
   });
 
   it("records a reject and says the next write will be blocked once", async () => {
@@ -202,7 +203,7 @@ describe("advisor-verdict · PostToolUse hook", () => {
     const reply = "## Verdict\n\n**Go-with-caveats.** Be careful about the rollout window.";
     await hook()(event(reply), undefined as never, {} as never);
     const items = await listBacklog(workDir);
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(0);   // ADR-0100: no park at parse time
     // The advisor's own words live in the durable record. The backlog item is
     // the pointer, so the words are asserted where they actually are.
     const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
@@ -352,7 +353,7 @@ describe("advisor-verdict · nothing is lost silently", () => {
     await rm(workDir, { recursive: true, force: true });
   });
 
-  it("keeps an oversized verdict in full in the record, and still parks a usable item", async () => {
+  it("keeps an oversized verdict in full — the record has no body cap", async () => {
     createTurnDesignContext(turnId, workDir);
     // A whole verdict SECTION is the shape most likely to exceed the backlog's
     // body cap — which under the old one-item-per-caveat design would have
@@ -372,20 +373,23 @@ describe("advisor-verdict · nothing is lost silently", () => {
       {} as never,
     );
     const items = await listBacklog(workDir);
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(0);   // ADR-0100: no park at parse time
     const record = await readFile(join(workDir, ".marvin", "advisor-caveats.md"), "utf-8");
+    // Under ADR-0095 this verdict had to be squeezed into a backlog item whose
+    // body is capped, so an oversized one risked losing the text. With no park
+    // at parse time the cap does not apply at all and the whole thing survives.
     expect(record.length).toBeGreaterThan(MAX_BODY_CHARS);
-    const body = await readFile(join(workDir, ".marvin", "backlog", `${items[0]!.id}.md`), "utf-8");
-    expect(body.length).toBeLessThan(MAX_BODY_CHARS);
-    expect(body).toContain("advisor-caveats.md");
   });
 
-  it("writes the fallback file when the backlog cannot take the item", async () => {
-    createTurnDesignContext(turnId, workDir);
-    // A read-only backlog directory makes every addBacklogItem fail the way a
-    // real disk problem would.
+  it("says so loudly when the durable record cannot be written", async () => {
+    const ctx = createTurnDesignContext(turnId, workDir);
+    // The record is now the ONLY write at parse time, which makes it the floor.
+    // Occupying its path with a file makes the append fail the way a real disk
+    // problem would. Previously this test broke the BACKLOG write; that path
+    // no longer exists here (ADR-0100), but the property it protected —
+    // nothing is lost silently — matters more now, not less.
     await mkdir(join(workDir, ".marvin"), { recursive: true });
-    await writeFile(join(workDir, ".marvin", "backlog"), "not a directory", "utf-8");
+    await mkdir(advisorFallbackPath(workDir), { recursive: true });
 
     const hook = makeAdvisorVerdictPostToolUse({ workDir, marvinSessionId: "s", turnId });
     const out = (await hook(
@@ -399,11 +403,11 @@ describe("advisor-verdict · nothing is lost silently", () => {
       {} as never,
     )) as Record<string, never>;
 
-    // The advice reached disk despite the backlog being unusable.
-    const fallback = await readFile(advisorFallbackPath(workDir), "utf-8");
-    expect(fallback).toContain("quantify");
     const context = (out.hookSpecificOutput as unknown as { additionalContext: string }).additionalContext;
-    expect(context).toContain("REFUSED");
-    expect(context).toContain("advisor-caveats.md");
+    // The executor must be told the caveats exist ONLY in its context window.
+    expect(context).toContain("could NOT be written");
+    expect(context).toContain("ONLY in this context window");
+    // And they still ride the turn as conditions, so the close still asks.
+    expect(ctx.advisorConditions?.length ?? 0).toBeGreaterThan(0);
   });
 });

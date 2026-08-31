@@ -35,10 +35,10 @@
  */
 
 import {
-  extractPathRefs,
-  relatedBacklogItems,
   type BacklogItem,
   type BacklogSeverity,
+  extractPathRefs,
+  relatedBacklogItems,
 } from "./backlog";
 
 /** Statuses that can still be acted on. Resolved items are history. */

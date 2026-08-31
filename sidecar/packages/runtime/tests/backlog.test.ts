@@ -1,27 +1,27 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  repairSwallowedField,
+  addBacklogItem,
+  type BacklogItem,
+  backlogSimilarity,
+  classifyBacklogText,
+  listBacklog,
   MAX_BODY_CHARS,
   MAX_OPEN_ITEMS,
   MAX_TITLE_CHARS,
-  RELATED_MAX,
-  addBacklogItem,
-  backlogSimilarity,
   NEAR_DUPLICATE_SCORE,
+  RELATED_MAX,
   RELATED_MIN_SCORE,
-  classifyBacklogText,
-  listBacklog,
   relatedBacklogItems,
+  repairSwallowedField,
   resolveBacklogItem,
   setBacklogStatus,
   updateBacklogItem,
-  type BacklogItem,
 } from "../src/backlog";
 
 // ADR-0044 — the per-project backlog store. A durable parking lot for deferred

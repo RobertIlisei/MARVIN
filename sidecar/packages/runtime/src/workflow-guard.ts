@@ -109,7 +109,7 @@ export function openPlanSteps(planState: unknown): string[] {
  */
 export function scopeOfDoneEntirelyUnticked(md: string): boolean {
   const m = md.match(/^#{1,6}\s+Scope of Done\b[^\n]*\n([\s\S]*?)(?=\n#{1,6}\s|$)/im);
-  if (!m || !m[1]) return false;
+  if (!m?.[1]) return false;
   const section = m[1];
   const unticked = (section.match(/^\s*[-*]\s*\[\s\]/gim) ?? []).length;
   const ticked = (section.match(/^\s*[-*]\s*\[[xX]\]/gim) ?? []).length;
@@ -120,11 +120,25 @@ export interface WorkflowGap {
   openTodos: string[];
   /** ADR basenames whose Scope of Done is entirely unticked. */
   untickedAdrs: string[];
+  /**
+   * ADR-0100 — advisor caveats still unresolved at the close.
+   *
+   * A caveat is a **condition on a `go` already given**, not deferred work, so
+   * it belongs to the scope it was attached to and has to be answered before
+   * that scope closes. This is the same shape as an unticked Scope-of-Done
+   * box: the executor claimed done, and something it was told to satisfy has
+   * no stated outcome.
+   */
+  openConditions?: string[];
 }
 
 /** True when there's anything to reconcile. */
 export function hasWorkflowGap(gap: WorkflowGap): boolean {
-  return gap.openTodos.length > 0 || gap.untickedAdrs.length > 0;
+  return (
+    gap.openTodos.length > 0 ||
+    gap.untickedAdrs.length > 0 ||
+    (gap.openConditions?.length ?? 0) > 0
+  );
 }
 
 /**
@@ -144,8 +158,33 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
       `- ADR(s) whose \`## Scope of Done\` is entirely unmarked: ${gap.untickedAdrs.join(", ")}`,
     );
   }
+  const conditions = gap.openConditions ?? [];
+  if (conditions.length > 0) {
+    lines.push(
+      `- Advisor condition(s) with no stated outcome: ` +
+        conditions.map((c) => `"${c}"`).join(", "),
+    );
+  }
+  // The conditions half needs its own instruction: reconciling a checkbox is
+  // "tick what is true", but reconciling a condition is "say which held, and
+  // park the ones that did not". Folding it into the ADR/todo sentence would
+  // have made it advisory-sounding, which is exactly what ADR-0100 is moving
+  // away from.
+  const conditionInstruction =
+    conditions.length > 0
+      ? `\n\nFor each advisor condition, state \`met\`, \`not met\`, or ` +
+        `\`waived, because …\`. Then park ONLY the not-met and waived ones with ` +
+        `\`backlog_add\`, quoting the condition and naming the advisor as its ` +
+        `source. A condition you met needs no backlog item — parking it is the ` +
+        `noise that buried the real ones (ADR-0095's own measurement: 12 parked, ` +
+        `10 dismissed, 2 kept). Do NOT claim a condition met to clear this ` +
+        `check; an honest "not met" is the useful answer.`
+      : "";
   return {
-    reason: "auto: reconcile plan/ADR before scope-met (ADR-0057)",
+    reason:
+      conditions.length > 0
+        ? "auto: reconcile plan/ADR/advisor conditions before scope-met (ADR-0057, ADR-0100)"
+        : "auto: reconcile plan/ADR before scope-met (ADR-0057)",
     prompt:
       `You closed the last turn with the scope-met marker, but the workflow ` +
       `isn't reconciled:\n${lines.join("\n")}\n\n` +
@@ -153,6 +192,7 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
       `genuinely done; tick the ADR \`## Scope of Done\` bullets that genuinely ` +
       `happened. For anything NOT actually done, leave it open, say so plainly, ` +
       `and do NOT claim scope met. Do NOT mark or tick anything merely to clear ` +
-      `this check — a false "done" is a worse failure than an unmarked box.`,
+      `this check — a false "done" is a worse failure than an unmarked box.` +
+      conditionInstruction,
   };
 }

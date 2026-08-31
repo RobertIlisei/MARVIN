@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveEffort, effortForThinkingMode } from "../src/sdk-runner";
+import { effortForThinkingMode, resolveEffort } from "../src/sdk-runner";
 
 // Pin the reasoning-effort resolver. MARVIN's picker now exposes the
 // full SDK ladder (low/medium/high/xhigh/max) instead of the old

@@ -18,10 +18,10 @@
  */
 
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { buildAdrIndex, linkTrailerFor, stripLinkTrailer, type AdrIndex } from "./note-links";
+import { type AdrIndex, buildAdrIndex, linkTrailerFor, stripLinkTrailer } from "./note-links";
 
 export const INDEX_HEADER = "# Project Backlog";
 export const MAX_TITLE_CHARS = 120;

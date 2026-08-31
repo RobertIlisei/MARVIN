@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { newestOfTier, fallbackNewestOfTier, type ModelInfo } from "../src/models";
+import { fallbackNewestOfTier, type ModelInfo, newestOfTier } from "../src/models";
 
 // Pin the tier-resolution logic that replaced the hardcoded model ids
 // (ADR-0029). The load-bearing rules:

@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerPendingConfirm,
   resolvePendingConfirm,

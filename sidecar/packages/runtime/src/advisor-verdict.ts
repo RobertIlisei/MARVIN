@@ -21,7 +21,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isSubagentDispatch } from "@marvin/tools/policy";
 
-import { addBacklogItem, MAX_BODY_CHARS } from "./backlog";
 import { ADVISOR_SUBAGENT_TYPE, getTurnDesignContext } from "./design-hooks";
 
 /** The verdict line ADR-0033's registered advisor is prompted to end on. */
@@ -308,92 +307,6 @@ export interface ParkOutcome {
   fellBack: boolean;
 }
 
-/** Record the advisor's caveats durably, and park ONE provisional backlog item
- *  per consult that points at them (ADR-0095 amendment, 2026-08-30).
- *
- *  The original shape parked one item PER CAVEAT. Measured on a real session
- *  the same day: **12 items parked in 60 seconds, 10 dismissed at the handoff,
- *  2 kept.** The 10 were not bad advice — they were advice the executor had
- *  already acted on in that same turn (`additionalContext` does reach it), so
- *  they arrived pre-satisfied and still had to be closed one at a time. The
- *  cost is not the writes; it is that the 2 real deploy-prerequisite items sat
- *  among 10 dismissible ones, which is how a real item gets missed.
- *
- *  Anthropic's long-running-agent guidance is explicit that "compaction isn't
- *  sufficient" and that state should be externalised — but the artefact it
- *  describes is a FILE (a progress log, a spec), not a queue of tickets. This
- *  implements that literally:
- *
- *    1. every caveat goes to `.marvin/advisor-caveats.md` immediately —
- *       durable, survives compaction, zero review burden;
- *    2. ONE provisional backlog item summarises the consult and points there,
- *       so "the advisor said X, we shipped without X" is still visible;
- *    3. promotion to individual items happens at the scope-met review, where
- *       the user already has the context to say which caveats are still open.
- *
- *  Every ADR-0095 property is preserved. What changes is granularity, and only
- *  the granularity was wrong. Deliberately NOT added: any check that a caveat
- *  was implemented — that is the correctness oracle a hook cannot be, and the
- *  original ADR was right to refuse it.
- *
- *  Refusals are still surfaced, never swallowed: `addBacklogItem` returns
- *  `{ok:false}` for the open-item cap and for validation, and an earlier
- *  version dropped those silently, making the cap a quiet destroyer of advice.
- */
-async function parkCaveats(args: {
-  workDir: string;
-  caveats: string[];
-  verdictText: string;
-  marvinSessionId: string;
-  topic: string;
-}): Promise<ParkOutcome> {
-  const { workDir, caveats, verdictText, marvinSessionId, topic } = args;
-  // Fail toward keeping too much: an unparsed verdict is recorded whole rather
-  // than dropped. A lost caveat is the failure this ADR exists to prevent.
-  const entries = caveats.length
-    ? caveats.map((c) => ({ title: caveatTitle(c), body: c }))
-    : [{ title: `Advisor caveats on ${topic}`, body: verdictText }];
-
-  // 1. The durable record, always, before anything can refuse.
-  const recordedOk = await recordCaveats(workDir, topic, entries, null);
-
-  // 2. One summary item. Its body carries the caveat TITLES so the review is
-  //    actionable without opening the file, and the file holds the full text.
-  const failures: string[] = [];
-  const parked: string[] = [];
-  const suffix =
-    `\n\nFull text: \`.marvin/advisor-caveats.md\`` +
-    `\n\n_Raised by the advisor (ADR-0095) on: ${topic}._` +
-    `\n_At the scope-met review, promote only the caveats still open._`;
-  const list = entries.map((e, i) => `${i + 1}. ${e.title}`).join("\n");
-  const room = MAX_BODY_CHARS - suffix.length - TRUNCATION_MARKER.length;
-  const body =
-    list.length > room ? `${list.slice(0, room)}${TRUNCATION_MARKER}${suffix}` : `${list}${suffix}`;
-
-  let result: Awaited<ReturnType<typeof addBacklogItem>>;
-  try {
-    result = await addBacklogItem(workDir, {
-      title:
-        entries.length === 1
-          ? entries[0]!.title
-          : `Advisor: ${entries.length} caveats on ${topic}`,
-      body,
-      kind: "investigate",
-      severity: "med",
-      sessionId: marvinSessionId,
-      provisional: true,
-    });
-  } catch (err) {
-    // The reason matters. Discarding it left `parked: 0` in telemetry with
-    // nothing to act on.
-    result = { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  if (result.ok) parked.push(result.item.id);
-  else failures.push(`${entries.length} caveat(s): ${result.error}`);
-
-  return { recorded: entries.length, recordedOk, parked, failures, fellBack: recordedOk };
-}
 
 /**
  * PostToolUse hook — read the advisor's verdict, persist its caveats (ADR-0095).
@@ -413,7 +326,10 @@ export function makeAdvisorVerdictPostToolUse(args: {
    *  same number. */
   advisorModel?: string;
 }): HookCallback {
-  const { workDir, marvinSessionId, turnId, advisorModel } = args;
+  // `marvinSessionId` stays on the args — callers pass it and the scope-met
+  // transfer needs a session to attribute the item to — but nothing in this
+  // hook writes a backlog item any more (ADR-0100), so it is not destructured.
+  const { workDir, turnId, advisorModel } = args;
   return async (input) => {
     if (input.hook_event_name !== "PostToolUse") return {} as HookJSONOutput;
     const evt = input as PostToolUseHookInput;
@@ -465,15 +381,49 @@ export function makeAdvisorVerdictPostToolUse(args: {
         : ""
       ).replace(/^advisor:\s*/i, "").trim() || "an advisor consult";
 
-    let outcome: ParkOutcome = { recorded: 0, recordedOk: true, parked: [], failures: [], fellBack: false };
+    // ── ADR-0100: record durably, attach as CONDITIONS, do not park ───────
+    //
+    // The durable write stays exactly where it was and still happens first:
+    // `.marvin/advisor-caveats.md` gets every caveat the moment it parses, so
+    // nothing is lost if this turn dies before its handoff. That was ADR-0095's
+    // real guarantee and it is untouched.
+    //
+    // What changed is the BACKLOG write, which used to happen here too. A
+    // caveat at parse time is not deferred work — it is a condition on a `go`
+    // already given, on work happening right now. ADR-0095's own amendment
+    // measured what parking it early costs: **12 items parked in 60 seconds,
+    // 10 dismissed at the handoff, 2 kept** — the 10 were advice the executor
+    // had ALREADY ACTED ON in that same turn, so they arrived pre-satisfied,
+    // and the 2 real ones sat among them. Parking before you can know whether
+    // the condition was met is the cause; moving the write to the handoff, and
+    // only for what is still open, is the fix.
+    let outcome: ParkOutcome = {
+      recorded: 0,
+      recordedOk: true,
+      parked: [],
+      failures: [],
+      fellBack: false,
+    };
     if (parsed.verdict !== "go") {
-      outcome = await parkCaveats({
-        workDir,
-        caveats: parsed.caveats,
-        verdictText: parsed.verdictText,
-        marvinSessionId,
-        topic,
-      });
+      const entries = parsed.caveats.length
+        ? parsed.caveats.map((c) => ({ title: caveatTitle(c), body: c }))
+        : [{ title: `Advisor caveats on ${topic}`, body: parsed.verdictText }];
+      const recordedOk = await recordCaveats(workDir, topic, entries, null);
+      outcome = {
+        recorded: entries.length,
+        recordedOk,
+        parked: [],
+        failures: recordedOk ? [] : ["advisor-caveats.md write failed"],
+        fellBack: false,
+      };
+      // The conditions ride the turn to its close, where the ADR-0057 guard
+      // asks for an outcome on each and parks only what is unmet or waived.
+      if (ctx) {
+        ctx.advisorConditions = [
+          ...(ctx.advisorConditions ?? []),
+          ...entries.map((e) => e.title),
+        ];
+      }
     }
 
     logAdvisorVerdict({
@@ -504,7 +454,7 @@ export function advisorContextLine(verdict: AdvisorVerdict, outcome: ParkOutcome
   if (verdict === "go") {
     return `${head} No caveats raised. Proceed, and cite the advisor's substantive input in your reply.`;
   }
-  const { recorded, recordedOk, parked, failures } = outcome;
+  const { recorded, recordedOk, failures } = outcome;
   const parts: string[] = [];
   if (recordedOk) {
     parts.push(
@@ -516,11 +466,13 @@ export function advisorContextLine(verdict: AdvisorVerdict, outcome: ParkOutcome
       `The caveat record could NOT be written. ${recorded} caveat(s) exist ONLY in this context window: act on them in this turn or restate them to the user now.`,
     );
   }
-  if (parked.length) {
-    parts.push(
-      `A summary item (${parked.join(", ")}) comes back at the scope-met review — promote only what is still open there.`,
-    );
-  }
+  // ADR-0100 — the caveats are CONDITIONS on this scope, not deferred work.
+  // Nothing is parked here; the scope-met reconcile asks for an outcome on
+  // each and parks only what is unmet or waived. Saying so is the point: the
+  // executor has to know it owes an answer, not that a chore was filed.
+  parts.push(
+    `They are conditions on THIS scope. State \`met\` / \`not met\` / \`waived, because …\` for each at the scope-met handoff; only the unmet and waived ones become backlog items there.`,
+  );
   if (failures.length) {
     // Name the reason. "Could not be parked" with no cause is not actionable.
     parts.push(

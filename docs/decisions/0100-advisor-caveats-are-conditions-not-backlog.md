@@ -1,6 +1,6 @@
 # ADR-0100 — An advisor caveat is a condition on the current scope, not deferred work
 
-- **Status:** Accepted — **implementation not started** (see Scope of Done)
+- **Status:** Accepted — implemented 2026-08-31
 - **Date:** 2026-08-31
 - **Related:** [ADR-0044](./0044-project-backlog.md) (what the backlog is for), [ADR-0095](./0095-advisor-verdict-is-read-and-caveats-persist.md) (the behaviour this changes), [ADR-0047](./0047-capture-at-discovery-consent-at-review.md) (capture-at-discovery), [ADR-0007](./0007-advisor-as-subagent-pattern.md) / [ADR-0094](./0094-advisor-dispatch-uses-the-registered-agent.md) (the advisor itself)
 
@@ -75,6 +75,19 @@ oracle to *ask*, and to make the answer part of the handoff the user reads.
 
 ### 3. The scope-met handoff is the transfer point
 
+Implemented by extending the **ADR-0057 workflow guard** rather than building a
+new mechanism. That guard already fires a corrective turn when a close claims
+scope-met with plan items open or an ADR's Scope of Done unticked; an
+unanswered advisor condition is the same shape of gap. `WorkflowGap` gains
+`openConditions`, and the reconcile prompt asks for `met` / `not met` /
+`waived, because …` per condition and instructs the executor to park **only**
+the unmet and waived ones with `backlog_add`.
+
+Putting the judgement in the corrective turn rather than in the hook is the
+point: the executor knows what it actually did, and a hook does not. This is
+the same division ADR-0095 drew when it refused to check whether a caveat was
+implemented.
+
 At the handoff, each open condition is rendered with the scope-met block and
 the executor states `met` / `not met` / `waived, because …`. Then:
 
@@ -106,12 +119,15 @@ can still change the outcome, which is the only window in which it is useful.
 "Advised X, shipped without X" becomes a *stated* waiver with a reason rather
 than an orphaned provisional item nobody connected to anything.
 
-**Negative.** Conditions now live in turn state, so a turn that dies without
-reaching its handoff loses them — which is precisely what ADR-0095's
-park-at-parse-time was protecting against. Mitigation: the transfer also fires
-on the abnormal-termination path, not only the clean handoff. That is the one
-piece of this design carrying real risk of being got wrong, and it is where
-the tests should concentrate.
+**Negative — smaller than this ADR first assumed.** The draft worried that
+turn-scoped conditions would be lost if a turn died before its handoff, and
+proposed firing the transfer on the abnormal-termination path to compensate.
+Reading the implementation showed that mitigation was unnecessary: ADR-0095
+already writes **every caveat to `.marvin/advisor-caveats.md` the instant it
+parses one**, before anything can refuse. That durable record is untouched
+here. What a dying turn loses is only the *backlog transfer* — the caveats
+themselves are on disk either way. The abnormal-termination hook was dropped
+as a complication buying nothing.
 
 **Negative.** One more thing the scope-met block must render, on a surface
 that is already dense.
@@ -132,13 +148,29 @@ is the only tool. Revisit if `AgentDefinition` gains the field.
 
 ## Scope of Done
 
-- [ ] Caveats parse to `DesignTurnContext`, not to `.marvin/backlog/`.
-- [ ] The `PostToolUse` line states the conditions bind the current scope.
-- [ ] The scope-met block renders every open condition and requires a
-      `met` / `not met` / `waived` answer for each.
-- [ ] `not met` and `waived` park to the backlog at the handoff, carrying
-      advisor provenance; `met` does not park.
-- [ ] The transfer also fires on abnormal turn termination — pinned by a test,
-      because this is the durability ADR-0095 had and this design must not
-      quietly lose.
-- [ ] ADR-0095 amended to point here for caveat handling.
+- [x] Caveats attach to `DesignTurnContext.advisorConditions`, not to
+      `.marvin/backlog/`. `parkCaveats` deleted as orphaned.
+- [x] The durable `.marvin/advisor-caveats.md` write is unchanged and still
+      immediate — pinned by a test asserting the record survives while the
+      backlog stays empty.
+- [x] The `PostToolUse` line states the caveats are conditions on this scope
+      and names the three legal answers.
+- [x] `hasWorkflowGap` treats an unanswered condition as a gap; the field is
+      optional so pre-ADR-0100 callers do not fire a corrective turn on every
+      clean close.
+- [x] The reconcile prompt asks `met` / `not met` / `waived` per condition and
+      instructs parking of **only** the unmet and waived ones, stating
+      explicitly that a met condition needs no backlog item.
+- [x] Two consults in one turn append rather than replace — a lost obligation
+      with no error is the failure mode this whole ADR is about.
+- [x] A failed record write is reported as "caveats exist ONLY in this context
+      window", since the record is now the only parse-time write and therefore
+      the floor.
+- [x] ADR-0095 amended to point here.
+- [x] 1043 sidecar tests green (6 new).
+
+**Not done, deliberately:** no check that a stated `met` is true. ADR-0095's
+reasoning holds — that is a correctness oracle a hook cannot be, and building
+one drifts toward the supervisor shape Golden Rule 1 forbids. The design makes
+the question unavoidable; the answer stays the executor's, and the user reads
+it.

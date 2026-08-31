@@ -1,8 +1,8 @@
 export { type AnthropicAuthStatus, getAnthropicAuth } from "./auth";
 export {
-  appendAutoAuditEntry,
   type AutoAuditEntry,
   type AutoAuditEntryKind,
+  appendAutoAuditEntry,
   readAutoAuditTail,
 } from "./auto-audit";
 export { type ClaudeCliResult, runClaudeCli } from "./claude-cli";

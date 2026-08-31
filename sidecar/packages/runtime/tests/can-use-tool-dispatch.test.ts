@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import path from "node:path";
 import { tmpdir } from "node:os";
+import path from "node:path";
 
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";

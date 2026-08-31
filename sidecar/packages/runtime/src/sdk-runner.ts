@@ -22,47 +22,31 @@
  *      when the user clicks allow or deny.
  */
 
+import { readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer } from "@marvin/graphify-bridge";
-import { createMemoryMcpServer } from "./memory-mcp";
+import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
+import { buildSubprocessEnv } from "./auth";
+import {
+  type AutoAuditEntryKind,
+  appendAutoAuditEntry,
+} from "./auto-audit";
+import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks";
 import { createBacklogMcpServer } from "./backlog-mcp";
-import { createObsidianMcpServer } from "./obsidian-mcp";
-import { projectSkillsPluginConfig } from "./project-skills-plugin";
-import { loadEnabledPlugins } from "./plugin-loader";
-import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
-import { makeOutputGovernorPostToolUse } from "./output-governor";
-import { scheduleWakeup } from "./wakeup-scheduler";
+import { recordPreImage } from "./change-checkpoints";
 import {
   buildCheckBackWakeup,
   detectUncoveredCheckBack,
   isCheckBackCovered,
 } from "./checkback-guard";
-import {
-  buildReconcilePrompt,
-  hasScopeMet,
-  hasWorkflowGap,
-  openPlanSteps,
-  openTodos,
-  scopeOfDoneEntirelyUnticked,
-  type WorkflowGap,
-} from "./workflow-guard";
-import { readPlanState } from "./plan-state";
-import { saveSlashCommands } from "./slash-commands";
-import { recordPreImage } from "./change-checkpoints";
-import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks";
-import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
-import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
-import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
-import { KNOWN_TOOL_NAMES, PLAYWRIGHT_SERVER_KEY, isSubagentDispatch, looksLikeSubagentDispatch, mcpToolPolicy, type ToolName, toolPolicy } from "@marvin/tools/policy";
-import {
-  type AutoAuditEntryKind,
-  appendAutoAuditEntry,
-} from "./auto-audit";
+import { defaultModel, discoverClaudeBinary } from "./claude-cli";
 import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
-import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
+import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
 import {
   ADVISOR_SUBAGENT_TYPE,
   clearTurnDesignContext,
@@ -72,13 +56,29 @@ import {
   makeDesignHooksPreToolUse,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
+import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
-import { defaultModel, discoverClaudeBinary } from "./claude-cli";
-import { readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
-import { markTurnMutated } from "./turn-registry";
+import { createObsidianMcpServer } from "./obsidian-mcp";
+import { makeOutputGovernorPostToolUse } from "./output-governor";
+import { readPlanState } from "./plan-state";
+import { loadEnabledPlugins } from "./plugin-loader";
+import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import { saveSlashCommands } from "./slash-commands";
+import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { TurnInputChannel } from "./turn-input";
-import { buildSubprocessEnv } from "./auth";
+import { markTurnMutated } from "./turn-registry";
+import { scheduleWakeup } from "./wakeup-scheduler";
+import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
+import {
+  buildReconcilePrompt,
+  hasScopeMet,
+  hasWorkflowGap,
+  openPlanSteps,
+  openTodos,
+  scopeOfDoneEntirelyUnticked,
+  type WorkflowGap,
+} from "./workflow-guard";
+import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -232,11 +232,12 @@ export type AgentMode = "ask" | "agent" | "plan";
 export {
   clampEffort,
   EFFORT_LEVELS,
+  type ReasoningEffort,
   resolveEffort,
   stepDownEffort,
-  type ReasoningEffort,
 } from "./effort";
-import { resolveEffort, type ReasoningEffort } from "./effort";
+
+import { type ReasoningEffort, resolveEffort } from "./effort";
 
 /**
  * @deprecated Use {@link resolveEffort}. Kept as a thin alias so any
@@ -1752,6 +1753,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let tokenUsage: RunAgentResult["tokenUsage"];
   let permissionDenials = 0;
   let resultError: string | undefined;
+  /** ADR-0100 — advisor conditions captured before the design context is torn
+   *  down, for the scope-met reconcile below. */
+  let advisorConditionsAtClose: string[] = [];
   // True once a non-error `result` envelope has been observed. Drives
   // the watchdog: if the SDK iterator hasn't terminated within
   // WATCHDOG_MS of seeing `result`, we force-abort the subprocess
@@ -1769,7 +1773,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // Workflow-completion guard state (ADR-0057). Latest TodoWrite payload and the
   // set of ADR files this turn edited, checked at turn-end against the scope-met
   // marker to catch a premature "done".
-  let lastTodoPayload: unknown = undefined;
+  let lastTodoPayload: unknown ;
   const editedAdrPaths = new Set<string>();
   let watchdogTimer: NodeJS.Timeout | null = null;
   // ADR-0080 — background subagents outlive the main turn's `result`. While
@@ -2002,12 +2006,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               : ev.subtype;
           resultError = detail;
         } else if (channel && channel.pending > 0) {
-          // ADR-0076 — a message was injected while this assistant turn
-          // ran. In streaming mode the SDK will now consume it and start
-          // the next assistant turn inside the same query; this `result`
-          // is intermediate, not terminal. Keep iterating; don't arm the
-          // watchdog. (Cost/usage above are overwritten by the final one.)
-          continue;
         } else if (bgLedger.hasLive) {
           // ADR-0080 — a background subagent (scout / graph-extractor) is
           // still running. Same shape as the injected-message case: this
@@ -2039,7 +2037,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               }
             }, BG_DRAIN_MAX_MS);
           }
-          continue;
         } else {
           // Successful result. Arm the watchdog: if the iterator
           // doesn't terminate naturally within WATCHDOG_MS, force-
@@ -2110,6 +2107,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // the context, so the ratio is readable from the sidecar log instead of
     // reconstructed from session transcripts.
     logDesignTurnSummary(designCtx);
+    // ADR-0100 — read the advisor conditions off the context BEFORE the
+    // teardown drops it. `clearTurnDesignContext` only deletes the registry
+    // entry, so the local `designCtx` reference would survive it — but the
+    // workflow guard below is ~50 lines away and depending on that detail
+    // across a teardown is how a working read becomes a silent `undefined`
+    // after an unrelated refactor.
+    advisorConditionsAtClose = designCtx.advisorConditions ?? [];
     clearTurnDesignContext(turnId);
   }
 
@@ -2178,7 +2182,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const ps = readPlanState(wakeupCtx.projectId, wakeupCtx.marvinSessionId);
       openPlanItems = ps.ok ? openPlanSteps(ps.state) : [];
     }
-    const gap: WorkflowGap = { openTodos: openPlanItems, untickedAdrs };
+    // ADR-0100 — advisor conditions are part of the close, not a backlog
+    // deposit made 20 minutes earlier. They rode the turn on the design
+    // context; here is where the executor is asked for an outcome on each.
+    const openConditions = advisorConditionsAtClose;
+    const gap: WorkflowGap = {
+      openTodos: openPlanItems,
+      untickedAdrs,
+      openConditions,
+    };
     if (hasWorkflowGap(gap)) {
       const { reason, prompt } = buildReconcilePrompt(gap);
       const res = scheduleWakeup({

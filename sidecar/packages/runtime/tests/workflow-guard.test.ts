@@ -128,3 +128,59 @@ describe("hasWorkflowGap + buildReconcilePrompt", () => {
     expect(prompt).toMatch(/retract|do not claim scope met|leave it open/i);
   });
 });
+
+describe("advisor conditions at the close (ADR-0100)", () => {
+  it("an unanswered condition IS a workflow gap", () => {
+    // The whole point of moving caveats off the backlog: they must be
+    // answered before the scope they were attached to closes.
+    expect(
+      hasWorkflowGap({ openTodos: [], untickedAdrs: [], openConditions: ["Add a rollback"] }),
+    ).toBe(true);
+  });
+
+  it("no conditions is not a gap, and the field is optional", () => {
+    expect(hasWorkflowGap({ openTodos: [], untickedAdrs: [], openConditions: [] })).toBe(false);
+    // Callers written before ADR-0100 omit the field entirely; that must not
+    // read as a gap and fire a corrective turn on every clean close.
+    expect(hasWorkflowGap({ openTodos: [], untickedAdrs: [] })).toBe(false);
+  });
+
+  it("asks for an outcome per condition and parks only the unmet ones", () => {
+    const { reason, prompt } = buildReconcilePrompt({
+      openTodos: [],
+      untickedAdrs: [],
+      openConditions: ["Add a rollback path", "Confirm the index exists"],
+    });
+    expect(reason).toContain("ADR-0100");
+    expect(prompt).toContain("Add a rollback path");
+    expect(prompt).toContain("Confirm the index exists");
+    // The three legal answers, and the instruction that met ones are NOT parked
+    // — parking the satisfied ones is what buried the real items before.
+    expect(prompt).toMatch(/`met`/);
+    expect(prompt).toMatch(/`not met`/);
+    expect(prompt).toMatch(/waived/);
+    expect(prompt).toContain("backlog_add");
+    expect(prompt).toContain("needs no backlog item");
+  });
+
+  it("keeps the plan/ADR reconcile intact alongside conditions", () => {
+    // A close can be short on all three at once; none may mask the others.
+    const { prompt } = buildReconcilePrompt({
+      openTodos: ["Step 3"],
+      untickedAdrs: ["0100-x.md"],
+      openConditions: ["Add a rollback path"],
+    });
+    expect(prompt).toContain("Step 3");
+    expect(prompt).toContain("0100-x.md");
+    expect(prompt).toContain("Add a rollback path");
+  });
+
+  it("does not mention conditions when there are none", () => {
+    const { reason, prompt } = buildReconcilePrompt({
+      openTodos: ["Step 3"],
+      untickedAdrs: [],
+    });
+    expect(reason).not.toContain("ADR-0100");
+    expect(prompt).not.toContain("backlog_add");
+  });
+});

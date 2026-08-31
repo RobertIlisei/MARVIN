@@ -18,22 +18,20 @@ import { resolve, sep } from "node:path";
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-
-import { groomBacklog, renderGroomReport } from "./backlog-groom";
-
 import {
+  addBacklogItem,
   BACKLOG_KINDS,
   BACKLOG_SEVERITIES,
-  MAX_BODY_CHARS,
-  MAX_TITLE_CHARS,
-  addBacklogItem,
-  classifyBacklogText,
-  listBacklog,
-  resolveBacklogItem,
-  setBacklogStatus,
   type BacklogItem,
   type BacklogStatus,
+  classifyBacklogText,
+  listBacklog,
+  MAX_BODY_CHARS,
+  MAX_TITLE_CHARS,
+  resolveBacklogItem,
+  setBacklogStatus,
 } from "./backlog";
+import { groomBacklog, renderGroomReport } from "./backlog-groom";
 
 export interface BacklogToolContext {
   cwd: string;

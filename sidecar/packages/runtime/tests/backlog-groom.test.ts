@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import { groomBacklog, renderGroomReport } from "../src/backlog-groom";
 import type { BacklogItem } from "../src/backlog";
+import { groomBacklog, renderGroomReport } from "../src/backlog-groom";
 
 // ADR-0063 — the backlog groomer, Phase 1 of the backlog loop. It REVIEWS and
 // reports; it never mutates. Thresholds and file existence are injected, so

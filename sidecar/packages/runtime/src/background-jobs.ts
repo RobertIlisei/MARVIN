@@ -17,11 +17,11 @@
  * inheritance, same chain-depth guard against runaway.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { stepDownEffort } from "./effort";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { stepDownEffort } from "./effort";
 
-import { MAX_CHAIN_DEPTH, fireNow, type WakeupRecord } from "./wakeup-scheduler";
+import { fireNow, MAX_CHAIN_DEPTH, type WakeupRecord } from "./wakeup-scheduler";
 
 /** Max concurrent background jobs per session — a rail, not a workload. */
 export const MAX_JOBS_PER_SESSION = 3;
