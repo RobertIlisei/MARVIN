@@ -67,12 +67,60 @@ struct LeftPane: View {
     /// Expanded Outline/Timeline/Tasks sections, reported up by the panel.
     @State private var toolsOpenSections = 0
 
+    /// Height the user dragged the tools panel to. Grown, never shrunk, by
+    /// `toolsMinHeight` — see below.
+    @State private var toolsHeight: CGFloat = 78
+
     /// Floor for the tools panel: its three headers, plus room for whatever
     /// is open. Capped so opening all three cannot crush the file tree.
+    ///
+    /// A floor rather than a height, because the two behave differently on
+    /// collapse: a floor claims room when a section opens and then simply
+    /// stops demanding, leaving a position the user dragged to intact.
     private var toolsMinHeight: CGFloat {
         let headers: CGFloat = 78
         guard toolsOpenSections > 0 else { return headers }
         return headers + min(CGFloat(toolsOpenSections) * 120, 260)
+    }
+
+    /// Draggable split between the file tree and the tools panel.
+    ///
+    /// A plain divider with a drag gesture, NOT a `VSplitView`. The split
+    /// view bridges to `NSSplitView`, and its hosted children do not inherit
+    /// the window's safe-area inset: probed live, the pane container sat at
+    /// y=52 (below the title bar) while the tree inside the split view sat at
+    /// y=0, so the tree's own 38pt header rendered entirely above the pane's
+    /// top edge and the first row was clipped by the title bar (user,
+    /// 2026-08-31: "on top the file explorer, the items are going out of
+    /// bounds"). Three fixes before this one reasoned from source about
+    /// ScrollView ideal heights and were all wrong; the frames settled it in
+    /// one launch.
+    ///
+    /// Losing the bridge also removes the ideal-size guessing it forced, and
+    /// `_NSSplitViewItemViewWrapper` was among the constraint-storm triggers.
+    private var toolsDivider: some View {
+        MarvinDivider()
+            // A 1px hairline is not a drag target. The padding widens the hit
+            // area without moving anything, which is what AppKit's own split
+            // dividers do.
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        // Dragging UP grows the panel, so the translation is
+                        // subtracted. Clamped to a sane band rather than
+                        // measured against the pane: measuring would need a
+                        // GeometryReader, and inserting views into this
+                        // hierarchy is what made AppKit's runaway-pass breaker
+                        // fatal in v0.1.93.
+                        let next = toolsHeight - value.translation.height
+                        toolsHeight = min(max(next, 78), 520)
+                    }
+            )
     }
 
     /// Width below which the content half of the pane is dropped and only the
@@ -157,52 +205,12 @@ struct LeftPane: View {
                 // the sections get — they are collapsed by default, so the
                 // tree keeps the whole pane until someone opens one.
                 paneSlot(
-                    VSplitView {
-                        // `idealHeight` is load-bearing, not decoration. A
-                        // minHeight-only frame forwards the ideal-size query
-                        // straight through to the child, and this child's
-                        // ideal height is a ScrollView's — which is its ENTIRE
-                        // content, every file in the project. `VSplitView`
-                        // asks for ideal sizes, so the tree was laid out
-                        // taller than the pane; a VStack centres, so the
-                        // overflow split top and bottom and pushed the tree's
-                        // own header off the top edge (user, 2026-08-31: "on
-                        // top the file explorer, the items are going out of
-                        // bounds"). An explicit ideal lets `_FlexFrameLayout`
-                        // answer that query without consulting the child.
-                        // Definite proposals are unaffected, so the rendered
-                        // size is unchanged — this is the same fix the chat
-                        // transcript needed on 2026-08-29.
+                    VStack(spacing: 0) {
                         FileTreeView()
-                            .frame(minHeight: 120, idealHeight: 400)
-                            // Belt and braces: whatever the proposal, the tree
-                            // must not paint outside the space it was given.
-                            .clipped()
-                        // The ideal is STABLE and the minimum MOVES, and the
-                        // asymmetry between those two is the whole design.
-                        //
-                        // A changing *ideal* is what made resizing feel wrong:
-                        // the split view re-applies it on every expand and
-                        // collapse, so the divider snapped back to a computed
-                        // position after the user had dragged it where they
-                        // wanted it.
-                        //
-                        // But a fixed 76pt *minimum* is three section headers
-                        // and nothing else, so expanding one had no room to
-                        // render into — the section opened onto zero pixels
-                        // and read as "expand stopped working". The old
-                        // changing ideal had been hiding that by force-growing
-                        // the panel.
-                        //
-                        // A minimum only ever pushes: it claims room when a
-                        // section opens, and on collapse it simply stops
-                        // demanding — NSSplitView does not reel the divider
-                        // back in. So the panel can always show what it was
-                        // asked to show, and a position the user chose stays
-                        // chosen. Capped, because three open sections must not
-                        // crush the file tree above.
+                            .frame(maxHeight: .infinity)
+                        toolsDivider
                         ProjectToolsPanel(openSections: $toolsOpenSections)
-                            .frame(minHeight: toolsMinHeight, idealHeight: 200)
+                            .frame(height: max(toolsHeight, toolsMinHeight))
                     },
                     active: tab == .files
                 )
