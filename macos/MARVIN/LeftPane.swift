@@ -42,20 +42,6 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// Width of the left pane, reported from a background measurement layer so the
-/// pane keeps its own intrinsic sizing (a root GeometryReader does not) and so
-/// a divider drag re-renders only a `Color.clear`. See `LeftPane.body`.
-///
-/// `-1`, not `0`: the default is what `onPreferenceChange` sees BEFORE the
-/// first real layout, and a `0` default silently reads as "narrow enough to
-/// collapse". That shipped once and hid the whole sidebar.
-private struct LeftPaneWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = -1
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 struct LeftPane: View {
     /// Picker selection persists across tab switches but not across
     /// app restarts — `@State` is sufficient. Phase 3e doesn't store
@@ -102,26 +88,38 @@ struct LeftPane: View {
         // default of -1 and the `width > 0` guard below — an unmeasured pane
         // is never a collapsed pane.
         //
-        // `onGeometryChange(for:)` expresses all of this directly but is
-        // macOS 15+; the deployment target is 14.0 (`macos/project.yml`).
+        // 3. THE CONSTRAINT STORM (2026-08-31). The `GeometryReader` +
+        //    `PreferenceKey` this used to be was a storm generator, and the
+        //    stack named it exactly: AppKit asks this pane's hosting view
+        //    for `minSize` during the constraints pass, SwiftUI instantiates
+        //    the graph to answer, instantiating creates the PREFERENCE
+        //    OUTLETS, and creating them invalidates the graph — which calls
+        //    `setNeedsUpdateConstraints` back on the hosting view, re-arming
+        //    the pass that asked. 150 invalidations in half a second, five
+        //    times a session. `WidthReporter` is an `NSView` that reads its
+        //    own `bounds` in `layout()`: no view graph, no preference,
+        //    nothing to invalidate. See `WidthReporter.swift` for the
+        //    captured stack.
+        //
+        // `onGeometryChange(for:)` would also avoid the preference, but it
+        // is macOS 15+ and the deployment target is 14.0.
         pane(collapsed: collapsed)
             .frame(minWidth: 45)
             .background {
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: LeftPaneWidthKey.self,
-                        value: geo.size.width,
-                    )
+                WidthReporter { width in
+                    // An unmeasured pane is never a collapsed pane. With the
+                    // old PreferenceKey this needed a -1 sentinel, because a
+                    // `0` default fired before any real layout and latched
+                    // the sidebar shut at full width — that shipped once.
+                    // `WidthReporter` only reports from a real `layout()`,
+                    // so the guard is now belt-and-braces rather than
+                    // load-bearing.
+                    guard width > 0 else { return }
+                    // Measured on the content, not the whole pane, so the
+                    // rail's 45pt never counts toward the threshold.
+                    let next = width - 45 < Self.collapseBelow
+                    if next != collapsed { collapsed = next }
                 }
-            }
-            .onPreferenceChange(LeftPaneWidthKey.self) { width in
-                // The sentinel: -1 means "not measured yet". Only a real
-                // layout gets to decide whether the pane is collapsed.
-                guard width > 0 else { return }
-                // Measured on the content, not the whole pane, so the rail's
-                // 45pt never counts toward the threshold.
-                let next = width - 45 < Self.collapseBelow
-                if next != collapsed { collapsed = next }
             }
     }
 

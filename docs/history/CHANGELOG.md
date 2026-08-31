@@ -8,6 +8,56 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.90: the constraint storm, named by its own stack.**
+
+  The ADR-0062 storm monitor had been reporting **five storms a session** on
+  the left pane's `NSHostingView`, 150 invalidations in under 0.5 s each. A
+  2026-08-29 fix addressed a storm with the same symptom, the same monitor
+  and the same view, and the reports continued — because it was a different
+  loop. That one ran through `_recursiveSetDefaultKeyViewLoop` (the focus
+  key-view walk) and was fixed by taking inactive panes out of layout. This
+  one runs through preferences.
+
+  Read the captured stack bottom-up:
+
+      -[NSView _updateConstraintsForSubtreeIfNeeded…]
+        → NSHostingView._willUpdateConstraintsForSubtree
+          → SizeConstraints.update(from:) → minSize → _sizeThatFits
+            → ViewGraph.sizeThatFits → GraphHost.instantiateIfNeeded
+              → instantiateOutputs → makePreferenceOutlets
+                → PreferenceBridge.addValue → graphInvalidation
+                  → NSHostingView.requestUpdate → setNeedsUpdateConstraints
+
+  AppKit asks the pane's hosting view for its minimum size during the
+  constraints pass. SwiftUI instantiates the view graph to answer.
+  Instantiating creates the **preference outlets**, and creating them
+  invalidates the graph, which calls `setNeedsUpdateConstraints` back on the
+  hosting view — re-arming the pass that asked. It does not converge; it
+  stops when the budget runs out.
+
+  The trigger was the idiomatic SwiftUI measurement,
+  `.background { GeometryReader { Color.clear.preference(…) } }` — correct
+  in general, a storm generator inside an `NSSplitView` pane. `LeftPane`
+  used it for its collapse threshold, and the editor tab strip added two
+  more in v0.1.89 for its overflow arrows.
+
+  All three replaced by `WidthReporter`: an `NSView` that reads its own
+  `bounds` in `layout()` and reports on a one-runloop hop, so no state is
+  mutated inside the layout pass that produced it. No view graph, no
+  preference, nothing to invalidate — the same drop-to-AppKit move already
+  used by `SplitViewAutosave`, `SplitDividerTheme` and `HoverTooltip`.
+  `onGeometryChange(for:)` expresses this natively without preferences and
+  is the right answer once the deployment floor moves off macOS 14.
+
+  A grep confirms no `PreferenceKey` or `onPreferenceChange` remains
+  anywhere in `macos/MARVIN/`.
+
+  **Not verified live.** Confirming the fix means running a new build, and
+  the installed v0.1.89 was mid-task and deliberately left running at the
+  user's request. `swift build` is clean and 528 test assertions pass; the
+  real test is the storm count in `~/Library/Logs/MARVIN/exceptions.log`
+  after the next restart, which was 5 per session before this.
+
 - **2026-08-31 — v0.1.89: three surfaces that existed and could not be reached.**
 
   Reported over one session as *"we are missing a lot of features in source

@@ -131,48 +131,49 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.89** — source control, diagnostics and the menu bar stop pretending.
+**v0.1.90** — the constraint storm, named by its own stack.
 
-Three surfaces the user reported as "doesn't do anything", and in all three
-the feature existed and could not be reached.
+MARVIN's storm monitor (ADR-0062) had been reporting five storms a session
+on the left pane's hosting view — 150 layout invalidations in under half a
+second, each time. A fix on 2026-08-29 addressed a storm with the same
+symptom and the same monitor, and the reports kept coming, because it was a
+**different loop**.
 
-**Source control had a backend with no caller.** `/api/git/branch`,
-`/branch/create`, `/branch/switch` and `/branch/delete` shipped with ADR-0012
-M2. `rg` across `macos/` found **zero** Swift callers: the branch name was a
-`Text` in both the SCM panel and the status bar. Complete, tested, documented,
-unreachable. It is now a searchable ref picker (create / create-from /
-checkout-detached, ahead-behind and a `author · sha · subject` line per
-branch), reachable from the status bar and the panel. The panel itself was
-rebuilt to the reference shape — composer on top with a branch-aware
-placeholder and an AI **Generate**, one primary button that is Commit /
-Sync `10↓ 5↑` / Publish Branch depending on state, collapsible sections,
-stash and worktree groups, and a real commit **DAG** with lane assignment and
-merge curves.
+The captured stack settles it, read bottom-up:
 
-**Diagnostics were searching one directory.** `detectAndRun` looked at the
-repo root only, for three markers. A monorepo with TypeScript under
-`apps/web/` and Java under `apps/api/` matched none of them, ran nothing,
-returned `[]` — and `[]` rendered as the same clean checkmark a genuinely
-clean project gets. Discovery now walks the tree across eight toolchains, and
-the three empty states (never ran / no toolchain found / actually clean) are
-distinct, which is the part that let this hide for months.
+    -[NSView _updateConstraintsForSubtreeIfNeeded…]
+      → NSHostingView._willUpdateConstraintsForSubtree
+        → SizeConstraints.update(from:) → minSize → _sizeThatFits
+          → GraphHost.instantiateIfNeeded → instantiateOutputs
+            → makePreferenceOutlets → PreferenceBridge.addValue
+              → graphInvalidation → requestUpdate
+                → setNeedsUpdateConstraints
 
-**Then the deeper answer: language servers.** A CLI runner reads from DISK,
-so the panel can confidently describe a file you already fixed. ADR-0099 adds
-a real LSP client — verified against `sourcekit-lsp`, which published
-`error 1:15 — Cannot convert value of type 'String' to specified type 'Int'`
-for an **unsaved buffer** while the file on disk still said `let ok: Int = 1`.
-Squiggles, Go to Definition and live diagnostics follow from that connection.
+AppKit asks the pane's hosting view for its minimum size during the
+constraints pass. SwiftUI must instantiate the view graph to answer.
+Instantiating **creates the preference outlets, and creating them
+invalidates the graph** — which calls `setNeedsUpdateConstraints` straight
+back on the hosting view, re-arming the pass that asked. It never settles;
+it stops when the invalidation budget runs out.
 
-**And the menu bar was one long Window menu** carrying eleven app surfaces,
-with ⌘G bound to both Find Next and the graph pane and ⇧⌘B to both Run Build
-Task and Backlog. Commands are now values in one registry that the menus, a
-new ⇧⌘P **Command Palette** and the ⌘/ help sheet all render from — which is
-what makes the shortcut audit mechanical instead of hopeful.
+The trigger was the idiomatic SwiftUI answer to "how wide am I":
+`.background { GeometryReader { Color.clear.preference(…) } }`. Correct
+everywhere else, a storm generator inside an `NSSplitView` pane. `LeftPane`
+used it to decide when to collapse the sidebar; the editor tab strip used
+two more to decide when to show its scroll arrows.
 
-Full parity matrix against Antigravity's nine menus, with what each remaining
-gap actually needs, at [`docs/reference/ide-parity.md`](reference/ide-parity.md).
+All three are now `WidthReporter` — an `NSView` that reads its own `bounds`
+in `layout()` and reports on a one-runloop hop. No view graph, no
+preference, nothing to invalidate. The same "drop to AppKit for the thing
+SwiftUI models badly" move already used by `SplitViewAutosave`,
+`SplitDividerTheme` and `HoverTooltip`. `onGeometryChange(for:)` would also
+avoid the preference and is the right answer once the deployment floor
+moves off macOS 14.
 
+Not verified live: confirming it requires running a new build, and the
+running v0.1.89 was mid-task and deliberately left alone. The test is the
+storm count in `~/Library/Logs/MARVIN/exceptions.log` after the next
+restart — it was 5 per session.
 
 ### Previously
 
