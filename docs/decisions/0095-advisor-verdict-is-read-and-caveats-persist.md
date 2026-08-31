@@ -244,3 +244,21 @@ written to prevent.
 - [x] Record-write failure is the loud case (caveats exist only in context)
 - [x] 28 assertions green, including an oversized verdict surviving in full
 
+## Amendment — 2026-08-31: caveats move off the backlog (ADR-0100)
+
+Decision 2 above — park each caveat to `.marvin/backlog/` at parse time — is
+superseded by [ADR-0100](./0100-advisor-caveats-are-conditions-not-backlog.md).
+
+The durability goal was right and is kept. The destination was wrong: a caveat
+is a **condition on a `go` already given**, not deferred work, and ADR-0044
+built the backlog for deferred work specifically. Parking at parse time
+converts a precondition into a someday, and drops the conditionality that made
+the verdict `go-with-caveats` rather than `go`.
+
+Under ADR-0100 caveats live on `DesignTurnContext` while the scope is open and
+transfer to the backlog **at the scope-met handoff, only if unmet or waived** —
+which is the first moment they honestly are deferred work.
+
+Everything else in this ADR stands: the verdict parse, the `additionalContext`
+line, the fire-once `reject` deny, and the reasoning for why a hook must not
+try to be a correctness oracle.

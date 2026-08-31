@@ -110,7 +110,23 @@ with `run_in_background: true`. Three failures followed from that one flag:
 
 ### Decision
 
-**An `advisor` dispatch carrying `run_in_background: true` is `deny`.**
+**An `advisor` dispatch that is not explicitly `run_in_background: false` is
+`deny`.**
+
+The check is `!== false`, not `=== true`, and that is the whole guard.
+[Anthropic's subagent docs](https://code.claude.com/docs/en/agent-sdk/subagents)
+record that **Claude Code v2.1.198 flipped the default**: an Agent call that
+*omits* `run_in_background` now launches a background subagent, where before it
+ran synchronously. MARVIN runs 2.1.251. A `=== true` check — which is what
+shipped in v0.1.91 — catches only the honest dispatch and waves through the
+likelier one, the model simply not mentioning the field. The advisor must
+therefore *opt in* to being synchronous.
+
+The same version flip left `SCOUT_AGENT`'s comment asserting "the SDK's default
+is FOREGROUND", which stopped being true under it. The scout still sets
+`background: true` explicitly, which is what makes its behaviour independent of
+the harness default rather than a bet on it — the ADR-0079 lesson again, and
+the reason the advisor now sets `background: false` beside it.
 
 Scoped to the advisor deliberately. A backgrounded `scout` or `Explore` is
 the *point* of them (ADR-0014) — the executor collects the answer whenever it

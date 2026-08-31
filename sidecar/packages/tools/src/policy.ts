@@ -466,14 +466,23 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
     //
     // Denying it here kills all three at the source. The gate cannot be
     // discharged by a consult that structurally cannot answer in time.
-    if (sub === "advisor" && input.run_in_background === true) {
+    // The check is `!== false`, NOT `=== true`, and that distinction is the
+    // whole guard. Per Anthropic's subagent docs, **Claude Code v2.1.198
+    // flipped the default**: an Agent call that OMITS `run_in_background`
+    // now launches a BACKGROUND subagent, where before it ran synchronously.
+    // MARVIN runs CLI 2.1.251. So `=== true` would catch only the honest
+    // dispatch and wave through the far more likely one — the model simply
+    // not mentioning the field. An advisor consult must therefore *opt in*
+    // to being synchronous, explicitly.
+    if (sub === "advisor" && input.run_in_background !== false) {
       return {
         class: "deny",
         reason:
-          "An advisor consult cannot run in the background: it gates the work " +
+          "An advisor consult must run in the FOREGROUND: it gates the work " +
           "that follows, and a backgrounded dispatch returns a launch receipt " +
-          "rather than a verdict. Re-dispatch with run_in_background omitted " +
-          "(or false) and wait for the critique.",
+          "rather than a verdict. Since Claude Code v2.1.198 an omitted " +
+          "run_in_background means BACKGROUND, so pass run_in_background: " +
+          "false explicitly and wait for the critique.",
       };
     }
     if (sub && SANCTIONED_SUBAGENT_TYPES.has(sub)) {

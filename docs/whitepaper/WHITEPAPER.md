@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · August 2026 · v0.1.91 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · August 2026 · v0.1.92 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -606,4 +606,4 @@ ad-hoc signed — no paid developer program — and installs to
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.91; the repository is the authoritative, current reference.*
+v0.1.92; the repository is the authoritative, current reference.*

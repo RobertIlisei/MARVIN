@@ -146,8 +146,15 @@ describe.each(["Task", "Agent"] as const)(
       expect(toolPolicy(tool, { subagent_type: "scout" }).class).toBe("auto");
     });
 
-    it("auto-allows sanctioned `advisor` subagent (ADR-0033)", () => {
-      expect(toolPolicy(tool, { subagent_type: "advisor" }).class).toBe("auto");
+    it("auto-allows sanctioned `advisor` subagent (ADR-0033) — when foreground", () => {
+      // Narrowed by the ADR-0094 amendment: `advisor` is still a sanctioned
+      // type, but the consult GATES the work that follows, so it must also be
+      // synchronous. Claude Code v2.1.198 made an omitted `run_in_background`
+      // mean BACKGROUND, so the flag has to be explicit.
+      expect(
+        toolPolicy(tool, { subagent_type: "advisor", run_in_background: false }).class,
+      ).toBe("auto");
+      expect(toolPolicy(tool, { subagent_type: "advisor" }).class).toBe("deny");
     });
 
     it("auto-allows sanctioned `general-purpose` subagent", () => {
@@ -519,7 +526,19 @@ describe("advisor consults cannot be backgrounded (2026-08-31)", () => {
   // ADR-0095 verdict reader parsed the launch receipt and logged `unparsed`,
   // and the turn ended with the gated migration unwritten. No advice was ever
   // received, and nothing said so.
-  it("denies a backgrounded advisor dispatch", () => {
+  it("denies an advisor dispatch that OMITS run_in_background", () => {
+    // The regression that mattered. Claude Code v2.1.198 flipped the default:
+    // an omitted flag now means BACKGROUND. A `=== true` check would catch
+    // only the honest dispatch and wave through the likelier one.
+    const d = toolPolicy("Agent", {
+      subagent_type: "advisor",
+      description: "advisor: migration",
+    });
+    expect(d.class).toBe("deny");
+    expect(d.reason).toMatch(/foreground/i);
+  });
+
+  it("denies an explicitly backgrounded advisor dispatch", () => {
     const d = toolPolicy("Agent", {
       subagent_type: "advisor",
       description: "advisor: migration",
@@ -529,16 +548,11 @@ describe("advisor consults cannot be backgrounded (2026-08-31)", () => {
     expect(d.reason).toMatch(/background/i);
   });
 
-  it("still auto-allows a FOREGROUND advisor dispatch", () => {
+  it("auto-allows ONLY an explicitly foreground advisor dispatch", () => {
     expect(
       toolPolicy("Agent", {
         subagent_type: "advisor",
         description: "advisor: migration",
-      }).class,
-    ).toBe("auto");
-    expect(
-      toolPolicy("Agent", {
-        subagent_type: "advisor",
         run_in_background: false,
       }).class,
     ).toBe("auto");

@@ -390,12 +390,20 @@ export const SCOUT_AGENT: AgentDefinition = {
   // and no signal to the user. 40 round-trips is far above what a real
   // breadth-first sweep of this repo takes and far below a runaway.
   maxTurns: 40,
-  // ADR-0080 — run in the background. The SDK's default is FOREGROUND: the
-  // parent turn blocked until the scout returned, which made MARVIN's one
-  // sanctioned form of parallelism execute serially ("waiting for 1 agent to
-  // finish before continuing kills our speed" — user, 2026-08-29). Now the
-  // parent keeps working; the completion re-prompts it. Verified live that
-  // background agents keep their MCP tools, so graph-first still holds.
+  // ADR-0080 — run in the background, declared explicitly.
+  //
+  // When this was written the SDK default was FOREGROUND: the parent turn
+  // blocked until the scout returned, which made MARVIN's one sanctioned form
+  // of parallelism execute serially ("waiting for 1 agent to finish before
+  // continuing kills our speed" — user, 2026-08-29). **That default flipped
+  // in Claude Code v2.1.198** — an Agent call omitting `run_in_background`
+  // now backgrounds — so the sentence this comment used to open with was
+  // asserting the opposite of reality on the 2.1.251 CLI MARVIN runs.
+  //
+  // The field stays set regardless: it is what makes the behaviour
+  // independent of the harness default rather than a bet on it, which is the
+  // same lesson as ADR-0079. Verified live that background agents keep their
+  // MCP tools, so graph-first still holds.
   background: true,
   description:
     "Read-only research scout. Spawn for breadth-first exploration " +
@@ -552,6 +560,14 @@ export function buildAdvisorAgent(args: {
     // One critique, one answer — and this is the Opus-tier agent, so it is the
     // expensive one to leave unbounded (ADR-0079).
     maxTurns: 20,
+    // Declared, not inherited. Claude Code v2.1.198 flipped the subagent
+    // default to BACKGROUND, so leaving this unset gives the advisor exactly
+    // the behaviour that broke it: a launch receipt instead of a verdict.
+    // The docs only promise that `background: true` FORCES background, so
+    // this field is a statement of intent — the enforcement that actually
+    // holds is the gate's deny on any advisor dispatch that is not
+    // explicitly `run_in_background: false` (ADR-0094 amendment).
+    background: false,
     prompt: [
       "You are an advisor consulted by MARVIN's executor for a second",
       "opinion. You are not MARVIN; the user does not see you directly.",

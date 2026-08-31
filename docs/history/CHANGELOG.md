@@ -8,6 +8,69 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.92: the fix had a hole, and the official docs said why.**
+
+  v0.1.91 shipped a deny on backgrounded advisor dispatches, keyed on
+  `run_in_background === true`. Reading Anthropic's
+  [subagent documentation](https://code.claude.com/docs/en/agent-sdk/subagents)
+  afterwards — prompted by the user asking what the official guidance actually
+  says — turned up the sentence that made it insufficient:
+
+  > **Two subagent behaviors changed in Claude Code v2.1.198:** subagents run
+  > in the **background by default**. An Agent tool call that omits
+  > `run_in_background` launches a background subagent, and Claude sets
+  > `run_in_background: false` when it needs the result before continuing.
+  > **Before v2.1.198, omitting `run_in_background` ran the subagent
+  > synchronously.**
+
+  MARVIN runs CLI **2.1.251**. So the v0.1.91 check caught only the dispatch
+  that said what it was doing, and waved through the likelier one — the model
+  simply not mentioning the field. The guard is now `!== false`: an advisor
+  consult must **opt in** to being synchronous. `buildAdvisorAgent` also
+  declares `background: false` rather than inheriting a default that has
+  already moved once.
+
+  The same version flip had left `SCOUT_AGENT` carrying a comment opening
+  *"ADR-0080 — run in the background. The SDK's default is FOREGROUND"* — a
+  sentence that stopped being true under the CLI MARVIN actually runs. The
+  scout still sets `background: true` explicitly, which is exactly what makes
+  its behaviour independent of the default rather than a bet on it. That is
+  ADR-0079's lesson for the third time in this repo: **code that bets on a
+  harness default is one release away from being silently wrong.**
+
+  One pre-existing test asserted the old contract (`advisor` → `auto` with no
+  flag). Updated rather than bent: `advisor` is still a sanctioned type, but
+  the consult gates the work that follows, so it must also be synchronous.
+  1037 sidecar tests green.
+
+  **[ADR-0100](../decisions/0100-advisor-caveats-are-conditions-not-backlog.md)
+  — advisor caveats are conditions, not backlog items.** The user's question:
+  *"the backlog should be for backlogged items as first proposed, in-flight
+  items that we discover. Advisor caveats seem like another kind of
+  necessity."* Correct, and the gate-pattern literature draws the same line —
+  a reviewer who records a concern while work proceeds is performing *review*;
+  one whose objection halts it is performing *approval*. A caveat on a
+  `go-with-caveats` is a **condition on a `go` already given**. ADR-0044 built
+  the backlog for **deferred work** and made `backlog_add` reject the other
+  content classes; parking a caveat at parse time converts a precondition into
+  a someday and drops the conditionality that made the verdict conditional.
+
+  The decision: caveats live on `DesignTurnContext` while the scope is open,
+  are surfaced as binding conditions, and transfer to the backlog **at the
+  scope-met handoff, only if unmet or waived** — the first moment they
+  honestly are deferred work. ADR-0095 amended to point here. Decision
+  recorded, **implementation not started**; the risky part is the
+  abnormal-termination path, which is where ADR-0095's park-at-parse-time was
+  strongest and where the tests must concentrate.
+
+  Also learned while researching: `AgentDefinition` has **no output-schema
+  field**. [Structured outputs](https://code.claude.com/docs/en/agent-sdk/structured-outputs)
+  (`outputFormat` → validated `structured_output`, with SDK re-prompting on
+  mismatch) is a `query()`-level option only, so a *subagent's* reply cannot be
+  schema-validated today. ADR-0095's hand-parsed markdown verdict block is not
+  a shortcut past a better tool — it is the only tool, which is why `unparsed`
+  exists as a state at all.
+
 - **2026-08-31 — v0.1.91: the advisor was consulted and never answered.**
 
   User: *"we also need to understand why the advisor didn't respond in the

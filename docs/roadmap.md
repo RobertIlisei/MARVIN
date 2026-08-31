@@ -131,37 +131,42 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.91** — an advisor consult that gates work cannot be backgrounded.
+**v0.1.92** — the fix had a hole, and the docs said why.
 
-MARVIN was told to add a `CHECK` constraint to a tenant migration. The
-DB-migration ADR trigger fired, the gate demanded an advisor consult, and the
-executor dispatched the registered advisor — with `run_in_background: true`.
-The turn then ended with the migration unwritten, and the user only found out
-by asking what happened.
+v0.1.91 denied a backgrounded advisor dispatch by checking
+`run_in_background === true`. Reading Anthropic's subagent docs afterwards
+turned up the reason that was not enough:
 
-One flag, three failures:
+> **Two subagent behaviors changed in Claude Code v2.1.198:** subagents run in
+> the **background by default**. An Agent tool call that omits
+> `run_in_background` launches a background subagent… **Before v2.1.198,
+> omitting it ran the subagent synchronously.**
 
-1. **The gate discharged with no advice in hand.** `recordAllowedTool`
-   counts the *dispatch*, and it runs before `canUseTool` — its own call-site
-   comment already conceded that as "a slight over-count". For an advice
-   requirement it is not slight.
-2. **The ADR-0095 verdict reader parsed a launch receipt as a critique.** The
-   response was `"Async agent launched successfully… agentId: …"`, so the
-   parser found no verdict and logged `unparsed` — **25 ms after dispatch**.
-   No advisor answers in 25 ms. The number was in the telemetry the whole
-   time and said nothing, because `unparsed` reads as a *prompt* problem when
-   this was a *structural* one.
-3. **The turn ended with the gated work undone.** The executor did not
-   proceed — it correctly reported itself blocked — but nothing made it wait,
-   and the background result never came.
+MARVIN runs 2.1.251. So `=== true` caught only the honest dispatch and waved
+through the likelier one — the model not mentioning the field at all. The
+check is now `!== false`: an advisor consult must *opt in* to being
+synchronous. The advisor's `AgentDefinition` also declares `background: false`
+rather than inheriting a default that has already moved once.
 
-Fixed at the source: a `run_in_background` advisor dispatch is now `deny`.
-Scoped to the advisor deliberately — a backgrounded `scout` or `Explore` is
-the point of them; the advisor is different because its consult *gates* the
-work, and you cannot act on advice you have not received. The counter no
-longer credits a backgrounded dispatch, and the verdict reader gained a
-distinct `async-pending` state so a launch receipt can never again be
-mistaken for advice. See [ADR-0094's amendment](decisions/0094-advisor-dispatch-uses-the-registered-agent.md).
+The same flip had left `SCOUT_AGENT` carrying a comment reading *"The SDK's
+default is FOREGROUND"* — asserting the opposite of reality on the CLI in use.
+Corrected. This is ADR-0079's lesson for the third time: **code that bets on a
+harness default is one release away from being wrong, silently.**
+
+Also this release: **[ADR-0100](decisions/0100-advisor-caveats-are-conditions-not-backlog.md)**,
+prompted by the user asking whether advisor caveats belong in the backlog at
+all. They do not. A caveat is a *condition on a `go` already given*, and
+ADR-0044 built the backlog for *deferred work* — parking one at parse time
+converts a precondition into a someday and drops the conditionality that made
+the verdict `go-with-caveats` rather than `go`. The ADR moves caveats to
+turn-scoped state and transfers them to the backlog at the scope-met handoff,
+**only if unmet or waived**. Decision recorded; implementation not started.
+
+While researching it: `AgentDefinition` has no output-schema field, so a
+subagent's result cannot be schema-validated —
+[structured outputs](https://code.claude.com/docs/en/agent-sdk/structured-outputs)
+is a `query()`-level option. ADR-0095's hand-parsed markdown verdict block is
+not a shortcut past a better tool; it is the only tool.
 
 ### Previously
 
