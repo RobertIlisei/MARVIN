@@ -40,6 +40,18 @@ struct ActivityPopover: View {
         var id: String { at + descriptor }
     }
 
+    /// What a confirmed stop will do, captured at confirm time so the alert
+    /// and the action cannot disagree about the scope.
+    struct StopPlan: Identifiable {
+        let id = UUID()
+        let summary: String
+        let terminalRunning: Bool
+    }
+
+    @State private var pendingStop: StopPlan? = nil
+    @State private var stopping = false
+    @State private var stopReport: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -60,10 +72,124 @@ struct ActivityPopover: View {
                 wakeupsSection
                 auditSection
             }
+            MarvinDivider()
+            stopEverythingButton
         }
         .padding(12)
         .frame(width: 380)
         .task { await refresh() }
+        // Confirmation names the scope. "Stop everything?" is a question a
+        // user cannot answer — they do not know what everything is, and one
+        // of the things in it might be a forty-minute build they forgot was
+        // running. The alert lists the count of each kind before anything
+        // dies.
+        .alert(
+            "Stop this session?",
+            isPresented: Binding(
+                get: { pendingStop != nil },
+                set: { if !$0 { pendingStop = nil } }
+            ),
+            presenting: pendingStop
+        ) { plan in
+            Button("Stop Everything", role: .destructive) {
+                let confirmed = plan
+                pendingStop = nil
+                Task { await performStop(confirmed) }
+            }
+            Button("Cancel", role: .cancel) { pendingStop = nil }
+        } message: { plan in
+            Text("This will stop \(plan.summary).\n\nBackground jobs are killed, scheduled wakeups are cancelled so they cannot start a new turn later, and the running turn is aborted. This cannot be undone.")
+        }
+    }
+
+    /// The one control that stops a session and everything it left running.
+    ///
+    /// It lives HERE, in the popover that lists the background jobs and the
+    /// scheduled wakeups, because this is where a user can already see what
+    /// is running — a stop button somewhere else would be asking them to
+    /// confirm a list they are not looking at. It is also in the Run menu and
+    /// the ⇧⌘P palette, via `CommandRegistry`.
+    @ViewBuilder private var stopEverythingButton: some View {
+        HStack {
+            Button(role: .destructive) {
+                Task { await beginStop() }
+            } label: {
+                Label(
+                    stopping ? "Stopping…" : "Stop Session & All Work",
+                    systemImage: "stop.circle"
+                )
+                .font(.system(size: 11, weight: .medium))
+            }
+            .disabled(stopping || sessionId == nil)
+            Spacer()
+        }
+        if let stopReport {
+            Text(stopReport)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Ask the server what is running, then confirm against THAT — not
+    /// against the popover's own lists, which may be a refresh behind.
+    private func beginStop() async {
+        guard let sessionId else { return }
+        stopReport = nil
+        guard let scope = await SessionStopService.preview(
+            sessionId: sessionId, projectId: projectId
+        ) else {
+            error = "Could not read what is running."
+            return
+        }
+        // Terminal shells are the user's own processes, not MARVIN's, so they
+        // are named separately rather than folded into "background jobs" —
+        // and only when one is actually running.
+        //
+        // Scoped to THIS project's workDir. Several sessions can be live at
+        // once, each on its own project, and stopping one of them must not
+        // reach into another's terminal (user, 2026-08-31: "we only need to
+        // kill the session we want with it's adiacents, not the rest of the
+        // sessions or their jobs"). Everything else here is already filtered
+        // by `marvinSessionId` server-side; this was the one global.
+        let terminalRunning = workDir.map {
+            TerminalSessionStore.shared.isRunning(workDir: $0)
+        } ?? false
+        var parts: [String] = []
+        if let summary = scope.summary { parts.append(summary) }
+        if terminalRunning { parts.append("this project's terminal session") }
+        guard !parts.isEmpty else {
+            stopReport = "Nothing is running."
+            return
+        }
+        let joined = parts.count == 1
+            ? parts[0]
+            : parts.dropLast().joined(separator: ", ") + " and " + (parts.last ?? "")
+        pendingStop = StopPlan(summary: joined, terminalRunning: terminalRunning)
+    }
+
+    private func performStop(_ plan: StopPlan) async {
+        guard let sessionId else { return }
+        stopping = true
+        defer { stopping = false }
+        let result = await SessionStopService.stop(sessionId: sessionId, projectId: projectId)
+        // Terminals are client-side: the sidecar never had a handle on them.
+        // One workDir, not all of them — see `beginStop`.
+        if plan.terminalRunning, let workDir {
+            TerminalSessionStore.shared.terminate(workDir: workDir)
+        }
+        guard let result else {
+            error = "Stop failed."
+            return
+        }
+        var bits: [String] = []
+        if result.turnCancelled { bits.append("turn aborted") }
+        if result.jobsCancelled > 0 { bits.append("\(result.jobsCancelled) job(s) killed") }
+        if result.wakeupsCancelled > 0 { bits.append("\(result.wakeupsCancelled) wakeup(s) cancelled") }
+        if plan.terminalRunning { bits.append("terminal closed") }
+        if !result.failed.isEmpty { bits.append("\(result.failed.count) already gone") }
+        stopReport = bits.isEmpty ? "Nothing was running." : "Stopped: " + bits.joined(separator: ", ") + "."
+        await refresh()
     }
 
     @ViewBuilder private var jobsSection: some View {

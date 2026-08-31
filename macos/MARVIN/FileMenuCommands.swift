@@ -22,6 +22,12 @@ extension Notification.Name {
     /// Posted by "New Text File"; observed by `FileTreeView`, which owns
     /// the naming sheet and the create flow.
     static let marvinRequestNewFile = Notification.Name("marvin.requestNewFile")
+    /// Posted by "Stop Session & All Work"; observed by `AppStatusBar`, which
+    /// presents the Activity popover. The popover owns the confirmation and
+    /// the list of what is running, so the menu command opens it rather than
+    /// growing a second copy of that flow — and the user confirms while
+    /// LOOKING at the jobs and wakeups they are about to kill.
+    static let marvinRequestActivityPopover = Notification.Name("marvin.requestActivityPopover")
 }
 
 /// Commands that act on the open editors.

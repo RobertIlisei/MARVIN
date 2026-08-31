@@ -365,6 +365,18 @@ enum CommandRegistry {
             TerminalSessionStore.shared.session(for: workDir).run(command: command)
         })
         c.append(AppCommand(
+            id: "run.stopAll", title: "Stop Session & All Work…",
+            slot: .run, keywords: ["kill", "abort", "cancel", "background", "wakeup"],
+            isEnabled: { MarvinBridge.shared.activeMarvinSessionId != nil }
+        ) {
+            // Opens the Activity popover, which lists the jobs and wakeups
+            // and owns the confirmation. Deliberately not a second confirm
+            // flow: the user should be looking at what they are killing.
+            NotificationCenter.default.post(
+                name: .marvinRequestActivityPopover, object: nil
+            )
+        })
+        c.append(AppCommand(
             id: "run.auditSession", title: "Audit Session…",
             slot: .run, keywords: ["review", "drift"], isEnabled: { hasProject }
         ) { MarvinBridge.shared.triggerSessionAudit() })

@@ -377,6 +377,11 @@ struct AppStatusBar: View {
                 workDir: bridge.projectWorkDir
             )
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .marvinRequestActivityPopover)
+        ) { _ in
+            activityPopoverOpen = true
+        }
     }
 
     /// ADR-0022 §2 — context-pressure segment. Shows the current

@@ -128,6 +128,21 @@ final class TerminalSessionStore {
     }
 
     /// Hang up every shell. Called from `applicationWillTerminate`.
+    /// Is there a live shell for THIS project?
+    ///
+    /// Scoped to one `workDir`, never a global count. The store is keyed by
+    /// project, and several sessions can be running at once — a session-stop
+    /// that counted every shell would be offering to close another project's
+    /// terminal, which is precisely what stopping ONE session must not do.
+    func isRunning(workDir: String) -> Bool {
+        sessions[workDir]?.isRunning ?? false
+    }
+
+    /// Terminate the shell for one project, leaving every other alone.
+    func terminate(workDir: String) {
+        sessions[workDir]?.terminate()
+    }
+
     func terminateAll() {
         for s in sessions.values { s.terminate() }
         sessions.removeAll()

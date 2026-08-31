@@ -27,6 +27,7 @@
     "./obsidian-vault": "./src/obsidian-vault.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
     "./background-jobs": "./src/background-jobs.ts",
+    "./stop-all": "./src/stop-all.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",
     "./models": "./src/models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
