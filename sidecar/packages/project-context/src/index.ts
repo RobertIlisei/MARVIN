@@ -3,9 +3,9 @@
  *
  * Every session is scoped to ONE project — the thing the user is building.
  * On the first message of a session we read any project-authored context
- * documents (by default: `PROJECT_STATUS.md`, `BUSINESS_OVERVIEW.md`,
- * `README.md` if present) from the project's workDir and prepend them to the
- * system prompt.
+ * documents (by default: `CLAUDE.md`, `PROJECT_STATUS.md`,
+ * `BUSINESS_OVERVIEW.md`, `README.md` if present) from the project's workDir
+ * and prepend them to the system prompt.
  *
  * This module is **project-agnostic**. It reads only the files that exist in
  * the user's project directory; it does not know about any specific project,
@@ -54,7 +54,27 @@ export interface ProjectContextOptions {
   memoryFile?: string;
 }
 
-const DEFAULT_FILES = ["PROJECT_STATUS.md", "BUSINESS_OVERVIEW.md", "README.md"];
+// `CLAUDE.md` FIRST, and it was missing entirely until 2026-08-31.
+//
+// It is the most standard instruction file in the ecosystem — nearly every
+// project a Claude Code user brings to MARVIN already has one, carrying the
+// rules that project expects an assistant to follow. MARVIN read the status
+// and overview documents and silently ignored it, so a user whose
+// conventions lived there watched MARVIN work as if they had never written
+// them down.
+//
+// First in the list because it is INSTRUCTIONS, not status: the others
+// describe what the project is, this one describes how to work on it.
+//
+// `CLAUDE.local.md` is deliberately NOT here. It is the personal, never-
+// committed override, and reading it is a separate decision about whose
+// machine's preferences steer a session — not a default.
+const DEFAULT_FILES = [
+  "CLAUDE.md",
+  "PROJECT_STATUS.md",
+  "BUSINESS_OVERVIEW.md",
+  "README.md",
+];
 const DEFAULT_ADR_DIRS = ["docs/adr", "docs/adrs", "docs/decisions"];
 const DEFAULT_MEMORY_FILE = ".marvin/memory.md";
 

@@ -56,6 +56,35 @@ describe("buildProjectContext — breakdown", () => {
     expect(sum).toBeGreaterThan(whole * 0.5);
   });
 
+  it("injects CLAUDE.md, ahead of the other project docs", async () => {
+    // The instruction file nearly every project already has. It was absent
+    // from DEFAULT_FILES until 2026-08-31, so a user whose conventions lived
+    // there watched MARVIN work as if they had never written them down.
+    const wd = fixtureDir();
+    writeFileSync(join(wd, "CLAUDE.md"), "# Rules\n\nAlways run the linter.");
+    writeFileSync(join(wd, "README.md"), "# Readme\n\nWhat this project is.");
+
+    const res = await buildProjectContext({ workDir: wd, firstMessage: true });
+
+    expect(res.text).toContain("## CLAUDE.md");
+    expect(res.text).toContain("Always run the linter.");
+    // Instructions before description: how to work on it outranks what it is.
+    expect(res.text.indexOf("## CLAUDE.md")).toBeLessThan(
+      res.text.indexOf("## README.md"),
+    );
+  });
+
+  it("does not inject CLAUDE.local.md", async () => {
+    // The personal, never-committed override. Reading it is a separate
+    // decision about whose machine's preferences steer a session.
+    const wd = fixtureDir();
+    writeFileSync(join(wd, "CLAUDE.local.md"), "# Mine\n\nSkip the tests.");
+
+    const res = await buildProjectContext({ workDir: wd, firstMessage: true });
+    expect(res.text).not.toContain("CLAUDE.local.md");
+    expect(res.text).not.toContain("Skip the tests.");
+  });
+
   it("returns an empty result (text + breakdown) when there is nothing to inject", async () => {
     const wd = fixtureDir(); // bare dir, no docs/memory/graph
     const res = await buildProjectContext({ workDir: wd, firstMessage: false });
