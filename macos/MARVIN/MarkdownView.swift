@@ -27,9 +27,23 @@ struct MarkdownView: View {
     private var blocks: [MarkdownBlock] { ChatMarkdown.parse(text) }
 
     var body: some View {
+        // Grouped, not one view per block.
+        //
+        // Every `RichText` is its own `NSTextView`, and **selection cannot
+        // cross two independent text systems** — so a drag used to stop at
+        // the end of whichever paragraph or list item it began in. Merging
+        // consecutive prose into one text view makes a drag across a heading,
+        // its paragraph and the bullets below it a single selection, which is
+        // what a reader trying to copy an answer actually wants.
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                blockView(block)
+            ForEach(Array(MarkdownFlow.group(blocks).enumerated()), id: \.offset) { _, group in
+                switch group {
+                case let .flow(run):
+                    RichText(attributed: flowAttributed(run), onLink: Self.handleLink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case let .standalone(block):
+                    blockView(block)
+                }
             }
         }
         .frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
@@ -104,6 +118,81 @@ struct MarkdownView: View {
         case .rule:
             MarvinDivider().padding(.vertical, 2)
         }
+    }
+
+    /// One attributed string for a run of consecutive prose blocks.
+    ///
+    /// Spacing is carried by `paragraphSpacing` rather than by the VStack
+    /// that used to separate these views, so the rendered result matches what
+    /// it replaced. List markers move INTO the text (marker + tab), with
+    /// `headIndent` and a tab stop so a wrapped item lines up under its own
+    /// first line instead of under the bullet.
+    private func flowAttributed(_ run: [MarkdownBlock]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        for (idx, block) in run.enumerated() {
+            if idx > 0 { out.append(NSAttributedString(string: "\n")) }
+            switch block {
+            case let .heading(level, text):
+                let piece = NSMutableAttributedString(
+                    attributedString: attributed(text, font: headingNSFont(level), color: nsBaseColor)
+                )
+                piece.addAttribute(
+                    .paragraphStyle,
+                    value: flowParagraphStyle(spacingBefore: idx > 0 ? 6 : 0),
+                    range: NSRange(location: 0, length: piece.length)
+                )
+                out.append(piece)
+            case let .paragraph(text):
+                let piece = NSMutableAttributedString(
+                    attributedString: attributed(text, font: baseNSFont, color: nsBaseColor)
+                )
+                piece.addAttribute(
+                    .paragraphStyle,
+                    value: flowParagraphStyle(),
+                    range: NSRange(location: 0, length: piece.length)
+                )
+                out.append(piece)
+            case let .list(items, ordered):
+                for (i, item) in items.enumerated() {
+                    if i > 0 { out.append(NSAttributedString(string: "\n")) }
+                    let marker = ordered ? "\(i + 1).\t" : "•\t"
+                    let piece = NSMutableAttributedString(
+                        string: marker,
+                        attributes: [
+                            .font: baseNSFont,
+                            .foregroundColor: NSColor.secondaryLabelColor,
+                        ]
+                    )
+                    piece.append(attributed(item, font: baseNSFont, color: nsBaseColor))
+                    piece.addAttribute(
+                        .paragraphStyle,
+                        value: flowListParagraphStyle(),
+                        range: NSRange(location: 0, length: piece.length)
+                    )
+                    out.append(piece)
+                }
+            case .code, .table, .quote, .rule:
+                // `MarkdownFlow.group` never puts these in a run.
+                break
+            }
+        }
+        return out
+    }
+
+    private func flowParagraphStyle(spacingBefore: CGFloat = 0) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 8
+        style.paragraphSpacingBefore = spacingBefore
+        return style
+    }
+
+    private func flowListParagraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 3
+        // A wrapped item aligns under its own text, not under the bullet.
+        style.headIndent = 18
+        style.tabStops = [NSTextTab(textAlignment: .left, location: 18)]
+        return style
     }
 
     private func rich(_ s: String, font: NSFont, color: NSColor) -> some View {

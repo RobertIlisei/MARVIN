@@ -2737,6 +2737,49 @@ runner.suite("brain-state-gate") {
 }
 
 
+runner.suite("markdown-flow") {
+    let para = MarkdownBlock.paragraph("p")
+    let head = MarkdownBlock.heading(level: 2, text: "h")
+    let list = MarkdownBlock.list(items: ["a", "b"], ordered: false)
+    let code = MarkdownBlock.code(language: "swift", content: "let x = 1")
+    let rule = MarkdownBlock.rule
+
+    runner.test("consecutive prose becomes ONE run, so a drag can cross it") {
+        let groups = MarkdownFlow.group([head, para, list])
+        runner.expect(groups.count, equals: 1, "heading + paragraph + list share a text view")
+        runner.expect(groups.first == .flow([head, para, list]), equals: true, "in order")
+    }
+
+    runner.test("a code block breaks the run and stands alone") {
+        let groups = MarkdownFlow.group([para, code, para])
+        runner.expect(groups.count, equals: 3, "prose, code, prose")
+        runner.expect(groups[1] == .standalone(code), equals: true, "code keeps its own view")
+    }
+
+    runner.test("a lone paragraph is still a flow, not a standalone") {
+        // The distinction is how it is laid out, not how many there are.
+        runner.expect(MarkdownFlow.group([para]) == [.flow([para])], equals: true, "one prose block")
+    }
+
+    runner.test("runs on both sides of a rule stay separate") {
+        let groups = MarkdownFlow.group([para, para, rule, para])
+        runner.expect(groups.count, equals: 3, "two prose runs split by the rule")
+        runner.expect(groups[0] == .flow([para, para]), equals: true, "the first run merges both")
+    }
+
+    runner.test("empty input yields no groups, and never an empty run") {
+        runner.expect(MarkdownFlow.group([]).isEmpty, equals: true, "nothing in, nothing out")
+    }
+
+    runner.test("quotes and tables are not flowable") {
+        runner.expect(MarkdownFlow.isFlowable(.quote("q")), equals: false,
+                      "its bar is an overlay on the view and would span neighbours")
+        runner.expect(MarkdownFlow.isFlowable(.table(headers: ["h"], rows: [])), equals: false, "own layout")
+        runner.expect(MarkdownFlow.isFlowable(para), equals: true, "prose is")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
