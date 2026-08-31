@@ -37,9 +37,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.96+ed443910</string>
+	<string>0.1.97+698cc398</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.96+ed443910</string>
+	<string>0.1.97+698cc398</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>

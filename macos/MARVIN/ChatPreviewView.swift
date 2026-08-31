@@ -1942,9 +1942,20 @@ struct ChatPreviewView: View {
                 }
             }
         }
-        .onChange(of: bridge.activeMarvinSessionId) { _, _ in
-            syncHydrateFromBridge()
-        }
+        // NOT `.onChange(of: bridge.activeMarvinSessionId)`.
+        //
+        // That property is an OUTPUT of this model now, not an input. It was
+        // dead — written only by the removed WebView, permanently nil — and
+        // reviving it so the Stop-All button could see a session turned this
+        // observer into a cycle: `clear()` nils the model's session id, which
+        // publishes nil to the bridge, which fires this, which calls
+        // `syncHydrateFromBridge`, which auto-hydrates the latest session
+        // straight back. Both symptoms were that one loop — New produced a
+        // hard refresh of the session you just left, and closing the last tab
+        // reopened it (user, 2026-09-01).
+        //
+        // The project is still a real input: switching projects is decided
+        // elsewhere and this view has to follow it.
         .onChange(of: bridge.activeProjectId) { _, _ in
             syncHydrateFromBridge()
         }
@@ -2108,22 +2119,30 @@ struct ChatPreviewView: View {
     ///      history sitting on the native side.
     ///   3. Both nil from the start (no project active) → no-op;
     ///      the empty initial state is already correct.
+    /// Load whatever the ACTIVE PROJECT should show. Called on appear and on
+    /// a project switch — never on a session change, which this view decides
+    /// for itself.
+    ///
+    /// The old first branch hydrated from `bridge.activeMarvinSessionId`,
+    /// which made sense while the WebView owned session identity. The model
+    /// owns it now, so reading it back here would hydrate this view from its
+    /// own output — and on a project switch it would hydrate the OLD
+    /// project's session against the new project.
     private func syncHydrateFromBridge() {
-        if let pid = bridge.activeProjectId,
-           let sid = bridge.activeMarvinSessionId {
-            model.hydrate(projectId: pid, sessionId: sid)
+        guard let pid = bridge.activeProjectId else {
+            if model.loadedSessionId != nil || !model.messages.isEmpty {
+                model.clear()
+            }
             return
         }
-        // sid went nil with state to clear → match the web reset.
-        if model.loadedSessionId != nil || !model.messages.isEmpty {
+        // A different project's transcript must not linger.
+        if let loaded = model.loadedProjectId, loaded != pid {
             model.clear()
         }
-        // Post-M5: activeMarvinSessionId is always nil (set only by the
-        // now-removed WebView). Fetch sessions directly and pick the
-        // latest — await the result instead of sleeping + polling.
-        if let pid = bridge.activeProjectId,
-           bridge.activeMarvinSessionId == nil,
-           model.loadedSessionId == nil {
+        // Only pick a session when none is loaded. `clear()` is a deliberate
+        // "give me an empty chat" — auto-hydrating over it is what made New
+        // and tab-close look broken.
+        if model.loadedSessionId == nil, model.messages.isEmpty {
             Task { await model.autoHydrate(projectId: pid) }
         }
     }
