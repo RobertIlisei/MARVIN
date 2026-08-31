@@ -20,17 +20,24 @@
 
 import Foundation
 
+/// The bottom panel's tabs.
+///
+/// `preview` is deliberately NOT here. The browser preview is an **editor
+/// surface**, not a bottom-panel tool: every IDE the user compares MARVIN to
+/// opens a browser where files open, not in the drawer beside the terminal
+/// (user, 2026-08-31: "in antigravity or any other IDE the browser is opening
+/// independent of the terminal / run diagnostics pane… it should be here").
+/// It lives in `editorArea` instead, with its own visibility flag, and
+/// deliberately does not register as a file tab.
 public enum BottomPanelTab: String, CaseIterable, Sendable, Codable {
     case problems
     case terminal
-    case preview
     case graph
 
     public var title: String {
         switch self {
         case .problems: return "Problems"
         case .terminal: return "Terminal"
-        case .preview:  return "Preview"
         case .graph:    return "Graph"
         }
     }
@@ -40,7 +47,6 @@ public enum BottomPanelTab: String, CaseIterable, Sendable, Codable {
         switch self {
         case .problems: return "exclamationmark.triangle"
         case .terminal: return "terminal"
-        case .preview:  return "eye"
         case .graph:    return "point.3.connected.trianglepath.dotted"
         }
     }
@@ -115,17 +121,22 @@ public enum BottomPanelMigration {
     /// Precedence when several bottom panes were on: the one the user was
     /// most likely looking at. Terminal first — it is the one with running
     /// state; Graph last, it is the most incidental.
-    public static let precedence: [BottomPanelTab] = [.terminal, .problems, .preview, .graph]
+    public static let precedence: [BottomPanelTab] = [.terminal, .problems, .graph]
 
     /// Resolve the panel state from the legacy per-pane booleans.
+    /// `preview` is still accepted from the persisted payload — an existing
+    /// install has it — but it can no longer resolve to a bottom tab, because
+    /// preview is an editor surface now. A user whose only open bottom pane
+    /// was Preview lands on a closed panel, which is correct: their preview
+    /// moved, it did not disappear.
     public static func resolve(
         terminal: Bool,
         problems: Bool,
-        preview: Bool,
+        preview _: Bool,
         graph: Bool,
         stored: BottomPanelTab? = nil
     ) -> BottomPanelState {
-        let on: [BottomPanelTab: Bool] = [.terminal: terminal, .problems: problems, .preview: preview, .graph: graph]
+        let on: [BottomPanelTab: Bool] = [.terminal: terminal, .problems: problems, .graph: graph]
         // A stored tab from the new shape wins, provided it was actually on.
         if let stored, on[stored] == true { return BottomPanelState(isOpen: true, activeTab: stored) }
         if let first = precedence.first(where: { on[$0] == true }) {
@@ -141,7 +152,7 @@ public enum BottomPanelMigration {
         (
             terminal: state.isOpen && state.activeTab == .terminal,
             problems: state.isOpen && state.activeTab == .problems,
-            preview: state.isOpen && state.activeTab == .preview,
+            preview: false,   // preview is no longer a bottom tab
             graph: state.isOpen && state.activeTab == .graph
         )
     }

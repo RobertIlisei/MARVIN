@@ -146,6 +146,49 @@ struct RegistryMenuItem: View {
     }
 }
 
+/// The Edit / Selection / Go / Run menus, as one `Commands` element.
+///
+/// Not an organisational preference: SwiftUI's `CommandsBuilder` takes a
+/// bounded number of children, and adding Edit and Selection pushed the
+/// `.commands { }` block one past it. The compiler reports that as "extra
+/// argument in call" on whichever group happens to be last, which points at
+/// an innocent line — worth knowing before chasing the wrong menu.
+struct EditorMenus: Commands {
+    var body: some Commands {
+        // ── Edit ────────────────────────────────────────────────────
+        //
+        // Appended to the system Edit menu, after Cut/Copy/Paste. Undo,
+        // Redo and the Find family stay AppKit's — see the note in
+        // `CommandRegistry`.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            registryItems(.edit)
+        }
+
+        // ── Selection ───────────────────────────────────────────────
+        //
+        // A real menu, as in the reference, rather than a tail on Edit.
+        // `CommandMenu` is safe here in a way it was NOT for View:
+        // macOS auto-creates a View menu (which is how the menu bar
+        // ended up reading "View View"), and it does not auto-create a
+        // Selection menu. Declared before Go and Run so the three land
+        // in the reference's order.
+        CommandMenu("Selection") {
+            registryItems(.selection)
+        }
+
+        CommandMenu("Go") {
+            registryItems(.go)
+        }
+
+        CommandMenu("Run") {
+            registryItems(.run)
+            Divider()
+            registryItems(.terminal)
+        }
+    }
+}
+
 /// Turns `"⇧⌘P"` back into `(KeyEquivalent, EventModifiers)`.
 ///
 /// The registry stores the display form because that is what a user reads;
@@ -549,11 +592,19 @@ struct MARVINApp: App {
             // .marvinRequestSdkReset) — the menu can't reach the
             // @MainActor ChatPreviewModel directly. Was a disabled
             // placeholder until the 2026-07-02 stale-buttons audit.
+            // ── File ────────────────────────────────────────────────────
+            //
+            // Rendered from the registry, like View / Go / Run. It was not,
+            // and the consequence was invisible: `.file`, `.edit` and
+            // `.selection` commands existed in the ⇧⌘P palette and in the
+            // ⌘/ help sheet, complete with a printed shortcut — but a key
+            // equivalent only exists on a MENU ITEM, and none of those
+            // slots was in a menu. So ⌘' (Toggle Line Comment), ⌥↑ (Move
+            // Line Up) and the rest were documented keys that did nothing.
+            // The registry was built to stop exactly this drift; three of
+            // its eight slots were simply never plugged in.
             CommandGroup(replacing: .newItem) {
-                Button("New Session") {
-                    NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
+                registryItems(.file)
             }
 
 
@@ -567,12 +618,11 @@ struct MARVINApp: App {
             CommandGroup(after: .saveItem) {
                 Divider()
 
-                // ADR-0021 M5: native NSOpenPanel replaces the WebView dispatch.
-                Button("Open Project…") {
-                    openProjectWithPanel()
-                }
-                .keyboardShortcut("o", modifiers: [.command])
-
+                // "Open Project…" and "Reveal Project in Finder" moved into
+                // the registry-rendered group above. Keeping a second copy
+                // here would bind ⌘O and ⌥⌘R twice — the failure the
+                // registry exists to prevent.
+                //
                 // Phase 1d.33 — File → Open Recent submenu populated
                 // from the bridge. Click on a project to make it
                 // active without going through the web picker.
@@ -582,12 +632,6 @@ struct MARVINApp: App {
                 .disabled(!health.state.isOnline)
 
                 Divider()
-
-                Button("Reveal Project in Finder") {
-                    revealProjectInFinder(workDir: bridge.projectWorkDir)
-                }
-                .keyboardShortcut("r", modifiers: [.command, .option])
-                .disabled(bridge.projectWorkDir == nil)
 
                 Button("Open Terminal Here") {
                     openTerminalAt(workDir: bridge.projectWorkDir)
@@ -643,15 +687,7 @@ struct MARVINApp: App {
                 registryItems(.view)
             }
 
-            CommandMenu("Go") {
-                registryItems(.go)
-            }
-
-            CommandMenu("Run") {
-                registryItems(.run)
-                Divider()
-                registryItems(.terminal)
-            }
+            EditorMenus()
 
             // ── Window ──────────────────────────────────────────────────
             //

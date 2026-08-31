@@ -151,7 +151,11 @@ struct PluginsPane: View {
     @ViewBuilder
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            // LazyVStack for the same reason as SkillsPane: the installed +
+            // marketplace lists are long, and a plain VStack lays every row
+            // out on the tab switch. `/api/plugins` answers in 3.7 ms — the
+            // cost is layout, not data.
+            LazyVStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
                     Image(systemName: "puzzlepiece.extension").foregroundStyle(.tint)
                     Text("Project plugins").font(.headline)

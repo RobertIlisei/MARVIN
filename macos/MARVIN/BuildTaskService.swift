@@ -12,12 +12,21 @@ import Foundation
 struct BuildTask: Identifiable, Hashable {
     enum Kind: String {
         case npm, yarn, pnpm, make, swift, cargo, shell
+        // Golden Rule 6 — MARVIN ships no stack assumptions. The task list has
+        // to work for whatever the user opened: a Maven monolith, a Go module,
+        // a Python package, a Gradle build. Adding a build system here is a
+        // parser plus a row in `discover`; nothing about the UI is per-language.
+        case maven, gradle, go, python
     }
     let id = UUID()
     let name: String
     let command: String
     let kind: Kind
     let description: String?
+    /// Where the task runs. A monorepo's `apps/web: build` must run in
+    /// `apps/web`, not at the repo root — running npm from the wrong
+    /// directory is the classic "task does nothing" report.
+    var directory: String? = nil
 
     var displayLabel: String { name }
     var kindLabel: String {
@@ -29,18 +38,128 @@ struct BuildTask: Identifiable, Hashable {
         case .swift: return "swift"
         case .cargo: return "cargo"
         case .shell: return "shell"
+        case .maven: return "maven"
+        case .gradle: return "gradle"
+        case .go: return "go"
+        case .python: return "python"
         }
     }
 }
 
 struct BuildTaskService {
+    /// Every build system found in the project, root first.
+    ///
+    /// Walks sub-projects rather than checking only the root: a monorepo puts
+    /// its web app in `apps/web/` and its service in `apps/api/`, and a
+    /// root-only scan finds neither (the exact bug the Problems panel had —
+    /// see `DiagnosticDiscovery`). Reuses that same bounded, ignore-aware walk
+    /// so the two surfaces cannot disagree about what a project contains.
     static func discover(workDir: String) -> [BuildTask] {
         var tasks: [BuildTask] = []
-        tasks += fromPackageJSON(workDir: workDir)
-        tasks += fromMakefile(workDir: workDir)
-        tasks += fromPackageSwift(workDir: workDir)
-        tasks += fromCargoToml(workDir: workDir)
+        var seen = Set<String>()
+        for dir in DiagnosticDiscovery.directories(root: workDir) {
+            let rel = dir == workDir
+                ? ""
+                : String(dir.dropFirst(workDir.count).drop(while: { $0 == "/" }))
+            for var t in tasksIn(dir: dir) {
+                // Same-named script in two modules is two different tasks —
+                // `apps/web: build` and `apps/api: build` must both survive.
+                if !rel.isEmpty {
+                    t = BuildTask(name: "\(rel): \(t.name)", command: t.command,
+                                  kind: t.kind, description: t.description,
+                                  directory: dir)
+                }
+                if seen.insert("\(t.kind.rawValue)|\(t.name)").inserted { tasks.append(t) }
+            }
+        }
         return tasks
+    }
+
+    private static func tasksIn(dir: String) -> [BuildTask] {
+        var tasks: [BuildTask] = []
+        tasks += fromPackageJSON(workDir: dir)
+        tasks += fromMakefile(workDir: dir)
+        tasks += fromPackageSwift(workDir: dir)
+        tasks += fromCargoToml(workDir: dir)
+        tasks += fromMaven(workDir: dir)
+        tasks += fromGradle(workDir: dir)
+        tasks += fromGoMod(workDir: dir)
+        tasks += fromPython(workDir: dir)
+        return tasks
+    }
+
+    // MARK: - Maven / Gradle / Go / Python
+    //
+    // These four are LIFECYCLE systems, not script registries: the useful
+    // entries are the phases the tool defines, not names someone wrote in a
+    // config file. So the task list is the lifecycle, and the wrapper script
+    // is preferred over a global binary because that is the version the
+    // project pins.
+
+    private static func fromMaven(workDir: String) -> [BuildTask] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: workDir + "/pom.xml") else { return [] }
+        let exe = fm.isExecutableFile(atPath: workDir + "/mvnw") ? "./mvnw" : "mvn"
+        return [
+            ("clean", "remove target/"),
+            ("compile", "compile sources"),
+            ("test", "run tests"),
+            ("package", "build the artifact"),
+            ("verify", "run checks + integration tests"),
+            ("install", "install to the local repository"),
+        ].map { phase, why in
+            BuildTask(name: phase, command: "\(exe) \(phase)", kind: .maven,
+                      description: why, directory: workDir)
+        }
+    }
+
+    private static func fromGradle(workDir: String) -> [BuildTask] {
+        let fm = FileManager.default
+        let hasBuild = ["build.gradle", "build.gradle.kts"].contains {
+            fm.fileExists(atPath: workDir + "/" + $0)
+        }
+        guard hasBuild else { return [] }
+        let exe = fm.isExecutableFile(atPath: workDir + "/gradlew") ? "./gradlew" : "gradle"
+        return [
+            ("build", "assemble and test"),
+            ("assemble", "assemble without testing"),
+            ("test", "run tests"),
+            ("clean", "delete build output"),
+            ("tasks", "list every available task"),
+        ].map { name, why in
+            BuildTask(name: name, command: "\(exe) \(name)", kind: .gradle,
+                      description: why, directory: workDir)
+        }
+    }
+
+    private static func fromGoMod(workDir: String) -> [BuildTask] {
+        guard FileManager.default.fileExists(atPath: workDir + "/go.mod") else { return [] }
+        return [
+            ("build", "go build ./...", "compile every package"),
+            ("test", "go test ./...", "run tests"),
+            ("vet", "go vet ./...", "report suspicious constructs"),
+            ("tidy", "go mod tidy", "prune and add module requirements"),
+        ].map { name, cmd, why in
+            BuildTask(name: name, command: cmd, kind: .go, description: why, directory: workDir)
+        }
+    }
+
+    private static func fromPython(workDir: String) -> [BuildTask] {
+        let fm = FileManager.default
+        // `pyproject.toml` is the modern marker; the runner is whichever
+        // manager the project actually uses, detected by its lock file.
+        guard fm.fileExists(atPath: workDir + "/pyproject.toml") else { return [] }
+        let runner: String
+        if fm.fileExists(atPath: workDir + "/uv.lock") { runner = "uv run" }
+        else if fm.fileExists(atPath: workDir + "/poetry.lock") { runner = "poetry run" }
+        else { runner = "python -m" }
+        return [
+            ("test", "\(runner) pytest", "run tests"),
+            ("lint", "\(runner) ruff check .", "lint"),
+            ("format", "\(runner) ruff format .", "format"),
+        ].map { name, cmd, why in
+            BuildTask(name: name, command: cmd, kind: .python, description: why, directory: workDir)
+        }
     }
 
     // MARK: - package.json

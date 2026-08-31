@@ -337,7 +337,11 @@ enum DiagnosticDiscovery {
 
     /// Breadth-first so shallower directories are visited first — which is
     /// what makes "shallowest wins" above true.
-    private static func directories(root: String) -> [String] {
+    ///
+    /// Internal, not private: `BuildTaskService` walks the same tree looking
+    /// for build systems, and two independent walks would eventually disagree
+    /// about what counts as a sub-project or what to skip.
+    static func directories(root: String) -> [String] {
         let fm = FileManager.default
         var result = [root]
         var frontier = [root]

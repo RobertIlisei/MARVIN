@@ -681,7 +681,20 @@ struct SkillsPane: View {
     @ViewBuilder
     private func content(_ idx: SkillsIndexResponse) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            // LazyVStack, not VStack.
+            //
+            // This pane renders 45+ skill rows, each with an icon, name,
+            // description and two buttons. A plain `VStack` builds and lays
+            // out EVERY one of them the moment the pane becomes visible,
+            // including the ~35 below the fold — which is the cost the user
+            // feels on a tab switch ("very sluggish when loading, it's not
+            // fluid", 2026-08-31).
+            //
+            // It is not a data problem, so caching and skeletons do not help:
+            // `/api/skills` answers in **3.6 ms** and the payload is already
+            // in hand before the pane draws. The delay is layout, and the fix
+            // is to stop laying out what nobody is looking at.
+            LazyVStack(alignment: .leading, spacing: 18) {
                 paneActions
                 // ADR-0037 — organised around the one question that matters:
                 // what is ACTIVE for this project. Active → available to turn

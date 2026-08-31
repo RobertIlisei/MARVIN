@@ -69,8 +69,11 @@ struct LayoutPopoverContent: View {
             paneRow(
                 key: "preview",
                 label: "preview",
-                kbd: "⌘⇧P",
-                tip: "live web preview of dev server",
+                // ^⇧P — ⇧⌘P belongs to the Command Palette. The row's own
+                // toggle routes through `togglePane("preview")`, which now
+                // flips the editor-surface flag rather than a bottom tab.
+                kbd: "^⇧P",
+                tip: "live web preview — opens in the editor, not the bottom panel",
                 active: bridge.panes.preview,
                 disabled: bridge.projectWorkDir == nil
             )

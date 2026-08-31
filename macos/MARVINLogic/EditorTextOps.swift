@@ -238,3 +238,177 @@ public enum EditorTextOps {
         )
     }
 }
+
+// MARK: - Block comments
+
+public extension EditorTextOps {
+    /// Block-comment delimiters by file extension, or nil where the language
+    /// has none (or none worth using). Returning nil makes the command a
+    /// no-op rather than inserting something that would corrupt the file —
+    /// the same rule as `lineCommentToken`.
+    static func blockCommentTokens(forExtension ext: String) -> (open: String, close: String)? {
+        switch ext.lowercased() {
+        case "swift", "ts", "tsx", "js", "jsx", "mts", "cts", "go", "rs",
+             "c", "h", "cc", "cpp", "hpp", "m", "mm", "java", "kt", "scala",
+             "cs", "php", "dart", "proto", "gradle", "css", "scss", "less":
+            return ("/*", "*/")
+        case "html", "htm", "xml", "vue", "svelte", "md", "markdown":
+            return ("<!--", "-->")
+        case "py":
+            // Python has no block comment; `"""` is a string literal that
+            // happens to be discarded, and inserting one changes semantics
+            // inside an expression. Line comments are the honest answer.
+            return nil
+        case "sql":
+            return ("/*", "*/")
+        case "lua":
+            return ("--[[", "]]")
+        default:
+            return nil
+        }
+    }
+
+    /// Wrap the selection in block-comment delimiters, or unwrap when it is
+    /// already wrapped. Unwrapping checks the TRIMMED selection so a user who
+    /// selected a little loosely still gets the toggle they meant.
+    static func toggleBlockComment(
+        _ text: String, _ selection: NSRange, open: String, close: String
+    ) -> TextEdit {
+        let ns = text as NSString
+        let range = selection.length > 0 ? selection : lineSpan(in: text, for: selection)
+        guard range.length >= 0, range.location + range.length <= ns.length else {
+            return TextEdit(text: text, selection: selection)
+        }
+        let chunk = ns.substring(with: range)
+        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.hasPrefix(open) && trimmed.hasSuffix(close) && trimmed.count >= open.count + close.count {
+            let inner = String(trimmed.dropFirst(open.count).dropLast(close.count))
+            let out = ns.replacingCharacters(in: range, with: inner)
+            return TextEdit(
+                text: out,
+                selection: NSRange(location: range.location, length: (inner as NSString).length)
+            )
+        }
+        let wrapped = "\(open)\(chunk)\(close)"
+        let out = ns.replacingCharacters(in: range, with: wrapped)
+        return TextEdit(
+            text: out,
+            selection: NSRange(location: range.location, length: (wrapped as NSString).length)
+        )
+    }
+}
+
+// MARK: - Brackets and selection expansion
+
+public extension EditorTextOps {
+    static let bracketPairs: [(open: Character, close: Character)] =
+        [("(", ")"), ("[", "]"), ("{", "}")]
+
+    /// Offset of the bracket matching the one at `offset`, or nil.
+    ///
+    /// Scans with a depth counter rather than regex, because nesting is the
+    /// whole problem: `f(g(x), y)` from the first `(` must reach the LAST
+    /// `)`, not the first one it meets.
+    static func matchingBracket(in text: String, at offset: Int) -> Int? {
+        let ns = text as NSString
+        guard offset >= 0, offset < ns.length else { return nil }
+        let ch = Character(UnicodeScalar(ns.character(at: offset))!)
+
+        if let pair = bracketPairs.first(where: { $0.open == ch }) {
+            var depth = 0
+            var i = offset
+            while i < ns.length {
+                let c = Character(UnicodeScalar(ns.character(at: i))!)
+                if c == pair.open { depth += 1 }
+                else if c == pair.close {
+                    depth -= 1
+                    if depth == 0 { return i }
+                }
+                i += 1
+            }
+            return nil
+        }
+        if let pair = bracketPairs.first(where: { $0.close == ch }) {
+            var depth = 0
+            var i = offset
+            while i >= 0 {
+                let c = Character(UnicodeScalar(ns.character(at: i))!)
+                if c == pair.close { depth += 1 }
+                else if c == pair.open {
+                    depth -= 1
+                    if depth == 0 { return i }
+                }
+                i -= 1
+            }
+            return nil
+        }
+        return nil
+    }
+
+    /// The next larger meaningful span around `selection`.
+    ///
+    /// Deliberately bracket- and line-based rather than syntax-aware. VS Code
+    /// expands along the syntax tree; MARVIN wires tree-sitter for only 12
+    /// languages, so a syntax version would silently do nothing on the rest —
+    /// including Java, the language of the project that prompted this work.
+    /// Brackets and lines exist in every language MARVIN can open, and the
+    /// progression (word → enclosing brackets → line → whole document) covers
+    /// what the command is reached for.
+    static func expandSelection(_ text: String, _ selection: NSRange) -> NSRange? {
+        let ns = text as NSString
+        guard ns.length > 0 else { return nil }
+        let loc = min(max(selection.location, 0), ns.length)
+        let end = min(loc + max(selection.length, 0), ns.length)
+
+        // 1. Empty selection → the word under the caret.
+        if selection.length == 0 {
+            if let word = wordRange(in: ns, at: loc), word.length > 0 { return word }
+        }
+        // 2. Grow to the innermost enclosing bracket pair, if it adds anything.
+        if let inner = enclosingBrackets(in: ns, from: loc, to: end) {
+            if inner.location < loc || inner.location + inner.length > end { return inner }
+        }
+        // 3. The whole line block.
+        let span = lineSpan(in: text, for: NSRange(location: loc, length: end - loc))
+        if span.location < loc || span.location + span.length > end { return span }
+        // 4. Everything.
+        let all = NSRange(location: 0, length: ns.length)
+        return (all.length > (end - loc)) ? all : nil
+    }
+
+    private static func wordRange(in ns: NSString, at offset: Int) -> NSRange? {
+        func isWord(_ u: unichar) -> Bool {
+            let c = Character(UnicodeScalar(u)!)
+            return c.isLetter || c.isNumber || c == "_"
+        }
+        var start = offset
+        while start > 0, isWord(ns.character(at: start - 1)) { start -= 1 }
+        var stop = offset
+        while stop < ns.length, isWord(ns.character(at: stop)) { stop += 1 }
+        return stop > start ? NSRange(location: start, length: stop - start) : nil
+    }
+
+    /// The innermost bracket pair strictly containing `[from, to)`, as the
+    /// span INSIDE the brackets.
+    private static func enclosingBrackets(in ns: NSString, from: Int, to: Int) -> NSRange? {
+        var depth = 0
+        var i = from - 1
+        while i >= 0 {
+            let c = Character(UnicodeScalar(ns.character(at: i))!)
+            if bracketPairs.contains(where: { $0.close == c }) { depth += 1 }
+            else if let pair = bracketPairs.first(where: { $0.open == c }) {
+                if depth == 0 {
+                    if let close = matchingBracket(in: ns as String, at: i), close >= to {
+                        _ = pair
+                        return NSRange(location: i + 1, length: close - i - 1)
+                    }
+                    return nil
+                }
+                depth -= 1
+            }
+            i -= 1
+        }
+        return nil
+    }
+}

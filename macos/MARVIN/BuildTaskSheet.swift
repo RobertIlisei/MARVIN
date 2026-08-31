@@ -166,6 +166,10 @@ struct BuildTaskSheet: View {
         case .swift:             return .blue
         case .cargo:             return .brown
         case .shell:             return .gray
+        case .maven:             return .pink
+        case .gradle:            return .green
+        case .go:                return .cyan
+        case .python:            return .yellow
         }
     }
 }

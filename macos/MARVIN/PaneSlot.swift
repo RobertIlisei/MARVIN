@@ -29,7 +29,21 @@ extension View {
             .frame(width: active ? nil : 0, height: active ? nil : 0)
             .clipped()
             .disabled(!active)
-            .focusable(active)
+            // `.focusable(false)` unconditionally, not `.focusable(active)`.
+            //
+            // Two reasons, and the first is visible. Marking the ACTIVE pane
+            // focusable makes the whole pane a focus target, so macOS draws
+            // its focus ring around the entire pane — the blue outline the
+            // user reported (2026-08-31: "sometimes I can see the blue lines
+            // of the pane, this is not very professional"). The pane's
+            // CONTENTS are focusable on their own; the container never needed
+            // to be.
+            //
+            // The load-bearing half is unchanged: inactive panes must stay out
+            // of the focus key-view loop, which is what `disabled(!active)`
+            // plus the zero frame achieve. `false` here keeps that and is
+            // strictly stronger than the old `active` value.
+            .focusable(false)
             .accessibilityHidden(!active)
     }
 }

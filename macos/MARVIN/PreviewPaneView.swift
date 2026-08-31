@@ -130,6 +130,18 @@ struct PreviewPaneView: View {
             }
             .buttonStyle(.borderless)
             .disabled(urlString.isEmpty)
+            .help("Open in the system browser")
+            // Close. The preview used to be a bottom-panel tab, so the tab
+            // strip closed it; as an editor surface it owns that affordance
+            // itself. Without this the only way out is the View menu, which
+            // is not where anyone looks to dismiss a pane they are staring at.
+            Button {
+                NativePrefs.shared.setPreviewOpen(false)
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Close the preview (^⇧P)")
             .help("Open in default browser")
         }
         .padding(.horizontal, 10)

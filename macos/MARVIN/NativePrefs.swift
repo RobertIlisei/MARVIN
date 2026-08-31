@@ -46,6 +46,15 @@ final class NativePrefs {
     private(set) var themeName: String? = nil
     /// 0 = tab; positive = that many spaces. Default 4 matches VS Code / Cursor.
     private(set) var indentSize: Int = 4
+    /// Soft-wrap long lines in the editor. Off by default: code reads better
+    /// with a horizontal scroll than with a wrapped statement, and that was
+    /// the editor's fixed behaviour before this became a toggle.
+    private(set) var wordWrap: Bool = false
+    /// Write a dirty buffer back to disk shortly after the user stops typing.
+    /// Off by default — MARVIN saves through a route that carries an mtime
+    /// for stale-detection, and turning that into a background action is a
+    /// choice the user should make, not inherit.
+    private(set) var autoSave: Bool = false
     /// First-launch onboarding has been shown + dismissed. False on a
     /// fresh `brew install` until the user clicks "Get started" in
     /// OnboardingView; true thereafter. The Help menu carries a
@@ -169,6 +178,7 @@ final class NativePrefs {
         switch key {
         case "files":    next.files = !next.files
         case "brain":    next.brain = !next.brain
+        case "preview":  next.previewOpen = !next.previewOpen
         default:
             guard let tab = BottomPanelTab(rawValue: key) else { return }
             next.bottom = next.bottom.activating(tab)
@@ -191,6 +201,16 @@ final class NativePrefs {
         setPanes(next)
     }
 
+    /// The browser preview's own visibility — independent of the bottom
+    /// panel, because it is an editor surface (see `PaneState.previewOpen`).
+    func setPreviewOpen(_ open: Bool) {
+        var next = panes
+        next.previewOpen = open
+        setPanes(next)
+    }
+
+    func togglePreview() { setPreviewOpen(!panes.previewOpen) }
+
     func selectBottomTab(_ tab: BottomPanelTab) {
         var next = panes
         next.bottom = BottomPanelState(isOpen: true, activeTab: tab)
@@ -210,6 +230,18 @@ final class NativePrefs {
         indentSize = clamped
         UserDefaults.standard.set(clamped, forKey: "marvin.indentSize")
         MarvinBridge.shared.indentSize = clamped
+    }
+
+    func setWordWrap(_ v: Bool) {
+        wordWrap = v
+        UserDefaults.standard.set(v, forKey: "marvin.wordWrap")
+        MarvinBridge.shared.wordWrap = v
+    }
+
+    func setAutoSave(_ v: Bool) {
+        autoSave = v
+        UserDefaults.standard.set(v, forKey: "marvin.autoSave")
+        MarvinBridge.shared.autoSave = v
     }
 
     // MARK: - Recent files (MRU per project)
@@ -371,6 +403,8 @@ final class NativePrefs {
             indentSize = max(0, min(saved, 8))
         }
         hasCompletedOnboarding = d.bool(forKey: "marvin.onboarding.completed")
+        wordWrap = d.bool(forKey: "marvin.wordWrap")
+        autoSave = d.bool(forKey: "marvin.autoSave")
     }
 
     // MARK: - Onboarding
@@ -405,6 +439,8 @@ final class NativePrefs {
         b.panes               = panes
         b.themeName           = themeName
         b.indentSize          = indentSize
+        b.wordWrap            = wordWrap
+        b.autoSave            = autoSave
     }
 }
 
@@ -423,7 +459,12 @@ private struct PanesCodable: Codable {
     init(from s: MarvinBridge.PaneState) {
         files = s.files; brain = s.brain
         let p = BottomPanelMigration.project(s.bottom)
-        graph = p.graph; preview = p.preview; terminal = p.terminal; problems = p.problems
+        graph = p.graph; terminal = p.terminal; problems = p.problems
+        // `preview` keeps its slot in the persisted payload, but it now
+        // carries the EDITOR surface's state rather than a bottom tab's.
+        // Same key, same shape — an older build reading this file still sees
+        // a boolean it understands.
+        preview = s.previewOpen
         bottomOpen = s.bottom.isOpen
         bottomTab = s.bottom.activeTab.rawValue
     }
@@ -431,6 +472,7 @@ private struct PanesCodable: Codable {
     func toState() -> MarvinBridge.PaneState {
         var s = MarvinBridge.PaneState()
         s.files = files; s.brain = brain
+        s.previewOpen = preview
         let stored = bottomTab.flatMap(BottomPanelTab.init(rawValue:))
         if let open = bottomOpen, let stored {
             s.bottom = BottomPanelState(isOpen: open, activeTab: stored)

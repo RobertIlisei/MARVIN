@@ -19,7 +19,7 @@ need its own ADR.
 
 | Item | Status | Note |
 |---|---|---|
-| New Text File | ⬜ | Needs an untitled-buffer concept; every buffer today is backed by a path. |
+| New Text File | ✅ | ⌘N. Opens the file tree's own naming sheet at the project root — a real path rather than an untitled buffer, which is what the buffer model supports. |
 | New File… | 🟡 | The file tree can create files; there is no menu entry. |
 | New Window | 🚫 | MARVIN is single-window by design (ADR-0021). Multiple projects = multiple sessions, not multiple windows. |
 | New Window with Profile | 🚫 | No profile concept. |
@@ -28,9 +28,9 @@ need its own ADR.
 | Open Recent ▸ | ✅ | File menu submenu, bridge-populated. |
 | Add Folder to Workspace… | 🚫 | Single-root by design (Golden Rule 4). |
 | Save / Save As… | 🟡 | `⌘S` saves the active editor. No Save As. |
-| Save All | ⬜ | Needs a multi-buffer flush; buffers exist, the command does not. |
-| Auto Save | ⬜ | Would need a debounce + conflict policy against the `mtime` guard. |
-| Revert File | ⬜ | Buffer already holds `originalContent`; this is a small command. |
+| Save All | ✅ | ⌥⌘S. Sequential, not concurrent — each save round-trips an `mtime`, and parallel writes would make the stale-conflict alert ambiguous. |
+| Auto Save | ✅ | Off by default; 1.5 s debounce after the last keystroke, through the same `mtime`-guarded save path, so a stale write still raises the conflict alert. |
+| Revert File | ✅ | Confirmation-gated — the one command in the group with no undo. |
 | Close Editor | ✅ | `⌘W`. |
 | Close All Editors | ✅ | New — registry `file.closeAllEditors`. |
 | Reveal in Finder | ✅ | `⌥⌘R`. |
@@ -50,12 +50,12 @@ with a worse one.
 | Undo / Redo / Cut / Copy / Paste | ✅ | Responder chain. |
 | Find / Find Next / Find Previous | ✅ | `⌘F` / `⌘G` / `⇧⌘G`, Edit menu. |
 | Find in Files | ✅ | `⇧⌘F` — reveals the Search pane. |
-| Replace / Replace in Files | ⬜ | Search pane is read-only today. |
+| Replace / Replace in Files | ⬜ | Search pane is read-only today. **Deferred deliberately:** a multi-file rewrite is a mutation, and MARVIN gates mutations (`gitWritePolicy`, the confirm registry). It needs a preview-and-confirm story, i.e. its own ADR — not a menu item. |
 | Toggle Line Comment | ⬜ | Needs editor text manipulation; per-language comment tokens are already known to the syntax layer. |
-| Toggle Block Comment | ⬜ | Same. |
+| Toggle Block Comment | ✅ | ⌥⇧A. Per-language delimiters; Python deliberately has none (`"""` is a string literal, not a comment). |
 | Move Line Up/Down, Copy Line Up/Down | ⬜ | Editor text manipulation. High value, self-contained. |
 | Duplicate Selection | ⬜ | Same. |
-| Expand / Shrink Selection | ⬜ | **tree-sitter already parses 12 languages** — this is a syntax-node walk, not new infrastructure. |
+| Expand / Shrink Selection | ✅ | ⌃⇧⌘→ / ⌃⇧⌘←. Bracket- and line-based, **not** the tree-sitter walk first planned: MARVIN wires 12 grammars, so a syntax version would do nothing in every other language — including Java, the language of the project that prompted this. Shrink replays the expand stack. |
 | Add Cursor Above/Below, Add Next Occurrence, multi-cursor | ⬜ | The largest editor item. `STTextView` supports multiple insertion points; the commands and the UX are the work. |
 | Column Selection Mode | ⬜ | Follows multi-cursor. |
 | Emmet | 🚫 | Web-authoring specific. |
@@ -73,7 +73,7 @@ with a worse one.
 | Run | ⬜ | Needs DAP. |
 | Extensions | 🚫 | MARVIN has Skills and Plugins panes instead (ADR-0053); both are in the View menu. |
 | Problems / Output / Debug Console / Terminal | 🟡 | Problems ✅ `⇧⌘M`, Terminal ✅ `^\``, Graph ✅ `^⇧G`, Preview ✅ `⇧⌘P`. No Output or Debug Console. |
-| Word Wrap | ⬜ | Editor setting; small. |
+| Word Wrap | ✅ | ⌥Z, persisted. Also re-routes the chat-link line jump, whose offset arithmetic assumed uniform line height. |
 
 ## Go
 
@@ -87,9 +87,9 @@ with a worse one.
 | Go to Symbol in Editor… | ⬜ | Needs LSP `documentSymbol`. |
 | Go to Definition / Declaration / Type Definition / Implementations / References | ⬜ | **Needs LSP** — the connection exists now; these are `textDocument/*` requests plus UI. |
 | Go to Line/Column… | ✅ | **New** — `^G`, accepts `120` or `120:8`. |
-| Go to Bracket | ⬜ | tree-sitter can answer this. |
+| Go to Bracket | ✅ | ⇧⌘\\. Depth-counted scan, so `f(g(x), y)` reaches the outer close. Tries the character at the caret, then the one before it. |
 | Next / Previous Problem | ✅ | **New** — `F8` / `⇧F8` walk the merged diagnostics list. |
-| Next / Previous Change | ⬜ | The diff gutter already computes hunks; this is navigation over them. |
+| Next / Previous Change | ✅ | ⌥⌘↓ / ⌥⌘↑, over the gutter's existing hunks. Wraps at both ends. |
 
 ## Run
 
@@ -111,10 +111,10 @@ Diagnostics, Audit Session.
 | Item | Status | Note |
 |---|---|---|
 | New Terminal | ✅ | `^\`` toggles the terminal tab. |
-| Split Terminal | ⬜ | One terminal per project today. |
+| Split Terminal | ⬜ | **Deferred deliberately:** `TerminalSessionStore` is keyed by `workDir`, one session per project. Splitting means N sessions per project plus the pane UI to address them — a refactor, not a command. |
 | New Terminal Window | 🚫 | Single-window. |
 | Run Task… / Run Build Task… | ✅ | `⇧⌘B`, discovers from `package.json` / `Makefile` / `Package.swift` / `Cargo.toml`. |
-| Run Active File / Run Selected Text | ⬜ | Small, given the terminal exists. |
+| Run Active File | ✅ | Interpreter per extension (Golden Rule 6: that is a fact about Python, not about a project). Disabled — not failing in the terminal — where a language has no single-file run. Run Selected Text ⬜. |
 | Show / Restart / Terminate Running Tasks | ⬜ | Needs a task registry. |
 | Configure Tasks / Default Build Task | ⬜ | Needs a `tasks.json` equivalent. |
 

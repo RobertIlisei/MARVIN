@@ -380,6 +380,9 @@ struct FileViewerNSView: NSViewRepresentable {
     let fileExtension: String
     let isDark: Bool
     let isEditable: Bool
+    /// Soft-wrap long lines. Applied in `updateNSView` so flipping the
+    /// setting re-lays-out the document that is already open.
+    var wordWrap: Bool = false
     /// M5: git diff markers for the current file. Keys are 1-indexed
     /// line numbers; values are the status (added / modified / removed).
     var diffLines: [Int: DiffLineStatus] = [:]
@@ -415,16 +418,11 @@ struct FileViewerNSView: NSViewRepresentable {
             ofSize: 12,
             weight: .regular
         )
-        // No soft wrap — code prefers horizontal scroll for long
-        // lines. STTextView's top-level `widthTracksTextView`
-        // governs this; the container size is huge so AppKit can't
-        // wrap.
-        textView.widthTracksTextView = false
-        textView.textContainer.containerSize = NSSize(
-            width: 1_000_000,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        scroll.hasHorizontalScroller = true
+        // Wrap is off by default — code reads better with a horizontal
+        // scroll than with a wrapped statement. `updateNSView` applies the
+        // live setting; this is only the initial state.
+        Self.applyWrap(wordWrap, to: textView, in: scroll)
+        context.coordinator.lastWordWrap = wordWrap
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
@@ -489,6 +487,11 @@ struct FileViewerNSView: NSViewRepresentable {
             || context.coordinator.lastIsDark != isDark
             || context.coordinator.lastDiagnostics != diagnosticsFingerprint
 
+        if context.coordinator.lastWordWrap != wordWrap {
+            Self.applyWrap(wordWrap, to: textView, in: scroll)
+            context.coordinator.lastWordWrap = wordWrap
+        }
+
         // Editable flag tracks the buffer's canEdit. STTextView reads
         // this on every event hop; cheap to set unconditionally.
         textView.isEditable = isEditable
@@ -519,9 +522,19 @@ struct FileViewerNSView: NSViewRepresentable {
 
         // Chat-link jump. Deferred until content is present: the first render
         // after a tab switch has an empty buffer, and scrolling that lands at
-        // the top. No soft wrap here (widthTracksTextView is false), so line
-        // height is uniform and the offset is just line × height.
-        if let target = targetLine, !content.isEmpty, textView.string == content {
+        // the top.
+        //
+        // With wrap OFF every line is one line tall, so the offset is just
+        // line × height. With wrap ON that arithmetic is wrong by however
+        // many lines above the target happened to wrap, so the jump goes
+        // through the character offset instead and lets the layout answer.
+        if let target = targetLine, !content.isEmpty, textView.string == content, wordWrap {
+            let offset = Self.characterOffset(ofLine: target, in: content)
+            textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            textView.setSelectedRange(NSRange(location: offset, length: 0))
+            let done = onTargetConsumed
+            DispatchQueue.main.async { done() }
+        } else if let target = targetLine, !content.isEmpty, textView.string == content {
             let lineHeight = NSLayoutManager().defaultLineHeight(
                 for: textView.font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
             )
@@ -541,6 +554,40 @@ struct FileViewerNSView: NSViewRepresentable {
         context.coordinator.diffGutterBar?.needsDisplay = true
     }
 
+    /// Character offset of the start of a 1-indexed line.
+    static func characterOffset(ofLine line: Int, in text: String) -> Int {
+        let ns = text as NSString
+        var offset = 0
+        var remaining = max(0, line - 1)
+        while remaining > 0, offset < ns.length {
+            let found = ns.range(
+                of: "\n", options: [], range: NSRange(location: offset, length: ns.length - offset)
+            )
+            if found.location == NSNotFound { return min(offset, ns.length) }
+            offset = found.location + 1
+            remaining -= 1
+        }
+        return min(offset, ns.length)
+    }
+
+    /// Switch the text container between "as wide as it needs to be" and
+    /// "as wide as the scroll view", which is the whole of soft wrap.
+    ///
+    /// `widthTracksTextView` is STTextView's own governing flag; the
+    /// enormous container width is what stops AppKit wrapping when it is
+    /// off. Both have to move together — leaving the width at 1,000,000
+    /// with tracking on wraps at a million points, i.e. never.
+    static func applyWrap(_ wrap: Bool, to textView: STTextView, in scroll: NSScrollView) {
+        textView.widthTracksTextView = wrap
+        textView.textContainer.containerSize = NSSize(
+            width: wrap ? scroll.contentSize.width : 1_000_000,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        scroll.hasHorizontalScroller = !wrap
+        textView.needsLayout = true
+        textView.needsDisplay = true
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -557,6 +604,9 @@ struct FileViewerNSView: NSViewRepresentable {
         /// changes nothing does not force a full re-highlight.
         var lastDiagnostics: String = ""
         var lastIsDark: Bool = false
+        /// Seeded to the value `makeNSView` applied, so the first update
+        /// does not re-run a no-op wrap pass.
+        var lastWordWrap: Bool = false
         var lastPath: String = ""
         /// True for the immediate next change — set when WE
         /// programmatically reset `string` (tab switch / reload) so
@@ -816,6 +866,12 @@ struct FileViewerView: View {
     }
 
     @State private var unsavedClosePath: String? = nil
+    /// Pending auto-save. One task, cancelled and replaced on every
+    /// keystroke, so the write happens once the user pauses rather than
+    /// once per character.
+    @State private var autoSaveTask: Task<Void, Never>? = nil
+    /// Path awaiting the Revert confirmation.
+    @State private var revertPath: String? = nil
 
     var body: some View {
         // Phase 5f — the per-editor status bar moved to the global
@@ -846,6 +902,10 @@ struct FileViewerView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .preferredColorScheme(bridge.preferredColorScheme)
         .onAppear { ensureActiveLoaded() }
+        .onReceive(NotificationCenter.default.publisher(for: .marvinFileCommand)) { note in
+            guard let command = FileCommand.from(note) else { return }
+            handle(command)
+        }
         .onChange(of: bridge.selectedFilePath) { _, _ in ensureActiveLoaded() }
         .onChange(of: bridge.projectWorkDir) { _, _ in
             // Project switch — drop all buffers; the open-files list
@@ -876,6 +936,25 @@ struct FileViewerView: View {
             Button("Cancel", role: .cancel) { staleConflict = nil }
         } message: { _ in
             Text("Another process modified this file since you opened it. Reload to discard your edits, or Overwrite to keep them and replace the on-disk version.")
+        }
+        // Revert confirmation — the one command here that throws work away.
+        .alert(
+            "Revert file?",
+            isPresented: Binding(
+                get: { revertPath != nil },
+                set: { if !$0 { revertPath = nil } }
+            ),
+            presenting: revertPath
+        ) { path in
+            Button("Revert", role: .destructive) {
+                if let cwd = bridge.projectWorkDir {
+                    model.reload(cwd: cwd, path: path)
+                }
+                revertPath = nil
+            }
+            Button("Cancel", role: .cancel) { revertPath = nil }
+        } message: { path in
+            Text("Discard unsaved changes to \((path as NSString).lastPathComponent) and reload it from disk? This cannot be undone.")
         }
         // Unsaved changes alert.
         .background(
@@ -1290,6 +1369,7 @@ struct FileViewerView: View {
                         fileExtension: (path as NSString).pathExtension,
                         isDark: bridge.preferredColorScheme != .light,
                         isEditable: buffer.canEdit && !buffer.isSaving,
+                        wordWrap: bridge.wordWrap,
                         diffLines: diffLines,
                         targetLine: bridge.pendingEditorLine,
                         onTargetConsumed: { _ = bridge.consumePendingEditorLine() },
@@ -1299,6 +1379,7 @@ struct FileViewerView: View {
                         diagnostics: bridge.diagnosticItems.filter { $0.filePath == path },
                         onContentChange: { p, c in
                             model.updateContent(path: p, content: c)
+                            scheduleAutoSave(path: p)
                             // Phase 5f — line count fed to global
                             // AppStatusBar via bridge so it can show
                             // "Ln X · N lines" alongside cursor pos.
@@ -1414,6 +1495,71 @@ struct FileViewerView: View {
         LSPService.shared.didClose(path: path)
         bridge.closeFile(path)
         model.dropBuffer(path: path)
+    }
+
+    @MainActor
+    private func handle(_ command: FileCommand) {
+        switch command {
+        case .saveAll:
+            // Every dirty buffer, not just the visible tab. Sequential
+            // rather than a task group: each save round-trips an mtime for
+            // stale-detection, and firing them concurrently would make the
+            // conflict alert fight itself over which file it is about.
+            Task {
+                for path in bridge.openFiles {
+                    guard let buffer = model.buffer(for: path),
+                          buffer.isDirty, buffer.canEdit, !buffer.isSaving else { continue }
+                    _ = await performSave(force: false, targetPath: path)
+                }
+            }
+        case .revert:
+            // Discards unsaved edits, so it asks first — this is the one
+            // command in the group with no undo.
+            guard let path = bridge.selectedFilePath,
+                  let buffer = model.buffer(for: path), buffer.isDirty else { return }
+            revertPath = path
+        case .nextChange:
+            jumpToChange(forward: true)
+        case .previousChange:
+            jumpToChange(forward: false)
+        }
+    }
+
+    /// Move the caret to the next / previous changed line.
+    ///
+    /// `diffLines` is already computed for the gutter, so this is a search
+    /// over keys the view is holding anyway. It wraps at the ends, which is
+    /// what makes it usable for stepping through a file's changes: reaching
+    /// the last hunk and pressing again should return to the first, not
+    /// stop dead with no feedback.
+    @MainActor
+    private func jumpToChange(forward: Bool) {
+        let lines = diffLines.keys.sorted()
+        guard !lines.isEmpty else { return }
+        let current = bridge.cursorRow
+        let target: Int
+        if forward {
+            target = lines.first(where: { $0 > current }) ?? lines[0]
+        } else {
+            target = lines.last(where: { $0 < current }) ?? lines[lines.count - 1]
+        }
+        bridge.requestEditorLine(target)
+    }
+
+    /// Queue an auto-save for `path` if the setting is on.
+    @MainActor
+    private func scheduleAutoSave(path: String) {
+        autoSaveTask?.cancel()
+        guard bridge.autoSave else { return }
+        autoSaveTask = Task {
+            // Long enough that a normal typing burst is one save, short
+            // enough that "auto" still means what the user turned on.
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            guard let buffer = model.buffer(for: path),
+                  buffer.isDirty, buffer.canEdit, !buffer.isSaving else { return }
+            _ = await performSave(force: false, targetPath: path)
+        }
     }
 
     @MainActor

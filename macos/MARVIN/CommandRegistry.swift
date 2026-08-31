@@ -96,6 +96,32 @@ enum CommandRegistry {
             slot: .file, shortcut: "⌘O", keywords: ["folder", "workspace"]
         ) { MarvinBridge.shared.triggerOpenProject() })
         c.append(AppCommand(
+            id: "file.newTextFile", title: "New Text File…",
+            slot: .file, shortcut: "⌘N", keywords: ["create", "add file"],
+            isEnabled: { hasProject }
+        ) {
+            // The naming sheet and the create flow live in `FileTreeView`;
+            // duplicating them here is how two "New File" dialogs that
+            // behave slightly differently get born.
+            MarvinBridge.shared.revealLeftTab("files")
+            NotificationCenter.default.post(name: .marvinRequestNewFile, object: nil)
+        })
+        c.append(AppCommand(
+            id: "file.saveAll", title: "Save All",
+            slot: .file, shortcut: "⌥⌘S", keywords: ["write", "flush"],
+            isEnabled: { !MarvinBridge.shared.openFiles.isEmpty }
+        ) { FileCommand.saveAll.post() })
+        c.append(AppCommand(
+            id: "file.revert", title: "Revert File",
+            slot: .file, keywords: ["discard", "reload from disk", "undo changes"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { FileCommand.revert.post() })
+        c.append(AppCommand(
+            id: "file.autoSave",
+            title: NativePrefs.shared.autoSave ? "Turn Auto Save Off" : "Turn Auto Save On",
+            slot: .file, keywords: ["auto save", "autosave"]
+        ) { NativePrefs.shared.setAutoSave(!NativePrefs.shared.autoSave) })
+        c.append(AppCommand(
             id: "file.closeAllEditors", title: "Close All Editors",
             slot: .file, keywords: ["tabs"],
             isEnabled: { !MarvinBridge.shared.openFiles.isEmpty }
@@ -134,6 +160,11 @@ enum CommandRegistry {
             isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
         ) { EditorCommands.perform(.toggleLineComment) })
         c.append(AppCommand(
+            id: "edit.toggleBlockComment", title: "Toggle Block Comment",
+            slot: .edit, shortcut: "⌥⇧A", keywords: ["/*", "<!--", "comment out"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { EditorCommands.perform(.toggleBlockComment) })
+        c.append(AppCommand(
             id: "selection.moveLineUp", title: "Move Line Up",
             slot: .selection, shortcut: "⌥↑",
             isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
@@ -158,6 +189,16 @@ enum CommandRegistry {
             slot: .selection, shortcut: "⇧⌘D", keywords: ["copy"],
             isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
         ) { EditorCommands.perform(.duplicate) })
+        c.append(AppCommand(
+            id: "selection.expand", title: "Expand Selection",
+            slot: .selection, shortcut: "^⇧⌘→", keywords: ["grow", "smart select"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { EditorCommands.perform(.expandSelection) })
+        c.append(AppCommand(
+            id: "selection.shrink", title: "Shrink Selection",
+            slot: .selection, shortcut: "^⇧⌘←", keywords: ["contract", "smart select"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { EditorCommands.perform(.shrinkSelection) })
 
         // ── View ────────────────────────────────────────────────────────
         c.append(AppCommand(
@@ -173,6 +214,11 @@ enum CommandRegistry {
             slot: .view, shortcut: "⇧⌘F", keywords: ["find in files", "grep"],
             isEnabled: { hasProject }
         ) { MarvinBridge.shared.revealLeftTab("search") })
+        c.append(AppCommand(
+            id: "view.wordWrap",
+            title: NativePrefs.shared.wordWrap ? "Turn Word Wrap Off" : "Turn Word Wrap On",
+            slot: .view, shortcut: "⌥Z", keywords: ["word wrap", "soft wrap", "lines"]
+        ) { NativePrefs.shared.setWordWrap(!NativePrefs.shared.wordWrap) })
         c.append(AppCommand(
             id: "view.sourceControl", title: "Source Control",
             slot: .view, shortcut: "^⇧S", keywords: ["git", "scm", "commit", "branch"],
@@ -204,6 +250,12 @@ enum CommandRegistry {
                 keywords: ["panel", "bottom"], isEnabled: { hasProject }
             ) { NativePrefs.shared.togglePane(tab.rawValue) })
         }
+        c.append(AppCommand(
+            id: "view.preview", title: "Browser Preview",
+            slot: .view, shortcut: "^⇧P",
+            keywords: ["browser", "web", "localhost", "open in browser"],
+            isEnabled: { hasProject }
+        ) { NativePrefs.shared.togglePreview() })
         c.append(AppCommand(
             id: "view.theme", title: "Toggle Theme",
             slot: .view, shortcut: "⇧⌘T", keywords: ["dark", "light", "appearance"]
@@ -265,6 +317,21 @@ enum CommandRegistry {
             slot: .go, shortcut: "^⇧-", keywords: ["navigate", "history"],
             isEnabled: { MarvinBridge.shared.canNavigateForward }
         ) { MarvinBridge.shared.navigateForward() })
+        c.append(AppCommand(
+            id: "go.bracket", title: "Go to Bracket",
+            slot: .go, shortcut: "⇧⌘\\", keywords: ["matching", "paren", "brace"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { EditorCommands.perform(.goToBracket) })
+        c.append(AppCommand(
+            id: "go.nextChange", title: "Next Change",
+            slot: .go, shortcut: "⌥⌘↓", keywords: ["diff", "hunk", "modified"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { FileCommand.nextChange.post() })
+        c.append(AppCommand(
+            id: "go.previousChange", title: "Previous Change",
+            slot: .go, shortcut: "⌥⌘↑", keywords: ["diff", "hunk", "modified"],
+            isEnabled: { MarvinBridge.shared.selectedFilePath != nil }
+        ) { FileCommand.previousChange.post() })
 
         // ── Run / Terminal ──────────────────────────────────────────────
         c.append(AppCommand(
@@ -280,6 +347,22 @@ enum CommandRegistry {
             guard let w = workDir else { return }
             NativePrefs.shared.revealPane(.problems)
             DiagnosticsService.shared.runAll(workDir: w)
+        })
+        c.append(AppCommand(
+            id: "run.activeFile", title: "Run Active File",
+            slot: .run, keywords: ["execute", "python", "node", "script"],
+            isEnabled: {
+                guard let p = MarvinBridge.shared.selectedFilePath else { return false }
+                // Disabled rather than failing in the terminal: a language
+                // with no single-file run has no honest command to send.
+                return hasProject && RunFileCommand.command(forPath: p) != nil
+            }
+        ) {
+            guard let workDir = workDir,
+                  let path = MarvinBridge.shared.selectedFilePath,
+                  let command = RunFileCommand.command(forPath: path) else { return }
+            NativePrefs.shared.revealPane(.terminal)
+            TerminalSessionStore.shared.session(for: workDir).run(command: command)
         })
         c.append(AppCommand(
             id: "run.auditSession", title: "Audit Session…",
@@ -311,10 +394,6 @@ enum CommandRegistry {
         switch tab {
         case .terminal: return "^`"
         case .problems: return "⇧⌘M"
-        // ^⇧P, not ⇧⌘P: the Command Palette owns ⇧⌘P in every editor
-        // that has one, and that reflex is not worth breaking for a
-        // preview pane.
-        case .preview: return "^⇧P"
         case .graph: return "^⇧G"
         }
     }

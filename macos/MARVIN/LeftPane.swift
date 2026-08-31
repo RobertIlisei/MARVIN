@@ -64,6 +64,8 @@ struct LeftPane: View {
     /// AppStorage if user feedback says otherwise.
     @Environment(MarvinBridge.self) private var bridge
     @State private var tab: LeftPaneTab = .files
+    /// Expanded Outline/Timeline/Tasks sections, reported up by the panel.
+    @State private var toolsOpenSections = 0
 
     /// Width below which the content half of the pane is dropped and only the
     /// rail remains — VS Code / Antigravity collapse the sidebar when you drag
@@ -141,7 +143,28 @@ struct LeftPane: View {
             // 60fps-cheap; the alternative — `if/else` swapping —
             // would re-create the view on every flip and lose state.
             ZStack {
-                paneSlot(FileTreeView(), active: tab == .files)
+                // Files = the tree PLUS the Outline / Timeline / Tasks
+                // sections beneath it, which is where VS Code and Antigravity
+                // put them. A VSplitView so the user can decide how much room
+                // the sections get — they are collapsed by default, so the
+                // tree keeps the whole pane until someone opens one.
+                paneSlot(
+                    VSplitView {
+                        FileTreeView()
+                            .frame(minHeight: 120)
+                        // A STABLE ideal, deliberately not one that tracks the
+                        // open-section count. A changing ideal makes the split
+                        // view re-apply it on every expand/collapse, which
+                        // yanks the divider back to a computed position after
+                        // the user has dragged it somewhere they wanted — the
+                        // "resizing feels weird" report. The panel scrolls its
+                        // own content instead, so opening a section never
+                        // moves the divider at all.
+                        ProjectToolsPanel(openSections: $toolsOpenSections)
+                            .frame(minHeight: 76, idealHeight: 200)
+                    },
+                    active: tab == .files
+                )
                 paneSlot(FindInFilesView(), active: tab == .search)
                 paneSlot(SourceControlView(), active: tab == .sourceControl)
                 paneSlot(SkillsPane(), active: tab == .skills)
@@ -158,7 +181,15 @@ struct LeftPane: View {
             .frame(minWidth: 0, maxWidth: .infinity)
             .clipped()
             .background(MarvinTheme.background)
-            .animation(MarvinTheme.transition, value: tab)
+            // No animation on `tab`.
+            //
+            // `paneSlot` switches a pane between `frame(0x0)` and its real
+            // size, so animating on `tab` made SwiftUI INTERPOLATE that frame
+            // over 180 ms — re-laying out the whole incoming pane on every
+            // frame of the transition. On SkillsPane (45+ rows) that is the
+            // "sluggish, not fluid" the user reported. A tab switch should be
+            // instant; the crossfade is already carried by each slot's own
+            // `opacity`, which animates without touching layout.
             // Hidden rather than removed: the five panes keep their @State
             // (scroll offset, expanded folders, in-flight fetches) across a
             // collapse, so dragging back open restores what was there instead
@@ -199,7 +230,19 @@ struct LeftPane: View {
             .frame(width: active ? nil : 0, height: active ? nil : 0)
             .clipped()
             .disabled(!active)
-            .focusable(active)
+            // `.focusable(false)` unconditionally, not `.focusable(active)`.
+            //
+            // Marking the ACTIVE pane focusable makes the whole pane a focus
+            // target, so macOS draws its focus ring around the entire pane —
+            // the blue outline the user reported (2026-08-31: "sometimes I can
+            // see the blue lines of the pane, this is not very professional").
+            // The pane's CONTENTS are focusable on their own; the container
+            // never needed to be.
+            //
+            // The load-bearing half is unchanged: inactive panes stay out of
+            // the focus key-view loop via `disabled(!active)` plus the zero
+            // frame. `false` keeps that and is strictly stronger.
+            .focusable(false)
             .accessibilityHidden(!active)
     }
 

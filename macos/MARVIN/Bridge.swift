@@ -257,8 +257,15 @@ final class MarvinBridge {
         /// payload keep working; the panel is the source of truth.
         var bottom = BottomPanelState()
 
+        /// The browser preview, which is an EDITOR surface — not a bottom tab.
+        /// It occupies the editor region (where files open) the way every
+        /// other IDE opens a browser, and deliberately never registers as a
+        /// file tab: it is not a document, so it does not belong in the
+        /// open-files bar.
+        var previewOpen: Bool = false
+
         var graph: Bool { bottom.isOpen && bottom.activeTab == .graph }
-        var preview: Bool { bottom.isOpen && bottom.activeTab == .preview }
+        var preview: Bool { previewOpen }
         var terminal: Bool { bottom.isOpen && bottom.activeTab == .terminal }
         var problems: Bool { bottom.isOpen && bottom.activeTab == .problems }
     }
@@ -341,6 +348,12 @@ final class MarvinBridge {
     /// positive value = that many spaces. Stored in NativePrefs /
     /// UserDefaults; read here by AppStatusBar and FileViewerView.
     var indentSize: Int = 4
+    /// Editor soft wrap. Mirrored from `NativePrefs`; read by the editor's
+    /// `updateNSView` so flipping it re-lays-out the open document.
+    var wordWrap: Bool = false
+    /// Auto-save dirty buffers after a pause in typing. Mirrored from
+    /// `NativePrefs`; acted on by `FileViewerView`.
+    var autoSave: Bool = false
 
     // MARK: - Notifications (M1)
 
@@ -465,10 +478,10 @@ final class MarvinBridge {
     func openInPreview(url: String) {
         previewLoadURL = url
         previewLoadCommand &+= 1
-        // Ensure the preview pane is actually visible — otherwise
-        // "Open in Browser" silently does nothing the first time.
-        if !panes.preview {
-            NativePrefs.shared.revealPane(.preview)
+        // Ensure the preview is actually visible — otherwise "Open in
+        // Browser" silently does nothing the first time.
+        if !panes.previewOpen {
+            NativePrefs.shared.setPreviewOpen(true)
         }
     }
 
@@ -592,6 +605,15 @@ final class MarvinBridge {
     func openFileFromChat(path: String, line: Int?) {
         pendingEditorLine = line
         setSelectedFile(path)
+    }
+
+    /// Ask the viewer to scroll the ALREADY-open file to `line`.
+    ///
+    /// Same channel as a chat link, without touching the selected file —
+    /// used by Next/Previous Change, which navigates inside the file the
+    /// user is already looking at.
+    func requestEditorLine(_ line: Int) {
+        pendingEditorLine = line
     }
 
     /// Line a chat link asked to jump to, consumed by the file viewer once it

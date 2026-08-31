@@ -182,6 +182,13 @@ struct FileTreeView: View {
                 errorBanner("Mutation: \(err)")
             }
         }
+        // "New Text File" from the File menu. The naming sheet and the
+        // create flow both live here, so the menu command posts rather than
+        // growing a second copy of them.
+        .onReceive(NotificationCenter.default.publisher(for: .marvinRequestNewFile)) { _ in
+            guard let root = MarvinBridge.shared.projectWorkDir, !root.isEmpty else { return }
+            newEntryContext = NewEntryContext(parentDir: root, kind: .file)
+        }
         // New file / folder sheet — bound to newEntryContext.
         .sheet(item: $newEntryContext) { ctx in
             NewEntrySheet(

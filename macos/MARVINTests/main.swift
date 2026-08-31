@@ -1802,9 +1802,9 @@ runner.suite("BottomPanel") {
     }
 
     runner.test("toggled opens and closes without changing the selection") {
-        let st = BottomPanelState(isOpen: true, activeTab: .preview).toggled()
+        let st = BottomPanelState(isOpen: true, activeTab: .graph).toggled()
         runner.expect(!st.isOpen, "closed")
-        runner.expect(st.activeTab, equals: .preview, "selection kept")
+        runner.expect(st.activeTab, equals: .graph, "selection kept")
         runner.expect(st.toggled().isOpen, "reopens")
     }
 }
@@ -1816,9 +1816,33 @@ runner.suite("BottomPanelMigration") {
         runner.expect(st.isOpen, "open")
         runner.expect(st.activeTab, equals: .terminal, "terminal wins — it has running state")
         runner.expect(
-            BottomPanelMigration.resolve(terminal: false, problems: false, preview: true, graph: true).activeTab,
-            equals: .preview, "preview beats graph"
+            BottomPanelMigration.resolve(terminal: false, problems: true, preview: false, graph: true).activeTab,
+            equals: .problems, "problems beats graph"
         )
+    }
+
+    runner.test("a legacy preview-only layout resolves to a CLOSED panel") {
+        // Preview left the bottom panel — it is an editor surface now. An
+        // existing install whose only open bottom pane was Preview must land
+        // on a closed panel rather than on some arbitrary substitute tab:
+        // their preview moved, it did not disappear, and silently opening
+        // Terminal in its place would be a worse answer than opening nothing.
+        let st = BottomPanelMigration.resolve(
+            terminal: false, problems: false, preview: true, graph: false
+        )
+        runner.expect(!st.isOpen, "panel closed")
+    }
+
+    runner.test("preview is no longer a bottom tab at all") {
+        runner.expect(BottomPanelTab.allCases.count, equals: 3, "problems, terminal, graph")
+        runner.expect(
+            BottomPanelTab.allCases.contains { $0.rawValue == "preview" } == false,
+            equals: true, "no preview tab"
+        )
+        // The projection still WRITES the key, so an older build reading this
+        // payload sees a boolean it understands rather than a missing field.
+        let p = BottomPanelMigration.project(BottomPanelState(isOpen: true, activeTab: .terminal))
+        runner.expect(p.preview, equals: false, "projected preview is always false now")
     }
 
     runner.test("no bottom pane on = closed, and the stored tab survives") {
@@ -2050,8 +2074,8 @@ runner.suite("BottomPanelMounting") {
 
     runner.test("closing never unmounts, and mounts nothing new") {
         var mounted = BottomPanelMounting.mounted([], after: BottomPanelState(isOpen: true, activeTab: .terminal))
-        mounted = BottomPanelMounting.mounted(mounted, after: BottomPanelState(isOpen: false, activeTab: .preview))
-        runner.expect(mounted == [.terminal], "preview never became visible, so it never mounted")
+        mounted = BottomPanelMounting.mounted(mounted, after: BottomPanelState(isOpen: false, activeTab: .graph))
+        runner.expect(mounted == [.terminal], "graph never became visible, so it never mounted")
     }
 
     runner.test("an unopened tab never mounts — the WKWebView it would cost") {
@@ -2504,6 +2528,99 @@ runner.suite("editor-text-ops") {
         runner.expect(EditorTextOps.lineCommentToken(forExtension: "TS"), equals: "//", "case-insensitive")
         runner.expect(EditorTextOps.lineCommentToken(forExtension: "png") == nil, equals: true,
                       "unknown language inserts nothing rather than guessing")
+    }
+}
+
+
+// MARK: - Block comments, brackets, selection expansion (2026-08-31 parity tranche)
+
+runner.suite("editor-block-ops") {
+    func r(_ l: Int, _ n: Int) -> NSRange { NSRange(location: l, length: n) }
+
+    runner.test("block comment wraps the selection, and toggles back off") {
+        let code = "let a = 1"
+        let on = EditorTextOps.toggleBlockComment(code, r(4, 5), open: "/*", close: "*/")
+        runner.expect(on.text, equals: "let /*a = 1*/", "wrapped in place")
+        let off = EditorTextOps.toggleBlockComment(on.text, on.selection, open: "/*", close: "*/")
+        runner.expect(off.text, equals: code, "unwrapping restores the original exactly")
+    }
+
+    runner.test("a loose selection around an existing block still un-comments") {
+        // The user rarely selects flush to the delimiters; trimming is what
+        // makes the second press do what they meant.
+        let code = "  /*x*/  "
+        let off = EditorTextOps.toggleBlockComment(code, r(0, 9), open: "/*", close: "*/")
+        runner.expect(off.text, equals: "x", "trimmed match unwraps")
+    }
+
+    runner.test("an empty selection block-comments the whole line") {
+        let e = EditorTextOps.toggleBlockComment("a\nbb\nc", r(2, 0), open: "/*", close: "*/")
+        runner.expect(e.text, equals: "a\n/*bb*/\nc", "line span used when nothing is selected")
+    }
+
+    runner.test("block tokens are per language, and Python has none") {
+        runner.expect(EditorTextOps.blockCommentTokens(forExtension: "swift")?.open, equals: "/*", "swift")
+        runner.expect(EditorTextOps.blockCommentTokens(forExtension: "html")?.close, equals: "-->", "html")
+        runner.expect(EditorTextOps.blockCommentTokens(forExtension: "lua")?.open, equals: "--[[", "lua")
+        runner.expect(EditorTextOps.blockCommentTokens(forExtension: "py") == nil, equals: true,
+                      "python: a triple-quote is a string literal, not a comment")
+        runner.expect(EditorTextOps.blockCommentTokens(forExtension: "png") == nil, equals: true,
+                      "unknown language inserts nothing rather than guessing")
+    }
+
+    runner.test("matching bracket respects nesting in both directions") {
+        let code = "f(g(x), y)"
+        runner.expect(EditorTextOps.matchingBracket(in: code, at: 1), equals: 9,
+                      "the outer open reaches the LAST close, not the first")
+        runner.expect(EditorTextOps.matchingBracket(in: code, at: 3), equals: 5, "inner pair")
+        runner.expect(EditorTextOps.matchingBracket(in: code, at: 9), equals: 1, "backwards from the close")
+        runner.expect(EditorTextOps.matchingBracket(in: code, at: 0) == nil, equals: true,
+                      "not a bracket at all")
+        runner.expect(EditorTextOps.matchingBracket(in: "f(x", at: 1) == nil, equals: true, "unbalanced")
+    }
+
+    runner.test("expand selection grows word → brackets → line → document") {
+        let code = "let a = f(bcd, e)\nnext"
+        // caret inside `bcd`
+        let word = EditorTextOps.expandSelection(code, r(11, 0))
+        runner.expect(word, equals: r(10, 3), "first press takes the word under the caret")
+        let brackets = EditorTextOps.expandSelection(code, word!)
+        runner.expect(brackets, equals: r(10, 6), "then the inside of the enclosing parens")
+        let line = EditorTextOps.expandSelection(code, brackets!)
+        runner.expect(line, equals: r(0, 17), "then the whole line")
+        let all = EditorTextOps.expandSelection(code, line!)
+        runner.expect(all, equals: r(0, 22), "then the document")
+        runner.expect(EditorTextOps.expandSelection(code, all!) == nil, equals: true,
+                      "and then it stops rather than reporting a no-op expansion")
+    }
+
+    runner.test("expand skips brackets that do not enclose the selection") {
+        let code = "a(b) c"
+        let e = EditorTextOps.expandSelection(code, r(5, 1))   // the `c`, outside the parens
+        runner.expect(e, equals: r(0, 6), "goes straight to the line, not into a() ")
+    }
+
+    runner.test("expand on an empty document reports nothing") {
+        runner.expect(EditorTextOps.expandSelection("", r(0, 0)) == nil, equals: true, "no crash, no span")
+    }
+}
+
+
+runner.suite("run-active-file") {
+    runner.test("known interpreters, and unknown means no command") {
+        runner.expect(RunFileCommand.command(forPath: "/a/b.py"), equals: "python3 '/a/b.py'", "python")
+        runner.expect(RunFileCommand.command(forPath: "/a/b.go"), equals: "go run '/a/b.go'", "go")
+        runner.expect(RunFileCommand.command(forPath: "/a/B.JS"), equals: "node '/a/B.JS'", "case-insensitive")
+        runner.expect(RunFileCommand.command(forPath: "/a/b.png") == nil, equals: true,
+                      "no guess for a language with no single-file run")
+        runner.expect(RunFileCommand.command(forPath: "/a/README") == nil, equals: true, "no extension")
+    }
+
+    runner.test("paths with spaces and quotes stay one argument") {
+        runner.expect(RunFileCommand.command(forPath: "/a b/c.py"), equals: "python3 '/a b/c.py'",
+                      "a space must not split the argument")
+        runner.expect(RunFileCommand.shellQuoted("/a'b"), equals: "'/a'\\''b'",
+                      "an embedded quote is escaped, not left to terminate the string")
     }
 }
 

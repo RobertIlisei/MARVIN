@@ -43,6 +43,9 @@ struct ContentView: View {
     @State private var buildTaskOpen = false
     @State private var commandPaletteOpen = false
     @State private var goToLineOpen = false
+    /// Latched once the preview has been opened, so the `WKWebView` is created
+    /// lazily but never destroyed by a tab switch.
+    @State private var previewEverOpened = false
     @State private var shortcutsOpen = false
 
     var body: some View {
@@ -371,14 +374,34 @@ struct ContentView: View {
 
     /// Editor surface — file viewer when there's an active tab,
     /// native empty-state hint otherwise.
+    /// Editor surface — browser preview, file viewer, or the empty hint.
+    ///
+    /// The preview takes precedence when open, and is deliberately NOT a file
+    /// tab: it is not a document, so it never enters `bridge.openFiles` and
+    /// never appears in the open-files bar. Every IDE the user compares MARVIN
+    /// to opens a browser here rather than in the drawer beside the terminal
+    /// (user, 2026-08-31) — it was a bottom-panel tab until then.
+    ///
+    /// Mounted only once opened, and kept mounted after: a `WKWebView` is
+    /// expensive to create, and losing the page (and its scroll position)
+    /// every time the user glances at a file would make the preview useless
+    /// for watching a running app.
     @ViewBuilder
     private var editorArea: some View {
-        if let path = bridge.selectedFilePath, !path.isEmpty {
-            FileViewerView()
-                .transition(.opacity)
-        } else {
-            workPaneEmptyHint
-                .transition(.opacity)
+        ZStack {
+            if bridge.selectedFilePath?.isEmpty == false {
+                FileViewerView().transition(.opacity)
+            } else {
+                workPaneEmptyHint.transition(.opacity)
+            }
+            if previewEverOpened {
+                PreviewPaneView()
+                    .environment(bridge)
+                    .keptMounted(active: bridge.panes.previewOpen)
+            }
+        }
+        .onChange(of: bridge.panes.previewOpen, initial: true) { _, open in
+            if open { previewEverOpened = true }
         }
     }
 
@@ -406,10 +429,6 @@ struct ContentView: View {
                 if mountedBottomTabs.contains(.terminal) {
                     TerminalPaneView().environment(bridge)
                         .keptMounted(active: panel.activeTab == .terminal)
-                }
-                if mountedBottomTabs.contains(.preview) {
-                    PreviewPaneView().environment(bridge)
-                        .keptMounted(active: panel.activeTab == .preview)
                 }
                 if mountedBottomTabs.contains(.graph) {
                     GraphPaneView().environment(bridge)
