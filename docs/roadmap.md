@@ -131,41 +131,34 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.93** — advisor caveats become conditions on the scope, not backlog items.
+**v0.1.94** — reverting my own constraint-storm "fix", which crashed the app.
 
-ADR-0095 made caveats durable by parking each one to `.marvin/backlog/` at
-parse time. Durability was the right goal; the destination was wrong, and the
-repo already held the measurement proving it. From ADR-0095's own amendment:
+v0.1.90 replaced three `GeometryReader` + `PreferenceKey` width measurements
+with `WidthReporter`, an `NSView` that reads its own `bounds` in `layout()`.
+The diagnosis behind it was correct and is still on record: the preference
+outlets really were feeding a non-converging constraints loop, and the stack
+after the change proves that specific loop is gone.
 
-> **12 items parked in 60 seconds, 10 dismissed at the handoff, 2 kept.** The
-> 10 were not bad advice — they were advice the executor had *already acted on
-> in that same turn*, so they arrived pre-satisfied… the 2 real
-> deploy-prerequisite items sat among 10 dismissible ones, which is how a real
-> item gets missed.
+**The cure was worse.** v0.1.93 was the first build carrying it that actually
+ran on the user's machine, and it aborted:
 
-The cause is parking **before you can know whether the condition was met**. A
-caveat on a `go-with-caveats` is a condition on a `go` already given, not
-deferred work — and ADR-0044 built the backlog for deferred work specifically,
-with `backlog_add` rejecting the other content classes.
+    NSGenericException: The window has been marked as needing another Update
+    Constraints in Window pass, but it has already had more Update Constraints
+    in Window passes than there are views in the window.
 
-[ADR-0100](decisions/0100-advisor-caveats-are-conditions-not-backlog.md):
-caveats attach to the turn as conditions, and the **ADR-0057 workflow guard**
-— which already fires a corrective turn when a close claims scope-met with
-plan items open — now treats an unanswered condition as the same shape of gap.
-The reconcile asks `met` / `not met` / `waived, because …` per condition and
-parks **only** the unmet and waived ones. A met condition gets no backlog item,
-which is precisely the noise that buried the real ones.
+That is AppKit's runaway-pass breaker — the same class as the ADR-0062 launch
+crash of 2026-08-29, and the exception counts passes **against the number of
+views in the window**. `WidthReporter` adds a view in three places. It removed
+one loop and made a second one fatal.
 
-Reusing the guard rather than building a transfer path also put the judgement
-where it belongs: the executor knows what it actually did, a hook does not —
-the same division ADR-0095 drew when it refused to verify caveats.
-
-One drafting assumption did not survive contact with the code. The ADR worried
-that turn-scoped conditions would be lost if a turn died before its handoff,
-and proposed an abnormal-termination hook to compensate. Unnecessary: ADR-0095
-already writes every caveat to `.marvin/advisor-caveats.md` the instant it
-parses one, and that is untouched. A dying turn loses the backlog transfer, not
-the advice. The extra hook was dropped.
+Reverted. The storm returns to what it was: logged, survivable, ~5 per session,
+a performance annoyance. **Trading a logged annoyance for a crash is a strictly
+worse position, and shipping it without running the build once was the actual
+mistake** — the storm fix could never have been verified by `swift build` and
+a unit suite, because it is a runtime layout behaviour. The evidence is kept:
+the preference loop and the safe-area loop are two distinct causes on the same
+`NavigationPane` hosting view, and the next attempt starts from the stacks in
+this release's history rather than from scratch.
 
 ### Previously
 

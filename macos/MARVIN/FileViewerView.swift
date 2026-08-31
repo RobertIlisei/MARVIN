@@ -954,14 +954,23 @@ struct FileViewerView: View {
                     // stretch the row to the viewport, so content width would
                     // always equal viewport width and overflow could never be
                     // detected.
-                    //
-                    // `WidthReporter`, not GeometryReader + PreferenceKey:
-                    // this view is inside an NSSplitView pane, where creating
-                    // a preference outlet during AppKit's constraints pass
-                    // re-arms that pass and storms. See WidthReporter.swift.
-                    .background(WidthReporter { tabsContentWidth = $0 })
+                    .background(
+                        GeometryReader { g in
+                            Color.clear.preference(
+                                key: TabStripWidthKey.self, value: g.size.width
+                            )
+                        }
+                    )
                 }
-                .background(WidthReporter { tabsViewportWidth = $0 })
+                .onPreferenceChange(TabStripWidthKey.self) { tabsContentWidth = $0 }
+                .background(
+                    GeometryReader { g in
+                        Color.clear.preference(
+                            key: TabStripViewportKey.self, value: g.size.width
+                        )
+                    }
+                )
+                .onPreferenceChange(TabStripViewportKey.self) { tabsViewportWidth = $0 }
                 if tabsOverflow {
                     MarvinDivider().frame(height: 18)
                     tabScrollButton(.trailing, proxy: proxy)
@@ -1490,4 +1499,18 @@ private struct ImageFilePreview: View {
 }
 
 
+/// Intrinsic width of the tab row.
+private struct TabStripWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
 
+/// Width of the scroll view showing it.
+private struct TabStripViewportKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}

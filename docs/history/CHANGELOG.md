@@ -8,6 +8,52 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.94: reverting my own storm "fix", which crashed the app.**
+
+  v0.1.90 replaced three `GeometryReader` + `PreferenceKey` width measurements
+  with `WidthReporter` — an `NSView` reading its own `bounds` in `layout()` —
+  to break a constraints loop the captured stack had named precisely:
+  `makePreferenceOutlets → PreferenceBridge.addValue → graphInvalidation →
+  requestUpdate → setNeedsUpdateConstraints`.
+
+  **The diagnosis was right and the change still made things worse.** v0.1.93
+  was the first build carrying it that ran on the user's machine. It aborted
+  with `SIGABRT` after ~40 minutes:
+
+      NSGenericException: The window has been marked as needing another Update
+      Constraints in Window pass, but it has already had more Update
+      Constraints in Window passes than there are views in the window.
+
+  AppKit's runaway-pass breaker, thrown inside
+  `__NSWindowGetDisplayCycleObserverForUpdateConstraints_block_invoke` — the
+  layout-cycle path MARVIN's own `_crashOnException` hook documents as fatal.
+  Same class as the 2026-08-29 `ThemedSplitDivider` launch crash.
+
+  Attribution is clean: the only MARVIN app crashes on record are Aug 29
+  (v0.1.65) and this one. v0.1.90–0.1.92 were released but never installed
+  locally, so v0.1.93 is the first execution of `WidthReporter` anywhere.
+
+  The mechanism is in the exception text: it counts update passes **against the
+  number of views in the window**, and `WidthReporter` adds a view in three
+  places. Removing one non-converging loop while adding views made a *second*
+  loop — `didChangeValue(forKey:) → invalidateSafeAreaCornerInsets →
+  invalidateProperties → requestUpdate`, visible in v0.1.93's storm stacks —
+  cross the abort threshold.
+
+  Reverted whole: `WidthReporter.swift` deleted, `LeftPane` and
+  `FileViewerView` restored to their preference-based measurement. The storm
+  returns to what it was — logged, survivable, ~5 per session, a performance
+  annoyance.
+
+  **The real mistake was shipping it unrun.** A layout-cycle behaviour cannot
+  be verified by `swift build` and a unit suite, which is all it had; the
+  release notes even said "not verified live" and it shipped anyway. Two
+  findings are kept because they cost real evidence to obtain and the next
+  attempt should not re-derive them: the preference-outlet loop is real and
+  `WidthReporter` does eliminate it (proved by stack diff), and there is a
+  second, independent safe-area-insets loop on the same `NavigationPane`
+  hosting view. Three distinct loops have now been found on that one view.
+
 - **2026-08-31 — v0.1.93: advisor caveats are conditions, not backlog items.**
 
   ADR-0100 implemented. The user's objection was a content-class one: *"the
