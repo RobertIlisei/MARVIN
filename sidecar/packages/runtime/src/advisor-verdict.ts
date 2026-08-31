@@ -11,22 +11,53 @@
 // Pure (ADR-0022) so the parse is test-pinned against real advisor output
 // rather than trusted in situ.
 
+
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type {
   HookCallback,
   HookJSONOutput,
   PostToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
-
 import { isSubagentDispatch } from "@marvin/tools/policy";
-
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
 
 import { addBacklogItem, MAX_BODY_CHARS } from "./backlog";
 import { ADVISOR_SUBAGENT_TYPE, getTurnDesignContext } from "./design-hooks";
 
 /** The verdict line ADR-0033's registered advisor is prompted to end on. */
-export type AdvisorVerdict = "go" | "go-with-caveats" | "reject" | "unparsed";
+export type AdvisorVerdict =
+  | "go"
+  | "go-with-caveats"
+  | "reject"
+  | "unparsed"
+  /**
+   * The dispatch was backgrounded, so the tool result is a launch receipt —
+   * not a critique. Distinct from `unparsed` on purpose: `unparsed` means the
+   * advisor answered in a shape we could not read (a prompt problem), while
+   * this means **the advisor never answered at all** (a structural one).
+   *
+   * Collapsing the two is how this hid. On 2026-08-31 a backgrounded advisor
+   * consult logged `verdict: "unparsed"` **25 ms after dispatch** — a number
+   * that is impossible for a real critique and would have named the bug on
+   * sight, had anyone been able to tell the two apart in the telemetry.
+   * The gate now denies backgrounded advisor dispatches outright
+   * (`policy.ts`), so this should be unreachable; it stays as the detector
+   * that says so if it ever is not.
+   */
+  | "async-pending";
+
+/**
+ * True when the tool result is the harness's async-launch receipt rather than
+ * an agent's reply. Matched on the two stable markers the receipt carries.
+ */
+export function isAsyncLaunchReceipt(reply: string): boolean {
+  const t = reply.trim();
+  if (!t) return false;
+  return (
+    /async agent launched/i.test(t) ||
+    (/\bagentId:\s*[0-9a-f]{6,}/i.test(t) && t.length < 1200)
+  );
+}
 
 export interface ParsedAdvisorReply {
   verdict: AdvisorVerdict;
@@ -179,6 +210,11 @@ export function parseAdvisorReply(reply: string): ParsedAdvisorReply {
   // Structure first, prose second. A reply carrying the block is parsed
   // deterministically; one without it falls back to the regex parser, which is
   // what every advisor reply written before this amendment looks like.
+  // Before anything else: a launch receipt is not a reply. Parsing it would
+  // yield `unparsed` and report a structural failure as a formatting one.
+  if (isAsyncLaunchReceipt(reply)) {
+    return { verdict: "async-pending", caveats: [], verdictText: "", structured: false };
+  }
   const structured = parseVerdictBlock(reply);
   if (structured) return structured;
   const verdictText = extractVerdictSection(reply);
@@ -388,6 +424,25 @@ export function makeAdvisorVerdictPostToolUse(args: {
 
     const ctx = getTurnDesignContext(turnId);
     if (ctx) ctx.advisorVerdict = parsed.verdict;
+
+    // A backgrounded consult produced no advice. Say so to the executor
+    // rather than letting it read a launch receipt as a verdict — this is
+    // the belt to the gate's braces, since `policy.ts` now denies the
+    // dispatch outright.
+    if (parsed.verdict === "async-pending") {
+      logAdvisorVerdict({
+        turnId, advisorModel, verdict: parsed.verdict,
+        structured: false, caveats: 0, parked: 0,
+      });
+      return {
+        systemMessage:
+          "That advisor dispatch was backgrounded, so it returned a launch " +
+          "receipt, not a verdict — no advice has been received and the " +
+          "consult gate is NOT discharged. Re-dispatch the advisor WITHOUT " +
+          "run_in_background and wait for the critique before doing the " +
+          "gated work. Do not end the turn with that work undone.",
+      } as HookJSONOutput;
+    }
 
     // Nothing to say when the advisor's reply had no verdict at all — the
     // executor still reads the full text, and inventing a summary of an

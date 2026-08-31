@@ -36,11 +36,9 @@ import type {
   PermissionResult,
   PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
-
-import { appendAutoAuditEntry, type AutoAuditEntryKind } from "./auto-audit";
 import { isSubagentDispatch } from "@marvin/tools/policy";
-
 import type { AdvisorVerdict } from "./advisor-verdict";
+import { type AutoAuditEntryKind, appendAutoAuditEntry } from "./auto-audit";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -367,10 +365,24 @@ export function recordAllowedTool(
       typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
     const description =
       typeof toolInput.description === "string" ? toolInput.description : "";
-    if (
+    const isAdvisor =
       subagentType.trim().toLowerCase() === ADVISOR_SUBAGENT_TYPE ||
-      description.trim().toLowerCase().startsWith("advisor:")
-    ) {
+      description.trim().toLowerCase().startsWith("advisor:");
+    // A BACKGROUNDED advisor dispatch does not discharge the gate.
+    //
+    // This runs before `canUseTool`, which is why the note above the call
+    // site calls the tally a "slight over-count" when the gate later denies.
+    // For the advisor it is not slight: counting a dispatch that never runs
+    // marks the consult as done and lets the gated work proceed with no
+    // advice at all.
+    //
+    // Even without the gate's deny (`policy.ts`), a backgrounded dispatch
+    // returns a launch receipt in ~25 ms rather than a verdict — so it could
+    // never have discharged an ADVICE requirement honestly. Observed
+    // 2026-08-31: the consult was counted, the verdict logged `unparsed`
+    // 25 ms later, and the turn ended with the gated migration unwritten.
+    const backgrounded = toolInput.run_in_background === true;
+    if (isAdvisor && !backgrounded) {
       ctx.advisorCallCount += 1;
     }
     return;

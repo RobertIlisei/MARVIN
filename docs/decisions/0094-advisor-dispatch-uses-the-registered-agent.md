@@ -77,3 +77,74 @@ remedy discharged.
 - [x] Tests pin both dispatch routes and the message content
 - [ ] Not in scope: parsing the verdict, enforcing or persisting caveats,
       making `reject` block
+
+## Amendment — 2026-08-31: a consult that gates work cannot be backgrounded
+
+The gate this ADR built counts a **dispatch**. That was fine while every
+dispatch was synchronous. It is not fine now that the subagent tool takes
+`run_in_background`.
+
+Observed on a real turn. The executor hit the DB-migration ADR trigger, the
+gate fired its remedy, and the executor dispatched the registered advisor —
+with `run_in_background: true`. Three failures followed from that one flag:
+
+1. **The gate discharged with no advice in hand.** `recordAllowedTool`
+   incremented `advisorCallCount` on the dispatch. It runs *before*
+   `canUseTool`, and its own call-site comment already conceded the tally is
+   "a slight over-count" when the gate later denies. For an advice
+   requirement it is not slight — it marks the consult done.
+2. **[ADR-0095](./0095-advisor-verdict-is-read-and-caveats-persist.md)'s
+   verdict reader parsed a launch receipt as a critique.** The tool response
+   was `"Async agent launched successfully… agentId: …"`. `parseAdvisorReply`
+   found no verdict block, fell through to the prose parser, and logged
+   `verdict: "unparsed"` — **25 ms after dispatch**. No advisor answers in
+   25 ms. The number was in the telemetry the whole time and said nothing,
+   because `unparsed` reads as "the advisor wrote something we could not
+   parse" (a prompt problem) when the truth was "the advisor never answered"
+   (a structural one).
+3. **The turn ended with the gated work undone.** To its credit the executor
+   did not proceed — it reported the item "blocked on a gate-required advisor
+   consult that's still running". But it then ended the turn, and the
+   background result never arrived. The user lost a deliverable and only
+   found out by asking.
+
+### Decision
+
+**An `advisor` dispatch carrying `run_in_background: true` is `deny`.**
+
+Scoped to the advisor deliberately. A backgrounded `scout` or `Explore` is
+the *point* of them (ADR-0014) — the executor collects the answer whenever it
+lands, and nothing waits on it. The advisor is different in kind because its
+consult **gates the work that follows**, and you cannot act on advice you have
+not received. Any subagent whose result is a precondition belongs under the
+same rule; one whose result is an input does not.
+
+Three changes, each closing one of the failures above:
+
+- `policy.ts` denies the dispatch, with a reason that names the remedy
+  (re-dispatch without the flag).
+- `design-hooks.ts` does not count a backgrounded advisor dispatch toward
+  `advisorCallCount`, so the gate stays armed even though the counter runs
+  ahead of `canUseTool`.
+- `advisor-verdict.ts` gains a distinct `async-pending` verdict and an
+  `isAsyncLaunchReceipt` detector, so a launch receipt is never mistaken for
+  a critique and the telemetry stops reporting a structural failure as a
+  formatting one. It also returns a `systemMessage` telling the executor the
+  gate is **not** discharged and it must not end the turn with the gated work
+  undone.
+
+The deny makes the other two unreachable in normal operation. They stay as
+the detectors that say so if it ever is not — the same reasoning as ADR-0079,
+where five guards matching a literal went dead in silence.
+
+### Scope of Done
+
+- [x] A backgrounded `advisor` dispatch classifies as `deny`, under both the
+      `Agent` and legacy `Task` spellings.
+- [x] A foreground advisor dispatch still auto-allows.
+- [x] Backgrounding remains allowed for `scout`, `Explore` and
+      `graph-extractor`.
+- [x] A backgrounded advisor dispatch does not increment `advisorCallCount`.
+- [x] A launch receipt parses as `async-pending`, never `unparsed`.
+- [x] 4 new tests; 1036 sidecar tests green.
+

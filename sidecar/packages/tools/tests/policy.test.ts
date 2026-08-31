@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_TOOL_NAMES, isSubagentDispatch, looksLikeSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
+import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
 
 describe("toolPolicy — Bash hard-deny coverage", () => {
   // Audit finding #2: `\brm\s+-rf\s+\/` only matched a literal `/` after
@@ -509,5 +509,59 @@ describe("marvin-obsidian trust (ADR-0089)", () => {
   it("external servers are still gated", () => {
     expect(mcpToolPolicy("mcp__some_plugin__do_thing")).toBe("confirm");
     expect(mcpToolPolicy("mcp__playwright__browser_run_code_unsafe")).toBe("deny");
+  });
+});
+
+describe("advisor consults cannot be backgrounded (2026-08-31)", () => {
+  // The incident: `advisor` was dispatched with `run_in_background: true` for
+  // a DB-migration consult. The tool answered "Async agent launched
+  // successfully" in 25 ms, the ADR-0094 gate read as discharged, the
+  // ADR-0095 verdict reader parsed the launch receipt and logged `unparsed`,
+  // and the turn ended with the gated migration unwritten. No advice was ever
+  // received, and nothing said so.
+  it("denies a backgrounded advisor dispatch", () => {
+    const d = toolPolicy("Agent", {
+      subagent_type: "advisor",
+      description: "advisor: migration",
+      run_in_background: true,
+    });
+    expect(d.class).toBe("deny");
+    expect(d.reason).toMatch(/background/i);
+  });
+
+  it("still auto-allows a FOREGROUND advisor dispatch", () => {
+    expect(
+      toolPolicy("Agent", {
+        subagent_type: "advisor",
+        description: "advisor: migration",
+      }).class,
+    ).toBe("auto");
+    expect(
+      toolPolicy("Agent", {
+        subagent_type: "advisor",
+        run_in_background: false,
+      }).class,
+    ).toBe("auto");
+  });
+
+  it("does NOT restrict backgrounding for other subagents", () => {
+    // A backgrounded scout or Explore is the point of them (ADR-0014) — the
+    // executor collects the answer when it arrives. Only the advisor gates
+    // work, so only the advisor must be synchronous.
+    for (const sub of ["scout", "Explore", "graph-extractor"]) {
+      expect(
+        toolPolicy("Agent", { subagent_type: sub, run_in_background: true }).class,
+      ).toBe("auto");
+    }
+  });
+
+  it("applies under the legacy `Task` spelling too", () => {
+    // ADR-0079: five guards went dead by matching only one spelling.
+    expect(
+      toolPolicy("Task", {
+        subagent_type: "advisor",
+        run_in_background: true,
+      }).class,
+    ).toBe("deny");
   });
 });

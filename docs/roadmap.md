@@ -131,49 +131,37 @@ _When a work item lands, move its line out of this section into a dated `## Rece
 
 ## Current version
 
-**v0.1.90** — the constraint storm, named by its own stack.
+**v0.1.91** — an advisor consult that gates work cannot be backgrounded.
 
-MARVIN's storm monitor (ADR-0062) had been reporting five storms a session
-on the left pane's hosting view — 150 layout invalidations in under half a
-second, each time. A fix on 2026-08-29 addressed a storm with the same
-symptom and the same monitor, and the reports kept coming, because it was a
-**different loop**.
+MARVIN was told to add a `CHECK` constraint to a tenant migration. The
+DB-migration ADR trigger fired, the gate demanded an advisor consult, and the
+executor dispatched the registered advisor — with `run_in_background: true`.
+The turn then ended with the migration unwritten, and the user only found out
+by asking what happened.
 
-The captured stack settles it, read bottom-up:
+One flag, three failures:
 
-    -[NSView _updateConstraintsForSubtreeIfNeeded…]
-      → NSHostingView._willUpdateConstraintsForSubtree
-        → SizeConstraints.update(from:) → minSize → _sizeThatFits
-          → GraphHost.instantiateIfNeeded → instantiateOutputs
-            → makePreferenceOutlets → PreferenceBridge.addValue
-              → graphInvalidation → requestUpdate
-                → setNeedsUpdateConstraints
+1. **The gate discharged with no advice in hand.** `recordAllowedTool`
+   counts the *dispatch*, and it runs before `canUseTool` — its own call-site
+   comment already conceded that as "a slight over-count". For an advice
+   requirement it is not slight.
+2. **The ADR-0095 verdict reader parsed a launch receipt as a critique.** The
+   response was `"Async agent launched successfully… agentId: …"`, so the
+   parser found no verdict and logged `unparsed` — **25 ms after dispatch**.
+   No advisor answers in 25 ms. The number was in the telemetry the whole
+   time and said nothing, because `unparsed` reads as a *prompt* problem when
+   this was a *structural* one.
+3. **The turn ended with the gated work undone.** The executor did not
+   proceed — it correctly reported itself blocked — but nothing made it wait,
+   and the background result never came.
 
-AppKit asks the pane's hosting view for its minimum size during the
-constraints pass. SwiftUI must instantiate the view graph to answer.
-Instantiating **creates the preference outlets, and creating them
-invalidates the graph** — which calls `setNeedsUpdateConstraints` straight
-back on the hosting view, re-arming the pass that asked. It never settles;
-it stops when the invalidation budget runs out.
-
-The trigger was the idiomatic SwiftUI answer to "how wide am I":
-`.background { GeometryReader { Color.clear.preference(…) } }`. Correct
-everywhere else, a storm generator inside an `NSSplitView` pane. `LeftPane`
-used it to decide when to collapse the sidebar; the editor tab strip used
-two more to decide when to show its scroll arrows.
-
-All three are now `WidthReporter` — an `NSView` that reads its own `bounds`
-in `layout()` and reports on a one-runloop hop. No view graph, no
-preference, nothing to invalidate. The same "drop to AppKit for the thing
-SwiftUI models badly" move already used by `SplitViewAutosave`,
-`SplitDividerTheme` and `HoverTooltip`. `onGeometryChange(for:)` would also
-avoid the preference and is the right answer once the deployment floor
-moves off macOS 14.
-
-Not verified live: confirming it requires running a new build, and the
-running v0.1.89 was mid-task and deliberately left alone. The test is the
-storm count in `~/Library/Logs/MARVIN/exceptions.log` after the next
-restart — it was 5 per session.
+Fixed at the source: a `run_in_background` advisor dispatch is now `deny`.
+Scoped to the advisor deliberately — a backgrounded `scout` or `Explore` is
+the point of them; the advisor is different because its consult *gates* the
+work, and you cannot act on advice you have not received. The counter no
+longer credits a backgrounded dispatch, and the verdict reader gained a
+distinct `async-pending` state so a launch receipt can never again be
+mistaken for advice. See [ADR-0094's amendment](decisions/0094-advisor-dispatch-uses-the-registered-agent.md).
 
 ### Previously
 

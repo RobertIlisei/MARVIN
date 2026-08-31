@@ -8,6 +8,53 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-08-31 — v0.1.91: the advisor was consulted and never answered.**
+
+  User: *"we also need to understand why the advisor didn't respond in the
+  first try."* It did respond — with a receipt, not a verdict.
+
+  The executor hit the DB-migration ADR trigger while adding a `CHECK`
+  constraint, the ADR-0094 gate demanded a consult, and it dispatched the
+  registered advisor with `run_in_background: true`. Three things then broke
+  off that one flag, and none of them raised an error:
+
+  1. `recordAllowedTool` counted the **dispatch**, discharging the gate with
+     no advice in hand. It runs before `canUseTool`, and the note above its
+     call site already conceded the tally is "a slight over-count" when the
+     gate later denies — which for an advice requirement is not slight.
+  2. The ADR-0095 verdict reader parsed `"Async agent launched successfully…
+     agentId: …"` as if it were the critique, found no verdict block, and
+     logged `verdict: "unparsed"` **25 ms after the dispatch**. That number
+     was sitting in the telemetry the whole time. It said nothing, because
+     `unparsed` reads as "the advisor wrote something we could not parse" — a
+     prompt problem — when the truth was "the advisor never answered", a
+     structural one.
+  3. The turn ended with the gated migration unwritten. The executor did not
+     proceed on absent advice, which is to its credit; it reported itself
+     blocked. But nothing made it wait for the result, and the background
+     agent's answer never arrived.
+
+  **Fix: a backgrounded `advisor` dispatch is `deny`.** Scoped to the advisor
+  on purpose. A backgrounded `scout` or `Explore` is the *point* of them
+  (ADR-0014) — the executor collects the answer when it lands and nothing
+  waits on it. The advisor is different in kind because its consult **gates
+  the work that follows**, and you cannot act on advice you have not
+  received. The rule generalises as: any subagent whose result is a
+  *precondition* must be synchronous; one whose result is an *input* need not
+  be.
+
+  Two detectors behind the deny, so a recurrence names itself instead of
+  hiding: `design-hooks.ts` no longer credits a backgrounded dispatch toward
+  `advisorCallCount`, and `advisor-verdict.ts` gained an `async-pending`
+  verdict plus an `isAsyncLaunchReceipt` check, with a `systemMessage`
+  telling the executor the gate is NOT discharged and it must not end the
+  turn with the gated work undone. Same reasoning as ADR-0079, where five
+  guards matching a literal went dead in silence.
+
+  4 new tests (both tool spellings, the foreground path, and the other
+  subagents' backgrounding left alone); 1036 sidecar tests green, `tsc` and
+  biome clean on every touched file.
+
 - **2026-08-31 — v0.1.90: the constraint storm, named by its own stack.**
 
   The ADR-0062 storm monitor had been reporting **five storms a session** on

@@ -443,6 +443,39 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
     const sub = typeof input.subagent_type === "string"
       ? input.subagent_type
       : "";
+    // ── An ADVISOR consult may not be backgrounded ──────────────────────
+    //
+    // Every other subagent may: a scout or an Explore that runs in the
+    // background is the point of it (ADR-0014), and the executor collects
+    // the answer when it arrives. The advisor is different in kind, because
+    // its consult **gates work**. You cannot act on advice you have not
+    // received.
+    //
+    // Observed 2026-08-31, and it cost a whole deliverable. The executor
+    // dispatched `advisor` with `run_in_background: true` for a DB-migration
+    // consult. The tool returned "Async agent launched successfully" in
+    // 25 ms; three things then went wrong at once:
+    //
+    //   1. `recordAllowedTool` counted the DISPATCH, so the ADR-0094 gate
+    //      read as discharged with no advice in hand.
+    //   2. The ADR-0095 PostToolUse verdict reader parsed that launch
+    //      envelope as if it were the critique, found no verdict, and logged
+    //      `unparsed` — reporting a structural failure as a formatting one.
+    //   3. The turn ended with the gated migration unwritten, because the
+    //      verdict never arrived.
+    //
+    // Denying it here kills all three at the source. The gate cannot be
+    // discharged by a consult that structurally cannot answer in time.
+    if (sub === "advisor" && input.run_in_background === true) {
+      return {
+        class: "deny",
+        reason:
+          "An advisor consult cannot run in the background: it gates the work " +
+          "that follows, and a backgrounded dispatch returns a launch receipt " +
+          "rather than a verdict. Re-dispatch with run_in_background omitted " +
+          "(or false) and wait for the critique.",
+      };
+    }
     if (sub && SANCTIONED_SUBAGENT_TYPES.has(sub)) {
       return {
         class: "auto",
