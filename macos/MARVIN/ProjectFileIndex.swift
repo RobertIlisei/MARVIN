@@ -31,29 +31,61 @@ final class ProjectFileIndex {
     private var byBasename: [String: [String]] = [:]
     private var relativePaths: Set<String> = []
     private var loading = false
+    /// Memoised lookups, cleared on every (re)load.
+    private var resolveCache: [String: [String]] = [:]
+    private var refreshTask: Task<Void, Never>?
 
     /// Candidate absolute paths for a mention. Empty until the index loads.
+    ///
+    /// Falls back to a disk check for a literal relative path when the index
+    /// has nothing. The index is a snapshot, and the files MARVIN mentions
+    /// most are the ones it just WROTE — an audit report it generated this
+    /// turn cannot be in a snapshot taken when the project opened, so those
+    /// mentions rendered as plain text with no icon and no click (user,
+    /// 2026-09-01). Refreshing on every turn (below) closes the bare-basename
+    /// case; this closes the exact-path case immediately, without waiting for
+    /// a refresh.
+    ///
+    /// Results are memoised because chat re-renders on every streamed token
+    /// and this would otherwise be a `stat` per mention per frame. The cache
+    /// is dropped whenever the index reloads, so a file appearing later is
+    /// not remembered as absent forever.
     func candidates(for mention: String) -> [String] {
         guard let workDir else { return [] }
-        return FileMentionResolver.candidates(
+        if let hit = resolveCache[mention] { return hit }
+        var out = FileMentionResolver.candidates(
             for: mention,
             workDir: workDir,
             index: byBasename,
             relativePaths: relativePaths
         )
+        if out.isEmpty, !mention.hasPrefix("/") {
+            let literal = (workDir as NSString).appendingPathComponent(mention)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: literal, isDirectory: &isDir), !isDir.boolValue {
+                out = [literal]
+            }
+        }
+        resolveCache[mention] = out
+        return out
     }
 
     /// Load (or reload) for `cwd`. Idempotent; a second call for the same
     /// project while one is in flight does nothing.
-    func ensureLoaded(cwd: String?) {
+    func ensureLoaded(cwd: String?, force: Bool = false) {
         guard let cwd, !cwd.isEmpty else {
             workDir = nil
             byBasename = [:]
             relativePaths = []
+            resolveCache = [:]
             generation += 1
             return
         }
-        guard cwd != workDir, !loading else { return }
+        // `force` is for a reload of the SAME project after a turn wrote
+        // files. It must not clear `workDir` first: the old index stays
+        // serviceable while the new one loads, so mentions do not flicker
+        // from link to plain text and back.
+        guard force || cwd != workDir, !loading else { return }
         loading = true
         Task { @MainActor in
             defer { loading = false }
@@ -64,7 +96,21 @@ final class ProjectFileIndex {
             workDir = cwd
             relativePaths = Set(collected)
             byBasename = FileMentionResolver.buildIndex(collected)
+            resolveCache = [:]
             generation += 1
+        }
+    }
+
+    /// Reload after a turn that may have written files.
+    ///
+    /// Debounced, because a turn completing is not the only thing that fires
+    /// and re-walking the tree is a real cost on a large project.
+    func refreshAfterTurn(cwd: String?) {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            ensureLoaded(cwd: cwd, force: true)
         }
     }
 

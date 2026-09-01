@@ -2029,6 +2029,11 @@ struct ChatPreviewView: View {
         .onChange(of: bridge.projectWorkDir) { _, cwd in
             ProjectFileIndex.shared.ensureLoaded(cwd: cwd)
         }
+        // A turn that wrote files invalidates the index snapshot — the files
+        // MARVIN mentions most are the ones it just created.
+        .onReceive(NotificationCenter.default.publisher(for: .marvinTurnCompleted)) { _ in
+            ProjectFileIndex.shared.refreshAfterTurn(cwd: bridge.projectWorkDir)
+        }
         .confirmationDialog(
             "Which file?",
             isPresented: Binding(

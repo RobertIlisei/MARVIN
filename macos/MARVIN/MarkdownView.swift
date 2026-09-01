@@ -268,7 +268,13 @@ struct MarkdownView: View {
     /// wholesale past the cap: a chat that long has scrolled well past its
     /// early paragraphs, and re-parsing them costs less than tracking recency.
     private func attributed(_ s: String, font: NSFont, color: NSColor) -> NSAttributedString {
-        let key = "\(workDir ?? "")\u{0}\(font.fontName)|\(font.pointSize)\u{0}\(color.hash)\u{0}\(s)"
+        // The index generation is part of the key. Without it, a mention that
+        // did not resolve when it was first rendered keeps its cached,
+        // link-less attributed string forever — so a file MARVIN created this
+        // turn would never become clickable, which is the bug the refresh
+        // exists to fix.
+        let key = "\(workDir ?? "")\u{0}\(font.fontName)|\(font.pointSize)\u{0}\(color.hash)"
+            + "\u{0}\(ProjectFileIndex.shared.generation)\u{0}\(s)"
         if let hit = Self.inlineCache[key] { return hit }
         let built = MarkdownInline.build(s, font: font, color: color, workDir: workDir)
         if Self.inlineCache.count >= Self.inlineCacheCap {
