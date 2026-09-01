@@ -48,7 +48,33 @@ function errorResult(message: string) {
   return { isError: true, content: [{ type: "text" as const, text: message }] };
 }
 
-const TYPE_ENUM = ["user", "feedback", "project", "reference"] as const;
+/**
+ * `practice` is the class added by ADR-0101: *how to work in this project* —
+ * "we tried X, it was wrong, do Y instead".
+ *
+ * The four that came before it do not cover it. `feedback` is guidance the
+ * USER gave; a practice lesson is one the session earned. `project` is a fact
+ * about the codebase. Neither holds the thing a session actually learns about
+ * its own method, which is why one had to be hand-written into CLAUDE.md when
+ * a day's work produced four of them.
+ *
+ * It reuses this store deliberately. ADR-0101 rejected a `.marvin/practice/`
+ * directory for the reason ADR-0100 rejected `.marvin/conditions/`: a new
+ * store must earn its own lifetime, and this content's lifetime is the
+ * project's, exactly like a fact's.
+ */
+const TYPE_ENUM = ["user", "feedback", "project", "reference", "practice"] as const;
+
+/**
+ * A practice lesson must cite what happened.
+ *
+ * The whole risk of a learn-loop is that it converges on plausible-sounding
+ * advice — this project's memory reached 419 KB and ~99 % redundancy the last
+ * time a store accepted whatever it was handed (ADR-0042). A lesson with no
+ * evidence behind it is exactly that failure in miniature, so the boundary
+ * demands the evidence rather than trusting the prompt to ask for it.
+ */
+const MIN_PRACTICE_BODY_CHARS = 80;
 
 /**
  * Rebuild memory.md from the header + a fresh index of every fact file. Keeps
@@ -93,6 +119,58 @@ export async function rewriteMemoryIndex(workDir: string): Promise<number> {
   return entries.length;
 }
 
+/**
+ * Everything `remember` refuses, as a pure function.
+ *
+ * Extracted so the boundary can be tested. ADR-0101 turns on the claim that a
+ * practice lesson without evidence is rejected AT THE WRITE BOUNDARY rather
+ * than merely discouraged in a prompt — and this repo has measured prompt-only
+ * guidance firing ~0×. An untested boundary is a claim, not a guarantee.
+ *
+ * Returns the rejection message, or null when the payload is acceptable.
+ */
+export function validateRememberPayload(input: {
+  hook: string;
+  body?: string;
+  type?: (typeof TYPE_ENUM)[number];
+}): string | null {
+  const hookOneLine = input.hook.replace(/\s+/g, " ").trim();
+  if (hookOneLine.length > MAX_HOOK_CHARS) {
+    return (
+      `Hook is ${hookOneLine.length} chars (max ${MAX_HOOK_CHARS}). memory is a ` +
+      `one-line-per-fact index — tighten it to the essential invariant/gotcha.`
+    );
+  }
+  const bodyText = (input.body ?? "").trim();
+  if (bodyText.length > MAX_BODY_CHARS) {
+    return (
+      `Body is ${bodyText.length} chars (max ${MAX_BODY_CHARS}). If it needs more, ` +
+      `it's probably a decision (→ ADR) or an implementation trail (→ git/changelog), ` +
+      `not a memory fact.`
+    );
+  }
+  if (input.type === "practice" && bodyText.length < MIN_PRACTICE_BODY_CHARS) {
+    return (
+      `Rejected — a practice lesson must cite the evidence behind it ` +
+      `(body is ${bodyText.length} chars, needs ${MIN_PRACTICE_BODY_CHARS}). ` +
+      `Say what was tried, what happened, and what to do instead. ` +
+      `"Prefer X over Y" with nothing behind it is advice, not a lesson, ` +
+      `and unevidenced advice is how a memory store becomes noise (ADR-0101).`
+    );
+  }
+  const haystack = `${hookOneLine}\n${bodyText}`;
+  for (const { re, why } of BANNED_PATTERNS) {
+    if (re.test(haystack)) {
+      return (
+        `Rejected — this reads like activity/status, not a durable fact (${why}). ` +
+        `memory.md holds only what's NOT re-derivable from ADRs/git/changelog ` +
+        `(ADR-0042). Record decisions in an ADR and status in git/changelog.`
+      );
+    }
+  }
+  return null;
+}
+
 export function createMemoryMcpServer(workDir: string) {
   const rememberTool = tool(
     "remember",
@@ -106,34 +184,17 @@ export function createMemoryMcpServer(workDir: string) {
       name: z.string().min(1).describe("Short stable title; the dedup key. Reusing it updates the fact in place."),
       hook: z.string().min(1).describe(`One-line summary shown in the index (≤${MAX_HOOK_CHARS} chars).`),
       body: z.string().optional().describe(`Optional detail (≤${MAX_BODY_CHARS} chars). Keep it to the fact — not a Ship trail.`),
-      type: z.enum(TYPE_ENUM).optional().describe("user | feedback | project | reference. Default project."),
+      type: z.enum(TYPE_ENUM).optional().describe(
+        "user | feedback | project | reference | practice. Default project. " +
+          "`practice` = how to work in this project (\"tried X, it was wrong, " +
+          "do Y\"); it requires a body citing what happened.",
+      ),
     },
     async ({ name, hook, body, type }) => {
+      const rejection = validateRememberPayload({ hook, body, type });
+      if (rejection) return errorResult(rejection);
       const hookOneLine = hook.replace(/\s+/g, " ").trim();
-      if (hookOneLine.length > MAX_HOOK_CHARS) {
-        return errorResult(
-          `Hook is ${hookOneLine.length} chars (max ${MAX_HOOK_CHARS}). memory is a ` +
-            `one-line-per-fact index — tighten it to the essential invariant/gotcha.`,
-        );
-      }
       const bodyText = (body ?? "").trim();
-      if (bodyText.length > MAX_BODY_CHARS) {
-        return errorResult(
-          `Body is ${bodyText.length} chars (max ${MAX_BODY_CHARS}). If it needs more, ` +
-            `it's probably a decision (→ ADR) or an implementation trail (→ git/changelog), ` +
-            `not a memory fact.`,
-        );
-      }
-      const haystack = `${hookOneLine}\n${bodyText}`;
-      for (const { re, why } of BANNED_PATTERNS) {
-        if (re.test(haystack)) {
-          return errorResult(
-            `Rejected — this reads like activity/status, not a durable fact (${why}). ` +
-              `memory.md holds only what's NOT re-derivable from ADRs/git/changelog ` +
-              `(ADR-0042). Record decisions in an ADR and status in git/changelog.`,
-          );
-        }
-      }
       const slug = slugify(name);
       const memDir = join(workDir, ".marvin", "memory");
       try {

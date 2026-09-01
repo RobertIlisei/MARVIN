@@ -180,3 +180,28 @@ describe("native commands", () => {
     expect(expandNativeCommand("/GROOM")).toBeTruthy();
   });
 });
+
+describe("/refine (ADR-0101)", () => {
+  it("expands, and the expansion forbids writing", () => {
+    const out = expandNativeCommand("/refine");
+    expect(out).toBeTruthy();
+    // The whole design is propose-don't-write. If this ever stops being said
+    // in the expansion, the command has quietly become a write channel — and
+    // ADR-0101's entire safety argument is that it has none of its own.
+    expect(out).toContain("Propose only");
+    expect(out).toMatch(/do NOT call `remember` or `backlog_add`/);
+    expect(out).toContain("At most 5 proposals");
+    // "None at all is a valid answer" is load-bearing: a review that must
+    // produce something produces noise.
+    expect(out).toMatch(/none at all is a valid\s+answer/i);
+  });
+
+  it("carries arguments through like any native command", () => {
+    const out = expandNativeCommand("/refine focus on the migration work");
+    expect(out).toContain("Additional instruction: focus on the migration work");
+  });
+
+  it("is not triggered by a passing mention", () => {
+    expect(expandNativeCommand("we should /refine later")).toBeNull();
+  });
+});

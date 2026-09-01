@@ -136,6 +136,40 @@ export const NATIVE_COMMANDS: readonly NativeCommand[] = [
       "you'd suggest. Do NOT resolve, dismiss, merge, re-prioritise, or edit any " +
       "item, and do not start working on one — I'll decide what to act on.",
   },
+  {
+    name: "refine",
+    description: "Review this session and propose durable lessons — proposals only, nothing is written",
+    argumentHint: "",
+    // ADR-0101. The trigger is the part worth having: this repo has measured,
+    // repeatedly, that valuable-but-optional model behaviour fires ~0× —
+    // skills across thousands of qualifying contexts, `graph_save_result` at 0
+    // in an audited window. Relying on the model to NOTICE it learned
+    // something has a known failure rate; a command the user runs does not.
+    //
+    // The expansion is emphatic about proposing rather than writing because
+    // the failure mode is not a wrong lesson, it is a store that fills with
+    // plausible advice nobody asked for. That is how a project's memory.md
+    // reached 419 KB (ADR-0042).
+    expansion:
+      "Review THIS session's trajectory and propose durable lessons. Propose " +
+      "only — do NOT call `remember` or `backlog_add`, and do not edit any " +
+      "file. I decide what lands.\n\n" +
+      "Look for what this session LEARNED that the next one would otherwise " +
+      "re-learn: a wrong assumption that cost real work, a diagnosis approach " +
+      "that failed and the one that worked, a constraint discovered the hard " +
+      "way, a tool or command that behaved differently than expected.\n\n" +
+      "At most 5 proposals, fewer is better, and none at all is a valid " +
+      "answer — say so plainly rather than manufacturing something. For each, " +
+      "give:\n" +
+      "  - the lesson in one line, as an instruction to a future session\n" +
+      "  - the EVIDENCE from this session: what was tried, what happened\n" +
+      "  - where it belongs: `remember` (type `practice` for how-to-work, " +
+      "`project` for a codebase fact) or `backlog_add` for actual work\n\n" +
+      "Skip anything already recorded in an ADR, the changelog, git history, " +
+      "or existing memory — a lesson that duplicates one of those is noise. " +
+      "Skip anything you cannot cite evidence for from this session. Do not " +
+      "propose changes to MARVIN's own prompt, ADRs, or plan files.",
+  },
 ];
 
 /**

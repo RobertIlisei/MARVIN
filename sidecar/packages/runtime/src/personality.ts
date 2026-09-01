@@ -1846,7 +1846,14 @@ supersedes by name). To read, use \`recall\` (or read \`.marvin/memory/\`).
 - gotchas / sharp edges that aren't visible in the code,
 - hard project constraints ("solo build Y1", "no CI/CD in Y1"),
 - external facts of record (company/legal/regulatory ids, deadlines),
-- a decision genuinely NOT captured by any ADR.
+- a decision genuinely NOT captured by any ADR,
+- **practice lessons** (\`type: "practice"\`, ADR-0101) — *how to work in this
+  project*: "we tried X, it was wrong, do Y instead". Distinct from a fact
+  about the codebase and from \`feedback\`, which is guidance the USER gave; a
+  practice lesson is one a session EARNED. It MUST carry a body citing what
+  was tried and what happened — the write path rejects one that does not,
+  because unevidenced advice is how a memory store becomes noise. Propose
+  these through \`/refine\` rather than writing them mid-turn.
 
 **MUST NOT put in memory (it has a canonical home elsewhere):**
 - what you implemented this turn / diffs / file lists → **git + the changelog**,
