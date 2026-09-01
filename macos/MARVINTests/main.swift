@@ -2780,6 +2780,61 @@ runner.suite("markdown-flow") {
 }
 
 
+runner.suite("file-mention-resolver") {
+    let paths = [
+        "sidecar/packages/runtime/src/sdk-runner.ts",
+        "sidecar/src/app/api/chat/route.ts",
+        "sidecar/src/index.ts",
+        "macos/MARVIN/Bridge.swift",
+        "docs/index.ts",
+    ]
+    let index = FileMentionResolver.buildIndex(paths)
+    let rel = Set(paths)
+    func resolve(_ m: String) -> [String] {
+        FileMentionResolver.candidates(for: m, workDir: "/w", index: index, relativePaths: rel)
+    }
+
+    runner.test("a bare basename resolves to the file wherever it lives") {
+        runner.expect(resolve("sdk-runner.ts"),
+                      equals: ["/w/sidecar/packages/runtime/src/sdk-runner.ts"],
+                      "the case a model actually writes")
+    }
+
+    runner.test("an exact relative path wins outright") {
+        runner.expect(resolve("sidecar/src/index.ts"), equals: ["/w/sidecar/src/index.ts"],
+                      "no other candidate is considered")
+        runner.expect(resolve("./sidecar/src/index.ts"), equals: ["/w/sidecar/src/index.ts"],
+                      "a leading ./ is the same path")
+    }
+
+    runner.test("a partial path must match WHOLE trailing segments") {
+        // The bug this rule exists to prevent: a string suffix would resolve
+        // `runner.ts` onto `sdk-runner.ts`, and a link that opens the wrong
+        // file is worse than no link.
+        runner.expect(resolve("runner.ts").isEmpty, equals: true, "not a segment of any path")
+        runner.expect(FileMentionResolver.hasTrailingSegments(["index.ts"], in: "docs/index.ts"),
+                      equals: true, "trailing segment matches")
+        runner.expect(FileMentionResolver.hasTrailingSegments(["src", "index.ts"], in: "websrc/index.ts"),
+                      equals: false, "websrc is not src")
+    }
+
+    runner.test("an ambiguous basename returns every match, shallowest first") {
+        let hits = resolve("index.ts")
+        runner.expect(hits.count, equals: 2, "both are offered, neither is guessed at")
+        runner.expect(hits.first, equals: "/w/docs/index.ts", "shallowest first, then alphabetical")
+    }
+
+    runner.test("an unknown name links nothing") {
+        runner.expect(resolve("nope.ts").isEmpty, equals: true, "a link that opens nothing is worse than text")
+        runner.expect(resolve("").isEmpty, equals: true, "empty mention")
+    }
+
+    runner.test("an absolute path is already an answer") {
+        runner.expect(resolve("/etc/hosts"), equals: ["/etc/hosts"], "passed through")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -210,10 +210,22 @@ struct MarkdownView: View {
         guard url.scheme == MarkdownLinks.fileScheme else { return false }
         let path = url.path
         guard !path.isEmpty else { return true }
-        let line = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "line" })
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let line = items.first(where: { $0.name == "line" })
             .flatMap { $0.value }
             .flatMap(Int.init)
+        // Several files share this basename. Ask rather than open one of
+        // them: a link that opens the WRONG file is worse than a link that
+        // asks, because the reader has no reason to doubt what they got.
+        let alternatives = items.filter { $0.name == "alt" }.compactMap(\.value)
+        if !alternatives.isEmpty {
+            NotificationCenter.default.post(
+                name: .marvinRequestPickFile,
+                object: nil,
+                userInfo: ["paths": [path] + alternatives]
+            )
+            return true
+        }
         MarvinBridge.shared.openFileFromChat(path: path, line: line)
         return true
     }

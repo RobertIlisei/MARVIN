@@ -178,6 +178,7 @@ enum TextMeasurer {
 /// Mirrors what the SwiftUI path used to do (bold / italic / code / links), but
 /// in AppKit attributes so `NSTextView` can render it. Block structure is still
 /// `ChatMarkdown.parse`'s job — this only handles what lives inside a block.
+@MainActor
 enum MarkdownInline {
     static func build(
         _ source: String,
@@ -225,14 +226,65 @@ enum MarkdownInline {
             guard value != nil else { return }
             style(out, range: range, kind: .web)
         }
-        for span in MarkdownLinks.webSpans(in: out.string)
-            + MarkdownLinks.fileSpans(in: out.string, workDir: workDir) {
+        // File mentions resolve through the project's file index, so a bare
+        // `sdk-runner.ts` links to wherever it actually lives rather than
+        // only matching a literal path under the project root.
+        let fileSpans = MarkdownLinks.fileSpans(
+            in: out.string,
+            workDir: workDir,
+            resolve: { ProjectFileIndex.shared.candidates(for: $0) }
+        )
+        for span in MarkdownLinks.webSpans(in: out.string) + fileSpans {
             guard span.range.upperBound <= out.length,
                   out.attribute(.link, at: span.range.location, effectiveRange: nil) == nil
             else { continue }
             out.addAttribute(.link, value: span.url, range: span.range)
             style(out, range: span.range, kind: span.kind)
         }
+        // Icons LAST, and inserted back-to-front.
+        //
+        // Each insertion shifts every range after it, so applying them in
+        // reverse order keeps the earlier spans' ranges valid without having
+        // to re-map them. Doing this before the link pass would invalidate
+        // the very ranges that pass is about to use.
+        for span in fileSpans.sorted(by: { $0.range.location > $1.range.location }) {
+            guard span.range.location <= out.length,
+                  let path = span.url.path.isEmpty ? nil : span.url.path
+            else { continue }
+            out.insert(fileIcon(for: path, font: font), at: span.range.location)
+        }
+        return out
+    }
+
+    /// A tinted SF Symbol for the file's type, as an inline attachment.
+    ///
+    /// Sized against the surrounding font rather than a fixed point size, so
+    /// it stays aligned when the transcript's text size changes. Carries the
+    /// same `.link` the text does — an icon next to a link that is not itself
+    /// clickable reads as broken.
+    private static func fileIcon(for path: String, font: NSFont) -> NSAttributedString {
+        let kind = FileTypeIcon.kind(for: path)
+        let config = NSImage.SymbolConfiguration(
+            pointSize: font.pointSize, weight: .regular
+        )
+        .applying(NSImage.SymbolConfiguration(paletteColors: [
+            NSColor(FileTypeIcon.color(for: kind))
+        ]))
+        guard let image = NSImage(
+            systemSymbolName: FileTypeIcon.symbol(for: kind),
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(config) else {
+            return NSAttributedString(string: "")
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        // Nudged down so the glyph's optical centre sits on the text baseline.
+        attachment.bounds = CGRect(
+            x: 0, y: font.descender * 0.5,
+            width: image.size.width, height: image.size.height
+        )
+        let out = NSMutableAttributedString(attachment: attachment)
+        out.append(NSAttributedString(string: "\u{2009}"))  // thin space
         return out
     }
 

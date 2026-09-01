@@ -284,10 +284,17 @@ public enum MarkdownLinks {
     /// Only paths that actually resolve under `workDir` become links — models
     /// mention filenames constantly, and a link that opens nothing is worse
     /// than plain text. `exists` is injectable so tests don't touch disk.
+    /// `resolve` turns a mention into candidate absolute paths and takes
+    /// precedence over `exists`. It is how a bare `sdk-runner.ts` becomes a
+    /// link: the literal path under `workDir` does not exist, but the file
+    /// does, three directories down. When it returns more than one candidate
+    /// they all ride on the URL as `alt` items — the click handler asks
+    /// rather than guessing which file was meant.
     public static func fileSpans(
         in text: String,
         workDir: String?,
-        exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        resolve: ((String) -> [String])? = nil
     ) -> [MarkdownLinkSpan] {
         guard let workDir, !workDir.isEmpty else { return [] }
         let pattern = #"(?<![\w/.-])(/?(?:[\w.-]+/)*[\w.-]+\.[A-Za-z][\w]{0,9})(?::(\d+)(?:-\d+)?)?"#
@@ -296,21 +303,34 @@ public enum MarkdownLinks {
         var out: [MarkdownLinkSpan] = []
         for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             let pathPart = ns.substring(with: m.range(at: 1))
-            let abs = pathPart.hasPrefix("/")
-                ? pathPart
-                : (workDir as NSString).appendingPathComponent(pathPart)
-            guard exists(abs) else { continue }
+            var alternatives: [String] = []
+            let abs: String
+            if let resolve {
+                let hits = resolve(pathPart)
+                guard let first = hits.first else { continue }
+                abs = first
+                alternatives = Array(hits.dropFirst())
+            } else {
+                let literal = pathPart.hasPrefix("/")
+                    ? pathPart
+                    : (workDir as NSString).appendingPathComponent(pathPart)
+                guard exists(literal) else { continue }
+                abs = literal
+            }
             var comps = URLComponents()
             comps.scheme = fileScheme
             // The path lands in the URL's host+path; force an empty host so
             // `marvin-file:///abs/path` round-trips through URL.path cleanly.
             comps.host = ""
             comps.path = abs
+            var items: [URLQueryItem] = []
             if m.range(at: 2).location != NSNotFound {
-                comps.queryItems = [
+                items.append(
                     URLQueryItem(name: "line", value: ns.substring(with: m.range(at: 2)))
-                ]
+                )
             }
+            items.append(contentsOf: alternatives.map { URLQueryItem(name: "alt", value: $0) })
+            if !items.isEmpty { comps.queryItems = items }
             guard let url = comps.url else { continue }
             out.append(MarkdownLinkSpan(range: m.range, url: url, kind: .file))
         }

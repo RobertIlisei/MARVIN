@@ -1715,6 +1715,8 @@ struct ChatPreviewView: View {
     /// Pending "stop this session" confirmation, captured at confirm time so
     /// the alert and the action cannot disagree about the scope.
     @State private var stopAllPlan: StopAllPlan? = nil
+    /// Candidates for an ambiguous file mention clicked in chat.
+    @State private var filePickCandidates: [String] = []
 
     struct StopAllPlan: Identifiable {
         let id = UUID()
@@ -2017,6 +2019,35 @@ struct ChatPreviewView: View {
         // a captured copy is the kind of thing that silently does nothing.
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestStopAll)) { _ in
             Task { await beginStopAll() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .marvinRequestPickFile)) { note in
+            guard let paths = note.userInfo?["paths"] as? [String], !paths.isEmpty else { return }
+            filePickCandidates = paths
+        }
+        // The file index backs chat's file links. Loaded per project, once.
+        .onAppear { ProjectFileIndex.shared.ensureLoaded(cwd: bridge.projectWorkDir) }
+        .onChange(of: bridge.projectWorkDir) { _, cwd in
+            ProjectFileIndex.shared.ensureLoaded(cwd: cwd)
+        }
+        .confirmationDialog(
+            "Which file?",
+            isPresented: Binding(
+                get: { !filePickCandidates.isEmpty },
+                set: { if !$0 { filePickCandidates = [] } }
+            ),
+            titleVisibility: .visible
+        ) {
+            // Capped: past a handful this stops being a choice and becomes a
+            // list to read. A mention that vague is better served by ⌘P.
+            ForEach(filePickCandidates.prefix(6), id: \.self) { path in
+                Button(WorkspaceRelativePath.of(path, in: bridge.projectWorkDir ?? "") ?? path) {
+                    MarvinBridge.shared.openFileFromChat(path: path, line: nil)
+                    filePickCandidates = []
+                }
+            }
+            Button("Cancel", role: .cancel) { filePickCandidates = [] }
+        } message: {
+            Text("\(filePickCandidates.count) files share that name.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .marvinRequestBacklogPanel)) { _ in
             backlogPanelOpen = true

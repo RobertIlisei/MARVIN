@@ -32,6 +32,9 @@ extension Notification.Name {
     /// observed by the chat view, which owns the confirmation and knows which
     /// session is on screen.
     static let marvinRequestStopAll = Notification.Name("marvin.requestStopAll")
+    /// Posted when a file mentioned in chat matches several files by
+    /// basename; observed by the chat view, which asks which one was meant.
+    static let marvinRequestPickFile = Notification.Name("marvin.requestPickFile")
 }
 
 /// Commands that act on the open editors.
