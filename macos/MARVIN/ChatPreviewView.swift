@@ -268,7 +268,21 @@ final class ChatPreviewModel {
             activePlanId = slug
             if announce && changed { messages.append(.system(text: "📋 Plan (revised)\n\n\(body)")) }
         } else {
-            plans.append(Plan(id: slug, title: title, text: body, path: nil, steps: seeded))
+            // A slug this SESSION has not seen may still exist on disk: plan
+            // state is per (projectId, sessionId) while plan FILES are per
+            // project. Seeding every step unticked would show "0 of N" for
+            // work already finished, and the strip offers **Continue**, which
+            // resumes from the last finished step — so a reset to zero invites
+            // the agent to redo it and invites the user to authorise that.
+            // Observed 2026-09-01 on a shipped GDPR erasure plan.
+            let recovered = Self.completedStepsOnDisk(slug: slug)
+            let seededWithHistory = seeded.map { step -> PlanStep in
+                guard recovered.contains(step.id) else { return step }
+                var s = step
+                s.status = "completed"
+                return s
+            }
+            plans.append(Plan(id: slug, title: title, text: body, path: nil, steps: seededWithHistory))
             activePlanId = slug
             if announce { messages.append(.system(text: "📋 Plan\n\n\(body)")) }
         }
@@ -315,6 +329,19 @@ final class ChatPreviewModel {
     /// just needs the path set so "Open plan" works, without stealing the
     /// editor on every chat switch. The write is idempotent (skipped when the
     /// file already matches) so rehydrating doesn't churn the file / watcher.
+    /// Steps already ticked in this project's plan file for `slug`.
+    ///
+    /// Empty when the file does not exist, which is the common case and the
+    /// correct answer: a genuinely new plan has no history to carry.
+    static func completedStepsOnDisk(slug: String) -> Set<String> {
+        guard let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return [] }
+        let path = (wd as NSString)
+            .appendingPathComponent(".marvin/plans")
+            .appending("/\(slug).md")
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        return PlanFile.completedStepIds(inRenderedFile: text)
+    }
+
     func persistAndOpenPlan(open: Bool = true) {
         guard let plan = activePlan, !plan.text.isEmpty,
               let wd = MarvinBridge.shared.projectWorkDir, !wd.isEmpty else { return }

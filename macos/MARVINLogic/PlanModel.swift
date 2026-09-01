@@ -707,3 +707,51 @@ public enum PlanFile {
         return out.joined(separator: "\n")
     }
 }
+
+// MARK: - Reading a plan file back (ADR-0102)
+
+public extension PlanFile {
+    /// Step statuses recovered from a rendered plan file, keyed by step id.
+    ///
+    /// `render` overlays `[x]` / `[ ]` onto each step's original line, so the
+    /// file is a lossless-enough record of *which steps were done*. Reading it
+    /// back is what lets a plan resurface in a NEW session with its progress
+    /// intact.
+    ///
+    /// Without this, plan state is per `(projectId, sessionId)` while plan
+    /// FILES are per project — so re-presenting a plan in a different session
+    /// seeded every step unticked, and the strip offered "Continue" on work
+    /// that was already finished. That is not a cosmetic mismatch: Continue
+    /// resumes from the last finished step, so a reset to zero invites the
+    /// agent to redo merged work, and invites the user to authorise it
+    /// (observed 2026-09-01 on a shipped GDPR erasure plan).
+    ///
+    /// Deliberately recovers ONLY `completed`. A file records done-or-not; it
+    /// does not record which step was mid-flight, and inventing an
+    /// `in_progress` from a `[ ]` would be a guess in the more dangerous
+    /// direction — claiming work was underway when the file says nothing.
+    ///
+    /// Keyed by `PlanProgress.normalize` of the step text, which is exactly
+    /// how `PlanStep.id` is derived — NOT by the step number. The number in
+    /// the file is the original markdown numbering, and a plan revised
+    /// between sessions renumbers while its steps keep their identity.
+    static func completedStepIds(inRenderedFile markdown: String) -> Set<String> {
+        var out: Set<String> = []
+        // indent · marker · gap · `[x]` · the step text — the shape `render`
+        // writes back onto each step's own line.
+        let re = try? NSRegularExpression(
+            pattern: #"^\s*(?:\d+[.)]|[-*•])\s+\[[xX]\]\s+(.*)$"#,
+            options: [.anchorsMatchLines]
+        )
+        guard let re else { return out }
+        let ns = markdown as NSString
+        for m in re.matches(in: markdown, range: NSRange(location: 0, length: ns.length)) {
+            guard m.numberOfRanges > 1 else { continue }
+            let text = ns.substring(with: m.range(at: 1))
+                .trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { continue }
+            out.insert(PlanProgress.normalize(text))
+        }
+        return out
+    }
+}

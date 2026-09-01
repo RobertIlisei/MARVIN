@@ -2835,6 +2835,48 @@ runner.suite("file-mention-resolver") {
 }
 
 
+runner.suite("plan-file-completed-steps") {
+    let file = """
+    1. [x] **Pre-flight facts (read-only):** confirm the proxy timeout.
+    2. [ ] **Write the ADR** for the behaviour change.
+    3. [x] Backend — the budget.
+    """
+
+    runner.test("recovers exactly the ticked steps") {
+        let done = PlanFile.completedStepIds(inRenderedFile: file)
+        runner.expect(done.count, equals: 2, "two of three are ticked")
+        runner.expect(done.contains(PlanProgress.normalize("Backend — the budget.")),
+                      equals: true, "keyed the way PlanStep.id is derived")
+        runner.expect(done.contains(PlanProgress.normalize("**Write the ADR** for the behaviour change.")),
+                      equals: false, "an unticked step is not recovered")
+    }
+
+    runner.test("keys on content, not on the step number") {
+        // A plan revised between sessions renumbers while its steps keep their
+        // identity — recovering by number would carry progress onto whatever
+        // step sits at that position now, which is worse than carrying none.
+        let renumbered = "7. [x] Backend — the budget.\n8. [ ] Ship it."
+        let done = PlanFile.completedStepIds(inRenderedFile: renumbered)
+        runner.expect(done.contains(PlanProgress.normalize("Backend — the budget.")),
+                      equals: true, "same step, different number, still recovered")
+    }
+
+    runner.test("bullet markers count too, and nothing else does") {
+        runner.expect(PlanFile.completedStepIds(inRenderedFile: "- [x] Did a thing").count,
+                      equals: 1, "bullets are a marker render writes")
+        runner.expect(PlanFile.completedStepIds(inRenderedFile: "Some prose [x] mid-sentence").isEmpty,
+                      equals: true, "a checkbox in prose is not a step")
+        runner.expect(PlanFile.completedStepIds(inRenderedFile: "1. [x]   ").isEmpty,
+                      equals: true, "a ticked step with no text has no identity")
+    }
+
+    runner.test("an unrendered plan yields nothing rather than guessing") {
+        runner.expect(PlanFile.completedStepIds(inRenderedFile: "1. Do the thing\n2. Do the other").isEmpty,
+                      equals: true, "no checkboxes means no recorded progress")
+    }
+}
+
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
