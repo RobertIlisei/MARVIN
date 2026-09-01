@@ -51,7 +51,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.100**). `main` and `development` are fast-forwarded together at each
+> **v0.1.101**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
