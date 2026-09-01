@@ -14,6 +14,17 @@ import SwiftUI
 
 struct PTYTerminalView: NSViewRepresentable {
     let session: TerminalSession
+    /// Bumped when something types a command into this shell from elsewhere —
+    /// the Tasks panel, the build-task sheet. Focus follows, so ⌃C reaches the
+    /// job that was just started.
+    ///
+    /// Without this, a task launched from the sidebar leaves first responder
+    /// in the sidebar: the terminal focuses itself only in `makeNSView`, and a
+    /// pane that is already mounted never runs that again. The user then
+    /// presses ⌃C into whatever had focus, and reaches for the chat footer's
+    /// Stop — which cancels a TURN and has nothing to do with a shell command
+    /// (user, 2026-09-01: "i started a task but i can't seem to cancel it").
+    var focusToken: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
@@ -26,6 +37,12 @@ struct PTYTerminalView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.session = session
         guard let container = nsView as? FocusingContainer else { return }
+        if focusToken != context.coordinator.lastFocusToken {
+            context.coordinator.lastFocusToken = focusToken
+            if let tv = container.terminal {
+                DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
+            }
+        }
         // SESSION SWAP. Sessions are keyed by workDir, so switching projects
         // hands us a DIFFERENT TerminalSession with a different TerminalView —
         // and SwiftUI keeps this representable's identity, so only this method
@@ -89,6 +106,10 @@ struct PTYTerminalView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, @preconcurrency TerminalViewDelegate {
+        /// Last `focusToken` acted on, so focus is stolen only when something
+        /// actually injected a command — not on every SwiftUI update.
+        var lastFocusToken = 0
+
         var session: TerminalSession
         init(session: TerminalSession) { self.session = session }
 

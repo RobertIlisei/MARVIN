@@ -14,6 +14,7 @@
 import SwiftUI
 
 struct TerminalPaneView: View {
+    @State private var focusToken = 0
     @Environment(MarvinBridge.self) private var bridge
 
     private var session: TerminalSession? {
@@ -25,7 +26,7 @@ struct TerminalPaneView: View {
             header
             MarvinDivider()
             if let session {
-                PTYTerminalView(session: session)
+                PTYTerminalView(session: session, focusToken: focusToken)
             } else {
                 Text("Open a project to start a shell.")
                     .font(.system(size: 12, design: .monospaced))
@@ -41,6 +42,8 @@ struct TerminalPaneView: View {
             guard let cmd, !cmd.isEmpty, let session else { return }
             bridge.consumePendingTerminalCommand()
             session.run(command: cmd)
+            // Focus the shell that is now running the job, so ⌃C goes to it.
+            focusToken += 1
         }
     }
 
