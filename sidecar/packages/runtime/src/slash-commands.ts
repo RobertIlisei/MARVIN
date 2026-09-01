@@ -168,7 +168,15 @@ export const NATIVE_COMMANDS: readonly NativeCommand[] = [
       "Skip anything already recorded in an ADR, the changelog, git history, " +
       "or existing memory — a lesson that duplicates one of those is noise. " +
       "Skip anything you cannot cite evidence for from this session. Do not " +
-      "propose changes to MARVIN's own prompt, ADRs, or plan files.",
+      "propose changes to MARVIN's own prompt, ADRs, or plan files.\n\n" +
+      "This is NOT an audit, and you MUST NOT make it one. Do not assess " +
+      "whether your own claims held up, whether a verification was really " +
+      "run, or whether a Definition of Done was honestly met — that is the " +
+      "session auditor's job precisely BECAUSE it is independent of you " +
+      "(ADR-0059), and an executor grading its own homework is the " +
+      "self-briefing the design forbids. If the user shares audit findings " +
+      "with you, those are excellent evidence for a lesson — cite them. " +
+      "Reaching them yourself is not.",
   },
 ];
 

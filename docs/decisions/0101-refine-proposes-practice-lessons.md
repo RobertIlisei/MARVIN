@@ -114,6 +114,58 @@ with a `kind`. ADR-0100 rejected a `.marvin/conditions/` store for the same
 reason: a new store must earn its own lifetime, and this content's lifetime is
 the project's, exactly like a fact's.
 
+## Relationship to the session auditor (ADR-0059)
+
+They are different tools at different **trust levels**, and the distinction is
+load-bearing rather than editorial.
+
+The auditor asks *"did what you claimed match what actually ran and changed?"*
+— drift, reinterpretation, repetition, claim-vs-evidence gaps. It is a
+**separate session dispatched by the runtime**, and `personality.ts` forbids
+MARVIN from invoking it or offering to: an executor commissioning its own audit
+is self-briefing. `/refine` asks *"what did this session learn that the next
+would re-learn?"* and is openly self-review.
+
+**So `/refine` MUST NOT audit.** Its expansion says so explicitly: do not
+assess whether your own claims held up, whether a verification really ran, or
+whether a DoD was honestly met. A self-review that drifts into those questions
+is the failure ADR-0059 exists to prevent, wearing a different name. Pinned by
+a test, because this is the one way the two tools could quietly become one.
+
+**They compose in one direction only.** An audit finding is *evidence* — the
+citable kind a practice lesson requires. "The same bug was fixed twice" or
+"claimed verified end-to-end, transcript shows a typecheck" is exactly what
+turns a vague lesson into one worth keeping. So the pipeline is: the auditor
+finds it, the user shares it, `/refine` proposes a lesson citing it. Never the
+reverse: `/refine` reaching an audit conclusion on its own is the thing
+forbidden above.
+
+**Cost, and why neither should be habitual.** Both read the trajectory and both
+cost a full turn's context. The auditor additionally spends a separate session.
+Running both at every scope-met would tax every piece of work in the project;
+they belong at a boundary the user chooses.
+
+**Rejected — running `/refine` automatically.**
+
+Not at turn end, and not at session end either. Three reasons, and the second
+is the one that decided it:
+
+1. Cost. It reads the trajectory, so it is a full turn against the ADR-0041
+   context budget, at exactly the moment a session is winding down.
+2. **A scheduled ritual has an incentive to produce something.** The expansion
+   says "none at all is a valid answer", and that holds when a person asked a
+   question. It does not hold for a job that runs whether or not there is
+   anything to say: one that usually emits nothing gets ignored, and one that
+   always emits something is noise. The 419 KB memory.md was written by a loop
+   that ran regardless.
+3. It would make the executor start an unrequested review of itself, which is
+   adjacent to the self-briefing line above.
+
+The affordance instead is discoverability: `/refine` sits in the command
+catalog beside `/groom`, and the scope-met handoff is the natural moment to
+reach for it — the same shape as the auditor's chip, offered rather than
+imposed.
+
 **Rejected — automatic refinement at turn end.** Every turn producing candidate
 lessons is how the 419 KB log happened. The trigger is a command.
 
@@ -132,6 +184,8 @@ lessons is how the 419 KB log happened. The trigger is a command.
       this could be tested rather than claimed. 5 assertions, including that
       the evidence floor does not become a way in for the activity/status class
       the store already refuses.
+- [x] `/refine` does not audit: it must not assess its own claims, verification
+      or DoD honesty — that is ADR-0059's independent job. 3 assertions.
 - [x] `personality.ts`, ADRs and `.marvin/plans/` are untouched by it. The
       latter two are already gate-denied; the prompt forbids proposing changes
       to the first.

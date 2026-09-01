@@ -196,6 +196,18 @@ describe("/refine (ADR-0101)", () => {
     expect(out).toMatch(/none at all is a valid\s+answer/i);
   });
 
+  it("refuses to become a self-audit", () => {
+    // ADR-0059 keeps the auditor independent because an executor cannot grade
+    // its own homework. A self-review that drifts into "did I really verify
+    // that?" is the self-briefing failure wearing a different name.
+    const out = expandNativeCommand("/refine") ?? "";
+    expect(out).toContain("This is NOT an audit");
+    expect(out).toMatch(/Definition of Done was honestly met/);
+    // Audit findings are still welcome as EVIDENCE — the two compose, they
+    // just must not be performed by the same party.
+    expect(out).toMatch(/If the user shares audit findings/);
+  });
+
   it("carries arguments through like any native command", () => {
     const out = expandNativeCommand("/refine focus on the migration work");
     expect(out).toContain("Additional instruction: focus on the migration work");
