@@ -21,7 +21,7 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 > makes against the current grain:
 >
 > 1. **One assistant with enforced phases** — not an agent team; subagents are structurally unable to write
-> 2. **The knowledge graph before the file read** — structural answers at ~1/36th the token cost, with `file:line` citations
+> 2. **The knowledge graph before the file read** — structural answers at ~1/27th the token cost (measured on this repo), with `file:line` citations
 > 3. **Deterministic contracts at the tool gate** — enforced, not politely requested in the prompt
 > 4. **Local-first, no backend** — inference straight to Anthropic; credentials never leave your machine
 >
@@ -205,7 +205,8 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
   or builds the *active project's* graph, never its own source.
 - **Built on a knowledge graph it maintains for you.** Queries
   [graphify](https://github.com/safishamsi/graphify) first on
-  architecture/impact questions (~36× cheaper than reading raw files), and
+  architecture/impact questions (**27.5× cheaper** than reading raw files —
+  measured with `graphify benchmark`, 2026-08-15), and
   builds/refreshes the active project's code + knowledge graphs itself
   (AST-only, free) so they're always current (ADR-0041).
 - **Memory is durable facts, not a log.** `.marvin/memory.md` is a curated,
@@ -226,7 +227,11 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 - 🔍 Project-wide search — ripgrep-backed, include glob filter, replace all
 - 🔣 Symbol search and file history
 - 🏗️ Build task panel — run build tasks, see diagnostics inline
-- 🧩 Diagnostics panel — compiler errors and warnings from build output
+- 🧩 Problems panel — diagnostics from a bounded, ignore-aware sweep of the whole tree (tsc · eslint flat + legacy · biome · ruff · go vet · cargo · swift build · maven), project-local wrappers preferred, fast checks automatic and minute-scale builds on demand. Grouped by file, severity chips that filter, rows jump to `file:line:col`, and three distinct empty states — never-run, no-toolchain-found, genuinely-clean
+- 🔌 Language server client — diagnostics from the **buffer**, not from disk, so the list describes the file as it is now rather than as it was last saved (ADR-0099). Full-text sync, a three-strike crash budget, and a missing server surfaced *as a diagnostic* rather than as silence
+- ⌨️ Command registry — the menu bar, the **⇧⌘P command palette** and the ⌘/ shortcut sheet are three renderings of one array, so a binding cannot drift between them. Save All · Revert · New Text File · Auto Save · Word Wrap · Toggle Line/Block Comment · Move/Copy/Duplicate Line · Expand/Shrink Selection · Go to Bracket · Go to Line · Next/Previous Problem · Next/Previous Change · Back/Forward · Run Active File
+- 🧭 Outline · Timeline · Tasks — the sidebar sections VS Code has, built language-agnostically: the outline reads the **knowledge graph** rather than tree-sitter (which covers 12 languages and would silently do nothing in the rest), and Tasks is a generic runner rather than the reference's Java-only Maven panel
+- 🛑 Stop Session & All Work (⇧⌘.) — Stop cancels the turn; this cancels the turn **plus** the background jobs and scheduled wakeups it leaves behind, which otherwise outlive it and can start a new turn on their own. Confirmation names the scope by count, and the whole thing is scoped to one session
 - ⌨️ Embedded terminal (PTY-backed)
 - 🕐 Session history — click any past session in the header to restore it
 - 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
@@ -305,6 +310,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.87–0.1.98 — IDE parity, and four bugs that only measurement found.** Two halves. The first is parity with the reference IDE (Antigravity, a VS Code fork), audited item by item into a [parity matrix](./docs/reference/ide-parity.md): a **language-server client** ([ADR-0099](./docs/decisions/0099-lsp-client-for-live-diagnostics.md)) so diagnostics come from the buffer rather than from disk — verified against a real `sourcekit-lsp`, which reported a type error on an **unsaved** edit while the file on disk still said otherwise, the exact capability a CLI runner cannot have; a **command registry** making the menus, the ⇧⌘P palette and the ⌘/ sheet three renderings of one array (it immediately surfaced two double-bound keys); **source control** reaching the reference's feature set, including four routes that had shipped with *zero* callers — the branch name was a `Text`, so the feature was complete, tested, documented and unreachable; a **Problems panel** that searches the whole tree rather than the repo root, where "found nothing" had been rendering as "your code is clean"; and a tranche of self-contained editor commands. The second half is a lesson worth more than the features: **four bugs in a row were diagnosed wrongly from reading source, and settled immediately once something was measured.** A file tree drawing over the title bar took three wrong guesses about ScrollView ideal heights before a geometry probe said *container at y=52, tree at y=0* — not too tall, 52pt too high, exactly the title bar, because `VSplitView` does not inherit the safe area. An app frozen at 100 % CPU with two sessions open was a width latch with **no deadband**: collapsing changed the measured width, and one threshold in both directions let it cross back, each cycle re-forming the split view's panes. A Stop-All button was permanently disabled because it gated on a property nothing had set since the WebView was removed. And two sessions that looked "interconnected" had genuinely separate conversations — distinct SDK session ids per transcript — but collided on the **working tree**, which Golden Rule 1 forbids and nothing enforces. Also shipped: `CLAUDE.md` is finally injected into project context (it never had been), chat prose is selectable across lines, and `Stop Session & All Work` cancels the jobs and wakeups a turn leaves behind.
 
 **v0.1.77–0.1.86 — a day of failures that looked like nothing happening.** Ten releases, one recurring shape. **[ADR-0097](./docs/decisions/0097-verify-against-what-runs.md) — verify against what runs.** The Claude-plan usage bars survived two previous fixes because the SDK never resolves `claude` from `PATH`: it spawns the native binary its own package links to, and the bundler picked that with `find | head -n1`, linking **0.2.113** beside a 0.3.251 SDK. Every turn ran a CLI 138 versions behind while the About panel confirmed the right one. The same pass found `Skill` had been called **29 times across every transcript ever recorded, failing every time, with zero successes** — the pane listed skills the loader had skipped, because `description:` is the load-bearing frontmatter key and the registered identity is always the directory. **[ADR-0098](./docs/decisions/0098-the-rail-must-outlive-the-tool-surface.md) — a rail keyed on vendor tool names is only as durable as those names.** That upgrade removed `Grep`/`Glob`; all four graphify-first guards keyed on them with no `Bash` branch, so searching moved where the rail is blind — **15 of 18 Bash calls search-shaped against 2 graph calls**. **And a run of silent failures:** a `ScrollView` under a frame with no `idealHeight` measured the whole transcript (eight 61-second hangs); the bottom panel mounted tabs only on an `activeTab` *change*, so opening it on the selected tab gave an empty pane with no shell; extended thinking rendered as `unhandled block: thinking`; `_ = try await URLSession.data(for:)` treated an HTTP 500 as success, so Discover ran two minutes and showed nothing; `which("tsc")` under a Finder-launched app's bare `PATH` returned `[]`, rendered as "No problems detected"; and the terminal broke on project switch — sessions keyed by `workDir`, SwiftUI keeping the representable's identity, `updateNSView` swapping the session but not the view. Skills work on OpenRouter (`tools: []`, and the proxy answers `count_tokens` with an estimate rather than a fabricated zero).
 

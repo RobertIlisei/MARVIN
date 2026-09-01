@@ -242,7 +242,8 @@ prompts grow.
 For structural questions the graph is queried **before** files are read —
 a hard rule with per-tool MUST triggers in `personality.ts`, no judgement
 call ([`docs/concepts/graphify-integration.md`](../concepts/graphify-integration.md)).
-Internally estimated ~36× cheaper per structural question than
+Measured 27.5× cheaper per structural question (`graphify benchmark`,
+2026-08-15; an earlier ~36× figure was an estimate, never measured) than
 file-reading; answers cite `file:line`.
 
 ### 3.2 Two graphs, three scopes

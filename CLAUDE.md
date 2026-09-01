@@ -136,6 +136,37 @@ reads at turn time.
 The pattern is the same across all of them: a MUST list, a MUST-NOT list,
 and a fallback judgement test for cases the lists don't cover.
 
+### Measure before theorising — for UI and layout bugs especially
+
+Established the hard way on 2026-09-01. Four bugs in a row were diagnosed by
+reading source, four diagnoses were wrong, and each was settled in one
+attempt once something was actually measured:
+
+| Bug | Wrong from reading | What a measurement said |
+|---|---|---|
+| File tree drawn over the title bar | ScrollView ideal height; `VStack` centring; missing `.clipped()` — three fixes, three misses | `paneContainer origin=(45,52)` vs `tree origin=(45,0)`. Not too tall — **52pt too high**, exactly the title bar: `VSplitView` does not inherit the safe area. |
+| App frozen, two sessions open | — | `ps`: **100 % CPU, `STAT R`**. `sample`: a closed loop through `SystemSplitView.updateNSViewController → formCurrentItems → NSHostingView.setRootView → setNeedsUpdate`. |
+| Two sessions "interconnected" | — | Distinct SDK session ids per transcript — conversations WERE separate. The collision was the shared working tree. |
+| Turn killed with no cause | — | The string was the SDK's, not `cancelLiveTurn`'s: `endLiveTurn`'s `ended` guard was suppressing MARVIN's own message. |
+
+**The tools, in order of preference.** `sample <pid>` for a spin (`STAT R` +
+100 % CPU is a spin, not a deadlock). `~/Library/Logs/MARVIN/exceptions.log`
+for constraint storms — it already records trigger view, frame, ancestry and
+stack ([ADR-0062](./docs/decisions/0062-update-constraints-loop-identified-mitigated.md)).
+`MARVIN_SNAPSHOT_MD=/tmp/x.png <binary>` renders `MarkdownView` to a PNG with
+no window and no session, for anything chat-rendering. And for frames,
+**`onGeometryChange`** — it reports geometry *without inserting a view*.
+
+That last point is not a style preference. The `background(GeometryReader)`
+shape adds subviews, and AppKit's runaway-pass breaker counts update passes
+**against the number of views in the window** — which is how v0.1.93's
+`WidthReporter` eliminated a constraint storm (proved by stack diff) and
+crashed the app anyway. Same diagnosis, same fix, no extra views.
+
+**The rule:** after ONE failed fix for a layout or timing bug, stop reasoning
+about the code and instrument it. A probe costs one launch. Three wrong
+guesses cost three releases, and one of them shipped a crash to the user.
+
 ## Repo layout
 
 ```
@@ -412,7 +443,7 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 7946 nodes · 15706 edges · 442 communities (2026-08-31
+  files. 7946 nodes · 15706 edges · 453 communities (2026-09-01
   rebuild on graphify 0.9.51; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
@@ -420,8 +451,8 @@ repo:
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1708 nodes · 2230 edges · 157 communities
-  (built 2026-08-31). **Community labels are stale** — both counts moved on
+  `.marvin/memory.md`. 1722 nodes · 2248 edges · 158 communities
+  (built 2026-09-01). **Community labels are stale** — both counts moved on
   this rebuild, so graphify has renamed every community after its hub node;
   re-run `graphify label . --backend=claude-cli` (an LLM pass) to restore
   concept names.
@@ -550,11 +581,15 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-08-24 rebuild: `cn()` (97 edges), `requireMarvinClient()`
-(96), `checkFsPath()` (76), `ChatPreviewModel` (73), `ChatPreviewView` (55),
-`validateProjectCwd()` (47), `SkillsPane` (46), `BacklogPanel` (46) are the
-real architectural anchors — the shared client guard, the fs-path check and
-the project-cwd validator are the widest coupling points in the repo.
+After the 2026-09-01 rebuild: `requireMarvinClient()` (98 edges), `cn()`
+(97), `checkFsPath()` (84), `ChatPreviewModel` (76), `MarvinDivider` (68),
+`MarvinBridge` (64), `ChatPreviewView` (55), `runAgent()` (55) are the real
+architectural anchors — the shared client guard and the fs-path check are
+the widest coupling points in the repo, and `MarvinBridge` entering the top
+ten is worth noticing: it is the app-global state store, so a field on it is
+reachable from nearly anywhere, which is exactly how a dead property
+(`activeMarvinSessionId`) kept readers long after its only writer was
+deleted.
 (An incremental `update` can transiently drop a hot node out of the top 10:
 re-extracting only some of its source files prunes its cross-file edges, so
 prefer a full rebuild when counts look off.) This list moves a lot — it
