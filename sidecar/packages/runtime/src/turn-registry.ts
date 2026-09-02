@@ -175,6 +175,27 @@ export function getLiveTurnByTurnId(turnId: string): LiveTurn | null {
   return null;
 }
 
+/**
+ * Every turn still running for a project, newest first.
+ *
+ * `endLiveTurn` keeps a finished turn in the map for a 60 s grace period so a
+ * reconnecting client can still collect the terminal event, so `ended` has to
+ * be filtered here — a turn that has completed is not a co-tenant and must not
+ * raise a conflict against a session that is only tidying up.
+ *
+ * Used by the shared-tree gate (`maybeSharedTreeConfirm`) to answer "is
+ * another session working in this checkout right now".
+ */
+export function listLiveTurns(projectId: string): LiveTurn[] {
+  const out: LiveTurn[] = [];
+  for (const t of live.values()) {
+    if (t.ended) continue;
+    if (t.projectId !== projectId) continue;
+    out.push(t);
+  }
+  return out.sort((a, b) => b.startedAt - a.startedAt);
+}
+
 export function emitTurnEvent(
   turn: LiveTurn,
   event: string,

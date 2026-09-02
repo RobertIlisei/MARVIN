@@ -213,3 +213,72 @@ behind the threshold, and a 20 s cooldown means the diagnostic cannot itself
 become the pathology. The session-start stamp reports whether it armed —
 the same lesson as the original hook, which sat un-armed and silent for 24
 sessions because nothing said otherwise.
+
+## Addendum 3 (2026-09-01) — the storm counter named our own structure, and it was fixed
+
+MARVIN died again: `MARVIN-2026-09-01-164458.ips`, pid 1295, up 78 minutes,
+`EXC_BREAKPOINT / SIGTRAP` through `+[NSApplication _crashOnException:]` with
+the same `NSGenericException` this ADR opened with — 78 views in the window,
+more Update Constraints passes than that.
+
+**This is the occurrence the pass counter was added for.** Five storms fired
+before the fatal pass (`exceptions.log:2058–2190`), and for the first time in
+this ADR's history the captured stack names MARVIN's own layout rather than
+"somewhere in SwiftUI":
+
+```
+SystemSplitView.updateNSViewController
+ → SplitViewCoordinator.formCurrentItems
+  → SplitViewContentProvider.updateRootViewForItem
+   → NSHostingView.setRootView          ← re-roots a hosting view mid-pass
+    → NSHostingView.setNeedsUpdate
+     → NSView.setNeedsUpdateConstraints ← re-dirties the window
+```
+
+The ancestry is the diagnosis. **A split view inside a split view:**
+
+```
+NSHostingView<NavigationPaneModifier> constraints=122
+ _NSSplitViewItemViewWrapper → NSSplitView → NSView
+  AppKitPlatformViewHost<…SystemSplitView>      ← inner
+   NSHostingView<NavigationPaneModifier>
+    _NSSplitViewItemViewWrapper → NSSplitView
+     AppKitPlatformViewHost<…SystemSplitView>   ← outer
+      AppKitWindowHostingView<ModifiedContent<AnyView, RootModifier>>
+```
+
+`ContentView` put a `VSplitView` (brain over chat) inside the main
+`HSplitView`. Each bridges to its own `NSSplitView`. The outer split's update
+pass re-roots the inner split's hosting view, which marks the window as needing
+another pass — a ring that cannot converge, and AppKit raises once the passes
+outnumber the views.
+
+### Fixed
+
+The inner `VSplitView` is gone, replaced by `MarvinDivider()` plus a drag
+gesture (`ContentView.brainDivider`). This is not a new idea: `LeftPane`
+made the identical move on 2026-08-31 and recorded why —
+*"A plain divider with a drag gesture, NOT a `VSplitView` … losing the bridge
+also removes the ideal-size guessing it forced, and
+`_NSSplitViewItemViewWrapper` was among the constraint-storm triggers."* One
+level of nesting was left; this removes it. The main window now holds exactly
+one `HSplitView`.
+
+Divider persistence moved from `SplitViewAutosave(name: "marvin.right")` to
+`@AppStorage("marvin.brainHeight")` — plain `UserDefaults`, no view inserted
+into the hierarchy, which is the constraint v0.1.93's `WidthReporter` taught.
+
+### Why the count mattered, and what to watch
+
+The roadmap's standing entry on this bug notes that after the `LeftPane`
+deadband fix the CPU symptom resolved but **the storm count did not move: five
+per launch, before and after**. Five is also the count in this crash. If five
+storms per launch persist after this change, the remaining oscillator is a
+third path and the ancestry will say so — the capture format is now proven to
+name the culprit. If the count drops, the nesting was the source.
+
+**Still not claimed:** that ADR-0062 is closed. This fixes the ring this crash
+captured. The mitigation note stands — `NSApplicationCrashOnExceptions: false`
+does not cover this exception, because AppKit calls `_crashOnException:`
+directly on the layout path, so any future occurrence is still fatal and still
+logged with its view tree.

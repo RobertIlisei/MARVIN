@@ -21,7 +21,17 @@ import SwiftUI
 import AppKit
 import MARVINLogic
 
-struct ChatMessageRow: View {
+/// `Equatable` is load-bearing (2026-09-03). The list applies `.equatable()`
+/// to this row so SwiftUI compares the `ChatMessage` with `==` and skips the
+/// body — and the whole stack layout under it — for every row whose message
+/// did not change. Without it SwiftUI falls back to its own field-wise
+/// comparison, which gives up on `ChatBlock` (an enum with payloads) and
+/// treats EVERY row as changed on EVERY streamed event. Sampled at 100 % CPU
+/// during a long thinking turn, with the 200-row render window already in
+/// place: 1178 of 1306 main-thread samples inside `StackLayout` across the
+/// rendered rows, 39 in platform-view measurement, none in MARVIN code — the
+/// rows were not being measured expensively, they were all being re-laid-out.
+struct ChatMessageRow: View, Equatable {
     let message: ChatMessage
 
     var body: some View {

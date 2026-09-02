@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { buildProjectContext } from "@marvin/project-context";
 import {
   maybeRefreshGraphify,
   maybeRefreshKnowledgeGraph,
 } from "@marvin/graphify-bridge";
 import { defaultModel } from "@marvin/runtime/claude-cli";
-import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
-import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
+import type { PersonalityMode } from "@marvin/runtime/personality";
 import { slugifyWorkDir, validateProjectCwd } from "@marvin/runtime/projects";
 import {
   type AgentMode,
@@ -28,7 +26,7 @@ import {
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { enqueuePending } from "@marvin/runtime/pending-input";
-import { runDetachedTurn } from "@/lib/turn-orchestrator";
+import { buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -240,27 +238,15 @@ export async function POST(req: NextRequest) {
   const model = mode === "plan" && advisorModel ? advisorModel : executorModel;
   const firstMessage = !body.marvinSessionId;
 
-  const systemPrompt = buildSystemPrompt(personality);
-  const projectContext = body.skipProjectContext
-    ? ""
-    : (
-        await buildProjectContext({ workDir: cwd, firstMessage }).catch(() => ({
-          text: "",
-          breakdown: [],
-        }))
-      ).text;
-  // ADR-0037 — name the skills ACTIVE for this project so the model stops
-  // reaching for the (always-loaded) irrelevant ones. Default from the
-  // fingerprint; overridable in the Skills pane (.marvin/skills.json).
-  let activeSkillsBlock = "";
-  try {
-    activeSkillsBlock = formatActiveSkillsBlock(cwd);
-  } catch {
-    /* best-effort; never block a turn on skill enablement */
-  }
-  const appendSystemPrompt = [systemPrompt, projectContext, activeSkillsBlock]
-    .filter(Boolean)
-    .join("\n\n");
+  // One builder for every turn-starting path (route / wakeup / drained
+  // queue) — the prompt is the cache prefix, and two builders is how the
+  // wakeup path came to re-create ~650K tokens of cache per transition.
+  const appendSystemPrompt = await buildTurnSystemPrompt({
+    cwd,
+    personality,
+    firstMessage,
+    skipProjectContext: body.skipProjectContext,
+  });
 
   // Resolve the SDK resume id BEFORE we append turn.user (and before
   // `runAgentDetached` is dispatched below). Two distinct ids exist:

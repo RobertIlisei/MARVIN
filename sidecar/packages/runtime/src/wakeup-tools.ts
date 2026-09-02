@@ -24,7 +24,7 @@ import {
   MIN_DELAY_SECONDS,
   scheduleWakeup,
 } from "./wakeup-scheduler";
-import { createWorktree, describeWorktree, listWorktrees, removeWorktree } from "./worktrees";
+import { createWorktree, describeWorktree, mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "./worktrees";
 
 /** Per-turn identity + config the wakeup tools capture for the future turn. */
 export interface WakeupToolContext {
@@ -217,20 +217,49 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
   );
   const worktreeList = tool(
     "worktree_list",
-    "List the implementer worktrees registered for this project, with their branch and how many commits each is ahead of its base. Use to report finished work for the user to review (`git diff <base>...<branch>`) and merge.",
+    "List this project's implementer worktrees with their DERIVED state — running / empty / ready / merged — plus commits, files changed, and whether the checkout holds uncommitted work. State is recomputed from git on every call, so a branch you merged in a terminal or in another session shows as `merged` here. Use it to report finished work: `ready` is the deliverable, and `git diff <base>...<branch>` reviews it.",
     {},
     async () => {
-      const all = listWorktrees(ctx.cwd);
-      if (all.length === 0) return { content: [{ type: "text", text: "No worktrees registered." }] };
-      return { content: [{ type: "text", text: all.map((w) => describeWorktree(ctx.cwd, w)).join("\n") }] };
+      const all = reconcileWorktrees(ctx.cwd);
+      if (all.length === 0) return textResult("No worktrees registered.");
+      const ready = all.filter((w) => w.state === "ready").length;
+      const lines = all.map((w) => describeWorktree(ctx.cwd, w));
+      const hint = ready > 0
+        ? `\n\n${ready} branch(es) ready. Merge locally with worktree_merge — that costs no CI run, because the commits ride along in whatever pipeline the current branch already runs. Never push an implementer branch on its own.`
+        : "";
+      return textResult(`${lines.join("\n")}${hint}`);
+    },
+  );
+  const worktreeMerge = tool(
+    "worktree_merge",
+    "Merge ONE ready implementer branch into the current branch of the main tree, locally. Never pushes and never opens a PR/MR — the commits ride along in whatever pipeline the current branch was already going to run, so N branches cost zero extra CI. Refuses if the implementer is still running, the branch is empty or already merged, the main tree is dirty, or the merge conflicts (it aborts cleanly). After merging, the checkout and branch are reclaimed by worktree_sweep.",
+    { slug: z.string().min(1).describe("The worktree slug from worktree_list.") },
+    async ({ slug }) => {
+      const out = mergeWorktree(ctx.cwd, slug);
+      return out.ok ? textResult(out.message) : { content: [{ type: "text" as const, text: out.message }], isError: true };
+    },
+  );
+  const worktreeSweep = tool(
+    "worktree_sweep",
+    "Reclaim every worktree that is provably safe to remove: branches with no commits, and branches already merged somewhere. Deletes the checkout AND the branch for those. NEVER touches a `ready` branch, a running implementer, or any checkout holding uncommitted work. Run it after merging, or when the user asks about leftover worktrees.",
+    {},
+    async () => {
+      const swept = sweepWorktrees(ctx.cwd);
+      if (swept.length === 0) return textResult("Nothing to reclaim — no empty or merged worktrees.");
+      return textResult(swept.map((s) => `${s.slug} (${s.state}): ${s.reason}`).join("\n"));
     },
   );
   const worktreeRemove = tool(
     "worktree_remove",
-    "Remove a worktree CHECKOUT after the user has merged or rejected its branch. The branch itself is kept — deleting it is the user's call. Never remove a worktree whose implementer is still running.",
-    { slug: z.string().min(1).describe("The worktree slug from worktree_list.") },
-    async ({ slug }) => {
-      const rec = removeWorktree(ctx.cwd, slug);
+    "Remove a worktree CHECKOUT after the user has merged or rejected its branch. The branch itself is kept — deleting it is the user's call. REFUSES a worktree whose implementer is still running; `force` overrides that and discards whatever it had not committed, so only pass it when the user asked.",
+    {
+      slug: z.string().min(1).describe("The worktree slug from worktree_list."),
+      force: z.boolean().optional().describe("Remove even if the implementer is still running. Discards its uncommitted work."),
+    },
+    async ({ slug, force }) => {
+      const out = removeWorktree(ctx.cwd, slug, force === true ? { force: true } : undefined);
+      if (out.refused) return { content: [{ type: "text" as const, text: out.refused }], isError: true };
+      const rec = out.removed;
       return { content: [{ type: "text", text: rec ? `Removed checkout ${rec.path}; branch ${rec.branch} kept.` : `No worktree named ${slug}.` }] };
     },
   );
@@ -242,6 +271,6 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     // checkback guard (ADR-0055) relies on `schedule_wakeup` being callable
     // without a discovery step; a deferred tool is an unarmed promise.
     alwaysLoad: true,
-    tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool, worktreeCreate, worktreeList, worktreeRemove],
+    tools: [scheduleTool, cancelTool, listTool, runJobTool, listJobsTool, cancelJobTool, worktreeCreate, worktreeList, worktreeMerge, worktreeSweep, worktreeRemove],
   });
 }

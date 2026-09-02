@@ -58,6 +58,11 @@ final class SourceControlModel {
     /// Worktrees of the open repo — the main checkout first.
     private(set) var repos: [GitRepoEntry] = []
     private(set) var stashes: [GitStashEntry] = []
+    /// Implementer worktrees (ADR-0103), state derived from git server-side.
+    private(set) var worktrees: [WorktreeEntry] = []
+    /// Result of the last merge/sweep, shown inline until the next action.
+    var worktreeNotice: String? = nil
+    private(set) var worktreeBusy: Bool = false
 
     private var fetchTask: Task<Void, Never>?
 
@@ -83,10 +88,11 @@ final class SourceControlModel {
     // MARK: - Reads
 
     /// Kick off a status fetch for `cwd`. Idempotent unless forced.
-    /// The repo + stash lists ride along — all three change together
-    /// (a commit moves status AND the graph; a stash moves status AND
-    /// the stash list), so refreshing them separately would guarantee
-    /// one of them is stale on screen.
+    /// The repo, stash and worktree lists ride along — they all change
+    /// together (a commit moves status AND the graph; a stash moves status
+    /// AND the stash list; merging an implementer branch moves status AND
+    /// that branch's state to `merged`), so refreshing them separately
+    /// would guarantee one of them is stale on screen.
     func refresh(cwd: String, force: Bool = false) {
         if !force, response != nil, loadedCwd == cwd, !isLoading { return }
         fetchTask?.cancel()
@@ -98,17 +104,76 @@ final class SourceControlModel {
                 async let status = FilesService.shared.fetchGitStatus(cwd: cwd)
                 async let repoList = FilesService.shared.fetchRepos(cwd: cwd)
                 async let stashList = FilesService.shared.fetchStashes(cwd: cwd)
+                async let worktreeList = FilesService.shared.fetchWorktrees(cwd: cwd)
                 let res = try await status
                 guard !Task.isCancelled else { return }
                 response = res
                 loadedCwd = cwd
                 repos = (try? await repoList)?.repos ?? []
                 stashes = (try? await stashList)?.entries ?? []
+                worktrees = (try? await worktreeList)?.worktrees ?? []
             } catch is CancellationError {
                 /* racing a project switch — quiet */
             } catch {
                 lastError = "\(error)"
             }
+        }
+    }
+
+    /// Merge one implementer branch into the current branch, locally.
+    ///
+    /// Never pushes. On a pipeline-gated project pushing each branch as its
+    /// own MR costs a full CI run each; merging where the implementer was cut
+    /// from costs nothing, because those commits ride along in the pipeline
+    /// the current branch already runs.
+    func mergeWorktree(slug: String) {
+        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        worktreeBusy = true
+        Task { @MainActor in
+            defer { worktreeBusy = false }
+            do {
+                let out = try await FilesService.shared.mergeWorktree(cwd: cwd, slug: slug)
+                worktreeNotice = out.message ?? out.error ?? "Merge finished."
+            } catch {
+                worktreeNotice = "Merge failed: \(error)"
+            }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
+    /// Remove one checkout, keeping its branch — the ADR-0081 semantics.
+    func dropWorktree(slug: String) {
+        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        worktreeBusy = true
+        Task { @MainActor in
+            defer { worktreeBusy = false }
+            do {
+                let out = try await FilesService.shared.dropWorktree(cwd: cwd, slug: slug)
+                worktreeNotice = out.message ?? out.error ?? "Checkout removed."
+            } catch {
+                worktreeNotice = "Drop failed: \(error)"
+            }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
+    /// Reclaim empty and merged worktrees. Never touches a `ready` branch or
+    /// any checkout holding uncommitted work.
+    func sweepWorktrees() {
+        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        worktreeBusy = true
+        Task { @MainActor in
+            defer { worktreeBusy = false }
+            do {
+                let out = try await FilesService.shared.sweepWorktrees(cwd: cwd)
+                let swept = out.swept ?? []
+                worktreeNotice = swept.isEmpty
+                    ? "Nothing to reclaim."
+                    : swept.map { "\($0.slug): \($0.reason)" }.joined(separator: "\n")
+            } catch {
+                worktreeNotice = "Sweep failed: \(error)"
+            }
+            refresh(cwd: cwd, force: true)
         }
     }
 
@@ -118,6 +183,8 @@ final class SourceControlModel {
         response = nil
         repos = []
         stashes = []
+        worktrees = []
+        worktreeNotice = nil
         loadedCwd = nil
         lastError = nil
         isLoading = false
@@ -572,6 +639,7 @@ struct SourceControlView: View {
                         ForEach(otherRepos) { repo in
                             otherRepoRow(repo)
                         }
+                        if !model.worktrees.isEmpty { worktreeSection }
                         if !model.stashes.isEmpty { stashSection }
                     }
                     .padding(.bottom, 8)
@@ -927,6 +995,122 @@ struct SourceControlView: View {
                 model.discardAllTracked()
             }
             iconButton("plus", help: "Stage all changes") { model.stageAll() }
+        }
+    }
+
+
+    /// Implementer worktrees (ADR-0103).
+    ///
+    /// This replaces reading an implementer's progress off a dirty count —
+    /// which reported 0 for one that had correctly committed, making finished
+    /// work indistinguishable from none. `state` is derived from git on every
+    /// fetch, so a branch merged in a terminal or another session shows as
+    /// merged here without MARVIN having witnessed it.
+    private var worktreeSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                Text("Worktrees")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Spacer()
+                let ready = model.worktrees.filter(\.isReady).count
+                if ready > 0 {
+                    Text("\(ready) ready")
+                        .font(.system(size: 9.5, weight: .semibold).monospaced())
+                        .padding(.horizontal, 5)
+                        .background(Capsule().fill(MarvinTheme.elevated))
+                        .foregroundStyle(GitDecorationColor.added)
+                }
+                if model.worktrees.contains(where: \.isSpent) {
+                    Button("Reclaim") { model.sweepWorktrees() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .disabled(model.worktreeBusy)
+                        .help("Remove checkouts and delete branches that are empty or already merged. Never touches unmerged or uncommitted work.")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 3)
+
+            ForEach(model.worktrees) { w in worktreeRow(w) }
+
+            if let notice = model.worktreeNotice {
+                Text(notice)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(4)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 2)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private func worktreeRow(_ w: WorktreeEntry) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(worktreeTint(w))
+                .frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(w.branch)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MarvinTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(w.summary)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if w.isReady {
+                Button("Merge") { model.mergeWorktree(slug: w.slug) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(GitDecorationColor.added)
+                    .disabled(model.worktreeBusy)
+                    .help("Merge \(w.branch) into the current branch, locally. Never pushes — the commits ride along in whatever pipeline this branch already runs.")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .help("\(w.task)\n\(w.path)")
+        .contextMenu {
+            Button("Copy Review Command") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(
+                    "git diff \(w.base)...\(w.branch)", forType: .string
+                )
+            }
+            Button("Copy Branch Name") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(w.branch, forType: .string)
+            }
+            if w.checkoutPresent {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: w.path)
+                }
+                Divider()
+                Button("Drop Checkout (keep branch)") {
+                    model.dropWorktree(slug: w.slug)
+                }
+                .disabled(model.worktreeBusy)
+            }
+        }
+    }
+
+    private func worktreeTint(_ w: WorktreeEntry) -> Color {
+        switch w.state {
+        case "ready": return GitDecorationColor.added
+        case "running": return GitDecorationColor.modified
+        case "merged": return MarvinTheme.textMuted
+        default: return .secondary
         }
     }
 

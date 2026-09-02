@@ -205,6 +205,38 @@ final class MarvinBridge {
         if isBusy != busy { isBusy = busy }
     }
 
+    /// May a per-session status-bar counter written by `sessionId` be shown?
+    ///
+    /// Same gate, same reason as `setMarvinState`. The ctx / graph-reads /
+    /// agents chips describe ONE session's turn; a figure from another session
+    /// is not a stale version of the on-screen one, it is a different answer.
+    /// Exposed rather than kept private because the three counters are fed
+    /// from `ContextUsageBridge`, which parses the event before it knows
+    /// whether the write is wanted.
+    func acceptsSessionCounters(from sessionId: String?) -> Bool {
+        BrainStateGate.accepts(writer: sessionId, active: activeMarvinSessionId)
+    }
+
+    /// Zero every counter that describes one session's SDK conversation.
+    ///
+    /// Called on a session switch as well as on a fresh SDK session. Before
+    /// 2026-09-01 only the latter cleared them, so switching between two live
+    /// sessions kept the leaving session's `ctx 147K`, its `graph N · reads M`
+    /// and its subagent ledger pinned in the status bar while the transcript
+    /// below showed the session you had just opened — the two sessions read as
+    /// "interconnected" even though their conversations were entirely separate
+    /// (user, 2026-09-01). `hydrate` already did this for the plan / to-do /
+    /// changed-files strips; these are the same content class and were missed.
+    func resetSessionCounters() {
+        residentContextTokens = nil
+        billableThisTurn = nil
+        reportedContextWindow = nil
+        sessionGraphCalls = 0
+        sessionFileReadCalls = 0
+        sessionGraphSummaryCalls = 0
+        subagents = SubagentLedger()
+    }
+
     /// Resident-context tokens (ADR-0022 §2). The bytes the model
     /// walks every turn — drives latency. `cache_read + input` from
     /// the latest assistant cli.event's `usage`. The bottom status

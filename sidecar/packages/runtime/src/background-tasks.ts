@@ -68,3 +68,19 @@ export function backgroundTasksPayload(ev: unknown): readonly BackgroundTaskRef[
       !!t && typeof t === "object" && typeof (t as BackgroundTaskRef).task_id === "string",
   );
 }
+
+/**
+ * Narrow the SDK stream to `task_notification` — the completion EDGE.
+ *
+ * `background_tasks_changed` stays the source of truth for liveness (a level
+ * signal cannot wedge on a missed bookend, which is why it was chosen). But a
+ * count cannot say WHICH task ended, and an implementer's whole deliverable is
+ * identified by its task id: without this, the branch it just finished is
+ * known to nobody (ADR-0103).
+ */
+export function taskNotificationPayload(ev: unknown): { task_id: string } | null {
+  if (!ev || typeof ev !== "object") return null;
+  const o = ev as { type?: unknown; subtype?: unknown; task_id?: unknown };
+  if (o.type !== "system" || o.subtype !== "task_notification") return null;
+  return typeof o.task_id === "string" ? { task_id: o.task_id } : null;
+}

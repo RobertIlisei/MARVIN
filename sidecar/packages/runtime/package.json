@@ -1,6 +1,6 @@
 {
   "name": "@marvin/runtime",
-  "version": "0.1.101",
+  "version": "0.1.102",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -23,6 +23,8 @@
     "./pending-input": "./src/pending-input.ts",
     "./turn-input": "./src/turn-input.ts",
     "./backlog": "./src/backlog.ts",
+    "./practice": "./src/practice.ts",
+    "./practice-extractors": "./src/practice-extractors.ts",
     "./backlog-groom": "./src/backlog-groom.ts",
     "./obsidian-vault": "./src/obsidian-vault.ts",
     "./wakeup-scheduler": "./src/wakeup-scheduler.ts",
@@ -44,7 +46,8 @@
     "./session-auditor": "./src/session-auditor.ts",
     "./ci-status": "./src/ci-status.ts",
     "./slash-commands": "./src/slash-commands.ts",
-    "./install-provenance": "./src/install-provenance.ts"
+    "./install-provenance": "./src/install-provenance.ts",
+    "./worktrees": "./src/worktrees.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

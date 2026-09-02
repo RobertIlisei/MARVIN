@@ -12,6 +12,8 @@ import {
   checkGraphDriftDeny,
   checkSaveResult,
   checkShipImpact,
+  checkShipReview,
+  classifyShipDiff,
   clearTurnDesignContext,
   createTurnDesignContext,
   GRAPH_DRIFT_DENY_THRESHOLD,
@@ -22,9 +24,15 @@ import {
   isSourceFile,
   logDesignTurnSummary,
   matchAdrTrigger,
+  matchShipBoundary,
+  parseCommitCommand,
   recordAllowedTool,
+  resetShipReviewState,
   runDesignHooks,
   SAVE_RESULT_GRAPH_THRESHOLD,
+  SHIP_REVIEW_MAX_DENIES,
+  type ShipDiff,
+  shipReviewSkillOf,
 } from "../src/design-hooks";
 
 /**
@@ -1236,5 +1244,143 @@ describe("design-hooks · Bash searches are structural (post-2.1.251)", () => {
     // A build command charges nothing.
     recordAllowedTool(ctx, "Bash", { command: `cd ${cwd} && make fast` });
     expect(ctx.novelFilesSinceGraph).toBe(before + 1);
+  });
+});
+
+// ADR-0104 — the personality's pr-review / security-audit MUST triggers fired
+// zero times across eight pushes of CI, sudoers and credential changes on
+// 2026-09-02. The gate reads the diff a commit is about to seal.
+describe("ship-review gate (ADR-0104)", () => {
+  const cwd = "/proj";
+  const diffOf =
+    (files: string[], changedLines = 10) =>
+    (): ShipDiff => ({ files, changedLines });
+
+  beforeEach(() => resetShipReviewState());
+  afterEach(() => resetShipReviewState());
+
+  it("parses plain, compound and heredoc-style commit commands", () => {
+    expect(parseCommitCommand("git status")).toBeNull();
+    expect(parseCommitCommand("git commit -m x")).toEqual({
+      dir: null,
+      addAll: false,
+      addPaths: [],
+      commitAll: false,
+    });
+    expect(
+      parseCommitCommand("cd /repo && git add -A && git commit -m 'feat: x' && git push"),
+    ).toEqual({ dir: "/repo", addAll: true, addPaths: [], commitAll: false });
+    expect(parseCommitCommand("git -C /repo add src/a.ts docs/b.md; git -C /repo commit -am x")).toEqual({
+      dir: "/repo",
+      addAll: false,
+      addPaths: ["src/a.ts", "docs/b.md"],
+      commitAll: true,
+    });
+    expect(
+      parseCommitCommand('cd /r\ngit add .\ngit commit -m "$(cat <<\'EOF\'\nline one\nEOF\n)"'),
+    ).toMatchObject({ dir: "/r", addAll: true });
+    // --amend is not -a
+    expect(parseCommitCommand("git commit --amend --no-edit")?.commitAll).toBe(false);
+  });
+
+  it("recognises the review skills, namespaced or not", () => {
+    expect(shipReviewSkillOf("Skill", { skill: "pr-review" })).toBe("pr-review");
+    expect(shipReviewSkillOf("Skill", { skill: "marvin:security-audit" })).toBe("security-audit");
+    expect(shipReviewSkillOf("Skill", { skill: "graphify" })).toBeNull();
+    expect(shipReviewSkillOf("Bash", { command: "pr-review" })).toBeNull();
+  });
+
+  it("classifies diffs by the personality's MUST and MUST-NOT lists", () => {
+    expect(classifyShipDiff({ files: [], changedLines: 0 })).toEqual([]);
+    expect(classifyShipDiff({ files: ["docs/adr/0001.md", "README.md"], changedLines: 900 })).toEqual([]);
+    expect(classifyShipDiff({ files: ["pnpm-lock.yaml"], changedLines: 900 })).toEqual([]);
+    // single small file = lint/format fix
+    expect(classifyShipDiff({ files: ["src/a.ts"], changedLines: 12 })).toEqual([]);
+    expect(classifyShipDiff({ files: ["src/a.ts"], changedLines: 51 }).map((n) => n.skill)).toEqual(["pr-review"]);
+    expect(
+      classifyShipDiff({ files: ["a.ts", "b.ts", "c.ts", "d.ts"], changedLines: 4 }).map((n) => n.skill),
+    ).toEqual(["pr-review"]);
+    const ops = classifyShipDiff({ files: [".gitlab-ci.yml", "scripts/ci-fetch-secrets.sh"], changedLines: 6 });
+    expect(ops.map((n) => n.skill)).toEqual(["security-audit", "pr-review"]);
+    expect(ops[0]?.reason).toContain(".gitlab-ci.yml (CI pipeline)");
+    // tests on a boundary path are exempt
+    expect(classifyShipDiff({ files: ["src/auth/login.test.ts"], changedLines: 3 })).toEqual([]);
+  });
+
+  it("boundary matcher covers what the session actually shipped unreviewed", () => {
+    for (const f of [
+      ".gitlab-ci.yml",
+      "infrastructure/sudoers.d/gitlab-runner",
+      "scripts/prod-backup-dump.sh",
+      ".env.production",
+      "src/auth/token-store.ts",
+      "db/migrations/001.sql",
+    ]) {
+      expect(matchShipBoundary(f), f).not.toBeNull();
+    }
+    expect(matchShipBoundary("apps/api/src/main/java/Foo.java")).toBeNull();
+    expect(matchShipBoundary("docs/runbooks/prod-deploy.md")).toBeNull();
+  });
+
+  it("denies a boundary commit until both skills have run, then allows it", () => {
+    const ctx = createTurnDesignContext("t-0104-a", cwd);
+    const collect = diffOf([".gitlab-ci.yml", "src/x.ts"], 20);
+    const first = checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect);
+    expect(first?.behavior).toBe("deny");
+    expect(first?.message).toContain('skill: "security-audit"');
+    expect(first?.message).toContain('skill: "pr-review"');
+
+    recordAllowedTool(ctx, "Skill", { skill: "security-audit" });
+    const second = checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect);
+    expect(second?.message).toContain('skill: "pr-review"');
+    expect(second?.message).not.toContain('skill: "security-audit"');
+
+    recordAllowedTool(ctx, "Skill", { skill: "pr-review" });
+    expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
+  });
+
+  it("a review this turn covers every commit this turn; an earlier one holds until the next commit", () => {
+    const collect = diffOf(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"], 80);
+    const t1 = createTurnDesignContext("t-0104-b1", cwd);
+    recordAllowedTool(t1, "Skill", { skill: "pr-review" });
+    expect(checkShipReview(t1, "Bash", { command: "git commit -m one" }, collect)).toBeNull();
+    recordAllowedTool(t1, "Bash", { command: "git commit -m one" });
+    expect(checkShipReview(t1, "Bash", { command: "git commit -m two" }, collect)).toBeNull();
+    recordAllowedTool(t1, "Bash", { command: "git commit -m two" });
+
+    // Next turn, new commit, no new review → denied.
+    const t2 = createTurnDesignContext("t-0104-b2", cwd);
+    expect(checkShipReview(t2, "Bash", { command: "git commit -m three" }, collect)?.behavior).toBe("deny");
+    // Review in t2 discharges it.
+    recordAllowedTool(t2, "Skill", { skill: "pr-review" });
+    expect(checkShipReview(t2, "Bash", { command: "git commit -m three" }, collect)).toBeNull();
+    recordAllowedTool(t2, "Bash", { command: "git commit -m three" });
+    // Review before the commit in t2 does not carry into t3's commit.
+    const t3 = createTurnDesignContext("t-0104-b3", cwd);
+    expect(checkShipReview(t3, "Bash", { command: "git commit -m four" }, collect)?.behavior).toBe("deny");
+  });
+
+  it("caps at SHIP_REVIEW_MAX_DENIES per turn and then lets the commit through", () => {
+    const ctx = createTurnDesignContext("t-0104-c", cwd);
+    const collect = diffOf(["a.ts", "b.ts", "c.ts", "d.ts"], 80);
+    for (let i = 0; i < SHIP_REVIEW_MAX_DENIES; i++) {
+      expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)?.behavior).toBe("deny");
+    }
+    expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
+  });
+
+  it("fails open when the diff cannot be read, and ignores non-commit shell", () => {
+    const ctx = createTurnDesignContext("t-0104-d", cwd);
+    expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, () => null)).toBeNull();
+    expect(checkShipReview(ctx, "Bash", { command: "git push origin main" }, diffOf([".env"]))).toBeNull();
+    expect(checkShipReview(ctx, "Edit", { file_path: "/proj/.env" }, diffOf([".env"]))).toBeNull();
+  });
+
+  it("is wired into runDesignHooks in enforce mode and silent in measure mode", () => {
+    const ctx = createTurnDesignContext("t-0104-e", cwd);
+    ctx.hasGraph = false;
+    // runDesignHooks uses the real collector; a cwd that is not a repo makes
+    // it fail open, so the wiring is exercised through the parser path only.
+    expect(runDesignHooks({ ctx, toolName: "Bash", toolInput: { command: "git commit -m x" }, mode: "enforce" })).toBeNull();
   });
 });

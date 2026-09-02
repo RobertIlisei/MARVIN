@@ -1291,9 +1291,33 @@ merges — nothing merges automatically, and the main tree is never touched.
    prompt MUST state the worktree path verbatim — that is what binds the
    gate. Give it the full brief: files, acceptance criteria, how to verify.
 3. It runs in the background. Keep working. Its report re-prompts you.
-4. On completion: \`worktree_list\`, then tell the user the branch and the
-   review command (\`git diff <base>...<branch>\`). The USER merges.
-5. After merge/reject: \`worktree_remove { slug }\`. The branch stays.
+4. On completion MARVIN raises the event itself — you do not have to
+   remember. Confirm with \`worktree_list\`, then tell the user the branch,
+   its commit/file counts, and the review command
+   (\`git diff <base>...<branch>\`). The USER decides.
+5. To integrate: \`worktree_merge { slug }\` — merges into the CURRENT branch,
+   locally. MUST NOT push an implementer branch or open a PR/MR for one: on a
+   pipeline-gated project every branch pushed as its own MR costs a full CI
+   run, while merging where the implementer was cut from costs nothing (the
+   commits ride along in the pipeline that branch already runs). Merge N
+   branches, then push once.
+6. \`worktree_remove\` drops a CHECKOUT and keeps the branch. It REFUSES a
+   \`running\` implementer; do not pass \`force\` unless the user asked for it
+   — that discards whatever the implementer had not committed.
+7. \`worktree_sweep\` reclaims what is spent — empty and already-merged
+   checkouts AND their branches. It never touches a \`ready\` branch, a
+   running implementer, or anything holding uncommitted work, so it is
+   always safe to run. Run it after merging, and whenever the user asks
+   about leftover worktrees or branches.
+
+**States \`worktree_list\` reports**, all derived from git on every call —
+a merge you did not perform (the user's terminal, another session) still
+shows up as \`merged\`:
+- \`running\` — its implementer has not reported yet. Leave it alone.
+- \`ready\` — committed, unmerged. THIS is the deliverable. Surface it.
+- \`merged\` — already in another branch. Reclaimable.
+- \`empty\` — zero commits. The implementer produced nothing; say so
+  plainly rather than reporting a branch that holds no work.
 
 ## Dynamic workflows — read-only fan-out only (ADR-0030)
 
@@ -1399,6 +1423,10 @@ mental model is a rule violation.
 
 ### Skill: \`pr-review\`
 
+**Enforced at the gate (ADR-0104):** a \`git commit\` whose diff meets the
+MUST list below is DENIED until this skill has run for the tree — the deny
+names the exact \`Skill\` call. Run it before the commit, not after the deny.
+
 **MUST invoke in Phase 8 (Ship) when:**
 1. The diff is >50 changed lines OR touches >3 files.
 2. The diff touches auth / credentials / tool-policy / sandbox /
@@ -1411,6 +1439,11 @@ mental model is a rule violation.
 - Lockfile-only PRs.
 
 ### Skill: \`security-audit\`
+
+**Enforced at the gate (ADR-0104):** a \`git commit\` touching a
+security-boundary path (auth / credentials / CI / sudoers / \`.env\` / shell
+scripts / migrations / policy) is DENIED until this skill AND \`pr-review\`
+have run for the tree.
 
 **MUST invoke when:**
 1. The diff touches auth flows / credential handling / tool-policy.

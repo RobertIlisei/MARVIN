@@ -17,6 +17,13 @@ export async function register(): Promise<void> {
   const { startScheduledTurn } = await import("@/lib/turn-orchestrator");
 
   setWakeupFireHandler(startScheduledTurn);
+
+  // ADR-0105 — the practice loop's nightly runner. A timer, not an agent:
+  // it reads transcripts, updates a ledger, and stops.
+  const { armPracticeSchedule } = await import("@marvin/runtime/practice");
+  const { listProjects } = await import("@marvin/runtime/projects");
+  armPracticeSchedule({ listProjectIds: () => listProjects().map((p) => p.id) });
+
   const stats = armAll();
   if (stats.armed || stats.firedImmediately || stats.dropped) {
     // eslint-disable-next-line no-console

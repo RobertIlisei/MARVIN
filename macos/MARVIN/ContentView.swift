@@ -48,6 +48,14 @@ struct ContentView: View {
     @State private var previewEverOpened = false
     @State private var shortcutsOpen = false
 
+    /// Height of the brain pane above the chat, in points.
+    ///
+    /// `@AppStorage` rather than `@State` because this split used to be a
+    /// `VSplitView` whose position `SplitViewAutosave` persisted across
+    /// launches; dropping the split view must not drop that. See
+    /// `brainDivider` for why the split view is gone.
+    @AppStorage("marvin.brainHeight") private var brainHeight: Double = 280
+
     var body: some View {
         // Phase 5f — outermost VStack so the global bottom status bar
         // (AppStatusBar) spans the full window width below every pane.
@@ -222,19 +230,16 @@ struct ContentView: View {
                     webIsland
                         .frame(minWidth: 320)
                     // Right pane mirrors the web `side` aside —
-                    // brain on top of chat. VSplitView lets the
-                    // user drag the brain/chat split anywhere
-                    // between the two children's minimums (no
-                    // maxHeight cap — the user might want all
-                    // brain or all chat).
-                    VSplitView {
+                    // brain on top of chat, split by a plain draggable
+                    // divider. NOT a `VSplitView`: see `brainDivider`.
+                    VStack(spacing: 0) {
                         if bridge.panes.brain {
                             BrainPaneView()
-                                .frame(minHeight: 120, idealHeight: 280)
-                                .background(SplitViewAutosave(name: "marvin.right"))
+                                .frame(height: brainHeight)
+                            brainDivider
                         }
                         ChatPreviewView()
-                            .frame(minHeight: 200)
+                            .frame(minHeight: 200, maxHeight: .infinity)
                     }
                     .frame(minWidth: 320, idealWidth: 480)
                 }
@@ -247,6 +252,56 @@ struct ContentView: View {
                 offlineView(reason: reason)
             }
         }
+    }
+
+    /// Draggable split between the brain pane and the chat.
+    ///
+    /// A plain divider with a drag gesture, NOT a `VSplitView` — the same move
+    /// `LeftPane.toolsDivider` made, for the same reason, one level up.
+    ///
+    /// This was a `VSplitView` nested inside the outer `HSplitView`, and each
+    /// bridges to its own `NSSplitView`. MARVIN died to AppKit's runaway-pass
+    /// breaker on 2026-09-01 (`MARVIN-2026-09-01-164458.ips`) with the storm
+    /// monitor's first capture that named our own structure rather than
+    /// "somewhere in SwiftUI". Five storms, one ring, split view inside split
+    /// view in the ancestry each time:
+    ///
+    ///     SystemSplitView.updateNSViewController
+    ///      → SplitViewCoordinator.formCurrentItems
+    ///       → SplitViewContentProvider.updateRootViewForItem
+    ///        → NSHostingView.setRootView          ← re-roots mid-pass
+    ///         → NSHostingView.setNeedsUpdate
+    ///          → NSView.setNeedsUpdateConstraints ← re-dirties the window
+    ///
+    /// The outer split's update pass re-roots the inner split's hosting view,
+    /// which marks the window as needing another Update Constraints pass. The
+    /// window held 78 views; AppKit raises once the passes outnumber them, and
+    /// `+[NSApplication _crashOnException:]` makes that fatal (ADR-0062). One
+    /// un-nested `HSplitView` cannot close that ring.
+    private var brainDivider: some View {
+        MarvinDivider()
+            // A 1px hairline is not a drag target. The padding widens the hit
+            // area without moving anything, which is what AppKit's own split
+            // dividers do.
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        // The brain is ABOVE the divider, so dragging DOWN
+                        // grows it — translation adds, the mirror image of
+                        // `LeftPane.toolsDivider`. Clamped to a band rather
+                        // than measured against the pane: measuring needs a
+                        // `GeometryReader`, and inserting views into this
+                        // hierarchy is what made the runaway-pass breaker
+                        // fatal in v0.1.93.
+                        let next = brainHeight + value.translation.height
+                        brainHeight = min(max(next, 120), 720)
+                    }
+            )
     }
 
     /// Native NSToolbar contents — extracted so the outer body can

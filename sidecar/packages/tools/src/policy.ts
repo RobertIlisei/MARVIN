@@ -413,8 +413,17 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
           "a real follow-up turn on exit. For a short command, run it foreground.",
       };
     }
-    if (BASH_HARD_DENY.some((r) => r.test(cmd))) {
-      return { class: "deny", reason: "Matches a hard-deny pattern (destructive)." };
+    const destructiveAt = BASH_HARD_DENY.map((r) => cmd.search(r)).find((i) => i >= 0);
+    const destructive =
+      destructiveAt !== undefined ? (cmd.slice(destructiveAt).split("\n")[0] ?? "").trim() : null;
+    if (destructive !== null) {
+      // Name the fragment. A compound command shows truncated in the chat
+      // row, so "docker ps -a … " was refused on 2026-09-03 with no visible
+      // reason — the `rm -rf /tmp/…` three lines down was the match.
+      return {
+        class: "deny",
+        reason: `Matches a hard-deny pattern (destructive): \`${destructive.trim().slice(0, 80)}\`.`,
+      };
     }
     // ADR-0077 — outward-facing publish is not recoverable, and `auto`
     // strategy bypasses `confirm`, so `confirm` is not a gate here.

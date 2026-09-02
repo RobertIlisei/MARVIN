@@ -425,6 +425,7 @@ struct FileViewerNSView: NSViewRepresentable {
         context.coordinator.lastWordWrap = wordWrap
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
+        Self.applyScrollerStyle(to: scroll, isDark: isDark)
 
         // Find-in-file (⌘F). STTextView owns an `NSTextFinder` and implements
         // `performTextFinderAction(_:)`; the find BAR needs a scroll view to
@@ -449,6 +450,21 @@ struct FileViewerNSView: NSViewRepresentable {
         gutterBar.autoresizingMask = [.minXMargin, .height]
         gutterBar.frame = NSRect(x: ruler.bounds.width - 3, y: 0, width: 3, height: ruler.bounds.height)
         context.coordinator.diffGutterBar = gutterBar
+
+        // Overview ruler — the change map on the scrollbar track. Placed
+        // below the scroller so the knob draws over the ticks.
+        let overview = DiffOverviewRuler(textView: textView)
+        overview.autoresizingMask = [.minXMargin, .height]
+        overview.frame = NSRect(
+            x: scroll.bounds.width - DiffOverviewRuler.width, y: 0,
+            width: DiffOverviewRuler.width, height: scroll.bounds.height
+        )
+        if let scroller = scroll.verticalScroller {
+            scroll.addSubview(overview, positioned: .below, relativeTo: scroller)
+        } else {
+            scroll.addSubview(overview)
+        }
+        context.coordinator.overviewRuler = overview
 
         // Hook STTextView's `didChangeTextIn` delegate so we can
         // mirror edits into the model on every keystroke / paste /
@@ -549,9 +565,27 @@ struct FileViewerNSView: NSViewRepresentable {
             DispatchQueue.main.async { done() }
         }
 
-        // M5: propagate diff markers to the gutter bar.
+        // M5: propagate diff markers to the gutter bar and the overview ruler.
         context.coordinator.diffGutterBar?.diffLines = diffLines
         context.coordinator.diffGutterBar?.needsDisplay = true
+        context.coordinator.overviewRuler?.diffLines = diffLines
+
+        // AppKit resets `scrollerStyle` to the system preference whenever
+        // that preference changes, so re-assert the overlay on each render.
+        Self.applyScrollerStyle(to: scroll, isDark: isDark)
+    }
+
+    /// Translucent overlay scrollers regardless of the "Show scroll bars"
+    /// system setting — a mouse user otherwise gets the opaque legacy track,
+    /// which is what an editor pane looks worst with. The knob style follows
+    /// the editor theme so the knob stays visible on a dark background.
+    static func applyScrollerStyle(to scroll: NSScrollView, isDark: Bool) {
+        if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+        let knob: NSScroller.KnobStyle = isDark ? .light : .dark
+        if scroll.verticalScroller?.knobStyle != knob {
+            scroll.verticalScroller?.knobStyle = knob
+            scroll.horizontalScroller?.knobStyle = knob
+        }
     }
 
     /// Character offset of the start of a 1-indexed line.
@@ -596,6 +630,7 @@ struct FileViewerNSView: NSViewRepresentable {
     final class Coordinator: NSObject, @preconcurrency STTextViewDelegate {
         weak var textView: STTextView?
         weak var diffGutterBar: DiffGutterBar?
+        weak var overviewRuler: DiffOverviewRuler?
         var path: String = ""
         var onContentChange: (String, String) -> Void = { _, _ in }
         var onSelectionChange: (Int, Int, Int) -> Void = { _, _, _ in }

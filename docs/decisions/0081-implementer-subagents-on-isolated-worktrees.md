@@ -123,3 +123,24 @@ swarm, no self-claiming task list, no model commanding a model.
 - [x] Pinned by tests, including real-git lifecycle
 - [x] Verified live through `runAgent` (streaming input): `greeting.js` written in the worktree only, `node` verified it, commit `afc7ee7` on `marvin/add-greeting-module`, main `HEAD` unchanged and status clean
 - [ ] Not in scope: auto-merge, read remapping, more than one implementer per worktree
+
+
+## Amendment — 2026-09-01: the branch got a lifecycle
+
+Decision 4 above — *"The deliverable is a branch. The user merges."* — was right
+and stayed unbuilt. `worktree_list` reported commits-ahead and nothing else; no
+event fired when an implementer finished; `worktree_remove` was gated on a
+merge MARVIN never learned about. On a real project that left five branches
+(three merged, two with zero commits), 3.1 GB and 159,358 files of checkouts,
+and two branches that had fallen out of the registry and become permanently
+invisible.
+
+[ADR-0103](./0103-implementer-branch-lifecycle.md) supplies the mechanism: state
+derived from git on every read (so a merge performed in a terminal or another
+session is seen), `task_notification` consumed for identity, automatic
+reclamation of `empty` and `merged` trees, and a local `worktree_merge` that
+never pushes.
+
+The policy in Decision 4 is unchanged. Nothing auto-merges; the user still
+decides. What changed is that MARVIN now tells them there is something to decide
+about, and clears up once they have.

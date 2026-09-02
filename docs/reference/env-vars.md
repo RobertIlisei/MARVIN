@@ -24,7 +24,7 @@ The Settings panel ("Authentication" section) writes a UI-managed override to `~
 | `MARVIN_CONFIRM_TIMEOUT_MS` | `300000` (5 min) | Auto-deny window for a pending confirm card. `0` / negative / NaN disables. |
 | `MARVIN_DESIGN_HOOKS` | `enforce` | Pre-tool design-rule enforcement level: `enforce` (deny on rule hit) / `measure` (log only) / `off`. |
 | `MARVIN_TREE_MAX_DEPTH` | `10` | File-tree walker depth ceiling. Raise for absurdly deep monorepos; a non-Infinity ceiling is also a backstop against a broken `.gitignore`. |
-| `MARVIN_TREE_MAX_ENTRIES` | `20000` | File-tree walker total-entry ceiling. |
+| `MARVIN_TREE_MAX_ENTRIES` | _unset — no limit_ | File-tree walker total-entry ceiling. **Opt-in since 2026-09-01**; the old `20000` default only ever fired on bulk MARVIN itself wrote into the project (graphify's cache, its Obsidian export, `.marvin/worktrees/`), truncating the user's real source instead of the bulk. Those are skipped at the walker now. Set this only if you want a ceiling. |
 | `SHELL` | user's login shell | Used by `/api/terminal/run` to spawn child processes (pipes + `&&` support). |
 | `PORT` | `3030` | Next.js dev/start port. The whole project assumes 3030; changing is untested. |
 

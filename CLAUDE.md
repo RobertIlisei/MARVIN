@@ -34,8 +34,19 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    swarm with no human between the agents. It is not "more than one session
    exists". A human running several MARVIN sessions in parallel, each on its
    own project or worktree and each steered by them, is N independent
-   single-assistant loops — this topology multiplied, not violated. The one
-   constraint is that two sessions must not point at the same working tree. Any new subagent type requires a new ADR; these carve-outs are
+   single-assistant loops — this topology multiplied, not violated.
+   **Two sessions MAY share one working tree
+   ([ADR-0102](./docs/decisions/0102-multiple-sessions-one-worktree.md),
+   2026-09-01)** — this line previously forbade it outright. A shared tree has
+   one HEAD, so a `git checkout` or `rebase` in one session rewrites every file
+   the other is working on; that happened, and the user read it as the two
+   sessions having merged. The remedy is not isolation (the user requires the
+   shared tree) but visibility: a HEAD-moving or history-rewriting git command
+   raises a confirm naming the other live session, in `auto` mode as well as
+   `gated`. Anthropic's own agent teams run several sessions in one directory
+   on the same basis — partitioned file ownership, not separate checkouts.
+   Two sessions must still never be *dispatched* by a model.
+   Any new subagent type requires a new ADR; these carve-outs are
    not a precedent for general multi-agent dispatch.
    **A standing supervisor agent was considered and rejected** (2026-07-24) —
    that's ADR-0001's camp 2, the shape this project was rebuilt to escape, and
@@ -130,6 +141,8 @@ reads at turn time.
 | **Negative claims** | `"I could not find it" is NOT "it does not exist"` section in `personality.ts`; [ADR-0068](./docs/decisions/0068-plan-dedupe-provenance-and-negative-claims.md) | What MARVIN must establish before saying something doesn't exist, was never done, or was fabricated. On 2026-08-17 it scanned 303 plan files, missed the active plan, and reported that genuine merged work was "fabricated" — the user was one step from discarding it. MUST resolve by identity (the active-plan block now names `id` + `source:` path), search ≥2 ways, and state where it looked; MUST-NOT call the user's project history fabricated without positively establishing the negative. |
 | **Scope-boundary gating** | Phase 7 "Gate on the SCOPE boundary, not the turn boundary" + the "would any answer change what I do next?" test in the question-asking rules; [ADR-0067](./docs/decisions/0067-gate-on-scope-not-turn-boundaries.md) | When to CONTINUE inside an approved plan vs STOP and hand off, and which questions are stalls rather than questions. The 2026-08-17 transcript analysis found 33.1 h of a 49 h session spent waiting on the user, ~90 % of it avoidable — 65 turns ended mid-plan with no question asked, 20 asked permission the plan had already granted, and the user typed a "resume the ACTIVE plan" macro 8× to restart a stalled system. Transport errors now auto-continue via the ADR-0031 wakeup rails instead of leaving the session dead (5.1 h across 4 incidents). |
 | **Skill triggers** | "Skill triggers — deterministic invocation" section | When to invoke `test-driven-development`, `systematic-debugging`, `pr-review`, `security-audit`, `frontend-design` via the `Skill` tool (per-skill MUST + MUST-NOT). The 2026-05-22 audit found 5 of 6 skills had soft-nudge language and fired ~0× across thousands of qualifying contexts; this section converts each to a deterministic trigger with NO bypass. |
+| **Practice rules** | `checkPracticeRules` in `design-hooks.ts` + `practicePromptBlock` in the prompt builder; `practice.ts` / `practice-extractors.ts`; [ADR-0105](./docs/decisions/0105-practice-loop.md) | Rules the user accepted from the **practice loop** — a nightly, read-only pass over a project's own transcripts that mines repeat failures (and the same acts done right) with deterministic extractors, scores them, and proposes a rule at three sessions. Accepted rules enforce at `prompt` / `nudge` / `deny` tier from a data table, with ADR-0104's brakes (a deny needs a discharge path, measure mode, two-per-turn cap, bypass logged), and are verified: a recurrence after acceptance is `regressed`, a quiet window is `confirmed`. Managed end to end from the Practice pane. Nothing is written without approval. |
+| **Ship-review gate** | `checkShipReview` in `design-hooks.ts`; [ADR-0104](./docs/decisions/0104-ship-review-gate.md) | `pr-review` / `security-audit` **enforced at `git commit`**. The 2026-09-02 audit of a real session found the MUST triggers above fired 0× across eight pushes of CI, sudoers and credential changes. The gate reads the diff the commit seals: a boundary path (auth / creds / CI / sudoers / `.env` / `*.sh` / migrations …) requires both skills, >3 files or >50 lines requires `pr-review`, docs-only and lockfile-only pass. A review this turn covers the turn; an earlier one holds until the next commit. Two denies per skill per turn, then allow + log. Fails open on git errors. |
 | **Project memory** | "Project memory — what goes in it" section in `personality.ts`; [ADR-0042](./docs/decisions/0042-memory-as-durable-facts.md) | What may be written to `.marvin/memory.md` and how. Durable facts only (invariants / gotchas / constraints / external facts), via the `remember` MCP tool — MUST-NOT Edit/Write memory.md directly or log activity/decisions/status. The 2026-06-14 audit found a project's memory.md at 419 KB / ~99 % redundant with ADRs/git/changelog; the tool enforces brevity + content-class at the write boundary where prose guidance failed. Since 2026-07-02 the gate also hard-denies direct model writes to `.marvin/memory.md` / `.marvin/memory/` (ADR-0042 enforcement addendum — same mechanism as the `.marvin/plans/` deny). |
 | **Project backlog** | "Project backlog — what goes in it" section in `personality.ts`; [ADR-0044](./docs/decisions/0044-project-backlog.md) | What may be parked to `.marvin/backlog/` and how. Actionable deferred work only ("noticed in flight, not in scope" follow-ups / out-of-scope improvements / blockers), via the `backlog_add` MCP tool — MUST-NOT park facts (→`remember`), status (→git), or decisions (→ADR). **Anti-Kanban (Golden Rule 1):** a parking lot read by MARVIN + the user — no subagent pull, never auto-executed, never overrides plan-first. Capture is un-gated at discovery (`provisional: true`, ADR-0047); consent moves to the keep/dismiss review at the scope-met handoff; open items surface in the next session's context. |
 
@@ -249,6 +262,14 @@ nowhere.
   `backlog_resolve` read and close; open items are re-injected by
   `buildProjectContext`. A **parking lot**, never a queue agents pull from
   (Golden Rule 1) — surfaced in the macOS backlog panel + a tray chip.
+
+- **Practice loop (ADR-0105)** is the *fourth* cross-session layer, for
+  **behaviour**: memory holds facts, the backlog holds work, ADRs hold
+  decisions, and `~/.marvin/practice/` holds what MARVIN keeps getting wrong
+  (and right) across a project's sessions, the rules the user accepted about
+  it, and whether they held. It lives under the data dir, not the project's
+  `.marvin/`, because it is about MARVIN. Read-only over transcripts, no
+  model in the loop, proposals only — the Practice pane is the write path.
 
 `.marvin/memory.md` + `.marvin/memory/` is the only sanctioned cross-session
 durable-facts persistence. Don't shadow it with a parallel sidecar cache, a
@@ -443,7 +464,7 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 7946 nodes · 15706 edges · 453 communities (2026-09-01
+  files. 8217 nodes · 16329 edges · 470 communities (2026-09-01
   rebuild on graphify 0.9.51; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
@@ -451,7 +472,7 @@ repo:
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1722 nodes · 2248 edges · 158 communities
+  `.marvin/memory.md`. 1742 nodes · 2283 edges · 160 communities
   (built 2026-09-01). **Community labels are stale** — both counts moved on
   this rebuild, so graphify has renamed every community after its hub node;
   re-run `graphify label . --backend=claude-cli` (an LLM pass) to restore

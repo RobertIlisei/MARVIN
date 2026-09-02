@@ -5,6 +5,7 @@ import {
   hasDenySegment,
   IGNORE_DIR_NAMES,
   isGraphifyCacheDir,
+  isMarvinScratchDir,
   isSecretFileName,
   SECRET_FILE_PATTERNS,
 } from "../src/fs-constants";
@@ -135,5 +136,31 @@ describe("graphify-out bulk output stays out of the tree", () => {
   it("only applies directly under graphify-out", () => {
     expect(isGraphifyCacheDir("src", "obsidian")).toBe(false);
     expect(isGraphifyCacheDir("docs", "cache")).toBe(false);
+  });
+});
+
+// 2026-09-01 — the third repeat of the same failure. `.marvin/worktrees/`
+// holds FULL CHECKOUTS of the repository, created inside the repository, so
+// the tree walked into copies of itself: 49,304 files against ~9,000 files of
+// real source on one project. The user saw "Tree truncated" and their own
+// `apps/` and `docs/` missing from the tree.
+describe(".marvin visibility", () => {
+  it("keeps .marvin browsable — plans / memory / backlog are documents", () => {
+    expect(IGNORE_DIR_NAMES.has(".marvin")).toBe(false);
+    expect(isMarvinScratchDir(".marvin", "plans")).toBe(false);
+    expect(isMarvinScratchDir(".marvin", "memory")).toBe(false);
+    expect(isMarvinScratchDir(".marvin", "backlog")).toBe(false);
+    expect(isMarvinScratchDir(".marvin", "skills")).toBe(false);
+  });
+
+  it("skips MARVIN's own generated bulk", () => {
+    expect(isMarvinScratchDir(".marvin", "worktrees")).toBe(true);
+    expect(isMarvinScratchDir(".marvin", "plugins-stage")).toBe(true);
+  });
+
+  it("only skips those names directly under .marvin", () => {
+    // A project's own `worktrees/` directory is the user's, and stays visible.
+    expect(isMarvinScratchDir("src", "worktrees")).toBe(false);
+    expect(isMarvinScratchDir("apps", "plugins-stage")).toBe(false);
   });
 });

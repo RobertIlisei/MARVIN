@@ -15,7 +15,9 @@ The measurement that produced ADR-0067, on a real 2-day session:
        5.1h (15.5%) n= 4  CRASH / no closing text
        3.4h (10.3%) n=13  waiting on background job (by design)
 
-Only the last row is legitimate. Re-run this after a long plan to check whether
+Only the last row is legitimate — plus, since 2026-09-02, "BLOCKED on a named
+human action", for a turn whose closing message names something only the user
+can do (push a tag, approve a prod step). Re-run this after a long plan to check whether
 the ADR-0067 gating change actually moved those numbers — the success signal is
 the first two rows shrinking, NOT the total span.
 
@@ -58,8 +60,21 @@ def classify(end_text: str) -> str:
     e = end_text.lower()
     if not end_text.strip() or "api error" in e or "stream idle timeout" in e:
         return "CRASH / no closing text"
-    if re.search(r"wakeup|background job|pick back up automatically", e):
+    if re.search(r"wakeup|background job|pick back up automatically|polling|watching (for|the|it)", e):
         return "waiting on background job (by design)"
+    # The last message names something only the user can do — push a tag,
+    # merge, approve a prod ceremony, review a design. Session 8927baf0
+    # (2026-09-02) had 20 "stopped with no question" waits and, read one by
+    # one, most were this. Counting them as stalls overstated ADR-0067's
+    # problem by ~3x on that session.
+    if re.search(
+        r"waiting on you|waiting for you|let me know when|once (that|it)'?s (pushed|merged|approved|done)"
+        r"|needs? your (go-ahead|review|approval|read|sign-off|audit)|your call"
+        r"|before i touch|i('| wi)ll wait for your|when you('|')?ve|after you (push|merge|approve|review)"
+        r"|blocked on you|i'll check with you before|wait for your go-ahead",
+        e,
+    ):
+        return "BLOCKED on a named human action (legitimate)"
     if end_text.rstrip().endswith("?") or re.search(
         r"want me to|approve to|should i |or handle a subset|shall i ", e
     ):

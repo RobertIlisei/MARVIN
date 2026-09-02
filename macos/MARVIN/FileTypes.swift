@@ -365,3 +365,64 @@ struct GitCommitMessageResponse: Codable, Equatable {
     let costUsd: Double?
     let error: String?
 }
+
+// MARK: - Implementer worktrees (ADR-0103)
+
+/// One implementer worktree, with its state derived from git server-side.
+///
+/// `state` is the field that matters: the previous surface keyed off a dirty
+/// count, so an implementer that had correctly COMMITTED its work rendered
+/// identically to one that produced nothing.
+struct WorktreeEntry: Codable, Equatable, Identifiable {
+    var id: String { slug }
+    let slug: String
+    let path: String
+    let branch: String
+    let base: String
+    let task: String
+    /// "running" | "empty" | "ready" | "merged"
+    let state: String
+    let commits: Int
+    let filesChanged: Int
+    let dirty: Bool
+    let checkoutPresent: Bool
+    let mergedInto: String?
+
+    /// The deliverable: committed, unmerged work waiting on the user.
+    var isReady: Bool { state == "ready" }
+    /// Spent — reclaimable with nothing to lose.
+    var isSpent: Bool { (state == "empty" || state == "merged") && !dirty }
+
+    var summary: String {
+        switch state {
+        case "running": return "building…"
+        case "empty": return dirty ? "no commits, uncommitted work" : "no commits"
+        case "merged": return "merged into \(mergedInto ?? "another branch")"
+        default: return "\(commits) commit\(commits == 1 ? "" : "s"), \(filesChanged) file\(filesChanged == 1 ? "" : "s")"
+        }
+    }
+}
+
+struct WorktreeListResponse: Codable, Equatable {
+    let worktrees: [WorktreeEntry]?
+    let error: String?
+}
+
+struct WorktreeMergeResponse: Codable, Equatable {
+    let ok: Bool?
+    let message: String?
+    let error: String?
+}
+
+struct WorktreeSweepEntry: Codable, Equatable {
+    let slug: String
+    let state: String
+    let removedCheckout: Bool
+    let deletedBranch: Bool
+    let reason: String
+}
+
+struct WorktreeSweepResponse: Codable, Equatable {
+    let swept: [WorktreeSweepEntry]?
+    let error: String?
+}

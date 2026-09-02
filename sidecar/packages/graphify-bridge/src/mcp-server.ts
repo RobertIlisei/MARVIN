@@ -96,6 +96,25 @@ function errorResult(message: string) {
   };
 }
 
+/**
+ * Format a rejected `pExecFile` for a tool result, keeping anything the CLI
+ * wrote to stdout.
+ *
+ * Node builds `err.message` from the command line plus **stderr** only, so a
+ * CLI that writes a real answer to stdout and still exits non-zero has that
+ * answer discarded. graphify does exactly this: an ambiguous node name prints
+ * the candidate ids and "retry with the full node id" on stdout, then exits 1.
+ * Before this, the caller saw only the exit status and whatever noise was on
+ * stderr. The call still reports `isError` — the exit code is not ours to
+ * reinterpret — but the guidance comes with it.
+ */
+function execFileErrorText(label: string, err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const stdout = (err as { stdout?: unknown } | null)?.stdout;
+  const said = typeof stdout === "string" ? stdout.trim() : "";
+  return said ? `${label} failed: ${message}\n\n${said}` : `${label} failed: ${message}`;
+}
+
 // ScopeSelection is what tools accept. "all" expands to ["code", "knowledge"].
 type ScopeSelection = GraphScope | "all";
 
@@ -946,10 +965,7 @@ export function createGraphMcpServer(workDir: string) {
         );
         return { content: [{ type: "text", text: stdout.trim() || `No node matching "${node}".` }] };
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `graph_explain failed: ${err instanceof Error ? err.message : String(err)}` }],
-          isError: true,
-        };
+        return errorResult(execFileErrorText("graph_explain", err));
       }
     },
   );

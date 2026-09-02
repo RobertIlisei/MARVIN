@@ -509,6 +509,16 @@ struct FileTreeView: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Only reachable when the user has SET `MARVIN_TREE_MAX_ENTRIES`.
+    ///
+    /// The walker had a 20,000 default until 2026-09-01, and every time it
+    /// fired the cause was machine-generated bulk MARVIN had written into the
+    /// project — graphify's cache, its Obsidian export, then `.marvin/worktrees/`
+    /// (full checkouts of the repo, inside the repo). The banner told the user
+    /// to raise a number when the truth was that their source tree was fine and
+    /// something else was eating the budget. The default is now unlimited, so
+    /// this only appears for a ceiling someone chose — hence the wording change:
+    /// it names the variable as THEIRS, not as a limit to discover.
     private func truncatedBanner(count: Int) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.circle.fill")
@@ -516,7 +526,7 @@ struct FileTreeView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Tree truncated")
                     .font(.caption.weight(.semibold))
-                Text("\(count) entries shown — increase MARVIN_TREE_MAX_ENTRIES on the sidecar to see more.")
+                Text("\(count) entries shown — your MARVIN_TREE_MAX_ENTRIES limit. Unset it for the full tree.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

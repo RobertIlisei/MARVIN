@@ -26,3 +26,9 @@ export {
   type ToolPolicyClass,
   toolPolicy,
 } from "./policy";
+export {
+  classifySharedTreeRisk,
+  describeSharedTreeRisk,
+  type SharedTreeRisk,
+  type SharedTreeVerdict,
+} from "./shared-tree";

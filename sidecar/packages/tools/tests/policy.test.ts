@@ -579,3 +579,20 @@ describe("advisor consults cannot be backgrounded (2026-08-31)", () => {
     ).toBe("deny");
   });
 });
+
+// 2026-09-03 — a compound command showed truncated in the chat row, so a
+// `docker ps -a …` was refused with no visible cause; the `rm -rf /tmp/…`
+// three lines down was the match. The reason now names the fragment.
+describe("toolPolicy — hard-deny reason names the matched fragment", () => {
+  it("quotes the destructive fragment of a compound command", () => {
+    const cmd = 'docker ps -a --filter "name=x" --format "{{.Names}}" 2>/dev/null\nrm -rf /tmp/openbao-rehearsal-combined\nmkdir -p /tmp/x';
+    const res = toolPolicy("Bash", { command: cmd });
+    expect(res.class).toBe("deny");
+    expect(res.reason).toContain("hard-deny");
+    expect(res.reason).toContain("rm -rf /tmp/openbao-rehearsal-combined");
+  });
+  it("a plain docker ps is not destructive", () => {
+    const res = toolPolicy("Bash", { command: 'docker ps -a --filter "name=x" --format "{{.Names}}" 2>/dev/null' });
+    expect(res.class).not.toBe("deny");
+  });
+});

@@ -490,6 +490,46 @@ final class ChatPreviewModel {
     /// shown; `historyTotalTurns` the total on disk; `historyTruncated` true
     /// while more remain to load.
     static let historyPage = 200
+
+    /// How many of the in-memory rows the list actually RENDERS.
+    ///
+    /// `historyPage` bounds what is fetched from disk. It never bounded what a
+    /// live turn appends, and a tool-heavy turn appends a row per event — 682
+    /// of them in the turn that wedged the app on 2026-09-02. The list is
+    /// bottom-anchored, so the ScrollView needs its total content size, which
+    /// makes `LazyVStack.measureEstimates` walk EVERY row on every append. The
+    /// laziness is real but the walk is O(all rows), so the cost of one
+    /// streamed event grows with the transcript until the main thread cannot
+    /// finish a layout pass at all: sampled at 100 % CPU, stack depth 550,
+    /// wedged inside `ScrollViewUtilities.sizeThatFits → measureEstimates →
+    /// ForEachList.applyNodes`.
+    ///
+    /// Rendering a bounded tail makes that walk O(window). Older rows are not
+    /// lost — they are behind the same ADR-0048 control that pages the log,
+    /// which now widens this window before it re-fetches from disk.
+    var renderWindow: Int = ChatPreviewModel.historyPage
+
+    /// True when in-memory rows are being held back by `renderWindow`.
+    var renderClipped: Bool { messages.count > renderWindow }
+
+    /// The rows the list renders — the most recent `renderWindow` of them.
+    /// A slice, so no copy: this is read on every layout pass.
+    var visibleMessages: ArraySlice<ChatMessage> {
+        renderClipped ? messages.suffix(renderWindow) : messages[...]
+    }
+
+    /// One "show earlier" step. Widens the render window first — the rows are
+    /// already in memory, so that costs no fetch — and only pages from disk
+    /// once everything in memory is on screen.
+    func showEarlierLines() {
+        if renderClipped {
+            renderWindow += Self.historyPage
+        } else {
+            renderWindow += Self.historyPage
+            loadNextHistoryPage()
+        }
+    }
+
     private(set) var isLoadingEarlierHistory: Bool = false
     private(set) var historyWindow: Int = 0
     private(set) var historyTotalTurns: Int? = nil
@@ -1008,10 +1048,17 @@ final class ChatPreviewModel {
         clearPlans()
         planAwaitingApproval = false
         agentChangedFiles = []
+        // The status bar's ctx / graph-reads / agents chips are the same
+        // content class and were missed here until 2026-09-01: they cleared
+        // only on a FRESH SDK session, so switching between two live sessions
+        // left the leaving session's numbers above the arriving session's
+        // transcript. See `MarvinBridge.resetSessionCounters`.
+        MarvinBridge.shared.resetSessionCounters()
         // ADR-0048 — reset the history paging window for the new session.
         historyWindow = 0
         historyTotalTurns = nil
         historyTruncated = false
+        renderWindow = Self.historyPage
     }
 
     /// Phase 2h — fetch the transcript for `(projectId, sessionId)`,
@@ -1149,8 +1196,13 @@ final class ChatPreviewModel {
 
     /// Load the next page of older lines (`HISTORY_PAGE` more).
     func loadNextHistoryPage() { loadMoreHistory(turns: historyWindow + Self.historyPage) }
-    /// Jump straight to the complete log.
-    func loadFullHistory() { loadMoreHistory(turns: nil) }
+    /// Jump straight to the complete log. Lifts the render window too —
+    /// fetching every line and then rendering 200 of them would read as the
+    /// button doing nothing.
+    func loadFullHistory() {
+        renderWindow = Int.max
+        loadMoreHistory(turns: nil)
+    }
 
     /// Replay a stored SessionRecord into the message list using
     /// the same reducer the live stream uses. Phase 2h.
@@ -1497,16 +1549,12 @@ final class ChatPreviewModel {
             // the old `ctx 147K` figure linger for the whole first
             // decision step, which makes the reset feel unconfirmed.
             if s.sdkSessionFresh == true {
-                b.residentContextTokens = nil
-                b.billableThisTurn = nil
                 // 2026-05-27 graphify-drift audit — the "graph N · reads M"
                 // chip is per SDK-session, same lifetime as the context
-                // counter. Zero it on session-fresh so the next turn
-                // starts from a clean slate the user can read.
-                b.sessionGraphCalls = 0
-                b.sessionFileReadCalls = 0
-                b.sessionGraphSummaryCalls = 0
-                b.subagents = SubagentLedger()
+                // counter, so they zero together. One call since 2026-09-01;
+                // the session-switch path needs the identical set and two
+                // hand-maintained lists had already drifted apart once.
+                b.resetSessionCounters()
                 // ADR-0036 — a fresh SDK session starts with no plan.
                 todos = []
                 clearPlans()
@@ -1543,9 +1591,9 @@ final class ChatPreviewModel {
             Task { @MainActor in
                 if let s = peek.state { b.setMarvinState(s, forSession: marvinSessionId) }
                 if let label = peek.activity { currentActivity = label }
-                ContextUsageReader.applyTo(bridge: b, cliEventData: data)
-                ToolUseCounter.applyTo(bridge: b, cliEventData: data)
-                SubagentLedger.applyTo(bridge: b, cliEventData: data)
+                ContextUsageReader.applyTo(bridge: b, cliEventData: data, forSession: marvinSessionId)
+                ToolUseCounter.applyTo(bridge: b, cliEventData: data, forSession: marvinSessionId)
+                SubagentLedger.applyTo(bridge: b, cliEventData: data, forSession: marvinSessionId)
                 // ADR-0034 — keep the "N files changed" strip live while
                 // the agent streams edits. Throttled inside (2 s), so
                 // calling per-event is cheap.
@@ -2859,7 +2907,7 @@ struct ChatPreviewView: View {
                     .foregroundStyle(.secondary)
             } else {
                 Button("Show \(ChatPreviewModel.historyPage) earlier lines") {
-                    model.loadNextHistoryPage()
+                    model.showEarlierLines()
                 }
                 .controlSize(.small)
                 Button("Show full log") { model.loadFullHistory() }
@@ -2887,11 +2935,16 @@ struct ChatPreviewView: View {
                     // remain, a top-of-list control loads the next page (or the
                     // full log). The list is bottom-anchored, so newly-loaded
                     // older lines appear above — scroll up to read them.
-                    if model.historyTruncated || model.isLoadingEarlierHistory {
+                    if model.historyTruncated || model.renderClipped || model.isLoadingEarlierHistory {
                         historyPagingRow
                     }
-                    ForEach(model.messages) { msg in
+                    ForEach(model.visibleMessages) { msg in
+                        // `.equatable()`: an unchanged message is an unchanged
+                        // row, and its cached layout survives the event. See
+                        // the note on `ChatMessageRow` — this is what makes a
+                        // streamed event cost one row instead of the window.
                         ChatMessageRow(message: msg)
+                            .equatable()
                             .padding(.horizontal, 12)
                             .id(msg.id)
                         MarvinDivider()

@@ -69,6 +69,44 @@ export function isGraphifyCacheDir(parentName: string, name: string): boolean {
 }
 
 /**
+ * Subdirectories of `.marvin/` the tree skips — MARVIN's own scratch space,
+ * not the user's project.
+ *
+ * `.marvin/` itself stays browsable, and deliberately so: `plans/`, `memory/`,
+ * `backlog/`, `skills/` and the loose markdown beside them are documents
+ * people open. What must stay out is the bulk MARVIN generates for its own
+ * use.
+ *
+ * `worktrees/` is the reason this exists. A MARVIN worktree is a FULL CHECKOUT
+ * of the repository, created inside the repository — so the tree walked into
+ * copies of itself. Measured on one real project (2026-09-01): five worktrees,
+ * **49,304 files**, against ~9,000 files of actual source. The tree truncated
+ * at 20,000 and the user's own `apps/` and `docs/` fell off the end.
+ *
+ * **This is the third time this exact bug has shipped.** `cache` was skipped
+ * on 2026-08-15 (12,195 files, 61 % of the budget); `obsidian` on 2026-08-30
+ * (34,463 files, "Tree truncated" — user); `worktrees` now. Every one was a
+ * directory of machine-generated bulk that did not exist when the previous fix
+ * was written, and every one presented as "my folders are missing". The entry
+ * cap no longer truncates by default (see the tree route), so a fourth such
+ * directory degrades a scroll bar rather than hiding the user's source — but
+ * it still belongs here, because walking a full second checkout is waste
+ * whether or not it fits.
+ */
+export const MARVIN_DIR = ".marvin";
+export const MARVIN_DIR_SKIP: ReadonlySet<string> = new Set([
+  // Full repository checkouts (ADR-0081 implementer worktrees).
+  "worktrees",
+  // Sanitised copies of every enabled plugin, re-staged per turn (ADR-0053).
+  "plugins-stage",
+]);
+
+/** True when `name` under `parentName` is MARVIN's own generated bulk. */
+export function isMarvinScratchDir(parentName: string, name: string): boolean {
+  return parentName === MARVIN_DIR && MARVIN_DIR_SKIP.has(name);
+}
+
+/**
  * Path segments that the user-initiated write policy HARD-denies — create,
  * rename-to, move-to, delete, or write-through all reject if any segment of
  * the target path matches.

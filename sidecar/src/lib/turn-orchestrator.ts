@@ -19,8 +19,10 @@ import { buildProjectContext } from "@marvin/project-context";
 import { recordTurnCost, pollOpenRouterBalance } from "@marvin/runtime/cost-tracker";
 import { readAuthConfig } from "@marvin/runtime/auth-config";
 import { calculateEstimatedCost } from "@marvin/runtime/models";
-import { buildSystemPrompt } from "@marvin/runtime/personality";
-import { touchProject } from "@marvin/runtime/projects";
+import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
+import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
+import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
+import { practicePromptBlock } from "@marvin/runtime/practice";
 import {
   type AgentMode,
   type PermissionStrategy,
@@ -58,6 +60,54 @@ import {
   setWakeupFireHandler,
   type WakeupRecord,
 } from "@marvin/runtime/wakeup-scheduler";
+
+/**
+ * The `append` half of the SDK system prompt, built the SAME way for every
+ * path that starts a turn — the chat route, a fired wakeup, a drained queue.
+ *
+ * One builder, because the prompt is the cache prefix. Measured on session
+ * 8927baf0 (2026-09-02, ~650–870K tokens of context): the wakeup path built
+ * personality + project context while the chat route built personality +
+ * project context + active-skills block, so every human↔wakeup transition
+ * re-created the whole cache — 7 of the 12 full re-creations that session,
+ * ~$2.50–3 each for turns that emitted a hundred output tokens. The
+ * remaining misses are the Claude Code preset's own per-process git-status
+ * snapshot, which MARVIN cannot pin from outside.
+ */
+export async function buildTurnSystemPrompt(args: {
+  cwd: string;
+  personality: PersonalityMode;
+  firstMessage: boolean;
+  skipProjectContext?: boolean | undefined;
+}): Promise<string> {
+  const systemPrompt = buildSystemPrompt(args.personality);
+  const projectContext = args.skipProjectContext
+    ? ""
+    : (
+        await buildProjectContext({ workDir: args.cwd, firstMessage: args.firstMessage }).catch(
+          () => ({ text: "", breakdown: [] }),
+        )
+      ).text;
+  // ADR-0037 — name the skills ACTIVE for this project so the model stops
+  // reaching for the (always-loaded) irrelevant ones. Best-effort; never
+  // block a turn on skill enablement.
+  let activeSkillsBlock = "";
+  try {
+    activeSkillsBlock = formatActiveSkillsBlock(args.cwd);
+  } catch {
+    /* best-effort */
+  }
+  // ADR-0105 — prompt-tier practice rules the user accepted for this project.
+  // Stable across turns (it only changes when a rule is edited), so it does
+  // not disturb the cache prefix the builder exists to protect.
+  let practiceBlock = "";
+  try {
+    practiceBlock = practicePromptBlock(slugifyWorkDir(args.cwd));
+  } catch {
+    /* best-effort */
+  }
+  return [systemPrompt, projectContext, activeSkillsBlock, practiceBlock].filter(Boolean).join("\n\n");
+}
 
 export interface DetachedTurnParams {
   liveTurn: LiveTurn;
@@ -233,6 +283,18 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
       });
       emitTurnEvent(liveTurn, "confirm.request", payload);
     },
+    // ADR-0103 — an implementer finished and its branch is now a
+    // deliverable. Persisted like any other turn event so the fact
+    // survives a reload: before this, whether the user ever heard about
+    // a finished branch depended on the model remembering to say so.
+    onWorktreeFinished: (payload) => {
+      appendSessionTurn(projectId, marvinSessionId, {
+        type: "worktree.finished",
+        at: new Date().toISOString(),
+        payload,
+      });
+      emitTurnEvent(liveTurn, "worktree.finished", payload);
+    },
     signal: liveTurn.abortController.signal,
   });
 
@@ -395,14 +457,42 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
     at: new Date().toISOString(),
     message,
   });
+  // Resume the SDK context the previous turn ended on, so the queued message
+  // continues the conversation instead of starting a cold one.
+  const sessionId = lastSdkSessionId(prev.projectId, prev.marvinSessionId) ?? prev.sessionId;
+  // A drained turn used to leave only a `turn.user` in the transcript — no
+  // `turn.started` — so every audit that groups events by turn attributed its
+  // whole run to the NEXT turn.user (session 8927baf0, 17:22: the queued
+  // "pipeline failed." appeared to vanish and its work to belong to a turn
+  // that started 300 ms later). Record it like the route and the wakeup do.
+  const turnStartedPayload = {
+    marvinSessionId: prev.marvinSessionId,
+    projectId: prev.projectId,
+    model: prev.model,
+    advisorModel: prev.advisorModel ?? null,
+    runtimeMode: (prev.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
+    personality: prev.personality,
+    permissionStrategy: prev.permissionStrategy,
+    playwrightEnabled: prev.playwrightEnabled ?? false,
+    mode: prev.mode ?? "agent",
+    thinkingMode: prev.thinkingMode,
+    advisorThinkingMode: prev.advisorThinkingMode ?? null,
+    sdkSessionFresh: !sessionId,
+    turnId,
+    queued: true,
+  };
+  emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
+  appendSessionTurn(prev.projectId, prev.marvinSessionId, {
+    type: "turn.started",
+    at: new Date().toISOString(),
+    ...turnStartedPayload,
+  });
   await runDetachedTurn({
     ...prev,
     liveTurn,
     turnId,
     message,
-    // Resume the SDK context the previous turn ended on, so the queued message
-    // continues the conversation instead of starting a cold one.
-    sessionId: lastSdkSessionId(prev.projectId, prev.marvinSessionId) ?? prev.sessionId,
+    sessionId,
     // A human message is never part of a wakeup chain.
     wakeupDepth: 0,
   });
@@ -422,16 +512,11 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
 
   const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
-  const systemPrompt = buildSystemPrompt(record.personality);
-  const projectContext = (
-    await buildProjectContext({
-      workDir: cwd,
-      firstMessage: false,
-    }).catch(() => ({ text: "", breakdown: [] }))
-  ).text;
-  const appendSystemPrompt = projectContext
-    ? `${systemPrompt}\n\n${projectContext}`
-    : systemPrompt;
+  const appendSystemPrompt = await buildTurnSystemPrompt({
+    cwd,
+    personality: record.personality,
+    firstMessage: false,
+  });
 
   const sdkResumeId = lastSdkSessionId(projectId, marvinSessionId) ?? undefined;
 

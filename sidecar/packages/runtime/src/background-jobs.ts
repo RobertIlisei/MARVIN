@@ -154,10 +154,10 @@ export function startBackgroundJob(input: {
   const appendOutput = (buf: Buffer) => {
     const chunk = buf.toString("utf-8");
     rec.bytesSeen += chunk.length;
-    if (rec.head.length < HEAD_BYTES) rec.head = (rec.head + chunk).slice(0, HEAD_BYTES);
+    if (rec.head.length < HEAD_BYTES) rec.head = surrogateSafeHead(rec.head + chunk, HEAD_BYTES);
     // The rolling window is head + tail wide so a job that fits inside it is
     // reported whole, with no stitching.
-    rec.tail = (rec.tail + chunk).slice(-(HEAD_BYTES + TAIL_BYTES));
+    rec.tail = surrogateSafeTail(rec.tail + chunk, HEAD_BYTES + TAIL_BYTES);
   };
   child.stdout?.on("data", appendOutput);
   child.stderr?.on("data", appendOutput);
@@ -170,10 +170,29 @@ export function startBackgroundJob(input: {
   return { ok: true, id: rec.id, pid: rec.pid };
 }
 
+/**
+ * `String.slice` counts UTF-16 units, so a cut can land between the two
+ * halves of an emoji and keep one. JavaScript tolerates the lone surrogate;
+ * Foundation's JSON decoder does not — on 2026-09-03 a job's excerpt carrying
+ * half of U+1FA4F went into the transcript as `\ude4f`, and the native app
+ * refused to hydrate the whole session ("Invalid unicode scalar value").
+ * These two cutters drop the orphaned half instead of keeping it.
+ */
+export function surrogateSafeHead(s: string, maxUnits: number): string {
+  const cut = s.slice(0, maxUnits);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+export function surrogateSafeTail(s: string, maxUnits: number): string {
+  const cut = s.slice(-maxUnits);
+  const first = cut.charCodeAt(0);
+  return first >= 0xdc00 && first <= 0xdfff ? cut.slice(1) : cut;
+}
+
 /** Whole output when it fit the window; otherwise head + elision + tail. */
 function outputExcerpt(rec: JobRecord): string {
   if (rec.bytesSeen <= HEAD_BYTES + TAIL_BYTES) return rec.tail;
-  const tail = rec.tail.slice(-TAIL_BYTES);
+  const tail = surrogateSafeTail(rec.tail, TAIL_BYTES);
   const elided = rec.bytesSeen - rec.head.length - tail.length;
   return `${rec.head}\n…[${elided} bytes elided]…\n${tail}`;
 }

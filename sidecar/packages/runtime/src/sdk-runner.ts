@@ -23,17 +23,20 @@
  */
 
 import { readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createGraphMcpServer } from "@marvin/graphify-bridge";
+import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
+import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
+import { makeTurnCloseStopHook } from "./turn-close-hook";
 import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
 import { buildSubprocessEnv } from "./auth";
 import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
 } from "./auto-audit";
-import { BackgroundTaskLedger, backgroundTasksPayload } from "./background-tasks";
+import { BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload } from "./background-tasks";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { recordPreImage } from "./change-checkpoints";
 import {
@@ -54,6 +57,7 @@ import {
   type DesignTurnContext,
   logDesignTurnSummary,
   makeDesignHooksPreToolUse,
+  recordAllowedTool,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -66,7 +70,7 @@ import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { TurnInputChannel } from "./turn-input";
-import { markTurnMutated } from "./turn-registry";
+import { listLiveTurns, markTurnMutated } from "./turn-registry";
 import { scheduleWakeup } from "./wakeup-scheduler";
 import { createWakeupMcpServer, type WakeupToolContext } from "./wakeup-tools";
 import {
@@ -78,7 +82,7 @@ import {
   scopeOfDoneEntirelyUnticked,
   type WorkflowGap,
 } from "./workflow-guard";
-import { implementerWorktreePolicy, listWorktrees } from "./worktrees";
+import { bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, sweepWorktrees, type WorktreeState } from "./worktrees";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -332,7 +336,26 @@ export interface RunAgentInput {
   wakeupDepth?: number;
   onEvent: (event: SDKMessage) => void;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
+  /**
+   * An implementer subagent finished and its branch is now a deliverable
+   * (ADR-0103). Fired from `task_notification`, so it is deterministic —
+   * before this, "tell the user the branch is ready" was a line of prompt
+   * text the model was free to forget, and did.
+   */
+  onWorktreeFinished?: (w: WorktreeFinished) => void;
   signal?: AbortSignal;
+}
+
+export interface WorktreeFinished {
+  slug: string;
+  branch: string;
+  state: WorktreeState;
+  commits: number;
+  filesChanged: number;
+  base: string;
+  task: string;
+  /** True when the branch was empty and has already been reclaimed. */
+  reclaimed: boolean;
 }
 
 export interface ConfirmRequestPayload {
@@ -644,8 +667,10 @@ export function buildImplementerAgent(): AgentDefinition {
       "   items go in your report, not in the diff.",
       "",
       "# Output shape",
-      "Return: what you built (files + commit hash), how you verified it",
-      "(tests run and their result), and anything the reviewer must know.",
+      "Return: the BRANCH you committed on, what you built (files + commit",
+      "hash), how you verified it (tests run and their result), and anything",
+      "the reviewer must know. If you committed nothing, say so in the first",
+      "line — an empty branch reported as work is worse than no branch.",
       "Concise prose; the parent integrates it.",
     ].join("\n"),
   };
@@ -1266,6 +1291,101 @@ function maybeAskUserQuestion(args: {
 }
 
 /**
+ * Shared-tree collision gate — two sessions, one checkout.
+ *
+ * MARVIN supports several sessions on one working tree; the user requires it.
+ * What a shared tree cannot give each session is its own HEAD, so a
+ * `git checkout` in one session silently rewrites every file the other is
+ * working on. That happened on 2026-09-01 and read to the user as the two
+ * sessions having become "interconnected".
+ *
+ * The precedent for the fix is Anthropic's own: agent teams run multiple
+ * sessions in one directory and are documented as NOT isolating them, relying
+ * instead on partitioned ownership plus a lock on the shared coordination
+ * state. So this neither isolates (that's a worktree, which the user does not
+ * want) nor refuses (a branch switch is often exactly the intent) — it
+ * surfaces the collision at the instant it would happen, naming the other
+ * session, and lets the human decide.
+ *
+ * ## Why this sits beside AskUserQuestion rather than in `toolPolicy`
+ *
+ * Two reasons, both structural:
+ *
+ *   1. `toolPolicy` is pure. Whether another session is live is runtime state,
+ *      and threading the turn registry into a pure classifier would make it
+ *      untestable for the sake of one caller.
+ *   2. The `confirm` class is bypassed wholesale in `auto` mode, which is
+ *      MARVIN's default. A conflict that only prompts in `gated` mode would
+ *      not have prevented the incident that motivated it. `maybePlanApproval`
+ *      and `maybeAskUserQuestion` established the shape for "reaches the user
+ *      in every mode"; this is the third member of that family.
+ *
+ * Returns null — the overwhelmingly common case — unless ALL of:
+ *   - the call is a Bash command that moves HEAD or rewrites the tree,
+ *   - another session in the same project has a turn running right now,
+ *   - a UI is wired to answer.
+ *
+ * With no UI (a headless wakeup, a background-job turn) the call is DENIED
+ * rather than allowed or hung: an unattended turn is the worst possible one to
+ * let move HEAD under a session the user is actively watching, and the message
+ * names the escape.
+ */
+function maybeSharedTreeConfirm(args: {
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  /** Absent for turns with no session identity (nothing to collide with). */
+  session?: { projectId: string; marvinSessionId: string };
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | null {
+  const { toolName, turnId, toolUseID, input, session, onConfirmRequest } = args;
+  if (toolName !== "Bash" || !session) return null;
+  const command = typeof input.command === "string" ? input.command : "";
+  if (!command) return null;
+  const verdict = classifySharedTreeRisk(command);
+  if (!verdict) return null;
+
+  const others = listLiveTurns(session.projectId).filter(
+    (t) => t.marvinSessionId !== session.marvinSessionId,
+  );
+  if (others.length === 0) return null;
+
+  const names = others.map((t) => t.marvinSessionId.slice(0, 8)).join(", ");
+  const plural = others.length === 1 ? "session" : "sessions";
+  const reason =
+    `\`${verdict.verb}\` ${describeSharedTreeRisk(verdict.risk)}. ` +
+    `${others.length} other ${plural} (${names}) ${others.length === 1 ? "is" : "are"} ` +
+    `running a turn in this same checkout right now. ` +
+    `Allow to proceed anyway, or deny and run it in a worktree instead.`;
+
+  if (!onConfirmRequest) {
+    return Promise.resolve({
+      behavior: "deny",
+      message:
+        `${reason} No interactive UI is attached to this turn, so it was denied ` +
+        `rather than run unattended. Wait for the other ${plural} to finish, or ` +
+        `create a worktree with \`git worktree add\` and work there.`,
+      interrupt: false,
+    } as PermissionResult);
+  }
+
+  return new Promise<PermissionResult>((resolve) => {
+    // No auto-deny timer, same reasoning as AskUserQuestion: this is a human
+    // decision about their own two sessions, and a silent timeout would turn
+    // into the mystery failure the confirm exists to replace.
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0);
+    onConfirmRequest({
+      turnId,
+      toolUseId: toolUseID,
+      toolName: "Bash",
+      input,
+      reason,
+    });
+  });
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -1295,6 +1415,16 @@ export function makeAutoModeLogger(args: {
     // AskUserQuestion always reaches the user, even in auto mode (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (ask) return ask;
+    // Two sessions, one checkout: a HEAD-moving command reaches the user in
+    // every mode. `checkpoint` is where this callback already carries the
+    // session's identity; the gate is a no-op without it, and without a second
+    // live session — which is every single-session turn.
+    const sharedTree = maybeSharedTreeConfirm({
+      toolName, turnId, toolUseID, input: safeInput,
+      ...(checkpoint ? { session: checkpoint } : {}),
+      onConfirmRequest,
+    });
+    if (sharedTree) return sharedTree;
     const binding = lookupSubagent(agentID);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
@@ -1364,6 +1494,15 @@ export function makeGatedCanUseTool(args: {
     // AskUserQuestion routes to the same confirm channel (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (ask) return ask;
+    // Two sessions, one checkout. Ahead of `classifyToolCall` because the
+    // conflict is about WHO ELSE is in the tree, not about the command's own
+    // risk class — several of these commands auto-allow on their own merits.
+    const sharedTree = maybeSharedTreeConfirm({
+      toolName, turnId, toolUseID, input: safeInput,
+      ...(checkpoint ? { session: checkpoint } : {}),
+      onConfirmRequest,
+    });
+    if (sharedTree) return sharedTree;
     const binding = lookupSubagent(agentID);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
@@ -1431,6 +1570,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     appendSystemPrompt,
     onEvent,
     onConfirmRequest,
+    onWorktreeFinished,
     signal,
   } = input;
   const permissionStrategy: PermissionStrategy = input.permissionStrategy ?? "auto";
@@ -1505,6 +1645,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     cwd,
     turnId,
     designCtx,
+  });
+  const turnCloseStopHook = makeTurnCloseStopHook({
+    turnId,
+    facts: () => ({
+      mutations: designCtx.mutationCount,
+      lastTodos: lastTodoPayload,
+      machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued)/.test(message),
+    }),
+    onFired: () => {
+      /* telemetry lives in the hook; nothing else to record per turn */
+    },
   });
   // Output governor (PostToolUse) — caps what a Bash result costs before the
   // model sees it; full output goes to disk with a pointer in the result.
@@ -1654,6 +1805,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
       PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook] }],
+      // Turn-close guard (2026-09-03): a real-work turn ending without its
+      // handoff, or a turn stopping with plan steps open and no question, is
+      // blocked ONCE with the reason and the model continues in-request.
+      Stop: [{ hooks: [turnCloseStopHook] }],
     },
     systemPrompt: {
       type: "preset",
@@ -1817,9 +1972,35 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // tail), so it never invalidates the cached system prefix even as step
     // statuses change; and it's only on the SDK prompt, not the persisted
     // `turn.user`, so reloads show the clean message.
-    const turnPrompt = input.planContext
-      ? `${message}\n\n<system-reminder>\n${input.planContext}\n</system-reminder>`
-      : message;
+    // Graph pre-orientation (2026-09-03): the runtime runs the turn's first
+    // graph call itself and rides the answer on the prompt. See
+    // `graph-orientation.ts` for the measurement that put the graphify-first
+    // deny at the top of the practice backtest. Same seam as the plan
+    // snapshot: the uncached tail, never the cached prefix.
+    let orientation: string | null = null;
+    if (designCtx.hasGraph) {
+      const query = buildOrientationQuery(message);
+      if (query) {
+        try {
+          const hits = searchGraph(join(cwd, "graphify-out", "graph.json"), query, 8);
+          orientation = formatOrientation(query, hits);
+          if (orientation) {
+            recordAllowedTool(designCtx, "mcp__marvin-graph__graph_search", { query });
+            console.info(
+              "[marvin.telemetry] " +
+                JSON.stringify({ kind: "graph.preorient", turnId, hits: hits.length, at: new Date().toISOString() }),
+            );
+          }
+        } catch {
+          orientation = null; // the graph is a convenience here, never a blocker
+        }
+      }
+    }
+    const reminders = [orientation, input.planContext].filter((x): x is string => Boolean(x));
+    const turnPrompt =
+      reminders.length > 0
+        ? `${message}\n\n${reminders.map((r) => `<system-reminder>\n${r}\n</system-reminder>`).join("\n\n")}`
+        : message;
     // Wall-clock when the model turn began — stamped onto the terminal
     // `result` event below so the chat footer can show "start → end"
     // (the SDK's duration_ms alone can't say *when* it ran). These ride
@@ -1873,6 +2054,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           ...(started.prompt ? { prompt: started.prompt } : {}),
           worktrees: known,
         });
+        // ADR-0103 — the in-memory binding dies with the turn
+        // (`clearSubagentsForTurn`), but the worktree outlives it by design.
+        // Writing the task id onto the record is what lets a completion that
+        // arrives later still be matched to the branch it produced.
+        if (binding.worktree) {
+          try {
+            bindWorktreeTask(cwd, binding.worktree, started.task_id);
+          } catch {
+            /* the dispatch matters more than the bookkeeping */
+          }
+        }
         // Observability: whether an implementer got bound is the single fact
         // that decides if its writes are allowed or collapsed. Log it.
         try {
@@ -1891,6 +2083,30 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           );
         } catch {
           /* never break on serialisation */
+        }
+      }
+      // ADR-0103 — an implementer finishing is the event this system was
+      // missing. Mark the record done, re-derive its state from git, and
+      // reclaim it immediately when there is provably nothing to lose.
+      const finished = taskNotificationPayload(ev);
+      if (finished) {
+        try {
+          const wt = markWorktreeFinished(cwd, finished.task_id);
+          if (wt) {
+            const cleaned = wt.state === "empty" && !wt.dirty ? sweepWorktrees(cwd) : [];
+            onWorktreeFinished?.({
+              slug: wt.slug,
+              branch: wt.branch,
+              state: wt.state,
+              commits: wt.commits,
+              filesChanged: wt.filesChanged,
+              base: wt.base,
+              task: wt.task,
+              reclaimed: cleaned.some((c) => c.slug === wt.slug && c.deletedBranch),
+            });
+          }
+        } catch {
+          /* a failed reconcile must never kill the turn */
         }
       }
       // Check-back guard bookkeeping (ADR-0055): capture the latest assistant

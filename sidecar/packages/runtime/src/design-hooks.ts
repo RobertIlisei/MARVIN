@@ -27,8 +27,9 @@
  * lifecycle.
  */
 
-import { existsSync } from "node:fs";
-import { extname, isAbsolute, join, relative, sep } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
 
 import type {
   HookCallback,
@@ -39,6 +40,8 @@ import type {
 import { isSubagentDispatch } from "@marvin/tools/policy";
 import type { AdvisorVerdict } from "./advisor-verdict";
 import { type AutoAuditEntryKind, appendAutoAuditEntry } from "./auto-audit";
+import { evaluatePracticeRules, notePracticeRuleFired, type RuleEvalResult } from "./practice";
+import { slugifyWorkDir } from "./projects";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -141,6 +144,21 @@ export interface DesignTurnContext {
   /** ADR-0084 — files this turn has already been nudged about. Editing a
    *  file twice is one decision, not two. */
   editedFilesThisTurn: Set<string>;
+  /** ADR-0104 — ship-review denies fired this turn, per skill. Capped at
+   *  `SHIP_REVIEW_MAX_DENIES`: two refusals carry the instruction; a third
+   *  would only stall a turn whose skill call is failing for some other
+   *  reason, so the commit is then allowed and the bypass logged. */
+  shipReviewDenies: Partial<Record<ShipReviewSkill, number>>;
+  /** ADR-0105 — practice-rule denies issued this turn, per rule id (capped). */
+  practiceDenies: Map<string, number>;
+  /** ADR-0105 — practice-rule nudges issued this turn (once per rule). */
+  practiceNudges: Set<string>;
+  /** ADR-0105 — a nudge produced by the rule table, to be emitted as
+   *  additionalContext by the hook after the deny checks passed. */
+  pendingPracticeNudge?: string;
+  /** Edit / Write / NotebookEdit calls allowed this turn (own, not subagent).
+   *  The turn-close hook's "did this turn do real work" fact. */
+  mutationCount: number;
 }
 
 /** ADR-0094 — the registered advisor agent's `subagent_type` (ADR-0033).
@@ -289,6 +307,10 @@ export function createTurnDesignContext(
     blastRadiusNudgeCount: 0,
     changeImpactCallCount: 0,
     shipImpactNudgeFired: false,
+    shipReviewDenies: {},
+    practiceDenies: new Map(),
+    practiceNudges: new Set(),
+    mutationCount: 0,
     saveResultCallCount: 0,
     saveResultNudgeFired: false,
     editedFilesThisTurn: new Set<string>(),
@@ -323,6 +345,21 @@ export function recordAllowedTool(
   toolName: string,
   toolInput: Record<string, unknown>,
 ): void {
+  // ADR-0104 — the two events the ship-review gate reasons about: a review
+  // skill ran, or a commit went through. Keyed on the working tree, not the
+  // turn, because "has this diff been reviewed" is a property of the tree.
+  const reviewSkill = shipReviewSkillOf(toolName, toolInput);
+  if (reviewSkill) {
+    shipReviewTreeState(ctx.cwd).reviews[reviewSkill] = { seq: nextShipSeq(), turnId: ctx.turnId };
+    return;
+  }
+  if (toolName === "Bash") {
+    const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+    if (parseCommitCommand(cmd)) {
+      shipReviewTreeState(ctx.cwd).lastCommit = { seq: nextShipSeq(), turnId: ctx.turnId };
+    }
+    // Fall through — a commit command is still a Bash call for the tallies below.
+  }
   if (toolName.startsWith("mcp__marvin-graph__")) {
     ctx.graphCallCount += 1;
     // ADR-0084 — track the two specific tools the measurement found unused.
@@ -358,6 +395,7 @@ export function recordAllowedTool(
   // which is the graph's job. This is why escalating to a mid-turn hard deny
   // would have been wrong: it would have blocked real implementation reads.
   if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit") {
+    ctx.mutationCount += 1;
     const target = pickPath(toolInput, ["file_path", "notebook_path", "path"]);
     if (target && ctx.chargedFiles.has(target)) {
       ctx.chargedFiles.delete(target);
@@ -849,6 +887,15 @@ export function makeDesignHooksPreToolUse(args: {
     // delays — never silences — a future hook firing.)
     recordAllowedTool(designCtx, evt.tool_name, safeInput);
 
+    // ADR-0105 — a practice-rule nudge produced during the deny pass above.
+    if (designCtx.pendingPracticeNudge) {
+      const advice = designCtx.pendingPracticeNudge;
+      designCtx.pendingPracticeNudge = undefined;
+      return {
+        hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: advice },
+      } as HookJSONOutput;
+    }
+
     for (const [advice, kind] of [
       [blast, "blast.radius.nudge"],
       [ship, "ship.impact.nudge"],
@@ -974,7 +1021,451 @@ export function runDesignHooks(args: {
     }
   }
 
+  // Hook 3 — ADR-0104: ship-review gate. `pr-review` / `security-audit` were
+  // MUST triggers in the personality and fired ZERO times across eight pushes
+  // of CI, sudoers and credential changes on 2026-09-02. The gate reads the
+  // diff a `git commit` is about to seal and refuses it until the skill the
+  // prompt already demands has actually run.
+  const shipDeny = checkShipReview(ctx, toolName, toolInput);
+  if (shipDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "ship.review.deny.measured", turnId: ctx.turnId, tool: toolName });
+    } else {
+      return shipDeny;
+    }
+  }
+
+  // Hook 4 — ADR-0105: rules the user accepted from the practice loop. Data,
+  // not code: a rule is a trigger + tier + message in `practice/rules.json`.
+  // Runs AFTER the hand-written hooks so a rule that duplicates one of them
+  // never double-fires. A deny needs a discharge path (`effectiveTier`),
+  // honours measure mode, and is capped per turn like ADR-0104.
+  const practice = checkPracticeRules(ctx, toolName, toolInput, mode === "measure");
+  if (practice.deny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "practice.rule.deny.measured", turnId: ctx.turnId, tool: toolName, ruleId: practice.deny.ruleId });
+    } else {
+      return {
+        behavior: "deny",
+        message: `${practice.deny.message}\n\n(practice rule ${practice.deny.ruleId}, ADR-0105 — accepted by the user from this project's own sessions. MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${PRACTICE_DENY_CAP_NOTE} refusals in one turn the call is allowed and the bypass logged.)`,
+        interrupt: false,
+      };
+    }
+  }
+
   return null;
+}
+
+const PRACTICE_DENY_CAP_NOTE = 2;
+
+/** Evaluate the rule table for this call. Side effects: per-turn caps on
+ *  `ctx`, fire/bypass metrics on the rules file, and a pending nudge the
+ *  PreToolUse wrapper emits as additionalContext. Exported for tests. */
+export function checkPracticeRules(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  measure: boolean,
+): RuleEvalResult {
+  let result: RuleEvalResult;
+  try {
+    result = evaluatePracticeRules({
+      projectId: slugifyWorkDir(ctx.cwd),
+      toolName,
+      input: toolInput,
+      counters: {
+        sourceFilesRead: ctx.sourceFilesRead,
+        graphCallCount: ctx.graphCallCount,
+        novelFilesSinceGraph: ctx.novelFilesSinceGraph,
+        editedFiles: ctx.editedFilesThisTurn.size,
+      },
+      hasSkillRun: (skill) => {
+        const st = shipReviewByTree.get(ctx.cwd);
+        const mark = st?.reviews[skill as ShipReviewSkill];
+        if (!mark) return false;
+        return mark.turnId === ctx.turnId || !st?.lastCommit || mark.seq > st.lastCommit.seq;
+      },
+      boundaryHit: () => {
+        const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+        const parsed = parseCommitCommand(cmd);
+        if (!parsed) return false;
+        const diff = collectCommitDiff(ctx.cwd, parsed);
+        if (!diff) return false;
+        return classifyShipDiff(diff).some((n) => n.skill === "security-audit");
+      },
+      deniesThisTurn: ctx.practiceDenies,
+      nudgesThisTurn: ctx.practiceNudges,
+      measure,
+    });
+  } catch {
+    return { deny: null, nudges: [], bypassed: [] }; // the rule table must never break a turn
+  }
+  for (const id of result.bypassed) {
+    notePracticeRuleFired(id, "bypass");
+    logDesignHookEvent({ kind: "practice.rule.bypass", turnId: ctx.turnId, tool: toolName, ruleId: id });
+  }
+  if (result.deny) {
+    notePracticeRuleFired(result.deny.ruleId, "fired");
+    logDesignHookEvent({ kind: "practice.rule.deny", turnId: ctx.turnId, tool: toolName, ruleId: result.deny.ruleId });
+  }
+  if (result.nudges.length > 0) {
+    for (const n of result.nudges) {
+      notePracticeRuleFired(n.ruleId, "fired");
+      logDesignHookEvent({ kind: "practice.rule.nudge", turnId: ctx.turnId, tool: toolName, ruleId: n.ruleId });
+    }
+    ctx.pendingPracticeNudge = result.nudges
+      .map((n) => `[practice rule ${n.ruleId} — advisory] ${n.message}`)
+      .join("\n\n");
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0104 — ship-review gate
+// ---------------------------------------------------------------------------
+
+export type ShipReviewSkill = "pr-review" | "security-audit";
+
+/** Denies per skill per turn before the commit is let through anyway. */
+export const SHIP_REVIEW_MAX_DENIES = 2;
+/** Personality §Skill triggers: pr-review MUST run above either threshold. */
+export const SHIP_REVIEW_PR_LINES = 50;
+export const SHIP_REVIEW_PR_FILES = 3;
+
+interface ShipReviewMark {
+  /** Monotonic, process-local — ordering is all that matters, so a clock
+   *  with millisecond ties would be the wrong tool. */
+  seq: number;
+  turnId: string;
+}
+
+interface ShipReviewTreeState {
+  reviews: Partial<Record<ShipReviewSkill, ShipReviewMark>>;
+  lastCommit?: ShipReviewMark;
+}
+
+/** Keyed by working tree (ADR-0102: two sessions may share one, and a review
+ *  of the tree's diff is a review whichever session ran it). */
+const shipReviewByTree = new Map<string, ShipReviewTreeState>();
+let shipSeq = 0;
+function nextShipSeq(): number {
+  shipSeq += 1;
+  return shipSeq;
+}
+function shipReviewTreeState(cwd: string): ShipReviewTreeState {
+  let st = shipReviewByTree.get(cwd);
+  if (!st) {
+    st = { reviews: {} };
+    shipReviewByTree.set(cwd, st);
+  }
+  return st;
+}
+/** Test isolation. */
+export function resetShipReviewState(): void {
+  shipReviewByTree.clear();
+  shipSeq = 0;
+}
+
+/** The `Skill` tool call that discharges a ship-review requirement. Accepts
+ *  a namespaced name (`marvin:pr-review`) — the last segment is the skill. */
+export function shipReviewSkillOf(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): ShipReviewSkill | null {
+  if (toolName !== "Skill") return null;
+  const raw = typeof toolInput.skill === "string" ? toolInput.skill.trim() : "";
+  const base = raw.split(":").pop() ?? raw;
+  return base === "pr-review" || base === "security-audit" ? base : null;
+}
+
+export interface CommitCommand {
+  /** Directory the git command runs in (`cd X`, `git -C X`), or null = cwd. */
+  dir: string | null;
+  /** `git add -A` / `.` / `-u` earlier in the same command. */
+  addAll: boolean;
+  /** Explicit `git add <paths>` earlier in the same command. */
+  addPaths: string[];
+  /** `git commit -a` — stage every tracked change. */
+  commitAll: boolean;
+}
+
+function stripQuotes(s: string): string {
+  return s.replace(/^(["'])(.*)\1$/, "$2");
+}
+
+function shellTokens(s: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  return out;
+}
+
+/**
+ * Recognise a `git commit` inside a (possibly compound) Bash command and pull
+ * out what decides which files it seals. Returns null when the command does
+ * not commit. Pure; exported for tests.
+ */
+export function parseCommitCommand(command: string): CommitCommand | null {
+  const segments = command
+    .split(/&&|\|\||;|\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  let dir: string | null = null;
+  let addAll = false;
+  const addPaths: string[] = [];
+  let commitArgs: string | null = null;
+  for (const seg of segments) {
+    const cd = /^cd\s+("[^"]+"|'[^']+'|\S+)\s*$/.exec(seg);
+    if (cd) {
+      dir = stripQuotes(cd[1] ?? "");
+      continue;
+    }
+    const git = /^(?:sudo\s+)?git\s+(?:-C\s+("[^"]+"|'[^']+'|\S+)\s+)?(?:-c\s+\S+\s+)*([a-z-]+)(.*)$/s.exec(seg);
+    if (!git) continue;
+    if (git[1]) dir = stripQuotes(git[1]);
+    const sub = git[2];
+    const rest = git[3] ?? "";
+    if (sub === "add") {
+      for (const t of shellTokens(rest)) {
+        if (t === "-A" || t === "--all" || t === "." || t === "-u" || t === "--update" || t === ":/") {
+          addAll = true;
+        } else if (!t.startsWith("-")) {
+          addPaths.push(t);
+        }
+      }
+    } else if (sub === "commit") {
+      commitArgs = rest;
+    }
+  }
+  if (commitArgs === null) return null;
+  const commitAll = shellTokens(commitArgs).some(
+    (t) => t === "-a" || t === "--all" || (/^-[a-zA-Z]+$/.test(t) && t.includes("a")),
+  );
+  return { dir, addAll, addPaths, commitAll };
+}
+
+export interface ShipDiff {
+  /** Paths relative to the repo root, forward slashes. */
+  files: string[];
+  /** Added + deleted lines across `files`, against HEAD. */
+  changedLines: number;
+}
+
+/**
+ * What the commit is about to seal: the index, plus whatever the same command
+ * stages first (`git add …`, `commit -a`). Shells out to git with a short
+ * timeout and returns null on any failure — the gate fails OPEN, because a
+ * hook that could block every commit on a git hiccup would be worse than the
+ * prompt-only rule it replaces.
+ */
+export function collectCommitDiff(cwd: string, parsed: CommitCommand): ShipDiff | null {
+  const dir = parsed.dir ? (isAbsolute(parsed.dir) ? parsed.dir : join(cwd, parsed.dir)) : cwd;
+  const git = (args: string[]): string =>
+    execFileSync("git", ["-C", dir, ...args], {
+      encoding: "utf8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  const lines = (s: string): string[] => s.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+  try {
+    const files = new Set<string>(lines(git(["diff", "--cached", "--name-only"])).map((l) => l.trim()));
+    const untracked = new Set<string>();
+    if (parsed.addAll || parsed.commitAll || parsed.addPaths.length > 0) {
+      const entries = lines(git(["status", "--porcelain", "--untracked-files=all"])).map((l) => {
+        const xy = l.slice(0, 2);
+        let path = l.slice(3);
+        if (path.includes(" -> ")) path = path.split(" -> ").pop() ?? path;
+        return { xy, path: stripQuotes(path) };
+      });
+      const take = (e: { xy: string; path: string }): void => {
+        files.add(e.path);
+        if (e.xy.startsWith("??")) untracked.add(e.path);
+      };
+      if (parsed.addAll) {
+        for (const e of entries) take(e);
+      } else if (parsed.commitAll) {
+        for (const e of entries) if (!e.xy.startsWith("??")) files.add(e.path);
+      }
+      for (const p of parsed.addPaths) {
+        const norm = p.replace(/^\.\//, "").replace(/\/$/, "");
+        for (const e of entries) {
+          if (e.path === norm || e.path.startsWith(`${norm}/`)) take(e);
+        }
+      }
+    }
+    const list = [...files];
+    if (list.length === 0) return { files: [], changedLines: 0 };
+    let changed = 0;
+    const tracked = list.filter((f) => !untracked.has(f));
+    if (tracked.length > 0) {
+      for (const l of lines(git(["diff", "HEAD", "--numstat", "--", ...tracked]))) {
+        const [a, d] = l.split("\t");
+        changed += (Number.parseInt(a ?? "", 10) || 0) + (Number.parseInt(d ?? "", 10) || 0);
+      }
+    }
+    for (const f of untracked) {
+      try {
+        changed += readFileSync(join(dir, f), "utf8").split("\n").length;
+      } catch {
+        /* unreadable — counts as zero lines */
+      }
+    }
+    return { files: list, changedLines: changed };
+  } catch {
+    return null;
+  }
+}
+
+const DOC_ONLY_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
+const LOCKFILE =
+  /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|Package\.resolved|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/;
+
+/** Personality §Skill triggers ▸ security-audit, as paths: auth / credential
+ *  handling, tool policy, shell-execution paths, sandbox. The ADR-trigger
+ *  list already covers auth, credentials, migrations, CI workflows, policy;
+ *  this adds what a *commit* of ops work touches that an *edit* rule never
+ *  named — CI pipelines outside GitHub, sudo grants, env files, shell scripts. */
+const SHIP_BOUNDARY_PATTERNS: ReadonlyArray<{ regex: RegExp; label: string }> = [
+  { regex: /(^|\/)\.gitlab-ci\.ya?ml$/, label: "CI pipeline" },
+  { regex: /(^|\/)\.gitlab\//, label: "CI pipeline" },
+  {
+    regex: /(^|\/)(Jenkinsfile|\.circleci\/|\.buildkite\/|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml)/,
+    label: "CI pipeline",
+  },
+  { regex: /(^|\/)sudoers/, label: "sudo grant" },
+  { regex: /(^|\/)\.env(\.|$)/, label: "environment secrets" },
+  { regex: /(^|\/)secrets?(\/|\.)/, label: "secrets" },
+  { regex: /\.(sh|bash|zsh)$/i, label: "shell-execution path" },
+  { regex: /(token|password|passwd|keychain|sandbox|tool-policy)/i, label: "credential / sandbox surface" },
+  { regex: /(^|\/)compose(\.[a-z0-9.-]+)?\.ya?ml$/i, label: "container orchestration" },
+];
+
+/** Security-boundary match for a repo-relative path, or null. Tests and spec
+ *  files are exempt on the same reasoning as the ADR-trigger rule. */
+export function matchShipBoundary(rel: string): string | null {
+  if (isExemptFromAdrTriggers(rel)) return null;
+  for (const { regex, label } of ADR_TRIGGER_PATTERNS) {
+    if (regex.test(rel)) return label;
+  }
+  for (const { regex, label } of SHIP_BOUNDARY_PATTERNS) {
+    if (regex.test(rel)) return label;
+  }
+  return null;
+}
+
+export interface ShipReviewNeed {
+  skill: ShipReviewSkill;
+  reason: string;
+}
+
+/**
+ * Which review skills a diff requires — the personality's MUST lists, made
+ * mechanical. Docs-only and lockfile-only commits need nothing (its MUST-NOT
+ * list); a single small file is the "lint / format fix" it also exempts.
+ */
+export function classifyShipDiff(diff: ShipDiff): ShipReviewNeed[] {
+  const { files } = diff;
+  if (files.length === 0) return [];
+  if (files.every((f) => DOC_ONLY_FILE.test(f))) return [];
+  if (files.every((f) => LOCKFILE.test(f))) return [];
+  const boundary = files
+    .map((f) => ({ file: f, label: matchShipBoundary(f) }))
+    .filter((x): x is { file: string; label: string } => x.label !== null);
+  if (boundary.length > 0) {
+    const named = boundary
+      .slice(0, 4)
+      .map((b) => `${b.file} (${b.label})`)
+      .join(", ");
+    const more = boundary.length > 4 ? ` and ${boundary.length - 4} more` : "";
+    const reason = `touches ${named}${more}`;
+    return [
+      { skill: "security-audit", reason },
+      { skill: "pr-review", reason },
+    ];
+  }
+  if (files.length > SHIP_REVIEW_PR_FILES || diff.changedLines > SHIP_REVIEW_PR_LINES) {
+    return [
+      {
+        skill: "pr-review",
+        reason:
+          `${files.length} file${files.length === 1 ? "" : "s"}, ${diff.changedLines} changed ` +
+          `line${diff.changedLines === 1 ? "" : "s"} (threshold: >${SHIP_REVIEW_PR_FILES} files or ` +
+          `>${SHIP_REVIEW_PR_LINES} lines)`,
+      },
+    ];
+  }
+  return [];
+}
+
+/** A review discharges the requirement when it ran in THIS turn (it covers
+ *  every commit the turn makes) or, from an earlier turn, when no commit has
+ *  sealed the tree since. */
+function shipReviewSatisfied(st: ShipReviewTreeState, skill: ShipReviewSkill, turnId: string): boolean {
+  const r = st.reviews[skill];
+  if (!r) return false;
+  if (r.turnId === turnId) return true;
+  return !st.lastCommit || r.seq > st.lastCommit.seq;
+}
+
+/**
+ * ADR-0104 — refuse a `git commit` whose diff the personality says MUST be
+ * reviewed first, until the review skill has run. Exported for tests; the
+ * `collect` parameter lets them feed a diff without a repository.
+ */
+export function checkShipReview(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  collect: (cwd: string, parsed: CommitCommand) => ShipDiff | null = collectCommitDiff,
+): DesignHookDeny | null {
+  if (toolName !== "Bash") return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  const parsed = parseCommitCommand(cmd);
+  if (!parsed) return null;
+  const diff = collect(ctx.cwd, parsed);
+  if (!diff) return null;
+  const needs = classifyShipDiff(diff);
+  if (needs.length === 0) return null;
+  const st = shipReviewTreeState(ctx.cwd);
+  const unmet = needs.filter((n) => !shipReviewSatisfied(st, n.skill, ctx.turnId));
+  if (unmet.length === 0) return null;
+
+  const stillDeniable = unmet.filter((n) => (ctx.shipReviewDenies[n.skill] ?? 0) < SHIP_REVIEW_MAX_DENIES);
+  if (stillDeniable.length === 0) {
+    logDesignHookEvent({
+      kind: "ship.review.bypass",
+      turnId: ctx.turnId,
+      tool: toolName,
+      skills: unmet.map((n) => n.skill).join(","),
+      files: diff.files.length,
+      changedLines: diff.changedLines,
+    });
+    return null;
+  }
+  for (const n of stillDeniable) {
+    ctx.shipReviewDenies[n.skill] = (ctx.shipReviewDenies[n.skill] ?? 0) + 1;
+  }
+
+  const calls = stillDeniable
+    .map((n) => `    tool_use Skill:\n      skill: "${n.skill}"\n    — because the diff ${n.reason}`)
+    .join("\n\n");
+  const names = stillDeniable.map((n) => `\`${n.skill}\``).join(" and ");
+  return {
+    behavior: "deny",
+    message:
+      `ship-review gate (ADR-0104): this commit seals ${diff.files.length} file` +
+      `${diff.files.length === 1 ? "" : "s"} / ${diff.changedLines} changed lines, and ${names} ` +
+      "has not run for this tree since the last commit. Personality §Skill triggers makes " +
+      "that a MUST, not a suggestion. Run it now:\n\n" +
+      `${calls}\n\n` +
+      "then act on its findings and re-run the commit. A review this turn covers every " +
+      "commit this turn; one from an earlier turn holds until the next commit. Docs-only " +
+      "and lockfile-only commits are exempt. (MARVIN_DESIGN_HOOKS=measure logs instead of " +
+      `denying; after ${SHIP_REVIEW_MAX_DENIES} refusals in one turn the commit is allowed and ` +
+      "the bypass is logged.)",
+    interrupt: false,
+  };
 }
 
 /** Returns the deny PermissionResult when the graphify-first rule should
@@ -1037,7 +1528,9 @@ function checkGraphifyFirst(
       "would be the first structural search of this turn, and the graph " +
       "hasn't been queried yet. Call " +
       "`mcp__marvin-graph__graph_search` (or `graph_summary` to orient) " +
-      "FIRST, then come back with the file the graph points at. The " +
+      "FIRST — it is already loaded, call it directly, do NOT ToolSearch for it " +
+      `(try \`graph_search({ query: "${truncate(basename(triggered.target).replace(/\.[^.]+$/, ""), 40)}" })\`) — ` +
+      "then come back with the file the graph points at. The " +
       "personality's Graphify protocol is non-negotiable for any " +
       "structural exploration: graph before Read / Grep / Glob. " +
       "If the graph genuinely doesn't cover what you need, run " +

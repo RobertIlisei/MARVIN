@@ -81,6 +81,7 @@ The cwd anchor is the **one shared primitive** — [`checkFsPath`](../../package
 - Hunk-level staging (patch editor — own feature).
 - Stash (own surface, own failure modes).
 - Rebase / merge / cherry-pick / conflict-resolution UI (chat handles this; panel flags state only).
+  *(Narrowed 2026-09-01 by [ADR-0103](./0103-implementer-branch-lifecycle.md): one bounded merge — a MARVIN-created implementer branch into the current branch, local, never pushed — is now a panel action. Rebase, cherry-pick and conflict-resolution UI remain off this list.)*
 - Blame gutter, history / graph view.
 
 ## Consequences
@@ -239,3 +240,30 @@ in the user's working tree. Prompts do not constrain tools.
 - [`packages/git/src/argv-guards.ts`](../../packages/git/src/argv-guards.ts) — whitelists.
 - [`packages/git/src/exec.ts`](../../packages/git/src/exec.ts) — `runGit`.
 - [Tool policy reference](../security/tool-policy.md) — the three-channel matrix.
+
+
+## Amendment — 2026-09-01: one bounded merge, for implementer branches only
+
+[ADR-0103](./0103-implementer-branch-lifecycle.md) moves a single merge case off
+the "out of scope entirely (v2+)" list above.
+
+**What moves:** merging ONE branch MARVIN itself created for an implementer
+subagent (ADR-0081), into the current branch, in the local working tree.
+Exposed as `worktree_merge` and as a Merge action on the Worktrees section of
+the panel. It refuses on a running implementer, an empty or already-merged
+branch, a dirty main tree, or a conflict — which it aborts cleanly.
+
+**Why it is not the general merge UI this ADR deferred.** The deferral was about
+conflict resolution: a merge that stops half-done needs a three-way editor, a
+staging model for hunks, and an abort story, and half-shipping that is worse
+than not shipping it. This case has none of that surface. The branches are
+MARVIN's own, produced by implementers writing to partitioned file sets, so they
+are disjoint by construction — in the incident that prompted ADR-0103, three
+branches touched five files, each exactly once. And when a merge does conflict,
+this action does not enter a conflicted state at all: it aborts and reports.
+
+**What stays off the list:** rebase, cherry-pick, conflict-resolution UI, and
+merging arbitrary user branches. Those are still chat's job.
+
+Same precedent as the 2026-08-31 amendment, which moved stash and the graph view
+off this list once each had a bounded shape.

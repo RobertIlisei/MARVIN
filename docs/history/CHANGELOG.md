@@ -8,6 +8,138 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-03 — v0.1.102: the practice loop, the ship-review gate, and a night of measuring MARVIN against itself.**
+
+  Started as a request for a scrollbar change map and became an audit of how
+  MARVIN actually behaves across sessions, then the machinery to keep doing
+  that audit every night.
+
+  **Editor.** A `DiffOverviewRuler` draws every hunk on the scrollbar track
+  (green / orange / red ticks, proportional by line) and the editor's
+  scrollers are overlay style. The existing gutter bar needs real layout
+  geometry to align with text; the ruler maps by line count and never touches
+  the layout manager.
+
+  **The audit (session `8927baf0`, 25 turns, ~$108).** Every mechanical rule
+  held; the prompt-only ones did not. `pr-review` / `security-audit` ran
+  **0×** across eight pushes of CI, sudoers and credential changes. The
+  wakeup path built a different system prompt from the chat route, so every
+  human↔wakeup transition re-created ~650K tokens of cache ($2.67 for a
+  100-token turn). A drained queue turn recorded no `turn.started`. The
+  ADR-0067 breakdown script counted "waiting on you to push the tag" as a
+  stall (20 → 4 after a "blocked on a named human action" class).
+
+  **ADR-0104 — the ship-review gate.** `git commit` on a security-boundary
+  diff is denied until both review skills have run for the tree; >3 files or
+  >50 lines needs `pr-review`; docs-only and lockfiles pass. Two denies per
+  skill per turn, then allow-and-log; fails open on git errors. One prompt
+  builder for every turn-starting path.
+
+  **Two crashes that were not crashes.** The app pegged at 100 % during a
+  long thinking turn with the 200-row render window already installed:
+  `sample` showed 1178 of 1306 samples in `StackLayout` across the rows —
+  `ChatMessageRow` was not `Equatable`, so every streamed event re-laid-out
+  every row. Then a session that would not hydrate: half an emoji (`\ude4f`)
+  in a background job's excerpt, cut by UTF-16 unit; Foundation refuses the
+  whole document over one. Surrogate-safe cuts, and a scrub at the transcript
+  write and read boundary.
+
+  **ADR-0105 — the practice loop.** A nightly, read-only pass over a
+  project's transcripts with seven deterministic failure extractors and four
+  paired success extractors (so findings carry a rate, not a count), a
+  per-project ledger with exact day-two semantics, a linear score with
+  tunable weights, proposals at three distinct sessions, and rules enforced at
+  `prompt` / `nudge` / `deny` from a data table with ADR-0104's brakes. A
+  Practice pane manages all of it. Reviewed by a read-only advisor
+  (go-with-caveats, eight edits applied). Backtest on the real project: 397
+  sessions in 11 s, six proposals.
+
+  **The six findings, fixed in the runtime where they could be.** Graph
+  pre-orientation: the runtime runs the turn's first `graph_search` from the
+  user's message and rides the hits on the prompt — the graphify-first deny
+  (1655 in 172 sessions, 31 % followed by a wasted `ToolSearch`) no longer
+  fires on an oriented turn. A `Stop` hook blocks, once, a real-work turn
+  ending without its scope-met handoff (41 % of them) or stopping with plan
+  steps open and no question (21.5 h of "continue"). The advisor-gate count
+  was the gate working (80 % of next calls were the consult), so the extractor
+  now counts only repeat hits within a turn. A hard-deny reason names the
+  fragment it matched, after a truncated `docker ps …` row hid the
+  `rm -rf /tmp/…` three lines down.
+
+  Verification: 1074 runtime + tools tests, typecheck clean, Swift build
+  clean, installed and exercised against the live project.
+
+---
+
+- **2026-09-01 — two sessions, one worktree: the crash, the shared status bar, and the lost turn.**
+
+  The user ran two sessions against one checkout of `agri-saas-platform` — one
+  triaging dependency MRs, one hotfixing a production container — and reported
+  three things in sequence: MARVIN crashed; the two sessions were
+  "interconnected, they are not separate anymore"; one had to be killed.
+
+  Three independent causes, found by measuring rather than reading source.
+
+  **1. The crash was the ADR-0062 constraint loop, and it finally named itself.**
+  `MARVIN-2026-09-01-164458.ips`, pid 1295, 78 minutes up, `EXC_BREAKPOINT`
+  through `+[NSApplication _crashOnException:]`: *"more Update Constraints in
+  Window passes than there are views in the window"*, 78 views. Five storms
+  preceded it, and for the first time in this bug's history the pass counter
+  added in ADR-0062's addendum captured a stack naming MARVIN's own layout —
+  `SystemSplitView.updateNSViewController → formCurrentItems →
+  updateRootViewForItem → NSHostingView.setRootView → setNeedsUpdate` — with a
+  **split view nested inside a split view** in the ancestry every time.
+  `ContentView` had a `VSplitView` (brain over chat) inside the main
+  `HSplitView`; the outer pass re-rooted the inner's hosting view, re-dirtying
+  the window. Replaced with `MarvinDivider()` + a drag gesture, the identical
+  move `LeftPane` made one level up on 2026-08-31 — its comment already said
+  `_NSSplitViewItemViewWrapper` was among the storm triggers. Divider
+  persistence moved to `@AppStorage`, which inserts no view.
+
+  **2. "Interconnected" was true of the chrome, not the conversations.** No SDK
+  session id appeared in more than one transcript — the two conversations were
+  separate throughout. But `hydrate` reset the plan / to-do / changed-files
+  strips per session while the `ctx`, `graph N · reads M` and `agents` chips
+  live on the `MarvinBridge` singleton and cleared only on a *fresh SDK
+  session*, so switching between two live sessions left the leaving session's
+  figures above the arriving session's transcript. The three writers sat
+  ungated directly below two that were gated — `setMarvinState` / `setBusy`,
+  fixed for the brain earlier the same day after the user said *"brain status
+  should reflect the session i select"*. Same bug, same family, half of it
+  missed. All three now take `forSession:` through `BrainStateGate`, and
+  `resetSessionCounters()` is one call shared by both reset paths.
+
+  **3. The tree collision, and the requirement that came with it.** The reflog
+  shows the triage session running `git checkout` and `git rebase` while the
+  hotfix session edited the same files. The obvious fix — one session per
+  worktree, already sitting in the roadmap awaiting an ADR — was ruled out by
+  the user: *"i still need to be able to have multiple sessions in 1 worktree."*
+  Anthropic's documented precedent for N sessions in one directory is agent
+  teams, which explicitly do **not** isolate and rely on partitioned file
+  ownership plus locking on the shared coordination state. So MARVIN takes the
+  guardrail and not the topology: a HEAD-moving or history-rewriting git
+  command now raises a confirm naming the other live session, silent for a solo
+  session, and reaching the user in `auto` mode as well as `gated` — the third
+  member of the `AskUserQuestion` family that survives the auto-mode bypass,
+  because a guard that only prompted under `gated` would not have prevented the
+  incident. Golden Rule 1 and the roadmap entry that wanted the opposite were
+  both amended rather than left to contradict the code. See
+  [ADR-0102](../decisions/0102-multiple-sessions-one-worktree.md).
+
+  **A fourth thing fell out of the crash.** `lastSdkSessionId` translated
+  `marvinSessionId → SDK sessionId` by reading `turn.completed`, which a turn
+  killed mid-flight never writes. So after the crash, "continue." opened a
+  brand-new SDK session instead of resuming — visible in the transcript as two
+  SDK ids in one file, an hour of context dropped silently. It now also accepts
+  the `session_id` the SDK stamps on every `cli.event`, which is what
+  `claude --resume` does after a crash.
+
+  **Verified:** 1116 sidecar assertions (56 new across three files), 618 Swift
+  assertions, `swift build` and both package typechecks clean. **Not verified:**
+  the crash fix itself — it needs a real launch, and whether five storms per
+  launch survive the de-nesting is the measurement that says whether a third
+  oscillator remains.
+
 - **2026-08-31 — v0.1.94: reverting my own storm "fix", which crashed the app.**
 
   v0.1.90 replaced three `GeometryReader` + `PreferenceKey` width measurements

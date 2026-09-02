@@ -75,6 +75,26 @@ export type SessionTurn =
       toolUseId: string;
       decision: "allow" | "deny";
       message?: string;
+    }
+  /**
+   * An implementer subagent finished and left a branch behind (ADR-0103).
+   * Persisted rather than merely streamed: whether the user ever heard that
+   * a branch was ready used to depend on the model remembering to mention
+   * it, and a reload lost even that.
+   */
+  | {
+      type: "worktree.finished";
+      at: string;
+      payload: {
+        slug: string;
+        branch: string;
+        state: string;
+        commits: number;
+        filesChanged: number;
+        base: string;
+        task: string;
+        reclaimed: boolean;
+      };
     };
 
 export interface SessionRecord {
@@ -168,6 +188,23 @@ function redactDeep(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Replace a lone UTF-16 surrogate escape in serialised JSON with U+FFFD.
+ *
+ * `JSON.stringify` is well-formed since Node 12: a paired surrogate is written
+ * as the literal character, an UNPAIRED one as a `\uXXXX` escape — so on the
+ * serialised text an escaped surrogate IS a lone surrogate. Swift's
+ * `JSONDecoder` rejects the entire document over one of them (session
+ * `8927baf0`, 2026-09-03: "Invalid unicode scalar value '0xde4f' … column
+ * 233434" and the app could not hydrate the session at all). Applied on
+ * write, so no new transcript can carry one, and on read, so an existing one
+ * still loads. The even-backslash lookbehind keeps a literal `\\ud83d` in
+ * someone's content alone.
+ */
+export function scrubLoneSurrogates(json: string): string {
+  return json.replace(/(?<!\\)((?:\\\\)*)\\u[dD][89a-fA-F][0-9a-fA-F]{2}/g, "$1\\ufffd");
+}
+
 /** Append one event. Guarantees the parent dir exists. Synchronous on purpose
  *  — these are tiny writes and we want ordering. Persisted payload is
  *  passed through a secret-pattern redactor (audit 🟠 #7) so secrets
@@ -182,7 +219,7 @@ export function appendSessionTurn(
   ensureDir(dir);
   const isFirstWrite = !existsSync(path);
   const redacted = redactDeep(turn) as SessionTurn;
-  appendFileSync(path, `${JSON.stringify(redacted)}\n`, "utf-8");
+  appendFileSync(path, `${scrubLoneSurrogates(JSON.stringify(redacted))}\n`, "utf-8");
   if (isFirstWrite) {
     // Match the directory's 0700 with the file's 0600. Same
     // best-effort contract — non-fatal if the underlying filesystem
@@ -208,7 +245,7 @@ export function loadSession(
     const t = line.trim();
     if (!t) continue;
     try {
-      turns.push(JSON.parse(t) as SessionTurn);
+      turns.push(JSON.parse(scrubLoneSurrogates(t)) as SessionTurn);
     } catch {
       // skip malformed line
     }
@@ -237,6 +274,25 @@ export function loadSession(
  *
  * Returns `null` for unknown sessions or transcripts whose turns all completed
  * with `sessionId: null` (rare — usually means the SDK errored before init).
+ *
+ * ## A turn that never completed still has an SDK session (2026-09-01)
+ *
+ * `turn.completed` is written when a turn ENDS. A turn that was killed
+ * mid-flight — the app crashed, the process was signalled — never writes one,
+ * so the scan used to walk straight past it into the previous turn, or off the
+ * top of the file. The next message then resumed nothing and started a fresh
+ * SDK conversation with none of the killed turn's context.
+ *
+ * Measured on `a7382d02` after the ADR-0062 crash of 2026-09-01: the killed
+ * turn's 67 `cli.event`s all carried SDK session `7a83431d…`, the transcript
+ * had no `turn.completed` for it, and the user's next message opened
+ * `42eef37c…` instead. Two SDK ids in one transcript, an hour of context
+ * dropped.
+ *
+ * So the scan also accepts a `cli.event` carrying the SDK's own `session_id`.
+ * Reverse order means whichever marker is newest wins, and resuming a session
+ * whose turn was interrupted is precisely what `claude --resume` does after a
+ * crash — the SDK keeps its own transcript, and it is still there.
  */
 const sdkSessionIdCache = new Map<string, string>();
 const cacheKey = (projectId: string, marvinSessionId: string) =>
@@ -253,9 +309,10 @@ export function lastSdkSessionId(
   if (!existsSync(path)) return null;
   const raw = readFileSync(path, "utf-8");
   const lines = raw.split("\n");
-  // Reverse scan — the most recent turn.completed wins. Reading the whole
-  // file is cheap for typical sessions; the cache shields the 100+ MB
-  // outliers from re-reading on every turn.
+  // Reverse scan — the newest marker wins, whether it is a completed turn or
+  // a live event from a turn that never finished. Reading the whole file is
+  // cheap for typical sessions; the cache shields the 100+ MB outliers from
+  // re-reading on every turn.
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (!line) continue;
@@ -267,11 +324,30 @@ export function lastSdkSessionId(
         sdkSessionIdCache.set(key, turn.sessionId);
         return turn.sessionId;
       }
+      if (turn.type === "cli.event") {
+        const id = sdkSessionIdOfEvent(turn.event);
+        if (id) {
+          sdkSessionIdCache.set(key, id);
+          return id;
+        }
+      }
     } catch {
       // skip malformed line
     }
   }
   return null;
+}
+
+/**
+ * The SDK stamps its `session_id` on every stream event, including the
+ * `system/init` that opens a turn. Read it defensively — the union admits
+ * `Record<string, unknown>` for events the typed shape doesn't cover, and a
+ * malformed value must not be handed back as a resume id.
+ */
+function sdkSessionIdOfEvent(event: unknown): string | null {
+  if (!event || typeof event !== "object") return null;
+  const id = (event as { session_id?: unknown }).session_id;
+  return typeof id === "string" && id.length > 0 ? id : null;
 }
 
 /**

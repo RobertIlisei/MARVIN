@@ -736,6 +736,47 @@ final class FilesService {
         )
     }
 
+    /// GET /api/worktrees?cwd=… — implementer worktrees with their state
+    /// derived from git, so a branch merged in a terminal or another
+    /// session reads as `merged` here (ADR-0103).
+    func fetchWorktrees(cwd: String) async throws -> WorktreeListResponse {
+        try await getJSON(
+            url: gitURL("api/worktrees", query: ["cwd": cwd]),
+            as: WorktreeListResponse.self
+        )
+    }
+
+    /// POST /api/worktrees {action:"merge"} — merge one implementer branch
+    /// into the current branch, LOCALLY. Never pushes: the commits ride
+    /// along in whatever pipeline the current branch already runs.
+    func mergeWorktree(cwd: String, slug: String) async throws -> WorktreeMergeResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: ["cwd": cwd, "action": "merge", "slug": slug],
+            as: WorktreeMergeResponse.self
+        )
+    }
+
+    /// POST /api/worktrees {action:"drop"} — remove one checkout and keep
+    /// its branch. Reclaims disk from a `ready` tree without discarding work.
+    func dropWorktree(cwd: String, slug: String) async throws -> WorktreeMergeResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: ["cwd": cwd, "action": "drop", "slug": slug],
+            as: WorktreeMergeResponse.self
+        )
+    }
+
+    /// POST /api/worktrees {action:"sweep"} — reclaim empty and merged
+    /// worktrees. Never touches a `ready` branch or anything dirty.
+    func sweepWorktrees(cwd: String) async throws -> WorktreeSweepResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: ["cwd": cwd, "action": "sweep"],
+            as: WorktreeSweepResponse.self
+        )
+    }
+
     /// POST /api/git/commit-message — drafts a message from the staged
     /// diff. Spawns a Claude CLI turn server-side, so it gets its own
     /// long-lived session rather than the shared 30 s one; a cold model
@@ -787,6 +828,10 @@ final class FilesService {
     /// Every git read route takes `cwd` and some take one more scalar;
     /// URLComponents handles the encoding that hand-built strings get
     /// wrong on paths with spaces.
+    private func gitURL(_ path: String) -> URL {
+        baseURL.appendingPathComponent(path)
+    }
+
     private func gitURL(_ path: String, query: [String: String]) -> URL {
         let url = baseURL.appendingPathComponent(path)
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
@@ -802,6 +847,43 @@ final class FilesService {
     /// Inlines the body-cap on error to keep error logs from
     /// pulling 4 MB file contents into the surface — anything over
     /// 1 KB gets truncated.
+    private func postJSON<T: Decodable & Sendable>(
+        url: URL,
+        body: [String: Any],
+        as: T.Type
+    ) async throws -> T {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch {
+            throw FilesServiceError.transport(underlying: error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw FilesServiceError.transport(
+                underlying: URLError(.badServerResponse)
+            )
+        }
+        // A 409 carries the reason the operation was refused, in the same
+        // shape as success. Only 5xx is a genuine failure to report.
+        guard http.statusCode < 500 else {
+            var text = String(data: data, encoding: .utf8) ?? ""
+            if text.count > 1024 { text = String(text.prefix(1024)) + "…" }
+            throw FilesServiceError.httpStatus(http.statusCode, body: text)
+        }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw FilesServiceError.decode(underlying: error)
+        }
+    }
+
     private func getJSON<T: Decodable & Sendable>(
         url: URL,
         as: T.Type

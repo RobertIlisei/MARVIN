@@ -20,6 +20,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
     case sourceControl
     case skills
     case plugins
+    case practice
     var id: String { rawValue }
 
     var label: String {
@@ -29,6 +30,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .sourceControl: return "Source Control"
         case .skills: return "Skills"
         case .plugins: return "Plugins"
+        case .practice: return "Practice"
         }
     }
 
@@ -39,6 +41,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .sourceControl: return "arrow.triangle.branch"
         case .skills: return "sparkle"
         case .plugins: return "puzzlepiece.extension"
+        case .practice: return "moon.zzz"
         }
     }
 }
@@ -254,6 +257,7 @@ struct LeftPane: View {
                 paneSlot(SourceControlView(), active: tab == .sourceControl)
                 paneSlot(SkillsPane(), active: tab == .skills)
                 paneSlot(PluginsPane(), active: tab == .plugins)
+                paneSlot(PracticePane(), active: tab == .practice)
             }
             // `minWidth: 0` is load-bearing, not defensive. All five panes stay
             // mounted, so the ZStack's minimum width is the WIDEST of their
