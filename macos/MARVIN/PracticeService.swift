@@ -27,6 +27,7 @@ struct PracticeFinding: Codable, Identifiable, Equatable {
     let rate: Double?
     let value: Double
     let dismissReason: String?
+    let fixNote: String?
     let ruleId: String?
     let sessionsAfter: Int?
     let recurrenceAfter: Int?
@@ -53,6 +54,8 @@ struct PracticeRuleScope: Codable, Equatable {
 
 struct PracticeRule: Codable, Identifiable, Equatable {
     let id: String
+    /// A hand-written gate exposed as a row (ADR-0105 phase 3).
+    let builtin: Bool?
     let fingerprint: String
     let title: String
     /// prompt | nudge | deny
@@ -64,8 +67,12 @@ struct PracticeRule: Codable, Identifiable, Equatable {
     let metrics: PracticeRuleMetrics
     let acceptedAt: String
     let updatedAt: String
+    /// Phase 6 — confirmed here and in other projects.
+    let suggestGlobal: Bool?
+    let confirmedIn: Int?
 
     var isGlobal: Bool { scope.projectId == nil }
+    var isBuiltin: Bool { builtin ?? false }
 }
 
 struct PracticeRun: Codable, Identifiable, Equatable {
@@ -88,11 +95,46 @@ struct PracticeThresholds: Codable, Equatable {
     var minValue: Double
 }
 
+struct PracticeWeights: Codable, Equatable {
+    var recurrence: Double
+    var cost: Double
+    var rate: Double
+    var reliability: Double
+    var actionability: Double
+    var decay: Double
+}
+
+struct PracticeFitProvenance: Codable, Equatable {
+    let at: String
+    let samples: Int
+    let labelled: Int
+    let method: String
+    let rho: Double
+}
+
 struct PracticeConfig: Codable, Equatable {
     var enabled: Bool
     var hour: Int
     var thresholds: PracticeThresholds
     var verifyWindow: Int
+    var weights: PracticeWeights?
+    var fit: PracticeFitProvenance?
+}
+
+struct PracticeFit: Codable, Equatable {
+    let weights: PracticeWeights
+    let method: String
+    let samples: Int
+    let labelled: Int
+    let rhoBefore: Double
+    let rhoAfter: Double
+    let current: PracticeWeights
+}
+
+struct PracticeDraft: Codable, Equatable {
+    let message: String
+    let rationale: String
+    let costUsd: Double?
 }
 
 struct PracticeView: Codable, Equatable {
@@ -136,9 +178,10 @@ final class PracticeService {
         return try JSONDecoder().decode(RunResponse.self, from: data).view
     }
 
-    func approve(projectId: String, id: String, tier: String?, global: Bool) async throws -> PracticeView {
+    func approve(projectId: String, id: String, tier: String?, global: Bool, message: String? = nil) async throws -> PracticeView {
         var body: [String: Any] = ["projectId": projectId, "id": id, "action": "approve", "global": global]
         if let tier { body["tier"] = tier }
+        if let message { body["message"] = message }
         return try await mutate("api/practice/findings", body)
     }
 
@@ -146,16 +189,38 @@ final class PracticeService {
         try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "dismiss", "reason": reason])
     }
 
+    func markFixed(projectId: String, id: String, note: String) async throws -> PracticeView {
+        try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "fixed", "reason": note])
+    }
+
     func escalate(projectId: String, id: String) async throws -> PracticeView {
         try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "escalate"])
     }
 
-    func updateRule(projectId: String, id: String, tier: String? = nil, status: String? = nil, global: Bool? = nil) async throws -> PracticeView {
+    func updateRule(projectId: String, id: String, tier: String? = nil, status: String? = nil, global: Bool? = nil, message: String? = nil) async throws -> PracticeView {
         var body: [String: Any] = ["projectId": projectId, "id": id]
         if let tier { body["tier"] = tier }
         if let status { body["status"] = status }
         if let global { body["global"] = global }
+        if let message { body["message"] = message }
         return try await mutate("api/practice/rules", body)
+    }
+
+    private struct FitResponse: Decodable { let fit: PracticeFit }
+    private struct DraftResponse: Decodable { let ok: Bool; let error: String?; let message: String?; let rationale: String?; let costUsd: Double? }
+
+    /// Phase 5 — dry by default; `apply` writes the weights.
+    func fitWeights(apply: Bool) async throws -> PracticeFit {
+        let data = try await post("api/practice/fit", ["apply": apply])
+        return try JSONDecoder().decode(FitResponse.self, from: data).fit
+    }
+
+    /// Phase 4 — one read-only model call on the finding's aggregates.
+    func draft(projectId: String, id: String) async throws -> PracticeDraft {
+        let data = try await post("api/practice/draft", ["projectId": projectId, "id": id])
+        let res = try JSONDecoder().decode(DraftResponse.self, from: data)
+        guard res.ok, let message = res.message else { throw PracticeError.server(res.error ?? "no draft") }
+        return PracticeDraft(message: message, rationale: res.rationale ?? "", costUsd: res.costUsd)
     }
 
     func updateConfig(enabled: Bool? = nil, hour: Int? = nil) async throws -> PracticeConfig {

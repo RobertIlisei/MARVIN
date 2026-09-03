@@ -2,6 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// The gates read their built-in ROW (ADR-0105 Phase 3) from the data dir.
+// Point it at a scratch dir so these tests never see the user's real rules.
+process.env.MARVIN_DATA_DIR = mkdtempSync(join(tmpdir(), "marvin-design-hooks-data-"));
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -34,6 +38,15 @@ import {
   type ShipDiff,
   shipReviewSkillOf,
 } from "../src/design-hooks";
+import {
+  __resetBuiltinCacheForTests,
+  BUILTIN_RULE_IDS,
+  ensureBuiltinRules,
+  practicePromptBlock,
+  readRules,
+  updateRule,
+  writeRules,
+} from "../src/practice";
 
 /**
  * Design hooks pin the personality's two most-load-bearing workflow rules
@@ -1382,5 +1395,63 @@ describe("ship-review gate (ADR-0104)", () => {
     // runDesignHooks uses the real collector; a cwd that is not a repo makes
     // it fail open, so the wiring is exercised through the parser path only.
     expect(runDesignHooks({ ctx, toolName: "Bash", toolInput: { command: "git commit -m x" }, mode: "enforce" })).toBeNull();
+  });
+});
+
+// ADR-0105 Phase 3 — the hand-written gates are rows the user can tune.
+describe("built-in gate rows (ADR-0105 phase 3)", () => {
+  const cwd = "/proj-builtin";
+  const src = join(cwd, "src", "a.ts");
+  function graphCtx() {
+    const ctx = createTurnDesignContext("t-builtin", cwd);
+    ctx.hasGraph = true;
+    return ctx;
+  }
+  afterEach(() => {
+    writeRules([]);
+    __resetBuiltinCacheForTests();
+  });
+
+  it("with no rows on disk every gate is native (the tests above rely on this)", () => {
+    const deny = runDesignHooks({ ctx: graphCtx(), toolName: "Read", toolInput: { file_path: src }, mode: "enforce" });
+    expect(deny?.message).toContain("graphify-first");
+  });
+
+  it("ensureBuiltinRules seeds four global deny rows once", () => {
+    const rules = ensureBuiltinRules();
+    expect(rules.filter((r) => r.builtin).map((r) => r.id).sort()).toEqual([...BUILTIN_RULE_IDS].sort());
+    expect(rules.every((r) => r.tier === "deny" && r.scope.projectId === null)).toBe(true);
+    expect(ensureBuiltinRules()).toHaveLength(4);
+  });
+
+  it("a row at nudge tier turns the deny into an advisory and still counts a fire", () => {
+    ensureBuiltinRules();
+    updateRule("builtin:graphify-first", { tier: "nudge" });
+    __resetBuiltinCacheForTests();
+    const ctx = graphCtx();
+    const deny = runDesignHooks({ ctx, toolName: "Read", toolInput: { file_path: src }, mode: "enforce" });
+    expect(deny).toBeNull();
+    expect(ctx.pendingPracticeNudge).toContain("graphify-first");
+    expect(ctx.graphifyHookFired).toBe(true);
+    expect(readRules().find((r) => r.id === "builtin:graphify-first")?.metrics.fired).toBe(1);
+  });
+
+  it("a retired row switches the gate off; prompt tier is silent at tool time; an edited message replaces the native one", () => {
+    ensureBuiltinRules();
+    updateRule("builtin:graphify-first", { status: "retired" });
+    __resetBuiltinCacheForTests();
+    expect(runDesignHooks({ ctx: graphCtx(), toolName: "Read", toolInput: { file_path: src }, mode: "enforce" })).toBeNull();
+
+    updateRule("builtin:graphify-first", { status: "active", tier: "prompt" });
+    __resetBuiltinCacheForTests();
+    const ctx = graphCtx();
+    expect(runDesignHooks({ ctx, toolName: "Read", toolInput: { file_path: src }, mode: "enforce" })).toBeNull();
+    expect(ctx.pendingPracticeNudge).toBeUndefined();
+    expect(practicePromptBlock("any-project")).toContain("Graph before the first structural read");
+
+    updateRule("builtin:graphify-first", { tier: "deny", message: "Ask the graph first. Always." });
+    __resetBuiltinCacheForTests();
+    const deny = runDesignHooks({ ctx: graphCtx(), toolName: "Read", toolInput: { file_path: src }, mode: "enforce" });
+    expect(deny?.message).toBe("Ask the graph first. Always.");
   });
 });

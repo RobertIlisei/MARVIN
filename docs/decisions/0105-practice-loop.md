@@ -260,6 +260,32 @@ A **Practice** tab in `LeftPane` with three views and a header:
   project end to end is I/O and JSON parsing, and the watermark makes every
   later run incremental.
 
+## Phases
+
+The loop is a programme, not a feature. Recorded here so the sequence
+survives the conversation that produced it (user, 2026-09-03: *"give me the
+phases … what we build, where are we, where do we want to go, what is the
+finish"*).
+
+| phase | what | status | exit criterion |
+|---|---|---|---|
+| 0 | The loop exists: extractors, ledger, score, rules at three tiers, `fixed` state, runner, pane | shipped v0.1.102 | first backtest produced proposals; five fixed in the runtime |
+| 1 | Verification — nothing to build | running | every `fixed` / `active` item confirmed, or regressed and acted on, across `verifyWindow` sessions |
+| 2 | Coverage — five new kinds with paired successes: `skill.bypassed`, `review.ignored`, `plan.stale`, `command.retried`, `turn.overbudget` (report-only) | shipped v0.1.103 | the three largest causes of waiting and spend each have an extractor |
+| 3 | The rule table absorbs the hand-written gates: graphify-first, graph-drift, advisor-on-ADR, ship-review are rows (`builtin: true`) whose tier, on/off and message the pane controls, with fired counts; logic stays in code, native when no row exists | shipped v0.1.103 | every gate editable from the pane; no gate-specific tier logic outside its row |
+| 4 | The model writes the words, on request — `POST /api/practice/draft`, a read-only two-turn session over the finding's aggregates and the head of CLAUDE.md, never a transcript, never from the runner | shipped v0.1.103 | the user stops editing templates by hand |
+| 5 | Learned weights — `fitPracticeWeights` over every ledger's outcomes (confirmed/fixed 1, regressed 0.5, dismissed 0), coordinate descent on Spearman rank correlation; below eight labels, rank by cost share; applied only on the user's click, with provenance in the config | shipped v0.1.103 | the pane shows the weights and where they came from |
+| 6 | Project-specific lessons feed the defaults — a project rule confirmed in two or more projects is offered for promotion to global; verification stays per project | shipped v0.1.103 | no behavioural rule enters MARVIN without a finding before it and a verification after it |
+
+**What finished looks like.** The loop has run unattended for a month
+across the user's projects and the only human acts were approve, dismiss,
+fixed, and the occasional promote. The audit that took a night by hand runs
+every night at 03:00 with the same rigour and no cost. Every gate is a row
+with fired and held counts. Every line in the personality about behaviour
+points at evidence. Three things stay true throughout: nothing is applied
+without a click, no model reads a transcript, no model commands another
+model.
+
 ## Review
 
 Read-only advisor pass, 2026-09-03: **go-with-caveats**, eight edits. All
@@ -280,3 +306,12 @@ later model pass user-triggered from the pane on aggregates (§5).
 - [x] The nightly schedule arms at boot and fires once per project per day at the configured hour — tested; *Run now* and *Backtest* call the same runner.
 - [x] The Practice pane: Findings, Working, Rules, Runs; approve at a chosen tier or globally, dismiss with reason, escalate, change tier, promote, retire, reactivate, schedule toggle and hour.
 - [x] Typecheck, runtime tests and the Swift build pass; the app is reinstalled.
+
+Phases 2–6 (v0.1.103):
+
+- [x] Five new failure kinds and four paired successes, subagent-blind, with positive, pair and conservative-negative fixtures; `EXTRACTOR_VERSION` 3.
+- [x] Four built-in gate rows: seeded from the pane's read path only, native when absent; nudge / off / prompt / edited-message paths tested with the 93 gate tests untouched.
+- [x] Promotion suggested when the same fingerprint is confirmed in ≥ 2 projects; never for global or built-in rows — tested.
+- [x] Weight fit: pinned worked examples reproduce through `scoreFactors`; a predictive factor's weight rises; sum is one; cost-share fallback below eight labels; nothing written until applied — tested.
+- [x] Draft: packet is aggregates only (asserted transcript-free), two-line parse, malformed output fails closed — tested through the dispatch seam.
+- [x] Pane: Built-in gates group, Fit weights sheet, Draft message sheets, promotion banner, fit provenance line.

@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.102
+code. Written for contributors and deep evaluators. Covers v0.1.103
 (2026-08-31). Where this document and the repository disagree, the
 repository wins.*
 

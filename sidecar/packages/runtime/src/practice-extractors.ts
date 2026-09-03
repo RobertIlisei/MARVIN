@@ -11,6 +11,8 @@
  */
 
 export interface ParsedToolCall {
+  /** Position within the turn, shared with text blocks, so "after" is exact. */
+  seq: number;
   name: string;
   input: Record<string, unknown>;
   /** Set when the call came from a subagent. */
@@ -31,6 +33,8 @@ export interface ParsedTurn {
   endedAt: string | null;
   tools: ParsedToolCall[];
   texts: string[];
+  /** Same text as `texts`, with the position each block appeared at. */
+  textBlocks: Array<{ seq: number; text: string }>;
   lastText: string;
   error: string | null;
   cacheCreationTokens: number;
@@ -72,6 +76,16 @@ export const FINGERPRINT_KINDS = [
   "graph.first.followed",
   "turn.continued",
   "scope.met.present",
+  // Phase 2 (ADR-0105 § Phases): what the first backtest could not see.
+  "skill.bypassed",
+  "review.ignored",
+  "plan.stale",
+  "command.retried",
+  "turn.overbudget",
+  "skill.invoked",
+  "review.acted",
+  "plan.kept",
+  "command.adapted",
 ] as const;
 export type FingerprintKind = (typeof FINGERPRINT_KINDS)[number];
 
@@ -89,6 +103,15 @@ export const POLARITY: Record<FingerprintKind, Polarity> = {
   "graph.first.followed": "success",
   "turn.continued": "success",
   "scope.met.present": "success",
+  "skill.bypassed": "failure",
+  "review.ignored": "failure",
+  "plan.stale": "failure",
+  "command.retried": "failure",
+  "turn.overbudget": "failure",
+  "skill.invoked": "success",
+  "review.acted": "success",
+  "plan.kept": "success",
+  "command.adapted": "success",
 };
 
 /** failure kind → the success kind that counts the same opportunity done right. */
@@ -97,6 +120,10 @@ export const SUCCESS_PAIR: Partial<Record<FingerprintKind, FingerprintKind>> = {
   "graph.first.skipped": "graph.first.followed",
   "turn.stalled": "turn.continued",
   "scope.met.missing": "scope.met.present",
+  "skill.bypassed": "skill.invoked",
+  "review.ignored": "review.acted",
+  "plan.stale": "plan.kept",
+  "command.retried": "command.adapted",
 };
 
 export const COST_UNITS: Record<FingerprintKind, string> = {
@@ -111,6 +138,15 @@ export const COST_UNITS: Record<FingerprintKind, string> = {
   "graph.first.followed": "turns",
   "turn.continued": "turns",
   "scope.met.present": "turns",
+  "skill.bypassed": "reads",
+  "review.ignored": "turns",
+  "plan.stale": "turns",
+  "command.retried": "retries",
+  "turn.overbudget": "USD",
+  "skill.invoked": "turns",
+  "review.acted": "turns",
+  "plan.kept": "turns",
+  "command.adapted": "turns",
 };
 
 export function kindOf(fingerprint: string): FingerprintKind | null {
@@ -132,6 +168,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
   const turns: ParsedTurn[] = [];
   let cur: ParsedTurn | null = null;
   const toolIndex = new Map<string, ParsedToolCall>();
+  let seq = 0;
 
   for (const line of raw.split("\n")) {
     const t = line.trim();
@@ -146,6 +183,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
     const at = typeof o.at === "string" ? o.at : "";
     if (type === "turn.user") {
       const message = typeof o.message === "string" ? o.message : "";
+      seq = 0;
       cur = {
         index: turns.length,
         turnId: null,
@@ -155,6 +193,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
         endedAt: null,
         tools: [],
         texts: [],
+        textBlocks: [],
         lastText: "",
         error: null,
         cacheCreationTokens: 0,
@@ -183,6 +222,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
         for (const b of content) {
           if (b.type === "tool_use") {
             const call: ParsedToolCall = {
+              seq: ++seq,
               name: String(b.name ?? ""),
               input:
                 b.input && typeof b.input === "object" && !Array.isArray(b.input)
@@ -196,6 +236,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
             if (typeof b.id === "string") toolIndex.set(b.id, call);
           } else if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
             cur.texts.push(b.text);
+            cur.textBlocks.push({ seq: ++seq, text: b.text });
             cur.lastText = b.text;
           }
         }
@@ -538,6 +579,201 @@ const errorRepeated: Extractor = (s) => {
   return out;
 };
 
+// ---------------------------------------------------------------------------
+// Phase 2 extractors
+// ---------------------------------------------------------------------------
+
+const SKILL_DIR = /(^|[\/\s])\.(claude|marvin)\/skills\/([A-Za-z0-9._-]+)(?:\/|\s|$)/;
+const skillBase = (name: string): string => (name.split(":").pop() ?? name).trim().toLowerCase();
+
+/** Skills read by hand vs invoked. A `Read` (or read-shaped Bash) into a
+ *  skill's folder with no `Skill` call for that name earlier in the turn is
+ *  the model re-deriving what the tool would have loaded for it. */
+function skillUsage(s: ParsedSession): Occurrence[] {
+  const out: Occurrence[] = [];
+  for (const turn of s.turns) {
+    const own = ownCalls(turn);
+    const invoked = new Map<string, number>(); // name → seq
+    let anySkill = false;
+    const bypassed = new Map<string, number>();
+    for (const call of own) {
+      if (call.name === "Skill") {
+        const name = typeof call.input.skill === "string" ? skillBase(call.input.skill) : "";
+        if (name) {
+          invoked.set(name, call.seq);
+          anySkill = true;
+        }
+        continue;
+      }
+      let target = "";
+      if (call.name === "Read") target = typeof call.input.file_path === "string" ? call.input.file_path : "";
+      else if (call.name === "Bash") {
+        const cmd = typeof call.input.command === "string" ? call.input.command : "";
+        if (READ_SHAPED_BASH.test(cmd)) target = cmd;
+      }
+      const m = target ? SKILL_DIR.exec(target) : null;
+      if (!m) continue;
+      const name = (m[3] ?? "").toLowerCase();
+      const at = invoked.get(name);
+      if (at !== undefined && at < call.seq) continue;
+      bypassed.set(name, (bypassed.get(name) ?? 0) + 1);
+    }
+    for (const [name, reads] of bypassed) {
+      out.push({
+        fingerprint: `skill.bypassed:${name}`,
+        sessionId: s.sessionId,
+        turnId: turn.turnId,
+        at: turn.startedAt,
+        cost: reads,
+        detail: `read ${reads} file${reads === 1 ? "" : "s"} of the \`${name}\` skill by hand instead of invoking it`,
+      });
+    }
+    if (anySkill) {
+      out.push({
+        fingerprint: "skill.invoked",
+        sessionId: s.sessionId,
+        turnId: turn.turnId,
+        at: turn.startedAt,
+        cost: 1,
+        detail: `invoked ${[...invoked.keys()].slice(0, 3).join(", ")} through the Skill tool`,
+      });
+    }
+  }
+  return out;
+}
+const skillBypassed: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint.startsWith("skill.bypassed:"));
+const skillInvoked: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint === "skill.invoked");
+
+/** The two review skills' documented finding formats. Conservative: nit-only
+ *  or clean reports do not count as findings. */
+const REVIEW_FINDINGS = /\[(Important|CRITICAL|HIGH)\]|🔴|\b[1-9]\d* (important|critical|high)\b/i;
+
+function reviewOutcome(s: ParsedSession): Occurrence[] {
+  const out: Occurrence[] = [];
+  for (const turn of s.turns) {
+    const own = ownCalls(turn);
+    const review = own.find(
+      (c) => c.name === "Skill" && typeof c.input.skill === "string" && REVIEW_SKILL.test(c.input.skill),
+    );
+    if (!review) continue;
+    const findings = turn.textBlocks.some((b) => b.seq > review.seq && REVIEW_FINDINGS.test(b.text));
+    if (!findings) continue;
+    const acted = own.some((c) => c.seq > review.seq && (c.name === "Edit" || c.name === "Write"));
+    out.push({
+      fingerprint: acted ? "review.acted" : "review.ignored",
+      sessionId: s.sessionId,
+      turnId: turn.turnId,
+      at: turn.startedAt,
+      cost: 1,
+      detail: acted
+        ? "a review skill reported findings and edits followed in the same turn"
+        : "a review skill reported findings and nothing was edited afterwards in the turn",
+    });
+  }
+  return out;
+}
+const reviewIgnored: Extractor = (s) => reviewOutcome(s).filter((o) => o.fingerprint === "review.ignored");
+const reviewActed: Extractor = (s) => reviewOutcome(s).filter((o) => o.fingerprint === "review.acted");
+
+/** A plan that was started (a TodoWrite in an earlier turn) and then left
+ *  behind by a turn that did real work without touching it — or the next. */
+function planTracking(s: ParsedSession): Occurrence[] {
+  const out: Occurrence[] = [];
+  let todoSeen = false;
+  const hasTodo = (t: ParsedTurn): boolean => ownCalls(t).some((c) => c.name === "TodoWrite");
+  for (let i = 0; i < s.turns.length; i++) {
+    const turn = s.turns[i]!;
+    const seenBefore = todoSeen;
+    if (hasTodo(turn)) todoSeen = true;
+    if (!seenBefore || turn.machine || i === s.turns.length - 1) continue;
+    const edits = ownCalls(turn).filter((c) => c.name === "Edit" || c.name === "Write").length;
+    if (edits < 3) continue;
+    const kept = hasTodo(turn) || hasTodo(s.turns[i + 1]!);
+    out.push({
+      fingerprint: kept ? "plan.kept" : "plan.stale",
+      sessionId: s.sessionId,
+      turnId: turn.turnId,
+      at: turn.startedAt,
+      cost: 1,
+      detail: kept
+        ? `${edits} edits with the plan updated in this turn or the next`
+        : `${edits} edits and the plan's TodoWrite was not touched in this turn or the next`,
+    });
+  }
+  return out;
+}
+const planStale: Extractor = (s) => planTracking(s).filter((o) => o.fingerprint === "plan.stale");
+const planKept: Extractor = (s) => planTracking(s).filter((o) => o.fingerprint === "plan.kept");
+
+/** The same failing command run again unchanged. */
+function commandRetries(s: ParsedSession): Occurrence[] {
+  const out: Occurrence[] = [];
+  for (const turn of s.turns) {
+    const failures = new Map<string, number>();
+    for (const c of ownCalls(turn)) {
+      if (c.name !== "Bash" || !c.isError) continue;
+      const cmd = typeof c.input.command === "string" ? c.input.command.replace(/\s+/g, " ").trim() : "";
+      if (!cmd) continue;
+      failures.set(cmd, (failures.get(cmd) ?? 0) + 1);
+    }
+    if (failures.size === 0) continue;
+    let repeats = 0;
+    let worst = "";
+    for (const [cmd, n] of failures) {
+      if (n >= 2) {
+        repeats += n - 1;
+        if (!worst) worst = cmd;
+      }
+    }
+    if (repeats > 0) {
+      out.push({
+        fingerprint: "command.retried",
+        sessionId: s.sessionId,
+        turnId: turn.turnId,
+        at: turn.startedAt,
+        cost: repeats,
+        detail: `\`${worst.slice(0, 60)}\` failed and was re-run unchanged ${repeats} time${repeats === 1 ? "" : "s"}`,
+      });
+    } else {
+      out.push({
+        fingerprint: "command.adapted",
+        sessionId: s.sessionId,
+        turnId: turn.turnId,
+        at: turn.startedAt,
+        cost: 1,
+        detail: "a command failed and was not re-run unchanged",
+      });
+    }
+  }
+  return out;
+}
+const commandRetried: Extractor = (s) => commandRetries(s).filter((o) => o.fingerprint === "command.retried");
+const commandAdapted: Extractor = (s) => commandRetries(s).filter((o) => o.fingerprint === "command.adapted");
+
+export interface ExtractorOptions {
+  /** `turn.completed.costUsd` at or above this is over budget. */
+  turnOverbudgetUsd?: number;
+}
+export const DEFAULT_TURN_OVERBUDGET_USD = 10;
+
+let overbudgetThreshold = DEFAULT_TURN_OVERBUDGET_USD;
+/** Report-only (the remedy is a MARVIN or context decision, not a rule). */
+const turnOverbudget: Extractor = (s) => {
+  const out: Occurrence[] = [];
+  for (const turn of s.turns) {
+    if (turn.costUsd < overbudgetThreshold) continue;
+    out.push({
+      fingerprint: "turn.overbudget",
+      sessionId: s.sessionId,
+      turnId: turn.turnId,
+      at: turn.endedAt ?? turn.startedAt,
+      cost: turn.costUsd,
+      detail: `one turn cost $${turn.costUsd.toFixed(2)} (threshold $${overbudgetThreshold})`,
+    });
+  }
+  return out;
+};
+
 export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
   "ship.unreviewed": shipUnreviewed,
   "graph.first.skipped": graphFirstSkipped,
@@ -550,14 +786,24 @@ export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
   "graph.first.followed": graphFirstFollowed,
   "turn.continued": turnContinued,
   "scope.met.present": scopeMetPresent,
+  "skill.bypassed": skillBypassed,
+  "review.ignored": reviewIgnored,
+  "plan.stale": planStale,
+  "command.retried": commandRetried,
+  "turn.overbudget": turnOverbudget,
+  "skill.invoked": skillInvoked,
+  "review.acted": reviewActed,
+  "plan.kept": planKept,
+  "command.adapted": commandAdapted,
 };
 
 /** Bump when an extractor's definition changes; the ledger records it per
  *  finding so a count produced by an older definition is never compared
  *  against one from a newer definition as if they were the same measurement. */
-export const EXTRACTOR_VERSION = 1;
+export const EXTRACTOR_VERSION = 3; // v3 (2026-09-03): Phase 2 kinds — skill / review / plan / command / budget
 
-export function extractAll(session: ParsedSession): Occurrence[] {
+export function extractAll(session: ParsedSession, opts: ExtractorOptions = {}): Occurrence[] {
+  overbudgetThreshold = opts.turnOverbudgetUsd ?? DEFAULT_TURN_OVERBUDGET_USD;
   const out: Occurrence[] = [];
   for (const kind of FINGERPRINT_KINDS) out.push(...EXTRACTORS[kind](session));
   return out;

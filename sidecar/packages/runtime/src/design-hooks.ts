@@ -40,7 +40,14 @@ import type {
 import { isSubagentDispatch } from "@marvin/tools/policy";
 import type { AdvisorVerdict } from "./advisor-verdict";
 import { type AutoAuditEntryKind, appendAutoAuditEntry } from "./auto-audit";
-import { evaluatePracticeRules, notePracticeRuleFired, type RuleEvalResult } from "./practice";
+import {
+  type BuiltinGate,
+  type BuiltinRuleId,
+  builtinGate,
+  evaluatePracticeRules,
+  notePracticeRuleFired,
+  type RuleEvalResult,
+} from "./practice";
 import { slugifyWorkDir } from "./projects";
 
 /**
@@ -956,9 +963,33 @@ export function runDesignHooks(args: {
   const { ctx, toolName, toolInput, mode } = args;
   if (mode === "off") return null;
 
+  // Phase 3 (ADR-0105): the four hand-written gates read their ROW. The
+  // logic below is unchanged; the row decides whether it denies, nudges,
+  // is silent at tool time (prompt tier), or is off — and carries the
+  // fired/bypass counts. No row on disk means native behaviour.
+  const gateOf = (id: BuiltinRuleId): BuiltinGate => builtinGate(id);
+  const applyGate = (
+    id: BuiltinRuleId,
+    gate: BuiltinGate,
+    deny: DesignHookDeny,
+    onFire: () => void,
+  ): DesignHookDeny | null => {
+    if (gate.tier === "prompt") return null;
+    onFire();
+    notePracticeRuleFired(id, "fired");
+    const message = gate.message ?? deny.message ?? "";
+    if (gate.tier === "nudge") {
+      ctx.pendingPracticeNudge = `[${id} — advisory, tier set by you] ${message}`;
+      return null;
+    }
+    return gate.message ? { ...deny, message } : deny;
+  };
+
   // Hook 1 — graphify-first.
-  const graphifyDeny = checkGraphifyFirst(ctx, toolName, toolInput);
-  const driftDeny = checkGraphDriftDeny(ctx, toolName, toolInput);
+  const graphifyGate = gateOf("builtin:graphify-first");
+  const driftGate = gateOf("builtin:graph-drift-deny");
+  const graphifyDeny = graphifyGate.off ? null : checkGraphifyFirst(ctx, toolName, toolInput);
+  const driftDeny = driftGate.off ? null : checkGraphDriftDeny(ctx, toolName, toolInput);
   if (driftDeny) {
     if (mode === "measure") {
       logDesignHookEvent({
@@ -969,7 +1000,8 @@ export function runDesignHooks(args: {
         graphCallCount: ctx.graphCallCount,
       });
     } else {
-      return driftDeny;
+      const out = applyGate("builtin:graph-drift-deny", driftGate, driftDeny, () => {});
+      if (out) return out;
     }
   }
 
@@ -977,8 +1009,10 @@ export function runDesignHooks(args: {
     if (mode === "measure") {
       // Caller is responsible for logging; we just don't deny.
     } else {
-      ctx.graphifyHookFired = true;
-      return graphifyDeny;
+      const out = applyGate("builtin:graphify-first", graphifyGate, graphifyDeny, () => {
+        ctx.graphifyHookFired = true;
+      });
+      if (out) return out;
     }
   }
 
@@ -1010,14 +1044,17 @@ export function runDesignHooks(args: {
   }
 
   // Hook 2 — advisor-on-ADR-trigger.
-  const advisorDeny = checkAdvisorOnAdrTrigger(ctx, toolName, toolInput);
+  const advisorGate = gateOf("builtin:advisor-on-adr");
+  const advisorDeny = advisorGate.off ? null : checkAdvisorOnAdrTrigger(ctx, toolName, toolInput);
   if (advisorDeny) {
     if (mode === "measure") {
       // Caller logs; allow the call.
     } else {
-      const path = pickPath(toolInput, ["file_path", "path"]);
-      if (path) ctx.advisorHookFiredForPaths.add(path);
-      return advisorDeny;
+      const out = applyGate("builtin:advisor-on-adr", advisorGate, advisorDeny, () => {
+        const path = pickPath(toolInput, ["file_path", "path"]);
+        if (path) ctx.advisorHookFiredForPaths.add(path);
+      });
+      if (out) return out;
     }
   }
 
@@ -1026,12 +1063,14 @@ export function runDesignHooks(args: {
   // of CI, sudoers and credential changes on 2026-09-02. The gate reads the
   // diff a `git commit` is about to seal and refuses it until the skill the
   // prompt already demands has actually run.
-  const shipDeny = checkShipReview(ctx, toolName, toolInput);
+  const shipGate = gateOf("builtin:ship-review");
+  const shipDeny = shipGate.off ? null : checkShipReview(ctx, toolName, toolInput);
   if (shipDeny) {
     if (mode === "measure") {
       logDesignHookEvent({ kind: "ship.review.deny.measured", turnId: ctx.turnId, tool: toolName });
     } else {
-      return shipDeny;
+      const out = applyGate("builtin:ship-review", shipGate, shipDeny, () => {});
+      if (out) return out;
     }
   }
 

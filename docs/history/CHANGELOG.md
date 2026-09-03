@@ -8,6 +8,56 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-03 — v0.1.103: the practice loop, phases 2–6.**
+
+  The phases were stated in chat the night v0.1.102 shipped; the user asked
+  for them in the ADR and built. Order 2 → 3 → 6 → 5 → 4, so the one phase
+  that touches the SDK landed last. A Plan agent reviewed the design; its four
+  refinements are in (built-ins seeded from the pane path only, so the 93 gate
+  tests never see a rules file; an mtime-cached row read; sequence numbers on
+  tool calls; that order).
+
+  **Phase 2 — coverage.** Five kinds the first backtest could not see, each
+  with a paired success: `skill.bypassed:<name>` (a skill's folder read by
+  hand with no `Skill` call earlier in the turn), `review.ignored` (a review
+  skill reported findings and nothing was edited after), `plan.stale` (three
+  or more edits with the plan's TodoWrite untouched this turn and next),
+  `command.retried` (a failing command re-run verbatim), `turn.overbudget`
+  (report-only). Extractor version 3. On the real project: 34 new findings,
+  seven proposals — `command.retried` in 26 sessions, `plan.stale` in 48,
+  `skill.bypassed:hetzner-ssh` in 29, and $18.7K of over-budget turns across
+  217 sessions surfaced as a report.
+
+  **Phase 3 — the gates as rows.** Graphify-first, graph-drift, advisor-on-ADR
+  and ship-review are now `builtin:*` rows in the rule table. Their logic is
+  untouched; the row decides tier (deny / nudge / prompt), on / off, and an
+  optional replacement message, and carries fired counts. No row on disk means
+  native behaviour, which is what keeps every existing gate test valid.
+
+  **Phase 6 — promotion.** A project rule confirmed here and in at least one
+  other project's ledger is offered for promotion to global. Verification
+  stays per project.
+
+  **Phase 5 — learned weights.** `scoreFinding` split into factors and a dot
+  product; `fitPracticeWeights` searches the five positive weights by
+  coordinate descent on Spearman rank correlation against the ledger's own
+  outcomes (confirmed/fixed 1, regressed 0.5, dismissed 0), and below eight
+  labels ranks by cost share instead. Applied only from the pane, with
+  provenance stored on the config.
+
+  **Phase 4 — drafted messages.** "Draft message" asks a fresh read-only,
+  two-turn model session to write a rule's message from the finding's
+  aggregates and the head of the project's CLAUDE.md — never a transcript,
+  never from the runner — and hands the text back for the user to edit and
+  accept.
+
+  **Pane.** Built-in gates group with tier / off / message; Fit weights sheet
+  with current vs proposed and provenance; Draft message sheets on findings
+  and rules; a promotion banner; below-threshold findings folded.
+
+  Verification: 1090 runtime + tools tests, typecheck clean, Swift build
+  clean, backtest on the real project.
+
 - **2026-09-03 — v0.1.102: the practice loop, the ship-review gate, and a night of measuring MARVIN against itself.**
 
   Started as a request for a scrollbar change map and became an audit of how

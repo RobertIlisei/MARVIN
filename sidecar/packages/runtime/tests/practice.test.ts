@@ -21,6 +21,7 @@ import {
   effectiveTier,
   escalateFinding,
   evaluatePracticeRules,
+  markFindingFixed,
   PRACTICE_RULE_MAX_DENIES,
   practicePromptBlock,
   practiceView,
@@ -49,6 +50,7 @@ function turn(opts: {
   text?: string;
   endAt?: string;
   cacheCreation?: number;
+  costUsd?: number;
   error?: string;
 }): Line[] {
   const out: Line[] = [
@@ -90,7 +92,7 @@ function turn(opts: {
       type: "turn.completed",
       at: opts.endAt ?? opts.at,
       tokenUsage: { cache_creation_input_tokens: opts.cacheCreation ?? 1000 },
-      costUsd: 0.5,
+      costUsd: opts.costUsd ?? 0.5,
     });
   return out;
 }
@@ -179,7 +181,7 @@ describe("practice extractors (ADR-0105 §1)", () => {
   it("finds the paired successes in the good session, and no failures", () => {
     const occ = extractAll(parseSessionTranscript("s2", goodSession("2026-09-01")));
     const names = occ.map((o) => o.fingerprint).sort();
-    expect(names).toEqual(["graph.first.followed", "scope.met.present", "ship.reviewed", "turn.continued"]);
+    expect(names).toEqual(["graph.first.followed", "scope.met.present", "ship.reviewed", "skill.invoked", "turn.continued"]);
   });
 
   it("ignores subagent calls entirely", () => {
@@ -202,6 +204,72 @@ describe("practice extractors (ADR-0105 §1)", () => {
     expect(classifyTurnEnding("Want me to commit?")).toBe("asked");
     expect(classifyTurnEnding("Fixed the lint.")).toBe("stopped");
     expect(classifyTurnEnding("")).toBe("empty");
+  });
+});
+
+describe("phase 2 extractors", () => {
+  const skillRead = (name: string) => ({ name: "Read", input: { file_path: `/Users/x/.claude/skills/${name}/SKILL.md` } });
+  const skill = (name: string) => ({ name: "Skill", input: { skill: name } });
+  const todo = { name: "TodoWrite", input: { todos: [{ content: "[1] x", status: "in_progress" }] } };
+  const failing = (cmd: string) => ({ name: "Bash", input: { command: cmd }, error: "exit 1" });
+  const ids = (raw: string) => extractAll(parseSessionTranscript("p2", raw)).map((o) => o.fingerprint).sort();
+
+  it("skill.bypassed when a skill's folder is read by hand; skill.invoked when the tool is used first", () => {
+    expect(ids(jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "review this", tools: [skillRead("pr-review"), skillRead("pr-review")], text: "ok?" })))).toEqual([
+      "skill.bypassed:pr-review",
+    ]);
+    const invokedFirst = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "review this", tools: [skill("marvin:pr-review"), skillRead("pr-review")], text: "ok?" }));
+    expect(ids(invokedFirst)).toEqual(["skill.invoked"]);
+    const occ = extractAll(parseSessionTranscript("p2", jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "m", tools: [skillRead("tdd"), skillRead("tdd"), skillRead("tdd")] }))));
+    expect(occ.find((o) => o.fingerprint === "skill.bypassed:tdd")?.cost).toBe(3);
+    // A shell listing of the folder names the skill, not its arguments.
+    const listed = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "m", tools: [{ name: "Bash", input: { command: "find .claude/skills/hetzner-ssh -type f 2>/dev/null" } }], text: "?" }));
+    expect(ids(listed)).toEqual(["skill.bypassed:hetzner-ssh"]);
+  });
+
+  it("review.ignored only when findings were reported and nothing was edited after; nit-only reports do not count", () => {
+    const ignored = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "ship", tools: [edit, skill("pr-review")], text: "[Important] SQL built by string concat in repo.ts" }));
+    expect(ids(ignored)).toContain("review.ignored");
+    const acted = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "ship", tools: [skill("security-audit"), edit], text: "Findings: 2 high. Fixed both." }));
+    expect(ids(acted)).toContain("review.acted");
+    expect(ids(acted)).not.toContain("review.ignored");
+    const nits = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "ship", tools: [skill("pr-review")], text: "Clean. [Nit] rename a variable." }));
+    expect(ids(nits)).not.toContain("review.ignored");
+  });
+
+  it("plan.stale when three edits happen with the plan untouched this turn and next; plan.kept otherwise; last turn skipped", () => {
+    const stale = jsonl([
+      ...turn({ at: "2026-09-01T10:00:00Z", message: "plan", tools: [todo], text: "Plan set. Proceed?" }),
+      ...turn({ at: "2026-09-01T10:10:00Z", message: "go", tools: [edit, edit, edit], text: "Edited. Next?" }),
+      ...turn({ at: "2026-09-01T10:20:00Z", message: "go on", tools: [edit], text: "More. Next?" }),
+      ...turn({ at: "2026-09-01T10:30:00Z", message: "end", tools: [edit, edit, edit], text: "Done?" }),
+    ]);
+    const o = ids(stale);
+    expect(o.filter((x) => x === "plan.stale")).toHaveLength(1); // turn 2; turn 4 is last and skipped
+    const kept = jsonl([
+      ...turn({ at: "2026-09-01T10:00:00Z", message: "plan", tools: [todo], text: "Plan set. Proceed?" }),
+      ...turn({ at: "2026-09-01T10:10:00Z", message: "go", tools: [edit, edit, edit, todo], text: "Edited. Next?" }),
+      ...turn({ at: "2026-09-01T10:20:00Z", message: "end", text: "Done?" }),
+    ]);
+    expect(ids(kept)).toContain("plan.kept");
+    expect(ids(kept)).not.toContain("plan.stale");
+    // No plan ever started → nothing to keep or lose.
+    expect(ids(jsonl([...turn({ at: "2026-09-01T10:00:00Z", message: "a", tools: [edit, edit, edit], text: "x?" }), ...turn({ at: "2026-09-01T10:10:00Z", message: "b", text: "y?" })]))).not.toContain("plan.stale");
+  });
+
+  it("command.retried counts verbatim re-runs of a failing command; command.adapted when a failure was not repeated", () => {
+    const retried = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "test", tools: [failing("npm test"), failing("npm  test"), failing("npm test")], text: "hmm?" }));
+    const occ = extractAll(parseSessionTranscript("p2", retried));
+    expect(occ.find((o) => o.fingerprint === "command.retried")?.cost).toBe(2);
+    const adapted = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "test", tools: [failing("npm test"), { name: "Bash", input: { command: "npm test -- --runInBand" } }], text: "ok?" }));
+    expect(ids(adapted)).toContain("command.adapted");
+    expect(ids(adapted)).not.toContain("command.retried");
+  });
+
+  it("turn.overbudget is report-only and honours the threshold", () => {
+    const pricey = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "big", text: "done?", costUsd: 12 }));
+    expect(extractAll(parseSessionTranscript("p2", pricey)).map((o) => o.fingerprint)).toContain("turn.overbudget");
+    expect(extractAll(parseSessionTranscript("p2", pricey), { turnOverbudgetUsd: 20 }).map((o) => o.fingerprint)).not.toContain("turn.overbudget");
   });
 });
 
@@ -296,8 +364,10 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
   });
 
   function threeBadSessions(): void {
+    // Occurrence timestamps must sit clearly BEFORE an acceptance stamped
+    // with the real clock, so verification does not read them as recurrences.
     for (const [id, d] of [["a", 1], ["b", 2], ["c", 3]] as const) {
-      files.set(id, { raw: badSession(`2026-09-0${d}`), mtime: day(d) });
+      files.set(id, { raw: badSession(`2026-01-0${d}`), mtime: day(d) });
     }
     runPractice(projectId, { ...seams, now: day(3) + 1 });
     expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("proposed");
@@ -313,7 +383,7 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     expect(approveFinding(projectId, "cache.recreated").ok).toBe(false); // report-only
 
     const acceptedAt = Date.parse(readRules()[0]!.acceptedAt);
-    files.set("d", { raw: badSession("2026-09-04"), mtime: acceptedAt + 1000 });
+    files.set("d", { raw: badSession("2027-01-04"), mtime: acceptedAt + 1000 }); // occurrences dated AFTER acceptance
     const r = runPractice(projectId, { ...seams, now: acceptedAt + 2000 });
     expect(r.regressed).toBe(1);
     expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("regressed");
@@ -322,7 +392,7 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     // A nudge-tier rule escalates to deny and restarts verification.
     const g = approveFinding(projectId, "graph.first.skipped");
     expect(g.ok && g.rule.tier).toBe("nudge");
-    files.set("e", { raw: badSession("2026-09-05"), mtime: Date.parse((g as { rule: PracticeRule }).rule.acceptedAt) + 1000 });
+    files.set("e", { raw: badSession("2027-01-05"), mtime: Date.parse((g as { rule: PracticeRule }).rule.acceptedAt) + 1000 });
     runPractice(projectId, { ...seams, now: Date.now() + 5000 });
     expect(readLedger(projectId).findings["graph.first.skipped"]?.state).toBe("regressed");
     const esc = escalateFinding(projectId, "graph.first.skipped");
@@ -345,6 +415,28 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     runPractice(projectId, { ...seams, now: acc + 11_000 });
     expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("proposed");
     expect(readLedger(projectId).findings["ship.unreviewed"]?.ruleId).toBeUndefined();
+  });
+
+  it("fixed in MARVIN: verified like a rule without one — quiet window confirms, a recurrence regresses", () => {
+    threeBadSessions();
+    expect(markFindingFixed(projectId, "ship.unreviewed", "ADR-0104 gate")).toBe(true);
+    expect(markFindingFixed(projectId, "ship.reviewed", "x")).toBe(false); // successes are not fixable
+    let f = readLedger(projectId).findings["ship.unreviewed"]!;
+    expect(f.state).toBe("fixed");
+    const fixedAt = Date.parse(f.fixedAt!);
+    for (let i = 1; i <= 5; i++) files.set(`q${i}`, { raw: goodSession(`2026-09-1${i}`), mtime: fixedAt + i * 1000 });
+    const rc = runPractice(projectId, { ...seams, now: fixedAt + 10_000 });
+    expect(rc.confirmed).toBe(1);
+    expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("confirmed");
+
+    expect(markFindingFixed(projectId, "graph.first.skipped", "pre-orientation")).toBe(true);
+    const fx2 = Date.parse(readLedger(projectId).findings["graph.first.skipped"]!.fixedAt!);
+    files.set("bad-again", { raw: badSession("2027-01-20"), mtime: fx2 + 1000 });
+    runPractice(projectId, { ...seams, now: fx2 + 2000 });
+    f = readLedger(projectId).findings["graph.first.skipped"]!;
+    expect(f.state).toBe("regressed");
+    expect(f.ruleId).toBeUndefined();
+    expect(escalateFinding(projectId, "graph.first.skipped").ok).toBe(false); // nothing to escalate
   });
 
   it("dismiss suppresses until distinct sessions double, then re-surfaces", () => {

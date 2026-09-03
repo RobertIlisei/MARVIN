@@ -3,6 +3,7 @@
  *   { projectId, id, action: "approve", tier?, message?, global? }
  *   { projectId, id, action: "dismiss", reason }
  *   { projectId, id, action: "escalate" }
+ *   { projectId, id, action: "fixed", reason }   ← "I changed MARVIN's code"; verified like a rule
  * → { ok, rule?, view }
  *
  * The three verbs a finding has (ADR-0105 §6). Approve creates the rule from
@@ -15,6 +16,7 @@ import {
   approveFinding,
   dismissFinding,
   escalateFinding,
+  markFindingFixed,
   practiceView,
   type RuleTier,
 } from "@marvin/runtime/practice";
@@ -64,12 +66,17 @@ export async function POST(req: NextRequest) {
       if (!ok) return NextResponse.json({ ok: false, error: "unknown finding" }, { status: 404 });
       return NextResponse.json({ ok: true, view: practiceView(projectId) });
     }
+    case "fixed": {
+      const ok = markFindingFixed(projectId, id, body.reason ?? "");
+      if (!ok) return NextResponse.json({ ok: false, error: "unknown or success finding" }, { status: 404 });
+      return NextResponse.json({ ok: true, view: practiceView(projectId) });
+    }
     case "escalate": {
       const res = escalateFinding(projectId, id);
       if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 409 });
       return NextResponse.json({ ok: true, rule: res.rule, view: practiceView(projectId) });
     }
     default:
-      return NextResponse.json({ error: "action must be approve | dismiss | escalate" }, { status: 400 });
+      return NextResponse.json({ error: "action must be approve | dismiss | escalate | fixed" }, { status: 400 });
   }
 }

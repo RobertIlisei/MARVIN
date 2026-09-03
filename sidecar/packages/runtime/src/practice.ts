@@ -18,7 +18,7 @@
  * from the runner.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { marvinPaths } from "./paths";
@@ -54,18 +54,20 @@ export interface PracticeConfig {
   /** Local hour (0–23) the nightly run fires. */
   hour: number;
   weights: PracticeWeights;
-  thresholds: { minSessions: number; minValue: number };
+  thresholds: { minSessions: number; minValue: number; turnOverbudgetUsd: number };
   /** Per-kind cost that counts as "1.0" in the cost factor. */
   costScale: Record<string, number>;
   /** Sessions after acceptance with no recurrence before a rule is confirmed. */
   verifyWindow: number;
+  /** Phase 5 — where the current weights came from, when they were fitted. */
+  fit?: { at: string; samples: number; labelled: number; method: string; rho: number } | undefined;
 }
 
 export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
   enabled: true,
   hour: 3,
   weights: { recurrence: 0.3, cost: 0.2, rate: 0.15, reliability: 0.2, actionability: 0.15, decay: 0.15 },
-  thresholds: { minSessions: 3, minValue: 0.6 },
+  thresholds: { minSessions: 3, minValue: 0.6, turnOverbudgetUsd: 10 },
   costScale: {
     "ship.unreviewed": 1,
     "graph.first.skipped": 15,
@@ -74,6 +76,11 @@ export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
     "cache.recreated": 800_000,
     "hook.deny.repeated": 5,
     "error.repeated": 3,
+    "skill.bypassed": 3,
+    "review.ignored": 1,
+    "plan.stale": 1,
+    "command.retried": 3,
+    "turn.overbudget": 20,
   },
   verifyWindow: 5,
 };
@@ -91,6 +98,15 @@ export const RELIABILITY: Record<FingerprintKind, number> = {
   "graph.first.followed": 1,
   "turn.continued": 1,
   "scope.met.present": 1,
+  "skill.bypassed": 1,
+  "review.ignored": 0.8, // the findings regex is a format match, not a semantic one
+  "plan.stale": 1,
+  "command.retried": 1,
+  "turn.overbudget": 1,
+  "skill.invoked": 1,
+  "review.acted": 0.8,
+  "plan.kept": 1,
+  "command.adapted": 1,
 };
 
 // ---------------------------------------------------------------------------
@@ -121,6 +137,9 @@ export interface RuleTrigger {
 
 export interface PracticeRule {
   id: string;
+  /** Phase 3 — a hand-written gate exposed as a row. Its logic stays in
+   *  `design-hooks.ts`; the row decides tier, on/off and message. */
+  builtin?: boolean;
   fingerprint: string;
   title: string;
   tier: RuleTier;
@@ -206,13 +225,163 @@ export const RULE_TEMPLATES: Record<FingerprintKind, RuleTemplate | null> = {
   "graph.first.followed": null,
   "turn.continued": null,
   "scope.met.present": null,
+  "skill.bypassed": {
+    title: "Invoke a skill instead of reading its files",
+    tier: "nudge",
+    trigger: { tool: "^Read$", field: "file_path", pattern: "/\\.(claude|marvin)/skills/" },
+    message:
+      "practice rule: you are reading a skill's files by hand. Invoke it instead — `Skill { skill: \"<name>\" }` " +
+      "loads its own instructions. Measured across this project's sessions: the skill was re-derived from its " +
+      "folder instead of being used.",
+  },
+  "review.ignored": {
+    title: "Act on a review's findings before moving on",
+    tier: "prompt",
+    trigger: null,
+    message:
+      "When `pr-review` or `security-audit` reports findings, address them (edit, or say explicitly why not) in the " +
+      "same turn. Measured across this project's sessions: reviews ran, reported findings, and nothing followed.",
+  },
+  "plan.stale": {
+    title: "Keep the plan's checklist moving",
+    tier: "prompt",
+    trigger: null,
+    message:
+      "A turn that edits three or more files under an approved plan must update the plan's `TodoWrite` checklist in " +
+      "that turn or the next. Measured across this project's sessions: real work happened and the plan never moved.",
+  },
+  "command.retried": {
+    title: "Change something before re-running a failed command",
+    tier: "prompt",
+    trigger: null,
+    message:
+      "A command that failed must not be re-run unchanged. Read the error, change the command or the state, then run. " +
+      "Measured across this project's sessions: the same failing command was repeated verbatim.",
+  },
+  "turn.overbudget": null,
+  "skill.invoked": null,
+  "review.acted": null,
+  "plan.kept": null,
+  "command.adapted": null,
 };
 
 export const TIER_ORDER: RuleTier[] = ["prompt", "nudge", "deny"];
 
+// ---------------------------------------------------------------------------
+// Phase 3 — built-in gates as rows
+// ---------------------------------------------------------------------------
+
+export const BUILTIN_RULE_IDS = [
+  "builtin:graphify-first",
+  "builtin:graph-drift-deny",
+  "builtin:advisor-on-adr",
+  "builtin:ship-review",
+] as const;
+export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
+
+const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string; message: string }> = {
+  "builtin:graphify-first": {
+    title: "Graph before the first structural read",
+    fingerprint: "graph.first.skipped",
+    message:
+      "The first Read / Grep / Glob / search of a turn is refused until a graph_* call has been made (ADR-0060). " +
+      "Native message names the file and a suggested query; edit this text only if you want to replace it.",
+  },
+  "builtin:graph-drift-deny": {
+    title: "Graph drift stop",
+    fingerprint: "graph.first.skipped",
+    message:
+      "After 25 novel source files with no graph call, the next read is refused until the graph is consulted (ADR-0083).",
+  },
+  "builtin:advisor-on-adr": {
+    title: "Advisor before an ADR-trigger edit",
+    fingerprint: "hook.deny.repeated:advisor-on-adr-trigger",
+    message:
+      "An Edit / Write on an auth, credential, migration, schema, CI, container or policy path is refused until an " +
+      "advisor consult has run this turn (ADR-0007). Native message names the path and the exact dispatch.",
+  },
+  "builtin:ship-review": {
+    title: "Review before a boundary commit",
+    fingerprint: "ship.unreviewed",
+    message:
+      "A git commit whose diff touches a security boundary is refused until pr-review and security-audit have run " +
+      "for the tree; a large diff needs pr-review (ADR-0104). Native message names the files and the Skill calls.",
+  },
+};
+
+/** Seed the four built-in rows when missing. Called from the pane's read
+ *  path only — never from a hook — so a process with no rules file (the
+ *  gate tests) keeps native behaviour. */
+export function ensureBuiltinRules(): PracticeRule[] {
+  const rules = readRules();
+  let changed = false;
+  const now = new Date().toISOString();
+  for (const id of BUILTIN_RULE_IDS) {
+    if (rules.some((r) => r.id === id)) continue;
+    const seed = BUILTIN_SEEDS[id];
+    rules.push({
+      id,
+      builtin: true,
+      fingerprint: seed.fingerprint,
+      title: seed.title,
+      tier: "deny",
+      trigger: null,
+      message: seed.message,
+      status: "active",
+      scope: { projectId: null },
+      provenance: { findingId: seed.fingerprint, distinctSessions: 0, costTotal: 0, value: 0 },
+      metrics: { fired: 0, lastFiredAt: null, bypasses: 0 },
+      createdAt: now,
+      acceptedAt: now,
+      updatedAt: now,
+    });
+    changed = true;
+  }
+  if (changed) writeRules(rules);
+  return rules;
+}
+
+export interface BuiltinGate {
+  tier: RuleTier;
+  /** The user's text when it differs from the seed; null = keep the native message. */
+  message: string | null;
+  off: boolean;
+}
+
+const NATIVE_GATE: BuiltinGate = { tier: "deny", message: null, off: false };
+let builtinCache: { mtime: number; gates: Map<string, BuiltinGate> } | null = null;
+
+/** What the row says about a built-in gate. One `statSync` per call; the
+ *  file is re-parsed only when it changed. Missing file or row → native. */
+export function builtinGate(id: BuiltinRuleId): BuiltinGate {
+  const path = practicePaths.rules();
+  let mtime = -1;
+  try {
+    mtime = statSync(path).mtimeMs;
+  } catch {
+    return NATIVE_GATE;
+  }
+  if (!builtinCache || builtinCache.mtime !== mtime) {
+    const gates = new Map<string, BuiltinGate>();
+    for (const r of readRules()) {
+      if (!r.builtin) continue;
+      const seed = BUILTIN_SEEDS[r.id as BuiltinRuleId];
+      const edited = seed ? r.message.trim() !== seed.message.trim() : true;
+      gates.set(r.id, { tier: r.tier, message: edited ? r.message : null, off: r.status !== "active" });
+    }
+    builtinCache = { mtime, gates };
+  }
+  return builtinCache.gates.get(id) ?? NATIVE_GATE;
+}
+
+export function __resetBuiltinCacheForTests(): void {
+  builtinCache = null;
+}
+
 /** A `deny` without a machine-checkable discharge is a wall, not a gate
  *  (advisor review, ADR-0105). Such a rule is enforced at `nudge`. */
-export function effectiveTier(rule: Pick<PracticeRule, "tier" | "trigger">): RuleTier {
+export function effectiveTier(rule: Pick<PracticeRule, "tier" | "trigger" | "builtin">): RuleTier {
+  if (rule.builtin) return rule.tier; // bespoke logic carries its own discharge
   if (rule.tier === "deny") {
     const discharge = rule.trigger?.requireSkillThisSession?.length ?? 0;
     return discharge > 0 ? "deny" : "nudge";
@@ -236,7 +405,10 @@ export type FindingState =
   | "confirmed"
   | "dismissed"
   | "report"
-  | "practice";
+  | "practice"
+  /** The user changed MARVIN's code for this. Verified like a rule: a
+   *  recurrence after `fixedAt` is `regressed`, a quiet window `confirmed`. */
+  | "fixed";
 
 export interface LedgerSessionEntry {
   count: number;
@@ -267,9 +439,14 @@ export interface LedgerFinding {
   dismissedAtSessions?: number;
   ruleId?: string;
   acceptedAt?: string;
-  /** Verification, for `active` / `regressed` / `confirmed`. */
+  /** Set by "fixed in MARVIN": the verification clock for a code fix. */
+  fixedAt?: string;
+  fixNote?: string;
+  /** Verification, for `active` / `regressed` / `confirmed` / `fixed`. */
   sessionsAfter?: number;
   recurrenceAfter?: number;
+  /** Processed sessions newer than the last one this was seen in (decay input). */
+  sessionsSinceLastSeen?: number;
 }
 
 export interface RunRecord {
@@ -343,6 +520,7 @@ export function writePracticeConfig(patch: Partial<PracticeConfig>): PracticeCon
     costScale: { ...next.costScale, ...(patch.costScale ?? {}) },
   };
   merged.hour = Math.min(23, Math.max(0, Math.round(merged.hour)));
+  if (patch.fit === undefined && !("fit" in patch)) merged.fit = next.fit;
   writeJson(practicePaths.config(), merged);
   return merged;
 }
@@ -402,25 +580,43 @@ export interface ScoreInput {
  * `graph.first.skipped` in 3 of 40 structural turns, 7 reads each →
  *   0.19 + 0.20·(7/15) + 0.15·(3/40) + 0.20 + 0.15 = 0.19+0.093+0.011+0.20+0.15 = 0.64.
  */
-export function scoreFinding(input: ScoreInput, config: PracticeConfig = readPracticeConfig()): number {
-  const w = config.weights;
+export interface ScoreFactors {
+  recurrence: number;
+  cost: number;
+  rate: number;
+  reliability: number;
+  actionability: number;
+  decay: number;
+}
+
+/** The five positive factors and the decay penalty, each in [0, 1]. */
+export function scoreFactors(input: ScoreInput, config: PracticeConfig = readPracticeConfig()): ScoreFactors {
   const kind = input.kind;
-  const recurrence = Math.log2(1 + input.distinctSessions) / Math.log2(1 + 8);
   const scale = config.costScale[kind] ?? 1;
   const perOccurrence = input.distinctSessions > 0 ? input.costTotal / input.distinctSessions : 0;
-  const cost = Math.min(1, perOccurrence / scale);
-  const rate = input.rate ?? 1;
-  const reliability = RELIABILITY[kind];
-  const actionability = RULE_TEMPLATES[kind] ? 1 : 0.2;
-  const decay = 1 - 0.9 ** Math.max(0, input.sessionsSinceLastSeen);
+  return {
+    recurrence: Math.min(1, Math.log2(1 + input.distinctSessions) / Math.log2(1 + 8)),
+    cost: Math.min(1, perOccurrence / scale),
+    rate: input.rate ?? 1,
+    reliability: RELIABILITY[kind],
+    actionability: RULE_TEMPLATES[kind] ? 1 : 0.2,
+    decay: 1 - 0.9 ** Math.max(0, input.sessionsSinceLastSeen),
+  };
+}
+
+export function scoreWithWeights(f: ScoreFactors, w: PracticeWeights): number {
   const v =
-    w.recurrence * Math.min(1, recurrence) +
-    w.cost * cost +
-    w.rate * rate +
-    w.reliability * reliability +
-    w.actionability * actionability -
-    w.decay * decay;
+    w.recurrence * f.recurrence +
+    w.cost * f.cost +
+    w.rate * f.rate +
+    w.reliability * f.reliability +
+    w.actionability * f.actionability -
+    w.decay * f.decay;
   return Math.round(Math.max(0, Math.min(1, v)) * 1000) / 1000;
+}
+
+export function scoreFinding(input: ScoreInput, config: PracticeConfig = readPracticeConfig()): number {
+  return scoreWithWeights(scoreFactors(input, config), config.weights);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +725,9 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
     if (wm && wm.mtime === file.mtime && wm.size === file.size) continue;
     const raw = readTranscript(projectId, file.sessionId);
     if (raw === null) continue;
-    const occurrences = extractAll(parseSessionTranscript(file.sessionId, raw));
+    const occurrences = extractAll(parseSessionTranscript(file.sessionId, raw), {
+      turnOverbudgetUsd: config.thresholds.turnOverbudgetUsd,
+    });
     sessionsRead += 1;
     occurrencesTotal += occurrences.length;
 
@@ -589,6 +787,7 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
     f.costTotal = sessionsList.reduce((a, s) => a + s.cost, 0);
     const lastMtime = sessionsList.reduce((a, s) => Math.max(a, s.mtime), 0);
     const sinceLastSeen = lastMtime ? sessionsAfterTime(lastMtime) : 0;
+    f.sessionsSinceLastSeen = sinceLastSeen;
 
     // Rate against the paired success kind, by distinct session.
     const pair = SUCCESS_PAIR[f.kind];
@@ -650,11 +849,12 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
         }
         break;
       }
+      case "fixed":
       case "active":
       case "regressed":
       case "confirmed": {
-        const rule = rules.find((r) => r.id === f.ruleId && r.status === "active");
-        if (!rule) {
+        const rule = f.ruleId ? rules.find((r) => r.id === f.ruleId && r.status === "active") : undefined;
+        if (!rule && !f.fixedAt) {
           f.state = "observed";
           delete f.ruleId;
           delete f.acceptedAt;
@@ -663,9 +863,16 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
           promoteIfCrossed();
           break;
         }
-        const acceptedMs = Date.parse(rule.acceptedAt);
+        // A code fix and an accepted rule verify the same way; the clock is
+        // whichever was set. A regressed FIX stays `regressed` (nothing to
+        // escalate) until the user marks it fixed again or approves a rule.
+        const acceptedMs = Date.parse(rule ? rule.acceptedAt : (f.fixedAt as string));
         f.sessionsAfter = sessionsAfterTime(acceptedMs);
-        f.recurrenceAfter = sessionsList.filter((s) => s.mtime > acceptedMs).length;
+        // A recurrence is an OCCURRENCE after acceptance, not a session file
+        // touched after it: the session that was open when the rule landed
+        // straddles the date, and its earlier hits are not evidence against
+        // the rule. `lastAt` is the newest occurrence in that session.
+        f.recurrenceAfter = sessionsList.filter((s) => Date.parse(s.lastAt) > acceptedMs).length;
         if (f.recurrenceAfter > 0) {
           if (f.state !== "regressed") regressed += 1;
           f.state = "regressed";
@@ -676,7 +883,7 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
           if (f.state !== "confirmed") confirmed += 1;
           f.state = "confirmed";
         } else {
-          f.state = "active";
+          f.state = rule ? "active" : "fixed";
         }
         break;
       }
@@ -762,11 +969,33 @@ export function approveFinding(
   return { ok: true, rule };
 }
 
+/** "I changed MARVIN's code for this." Starts the same verification clock a
+ *  rule gets, without a rule: the fix must hold across `verifyWindow`
+ *  sessions or the finding comes back as `regressed`. */
+export function markFindingFixed(projectId: string, findingId: string, note: string): boolean {
+  const ledger = readLedger(projectId);
+  const f = ledger.findings[findingId];
+  if (!f || f.polarity === "success") return false;
+  const now = new Date().toISOString();
+  f.state = "fixed";
+  f.fixedAt = now;
+  f.fixNote = note.trim().slice(0, 300);
+  f.sessionsAfter = 0;
+  f.recurrenceAfter = 0;
+  delete f.dismissedAt;
+  delete f.dismissReason;
+  delete f.dismissedAtSessions;
+  writeLedger(ledger);
+  return true;
+}
+
 export function dismissFinding(projectId: string, findingId: string, reason: string): boolean {
   const ledger = readLedger(projectId);
   const f = ledger.findings[findingId];
   if (!f) return false;
   f.state = "dismissed";
+  delete f.fixedAt;
+  delete f.fixNote;
   f.dismissedAt = new Date().toISOString();
   f.dismissReason = reason.trim().slice(0, 300);
   f.dismissedAtSessions = f.distinctSessions;
@@ -821,7 +1050,7 @@ export function updateRule(ruleId: string, patch: RulePatch): PracticeRule | nul
   }
   if (patch.status) rule.status = patch.status;
   if (typeof patch.message === "string" && patch.message.trim()) rule.message = patch.message.trim().slice(0, 1200);
-  if (typeof patch.global === "boolean") rule.scope.projectId = patch.global ? null : (rule.scope.projectId ?? null);
+  if (typeof patch.global === "boolean" && !rule.builtin) rule.scope.projectId = patch.global ? null : (rule.scope.projectId ?? null);
   rule.updatedAt = now;
   writeRules(rules);
   return rule;
@@ -838,6 +1067,8 @@ export function retireRule(ruleId: string): boolean {
 /** The `## Practice rules` block for the system prompt. Empty when none. */
 export function practicePromptBlock(projectId: string, rules: PracticeRule[] = readRules()): string {
   const prompt = activeRulesFor(projectId, rules).filter((r) => effectiveTier(r) === "prompt");
+  // A built-in at prompt tier is the user's explicit choice to move a gate
+  // from the tool boundary into the prompt; anything else stays out.
   if (prompt.length === 0) return "";
   const lines = prompt.map((r) => `- **${r.title}.** ${r.message}`);
   return (
@@ -897,7 +1128,7 @@ function triggerMatches(t: RuleTrigger, ctx: RuleEvalContext): boolean {
 export function evaluatePracticeRules(ctx: RuleEvalContext, rules: PracticeRule[] = readRules()): RuleEvalResult {
   const result: RuleEvalResult = { deny: null, nudges: [], bypassed: [] };
   for (const rule of activeRulesFor(ctx.projectId, rules)) {
-    if (!rule.trigger) continue;
+    if (rule.builtin || !rule.trigger) continue;
     const tier = effectiveTier(rule);
     if (tier === "prompt") continue;
     if (!triggerMatches(rule.trigger, ctx)) continue;
@@ -940,17 +1171,28 @@ export interface PracticeView {
   projectId: string;
   config: PracticeConfig;
   findings: Array<LedgerFinding & { unit: string; template: boolean }>;
-  rules: PracticeRule[];
+  /** Phase 6 — a project rule whose finding is confirmed here AND in other
+   *  projects carries `suggestGlobal` with the count. */
+  rules: Array<PracticeRule & { suggestGlobal?: boolean; confirmedIn?: number }>;
   runs: RunRecord[];
   lastRun: RunRecord | null;
 }
 
 export function practiceView(projectId: string): PracticeView {
+  ensureBuiltinRules();
   const ledger = readLedger(projectId);
   const findings = Object.values(ledger.findings)
     .map((f) => ({ ...f, unit: COST_UNITS[f.kind], template: RULE_TEMPLATES[f.kind] !== null }))
     .sort((a, b) => b.value - a.value || b.distinctSessions - a.distinctSessions);
-  const rules = readRules().filter((r) => r.scope.projectId === null || r.scope.projectId === projectId);
+  const rules = readRules()
+    .filter((r) => r.scope.projectId === null || r.scope.projectId === projectId)
+    .map((r) => {
+      if (r.builtin || r.scope.projectId === null || r.status !== "active") return r;
+      const here = ledger.findings[r.fingerprint];
+      if (here?.state !== "confirmed") return r;
+      const confirmedIn = 1 + otherProjectsConfirmed(projectId, r.fingerprint);
+      return confirmedIn >= 2 ? { ...r, suggestGlobal: true, confirmedIn } : { ...r, confirmedIn };
+    });
   return {
     projectId,
     config: readPracticeConfig(),
@@ -959,6 +1201,28 @@ export function practiceView(projectId: string): PracticeView {
     runs: ledger.runs.slice(-20).reverse(),
     lastRun: ledger.runs[ledger.runs.length - 1] ?? null,
   };
+}
+
+/** Other projects whose ledger has this fingerprint `confirmed`. */
+export function otherProjectsConfirmed(projectId: string, fingerprint: string): number {
+  let n = 0;
+  for (const other of listLedgerProjectIds()) {
+    if (other === projectId) continue;
+    const f = readLedger(other).findings[fingerprint];
+    if (f?.state === "confirmed") n += 1;
+  }
+  return n;
+}
+
+/** Every project that has a ledger on disk. */
+export function listLedgerProjectIds(): string[] {
+  try {
+    return readdirSync(practiceDir(), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && existsSync(practicePaths.ledger(d.name)))
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
