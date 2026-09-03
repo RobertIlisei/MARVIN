@@ -48,6 +48,7 @@ struct PracticePane: View {
     @State private var draftText = ""
     @State private var showConfirmed = false
     @State private var showBelow = false
+    @State private var showHow = false
 
     private var projectId: String? {
         bridge.projectWorkDir.map { ProjectIdSlug.from(workDir: $0) }
@@ -165,6 +166,21 @@ struct PracticePane: View {
             Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose — then measured.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup(isExpanded: $showHow) {
+                VStack(alignment: .leading, spacing: 6) {
+                    howRow("Every night", "plain code reads this project's session transcripts and counts each failure kind by distinct session — and the same act done right, so a finding carries a rate.")
+                    howRow("Proposed", "three sessions and a score of 0.6. Approve makes a rule; Dismiss silences it with a reason; Fixed in MARVIN says you changed MARVIN's code.")
+                    howRow("Tiers", "prompt = a line in the system prompt. nudge = the call runs, MARVIN sees the message first. deny = the call is refused, twice per turn, then allowed and counted. A deny needs a checkable way out, or it acts as a nudge.")
+                    howRow("Verified", "a recurrence after acceptance is regressed; five quiet sessions confirm. Same for a fix.")
+                    howRow("Built-in gates", "MARVIN's own gates are rows too — tier, off, message, fired counts. No row means native behaviour.")
+                    howRow("Never", "no model reads a transcript; nothing changes without your click. Draft message is the only model call, and it sees aggregates.")
+                    Text("Full guide: docs/guides/practice.md · design: ADR-0105")
+                        .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                }
+                .padding(.top, 4)
+            } label: {
+                Text("How this works").font(.caption.bold()).foregroundStyle(.secondary)
+            }
             if let view {
                 HStack(spacing: 10) {
                     Toggle(isOn: Binding(
@@ -267,6 +283,13 @@ struct PracticePane: View {
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+    }
+
+    private func howRow(_ title: String, _ body: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(title).font(.caption2.bold()).frame(width: 84, alignment: .leading)
+            Text(body).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func metaLine(_ f: PracticeFinding) -> String {

@@ -453,6 +453,7 @@ bin/marvin logs     # tail .marvin/dev.log
 - [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
 - [Modes & workflows](./docs/guides/workflows.md) — Ask / Agent / Plan with worked examples, and how MARVIN takes decisions
+- [Practice](./docs/guides/practice.md) — how MARVIN learns from its own sessions: findings, rules, tiers, verification, and the pane that manages them
 - [Architecture](./docs/getting-started/architecture.md)
 - [HTTP API reference](./docs/reference/api.md)
 - [ADRs](./docs/decisions/) — design decisions

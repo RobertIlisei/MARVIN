@@ -748,3 +748,19 @@ Two modes:
 - [Session persistence](../operations/sessions.md) — how JSONL transcripts + resume work.
 - [Confirm gate](../concepts/confirm-gate.md) — how `/api/confirm` integrates with the SDK's `canUseTool`.
 - [Tool policy](../security/tool-policy.md) — what triggers a `confirm.request`.
+
+## Practice (ADR-0105)
+
+The practice loop's read model and verbs. All mutations require the `x-marvin-client: 1` header; every route keys on a **registered** `projectId`, never a path. See the [Practice guide](../guides/practice.md).
+
+| Method | Route | Body / query | Returns |
+|---|---|---|---|
+| GET | `/api/practice` | `?projectId=` | `{ projectId, config, findings[], rules[], runs[], lastRun }` — seeds the four built-in gate rows on first read |
+| POST | `/api/practice` | `{ config: { enabled?, hour?, thresholds?, verifyWindow?, weights?, costScale? } }` | `{ config }` |
+| POST | `/api/practice/run` | `{ projectId, force? }` | `{ run, view }` — `force` ignores watermarks (the backtest) |
+| POST | `/api/practice/findings` | `{ projectId, id, action: "approve", tier?, message?, global? }` · `{ …, action: "dismiss", reason }` · `{ …, action: "fixed", reason }` · `{ …, action: "escalate" }` | `{ ok, rule?, view }` |
+| POST | `/api/practice/rules` | `{ projectId, id, tier?, status?, message?, global? }` | `{ ok, rule, view }` — built-in rows accept tier / status / message only |
+| POST | `/api/practice/fit` | `{ projectIds?, apply? }` | `{ fit, config? }` — dry by default |
+| POST | `/api/practice/draft` | `{ projectId, id }` | `{ ok, message, rationale, costUsd }` — one read-only model call over aggregates; nothing persisted |
+
+Files: `~/.marvin/practice/config.json`, `~/.marvin/practice/rules.json`, `~/.marvin/practice/<projectId>/ledger.json`.
