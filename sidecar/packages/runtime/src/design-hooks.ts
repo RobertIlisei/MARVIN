@@ -49,6 +49,7 @@ import {
   type RuleEvalResult,
 } from "./practice";
 import { slugifyWorkDir } from "./projects";
+import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -166,6 +167,11 @@ export interface DesignTurnContext {
   /** Edit / Write / NotebookEdit calls allowed this turn (own, not subagent).
    *  The turn-close hook's "did this turn do real work" fact. */
   mutationCount: number;
+  /** Bash commands that FAILED this turn (whitespace-normalised → count),
+   *  recorded by the PostToolUseFailure hook. `checkCommandRetry` reads it. */
+  failedBashCommands: Map<string, number>;
+  /** Commands already nudged about this turn. */
+  retryNudged: Set<string>;
 }
 
 /** ADR-0094 — the registered advisor agent's `subagent_type` (ADR-0033).
@@ -318,6 +324,8 @@ export function createTurnDesignContext(
     practiceDenies: new Map(),
     practiceNudges: new Set(),
     mutationCount: 0,
+    failedBashCommands: new Map(),
+    retryNudged: new Set(),
     saveResultCallCount: 0,
     saveResultNudgeFired: false,
     editedFilesThisTurn: new Set<string>(),
@@ -742,6 +750,57 @@ export function checkShipImpact(
   );
 }
 
+/** The namespaced name for a bare project-local skill call, or null when
+ *  the call is not a `Skill`, already namespaced, or not a project skill. */
+export function rewriteProjectSkillName(
+  cwd: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (toolName !== "Skill") return null;
+  const raw = typeof toolInput.skill === "string" ? toolInput.skill.trim() : "";
+  if (!raw || raw.includes(":") || raw.includes("/")) return null;
+  if (!existsSync(join(cwd, ".marvin", "skills", raw, "SKILL.md"))) return null;
+  return { ...toolInput, skill: `${PROJECT_SKILLS_PLUGIN}:${raw}` };
+}
+
+export function normaliseBashCommand(cmd: string): string {
+  return cmd.replace(/\s+/g, " ").trim();
+}
+
+/** PostToolUseFailure — remember the exact command that failed this turn. */
+export function noteBashFailure(ctx: DesignTurnContext, toolName: string, toolInput: Record<string, unknown>): void {
+  if (toolName !== "Bash") return;
+  const cmd = typeof toolInput.command === "string" ? normaliseBashCommand(toolInput.command) : "";
+  if (!cmd) return;
+  ctx.failedBashCommands.set(cmd, (ctx.failedBashCommands.get(cmd) ?? 0) + 1);
+}
+
+/**
+ * Command-retry nudge (2026-09-03). The practice backtest found the same
+ * failing command re-run verbatim in 26 sessions (96 retries). Advisory,
+ * once per command per turn: the call proceeds, with the reminder attached.
+ * Exported for tests.
+ */
+export function checkCommandRetry(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | null {
+  if (toolName !== "Bash") return null;
+  const cmd = typeof toolInput.command === "string" ? normaliseBashCommand(toolInput.command) : "";
+  if (!cmd) return null;
+  const failures = ctx.failedBashCommands.get(cmd) ?? 0;
+  if (failures === 0 || ctx.retryNudged.has(cmd)) return null;
+  ctx.retryNudged.add(cmd);
+  return (
+    `[command retry — advisory] This exact command already failed ${failures === 1 ? "once" : `${failures} times`} ` +
+    "this turn. Re-running it unchanged will fail the same way. Read the error, change the command or the " +
+    "state it depends on, then run. (Measured across this project's sessions: the same failing command was " +
+    "repeated verbatim in 26 sessions.)"
+  );
+}
+
 /**
  * Build a PreToolUse hook callback for the SDK's `Options.hooks` config.
  *
@@ -841,6 +900,27 @@ export function makeDesignHooksPreToolUse(args: {
       evt.tool_input && typeof evt.tool_input === "object" && !Array.isArray(evt.tool_input)
         ? (evt.tool_input as Record<string, unknown>)
         : {};
+
+    // Project-local skill name rewrite (2026-09-03). ADR-0024 loads
+    // `<cwd>/.marvin/skills/<name>` under the plugin namespace, so the SDK
+    // knows `marvin-project-local:<name>` and rejects the bare `<name>` with
+    // "Unknown skill". The prompt says so; measured on the reporting project
+    // it was ignored 29 times out of 43 (every failure bare, every success
+    // namespaced), and each failure was followed by the model reading the
+    // skill's folder by hand. Same shape as the ADR-0058 dispatch rewrite:
+    // fix the name at the gate, log it, let the call through.
+    const rewritten = rewriteProjectSkillName(cwd, evt.tool_name, safeInput);
+    if (rewritten) {
+      logDesignHookEvent({ kind: "skill.name.rewritten", turnId, from: safeInput.skill, to: rewritten.skill });
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+          updatedInput: rewritten,
+        },
+      } as HookJSONOutput;
+    }
+
     const designDeny = runDesignHooks({
       ctx: designCtx,
       toolName: evt.tool_name,
@@ -887,6 +967,7 @@ export function makeDesignHooksPreToolUse(args: {
     const blast = mode === "enforce" ? checkBlastRadius(designCtx, evt.tool_name, safeInput) : null;
     const ship = mode === "enforce" ? checkShipImpact(designCtx, evt.tool_name, safeInput) : null;
     const save = mode === "enforce" ? checkSaveResult(designCtx, evt.tool_name) : null;
+    const retry = mode === "enforce" ? checkCommandRetry(designCtx, evt.tool_name, safeInput) : null;
 
     // No design-hook deny — record the tool as allowed-from-our-POV so
     // state advances. (canUseTool may still deny for safety reasons; if
@@ -904,6 +985,7 @@ export function makeDesignHooksPreToolUse(args: {
     }
 
     for (const [advice, kind] of [
+      [retry, "command.retry.nudge"],
       [blast, "blast.radius.nudge"],
       [ship, "ship.impact.nudge"],
       [save, "save.result.nudge"],

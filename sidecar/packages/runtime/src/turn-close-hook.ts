@@ -35,10 +35,14 @@ export interface TurnCloseFacts {
   machineTurn: boolean;
   /** Has this hook already blocked once this turn? */
   alreadyFired: boolean;
+  /** Open steps of the persisted plan spine, when no TodoWrite ran this turn. */
+  planOpenSteps?: string[];
+  /** Did this turn write TodoWrite at all? */
+  todoWrittenThisTurn?: boolean;
 }
 
 export interface TurnCloseDecision {
-  kind: "scope-met-missing" | "plan-steps-open";
+  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale";
   reason: string;
 }
 
@@ -57,6 +61,20 @@ export function decideTurnClose(lastText: string, facts: TurnCloseFacts): TurnCl
         "`<!-- marvin:scope-met -->` on its own line. If the scope is NOT met, say exactly what remains " +
         "instead — never claim it to clear this. (Measured across this project's sessions: 41 % of " +
         "real-work turns ended without the handoff. Once per turn; this will not repeat.)",
+    };
+  }
+  // Plan-stale (practice backtest: 48 sessions, 21 % of real-work turns):
+  // three or more edits under a plan whose checklist this turn never touched.
+  if (facts.mutations >= 3 && !facts.todoWrittenThisTurn && (facts.planOpenSteps?.length ?? 0) > 0) {
+    const open = facts.planOpenSteps ?? [];
+    return {
+      kind: "plan-stale",
+      reason:
+        `This turn edited ${facts.mutations} files under an approved plan with ${open.length} open step${open.length === 1 ? "" : "s"} ` +
+        `(${open.slice(0, 2).map((s) => `"${s.slice(0, 60)}"`).join(", ")}${open.length > 2 ? ", …" : ""}) and never updated the ` +
+        "checklist. Before you stop, write the TodoWrite snapshot with the steps this work completed marked done and " +
+        "the next one in_progress — the plan spine is what the next session resumes from. (Measured across this " +
+        "project's sessions: 21 % of real-work turns left the plan untouched. Once per turn; this will not repeat.)",
     };
   }
   if (ending === "stopped") {

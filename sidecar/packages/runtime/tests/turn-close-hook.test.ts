@@ -40,6 +40,18 @@ describe("turn-close decision", () => {
     expect(decideTurnClose("", { ...facts, mutations: 0, lastTodos: todos })).toBeNull();
   });
 
+  it("plan-stale: three edits under an open plan with no TodoWrite this turn blocks once; a TodoWrite or a small turn does not", () => {
+    const withPlan = { ...facts, mutations: 3, planOpenSteps: ["[2] run it on staging"], todoWrittenThisTurn: false };
+    const d = decideTurnClose("**Scope met:** done.\n<!-- marvin:scope-met -->", withPlan);
+    expect(d?.kind).toBe("plan-stale");
+    expect(d?.reason).toContain("run it on staging");
+    expect(decideTurnClose("**Scope met:** done.\n<!-- marvin:scope-met -->", { ...withPlan, todoWrittenThisTurn: true })).toBeNull();
+    expect(decideTurnClose("**Scope met:** done.\n<!-- marvin:scope-met -->", { ...withPlan, mutations: 2 })).toBeNull();
+    expect(decideTurnClose("**Scope met:** done.\n<!-- marvin:scope-met -->", { ...withPlan, planOpenSteps: [] })).toBeNull();
+    // The handoff comes first when both apply.
+    expect(decideTurnClose("Edited.", withPlan)?.kind).toBe("scope-met-missing");
+  });
+
   it("prefers the handoff block over the plan block when both apply", () => {
     expect(decideTurnClose("Edited.", { ...facts, mutations: 1, lastTodos: todos })?.kind).toBe("scope-met-missing");
   });

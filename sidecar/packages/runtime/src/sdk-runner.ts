@@ -24,7 +24,10 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage,
+  type HookJSONOutput,
+  type PostToolUseFailureHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { makeTurnCloseStopHook } from "./turn-close-hook";
@@ -58,6 +61,7 @@ import {
   logDesignTurnSummary,
   makeDesignHooksPreToolUse,
   recordAllowedTool,
+  noteBashFailure,
 } from "./design-hooks";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -1652,6 +1656,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       mutations: designCtx.mutationCount,
       lastTodos: lastTodoPayload,
       machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued)/.test(message),
+      // Plan-stale (2026-09-03): the persisted plan spine's open steps, so a
+      // real-work turn that never touched TodoWrite can be asked to.
+      planOpenSteps:
+        lastTodoPayload === undefined && input.projectId && input.marvinSessionId
+          ? (() => {
+              const ps = readPlanState(input.projectId, input.marvinSessionId);
+              return ps.ok ? openPlanSteps(ps.state) : [];
+            })()
+          : [],
+      todoWrittenThisTurn: lastTodoPayload !== undefined,
     }),
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
@@ -1805,6 +1819,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
       PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook] }],
+      // Command-retry memory (2026-09-03): a failed Bash is remembered for
+      // the turn so an identical re-run gets the advisory nudge.
+      PostToolUseFailure: [
+        {
+          hooks: [
+            async (hookInput) => {
+              if (hookInput.hook_event_name !== "PostToolUseFailure") return {} as HookJSONOutput;
+              const f = hookInput as PostToolUseFailureHookInput;
+              noteBashFailure(designCtx, f.tool_name, normaliseInput(f.tool_input));
+              return {} as HookJSONOutput;
+            },
+          ],
+        },
+      ],
       // Turn-close guard (2026-09-03): a real-work turn ending without its
       // handoff, or a turn stopping with plan steps open and no question, is
       // blocked ONCE with the reason and the model continues in-request.

@@ -38,6 +38,7 @@ import {
   type ShipDiff,
   shipReviewSkillOf,
 } from "../src/design-hooks";
+import { checkCommandRetry, noteBashFailure, rewriteProjectSkillName } from "../src/design-hooks";
 import {
   __resetBuiltinCacheForTests,
   BUILTIN_RULE_IDS,
@@ -1453,5 +1454,39 @@ describe("built-in gate rows (ADR-0105 phase 3)", () => {
     __resetBuiltinCacheForTests();
     const deny = runDesignHooks({ ctx: graphCtx(), toolName: "Read", toolInput: { file_path: src }, mode: "enforce" });
     expect(deny?.message).toBe("Ask the graph first. Always.");
+  });
+});
+
+// 2026-09-03 — two MARVIN-owned fixes from the practice report.
+describe("project-skill name rewrite", () => {
+  it("namespaces a bare project-local skill, leaves everything else alone", () => {
+    const { cwd, cleanup } = withTmpCwd();
+    try {
+      mkdirSync(join(cwd, ".marvin", "skills", "hetzner-ssh"), { recursive: true });
+      writeFileSync(join(cwd, ".marvin", "skills", "hetzner-ssh", "SKILL.md"), "# Skill: hetzner-ssh\n");
+      expect(rewriteProjectSkillName(cwd, "Skill", { skill: "hetzner-ssh", args: "x" })).toEqual({
+        skill: "marvin-project-local:hetzner-ssh",
+        args: "x",
+      });
+      expect(rewriteProjectSkillName(cwd, "Skill", { skill: "marvin-project-local:hetzner-ssh" })).toBeNull();
+      expect(rewriteProjectSkillName(cwd, "Skill", { skill: "pr-review" })).toBeNull(); // user-global, not project-local
+      expect(rewriteProjectSkillName(cwd, "Bash", { command: "hetzner-ssh" })).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("command-retry nudge", () => {
+  it("nudges once when the exact failed command is re-run, ignores different or first-time commands", () => {
+    const ctx = createTurnDesignContext("t-retry", "/proj");
+    expect(checkCommandRetry(ctx, "Bash", { command: "npm test" })).toBeNull();
+    noteBashFailure(ctx, "Bash", { command: "npm   test" });
+    const first = checkCommandRetry(ctx, "Bash", { command: "npm test" });
+    expect(first).toContain("already failed once");
+    expect(checkCommandRetry(ctx, "Bash", { command: "npm test" })).toBeNull(); // once per command
+    expect(checkCommandRetry(ctx, "Bash", { command: "npm test -- --runInBand" })).toBeNull();
+    noteBashFailure(ctx, "Read", { file_path: "/x" }); // only Bash counts
+    expect(ctx.failedBashCommands.size).toBe(1);
   });
 });
