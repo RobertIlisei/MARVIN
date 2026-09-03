@@ -230,7 +230,11 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 
 ## A tour
 
-Every image below is a real, unedited session on MARVIN's own repository.
+**The whole loop, in 50 seconds.** A request goes to the knowledge graph before any file, becomes a plan you approve, passes every tool call through the gate (reads allow, edits confirm, destructive commands are refused), is verified against its Definition of Done, reviewed as a diff, and every night the Practice pass turns repeat failures into rules that feed back into the same gate.
+
+<p align="center"><img src="./docs/assets/session-animated.gif" alt="Animated diagram of a MARVIN session: request, graph, plan and approval, the tool gate with allow, confirm and deny, execute and verify, review, and the nightly Practice loop feeding a rule back into the gate" width="900"></p>
+
+Everything below is a real, unedited session on MARVIN's own repository.
 
 **The IDE.** File tree, editor, the project's knowledge graph, and the chat. The question on the right was answered with two graph queries before the first file read, and cited to file and line.
 
@@ -250,6 +254,8 @@ Every image below is a real, unedited session on MARVIN's own repository.
 <p align="center"><img src="./docs/assets/decision-dialog.gif" alt="MARVIN needs your decision: a dialog with two options and Other, then the answer flowing back into the chat" width="800"></p>
 
 **Practice.** What MARVIN keeps getting right and wrong across this project's sessions, and the rules you accepted about it. The four built-in gates are rows you can re-tier or switch off. See the [Practice guide](./docs/guides/practice.md).
+
+<p align="center"><img src="./docs/assets/practice-loop-animated.gif" alt="Animated ring: sessions, nightly read-only pass, findings with a rate, proposed at three sessions and approved, enforced at the gate, measured and confirmed" width="900"></p>
 
 <p align="center">
   <img src="./docs/assets/practice-working.png" alt="Practice pane, Working tab: seven successes with their rates" width="420">

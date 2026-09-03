@@ -23,6 +23,9 @@ transcript. The nightly pass is plain code.
 
 ## The idea in one loop
 
+<p align="center"><img src="../assets/practice-loop-animated.gif" alt="The Practice loop, animated" width="800"></p>
+
+
 ```
 sessions on disk ─▶ extractors ─▶ findings (per project) ─▶ score ─▶ proposed
                                         ▲                                 │
