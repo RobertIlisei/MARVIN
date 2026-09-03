@@ -8,6 +8,29 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-03 — v0.1.104: practice cold start, the practice guide, and three fixes from the first practice report.**
+
+  The first practice report on a real project named three things MARVIN owned,
+  and all three are fixed in the runtime rather than proposed as rules. A bare
+  project-local skill name is rewritten to its plugin-namespaced form at the
+  gate (29 "Unknown skill" failures measured; every success was namespaced).
+  A `PostToolUseFailure` hook remembers a failed Bash command for the turn and
+  an identical re-run gets an advisory nudge. The turn-close hook blocks, once,
+  a three-plus-edit turn under an open plan that never updated `TodoWrite`.
+
+  **Cold start.** A project with fewer than three sessions has nothing to
+  propose, and the pane said so with an empty list. It now shows a calibration
+  card with a sessions counter, and lists rules **confirmed in the user's
+  other projects** that this one has no rule for as starters — *Adopt* copies
+  one here, scoped to this project. Adoption is a click, never automatic.
+
+  **Guide.** `docs/guides/practice.md` — the loop in one diagram, every
+  finding kind with its paired success, the three tiers, day-two semantics,
+  the API — linked from the README and from a Guide button in the pane.
+
+  Cask bumped from 0.1.101 straight to 0.1.104; 0.1.102 and 0.1.103 were
+  released on GitHub but never reached the tap.
+
 - **2026-09-03 — v0.1.103: the practice loop, phases 2–6.**
 
   The phases were stated in chat the night v0.1.102 shipped; the user asked
