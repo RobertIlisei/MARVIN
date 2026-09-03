@@ -150,20 +150,25 @@ graph. When a decision requires a written architecture record. When to
 spawn the advisor. When a skill fires. What may be written to memory. Each
 of these is a **firm surface** — auditable and testable.⁶
 
-The novel step is pushing two of these contracts below the prompt entirely,
-into the runtime: MARVIN's tool gate can **deny a blind source-file read**
-when the graph should have been consulted first, and **deny an edit in
-security-sensitive paths** until an advisor consult has happened. The
-prompt asks; the gate *enforces*. This "design hooks" layer exists because
-measurement showed prompt-only rules decay with prompt length — so the two
-most load-bearing rules stopped being prompt rules.
+The novel step is pushing contracts below the prompt entirely, into the
+runtime. MARVIN's tool gate can **deny a blind source-file read** when the
+graph should have been consulted first, **deny an edit in
+security-sensitive paths** until an advisor consult has happened, and —
+since v0.1.102 — **refuse a `git commit`** whose diff touches a security
+boundary until the review skills have actually run.¹⁴ The prompt asks; the
+gate *enforces*. This "design hooks" layer exists because measurement
+showed prompt-only rules decay with prompt length — so the most
+load-bearing rules stopped being prompt rules.
 
 Honesty about the ladder: most of the contract families are still
 prompt-level. The enumerated MUST/MUST-NOT form measurably outperforms the
 soft language it replaced — that is what the zero-fires audit forced — but
 only gate-level rules are truly deterministic, which is why the direction
 of travel is downward: when a prompt contract proves load-bearing, it earns
-a runtime hook. The hooks themselves are configurable (enforce by default,
+a runtime hook. Since v0.1.103 that promotion has a mechanism rather than a
+human reading transcripts: the **practice loop** (§4) mines a project's own
+sessions for the failures that repeat, proposes a rule, and an approved rule
+enforces at the same gate at one of three tiers.¹⁵ The hooks themselves are configurable (enforce by default,
 measure-only, off); the hard-deny floor and the subagent invariant are not
 — no configuration weakens those two.⁷
 
@@ -405,11 +410,32 @@ This is the intended failure mode of the whole approach: a deterministic
 contract produces a number, the number contradicts the design, and the
 design loses.
 
+**Rules that are mined, not written (measured, n=1 project).** Every
+behavioural fix in MARVIN's history came from a human reading many
+transcripts by hand — the 2026-05-22 skill audit, the 2026-08-17 stall
+analysis, and a 2026-09-02 session audit that found `.gitlab-ci.yml`, a
+secrets-fetching script, a production sudoers grant and SMTP credentials
+shipped across **eight pushes with the review skills invoked 0×**, while
+every mechanical rule in the same session held. The immediate fix was a
+gate at `git commit`.¹⁴ The general fix is the practice loop:¹⁵ a nightly,
+read-only pass over a project's transcripts runs deterministic extractors
+for repeat failures and their paired successes (so a finding carries a
+*rate*, not a count), scores them with a small linear model whose weights
+are fit from the loop's own outcomes, proposes a rule at three distinct
+sessions, and — after the user approves — enforces it at the gate and
+measures whether it held: a recurrence is *regressed*, a quiet window is
+*confirmed*. No model reads a transcript; nothing changes MARVIN's
+behaviour without a click. The first backtest on a real project read
+**397 sessions in 11 s** and produced six proposals; three were MARVIN's
+own defects and were fixed in the runtime that night — which is the
+intended shape. The loop is first a way of finding what to fix in MARVIN,
+and only second a way of constraining the model.
+
 **Decisions that bind (design property).** Architecture decision records
 written at decision time are re-read at the start of every future session
 and cross-checked
 during impact analysis. Month-eight work is confronted with month-two
-constraints mechanically, not by luck. Ninety-seven ADRs govern MARVIN's own
+constraints mechanically, not by luck. A hundred and five ADRs govern MARVIN's own
 development — the tool is built under its own discipline, and several of
 its subsystems (the memory redesign, the context budget, the verify-then-
 remediate contract) exist because that discipline surfaced a real failure
@@ -443,6 +469,16 @@ the security architecture is the evaluation. MARVIN's, in one place:
 - **Subagents cannot write.** Any tool call from a spawned agent that
   would mutate the workspace is hard-denied at the gate. This is the
   invariant that makes read-only research fan-outs safe.⁴
+- **Review is enforced at commit, not requested.** A `git commit` whose
+  diff touches auth, credentials, CI, sudoers, `.env`, shell scripts or
+  migrations is refused until both review skills have run this session;
+  more than three files or fifty lines requires code review; docs and
+  lockfiles pass. Two refusals per skill per turn, then allow and log —
+  the gate cannot deadlock a session, and it fails open on git errors.¹⁴
+- **Practice writes nothing on its own.** The loop that mines transcripts
+  is plain code, runs read-only, and can only *propose*; a rule enforces
+  only after the user approves it, a `deny` tier is offered only where a
+  machine-checkable discharge exists, and every bypass is logged.¹⁵
 - **Git is guarded at the argv level.** A single choke-point shells to
   git with `shell:false`, whitelists every ref and pathspec, rejects
   flag-injection vectors, and hard-denies force-pushes to main. Credential
@@ -477,7 +513,8 @@ flowchart TD
 
 *Figure 5 — the decision ladder every tool call descends. The deny floor
 and the subagent invariant sit above the auto/gated fork; no configuration
-weakens those two. The Bet-3 design hooks (graph-first, advisor-on-trigger)
+weakens those two. The Bet-3 design hooks (graph-first, advisor-on-trigger,
+ship-review, and the practice rules the user accepted)
 run inside the classification step and can turn an otherwise-allowed call
 into a deny — they are the one layer with an off switch.*
 
@@ -515,7 +552,7 @@ Honest positioning, category by category:
   your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
-  97 ADRs are public; so are the audits that found real flaws — including
+  105 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -602,6 +639,22 @@ ad-hoc signed — no paid developer program — and installs to
     repo — whose context comprised 139 ADRs plus a 419KB memory log
     (~566K tokens before the redesign; ~13.4K after). n=1; the mechanism,
     not the multiplier, is the claim.
+14. Ship-review gate:
+    [ADR-0104](../decisions/0104-ship-review-gate.md). The 0× figure is
+    from one audited session (25 turns, 2026-09-02); the hook is
+    `checkShipReview` in `design-hooks.ts`.
+15. Practice loop: [ADR-0105](../decisions/0105-practice-loop.md); user
+    guide: [`docs/guides/practice.md`](../guides/practice.md). The design
+    follows Anthropic's own guidance that memory files are "context, not
+    enforced configuration" and that blocking an action takes a hook
+    ([Claude Code docs: memory](https://code.claude.com/docs/en/memory)),
+    and two 2026 papers: *Learning What to Remember*
+    ([arXiv:2606.12945](https://arxiv.org/abs/2606.12945)) — a linear value
+    model whose weights are learned from downstream outcomes retained 77 %
+    of the evidence that later mattered, against 66 % for uniform weights —
+    and *MemGuard* ([arXiv:2608.21867](https://arxiv.org/abs/2608.21867)),
+    which keeps a verifier's signals attached to a memory for its lifetime.
+    The 397 sessions / 11 s backtest is one project on one machine.
 
 ---
 

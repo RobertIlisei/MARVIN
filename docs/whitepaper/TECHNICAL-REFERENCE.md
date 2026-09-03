@@ -3,7 +3,7 @@
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
 code. Written for contributors and deep evaluators. Covers v0.1.104
-(2026-08-31). Where this document and the repository disagree, the
+(2026-09-03). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -20,6 +20,12 @@ repository wins.*
 > (ADR-0096). Two cross-cutting lessons are recorded as ADR-0097 (verify
 > against the surface that *runs*, not the one that *reports*) and ADR-0098
 > (a rail keyed on vendor tool names is only as durable as those names).
+> Since 2026-09-01: an **LSP client** whose diagnostics come from the buffer
+> (ADR-0099), **`/refine`** proposing practice lessons (ADR-0101), **two
+> sessions in one worktree** with the collision surfaced (ADR-0102), a
+> **derived implementer-branch lifecycle** (ADR-0103), the **ship-review
+> gate** at `git commit` (ADR-0104, §2.7) and the **practice loop**
+> (ADR-0105, §2.7 and §4).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -221,17 +227,51 @@ process would finish unreported. The honest alternative is §9.1.
 
 ### 2.7 Runtime design hooks
 
-`runtime/design-hooks.ts` enforces the two most load-bearing behavioral
-rules **structurally**, below the prompt: a blind source-file read on a
-codebase question can be denied until the graph is consulted, and an edit
-in security/schema/CI/migration paths can be denied until an advisor
-consult has happened. Under the default `enforce` mode the deny is
-unconditional; `measure` logs what would have been denied; `off` disables
-the layer (`MARVIN_DESIGN_HOOKS`). These two rules are thus
-belt-and-suspenders: prompt contract (§3.1, §5) *plus* runtime hook —
-unlike the §2.2 invariant and the deny floor, which have no off switch.
-This layer exists because audits showed prompt-only rules decay as
-prompts grow.
+`runtime/design-hooks.ts` enforces the most load-bearing behavioral rules
+**structurally**, below the prompt. Four are built in: a blind source-file
+read on a codebase question is denied until the graph is consulted
+(graphify-first); a stale graph escalates a nudge (graph-drift, ADR-0083);
+an edit in security/schema/CI/migration paths is denied until an advisor
+consult has happened (advisor-on-ADR); and, since v0.1.102, a `git commit`
+is refused until the review skills the personality requires have run
+(`checkShipReview`, [ADR-0104](../decisions/0104-ship-review-gate.md)).
+The ship-review gate reads the diff the commit seals — the index plus
+whatever the same command stages: a boundary path (auth / creds / CI /
+sudoers / `.env` / `*.sh` / migrations) requires both `pr-review` and
+`security-audit`, more than three files or fifty lines requires
+`pr-review`, docs-only and lockfile-only pass; a review this turn covers
+the turn, an earlier one holds until the next commit; two denies per skill
+per turn, then allow and log; fails open on git errors.
+
+**Practice rules** ([ADR-0105](../decisions/0105-practice-loop.md)) are the
+fifth family and the first driven by data rather than code.
+`checkPracticeRules` reads the rules the user accepted in the Practice pane
+from `~/.marvin/practice/<projectId>/` (mtime-cached) and enforces each at
+its tier: `prompt` (a line in the system prompt, via `practicePromptBlock`),
+`nudge` (an advisory line on the tool result) or `deny` (a refusal, offered
+only for kinds with a machine-checkable discharge). Since v0.1.103 the four
+built-in gates are themselves rows in that store (`builtin:*`), so their
+tier, on/off state and message are editable from the pane; when no row
+exists the gate runs natively, which is why the 93 gate tests did not move.
+ADR-0104's brakes apply to every family: a deny needs a discharge path,
+`measure` mode logs instead of denying, two denies per rule per turn, and a
+bypass is logged. Since v0.1.104 three more MARVIN-owned hooks came out of
+the first practice report: a bare project-local skill name is rewritten to
+its plugin-namespaced form at the gate (the ADR-0058 `updatedInput`
+mechanism), a `PostToolUseFailure` hook remembers a failed Bash command for
+the turn so an identical re-run gets an advisory nudge, and the turn-close
+hook blocks, once, a three-plus-edit turn under an open plan that never
+updated `TodoWrite`.
+
+Under the default `enforce` mode a deny is unconditional; `measure` logs
+what would have been denied; `off` disables the layer
+(`MARVIN_DESIGN_HOOKS`). These rules are belt-and-suspenders: prompt
+contract (§3.1, §5, §11) *plus* runtime hook — unlike the §2.2 invariant
+and the deny floor, which have no off switch. This layer exists because
+audits showed prompt-only rules decay as prompts grow: the 2026-09-02
+session audit that produced the ship-review gate found the review skills
+invoked 0× across eight pushes of CI, sudoers and credential changes while
+every mechanical rule in the same session held.
 
 ---
 
@@ -299,11 +339,32 @@ path** that rejects the wrong class:
 | Material decisions | `<workDir>/docs/adr/NNNN-*.md` (user projects; this repo uses `docs/decisions/`) | Phase 4, enforced template with Scope-of-Done | triggers in §11.4 |
 | Status / activity | git history, changelog | ordinary commits | — |
 | Session notes | `.marvin/session-notes.md` | the native Scope-met chip | 0042 |
+| Behaviour — repeat failures, the rules about them, whether they held | `~/.marvin/practice/<projectId>/` (findings ledger, rules, runs; config and score weights shared across projects) | the Practice pane only, over `/api/practice`: approve / dismiss / fixed / escalate / adopt. The nightly runner writes findings, never rules | [0105](../decisions/0105-practice-loop.md) |
 
 On the backlog's two-step capture: `provisional:true` auto-parks a *memo*
 the instant something is noticed (no go-ahead needed — a memo is not a
 commitment); the consent gate is the keep/dismiss review at the scope-met
 handoff. Capture is automatic, retention is consented.
+
+The practice store is the one layer under the data dir rather than the
+project's `.marvin/`, because it is about MARVIN, not the project. A
+finding is keyed by a fingerprint (`kind[:qualifier]`) that a deterministic
+extractor computes over a transcript, counted by *distinct session*, with
+day-two semantics (new / recurring / proposed / regressed / confirmed /
+dismissed-then-resurfaced) and a versioned extractor. Twelve kinds ship,
+nine with a paired success so a finding carries a rate; three are
+report-only (cache re-creation, repeated errors, over-budget turns) because
+they are about MARVIN's implementation, not a behaviour a rule can change.
+Scoring is a small linear model over recurrence, cost, rate, reliability
+and actionability, minus decay; the weights can be fit from every ledger's
+own outcomes (Spearman rank correlation, coordinate descent; cost-share
+ranking below eight labels) and are applied only on a click, with
+provenance. A project with fewer than three sessions cannot propose; it
+shows a calibration counter and offers rules confirmed in the user's other
+projects for adoption, scoped to this project with its own verification
+clock. Subagent calls are never counted. No model reads a transcript; the
+one model call in the pane drafts a rule's wording from aggregates, in a
+read-only two-turn session.
 
 The design was forced by a real failure: a memory file activity-logged to
 419KB (~99% redundant with ADRs/git) that overflowed the context window.
@@ -563,7 +624,8 @@ Route groups under `sidecar/src/app/api/`: `chat` (+ `announce`,
 / status / write / upload), `git` (status / diff / branch / log / push /
 pull / fetch), `graph`, `projects`, `sessions`, `skills` (+ `add`),
 `models`, `auth`, `health`, `context`, `cost`, `audit`, `backlog`,
-`terminal`, `honeycomb`. Details: [`docs/reference/api.md`](../reference/api.md).
+`terminal`, `honeycomb`, `worktrees`, `practice` (+ `run`, `findings`,
+`rules`). Details: [`docs/reference/api.md`](../reference/api.md).
 
 ### 12.2 MCP servers
 
