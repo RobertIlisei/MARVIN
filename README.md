@@ -230,6 +230,36 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
 
 ---
 
+## A tour
+
+Every image below is a real, unedited session on MARVIN's own repository.
+
+**The IDE.** File tree, editor, the project's knowledge graph, and the chat. The question on the right was answered with two graph queries before the first file read, and cited to file and line.
+
+<p align="center"><img src="./docs/assets/marvin-ide.png" alt="MARVIN: file tree, editor with design-hooks.ts open, knowledge-graph brain, and a chat answer citing file and line" width="900"></p>
+
+**Plan mode.** Say what you want; get a plan card, a live checklist, and Open plan / Revise / Approve & execute. Nothing runs until you approve, and the plan is saved to `.marvin/plans/` and re-injected every turn so it survives a chat switch or a context compaction.
+
+<p align="center"><img src="./docs/assets/plan-mode.gif" alt="Plan mode: a request becomes a five-step plan card and a checklist strip with approve and revise buttons; the plan file opens in the editor" width="600"></p>
+
+**Agent mode, and the change review.** grep → Read → Edit → verification → the Scope-met handoff → a "1 file changed" strip. Review opens a side-by-side diff with accept/reject per hunk or per file; reject restores *your* uncommitted state, not git HEAD.
+
+<p align="center"><img src="./docs/assets/agent-mode-edit.gif" alt="Agent mode: tool calls, a one-line edit, verification, the Scope-met chip and the 1 file changed strip" width="600"></p>
+<p align="center"><img src="./docs/assets/change-review.png" alt="Review Changes window: original and modified side by side, with Reject and Accept per hunk, per file, and for all" width="900"></p>
+
+**Decisions are buttons.** When the model hits a real fork it asks with native options; your choice returns to the model as the tool result.
+
+<p align="center"><img src="./docs/assets/decision-dialog.gif" alt="MARVIN needs your decision: a dialog with two options and Other, then the answer flowing back into the chat" width="800"></p>
+
+**Practice.** What MARVIN keeps getting right and wrong across this project's sessions, and the rules you accepted about it. The four built-in gates are rows you can re-tier or switch off. See the [Practice guide](./docs/guides/practice.md).
+
+<p align="center">
+  <img src="./docs/assets/practice-working.png" alt="Practice pane, Working tab: seven successes with their rates" width="420">
+  <img src="./docs/assets/practice-rules.png" alt="Practice pane, Rules tab: the four built-in deny gates as editable rows" width="420">
+</p>
+
+---
+
 ## Features
 
 **macOS app**

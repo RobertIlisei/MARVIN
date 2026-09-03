@@ -80,6 +80,12 @@ its job.
 
 ## The Practice tab
 
+<p align="center">
+  <img src="../assets/practice-working.png" alt="Practice pane, Working tab" width="380">
+  <img src="../assets/practice-rules.png" alt="Practice pane, Rules tab with the four built-in gates" width="380">
+</p>
+
+
 **Header.** *Run now* reads every session that changed since the last run.
 *Backtest* re-reads everything from scratch. *Fit weights* proposes new score
 weights from outcomes (see below). The **Nightly** switch and hour control the
