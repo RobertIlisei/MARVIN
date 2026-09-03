@@ -11,6 +11,12 @@ proposes the schema + wiring + tests, executes with explicit confirms, commits.
 > "Here I am, brain the size of a planet, and they ask me to build a login page."
 > — MARVIN, probably
 
+<p align="center">
+  <img src="./docs/assets/marvin-session.gif" alt="A MARVIN session: a question about the ship-review gate is answered with two knowledge-graph queries before any file read, then a file-and-line cited answer, in 19 seconds" width="800">
+</p>
+
+<p align="center"><sub>A real session on MARVIN's own repo, unedited: two graph queries before the first file read, an answer with file and line citations, 19 seconds.</sub></p>
+
 ---
 
 ## 📄 The white paper
