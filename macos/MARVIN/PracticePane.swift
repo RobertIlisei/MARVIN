@@ -11,6 +11,7 @@
 //   Rules     — change tier, retire, promote to global.
 //   Runs      — the log; Run now / Backtest in the header.
 
+import AppKit
 import SwiftUI
 
 struct PracticePane: View {
@@ -162,6 +163,13 @@ struct PracticePane: View {
                 }
                 .labelStyle(.iconOnly)
                 .disabled(busy)
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/RobertIlisei/MARVIN/blob/main/docs/guides/practice.md")!)
+                } label: {
+                    Label("Guide", systemImage: "questionmark.circle")
+                }
+                .labelStyle(.iconOnly)
+                .help("Open the Practice guide — what it looks for, the tiers, verification, and a first-session walkthrough.")
             }
             Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose — then measured.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -216,6 +224,12 @@ struct PracticePane: View {
     @ViewBuilder
     private var findingsSection: some View {
         if let view {
+            if view.sessionsSeen < (view.config.thresholds.minSessions) {
+                coldStartCard(view)
+            }
+            if !view.starters.isEmpty {
+                startersCard(view)
+            }
             let failures = view.findings.filter { !$0.isSuccess }
             let live = failures.filter { $0.state != "confirmed" && $0.state != "dismissed" && $0.state != "observed" }
             let below = failures.filter { $0.state == "observed" }
@@ -242,6 +256,55 @@ struct PracticePane: View {
                 }
             }
         }
+    }
+
+    /// A project MARVIN has not worked in enough yet. Says what already
+    /// applies and how far it is from its first proposal.
+    private func coldStartCard(_ view: PracticeView) -> some View {
+        let need = view.config.thresholds.minSessions
+        let builtins = view.rules.filter { $0.isBuiltin && $0.status == "active" }.count
+        let globals = view.rules.filter { !$0.isBuiltin && $0.isGlobal && $0.status == "active" }.count
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").foregroundStyle(.tint)
+                Text("New project — calibrating").font(.caption.bold())
+                Spacer()
+                Text("\(view.sessionsSeen) of \(need) sessions").font(.caption2.monospaced()).foregroundStyle(.secondary)
+            }
+            ProgressView(value: Double(min(view.sessionsSeen, need)), total: Double(need)).controlSize(.small)
+            Text("Findings can propose a rule after \(need) distinct sessions here. Nothing about this project needs calibrating first: the extractors measure MARVIN's behaviour, not your code. Already in force from the first turn: \(builtins) built-in gate\(builtins == 1 ? "" : "s")\(globals > 0 ? " and \(globals) global rule\(globals == 1 ? "" : "s")" : ""). Score weights are shared across your projects.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.08)))
+    }
+
+    /// Rules that held in the user's other projects, offered here.
+    private func startersCard(_ view: PracticeView) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down.doc").foregroundStyle(.tint)
+                Text("Proven elsewhere").font(.caption.bold())
+                Spacer()
+            }
+            Text("Rules confirmed in your other projects that this project has no rule for. Adopting one copies it here and starts its own verification clock.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(view.starters) { s in
+                HStack(alignment: .top, spacing: 8) {
+                    tierChip(s.tier)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.title).font(.caption.bold())
+                        Text("confirmed in \(s.confirmedIn.count) project\(s.confirmedIn.count == 1 ? "" : "s") · \(s.fingerprint)")
+                            .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Adopt") { Task { await adopt(s) } }
+                        .buttonStyle(.link).font(.caption).disabled(busy)
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
     }
 
     @ViewBuilder
@@ -748,6 +811,15 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.approve(projectId: projectId, id: findingId, tier: nil, global: false, message: message)
             flash("Rule created for \(findingId)")
+        } catch { flash(error.localizedDescription) }
+    }
+
+    private func adopt(_ s: PracticeStarterRule) async {
+        guard let projectId else { return }
+        busy = true; defer { busy = false }
+        do {
+            view = try await PracticeService.shared.adopt(projectId: projectId, ruleId: s.ruleId)
+            flash("Adopted \(s.title) — verification starts now")
         } catch { flash(error.localizedDescription) }
     }
 

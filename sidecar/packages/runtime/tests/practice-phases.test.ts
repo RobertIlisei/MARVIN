@@ -7,6 +7,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 process.env.MARVIN_DATA_DIR = mkdtempSync(join(tmpdir(), "marvin-phases-"));
 
 import {
+  adoptRule,
   DEFAULT_PRACTICE_CONFIG,
   type LedgerFinding,
   type Ledger,
@@ -148,7 +149,35 @@ describe("phase 6 — promotion suggestions", () => {
   });
 });
 
+describe("cold start — starter rules from other projects", () => {
+  beforeEach(() => writeRules([]));
+
+  it("offers a project-scoped rule confirmed elsewhere, adopts it as a copy scoped here with its own clock", () => {
+    writeLedger(ledger("old", [finding("command.retried", { state: "confirmed", ruleId: "r-old" })]));
+    writeLedger(ledger("brand-new", []));
+    writeRules([rule({ id: "r-old", fingerprint: "command.retried", title: "Change before re-running", tier: "nudge", scope: { projectId: "old" } })]);
+    const v = practiceView("brand-new");
+    expect(v.sessionsSeen).toBe(0);
+    expect(v.starters.map((s) => s.fingerprint)).toEqual(["command.retried"]);
+    expect(v.starters[0]?.confirmedIn).toEqual(["old"]);
+
+    const res = adoptRule("brand-new", "r-old");
+    expect(res.ok).toBe(true);
+    const mine = practiceView("brand-new");
+    expect(mine.starters).toEqual([]);
+    const adopted = mine.rules.find((r) => r.scope.projectId === "brand-new");
+    expect(adopted?.fingerprint).toBe("command.retried");
+    expect(adopted?.id).not.toBe("r-old");
+    expect(mine.findings.find((f) => f.id === "command.retried")?.state).toBe("active");
+    // Twice is refused; a global rule is never offered (it already applies).
+    expect(adoptRule("brand-new", "r-old").ok).toBe(false);
+    writeRules([rule({ id: "g", fingerprint: "turn.stalled", scope: { projectId: null } })]);
+    expect(practiceView("brand-new").starters).toEqual([]);
+  });
+});
+
 describe("phase 4 — model-drafted message (user-triggered)", () => {
+  beforeEach(() => writeRules([])); // the packet prefers an active rule's message; start clean
   it("builds a packet from aggregates only, never transcript text, and parses the model's two lines", async () => {
     addProject({ name: "draft-proj", workDir: process.env.MARVIN_DATA_DIR! });
     const projectId = "p-draft";

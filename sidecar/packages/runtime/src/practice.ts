@@ -1167,9 +1167,24 @@ export function notePracticeRuleFired(ruleId: string, kind: "fired" | "bypass"):
 // Read model for the pane
 // ---------------------------------------------------------------------------
 
+/** A rule proven in another project, offered to this one (cold start). */
+export interface StarterRule {
+  ruleId: string;
+  fingerprint: string;
+  title: string;
+  tier: RuleTier;
+  message: string;
+  /** Projects where this fingerprint's rule is confirmed. */
+  confirmedIn: string[];
+}
+
 export interface PracticeView {
   projectId: string;
   config: PracticeConfig;
+  /** Sessions the ledger has read so far — the cold-start counter. */
+  sessionsSeen: number;
+  /** Rules confirmed elsewhere and not yet present here. */
+  starters: StarterRule[];
   findings: Array<LedgerFinding & { unit: string; template: boolean }>;
   /** Phase 6 — a project rule whose finding is confirmed here AND in other
    *  projects carries `suggestGlobal` with the count. */
@@ -1196,11 +1211,82 @@ export function practiceView(projectId: string): PracticeView {
   return {
     projectId,
     config: readPracticeConfig(),
+    sessionsSeen: Object.keys(ledger.watermarks).length,
+    starters: starterRulesFor(projectId, rules),
     findings,
     rules,
     runs: ledger.runs.slice(-20).reverse(),
     lastRun: ledger.runs[ledger.runs.length - 1] ?? null,
   };
+}
+
+/**
+ * Cold start. A project MARVIN has never worked in has no findings for three
+ * sessions, but the user's other projects already know what held: every
+ * project-scoped, active, non-built-in rule whose finding is `confirmed` in
+ * its own project, for a fingerprint this project has no rule for yet, is
+ * offered. Adopting one creates a copy scoped here, verified here.
+ */
+export function starterRulesFor(projectId: string, here: PracticeRule[] = []): StarterRule[] {
+  const present = new Set(here.filter((r) => r.status === "active").map((r) => r.fingerprint));
+  const byFingerprint = new Map<string, StarterRule>();
+  for (const r of readRules()) {
+    if (r.builtin || r.status !== "active" || r.scope.projectId === null || r.scope.projectId === projectId) continue;
+    if (present.has(r.fingerprint)) continue;
+    const f = readLedger(r.scope.projectId).findings[r.fingerprint];
+    if (f?.state !== "confirmed") continue;
+    const cur = byFingerprint.get(r.fingerprint);
+    if (cur) {
+      if (!cur.confirmedIn.includes(r.scope.projectId)) cur.confirmedIn.push(r.scope.projectId);
+    } else {
+      byFingerprint.set(r.fingerprint, {
+        ruleId: r.id,
+        fingerprint: r.fingerprint,
+        title: r.title,
+        tier: r.tier,
+        message: r.message,
+        confirmedIn: [r.scope.projectId],
+      });
+    }
+  }
+  return [...byFingerprint.values()].sort((a, b) => b.confirmedIn.length - a.confirmedIn.length);
+}
+
+/** Copy a rule proven elsewhere into this project; its clock starts now. */
+export function adoptRule(projectId: string, ruleId: string): { ok: true; rule: PracticeRule } | { ok: false; error: string } {
+  const rules = readRules();
+  const src = rules.find((r) => r.id === ruleId && r.status === "active" && !r.builtin);
+  if (!src) return { ok: false, error: "unknown or retired rule" };
+  if (rules.some((r) => r.status === "active" && r.fingerprint === src.fingerprint && (r.scope.projectId === projectId || r.scope.projectId === null))) {
+    return { ok: false, error: "this project already has a rule for that finding" };
+  }
+  const now = new Date().toISOString();
+  const rule: PracticeRule = {
+    ...src,
+    id: newRuleId(),
+    scope: { projectId },
+    provenance: { ...src.provenance, findingId: src.fingerprint },
+    metrics: { fired: 0, lastFiredAt: null, bypasses: 0 },
+    createdAt: now,
+    acceptedAt: now,
+    updatedAt: now,
+  };
+  rules.push(rule);
+  writeRules(rules);
+  // Let verification track it even before this project has the finding.
+  const ledger = readLedger(projectId);
+  const kind = kindOf(src.fingerprint);
+  if (kind) {
+    const f = ledger.findings[src.fingerprint] ?? emptyFinding(src.fingerprint, kind, now);
+    f.state = "active";
+    f.ruleId = rule.id;
+    f.acceptedAt = now;
+    f.sessionsAfter = 0;
+    f.recurrenceAfter = 0;
+    ledger.findings[src.fingerprint] = f;
+    writeLedger(ledger);
+  }
+  return { ok: true, rule };
 }
 
 /** Other projects whose ledger has this fingerprint `confirmed`. */

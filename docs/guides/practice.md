@@ -185,6 +185,28 @@ The API behind the pane is under `/api/practice` (see the
 
 ---
 
+## Starting on a project MARVIN has never seen
+
+Nothing about the project needs calibrating: the extractors measure MARVIN's
+behaviour, not your code, and the same shapes count in every project. What is
+different is how much evidence exists.
+
+- **From the first turn:** the four built-in gates, any rule you promoted to
+  global, and the score weights (shared across your projects).
+- **Until three sessions exist:** no finding can propose. The Findings tab
+  shows a calibration card with a sessions counter so you can see how far off
+  the first proposal is.
+- **Proven elsewhere:** rules confirmed in your other projects that this one
+  has no rule for are listed as starters. *Adopt* copies one here, scoped to
+  this project, with its own verification clock — proven there, verified
+  here. Adoption is your click, never automatic.
+
+So a new project inherits what held, waits for its own evidence before
+proposing anything new, and never inherits a rule that was only ever a
+proposal.
+
+---
+
 ## A first session with it
 
 1. Open a project you have used for a while and click **Backtest**. A few

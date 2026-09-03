@@ -137,9 +137,21 @@ struct PracticeDraft: Codable, Equatable {
     let costUsd: Double?
 }
 
+struct PracticeStarterRule: Codable, Identifiable, Equatable {
+    let ruleId: String
+    let fingerprint: String
+    let title: String
+    let tier: String
+    let message: String
+    let confirmedIn: [String]
+    var id: String { ruleId }
+}
+
 struct PracticeView: Codable, Equatable {
     let projectId: String
     let config: PracticeConfig
+    let sessionsSeen: Int
+    let starters: [PracticeStarterRule]
     let findings: [PracticeFinding]
     let rules: [PracticeRule]
     let runs: [PracticeRun]
@@ -221,6 +233,11 @@ final class PracticeService {
         let res = try JSONDecoder().decode(DraftResponse.self, from: data)
         guard res.ok, let message = res.message else { throw PracticeError.server(res.error ?? "no draft") }
         return PracticeDraft(message: message, rationale: res.rationale ?? "", costUsd: res.costUsd)
+    }
+
+    /// Cold start — copy a rule proven in another project into this one.
+    func adopt(projectId: String, ruleId: String) async throws -> PracticeView {
+        try await mutate("api/practice/rules", ["projectId": projectId, "adopt": ruleId])
     }
 
     func updateConfig(enabled: Bool? = nil, hour: Int? = nil) async throws -> PracticeConfig {
