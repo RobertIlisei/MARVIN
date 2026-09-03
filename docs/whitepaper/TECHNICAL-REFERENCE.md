@@ -450,20 +450,22 @@ unanswered; gaps are closed before the user sees it.
   substantially on routine work (~30–40% by per-token pricing arithmetic;
   workload-dependent, not a benchmark). Plan mode runs on the planner
   slot, execution on the executor (§1.3).
-- **Auth resolution** (`runtime/auth.ts`, `auth-config.ts`) — precedence:
-  UI-configured choice (API key in a `0600` file at
-  `~/.marvin/auth-config.json`, or forced CLI mode) → env OAuth token
-  (`CLAUDE_CODE_OAUTH_TOKEN`) → env API key (`ANTHROPIC_API_KEY`) →
-  auto-detected host credentials from `claude login`. Raw keys are never
+- **Auth resolution** (`runtime/auth.ts`, `auth-config.ts`) — the
+  supported credential is an **API key**: the key configured in Settings
+  (a `0600` file at `~/.marvin/auth-config.json`, provider `anthropic` or
+  `openrouter`) wins; otherwise env `ANTHROPIC_API_KEY`. Raw keys are never
   logged and never returned by any status surface (last-4 hint only).
-  (Host credentials and the Keychain token below are the same `claude
-  login` credential — the SDK reads it itself for turns; MARVIN's own
-  read exists only for model discovery.)
-- **Keychain read** ([ADR-0029](../decisions/0029-keychain-token-read-for-model-discovery.md)) —
-  `readHostOAuthToken()` reads the Claude Code OAuth token from the macOS
-  Keychain (5-minute in-process cache) to power **live model discovery**
-  (`/api/models`); never load-bearing for turns (the SDK handles turn
-  auth itself), falls back to a static list.
+  OpenRouter is reached by pointing the CLI at a local proxy
+  (`/api/proxy/openrouter`) that forwards Anthropic-format requests, and
+  every model id is then OpenRouter's ([ADR-0096](../decisions/0096-provider-aware-model-resolution.md)).
+- **Not a supported credential: a Claude.ai subscription login.**
+  Anthropic's authentication policy ([Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance),
+  February 2026) reserves OAuth sign-in for Claude Code and Anthropic's own
+  apps and requires API keys for products built on the Agent SDK. The
+  older host-credentials detection and the Keychain read for model
+  discovery ([ADR-0029](../decisions/0029-keychain-token-read-for-model-discovery.md))
+  predate that policy; they are legacy, undocumented here, and not
+  supported.
 
 ---
 

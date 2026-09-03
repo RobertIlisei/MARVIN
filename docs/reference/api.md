@@ -590,7 +590,7 @@ The HTML is served with a strict CSP (sandbox attribute + `frame-src 'self'` onl
 
 ### `GET /api/models`
 
-List available models. Attempts Anthropic's `/v1/models` endpoint with whatever credentials are readable — or OpenRouter's `/v1/models` when the configured provider is `openrouter` (that list additionally carries per-model `contextWindow` and `pricing`); falls back to a minimal static list when creds live in macOS Keychain.
+List available models. Attempts Anthropic's `/v1/models` endpoint with whatever credentials are readable — or OpenRouter's `/v1/models` when the configured provider is `openrouter` (that list additionally carries per-model `contextWindow` and `pricing`); falls back to a minimal static list when the models endpoint cannot be reached with the configured key.
 
 **Response:**
 
@@ -705,7 +705,7 @@ Persist a mode change (and optional key).
 
 ### `DELETE /api/auth/config`
 
-Remove the config file. Resolution falls back to the env-var chain, then host credentials.
+Remove the config file. Resolution falls back to `ANTHROPIC_API_KEY` in the environment.
 
 **Response:** same shape as `GET`, plus `removed: boolean` (false when the file didn't exist).
 

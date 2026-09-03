@@ -48,25 +48,6 @@ Renamed from `model` → `defaultModel` on 2026-04-19 after user feedback that t
 }
 ```
 
-**Happy path (macOS Keychain):**
-
-```json
-{
-  "ok": true,
-  "auth": {
-    "mode": "host-credentials",
-    "credentialHint": "~/.claude (CLI-managed · auto-detected)",
-    "error": null
-  },
-  "claudeBinary": "/opt/homebrew/bin/claude",
-  "binaryError": null,
-  "defaultModel": "claude-opus-4-7",
-  "dataDir": "/Users/you/.marvin"
-}
-```
-
-`/api/models` on this machine will return fallback list — see [Credentials → macOS Keychain caveat](../security/credentials.md#macos-keychain-caveat).
-
 **No credentials:**
 
 ```json
@@ -80,7 +61,7 @@ Renamed from `model` → `defaultModel` on 2026-04-19 after user feedback that t
 }
 ```
 
-Fix: set `ANTHROPIC_API_KEY` or run `claude auth login`.
+Fix: paste an API key in Settings → Authentication (Anthropic Console or OpenRouter), or set `ANTHROPIC_API_KEY`. See [Credentials](../security/credentials.md).
 
 ## What it does NOT check
 

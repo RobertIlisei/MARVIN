@@ -9,8 +9,8 @@ The Settings panel ("Authentication" section) writes a UI-managed override to `~
 | Variable | Default | Meaning |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Direct Anthropic API key. Used unless `~/.marvin/auth-config.json` says otherwise. |
-| `MARVIN_USE_HOST_CREDENTIALS` | `1` (auto) | Allow `getAnthropicAuth()` to auto-detect a prior `claude auth login`. Set to `0` to disable. Has no effect when `auth-config.json` exists. |
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Alternate credential form — some setups store the Claude CLI's token here. Auto-detected. |
+| `MARVIN_USE_HOST_CREDENTIALS` | `1` | Legacy: lets `getAnthropicAuth()` detect a Claude CLI login on the machine. Not a supported credential (Anthropic's [authentication policy](https://code.claude.com/docs/en/legal-and-compliance) requires API keys for Agent SDK products); set to `0`. Has no effect when `auth-config.json` exists. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Legacy: a Claude CLI OAuth token. Not a supported credential for MARVIN; use an API key. |
 | `MARVIN_MODEL` | `claude-opus-4-7` | Default model for `/api/chat` when no explicit `model` is sent. |
 | `MARVIN_CLAUDE_BIN` | — | Absolute path to a specific Claude CLI binary. Overrides the `claude` resolver. |
 
@@ -61,7 +61,7 @@ Per-project Honeycomb config can also live in `<cwd>/.marvin/honeycomb.json` (se
 
 ## Notes
 
-- **Credentials**: if *both* `ANTHROPIC_API_KEY` and host credentials are present, the API key wins. See [Credentials](../security/credentials.md) for the full detection order.
+- **Credentials**: the key configured in Settings wins over `ANTHROPIC_API_KEY`. See [Credentials](../security/credentials.md).
 - **Data dir**: MARVIN will auto-create subdirectories it needs (`sessions/<projectId>/`). You can safely delete `~/.marvin/` — on next boot MARVIN will recreate an empty structure. You'll lose registered projects, cost history, and session transcripts.
 - **Playwright**: when a turn needs a browser, MARVIN shells out via `Bash` to `npx playwright`. Run `npx playwright install chromium` once per machine before that path is exercised.
 - **Port 3030**: hardcoded in `sidecar/package.json` scripts and in `/api/health` display. Not currently configurable via env.

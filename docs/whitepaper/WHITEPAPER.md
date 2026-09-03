@@ -192,10 +192,9 @@ context — including the code MARVIN reads — to Anthropic, and that is the
 one network egress MARVIN *itself* makes. Tools acting on your behalf can
 create others, each passing through the gate: a `git push` to your own
 remotes, a shell command you allow, the opt-in browser. Credentials are
-either the user's existing `claude login` (read from the OS keychain, never
-copied) or an API key stored in a `0600` file on the user's own disk,
-displayed only as its last four characters, and sent nowhere except
-Anthropic.⁹ There is no telemetry by default; the
+the user's own API key — an Anthropic Console key, or an OpenRouter key —
+stored in a `0600` file on the user's own disk, displayed only as its last
+four characters, and sent nowhere except the provider it belongs to.⁹ There is no telemetry by default; the
 optional observability integration exports traces to the *user's own*
 Honeycomb account, configured by the user. Release artifacts are signed
 (minisign, with the public key pinned in three places across two
@@ -217,7 +216,7 @@ flowchart LR
       gate["Permission gate<br/>every tool call, pre-execution"]
     end
     proj["Your project directory<br/>code · graphs · memory · ADRs · plans · backlog"]
-    cred["claude login keychain item<br/>or 0600 API-key file"]
+    cred["0600 API-key file<br/>Anthropic Console or OpenRouter key"]
     ui <--> sidecar
     sidecar --> gate
     gate -->|"allowed tool calls"| proj
@@ -457,10 +456,12 @@ the security architecture is the evaluation. MARVIN's, in one place:
 
 - **No backend.** All state local; inference direct to Anthropic; no
   MARVIN-operated service in the path. No telemetry by default.
-- **Credentials.** Reuses `claude login` from the OS keychain (read-only,
-  cached in-process, never persisted by MARVIN), or an API key in a
-  `0600` file on the user's disk. Never logged, never displayed beyond a
-  hint, never sent anywhere but Anthropic.⁹
+- **Credentials.** The user's own API key — Anthropic Console, or
+  OpenRouter — in a `0600` file on the user's disk. Never logged, never
+  displayed beyond a last-four hint, never sent anywhere but the provider
+  it belongs to. MARVIN does not use Claude.ai subscription logins:
+  Anthropic's authentication policy reserves those for Claude Code and its
+  own apps, and products built on the Agent SDK must use API keys.⁹
 - **A structural gate, not a confirmation dialog.** Every tool call passes
   a classifier *before* execution: auto-allow (reads, whitelisted
   commands), confirm (edits, writes, unlisted shell), hard-deny
@@ -573,8 +574,8 @@ brew install --cask marvin-ai
 
 First launch requires macOS's one-time "Open Anyway" step (the app is
 ad-hoc signed — no paid developer program — and installs to
-`~/Applications`). MARVIN then needs Claude credentials: an existing
-`claude login`, or an API key pasted in Settings.
+`~/Applications`). MARVIN then needs an API key pasted in Settings: an
+Anthropic Console key, or an OpenRouter key.
 
 - **Source & docs:** [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 - **Worked examples of the modes and workflow:** [`docs/guides/workflows.md`](../guides/workflows.md)
@@ -619,8 +620,10 @@ ad-hoc signed — no paid developer program — and installs to
 8. Verify-then-remediate contract: v0.1.55 (2026-07-02), documented in
    the changelog and roadmap.
 9. Auth resolution: `sidecar/packages/runtime/src/auth.ts`,
-   `auth-config.ts`; keychain read:
-   [ADR-0029](../decisions/0029-keychain-token-read-for-model-discovery.md).
+   `auth-config.ts`. Anthropic's authentication and credential-use policy
+   (February 2026): [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
+   The Keychain read of [ADR-0029](../decisions/0029-keychain-token-read-for-model-discovery.md)
+   predates that policy and is not a supported path.
 10. Release signing:
     [ADR-0026](../decisions/0026-release-artefact-signing-minisign.md).
 11. Both examples — the multi-day compliance plan and the graph-first

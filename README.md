@@ -73,7 +73,7 @@ That's it. MARVIN.app appears in `~/Applications`, the bundled sidecar starts wi
 
 > **First launch — one-time Gatekeeper step (macOS 26+).** MARVIN is ad-hoc signed (no paid Apple Developer Programme membership). On first double-click macOS shows "Apple could not verify…": click **Done**, then open **System Settings → Privacy & Security**, scroll to the **Security** section, find "MARVIN.app was blocked from use…", and click **Open Anyway**. This whitelist persists for the life of the install — you only do it once. ([ADR-0027](./docs/decisions/0027-macos-26-gatekeeper-user-applications.md) has the technical detail.)
 
-**You'll need Anthropic credentials** to use it — either run `claude login` (the Claude CLI handles it) or paste an API key in MARVIN → Settings → Authentication.
+**You'll need an API key** to use it: an Anthropic API key from the [Claude Console](https://platform.claude.com/), or an [OpenRouter](https://openrouter.ai) key. Paste it in MARVIN → Settings → Authentication; usage is billed to that key. A Claude.ai subscription login is **not** a supported credential for MARVIN — Anthropic's [authentication policy](https://code.claude.com/docs/en/legal-and-compliance) reserves OAuth sign-in for Claude Code and its own apps and requires API keys for products built on the Agent SDK.
 
 **Updates:** `brew upgrade --cask marvin-ai`. **Uninstall:** `brew uninstall --cask marvin-ai` (add `--zap` to also wipe `~/.marvin`).
 
@@ -130,14 +130,12 @@ brew install --cask marvin-ai
 | Node.js **≥ 22** | [nodejs.org](https://nodejs.org) or `brew install node@22` |
 | pnpm | `npm install -g pnpm` |
 | Claude Code CLI | `npm install -g @anthropic-ai/claude-code` |
-| Claude credentials | `claude auth login` — or set `ANTHROPIC_API_KEY` in env |
+| API key | Anthropic Console key as `ANTHROPIC_API_KEY`, or paste an Anthropic / OpenRouter key in Settings → Authentication |
 
 **Optional:**
 
 - `npx playwright install chromium` — needed for browser automation (MARVIN shells out to `npx playwright` when a turn needs a browser)
 - `pip install graphifyy` — needed for the knowledge graph (`/graphify`, graph-aware chat)
-
-After `claude auth login`, also visit [claude.ai](https://claude.ai) once with the same email to accept the latest Consumer Terms — the CLI returns 400 until you do.
 
 ---
 
@@ -473,15 +471,14 @@ curl -s http://localhost:3030/api/health | jq .
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `auth.mode: "none"` | No credentials detected | `ANTHROPIC_API_KEY` in env, or `claude auth login` |
+| `auth.mode: "none"` | No API key configured | Set `ANTHROPIC_API_KEY`, or paste a key in Settings → Authentication |
 | `binaryError` in `/api/health` | Claude CLI not on PATH | `npm install -g @anthropic-ai/claude-code` or set `MARVIN_CLAUDE_BIN` |
-| Every turn → `400 Consumer Terms` | Anthropic account hasn't accepted latest Terms | Open [claude.ai](https://claude.ai) with the same email, accept banner |
 | `EADDRINUSE :::3030` | Another instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill it |
 | MARVIN.app won't open | Gatekeeper ad-hoc signing warning | Right-click → Open, or System Settings → Privacy & Security → Open Anyway |
 | Graph pane → "no graph found" | graphify not run on the project | `cd <workDir> && /graphify .` |
 | Sidecar didn't spawn with the app | Bundled sidecar crashed | Tail `~/Library/Logs/MARVIN/sidecar.log` for the cause; relaunch MARVIN |
 | Build fails: `No module 'STTextView'` | SPM not resolved | `cd macos && swift package resolve` |
-| Models dropdown → "fallback list" | Node can't read macOS Keychain token | Set `ANTHROPIC_API_KEY` directly |
+| Models dropdown → "fallback list" | The models endpoint could not be reached with the configured key | Check the key in Settings → Authentication; the static list still works |
 | Chat sessions not loading | First launch post-install | Open the sessions menu (clock icon) and click a session |
 
 **Lifecycle helpers:**

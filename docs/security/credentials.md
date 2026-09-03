@@ -1,42 +1,27 @@
 # Credentials
 
-MARVIN needs Claude API access to function. It supports three credential forms — auto-detected in priority order, overridable from the macOS app's Settings panel, with a `MARVIN_USE_HOST_CREDENTIALS` kill switch.
+MARVIN needs an **API key** to function. Two providers are supported, chosen in the macOS app under Settings → Authentication:
 
-## Detection order
+| Provider | Key | Billed to |
+|---|---|---|
+| **Anthropic** | an API key from the [Claude Console](https://platform.claude.com/) | your Anthropic Console account |
+| **OpenRouter** | an [OpenRouter](https://openrouter.ai) API key | your OpenRouter credits |
 
-[`getAnthropicAuth()`](../../sidecar/packages/runtime/src/auth.ts) walks this list on every turn. First hit wins.
+With OpenRouter, MARVIN points the Claude CLI at a local proxy (`/api/proxy/openrouter`) that forwards Anthropic-format requests to OpenRouter's Anthropic-compatible endpoint, and every model id is OpenRouter's (`anthropic/claude-sonnet-4.5`, …) — see [ADR-0096](../decisions/0096-provider-aware-model-resolution.md). Claude models through OpenRouter are the supported configuration; other models are reachable but Anthropic does not support routing Claude Code to non-Claude models, and OpenRouter warns they may not work.
 
-1. **UI override: `~/.marvin/auth-config.json`.** Persisted choice from Settings → Authentication ([API: `/api/auth/config`](../reference/api.md#authentication)).
-   - `mode: "api-key"` with a key → that key wins over every env-var path.
-   - `mode: "cli"` → forces host-credentials, ignores `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` even if they're in the parent shell environment. Falls through to `mode: "none"` if no `~/.claude/` is detected.
-   - File absent (default for fresh installs) → step 2.
-2. **Environment: `ANTHROPIC_API_KEY`.** Direct API key. Detected as `mode: "api-key"`.
-3. **Environment: `CLAUDE_CODE_OAUTH_TOKEN`.** Alternate token form that some Claude Code installs store in the environment. Detected as `mode: "oauth"`.
-4. **Linux / Windows: `~/.claude/.credentials.json` or `~/.claude/auth.json`.** Cross-platform storage for the Claude CLI. Detected as `mode: "host-credentials"` with hint "`~/.claude` (CLI-managed · auto-detected)".
-5. **macOS: recent activity in `~/Library/Application Support/claude-cli/history.jsonl`.** The CLI's actual credentials live in the macOS Keychain (see caveat below), but the history file proves a `claude auth login` ran. Detected as `mode: "host-credentials"`.
-6. **Nothing.** Detected as `mode: "none"`. `/api/health` returns `ok: false`. MARVIN won't take turns until this is fixed.
+## Not supported: a Claude.ai subscription login
 
-The UI override is stored at `~/.marvin/auth-config.json` with file mode `0600`. The raw key is **never** returned by `GET /api/auth/config` — only a last-4 hint. See [Storage layout](../reference/storage.md) for the file's place in `~/.marvin/`.
+MARVIN is built on the Claude Agent SDK. Anthropic's authentication and credential-use policy ([Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), February 2026) states that OAuth sign-in with a Free, Pro, Max, Team or Enterprise plan is intended exclusively for Claude Code and Anthropic's own applications, that products built on the Agent SDK must use API key authentication, and that third-party developers may not route requests through Free, Pro or Max credentials on behalf of their users or intermediate Claude.ai session tokens. Anthropic enforces this server-side.
 
-## macOS Keychain caveat
+So `claude login` is not a credential for MARVIN. Use an API key. Older versions of these docs described auto-detecting a Claude CLI login; that detection still exists in the code as a legacy path, is undocumented here, and is not supported — set `MARVIN_USE_HOST_CREDENTIALS=0` if you want to make sure it never triggers.
 
-On macOS, `claude auth login` stores the token in the Keychain. The token is NOT directly readable from Node.js (or any non-Apple-keychain-aware process). Consequences:
+## Resolution order
 
-- MARVIN can **authenticate turns** through the Agent SDK because the SDK shells out to the Claude CLI, which *can* read its own Keychain entry.
-- MARVIN **cannot list live models** via `/v1/models` because that's a direct HTTP call, not an SDK call. The [`/api/models`](../reference/api.md#get-apimodels) endpoint falls back to a static list and surfaces a warning: *"host-credentials token lives in the OS keychain and isn't readable by MARVIN; using fallback list."*
+[`getAnthropicAuth()`](../../sidecar/packages/runtime/src/auth.ts) runs on every turn. First hit wins.
 
-Two ways to get the live model list on macOS:
-
-1. Set `ANTHROPIC_API_KEY` directly in your shell profile. MARVIN detects it first, reads it, uses it for the live `/v1/models` call.
-2. Live with the fallback. It's a 4-model static list (Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5) — usable, just doesn't reflect any new models Anthropic ships.
-
-## Disabling host-credential detection
-
-Set `MARVIN_USE_HOST_CREDENTIALS=0`. MARVIN will only look at `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, never the filesystem. Useful when:
-
-- Running on a machine with shared home directory + multiple users.
-- Testing MARVIN's behavior without credentials.
-- CI environments where the agent should fail loud rather than picking up stale tokens.
+1. **Settings → Authentication**, persisted at `~/.marvin/auth-config.json` (file mode `0600`) with `provider: "anthropic" | "openrouter"` and the key. The raw key is **never** returned by `GET /api/auth/config` — only a last-four hint. API: [`/api/auth/config`](../reference/api.md#authentication).
+2. **Environment: `ANTHROPIC_API_KEY`.** An Anthropic Console key. Detected as `mode: "api-key"`.
+3. **Nothing.** `mode: "none"`; `/api/health` returns `ok: false` and MARVIN won't take turns until a key is set.
 
 ## Inspecting the current mode
 
@@ -44,34 +29,31 @@ Set `MARVIN_USE_HOST_CREDENTIALS=0`. MARVIN will only look at `ANTHROPIC_API_KEY
 curl -s http://localhost:3030/api/health | jq .auth
 ```
 
-Returns:
-
 ```json
 {
-  "mode": "api-key" | "host-credentials" | "none",
-  "credentialHint": "string describing which source was hit",
-  "error": "non-null only if detection threw"
+  "mode": "api-key" | "none",
+  "credentialHint": "…4f2a",
+  "error": null
 }
 ```
 
 ## What MARVIN never does with credentials
 
-- **Never logs them.** Neither the raw key nor the OAuth token appear in session transcripts, cost-tracker entries, or any persisted file.
-- **Never sends them to third parties.** Every credential use is a direct Anthropic API call. No analytics, no telemetry.
-- **Never writes them.** MARVIN reads credentials; it doesn't create them. `claude auth login` is the only way to set up host credentials, and that happens through the Claude CLI.
-- **Never mixes them across sessions.** Each turn re-runs `getAnthropicAuth()` — if the user rotates a key between turn N and N+1, turn N+1 picks up the new key immediately.
+- **Never logs them.** The raw key appears in no session transcript, cost-tracker entry, or persisted file.
+- **Never sends them to third parties.** An Anthropic key goes only to Anthropic; an OpenRouter key goes only to OpenRouter. No analytics, no telemetry.
+- **Never mixes them across sessions.** Each turn re-runs `getAnthropicAuth()`; rotate a key between turn N and N+1 and turn N+1 uses the new one.
 
 ## Security-sensitive env handling
 
-If an API key is set, it sits in `process.env.ANTHROPIC_API_KEY` for the lifetime of the Node process. Standard sec guidance applies:
+If the key comes from the environment it sits in `process.env.ANTHROPIC_API_KEY` for the lifetime of the Node process. Standard guidance applies:
 
-- Don't commit `.env` files with keys. The `.gitignore` in the repo blocks `.env*` by default.
+- Don't commit `.env` files with keys. The repo's `.gitignore` blocks `.env*`.
 - Rotate keys on machine compromise.
-- Consider using a shell-scoped secret manager (`pass`, `envchain`, 1Password CLI) to inject the key only for MARVIN's process rather than keeping it in `~/.zshrc`.
+- Prefer Settings → Authentication (a `0600` file) or a shell-scoped secret manager (`pass`, `envchain`, 1Password CLI) over `~/.zshrc`.
 
 ## Related
 
-- [`auth.ts` source](../../../sidecar/packages/runtime/src/auth.ts)
+- [`auth.ts` source](../../sidecar/packages/runtime/src/auth.ts)
 - [Env vars](../reference/env-vars.md)
 - [Health checks](../operations/health.md)
 - [Data flow](./data-flow.md) — what leaves your machine.

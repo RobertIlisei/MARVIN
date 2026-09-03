@@ -79,7 +79,7 @@ curl -s http://localhost:3030/api/health | jq .
 
 | Output | Fix |
 |---|---|
-| `ok: false, auth.mode: "none"` | Set `ANTHROPIC_API_KEY` in your shell or run `claude auth login`. See [Credentials](../security/credentials.md). |
+| `ok: false, auth.mode: "none"` | Paste an API key in Settings → Authentication, or set `ANTHROPIC_API_KEY`. See [Credentials](../security/credentials.md). |
 | `ok: true` but chat still hangs | Check the terminal running `pnpm dev` for SDK errors. Most commonly: network blocked or Anthropic API rate-limited. |
 | `ok: false, binaryError: "..."` | The Claude CLI binary is missing from PATH. `which claude` — if empty, install it. |
 
@@ -99,11 +99,11 @@ lsof -iTCP:3030 -sTCP:LISTEN
 
 ## Models dropdown shows "fallback list"
 
-**Symptom:** header `<ModelPicker>` → `models` dropdown shows a warning: *"host-credentials token lives in the OS keychain and isn't readable by MARVIN; using fallback list."*
+**Symptom:** the models dropdown shows a warning that the live model list could not be fetched and a fallback list is in use.
 
-**Cause:** on macOS, `claude auth login` stores the token in the Keychain, which Node can't read.
+**Cause:** the models endpoint (Anthropic's `/v1/models`, or OpenRouter's) could not be reached with the configured key — no key yet, a revoked key, or no network.
 
-**Fix:** set `ANTHROPIC_API_KEY` directly in your shell. MARVIN detects it first and uses it for the live `/v1/models` call. See [Credentials → macOS Keychain caveat](../security/credentials.md#macos-keychain-caveat).
+**Fix:** check Settings → Authentication (the last-four hint tells you which key is active) and `curl -s localhost:3030/api/health | jq .auth`. See [Credentials](../security/credentials.md).
 
 If you don't care about new models showing up in the dropdown, ignore it — the static fallback list (Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5) is usable.
 

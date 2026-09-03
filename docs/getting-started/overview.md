@@ -31,7 +31,7 @@ You say "let's build the login page." MARVIN reads the codebase, proposes the sc
 ## What you need
 
 - macOS 14 (Sonoma) or later.
-- Claude credentials — an `ANTHROPIC_API_KEY`, or a `claude auth login` done previously (auto-detected).
+- An API key — an Anthropic Console key (`ANTHROPIC_API_KEY`, or pasted in Settings) or an OpenRouter key (Settings). Claude.ai subscription logins are not a supported credential; see [Credentials](../security/credentials.md).
 - Optional: `npx playwright install chromium` if you want MARVIN to drive a browser against your local dev server.
 
 The end-user install path is a Homebrew cask — Node, the Next sidecar, and

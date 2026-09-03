@@ -53,10 +53,10 @@ versions for a given install.
 
 ### Set credentials, pick a project, you're done
 
-Set `ANTHROPIC_API_KEY` in your shell (or run `claude auth login`),
-launch MARVIN from the Dock, pick a project directory, and you're done.
-See [Credentials](../security/credentials.md) for the full detection
-order.
+Launch MARVIN from the Dock, paste an API key in Settings → Authentication
+(an Anthropic Console key, or an OpenRouter key), pick a project directory,
+and you're done. `ANTHROPIC_API_KEY` in your shell works too. See
+[Credentials](../security/credentials.md).
 
 Skip to step 6 below if you took the brew path.
 
@@ -72,7 +72,7 @@ MARVIN itself.
 | Node.js | ≥ 22 | `brew install node@22` / `nvm install 22` |
 | pnpm | 10.33+ | `npm install -g pnpm@10.33.0` (or use the `packageManager` field via Corepack) |
 | Xcode | 16+ (or Command Line Tools only) | App Store, or `xcode-select --install` |
-| Anthropic credentials | any one: `ANTHROPIC_API_KEY` env var **OR** `claude auth login` previously run | see [Credentials](../security/credentials.md) |
+| API key | an Anthropic Console key (`ANTHROPIC_API_KEY` or Settings) or an OpenRouter key (Settings) | see [Credentials](../security/credentials.md) |
 | Chromium (optional) | latest | `npx playwright install chromium` — only if you want MARVIN to drive a browser |
 
 ## 2. Clone + install
@@ -114,7 +114,7 @@ You should see:
 ```json
 {
   "ok": true,
-  "auth": { "mode": "host-credentials", "credentialHint": "~/.claude (CLI-managed · auto-detected)" },
+  "auth": { "mode": "api-key", "credentialHint": "…4f2a" },
   "claudeBinary": "/opt/homebrew/bin/claude",
   "binaryError": null,
   "defaultModel": "claude-opus-4-7",
@@ -122,7 +122,7 @@ You should see:
 }
 ```
 
-If `auth.mode` is `"none"`: set `ANTHROPIC_API_KEY` or run `claude auth login` and reload. See [Credentials](../security/credentials.md) for the full detection order.
+If `auth.mode` is `"none"`: paste a key in Settings → Authentication or set `ANTHROPIC_API_KEY`, then reload. See [Credentials](../security/credentials.md).
 
 ## 6. Add a project
 
@@ -156,8 +156,8 @@ Type a message into the composer. Press ⏎ (or ⌘⏎). MARVIN will:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `/api/health` returns `auth.mode: "none"` | No credentials detected | Set `ANTHROPIC_API_KEY` or run `claude auth login` |
-| Models dropdown shows "fallback list" | `claude auth login` stored the token in macOS Keychain, which Node can't read | Set `ANTHROPIC_API_KEY` directly for live model listing |
+| `/api/health` returns `auth.mode: "none"` | No API key configured | Paste a key in Settings → Authentication or set `ANTHROPIC_API_KEY` |
+| Models dropdown shows "fallback list" | The models endpoint could not be reached with the configured key | Check the key; the static list still works |
 | `port 3030 already in use` | Another MARVIN instance running | `lsof -iTCP:3030 -sTCP:LISTEN` → kill or use it |
 | Blank page, console errors about hydration | Rare. Usually fixed by `pnpm dev` restart | If persistent, see [Troubleshooting](../guides/troubleshooting.md) |
 | Browser-preview pane shows blank | Target page sends `X-Frame-Options: DENY` | Use the ↗ button to open in a new tab |

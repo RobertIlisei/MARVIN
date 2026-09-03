@@ -57,8 +57,8 @@ MARVIN: Querying the knowledge graph first…
 
         Auth enters at `POST /api/chat` (sidecar/src/app/api/chat/route.ts),
         which calls `resolveCredentials()` in packages/runtime/src/auth.ts.
-        That prefers a Claude CLI token from the keychain (ADR-0029) and
-        falls back to an API key. The token is never persisted to the
+        That takes the key configured in Settings and falls back to
+        `ANTHROPIC_API_KEY`. The key is never persisted to the
         transcript — it's read per turn.
 
         Want me to trace where it's attached to the outbound SDK call?

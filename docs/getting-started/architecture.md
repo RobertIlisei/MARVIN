@@ -55,7 +55,7 @@ Three-pane layout on `localhost:3030`. File tree · chat · brain/graph pane. St
 Owns auth, session persistence, model resolution, cost accounting, tool policy, MCP server registration, and the `canUseTool` structural gate.
 
 - [`sdk-runner.ts`](../../sidecar/packages/runtime/src/sdk-runner.ts) — the `runAgent()` entrypoint that `/api/chat` calls. Registers MCP servers, wires personality + project context, installs the confirm gate when `permissionStrategy === "gated"`.
-- [`auth.ts`](../../sidecar/packages/runtime/src/auth.ts) — `getAnthropicAuth()` detects which credential form is available (API key env var, Keychain history, Linux/Win `~/.claude/*.json`).
+- [`auth.ts`](../../sidecar/packages/runtime/src/auth.ts) — `getAnthropicAuth()` resolves the configured API key (Settings key file, else `ANTHROPIC_API_KEY`) and the provider (Anthropic or OpenRouter).
 - [`session.ts`](../../sidecar/packages/runtime/src/session.ts) — appends every event to `~/.marvin/sessions/<projectId>/<sessionId>.jsonl`.
 - [`cost-tracker.ts`](../../sidecar/packages/runtime/src/cost-tracker.ts) — appends a row per turn to `~/.marvin/cost-tracker.json`, summarizes today / 7d / lifetime.
 - [`projects.ts`](../../sidecar/packages/runtime/src/projects.ts) — registry for `~/.marvin/projects.json` + `active-project.json`.
