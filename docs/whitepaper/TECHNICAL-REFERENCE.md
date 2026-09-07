@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.104
-(2026-09-03). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v0.1.105
+(2026-09-07). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -25,7 +25,10 @@ repository wins.*
 > sessions in one worktree** with the collision surfaced (ADR-0102), a
 > **derived implementer-branch lifecycle** (ADR-0103), the **ship-review
 > gate** at `git commit` (ADR-0104, §2.7) and the **practice loop**
-> (ADR-0105, §2.7 and §4).
+> (ADR-0105, §2.7 and §4). Since 2026-09-07: **vertical-slice milestones**
+> — a Phase 5 rule, a `relations` filter on `graph_path` (§3.3), and the
+> `plan.horizontal` / `plan.vertical` kinds whose layers are discovered
+> from the project's graph (§2.7, §4).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -261,7 +264,28 @@ its plugin-namespaced form at the gate (the ADR-0058 `updatedInput`
 mechanism), a `PostToolUseFailure` hook remembers a failed Bash command for
 the turn so an identical re-run gets an advisory nudge, and the turn-close
 hook blocks, once, a three-plus-edit turn under an open plan that never
-updated `TodoWrite`.
+updated `TodoWrite`. Since v0.1.105 the loop measures **plan shape**:
+`plan.horizontal` (a plan of three or more `[N]` milestones each confined
+to one area of the project, none crossing two) against `plan.vertical`
+(some milestone crosses, or is marked as a slice), with a `nudge`-tier
+template that fires on the `TodoWrite` presenting a horizontal plan via a
+`planShape` trigger. The areas are **discovered** by `discoverAreas`
+(`graphify-bridge/src/plan-areas.ts`): the project's code files, made
+relative to their common root, split recursively wherever a directory
+holds two or more substantial groups (≥ 3 files and ≥ 5 %, depth ≤ 3,
+dot-directories and test folders folded into their parent); each area's
+vocabulary is its own directory names and file stems, kept where ≥ 60 % of
+a token's occurrences are in that area and that share beats the area's
+share of all files by 0.2. A milestone crosses layers only on
+*structural* evidence — directory-level words from two areas, or a
+methodology marker (end-to-end, tracer bullet, thin slice) — and steps
+that open with verify / test / lint / ship / commit / docs / ADR count for
+nothing. No graph, or fewer than two areas, means no verdict. MARVIN
+ships no layer vocabulary. The same release fixed two extractors from the
+day's report at their source: a source read is now what the gate says it
+is (`bash-search.ts` holds the one classifier both use), and a review's
+report excludes the CLI-echoed skill body and stops at the commit
+(extractor v6).
 
 Under the default `enforce` mode a deny is unconditional; `measure` logs
 what would have been denied; `off` disables the layer
@@ -300,7 +324,14 @@ In-process server (`sidecar/packages/graphify-bridge/`), read-only,
 blanket-allowed at the gate: `graph_summary`, `graph_search`,
 `graph_neighbors`, `graph_query`, `graph_path`, `graph_save_result`.
 Edges carry EXTRACTED / INFERRED / AMBIGUOUS confidence tags; god nodes
-and communities are first-class.
+and communities are first-class. `graph_path` (undirected BFS, in-process)
+takes a `relations` filter — `["calls", "imports", "imports_from",
+"method", "contains"]` for a path code actually takes rather than one
+threaded through a `references` string mention — and every hop carries
+the relation of the edge it leaves by and its `sourceFile`; the rendered
+arrows were off by one hop before 2026-09-07. This is Phase 5's
+tracer-bullet tool: entry symbol → persistence symbol is the first
+milestone's touchpoint list.
 
 ### 3.4 Lifecycle & the context budget
 
@@ -351,10 +382,11 @@ project's `.marvin/`, because it is about MARVIN, not the project. A
 finding is keyed by a fingerprint (`kind[:qualifier]`) that a deterministic
 extractor computes over a transcript, counted by *distinct session*, with
 day-two semantics (new / recurring / proposed / regressed / confirmed /
-dismissed-then-resurfaced) and a versioned extractor. Twelve kinds ship,
-nine with a paired success so a finding carries a rate; three are
-report-only (cache re-creation, repeated errors, over-budget turns) because
-they are about MARVIN's implementation, not a behaviour a rule can change.
+dismissed-then-resurfaced) and a versioned extractor (v6 at v0.1.105).
+Twenty-two kinds ship, eighteen of them in nine failure/success pairs so a
+finding carries a rate; three are report-only (cache re-creation, repeated
+errors, over-budget turns) because they are about MARVIN's implementation,
+not a behaviour a rule can change.
 Scoring is a small linear model over recurrence, cost, rate, reliability
 and actionability, minus decay; the weights can be fit from every ledger's
 own outcomes (Spearman rank correlation, coordinate descent; cost-share

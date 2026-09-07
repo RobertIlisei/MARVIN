@@ -40,6 +40,21 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.105** — vertical-slice milestones, and the layers come from the project.
+
+Phase 5 now requires the tracer bullet: for a change touching more than one layer, milestone 1
+is the thinnest path proving one flow through every layer, verified end to end, with
+`graph_path` (a `relations` filter, a file on every hop) as its touchpoint list. The practice
+loop measures the shape as `plan.horizontal` / `plan.vertical` with a nudge on the `TodoWrite`
+that presents a layer-stacked plan — and the layers are discovered from the project's own graph
+(`discoverAreas`), never a vocabulary MARVIN ships: on a real project's 399 transcripts, 931
+horizontal plans, 318 vertical, 201 sessions with one. The day's practice report was audited
+like the first: two extractor defects fixed at the source (the gate's search classifier is now
+the extractor's), one genuine proposal, one unexplained gate misfire now instrumented. Also the
+09-04 fixes: three false regressions in the extractors and the gate-deny retry gap.
+
+_The v0.1.104 summary follows._
+
 **v0.1.104** — practice cold start, the practice guide, and three fixes from the first practice report.
 
 The first practice report on a real project named three defects that were MARVIN's own, and
@@ -106,6 +121,15 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-09-07 — v0.1.105: vertical-slice milestones, and the layers come from the project
+
+_Shipped. Each entry carries its diagnostic trail; the short version is in the
+[changelog](./history/CHANGELOG.md)._
+
+- **Vertical-slice milestones, and the layers come from the project (2026-09-07, v0.1.105).** User shared Matt Pocock's AI Engineer Europe clip: agents fail on *horizontal* plans — database, then API, then frontend — because nothing gets integrated feedback until the last layer lands; the fix is the Pragmatic Programmer's tracer bullet, a thin slice through every layer first. Audit: Phase 5 required milestones to be "shippable units" and said nothing about shape; `graph_path` walked `references` edges and printed no files; the practice loop had no plan-shape extractor. Three surfaces. **Prompt:** Phase 5 now MUSTs milestone 1 as the thinnest path through every layer the change touches, with `graph_path(entry → persistence)` as its touchpoint list; layer-by-layer plans are MUST-NOT unless the work is single-layer. **Graph:** `graph_path` takes a `relations` filter for a structural path and prints each hop's file; its arrow labels were off by one hop. **Practice:** `plan.horizontal` / `plan.vertical`, a `nudge`-tier rule on `TodoWrite`. The user's constraint — *"marvin should be project agnostic completely, like tech stack, usages, project"* — killed the first design (a data / api / ui lexicon of framework words). Layers are now **discovered**: the project's code files grouped by directory, split wherever a directory holds two or more substantial groups (`apps/api`, `apps/web`; `macos/MARVIN`, `sidecar/packages/runtime`), each area's vocabulary its own directory names and file stems kept where distinctive; a milestone crosses layers when directory-level words from two areas appear in it; process steps (verify, ship, tests, ADR) count for nothing. No graph or one area → no verdict. Measured over 399 transcripts of a real project: **931 horizontal plans, 318 vertical, 201 sessions with a layer-stacked plan.** Extractor v5. No new ADR: a Phase 5 amendment, an additive tool parameter, and a kind on ADR-0105's shipped mechanism.
+
+- **The second practice report, audited the way the first was (2026-09-07, v0.1.105).** Four proposals on 399 sessions. Two were extractor defects: `graph.first.skipped` counted `grep`/`sed` on ADR markdown, `cat` on runbooks and a `find` under `~/.claude` as "10 source reads" while the gate counts only a search rooted inside the project — the gate's classifier moved to `bash-search.ts` and the extractor calls it, one definition; `review.ignored` matched the pr-review skill's own body (echoed by the CLI as assistant text, its legend contains 🔴) and "3 CRITICAL CVEs" in a later commit summary — the report is now the text between the review and the next skill or commit, minus the echoed body, and "0 important" is not findings. One was genuine (`skill.bypassed:graphify`: asked to "update graphify", the model drove graphify's Python by hand). One is unexplained: the advisor-on-ADR gate denied a compose edit with "no advisor consult has fired this turn" six minutes after an `advisor` dispatch had run and returned in that turn, both repeats right after a `compact_boundary`; the counter has one writer and no reset, the context is created once per turn, the log had rotated — the consult is now logged when recorded and every deny carries the counter. Extractor v6.
 
 ### 2026-09-02 → 09-03 — v0.1.102 … v0.1.104: the practice loop, the ship-review gate, and measuring MARVIN against itself
 

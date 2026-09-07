@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · September 2026 · v0.1.104 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · September 2026 · v0.1.105 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -268,6 +268,19 @@ dozens of turns; each "Continue" re-anchored MARVIN to *that plan and only
 that plan* — no re-auditing, no drift — while an advisor consult caught
 five defects in a decision record before it was ratified.¹¹
 
+**Milestones are vertical slices.** A plan for a change that touches more
+than one layer must make its first milestone the thinnest path that proves
+one flow through every layer it touches — the *tracer bullet* of *The
+Pragmatic Programmer* — verified end to end, with later milestones widening
+that path. The alternative, "database first, API next, frontend last", has
+the agent code each layer against nothing, integration surprises arrive
+last, and the user waits longest for the first thing they can see. The
+graph supplies the slice: the structural path from the entry symbol the
+user touches to the persistence symbol it reaches is the milestone's
+touchpoint list. MARVIN ships no notion of what a layer is; the practice
+loop (§4) reads a project's layers off its own graph — its directories and
+file names — and measures whether plans cross them.¹⁶
+
 ```mermaid
 sequenceDiagram
   actor U as You
@@ -428,7 +441,13 @@ behaviour without a click. The first backtest on a real project read
 **397 sessions in 11 s** and produced six proposals; three were MARVIN's
 own defects and were fixed in the runtime that night — which is the
 intended shape. The loop is first a way of finding what to fix in MARVIN,
-and only second a way of constraining the model.
+and only second a way of constraining the model. The second report, three
+days later, was audited the same way: of four proposals, two were extractor
+defects fixed at the source, one was genuine, and one was a gate misfiring
+that is now instrumented rather than explained away. The same report
+carried the loop's newest kind, plan shape: **201 of 399 sessions** on that
+project had planned a change layer by layer, which is the failure the
+vertical-slice rule (§3) now refuses.¹⁶
 
 **Decisions that bind (design property).** Architecture decision records
 written at decision time are re-read at the start of every future session
@@ -658,8 +677,19 @@ Anthropic Console key, or an OpenRouter key.
     and *MemGuard* ([arXiv:2608.21867](https://arxiv.org/abs/2608.21867)),
     which keeps a verifier's signals attached to a memory for its lifetime.
     The 397 sessions / 11 s backtest is one project on one machine.
+16. Vertical slices: the Phase 5 rule in `personality.ts`, the `relations`
+    filter on `graph_path`, and the `plan.horizontal` / `plan.vertical`
+    kinds (extractor v6). Layers are discovered by `discoverAreas` in
+    `graphify-bridge/src/plan-areas.ts`: code files grouped by directory,
+    split where a directory holds two or more substantial groups, each
+    area's vocabulary its own directory names and file stems kept where
+    distinctive; a milestone crosses layers only on directory-level
+    evidence from two areas. The tracer-bullet framing follows Matt
+    Pocock's AI Engineer Europe talk on why agents fail on horizontal
+    plans. The 931 / 318 / 201 figures are a dry run over one project's
+    399 transcripts before the rule shipped.
 
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.104; the repository is the authoritative, current reference.*
+v0.1.105; the repository is the authoritative, current reference.*
