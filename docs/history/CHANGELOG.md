@@ -8,6 +8,109 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-07 — v0.1.105: vertical-slice milestones — the prompt, `graph_path`, and a practice kind whose layers come from the project.**
+
+  Trigger: a clip of Matt Pocock at AI Engineer Europe. Agents fail on
+  horizontal plans — database first, API next, frontend last — because they
+  code each layer against nothing and integration surprises arrive last. His
+  fix is the Pragmatic Programmer's tracer bullet: one thin slice through
+  every layer first. (His closing line, that slices make a Kanban backlog
+  "easier for agents to grab independently", is the shape Golden Rule 1
+  rejects; the slicing was adopted, the swarm was not.)
+
+  **Audit.** Phase 5 asked for milestones that are "shippable units with a
+  verification step" and nothing about shape, so `[1] migration, [2]
+  endpoint, [3] page` satisfied every rule. `graph_path` — the natural
+  tracer-path tool — was triggered only by user questions, walked every edge
+  relation (a `references` string mention counts as a hop), and printed no
+  files. The practice loop's plan extractor checked only that `TodoWrite`
+  ran. The graph has no notion of a layer; communities are file clusters.
+
+  **What shipped.** Phase 5 gains "Slice vertically — tracer bullets, not
+  layers": milestone 1 MUST be the thinnest path proving one flow through
+  every layer the change touches, `graph_path({from: entry, to:
+  persistence, relations: [structural]})` is its touchpoint list, and a
+  layer-by-layer plan is MUST-NOT unless the work is single-layer. The
+  `graph_path` MUST entry gains the Phase 5 trigger. `graph_path` takes a
+  `relations` filter, `shortestPath` honours it, every hop carries
+  `sourceFile`, and the rendered arrows now label the edge each hop leaves
+  by (they were off by one). Practice: `plan.horizontal` (failure) /
+  `plan.vertical` (success), one occurrence per distinct plan, a horizontal
+  payload re-presented as vertical in the same turn counting only as
+  vertical (the nudge holding is not a recurrence), and a `nudge`-tier rule
+  on `TodoWrite` via a new `planShape` trigger. Extractor v5.
+
+  **The constraint that shaped it.** The first design classified milestone
+  titles with a data / api / ui lexicon of framework words (Flyway, React,
+  SwiftUI …). The user: *"our marvin should be project agnostic completely,
+  like tech stack, usages, project."* So the layers are discovered.
+  `discoverAreas` (graphify-bridge) reads the project's code files off its
+  graph, strips the common root, and splits wherever a directory holds two
+  or more substantial groups (≥ 3 files and ≥ 5 %), recursing to depth 3;
+  dot-directories and test folders fold into their parent. Each area's
+  vocabulary is its own directory names and file stems, kept where ≥ 60 %
+  of a token's occurrences are in that area *and* that share beats the
+  area's share of all files by 0.2 — without the lift, an area holding 70 %
+  of a project owned every word. Symbol labels were tried and dropped: they
+  flood an area with ordinary English. A milestone crosses layers only on
+  *structural* evidence — directory-level words from two areas, or a
+  methodology marker (end-to-end, tracer bullet, thin slice) — because file
+  stems carry domain nouns that legitimately appear in any layer's step.
+  Steps that open with verify / test / lint / typecheck / ship / commit /
+  deploy / docs / ADR are process, not build, and count for nothing:
+  "Verify & ship: typecheck, vitest, Playwright" names every area's tooling
+  and says nothing about shape. No graph, or fewer than two areas, means no
+  verdict.
+
+  **Measured.** Dry run over 399 transcripts of a real project, before the
+  prompt change: 1,516 distinct plans of three or more steps — **931
+  horizontal, 318 vertical, 250 single-layer, 17 unknown; 201 sessions
+  carry a layer-stacked plan.** The horizontal samples are the shape the
+  clip describes (ADR → migration → backend wiring → SPA form → tests →
+  ship). The first pass without the lift and the process-step rule had
+  called 1,276 of them vertical. Live on this repo the areas are
+  `macos/MARVIN`, `macos/MARVINLogic`, and the six sidecar packages;
+  "sidecar" identifies none of them because it names their parent.
+
+  **Verification.** 67 test files, 923 tests; `tsc --noEmit` clean in the
+  runtime and the bridge. New: `read-graph-path.test.ts` (filter, files,
+  off-by-one), `plan-areas.test.ts` (monorepo, lone `src/`, flat tree,
+  test/dot folding, distinctiveness, structural subset), and the runtime
+  plan-shape suite (classifier matrix, `planStepsOf`, dedupe and same-turn
+  supersession, rule evaluation).
+
+  **The first run's report, audited (same day, extractor v6).** The user
+  ran the loop on the installed build; 399 sessions, 4 proposals. Each was
+  checked against its transcript for a MARVIN-side cause, as on 09-04:
+  - `graph.first.skipped`, "10 source reads before the first graph call" —
+    seven were `grep`/`sed` on ADR markdown, two `cat` on runbooks and a
+    backlog note, one `find` under `~/.claude/skills`. The extractor's
+    Bash rule counted any `cat`/`grep`/`sed -n` while the gate counts only
+    a search whose root is inside the project. The classifier
+    (`bashSearchTarget`, `isSourceFile`, `isInsideCwd`) moved to
+    `bash-search.ts` and the extractor now calls it: one definition, so the
+    nightly report and the live rail cannot disagree. The parser records
+    the session's `cwd` from `system/init` to make that possible.
+  - `review.ignored` on a turn whose review said "**0 important, 0 nit**":
+    the regex matched the pr-review skill's own body, which the CLI echoes
+    as an assistant text block and whose severity legend contains 🔴, and
+    "3 CRITICAL CVEs" in a commit summary minutes later. The report is now
+    what the model says between the review and the next skill or commit,
+    minus the echoed body; a report that says it found nothing is not
+    findings; "N critical" followed by "CVE" is a dependency note.
+  - `skill.bypassed:graphify` — genuine. Asked to "update graphify", the
+    model drove graphify's Python by hand and read the skill's reference
+    files instead of invoking the skill. Left as a proposal for the user.
+  - `hook.deny.repeated:advisor-on-adr-trigger` — one real turn shows the
+    gate denying a compose edit at 09:35:02 with "no advisor consult has
+    fired this turn" after an `advisor` dispatch at 09:26:56 had run and
+    returned at 09:29:26 in the same turn; both repeated denies in that
+    turn followed a `compact_boundary`. The counter has one writer and no
+    reset, the context is created once per turn, and the sidecar log had
+    rotated. Unexplained; the consult is now logged when recorded and every
+    deny carries the counter, so the next one is diagnosable.
+  - `plan.horizontal` — the new kind, proposed at 201 sessions / 73 %.
+
 - **2026-09-03 — v0.1.104: practice cold start, the practice guide, and three fixes from the first practice report.**
 
   The first practice report on a real project named three things MARVIN owned,
