@@ -8,6 +8,47 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-07 — v0.1.106: plan spine — DoD bullets are criteria, not steps, and `[x]` reads back.**
+
+  Trigger: the user showed a finished agri-saas session whose plan card read
+  **0/13** on a plan with 8 numbered steps, the Definition of Done listed as
+  unchecked work items — "the plan was either not followed, not updated, or
+  something else happened."
+
+  **Diagnosis (measured before touching code).** The work was done — 6 of 7
+  backlog items closed, MR !199 open, reviews clean — and the stored spine
+  held **13 steps, 12 completed**. Two stacked parser defects:
+
+  1. The Golden Rule 8 template writes the DoD as column-0 `- [ ]` bullets
+     above the numbered steps; `topLevelStepRE` promoted all 5 to steps. The
+     spine became 13 steps, TodoWrite `[N]` tags (numbered 1–8 off the plan's
+     visible numbering) never aligned, the ADR-0052 rebase guard correctly
+     distrusted every batch, everything fell to fuzzy content matching, and
+     47 restatement sub-tasks piled up under "Ship" — the wall of duplicate
+     checkbox lines in the saved plan file.
+  2. The 0/13 itself: `stepText` kept the `[x]` prefix, so a checked step's
+     id normalized to `"x …"` and could never match its recovery id from
+     `completedStepIds` (which strips the box). Every plan re-seeded from its
+     rendered file lost all progress — ADR-0102's bug resurfaced one layer
+     down, in id derivation rather than recovery.
+
+  **What shipped** (`PlanModel.swift`). A criteria block (`Definition of
+  Done` / `Scope of Done` / `Acceptance criteria` heading + the bullets
+  directly under it) is excluded from step parsing and passed through
+  `PlanFile.render` verbatim — the same shape as the ADR-0068 addendum 4
+  `Sources:` cut. `stepText` strips a leading checkbox so step ids are
+  identical whether the text came from the presented plan or the rendered
+  file, and `todos(from:)` seeds `[x]` lines as `completed`. `redriveSteps`
+  heals an already-absorbed spine on the next reconcile (13 → 8, statuses
+  kept, criteria dropped — the agri-saas plan self-heals on next contact).
+
+  **Verification.** 7 new tests (DoD exclusion, heading spellings, block
+  boundary, `[x]` read-back, id stability against `completedStepIds`, render
+  pass-through, spine healing); `swift run MARVINTests` — 641 assertions
+  green across all suites. Noticed in flight, not in scope: `sameWork`
+  misses reworded progress summaries, which is what let the 47 sub-task
+  restatements accumulate.
+
 - **2026-09-07 — v0.1.105: vertical-slice milestones — the prompt, `graph_path`, and a practice kind whose layers come from the project.**
 
   Trigger: a clip of Matt Pocock at AI Engineer Europe. Agents fail on
