@@ -60,21 +60,20 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import { changeImpact, changedFilesOnBranch, renderChangeImpact } from "./change-impact";
 import { z } from "zod";
-
 import { buildCallIndex, callersOf } from "./call-index";
+import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
 import {
   type GraphScope,
   getNeighbors,
   graphPathForScope,
+  loadGraphNodes,
   nodeLabelIndex,
   nodeLabelResolver,
   resolveNode,
   searchGraph,
   shortestPath,
   summarizeGraph,
-  loadGraphNodes,
 } from "./read-graph";
 
 const pExecFile = promisify(execFile);
@@ -322,13 +321,20 @@ export function createGraphMcpServer(workDir: string) {
   // ── Tool: graph_path ──────────────────────────────────────────────────
   const pathTool = tool(
     "graph_path",
-    "Find the shortest structural path between two concepts (BFS on the undirected graph). Path is computed within a single graph — pass scope='knowledge' for doc-ADR-memory relations, scope='code' for code structural paths. scope='all' returns one path per graph if both endpoints exist there.",
+    "Find the shortest structural path between two concepts (BFS on the undirected graph). Path is computed within a single graph — pass scope='knowledge' for doc-ADR-memory relations, scope='code' for code structural paths. scope='all' returns one path per graph if both endpoints exist there. Each hop prints its file. Pass relations=[\"calls\",\"imports\",\"imports_from\",\"method\",\"contains\"] for a path code actually takes (a tracer-bullet touchpoint list for planning a vertical slice); without it BFS may thread through a `references` string mention.",
     {
       from: z.string().min(1).describe("Source — node id or label."),
       to: z.string().min(1).describe("Target — node id or label."),
+      relations: z
+        .array(z.string().min(1))
+        .max(6)
+        .optional()
+        .describe(
+          "Only walk edges with these relations, e.g. [\"calls\", \"imports\", \"imports_from\", \"method\", \"contains\"] for a structural path. Omit to walk every edge.",
+        ),
       scope: scopeSchema,
     },
-    async ({ from, to, scope }) => {
+    async ({ from, to, relations, scope }) => {
       const scopes = expandScope(scope);
       const sections: string[] = [];
       let foundAny = false;
@@ -342,10 +348,14 @@ export function createGraphMcpServer(workDir: string) {
           );
           continue;
         }
-        const hops = shortestPath(path, from, to);
+        const hops = shortestPath(path, from, to, { relations });
         if (!hops) {
+          const filtered = relations && relations.length > 0;
           sections.push(
-            `[${sc}] no path between '${truncLabel(fromNode.node.label ?? fromNode.node.id)}' and '${truncLabel(toNode.node.label ?? toNode.node.id)}' — different components.`,
+            `[${sc}] no path between '${truncLabel(fromNode.node.label ?? fromNode.node.id)}' and '${truncLabel(toNode.node.label ?? toNode.node.id)}'` +
+              (filtered
+                ? ` over relations [${relations.join(", ")}] — drop the filter to allow weaker edges (references, cites).`
+                : " — different components."),
           );
           continue;
         }
@@ -356,11 +366,15 @@ export function createGraphMcpServer(workDir: string) {
         );
         for (let i = 0; i < hops.length; i += 1) {
           const hop = hops[i]!;
+          const file = hop.sourceFile ? `  (${hop.sourceFile})` : "";
           if (i === 0) {
-            lines.push(`  ${truncLabel(hop.label)}`);
+            lines.push(`  ${truncLabel(hop.label)}${file}`);
           } else {
+            // A hop carries the relation of the edge it LEAVES by, so the
+            // arrow into hop i is labelled by hop i-1 (was off by one).
+            const edge = hops[i - 1]!;
             lines.push(
-              `    --${hop.relation ?? "related"} [${hop.confidence ?? "EXTRACTED"}]-->  ${truncLabel(hop.label)}`,
+              `    --${edge.relation ?? "related"} [${edge.confidence ?? "EXTRACTED"}]-->  ${truncLabel(hop.label)}${file}`,
             );
           }
         }

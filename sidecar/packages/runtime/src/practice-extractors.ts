@@ -1,3 +1,7 @@
+import { areasOfTitle, type ProjectAreas } from "@marvin/graphify-bridge";
+
+import { bashSearchTarget, isInsideCwd, isSourceFile } from "./bash-search";
+
 /**
  * Practice-loop extractors (ADR-0105).
  *
@@ -43,6 +47,8 @@ export interface ParsedTurn {
 
 export interface ParsedSession {
   sessionId: string;
+  /** The project directory, from the SDK's `system/init` event; null if none was seen. */
+  cwd: string | null;
   turns: ParsedTurn[];
 }
 
@@ -86,6 +92,10 @@ export const FINGERPRINT_KINDS = [
   "review.acted",
   "plan.kept",
   "command.adapted",
+  // 2026-09-07: plan shape (tracer bullets). Layers are the project's own
+  // areas, discovered from its graph — MARVIN assumes none.
+  "plan.horizontal",
+  "plan.vertical",
 ] as const;
 export type FingerprintKind = (typeof FINGERPRINT_KINDS)[number];
 
@@ -106,6 +116,8 @@ export const POLARITY: Record<FingerprintKind, Polarity> = {
   "skill.bypassed": "failure",
   "review.ignored": "failure",
   "plan.stale": "failure",
+  "plan.horizontal": "failure",
+  "plan.vertical": "success",
   "command.retried": "failure",
   "turn.overbudget": "failure",
   "skill.invoked": "success",
@@ -123,6 +135,7 @@ export const SUCCESS_PAIR: Partial<Record<FingerprintKind, FingerprintKind>> = {
   "skill.bypassed": "skill.invoked",
   "review.ignored": "review.acted",
   "plan.stale": "plan.kept",
+  "plan.horizontal": "plan.vertical",
   "command.retried": "command.adapted",
 };
 
@@ -141,6 +154,8 @@ export const COST_UNITS: Record<FingerprintKind, string> = {
   "skill.bypassed": "reads",
   "review.ignored": "turns",
   "plan.stale": "turns",
+  "plan.horizontal": "plans",
+  "plan.vertical": "plans",
   "command.retried": "retries",
   "turn.overbudget": "USD",
   "skill.invoked": "turns",
@@ -159,6 +174,12 @@ export function kindOf(fingerprint: string): FingerprintKind | null {
 // ---------------------------------------------------------------------------
 
 const SCOPE_MET_SENTINEL = "<!-- marvin:scope-met -->";
+/** A stated scope-NOT-met handoff: a bold lead ("**Not done yet**", "**Not
+ *  scope met**", "**Scope not met:**") or the phrase anywhere in the text. */
+const SCOPE_NOT_MET = /\*\*\s*(?:scope (?:is )?not(?: yet)? met|not scope met|not done(?: yet)?)\b|\bscope (?:is )?not(?: yet)? met\b/i;
+
+/** The synthetic `system` cli.event sdk-runner emits when pre-orientation ran. */
+export const PREORIENT_SUBTYPE = "marvin.graph.preorient";
 
 /**
  * Parse a JSONL transcript into turns. Tolerant: a malformed line is skipped,
@@ -166,6 +187,7 @@ const SCOPE_MET_SENTINEL = "<!-- marvin:scope-met -->";
  */
 export function parseSessionTranscript(sessionId: string, raw: string): ParsedSession {
   const turns: ParsedTurn[] = [];
+  let cwd: string | null = null;
   let cur: ParsedTurn | null = null;
   const toolIndex = new Map<string, ParsedToolCall>();
   let seq = 0;
@@ -216,6 +238,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
     } else if (type === "cli.event") {
       const ev = o.event as Record<string, unknown> | undefined;
       if (!ev) continue;
+      if (ev.type === "system" && ev.subtype === "init" && typeof ev.cwd === "string" && cwd === null) cwd = ev.cwd;
       const msg = ev.message as { content?: unknown } | undefined;
       const content = Array.isArray(msg?.content) ? (msg?.content as Array<Record<string, unknown>>) : [];
       if (ev.type === "assistant") {
@@ -240,6 +263,21 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
             cur.lastText = b.text;
           }
         }
+      } else if (ev.type === "system" && ev.subtype === PREORIENT_SUBTYPE) {
+        // The runtime ran the turn's first graph call itself (sdk-runner
+        // pre-orientation, 2026-09-03) and rode the answer on the prompt. It
+        // is a graph consult in every sense the graph-first extractor cares
+        // about, so it counts as one — before this it was invisible here and
+        // an oriented turn still read as "N source reads before the first
+        // graph call".
+        cur.tools.push({
+          seq: ++seq,
+          name: "mcp__marvin-graph__graph_search",
+          input: { query: typeof ev.query === "string" ? ev.query : "", preorient: true },
+          parentId: null,
+          result: null,
+          isError: false,
+        });
       } else if (ev.type === "user") {
         for (const b of content) {
           if (b.type !== "tool_result") continue;
@@ -260,14 +298,13 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
       }
     }
   }
-  return { sessionId, turns };
+  return { sessionId, cwd, turns };
 }
 
 // ---------------------------------------------------------------------------
 // Shared predicates
 // ---------------------------------------------------------------------------
 
-const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|swift|py|go|rs|c|cc|cpp|h|hpp|java|kt|rb|php|cs|scala|m|mm)$/i;
 const READ_SHAPED_BASH = /^\s*(cat|sed\s+-n|head|tail|grep|rg|find|awk|less|bat)\b/;
 const REVIEW_SKILL = /(^|:)(pr-review|security-audit)$/;
 const COMMIT_CMD = /\bgit\b[^|;&\n]*\bcommit\b/;
@@ -290,16 +327,17 @@ function ownCalls(turn: ParsedTurn): ParsedToolCall[] {
   return turn.tools.filter((c) => !c.parentId);
 }
 
-function isSourceRead(call: ParsedToolCall): boolean {
+/** Mirrors the graphify-first gate exactly (`bash-search.ts`): a source-file
+ *  Read inside the project, or a search-shaped Bash command whose root is
+ *  inside it. `cat docs/x.md` and a `find` under `~/.claude` are neither —
+ *  the 2026-09-07 ledger counted ten of those as "source reads". */
+function isSourceRead(call: ParsedToolCall, cwd: string | null): boolean {
   if (call.parentId) return false;
   if (call.name === "Read") {
     const p = typeof call.input.file_path === "string" ? call.input.file_path : "";
-    return SOURCE_EXT.test(p);
+    return isSourceFile(p) && (cwd === null || isInsideCwd(cwd, p));
   }
-  if (call.name === "Bash") {
-    const cmd = typeof call.input.command === "string" ? call.input.command : "";
-    return READ_SHAPED_BASH.test(cmd);
-  }
+  if (call.name === "Bash") return cwd !== null && bashSearchTarget(call.input, cwd) !== null;
   return false;
 }
 
@@ -317,10 +355,14 @@ function secondsBetween(a: string, b: string): number {
 /** Ported from `scripts/session-time-breakdown.py` (ADR-0067, ADR-0104). */
 export function classifyTurnEnding(
   lastText: string,
-): "background" | "blocked-on-human" | "asked" | "scope-met" | "stopped" | "empty" {
+): "background" | "blocked-on-human" | "asked" | "scope-met" | "scope-not-met" | "stopped" | "empty" {
   const e = lastText.toLowerCase();
   if (!lastText.trim()) return "empty";
   if (lastText.includes(SCOPE_MET_SENTINEL) || /\*\*scope met:\*\*/i.test(lastText)) return "scope-met";
+  // The Stop hook's own instruction: "If the scope is NOT met, say exactly
+  // what remains instead — never claim it to clear this." A turn that did
+  // that handed off; the 2026-09-04 ledger read two of them as missing.
+  if (SCOPE_NOT_MET.test(lastText)) return "scope-not-met";
   if (/wakeup|background job|pick back up automatically|polling|watching (for|the|it)/.test(e)) return "background";
   if (
     /waiting on you|waiting for you|let me know when|once (that|it)'?s (pushed|merged|approved|done)|needs? your (go-ahead|review|approval|read|sign-off|audit)|your call|before i touch|i('| wi)ll wait for your|when you('|')?ve|after you (push|merge|approve|review)|blocked on you|i'll check with you before|wait for your go-ahead/.test(
@@ -392,7 +434,7 @@ function graphFirstTurns(s: ParsedSession): Occurrence[] {
     let graphSeen = false;
     for (const call of ownCalls(turn)) {
       if (isGraphCall(call)) graphSeen = true;
-      if (isSourceRead(call)) {
+      if (isSourceRead(call, s.cwd)) {
         totalReads += 1;
         if (!graphSeen) readsBeforeGraph += 1;
       }
@@ -446,7 +488,7 @@ function turnEndings(s: ParsedSession): Occurrence[] {
         cost: waited,
         detail: `ended without a question; user replied "${next.message.trim().slice(0, 20)}" after ${Math.round(waited)}s`,
       });
-    } else if (ending === "scope-met" || ending === "asked" || ending === "blocked-on-human") {
+    } else if (ending === "scope-met" || ending === "scope-not-met" || ending === "asked" || ending === "blocked-on-human") {
       out.push({
         fingerprint: "turn.continued",
         sessionId: s.sessionId,
@@ -474,7 +516,7 @@ function scopeMetTurns(s: ParsedSession): Occurrence[] {
     const ending = classifyTurnEnding(turn.lastText);
     // A question is a handoff too (ADR-0067 gates on a real trade-off); only
     // a turn that simply stopped, or ended empty, is missing its handoff.
-    if (ending === "background" || ending === "blocked-on-human" || ending === "asked") continue;
+    if (ending === "background" || ending === "blocked-on-human" || ending === "asked" || ending === "scope-not-met") continue;
     const present = ending === "scope-met";
     out.push({
       fingerprint: present ? "scope.met.present" : "scope.met.missing",
@@ -583,7 +625,7 @@ const errorRepeated: Extractor = (s) => {
 // Phase 2 extractors
 // ---------------------------------------------------------------------------
 
-const SKILL_DIR = /(^|[\/\s])\.(claude|marvin)\/skills\/([A-Za-z0-9._-]+)(?:\/|\s|$)/;
+const SKILL_DIR = /(^|[/\s])\.(claude|marvin)\/skills\/([A-Za-z0-9._-]+)(?:\/|\s|$)/;
 const skillBase = (name: string): string => (name.split(":").pop() ?? name).trim().toLowerCase();
 
 /** Skills read by hand vs invoked. A `Read` (or read-shaped Bash) into a
@@ -596,6 +638,17 @@ function skillUsage(s: ParsedSession): Occurrence[] {
     const invoked = new Map<string, number>(); // name → seq
     let anySkill = false;
     const bypassed = new Map<string, number>();
+    // A turn that EDITS a skill's folder is maintaining the skill, and reading
+    // it first is how an edit is done — not a bypass. (2026-09-03: a backlog
+    // item "hetzner-ssh SKILL.md understates the sudo" was worked exactly so
+    // and the ledger called the read a regression.)
+    const edited = new Set<string>();
+    for (const call of own) {
+      if (call.name !== "Edit" && call.name !== "Write" && call.name !== "NotebookEdit") continue;
+      const p = typeof call.input.file_path === "string" ? call.input.file_path : "";
+      const m = p ? SKILL_DIR.exec(p) : null;
+      if (m) edited.add((m[3] ?? "").toLowerCase());
+    }
     for (const call of own) {
       if (call.name === "Skill") {
         const name = typeof call.input.skill === "string" ? skillBase(call.input.skill) : "";
@@ -614,6 +667,7 @@ function skillUsage(s: ParsedSession): Occurrence[] {
       const m = target ? SKILL_DIR.exec(target) : null;
       if (!m) continue;
       const name = (m[3] ?? "").toLowerCase();
+      if (edited.has(name)) continue;
       const at = invoked.get(name);
       if (at !== undefined && at < call.seq) continue;
       bypassed.set(name, (bypassed.get(name) ?? 0) + 1);
@@ -645,8 +699,14 @@ const skillBypassed: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprin
 const skillInvoked: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint === "skill.invoked");
 
 /** The two review skills' documented finding formats. Conservative: nit-only
- *  or clean reports do not count as findings. */
-const REVIEW_FINDINGS = /\[(Important|CRITICAL|HIGH)\]|🔴|\b[1-9]\d* (important|critical|high)\b/i;
+ *  or clean reports do not count as findings. "N critical" followed by "CVE"
+ *  is a dependency note, not a review count. */
+const REVIEW_FINDINGS = /\[(Important|CRITICAL|HIGH)\]|🔴|\b[1-9]\d* important\b|\b[1-9]\d* (critical|high)\b(?!\s+cves?\b)/i;
+/** A report that says it found nothing. */
+const REVIEW_CLEAN = /\b0 important\b|\bno (?:blocking )?findings\b|\bclean, no\b|\b0 (?:critical|high)\b/i;
+/** The CLI echoes the invoked skill's body as an assistant text block; its
+ *  severity legend contains every marker above. Not a report. */
+const SKILL_BODY = /^\s*Base directory for this skill:/;
 
 function reviewOutcome(s: ParsedSession): Occurrence[] {
   const out: Occurrence[] = [];
@@ -656,7 +716,16 @@ function reviewOutcome(s: ParsedSession): Occurrence[] {
       (c) => c.name === "Skill" && typeof c.input.skill === "string" && REVIEW_SKILL.test(c.input.skill),
     );
     if (!review) continue;
-    const findings = turn.textBlocks.some((b) => b.seq > review.seq && REVIEW_FINDINGS.test(b.text));
+    // The report is what the model says between the review and the next
+    // skill or commit — later prose ("3 CRITICAL CVEs" in a commit summary)
+    // is not the review speaking.
+    const stop = own.find(
+      (c) =>
+        c.seq > review.seq &&
+        (c.name === "Skill" || (c.name === "Bash" && COMMIT_CMD.test(typeof c.input.command === "string" ? c.input.command : ""))),
+    );
+    const report = turn.textBlocks.filter((b) => b.seq > review.seq && b.seq < (stop?.seq ?? Number.POSITIVE_INFINITY) && !SKILL_BODY.test(b.text));
+    const findings = report.some((b) => REVIEW_FINDINGS.test(b.text)) && !report.some((b) => REVIEW_CLEAN.test(b.text));
     if (!findings) continue;
     const acted = own.some((c) => c.seq > review.seq && (c.name === "Edit" || c.name === "Write"));
     out.push({
@@ -704,6 +773,142 @@ function planTracking(s: ParsedSession): Occurrence[] {
 }
 const planStale: Extractor = (s) => planTracking(s).filter((o) => o.fingerprint === "plan.stale");
 const planKept: Extractor = (s) => planTracking(s).filter((o) => o.fingerprint === "plan.kept");
+
+// ---------------------------------------------------------------------------
+// Plan shape — tracer bullets (2026-09-07)
+// ---------------------------------------------------------------------------
+
+/** A plan needs this many `[N]` steps before its shape is judged. */
+export const PLAN_SHAPE_MIN_STEPS = 3;
+
+/** The app's tag grammar (`PlanModel.swift`): `[N]` is a step, `[N.M]` a sub-task. */
+const STEP_TAG = /^\s*\[(\d+)(?:\.(\d+))?\]\s*(.*)$/;
+
+/** Top-level `[N]` step titles of a TodoWrite payload, sorted by N, first
+ *  title per N kept, sub-tasks dropped, untagged items ignored. */
+export function planStepsOf(todos: unknown): string[] {
+  if (!Array.isArray(todos)) return [];
+  const byN = new Map<number, string>();
+  for (const item of todos) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const text =
+      typeof o.content === "string" && o.content.trim() ? o.content : typeof o.activeForm === "string" ? o.activeForm : "";
+    const m = STEP_TAG.exec(text);
+    if (!m || m[2] !== undefined) continue;
+    const n = Number(m[1]);
+    if (!byN.has(n)) byN.set(n, (m[3] ?? "").replace(/\s+/g, " ").trim());
+  }
+  return [...byN.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t);
+}
+
+export type PlanShape = "horizontal" | "vertical" | "single-layer" | "unknown";
+
+export interface PlanShapeResult {
+  shape: PlanShape;
+  /** Areas each step touches, in step order. */
+  layersPerStep: string[][];
+  /** Distinct areas across the plan, in order of first appearance. */
+  layers: string[];
+  /** 1-based index of the first step that crosses areas or is marked as a slice. */
+  firstCrossStep: number | null;
+}
+
+// The only fixed words here are about planning method, not about any stack:
+// a slice is a slice in every project. "smoke" and "through" are deliberately
+// absent — Phase 5's own verification example says "manual smoke on /foo".
+const SLICE_STRONG =
+  /\b(?:end[\s-]?to[\s-]?end|e2e)\b(?!\s+(?:tests?|testing|suite|specs?|coverage)\b)|\btracer(?:[\s-]bullets?)?\b|\b(?:thin|vertical|first|one)[\s-]slices?\b|\bwalking[\s-]skeleton\b|\bfull[\s-]stack\b/i;
+/** Counts only when the same step also touches at least one area. */
+const SLICE_WEAK = /\bslices?\b|\b(?:wire|wires|wired|hook|hooks|hooked|connect|connects|connected|plumb)\b(?:\s+up)?[^.;]*\bto\b|\bround[\s-]trip\b/i;
+/** A step that is MARVIN's own workflow, not a build step: it neither
+ *  crosses layers nor adds one. "Verify & ship: typecheck, vitest,
+ *  Playwright" names every area's tooling and proves nothing about the
+ *  plan's shape. Process words, not any project's. */
+const PROCESS_STEP =
+  /^\s*(?:\[[\d.]+\]\s*)?(?:\W*\s*)?(?:verify|verification|validate|test|tests|testing|qa|lint|typecheck|ship|commit|release|deploy|deployment|docs?|document|documentation|adr|review|pr-review|security-audit|graphify|backlog|wrap[\s-]?up|cleanup|clean[\s-]up)\b/i;
+
+/** Shape of a plan against the project's discovered areas. With no areas
+ *  (no graph, or fewer than two) every plan is `unknown`: MARVIN does not
+ *  guess what a layer is. */
+export function classifyPlanShape(steps: string[], areas: ProjectAreas | null): PlanShapeResult {
+  const none: PlanShapeResult = { shape: "unknown", layersPerStep: steps.map(() => []), layers: [], firstCrossStep: null };
+  if (!areas || areas.areas.length < 2) return none;
+  const process = steps.map((t) => PROCESS_STEP.test(t));
+  const layersPerStep = steps.map((t, i) => (process[i] ? [] : areasOfTitle(areas, t)));
+  const layers: string[] = [];
+  for (const ls of layersPerStep) for (const l of ls) if (!layers.includes(l)) layers.push(l);
+  let firstCrossStep: number | null = null;
+  steps.forEach((t, i) => {
+    if (firstCrossStep !== null || process[i]) return;
+    // Crossing needs structural evidence on both sides: directory names, not
+    // the domain nouns that file stems carry into every layer's step.
+    const structural = areasOfTitle(areas, t, { structural: true }).length;
+    const any = layersPerStep[i]!.length;
+    if (structural >= 2 || SLICE_STRONG.test(t) || (any >= 1 && SLICE_WEAK.test(t))) firstCrossStep = i + 1;
+  });
+  let shape: PlanShape;
+  if (layers.length === 0) shape = "unknown";
+  else if (layers.length === 1) shape = "single-layer";
+  else if (firstCrossStep !== null) shape = "vertical";
+  else if (steps.length >= PLAN_SHAPE_MIN_STEPS) shape = "horizontal";
+  else shape = "unknown"; // two steps in two areas: too little to call
+  return { shape, layersPerStep, layers, firstCrossStep };
+}
+
+function planShapeDetail(steps: string[], c: PlanShapeResult): string {
+  if (c.shape === "horizontal") {
+    return `${steps.length} layer-only milestones (${c.layers.join(" → ")}), first cross-layer step: none`;
+  }
+  const n = c.firstCrossStep ?? 1;
+  const touched = c.layersPerStep[n - 1] ?? [];
+  const head =
+    touched.length >= 2
+      ? `milestone ${n} crosses ${touched.join(" + ")}`
+      : `milestone ${n} is marked as a slice (${touched.join(", ") || "no area named"})`;
+  return n > 1 ? `${head} (milestones 1–${n - 1} are layer-only)` : head;
+}
+
+/** One occurrence per distinct plan per session, at the first TodoWrite that
+ *  carried it. A horizontal payload re-presented as vertical LATER IN THE
+ *  SAME TURN counts only as vertical: that is the nudge holding, and an
+ *  accepted rule must not read its own success as a recurrence. */
+function planShapes(s: ParsedSession): Occurrence[] {
+  const out: Occurrence[] = [];
+  const areas = currentAreas;
+  if (!areas) return out;
+  const seen = new Set<string>();
+  for (const turn of s.turns) {
+    const thisTurn: Array<{ seq: number; shape: PlanShape; occ: Occurrence }> = [];
+    for (const call of ownCalls(turn)) {
+      if (call.name !== "TodoWrite") continue;
+      const steps = planStepsOf(call.input.todos);
+      if (steps.length < PLAN_SHAPE_MIN_STEPS) continue;
+      const key = steps.map((t) => t.toLowerCase().replace(/\s+/g, " ").trim()).join("\n");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const c = classifyPlanShape(steps, areas);
+      if (c.shape !== "horizontal" && c.shape !== "vertical") continue;
+      thisTurn.push({
+        seq: call.seq,
+        shape: c.shape,
+        occ: {
+          fingerprint: `plan.${c.shape}`,
+          sessionId: s.sessionId,
+          turnId: turn.turnId,
+          at: turn.startedAt,
+          cost: 1,
+          detail: planShapeDetail(steps, c),
+        },
+      });
+    }
+    const lastVertical = Math.max(-1, ...thisTurn.filter((x) => x.shape === "vertical").map((x) => x.seq));
+    for (const x of thisTurn) if (!(x.shape === "horizontal" && x.seq < lastVertical)) out.push(x.occ);
+  }
+  return out;
+}
+const planHorizontal: Extractor = (s) => planShapes(s).filter((o) => o.fingerprint === "plan.horizontal");
+const planVertical: Extractor = (s) => planShapes(s).filter((o) => o.fingerprint === "plan.vertical");
 
 /** The same failing command run again unchanged. */
 function commandRetries(s: ParsedSession): Occurrence[] {
@@ -753,7 +958,11 @@ const commandAdapted: Extractor = (s) => commandRetries(s).filter((o) => o.finge
 export interface ExtractorOptions {
   /** `turn.completed.costUsd` at or above this is over budget. */
   turnOverbudgetUsd?: number;
+  /** The project's areas (`discoverAreas`), for the plan-shape kinds. Null
+   *  or absent: no layers are known, so no plan-shape occurrence is emitted. */
+  areas?: ProjectAreas | null;
 }
+let currentAreas: ProjectAreas | null = null;
 export const DEFAULT_TURN_OVERBUDGET_USD = 10;
 
 let overbudgetThreshold = DEFAULT_TURN_OVERBUDGET_USD;
@@ -795,15 +1004,25 @@ export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
   "review.acted": reviewActed,
   "plan.kept": planKept,
   "command.adapted": commandAdapted,
+  "plan.horizontal": planHorizontal,
+  "plan.vertical": planVertical,
 };
 
 /** Bump when an extractor's definition changes; the ledger records it per
  *  finding so a count produced by an older definition is never compared
  *  against one from a newer definition as if they were the same measurement. */
-export const EXTRACTOR_VERSION = 3; // v3 (2026-09-03): Phase 2 kinds — skill / review / plan / command / budget
+export const EXTRACTOR_VERSION = 6;
+// v3 (2026-09-03): Phase 2 kinds — skill / review / plan / command / budget
+// v4 (2026-09-04): a scope-NOT-met handoff is a handoff; pre-orientation counts
+//   as the first graph call; reading a skill you edit this turn is not a bypass
+// v5 (2026-09-07): plan shape kinds — plan.horizontal / plan.vertical
+// v6 (2026-09-07, same day, after the first v5 run): a source read is what the gate says it is
+//   (search-shaped Bash inside cwd, not `cat docs/x.md`); a review's report excludes the echoed
+//   skill body and stops at the commit
 
 export function extractAll(session: ParsedSession, opts: ExtractorOptions = {}): Occurrence[] {
   overbudgetThreshold = opts.turnOverbudgetUsd ?? DEFAULT_TURN_OVERBUDGET_USD;
+  currentAreas = opts.areas ?? null;
   const out: Occurrence[] = [];
   for (const kind of FINGERPRINT_KINDS) out.push(...EXTRACTORS[kind](session));
   return out;

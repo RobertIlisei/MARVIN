@@ -30,6 +30,7 @@ import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Optio
 } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
+import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { makeTurnCloseStopHook } from "./turn-close-hook";
 import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
@@ -2014,10 +2015,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           orientation = formatOrientation(query, hits);
           if (orientation) {
             recordAllowedTool(designCtx, "mcp__marvin-graph__graph_search", { query });
-            console.info(
-              "[marvin.telemetry] " +
-                JSON.stringify({ kind: "graph.preorient", turnId, hits: hits.length, at: new Date().toISOString() }),
-            );
+            const at = new Date().toISOString();
+            console.info("[marvin.telemetry] " + JSON.stringify({ kind: "graph.preorient", turnId, hits: hits.length, at }));
+            // Also into the transcript, as a `system` cli.event: the practice
+            // graph-first extractor counts it as the turn's first graph call
+            // (it cannot see the telemetry line). The app's system reducer
+            // renders no system rows, so nothing shows in the chat.
+            onEvent({ type: "system", subtype: PREORIENT_SUBTYPE, turnId, query, hits: hits.length, at } as unknown as SDKMessage);
           }
         } catch {
           orientation = null; // the graph is a convenience here, never a blocker

@@ -21,19 +21,25 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { discoverAreas, type ProjectAreas } from "@marvin/graphify-bridge";
+
 import { marvinPaths } from "./paths";
-import { listSessions } from "./session";
 import {
   COST_UNITS,
+  classifyPlanShape,
   EXTRACTOR_VERSION,
+  extractAll,
   type FingerprintKind,
   kindOf,
   type Occurrence,
-  parseSessionTranscript,
+  PLAN_SHAPE_MIN_STEPS,
   POLARITY,
+  parseSessionTranscript,
+  planStepsOf,
   SUCCESS_PAIR,
-  extractAll,
 } from "./practice-extractors";
+import { getProject } from "./projects";
+import { listSessions } from "./session";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -81,6 +87,7 @@ export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
     "plan.stale": 1,
     "command.retried": 3,
     "turn.overbudget": 20,
+    "plan.horizontal": 1,
   },
   verifyWindow: 5,
 };
@@ -107,6 +114,8 @@ export const RELIABILITY: Record<FingerprintKind, number> = {
   "review.acted": 0.8,
   "plan.kept": 1,
   "command.adapted": 1,
+  "plan.horizontal": 0.8, // a lexical match against the project's own area vocabulary
+  "plan.vertical": 0.8,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,6 +139,9 @@ export interface RuleTrigger {
   pattern?: string;
   /** Only when the call is a commit whose diff touches a boundary path. */
   boundaryPaths?: boolean;
+  /** Only when the call is a TodoWrite whose `[N]` steps classify as this
+   *  shape against the project's discovered areas. */
+  planShape?: "horizontal";
   /** The discharge path a `deny` needs: any of these skills run this session. */
   requireSkillThisSession?: string[];
   conditions?: RuleCondition[];
@@ -263,6 +275,20 @@ export const RULE_TEMPLATES: Record<FingerprintKind, RuleTemplate | null> = {
   "review.acted": null,
   "plan.kept": null,
   "command.adapted": null,
+  "plan.horizontal": {
+    title: "Slice milestones vertically — milestone 1 proves one flow end to end",
+    tier: "nudge",
+    trigger: { tool: "^TodoWrite$", planShape: "horizontal" },
+    message:
+      "practice rule: this plan's milestones are stacked by layer — each `[N]` step lives in one area of this project " +
+      "and none crosses two — so nothing runs end to end until the last one lands and integration surprises arrive " +
+      "last. Measured across this project's sessions: layer-stacked plans are the shape that stalls. Before the first " +
+      'edit, run `graph_path({from: "<the entry symbol the user touches>", to: "<the persistence symbol it reaches>", ' +
+      'relations: ["calls", "imports", "imports_from", "method", "contains"]})` and re-present the plan with milestone 1 ' +
+      "as a thin slice along that path — one input through every area to one visible output, with its own " +
+      "verification — then widen each area in the later milestones.",
+  },
+  "plan.vertical": null,
 };
 
 export const TIER_ORDER: RuleTier[] = ["prompt", "nudge", "deny"];
@@ -634,6 +660,19 @@ export interface RunOptions {
   readTranscript?: (projectId: string, sessionId: string) => string | null;
   /** Test seam: enumerate sessions. */
   listSessionFiles?: (projectId: string) => Array<{ sessionId: string; mtime: number; size: number }>;
+  /** The project's areas for the plan-shape kinds; default: discovered from
+   *  the registered project's graph, null when there is none. */
+  areas?: ProjectAreas | null;
+}
+
+function defaultAreas(projectId: string): ProjectAreas | null {
+  const project = getProject(projectId);
+  if (!project) return null;
+  try {
+    return discoverAreas(join(project.workDir, "graphify-out", "graph.json"));
+  } catch {
+    return null;
+  }
 }
 
 function defaultListSessionFiles(projectId: string) {
@@ -691,6 +730,7 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
   const ledger = readLedger(projectId);
   const listFiles = opts.listSessionFiles ?? defaultListSessionFiles;
   const readTranscript = opts.readTranscript ?? defaultReadTranscript;
+  const areas = opts.areas !== undefined ? opts.areas : defaultAreas(projectId);
   const liveGrace = opts.liveGraceMs ?? 5 * 60 * 1000;
 
   // Extractor version bump: every count on file was produced by a different
@@ -727,6 +767,7 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
     if (raw === null) continue;
     const occurrences = extractAll(parseSessionTranscript(file.sessionId, raw), {
       turnOverbudgetUsd: config.thresholds.turnOverbudgetUsd,
+      areas,
     });
     sessionsRead += 1;
     occurrencesTotal += occurrences.length;
@@ -1087,6 +1128,8 @@ export interface RuleEvalContext {
   hasSkillRun: (skill: string) => boolean;
   /** Lazily computed by the caller — only invoked when a rule needs it. */
   boundaryHit: () => boolean;
+  /** The project's discovered areas, lazily — only a `planShape` rule asks. */
+  areas?: () => ProjectAreas | null;
   /** Denies already issued this turn, per rule id. Mutated. */
   deniesThisTurn: Map<string, number>;
   /** Nudges already issued this turn, per rule id. Mutated. */
@@ -1119,6 +1162,11 @@ function triggerMatches(t: RuleTrigger, ctx: RuleEvalContext): boolean {
     if (t.conditions && !t.conditions.every((c) => conditionHolds(c, ctx.counters))) return false;
     if (t.requireSkillThisSession && t.requireSkillThisSession.some((s) => ctx.hasSkillRun(s))) return false;
     if (t.boundaryPaths && !ctx.boundaryHit()) return false;
+    if (t.planShape) {
+      const steps = planStepsOf(ctx.input.todos);
+      if (steps.length < PLAN_SHAPE_MIN_STEPS) return false;
+      if (classifyPlanShape(steps, ctx.areas?.() ?? null).shape !== t.planShape) return false;
+    }
     return true;
   } catch {
     return false; // a rule with a broken regex never fires
@@ -1362,5 +1410,5 @@ export function __resetPracticeScheduleForTests(): void {
   lastRunDay.clear();
 }
 
+export type { FingerprintKind, Occurrence };
 export { COST_UNITS, EXTRACTOR_VERSION };
-export type { Occurrence, FingerprintKind };

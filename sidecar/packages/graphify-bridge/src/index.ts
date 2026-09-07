@@ -9,6 +9,7 @@ export {
   symbolOf,
 } from "./call-index";
 export { createGraphMcpServer } from "./mcp-server";
+export { areasOfTitle, discoverAreas, type ProjectArea, type ProjectAreas, tokensOf } from "./plan-areas";
 export {
   type GraphScope,
   nodeLabelIndex,

@@ -60,13 +60,13 @@ Use case: blast-radius enumeration in the impact-analysis phase.
 
 #### `graph_path`
 
-Shortest path between two nodes.
+Shortest path between two nodes (undirected BFS within one graph).
 
-**Arguments:** `{ from: string, to: string }`
+**Arguments:** `{ from: string, to: string, relations?: string[], scope? }` — `relations` restricts the walk to those edge relations, e.g. `["calls", "imports", "imports_from", "method", "contains"]` for a path code actually takes; without it BFS may thread through a `references` string mention.
 
-**Returns:** `Array<{ id, label, relation, confidence }>` — the chain, head to tail.
+**Returns:** `Array<{ id, label, relation, confidence, sourceFile }>` — the chain, head to tail. Each hop carries the relation of the edge it *leaves* by (the last has none) and its file, so the path reads as a touchpoint list.
 
-Use case: "how does the chat input reach the Agent SDK?" — surface the intermediate hops.
+Use cases: "how does the chat input reach the Agent SDK?" — surface the intermediate hops. And Phase 5 planning (2026-09-07): the structural path from the entry symbol a change touches to the persistence symbol it reaches is milestone 1's touchpoint list — the tracer bullet through every layer.
 
 ### Notes
 

@@ -544,6 +544,15 @@ code graph as before. Two further tools landed with
   community by id or labelled name, the one lookup `graph_summary` names but
   couldn't open. `graph_query` also gained `context: [...]` (the CLI's
   `--context` edge filter) for questions drowning in `references` noise.
+- **`graph_path({from, to, relations?})`** (2026-09-07) — pass
+  `relations: ["calls", "imports", "imports_from", "method", "contains"]`
+  for a *structural* path; every hop prints its file. This is Phase 5's
+  tracer-bullet tool: entry symbol → persistence symbol = milestone 1's
+  touchpoints, so the first milestone is a thin slice through every layer
+  rather than one layer. The practice loop measures plan shape as
+  `plan.horizontal` / `plan.vertical`, with the layers **discovered from the
+  project's own graph** (`discoverAreas` in graphify-bridge) — MARVIN ships
+  no layer vocabulary.
 
 `graph_save_result` now takes **`outcome: useful | dead_end | corrected`**
 (plus `correction`). Send it every time: without an outcome the save is a

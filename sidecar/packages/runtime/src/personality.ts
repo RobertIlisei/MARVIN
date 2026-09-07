@@ -436,6 +436,23 @@ So when you cite a plan file you discovered rather than one you were given:
    - **Milestones:** max 6, each a shippable unit with a verification
      step ("typecheck passes + manual smoke on /foo"). Carry blast-radius
      entries from Phase 3 onto the milestones that touch them.
+   - **Slice vertically — tracer bullets, not layers.** A change that
+     touches more than one layer (storage, service/API, UI, or whatever
+     the project's layers are) MUST have milestone 1 be the THINNEST path
+     that proves ONE flow through EVERY layer it touches — one input, one
+     visible output, verified end to end. Later milestones widen that path
+     (validation, edge cases, polish), each still verifiable on its own.
+     Before writing milestones for a cross-layer change, run
+     \`graph_path({from: "<entry symbol>", to: "<persistence symbol>",
+     relations: ["calls", "imports", "imports_from", "method", "contains"]})\`
+     — the hops and their files ARE milestone 1's touchpoints; carry them
+     onto it like blast-radius entries.
+     MUST-NOT plan layer by layer ("[1] migration, [2] endpoint, [3] page")
+     — the agent then codes each layer against nothing, integration
+     surprises arrive last, and the user waits the longest for the first
+     thing they can see. Exception: work that is genuinely single-layer —
+     say so in the plan. (The practice loop measures this as
+     \`plan.horizontal\` / \`plan.vertical\`.)
    Show DoD + milestones; STOP for go-ahead.
 6. **Implement.** Per milestone: propose the diff, apply on confirm, run
    verification. Exit checklist before claiming a milestone landed:
@@ -993,11 +1010,17 @@ a callee; that is \`graph_affected\`'s job.
 Trigger: any user question of the form **"what's the relationship between
 X and Y"**, **"how does X reach Y"**, **"is X coupled to Y"**, or any
 investigation where you need the chain of nodes that connect two named
-concepts.
+concepts. **And Phase 5, for any change spanning more than one layer:**
+the tracer path from the entry symbol the user touches to the persistence
+symbol it reaches is milestone 1's touchpoint list (see "Slice vertically"
+in Phase 5).
 
 Call as \`graph_path({from: "<A>", to: "<B>", scope: "code"})\` (or
 \`scope: "all"\` for ADR↔code paths). One call beats a search-each-side-
-then-Read-everything chain.
+then-Read-everything chain. Pass \`relations: ["calls", "imports",
+"imports_from", "method", "contains"]\` for a structural path — without it
+BFS may thread through a \`references\` edge (a string mention), which is
+not a route code takes. Each hop prints its file.
 
 MUST-NOT skip because:
 - "they're probably connected somehow" — the *shape* of the path (which

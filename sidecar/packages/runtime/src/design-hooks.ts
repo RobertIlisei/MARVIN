@@ -29,17 +29,18 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, extname, isAbsolute, join, relative, sep } from "node:path";
-
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import type {
   HookCallback,
   HookJSONOutput,
   PermissionResult,
   PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+import { discoverAreas } from "@marvin/graphify-bridge";
 import { isSubagentDispatch } from "@marvin/tools/policy";
 import type { AdvisorVerdict } from "./advisor-verdict";
 import { type AutoAuditEntryKind, appendAutoAuditEntry } from "./auto-audit";
+import { bashSearchTarget, isInsideCwd, isSourceFile, truncate } from "./bash-search";
 import {
   type BuiltinGate,
   type BuiltinRuleId,
@@ -48,8 +49,8 @@ import {
   notePracticeRuleFired,
   type RuleEvalResult,
 } from "./practice";
-import { slugifyWorkDir } from "./projects";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
+import { slugifyWorkDir } from "./projects";
 
 /**
  * Hooks only ever return a deny PermissionResult (or null). We narrow the
@@ -223,38 +224,6 @@ export function readDesignHooksMode(): DesignHooksMode {
   return "enforce";
 }
 
-/** Source file extensions that the graphify-first rule applies to. The
- *  rule is about *structural* reads — config / docs / data files don't
- *  trigger graph-first because they're not what the graph indexes. */
-const SOURCE_FILE_EXTENSIONS = new Set([
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-  ".swift",
-  ".py",
-  ".go",
-  ".rs",
-  ".c",
-  ".cc",
-  ".cpp",
-  ".cxx",
-  ".h",
-  ".hh",
-  ".hpp",
-  ".hxx",
-  ".java",
-  ".kt",
-  ".kts",
-  ".rb",
-  ".ex",
-  ".exs",
-  ".cs",
-  ".m",
-  ".mm",
-]);
 
 /** Filename suffixes / patterns that should NOT trigger advisor-on-ADR
  *  even if they match a trigger path. Tests are exempt — touching
@@ -450,6 +419,11 @@ export function recordAllowedTool(
     const backgrounded = toolInput.run_in_background === true;
     if (isAdvisor && !backgrounded) {
       ctx.advisorCallCount += 1;
+      // 2026-09-07: a real turn showed the advisor-on-ADR gate denying an edit
+      // six minutes AFTER a consult had run and returned in the same turn,
+      // right after a context compaction — unexplained from the code, and the
+      // log had rotated. Recorded so the next one is diagnosable.
+      logDesignHookEvent({ kind: "advisor.consult.recorded", turnId: ctx.turnId, tool: toolName, advisorCallCount: ctx.advisorCallCount });
     }
     return;
   }
@@ -777,6 +751,26 @@ export function noteBashFailure(ctx: DesignTurnContext, toolName: string, toolIn
 }
 
 /**
+ * A gate deny is a failure the model sees, and it re-runs those verbatim too:
+ * on 2026-09-03 the ship-review gate refused a `git commit`, the identical
+ * command came back 15 s later, and the retry nudge never fired because it
+ * hangs off PostToolUseFailure and a PreToolUse deny is not a tool failure.
+ * So a denied Bash command is remembered like a failed one, and a verbatim
+ * re-run carries the retry advisory ahead of the deny text. Exported for tests.
+ */
+export function denyReasonWithRetry(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  reason: string,
+): string {
+  if (toolName !== "Bash") return reason;
+  const retry = checkCommandRetry(ctx, toolName, toolInput);
+  noteBashFailure(ctx, toolName, toolInput);
+  return retry ? `${retry}\n\n${reason}` : reason;
+}
+
+/**
  * Command-retry nudge (2026-09-03). The practice backtest found the same
  * failing command re-run verbatim in 26 sessions (96 retries). Advisory,
  * once per command per turn: the call proceeds, with the reminder attached.
@@ -948,12 +942,14 @@ export function makeDesignHooksPreToolUse(args: {
         tool: evt.tool_name,
         graphCallCount: designCtx.graphCallCount,
         sourceFilesRead: designCtx.sourceFilesRead,
+        advisorCallCount: designCtx.advisorCallCount,
+        rule: designDeny.message?.split(":")[0] ?? "rule",
       });
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
-          permissionDecisionReason: designDeny.message ?? "design-hook deny",
+          permissionDecisionReason: denyReasonWithRetry(designCtx, evt.tool_name, safeInput, designDeny.message ?? "design-hook deny"),
         },
       } as HookJSONOutput;
     }
@@ -1216,6 +1212,9 @@ export function checkPracticeRules(
       },
       deniesThisTurn: ctx.practiceDenies,
       nudgesThisTurn: ctx.practiceNudges,
+      // Lazy: parsed once per graph mtime inside the bridge, asked only by a
+      // plan-shape rule on a TodoWrite.
+      areas: () => (ctx.hasGraph ? discoverAreas(join(ctx.cwd, "graphify-out", "graph.json")) : null),
       measure,
     });
   } catch {
@@ -1662,77 +1661,7 @@ function checkGraphifyFirst(
   };
 }
 
-/** Search commands that ARE structural exploration of the tree. */
-const BASH_SEARCH_COMMANDS = new Set([
-  "rg", "grep", "egrep", "fgrep", "ack", "ag", "find", "fd", "ripgrep",
-]);
 
-/**
- * The search root of a search-shaped `Bash` command, or null when the call is
- * not structural exploration.
- *
- * Why this exists (2026-08-30). Golden Rule 7's mechanical half keyed on
- * `Read` / `Grep` / `Glob`. Claude Code **2.1.251 removed `Grep` and `Glob`
- * from the main agent's tool surface** — verified by probing both bundled
- * CLIs directly: 2.1.113 reports them, 2.1.251 does not, and `ToolSearch`
- * answers `select:Grep,Glob` with "No matching deferred tools found", so they
- * are gone rather than deferred. Searching therefore moves to `Bash`, which
- * this rail could not see: measured across every session in the four hours
- * after the CLI upgrade, **15 of 18 Bash calls were search-shaped against 2
- * graph calls**. That is the "grep and pray" pattern the rule exists to
- * eliminate, routing around the mechanism built to stop it.
- *
- * Conservative on purpose, because `Bash` is mostly IMPLEMENTATION here
- * (tests, git, make) and the drift rails deliberately never interrupt that:
- *
- *   - only when a search binary LEADS a pipeline segment, so
- *     `make smoke | grep -i fail` (filtering command output) never fires
- *     while `grep -rn "x" src/` does;
- *   - only when the search root resolves inside `cwd`, matching what the
- *     `Grep` branch already required.
- */
-export function bashSearchTarget(
-  toolInput: Record<string, unknown>,
-  cwd: string,
-): string | null {
-  const command = typeof toolInput.command === "string" ? toolInput.command : "";
-  if (!command.trim()) return null;
-
-  // Split on LIST separators only (`&&`, `||`, `;`, newline) — never on `|`.
-  // A pipe is the whole distinction: `rg "x" src | head` searches the tree,
-  // `make smoke | grep FAIL` filters command output and must never be denied.
-  // So within each list segment we look at the FIRST pipeline stage only; a
-  // search binary downstream of a pipe is a filter, not a search.
-  for (const listSegment of command.split(/&&|\|\||;|\n/)) {
-    const rawSegment = listSegment.split("|")[0] ?? "";
-    const words = rawSegment.trim().split(/\s+/).filter(Boolean);
-    if (words.length === 0) continue;
-    // Skip a leading `cd <dir>` — MARVIN's Bash calls routinely open with one.
-    let i = 0;
-    if (words[i] === "cd") i += 2;
-    // Skip env assignments (FOO=bar) and common prefixes.
-    while (i < words.length && (/^[A-Z_][A-Z0-9_]*=/.test(words[i]!) || words[i] === "command" || words[i] === "sudo")) i += 1;
-    const head = (words[i] ?? "").split("/").pop() ?? "";
-    if (!BASH_SEARCH_COMMANDS.has(head)) continue;
-
-    // The first non-flag argument after the binary is the closest thing to a
-    // search root. `grep -rn "pat" src/` → "src/"; `find . -name x` → ".".
-    // `grep` takes the PATTERN first, so prefer the last path-ish argument;
-    // `find` takes the path first. Either way, default to cwd, which is what
-    // the `Grep` branch did when `path` was omitted.
-    const args = words.slice(i + 1).filter((w) => !w.startsWith("-"));
-    const pathish = head === "find" ? args[0] : args.slice(1).find((a) => a.includes("/") || a === "." || a === "..");
-    const target = pathish ?? cwd;
-    const resolved = target === "." || target === ".." ? cwd : target;
-    if (isInsideCwd(cwd, resolved)) return `${head} ${truncate(rawSegment.trim(), 60)}`;
-  }
-  return null;
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return `${s.slice(0, max - 1)}…`;
-}
 
 /** ADR-0095 amendment — deny a re-consult once a verdict has landed.
  *
@@ -1851,20 +1780,6 @@ function pickPath(
   return null;
 }
 
-/** Check whether `target` is a regular source file (by extension). */
-export function isSourceFile(target: string): boolean {
-  return SOURCE_FILE_EXTENSIONS.has(extname(target).toLowerCase());
-}
-
-/** Check whether `target` resolves to a path inside `cwd`. Tolerates
- *  relative paths by treating them as relative to cwd. */
-export function isInsideCwd(cwd: string, target: string): boolean {
-  const abs = isAbsolute(target) ? target : join(cwd, target);
-  const rel = relative(cwd, abs);
-  if (rel.startsWith("..") || isAbsolute(rel)) return false;
-  // Also treat empty string as inside (target === cwd).
-  return true;
-}
 
 /** Match a path against the ADR trigger list. Returns the trigger label
  *  on first match, or null. */
@@ -1896,3 +1811,6 @@ export function isExemptFromAdrTriggers(target: string): boolean {
   }
   return false;
 }
+
+// Moved to `bash-search.ts` (2026-09-07) so the practice extractor mirrors the gate; re-exported for existing importers.
+export { bashSearchTarget, isInsideCwd, isSourceFile };

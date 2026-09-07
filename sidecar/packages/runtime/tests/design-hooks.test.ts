@@ -38,7 +38,7 @@ import {
   type ShipDiff,
   shipReviewSkillOf,
 } from "../src/design-hooks";
-import { checkCommandRetry, noteBashFailure, rewriteProjectSkillName } from "../src/design-hooks";
+import { checkCommandRetry, denyReasonWithRetry, noteBashFailure, rewriteProjectSkillName } from "../src/design-hooks";
 import {
   __resetBuiltinCacheForTests,
   BUILTIN_RULE_IDS,
@@ -1487,6 +1487,21 @@ describe("command-retry nudge", () => {
     expect(checkCommandRetry(ctx, "Bash", { command: "npm test" })).toBeNull(); // once per command
     expect(checkCommandRetry(ctx, "Bash", { command: "npm test -- --runInBand" })).toBeNull();
     noteBashFailure(ctx, "Read", { file_path: "/x" }); // only Bash counts
+    expect(ctx.failedBashCommands.size).toBe(1);
+  });
+
+  it("a gate deny counts as a failure: the verbatim re-run carries the retry advisory ahead of the deny", () => {
+    const ctx = createTurnDesignContext("t-deny", "/proj");
+    const commit = { command: "cd /repo && git commit -m 'x'" };
+    const deny = "ship-review gate (ADR-0104): run pr-review first";
+    expect(denyReasonWithRetry(ctx, "Bash", commit, deny)).toBe(deny);
+    expect(ctx.failedBashCommands.get("cd /repo && git commit -m 'x'")).toBe(1);
+    const second = denyReasonWithRetry(ctx, "Bash", commit, deny);
+    expect(second.startsWith("[command retry — advisory]")).toBe(true);
+    expect(second).toContain("already failed once");
+    expect(second.endsWith(deny)).toBe(true);
+    // Only Bash is remembered; a Read deny is the graphify-first gate's business.
+    expect(denyReasonWithRetry(ctx, "Read", { file_path: "/x.ts" }, "graphify-first")).toBe("graphify-first");
     expect(ctx.failedBashCommands.size).toBe(1);
   });
 });

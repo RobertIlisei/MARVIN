@@ -411,12 +411,22 @@ export interface PathHop {
   label: string;
   relation?: string;
   confidence?: string;
+  /** The node's file, so a path reads as "files a change must touch". */
+  sourceFile: string | null;
+}
+
+export interface PathOptions {
+  /** Only walk edges whose `relation` is one of these (e.g. `["calls",
+   *  "imports", "imports_from", "method", "contains"]` for a structural
+   *  path). Omit to walk every edge, `references` included. */
+  relations?: string[];
 }
 
 export function shortestPath(
   graphPath: string,
   fromQueryOrId: string,
   toQueryOrId: string,
+  opts: PathOptions = {},
 ): PathHop[] | null {
   const data = loadRaw(graphPath);
   if (!data) return null;
@@ -424,8 +434,9 @@ export function shortestPath(
   const to = resolveNode(graphPath, toQueryOrId);
   if (!from || !to) return null;
   if (from.node.id === to.node.id) {
-    return [{ id: from.node.id, label: from.node.label ?? from.node.id }];
+    return [{ id: from.node.id, label: from.node.label ?? from.node.id, sourceFile: from.node.source_file ?? null }];
   }
+  const allowed = opts.relations && opts.relations.length > 0 ? new Set(opts.relations) : null;
 
   // Undirected BFS. Neighbour map keyed by node id; value is list of
   // {other, relation, confidence} tuples so we can reconstruct edges.
@@ -441,6 +452,7 @@ export function shortestPath(
   for (const l of data.links) {
     if (typeof l.source !== "string" || typeof l.target !== "string") continue;
     const rel = l.relation ?? "related";
+    if (allowed && !allowed.has(rel)) continue;
     const conf = l.confidence ?? "EXTRACTED";
     push(l.source, l.target, rel, conf);
     push(l.target, l.source, rel, conf);
@@ -465,7 +477,7 @@ export function shortestPath(
   if (!parent.has(to.node.id)) return null;
 
   const reversed: PathHop[] = [
-    { id: to.node.id, label: byId.get(to.node.id)?.label ?? to.node.id },
+    { id: to.node.id, label: byId.get(to.node.id)?.label ?? to.node.id, sourceFile: byId.get(to.node.id)?.source_file ?? null },
   ];
   let cursor = to.node.id;
   while (cursor !== from.node.id) {
@@ -476,6 +488,7 @@ export function shortestPath(
       label: byId.get(p.prev)?.label ?? p.prev,
       relation: p.relation,
       confidence: p.confidence,
+      sourceFile: byId.get(p.prev)?.source_file ?? null,
     });
     cursor = p.prev;
   }

@@ -50,7 +50,8 @@ export interface TurnCloseDecision {
 export function decideTurnClose(lastText: string, facts: TurnCloseFacts): TurnCloseDecision | null {
   if (facts.alreadyFired || facts.machineTurn) return null;
   const ending = classifyTurnEnding(lastText);
-  if (ending === "asked" || ending === "blocked-on-human" || ending === "background") return null;
+  // "scope-not-met" is the alternative this hook's own message asks for.
+  if (ending === "asked" || ending === "blocked-on-human" || ending === "background" || ending === "scope-not-met") return null;
   if (facts.mutations > 0 && !hasScopeMet(lastText)) {
     return {
       kind: "scope-met-missing",

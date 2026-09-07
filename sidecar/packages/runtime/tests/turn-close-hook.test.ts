@@ -22,6 +22,8 @@ describe("turn-close decision", () => {
   it("lets a real-work turn end when the handoff is present, a question is asked, or a human is named", () => {
     expect(decideTurnClose("**Scope met:** done.\n<!-- marvin:scope-met -->", { ...facts, mutations: 2 })).toBeNull();
     expect(decideTurnClose("Want me to commit?", { ...facts, mutations: 2 })).toBeNull();
+    // The hook's own alternative: say what remains instead of claiming it.
+    expect(decideTurnClose("**Not scope met — verification is still running.** Two steps remain.", { ...facts, mutations: 2 })).toBeNull();
     expect(decideTurnClose("Once that's pushed I'll pick it up.", { ...facts, mutations: 2 })).toBeNull();
     expect(decideTurnClose("Polling the pipeline now.", { ...facts, mutations: 2 })).toBeNull();
   });

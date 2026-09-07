@@ -6,12 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 process.env.MARVIN_DATA_DIR = mkdtempSync(join(tmpdir(), "marvin-practice-"));
 
-import {
-  classifyTurnEnding,
-  extractAll,
-  parseSessionTranscript,
-  type Occurrence,
-} from "../src/practice-extractors";
+import { checkPracticeRules, createTurnDesignContext, recordAllowedTool } from "../src/design-hooks";
 import {
   __resetPracticeScheduleForTests,
   approveFinding,
@@ -23,6 +18,7 @@ import {
   evaluatePracticeRules,
   markFindingFixed,
   PRACTICE_RULE_MAX_DENIES,
+  type PracticeRule,
   practicePromptBlock,
   practiceView,
   readLedger,
@@ -32,9 +28,16 @@ import {
   scoreFinding,
   writePracticeConfig,
   writeRules,
-  type PracticeRule,
 } from "../src/practice";
-import { createTurnDesignContext, checkPracticeRules, recordAllowedTool } from "../src/design-hooks";
+import {
+  classifyPlanShape,
+  classifyTurnEnding,
+  extractAll,
+  type Occurrence,
+  PREORIENT_SUBTYPE,
+  parseSessionTranscript,
+  planStepsOf,
+} from "../src/practice-extractors";
 
 // ---------------------------------------------------------------------------
 // Fixture transcripts — the JSONL shape MARVIN writes (session.ts SessionTurn)
@@ -584,5 +587,264 @@ describe("schedule", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(ran).toHaveLength(4);
     stop();
+  });
+});
+
+describe("the 2026-09-04 false regressions (three extractor blind spots)", () => {
+  const ids = (raw: string) => extractAll(parseSessionTranscript("fr", raw)).map((o) => o.fingerprint).sort();
+  const realWork = [edit, ...filler(10)];
+
+  it("a stated scope-NOT-met handoff is a handoff, not a missing one", () => {
+    for (const text of [
+      "**Not done yet — here's what remains.** Verified the fix; the fast suite is still running in the background.",
+      "**Not scope met — verification is still running.** I will report when it finishes.",
+      "Scope is not met: the migration has not been run on staging yet.",
+    ]) {
+      expect(classifyTurnEnding(text)).toBe("scope-not-met");
+      const one = ids(jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "fix it", tools: realWork, text })));
+      expect(one).not.toContain("scope.met.missing");
+      expect(one).not.toContain("scope.met.present");
+    }
+    // …and it is a boundary the user continued from, like scope-met.
+    const two = ids(
+      jsonl([
+        ...turn({ at: "2026-09-01T10:00:00Z", message: "fix it", tools: realWork, text: "**Not done yet.** Tests still running.", endAt: "2026-09-01T10:05:00Z" }),
+        ...turn({ at: "2026-09-01T10:10:00Z", message: "ok, wait for them", text: "Waiting." }),
+      ]),
+    );
+    expect(two).toContain("turn.continued");
+    expect(two).not.toContain("turn.stalled");
+    // A plain stop is still a stop.
+    expect(classifyTurnEnding("Done, files updated.")).toBe("stopped");
+  });
+
+  it("reading a skill's folder in the turn that edits that skill is maintenance, not a bypass", () => {
+    const skillFile = "/p/.marvin/skills/hetzner-ssh/SKILL.md";
+    const maintained = jsonl(
+      turn({
+        at: "2026-09-01T10:00:00Z",
+        message: "fix the hetzner-ssh skill's sudo note",
+        tools: [
+          { name: "Bash", input: { command: `cat ${skillFile} | sed -n '1,40p'` } },
+          { name: "Read", input: { file_path: skillFile } },
+          { name: "Edit", input: { file_path: skillFile, old_string: "a", new_string: "b" } },
+        ],
+        text: "ok?",
+      }),
+    );
+    expect(ids(maintained)).not.toContain("skill.bypassed:hetzner-ssh");
+    // Editing some OTHER skill does not excuse the read.
+    const other = jsonl(
+      turn({
+        at: "2026-09-01T10:00:00Z",
+        message: "m",
+        tools: [
+          { name: "Read", input: { file_path: skillFile } },
+          { name: "Edit", input: { file_path: "/p/.marvin/skills/other/SKILL.md" } },
+        ],
+        text: "ok?",
+      }),
+    );
+    expect(ids(other)).toContain("skill.bypassed:hetzner-ssh");
+  });
+
+  it("the runtime's pre-orientation counts as the turn's first graph call", () => {
+    const at = "2026-09-01T10:00:00Z";
+    const lines = turn({ at, message: "where is the login flow wired?", tools: reads(6), text: "ok?" });
+    const preorient = {
+      type: "cli.event",
+      at,
+      event: { type: "system", subtype: PREORIENT_SUBTYPE, turnId: `t-${at}`, query: "login flow", hits: 5, at },
+    };
+    // Same turn without the event: six reads before any graph call.
+    expect(ids(jsonl(lines))).toContain("graph.first.skipped");
+    // With it, spliced in right after turn.started (where the runner emits it).
+    const oriented = [...lines.slice(0, 2), preorient, ...lines.slice(2)];
+    const got = ids(jsonl(oriented));
+    expect(got).toContain("graph.first.followed");
+    expect(got).not.toContain("graph.first.skipped");
+  });
+});
+
+describe("plan shape — tracer bullets against the project's own areas (2026-09-07)", () => {
+  // A fixture of DISCOVERED areas: names are the project's paths, vocab its
+  // own (stemmed) words. Nothing here is MARVIN's assumption.
+  const areas = {
+    fileCount: 11,
+    areas: [
+      { name: "apps/api", files: 4, vocab: ["api", "controller", "endpoint", "migration", "repository"], structural: ["api", "endpoint", "migration"] },
+      { name: "apps/web", files: 4, vocab: ["web", "page", "component", "hook"], structural: ["web", "page", "component"] },
+    ],
+  };
+  const horizontal = ["[1] Migration for the orders table", "[2] Orders endpoint in the controller", "[3] Orders page with the OrderRow component"];
+  const vertical = ["[1] Thin slice: migration + endpoint + Orders page renders one row", "[2] Validation and error states", "[3] Pagination"];
+  const todoOf = (titles: string[], parent?: string) => ({
+    name: "TodoWrite",
+    input: { todos: titles.map((content) => ({ content, status: "pending" })) },
+    ...(parent ? { parent } : {}),
+  });
+  const ids = (raw: string, a: typeof areas | null = areas) =>
+    extractAll(parseSessionTranscript("ps", raw), { areas: a }).map((o) => o.fingerprint).sort();
+
+  it("classifies horizontal, vertical, single-layer and unknown plans", () => {
+    const h = classifyPlanShape(horizontal, areas);
+    expect(h.shape).toBe("horizontal");
+    expect(h.layersPerStep).toEqual([["apps/api"], ["apps/api"], ["apps/web"]]);
+    expect(h.layers).toEqual(["apps/api", "apps/web"]);
+    expect(h.firstCrossStep).toBeNull();
+    const v = classifyPlanShape(vertical, areas);
+    expect(v.shape).toBe("vertical");
+    expect(v.firstCrossStep).toBe(1);
+    expect(classifyPlanShape(["[1] Fix the OrdersPage layout", "[2] add the component tooltip"], areas).shape).toBe("single-layer");
+    expect(classifyPlanShape(["[1] update README"], areas).shape).toBe("unknown");
+    // Two steps in two areas: too little to call.
+    expect(classifyPlanShape(horizontal.slice(1), areas).shape).toBe("unknown");
+    // No areas known: never a verdict.
+    expect(classifyPlanShape(horizontal, null).shape).toBe("unknown");
+    expect(classifyPlanShape(horizontal, { fileCount: 3, areas: areas.areas.slice(0, 1) }).shape).toBe("unknown");
+  });
+
+  it("verification wording and a late test step do not flip a plan; a late end-to-end step does", () => {
+    const suffixed = horizontal.map((t) => `${t} — verify: typecheck + manual smoke on /orders`);
+    expect(classifyPlanShape(suffixed, areas).shape).toBe("horizontal");
+    expect(classifyPlanShape([...horizontal, "[4] add e2e tests"], areas).shape).toBe("horizontal");
+    const late = classifyPlanShape([...horizontal, "[4] end-to-end: create an order from the page and read it back"], areas);
+    expect(late.shape).toBe("vertical");
+    expect(late.firstCrossStep).toBe(4);
+    // Process steps neither cross nor add a layer, even when they name every area's tooling.
+    const shipped = [...horizontal, "[4] Verify & ship: typecheck, page tests, endpoint tests, pr-review"];
+    expect(classifyPlanShape(shipped, areas).shape).toBe("horizontal");
+    expect(classifyPlanShape(["[1] Write the ADR", "[2] Tests: page + endpoint", "[3] Ship"], areas).shape).toBe("unknown");
+    // Crossing needs structural evidence: a domain noun from a file stem does not cross.
+    const nouns = ["[1] Orders migration", "[2] Orders endpoint", "[3] Orders page listing the controller output"];
+    expect(classifyPlanShape(nouns, areas).layersPerStep[2]).toEqual(["apps/api", "apps/web"]);
+    expect(classifyPlanShape(nouns, areas).shape).toBe("horizontal");
+    // A weak marker needs an area in the same step.
+    expect(classifyPlanShape(["[1] Wire up logging to stdout", "[2] endpoint", "[3] page"], areas).firstCrossStep).toBeNull();
+    expect(classifyPlanShape(["[1] Wire the Orders page to the endpoint", "[2] x", "[3] y"], areas).firstCrossStep).toBe(1);
+  });
+
+  it("planStepsOf mirrors the app's tag grammar: sorted by N, first title per N, sub-tasks dropped", () => {
+    const todos = ["[2] c", "[1] a", "[1.1] b", "[1] a again", "no tag", "[2.3] d", "[3]"].map((content) => ({ content, status: "pending" }));
+    expect(planStepsOf(todos)).toEqual(["a", "c", ""]);
+    expect(planStepsOf([{ content: "[1.1] x" }, { content: "[1.2] y" }])).toEqual([]);
+    expect(planStepsOf(undefined)).toEqual([]);
+    expect(planStepsOf("str")).toEqual([]);
+    expect(planStepsOf([{ content: "", activeForm: "[1] from activeForm" }])).toEqual(["from activeForm"]);
+  });
+
+  it("emits one occurrence per distinct plan, at its first TodoWrite, and lets a same-turn re-slice supersede", () => {
+    const at = "2026-09-01T10:00:00Z";
+    const thrice = jsonl(turn({ at, message: "build orders", tools: [todoOf(horizontal), edit, todoOf(horizontal), todoOf(horizontal)], text: "ok?" }));
+    const occ = extractAll(parseSessionTranscript("ps", thrice), { areas });
+    const h = occ.filter((o) => o.fingerprint === "plan.horizontal");
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatchObject({ cost: 1, at });
+    expect(h[0]?.detail).toBe("3 layer-only milestones (apps/api → apps/web), first cross-layer step: none");
+    const v = extractAll(parseSessionTranscript("ps", jsonl(turn({ at, message: "m", tools: [todoOf(vertical)], text: "ok?" }))), { areas });
+    expect(v.find((o) => o.fingerprint === "plan.vertical")?.detail).toBe("milestone 1 crosses apps/api + apps/web");
+    // Same turn: horizontal then vertical → only the vertical (the nudge held).
+    expect(ids(jsonl(turn({ at, message: "m", tools: [todoOf(horizontal), todoOf(vertical)], text: "ok?" })))).toEqual(["plan.vertical"]);
+    // Across turns both stand.
+    const across = jsonl([
+      ...turn({ at, message: "m", tools: [todoOf(horizontal)], text: "ok?" }),
+      ...turn({ at: "2026-09-01T11:00:00Z", message: "re-slice it", tools: [todoOf(vertical)], text: "ok?" }),
+    ]);
+    expect(ids(across)).toEqual(["plan.horizontal", "plan.vertical", "turn.continued"]);
+    // A subagent's TodoWrite, a two-step plan, and no areas: nothing.
+    expect(ids(jsonl(turn({ at, message: "m", tools: [todoOf(horizontal, "toolu_sub")], text: "ok?" })))).toEqual([]);
+    expect(ids(jsonl(turn({ at, message: "m", tools: [todoOf(horizontal.slice(1))], text: "ok?" })))).toEqual([]);
+    expect(ids(jsonl(turn({ at, message: "m", tools: [todoOf(horizontal)], text: "ok?" })), null)).toEqual([]);
+  });
+
+  it("a nudge-tier rule fires once on a horizontal TodoWrite and on nothing else", () => {
+    const projectId = "p-shape";
+    const now = "2026-09-07T00:00:00.000Z";
+    const rule: PracticeRule = {
+      id: "r-shape",
+      fingerprint: "plan.horizontal",
+      title: "slice",
+      tier: "nudge",
+      trigger: { tool: "^TodoWrite$", planShape: "horizontal" },
+      message: "slice it",
+      status: "active",
+      scope: { projectId },
+      provenance: { findingId: "plan.horizontal", distinctSessions: 3, costTotal: 3, value: 0.8 },
+      metrics: { fired: 0, lastFiredAt: null, bypasses: 0 },
+      createdAt: now,
+      acceptedAt: now,
+      updatedAt: now,
+    };
+    const ctx = (input: Record<string, unknown>, toolName = "TodoWrite") => ({
+      projectId,
+      toolName,
+      input,
+      counters: {},
+      hasSkillRun: () => false,
+      boundaryHit: () => false,
+      areas: () => areas,
+      deniesThisTurn: new Map<string, number>(),
+      nudgesThisTurn: new Set<string>(),
+      measure: false,
+    });
+    const todos = (titles: string[]) => ({ todos: titles.map((content) => ({ content, status: "pending" })) });
+    const c = ctx(todos(horizontal));
+    expect(evaluatePracticeRules(c, [rule]).nudges.map((n) => n.message)).toEqual(["slice it"]);
+    expect(evaluatePracticeRules(c, [rule]).nudges).toEqual([]); // once per turn
+    expect(evaluatePracticeRules(ctx(todos(vertical)), [rule]).nudges).toEqual([]);
+    expect(evaluatePracticeRules(ctx(todos(horizontal), "Edit"), [rule]).nudges).toEqual([]);
+    expect(evaluatePracticeRules({ ...ctx(todos(horizontal)), areas: () => null }, [rule]).nudges).toEqual([]);
+  });
+});
+
+describe("the 2026-09-07 practice report — two more extractor blind spots", () => {
+  const at = "2026-09-01T10:00:00Z";
+  const init = (cwd: string) => ({ type: "cli.event", at, event: { type: "system", subtype: "init", cwd } });
+  const ids = (raw: string) => extractAll(parseSessionTranscript("r2", raw)).map((o) => o.fingerprint).sort();
+  const bash = (command: string) => ({ name: "Bash", input: { command } });
+
+  it("a source read is what the gate says it is: search-shaped Bash inside the project, not cat on a doc or a find under ~", () => {
+    const lines = turn({ at, message: "close the backlog items", tools: [
+      bash("grep -n 'seal' /p/docs/adr/0377.md"),
+      bash("cat /p/docs/runbooks/x.md"),
+      bash("sed -n '355,395p' /p/docs/adr/0377.md"),
+      bash("find /Users/x/.claude/skills/graphify -iname spec.md"),
+      bash("cat /p/.marvin/backlog/a.md"),
+      bash("cd /p\nPY=$(cat graphify-out/.graphify_python)\n\"$PY\" -c 'x'"),
+      { name: "Read", input: { file_path: "/p/docs/adr/0046.md" } },
+      { name: "Read", input: { file_path: "/elsewhere/src/a.ts" } },
+    ], text: "ok?" });
+    const parsed = parseSessionTranscript("r2", jsonl([...lines.slice(0, 2), init("/p"), ...lines.slice(2)]));
+    expect(parsed.cwd).toBe("/p");
+    // Only the grep (a search whose root is inside cwd) counts: one read, well under five.
+    expect(extractAll(parsed).map((o) => o.fingerprint)).not.toContain("graph.first.skipped");
+    // Five tree searches inside the project still do.
+    const searching = turn({ at, message: "m", tools: Array.from({ length: 5 }, (_, i) => bash(`rg "thing${i}" src/`)), text: "ok?" });
+    expect(ids(jsonl([...searching.slice(0, 2), init("/p"), ...searching.slice(2)]))).toContain("graph.first.skipped");
+    // Without an init event the cwd is unknown: source-extension Reads still count, Bash never does.
+    expect(ids(jsonl(turn({ at, message: "m", tools: reads(5), text: "ok?" })))).toContain("graph.first.skipped");
+    expect(ids(jsonl(turn({ at, message: "m", tools: Array.from({ length: 5 }, () => bash("rg x src/")), text: "ok?" })))).not.toContain("graph.first.skipped");
+  });
+
+  it("a review's report excludes the echoed skill body and stops at the commit; a clean report is not findings", () => {
+    const skill = { name: "Skill", input: { skill: "pr-review" } };
+    const body = "Base directory for this skill: /Users/x/.claude/skills/pr-review\n# Pre-landing review\n🔴 Important — must fix before merge";
+    // The real 2026-09-03 turn: skill body echoed, "0 important", commit, then "3 CRITICAL CVEs" in the summary.
+    const lines = [
+      ...turn({ at, message: "ship", tools: [edit, skill], text: body }),
+    ];
+    // Splice a second text block, a commit, and a later text block into the same turn.
+    const extra = [
+      { type: "cli.event", at, event: { type: "assistant", message: { content: [{ type: "text", text: "**0 important, 0 nit, 0 pre-existing.** Diff is entirely prose. Committing." }] } } },
+      { type: "cli.event", at, event: { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_c1", name: "Bash", input: { command: "git commit -m x" } }] } } },
+      { type: "cli.event", at, event: { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_c1", content: "ok" }] } } },
+      { type: "cli.event", at, event: { type: "assistant", message: { content: [{ type: "text", text: "Done. Earlier bump covered 3 CRITICAL CVEs." }] } } },
+    ];
+    const completed = lines.pop()!; // turn.completed stays last
+    const got = ids(jsonl([...lines, ...extra, completed]));
+    expect(got).not.toContain("review.ignored");
+    expect(got).not.toContain("review.acted");
+    // A real report right after the review still counts.
+    expect(ids(jsonl(turn({ at, message: "ship", tools: [edit, skill], text: "**2 important, 1 nit.** [Important] SQL built by concat." })))).toContain("review.ignored");
   });
 });

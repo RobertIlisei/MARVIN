@@ -66,6 +66,7 @@ turns out of two hundred is not five out of six.
 | `skill.bypassed:<name>` | a skill's folder was read by hand instead of invoking the skill | `skill.invoked` |
 | `review.ignored` | a review skill reported findings and nothing was edited afterwards | `review.acted` |
 | `plan.stale` | three or more edits under a plan whose checklist was never updated | `plan.kept` |
+| `plan.horizontal` | a plan of three or more milestones stacked by layer — each step lives in one *area* of the project and none crosses two — so nothing runs end to end until the last one lands. Areas are discovered from the project's own graph (its directories and file names), never assumed | `plan.vertical` |
 | `command.retried` | the same failing command re-run unchanged | `command.adapted` |
 | `hook.deny.repeated:<gate>` | one of MARVIN's gates refused the same thing again in the same turn | — |
 | `cache.recreated` | a turn re-created a very large prompt cache (report only) | — |
