@@ -40,6 +40,18 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.106** — plan spine: DoD bullets are criteria, not steps, and `[x]` reads back.
+
+A finished session's plan card read 0/13 on an 8-step plan. The Definition of Done's
+checkbox bullets had been parsed as steps, so `[N]` tags never aligned and progress fell to
+fuzzy matching; and a checked step kept its `[x]` in its id, so a plan re-seeded from its file
+lost every completion. Criteria blocks are now excluded from step parsing and rendered
+verbatim, ids are stable across chat and file, `[x]` reads back as completed, and an absorbed
+spine heals itself on the next reconcile. Details in the
+[changelog](./history/CHANGELOG.md).
+
+_The v0.1.105 summary follows._
+
 **v0.1.105** — vertical-slice milestones, and the layers come from the project.
 
 Phase 5 now requires the tracer bullet: for a change touching more than one layer, milestone 1

@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.105
+code. Written for contributors and deep evaluators. Covers v0.1.106
 (2026-09-07). Where this document and the repository disagree, the
 repository wins.*
 
@@ -28,7 +28,13 @@ repository wins.*
 > (ADR-0105, §2.7 and §4). Since 2026-09-07: **vertical-slice milestones**
 > — a Phase 5 rule, a `relations` filter on `graph_path` (§3.3), and the
 > `plan.horizontal` / `plan.vertical` kinds whose layers are discovered
-> from the project's graph (§2.7, §4).
+> from the project's graph (§2.7, §4). v0.1.106, same day: the plan spine
+> (`PlanModel.swift`) excludes a Definition-of-Done / Scope-of-Done /
+> Acceptance-criteria block from step parsing and renders it verbatim, strips
+> a leading checkbox from step ids so a plan re-seeded from its file keeps its
+> progress, seeds `[x]` as completed, and heals an already-absorbed spine on
+> the next reconcile (ADR-0052 / ADR-0068 lineage; 7 new tests, 641
+> assertions).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at

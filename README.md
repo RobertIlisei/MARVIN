@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.105**). `main` and `development` are fast-forwarded together at each
+> **v0.1.106**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -362,6 +362,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.106 — plan spine: DoD bullets are criteria, not steps, and `[x]` reads back.** A finished session's plan card read **0/13** on a plan with 8 numbered steps. Two stacked parser defects: the Definition of Done's column-0 `- [ ]` bullets were promoted to steps, so the spine held 13 steps, `[N]` tags never aligned, the rebase guard rightly distrusted every batch and 47 restatement sub-tasks piled up; and a checked step's id kept its `[x]` prefix, so every plan re-seeded from its file lost all progress. A criteria block (`Definition of Done` / `Scope of Done` / `Acceptance criteria`) is now excluded from step parsing and rendered verbatim, step ids are identical whether the text came from the chat or the file, `[x]` seeds `completed`, and an already-absorbed spine heals on the next reconcile. 7 new tests, 641 assertions green.
 
 **v0.1.105 — vertical-slice milestones, and the layers come from the project.** A clip of Matt Pocock at AI Engineer Europe named a failure MARVIN's own plan rules permitted: horizontal plans — database first, API next, frontend last — where the agent codes each layer against nothing and integration surprises arrive last. Phase 5 now requires the tracer bullet: milestone 1 is the thinnest path proving one flow through every layer the change touches, and `graph_path` (now with a `relations` filter for a structural path, and a file on every hop) is its touchpoint list. The practice loop gained `plan.horizontal` / `plan.vertical` and a nudge on the `TodoWrite` that presents a layer-stacked plan. The constraint that shaped it — *"MARVIN should be project agnostic completely, like tech stack, usages, project"* — killed the first design, a data / api / ui lexicon of framework words. The layers are now **discovered**: a project's code files grouped by directory and split wherever a directory holds two substantial groups, each area's vocabulary its own directory names and file stems kept where distinctive, a milestone crossing layers only on directory-level evidence from two areas, process steps counting for nothing. Measured on 399 transcripts of a real project: **931 horizontal plans, 318 vertical, 201 sessions with a layer-stacked plan.** The same day's practice report was audited the way the first was: two of its four proposals were extractor defects (the graph-first extractor counted `cat docs/x.md`, the review extractor matched the pr-review skill's own echoed body) and are fixed at the source — the gate's own search classifier is now the extractor's, one definition; one was genuine; one, an advisor gate denying an edit six minutes after the consult it demanded had run, is unexplained and now instrumented. Also from 09-04: three extractor false regressions fixed (a scope-not-met handoff is a handoff; pre-orientation is written to the transcript; reading a skill you are editing is not a bypass), and a gate-denied command re-run verbatim now gets the retry nudge.
 
