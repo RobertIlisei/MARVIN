@@ -1397,6 +1397,109 @@ runner.suite("PlanParser · reference section (ADR-0068 add.4)") {
     }
 }
 
+// MARK: - Plan parser: DoD bullets are criteria, not steps; [x] reads back
+//
+// Observed 2026-09-07 on a real plan ("Close the last 7 backlog items"): the
+// Golden Rule 8 template puts the Definition of Done as column-0 `- [ ]`
+// bullets above the numbered steps, so the top-level matcher counted 13
+// "steps" in a plan with 8. TodoWrite `[N]` tags never aligned, the ADR-0052
+// rebase guard distrusted every batch, and 47 restatement sub-tasks piled up
+// under "Ship". Separately, re-seeding from the RENDERED file showed 0/13:
+// `stepText` kept the `[x]` prefix, so a checked step's id normalized to
+// "x …" and could never match its own recovery id from `completedStepIds`.
+runner.suite("PlanParser · DoD criteria + checkbox read-back") {
+
+    let planWithDoD = """
+    # Plan — Close the backlog items
+
+    **Definition of Done**
+    - [ ] Items resolved with evidence
+    - [ ] make fast green and vitest green
+    - [ ] MR opened against main
+
+    1. [ ] **Sweep** the listed files
+    2. [ ] **Fix** the backup schedule display
+    3. [ ] **Ship** via MR
+    """
+
+    runner.test("bullets under a Definition of Done heading are not steps") {
+        let steps = PlanParser.steps(from: planWithDoD)
+        runner.expect(steps.count, equals: 3, "3 steps, not 6")
+        let all = steps.map(\.content).joined(separator: " | ")
+        runner.expect(!all.contains("Items resolved with evidence"), "no criterion became a step")
+    }
+
+    runner.test("the criteria heading matches its common spellings") {
+        for h in ["**Definition of Done**", "## Scope of Done", "Definition of Done:", "Acceptance criteria", "definition of done"] {
+            runner.expect(PlanParser.isCriteriaHeading(h), "'\(h)' opens a criteria block")
+        }
+        runner.expect(!PlanParser.isCriteriaHeading("1. Write the Definition of Done first"), "a step mentioning DoD is not a heading")
+        runner.expect(!PlanParser.isCriteriaHeading("The Definition of Done lives in docs/"), "prose is not a heading")
+    }
+
+    runner.test("the criteria block ends at the first non-bullet line") {
+        let plan = """
+        **Definition of Done**
+        - [ ] criterion one
+        - [ ] criterion two
+
+        1. [ ] Real step
+        - [ ] Another real step (bullet steps after the block still count)
+        """
+        let steps = PlanParser.steps(from: plan)
+        runner.expect(steps.count, equals: 2, "criteria excluded, both steps kept")
+        runner.expect(steps.first?.content.contains("Real step") == true, "numbered step survives")
+    }
+
+    runner.test("a checked step line seeds status completed, unchecked pending") {
+        let rendered = """
+        # Plan — t
+
+        1. [x] Done already
+        2. [ ] Still open
+        """
+        let steps = PlanParser.steps(from: rendered)
+        runner.expect(steps.count, equals: 2, "two steps")
+        runner.expect(steps[0].status, equals: "completed", "[x] reads back as completed")
+        runner.expect(steps[1].status, equals: "pending", "[ ] stays pending")
+    }
+
+    runner.test("a checked step's id matches its own recovery id (box stripped)") {
+        let rendered = "1. [x] Sweep the listed files\n2. [ ] Ship via MR"
+        let seeded = PlanParser.steps(from: rendered)
+        let recovered = PlanFile.completedStepIds(inRenderedFile: rendered)
+        runner.expect(recovered.contains(seeded[0].id), "seeded id and recovered id agree")
+        runner.expect(!seeded[0].id.hasPrefix("x "), "no 'x' leaks into the id")
+    }
+
+    runner.test("render passes DoD lines through verbatim — no overlay, no injections") {
+        var plan = Plan(id: "p", title: "t", text: planWithDoD, path: nil,
+                        steps: PlanParser.steps(from: planWithDoD))
+        plan.steps[0].status = "completed"
+        plan.steps[0].subtasks = [TodoItem(content: "prod-backup-dump.sh", status: "completed", activeForm: nil)]
+        let out = PlanFile.render(plan)
+        runner.expect(out.contains("1. [x] **Sweep**"), "step 1 overlaid")
+        runner.expect(out.contains("- [ ] Items resolved with evidence"), "criterion line verbatim")
+        runner.expect(!out.contains("- [ ] [ ] Items"), "no double box on a criterion")
+        runner.expect(out.components(separatedBy: "prod-backup-dump.sh").count == 2, "sub-task lands under its step, not the DoD")
+    }
+
+    runner.test("redriveSteps heals a spine that absorbed DoD bullets as steps") {
+        let stale = [
+            PlanStep(content: "Items resolved with evidence", status: "completed"),
+            PlanStep(content: "make fast green and vitest green", status: "completed"),
+            PlanStep(content: "MR opened against main", status: "completed"),
+            PlanStep(content: "Sweep the listed files", status: "completed"),
+            PlanStep(content: "Fix the backup schedule display", status: "in_progress"),
+            PlanStep(content: "Ship via MR", status: "pending"),
+        ]
+        let fixed = PlanProgress.redriveSteps(text: planWithDoD, existing: stale)
+        runner.expect(fixed.count, equals: 3, "the three criteria are gone")
+        runner.expect(fixed[0].status, equals: "completed", "real step statuses survive")
+        runner.expect(fixed[1].status, equals: "in_progress", "in-flight step survives")
+    }
+}
+
 // MARK: - Source decorations (colour swatches + Markdown front matter)
 
 runner.suite("SourceDecorations") {

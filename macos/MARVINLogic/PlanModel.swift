@@ -175,33 +175,50 @@ public enum PlanParser {
     /// about different things, which is worse than either being wrong.
     private static let topLevelStepRE = try? NSRegularExpression(pattern: #"^(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
 
-    /// Step content using a specific matcher. Extracted so top-level and
-    /// any-depth parsing share identical cleanup.
-    private static func stepText(of line: String, using re: NSRegularExpression?) -> String? {
+    /// A leading `[ ]` / `[x]` checkbox on a step's CONTENT (marker already
+    /// stripped). Stripped from parsed content so a step's id is identical
+    /// whether the text came from the presented plan or from the RENDERED
+    /// file — `normalize("[x] foo")` is "x foo", which is how a re-seeded
+    /// checked step could never match its own recovery id from
+    /// `completedStepIds` and every re-ingested plan showed 0/N (2026-09-07).
+    private static let boxPrefixRE = try? NSRegularExpression(pattern: #"^\[([ xX])\]\s*"#)
+
+    /// Shared cleanup: emphasis / inline code removed, then any leading
+    /// checkbox stripped, its state reported alongside.
+    private static func cleanContent(_ raw: String) -> (text: String, checked: Bool?) {
+        var content = raw
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+        var checked: Bool? = nil
+        if let re = boxPrefixRE {
+            let range = NSRange(content.startIndex..<content.endIndex, in: content)
+            if let m = re.firstMatch(in: content, range: range),
+               let whole = Range(m.range, in: content),
+               let state = Range(m.range(at: 1), in: content) {
+                checked = content[state].lowercased() == "x"
+                content.removeSubrange(whole)
+            }
+        }
+        return (content, checked)
+    }
+
+    /// Step content + checkbox state using a specific matcher. Extracted so
+    /// top-level and any-depth parsing share identical cleanup.
+    private static func stepItem(of line: String, using re: NSRegularExpression?) -> (text: String, checked: Bool?)? {
         guard let re else { return nil }
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
         guard let m = re.firstMatch(in: line, range: range),
               let r = Range(m.range(at: 1), in: line) else { return nil }
-        let content = String(line[r])
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "`", with: "")
-        return content.count > 1 ? content : nil
+        let item = cleanContent(String(line[r]))
+        return item.text.count > 1 ? item : nil
     }
 
     /// The step content of a single line — the marker stripped, emphasis /
-    /// inline code removed — or nil if the line isn't a step. Shared by
-    /// `todos(from:)` and `PlanFile.render` so parsing and rendering of the
-    /// same line can never drift apart.
+    /// inline code / leading checkbox removed — or nil if the line isn't a
+    /// step. Shared by `todos(from:)` and `PlanFile.render` so parsing and
+    /// rendering of the same line can never drift apart.
     public static func stepText(of line: String) -> String? {
-        guard let re = stepRE else { return nil }
-        let range = NSRange(line.startIndex..<line.endIndex, in: line)
-        guard let m = re.firstMatch(in: line, range: range),
-              let r = Range(m.range(at: 1), in: line) else { return nil }
-        let content = String(line[r])
-            // strip markdown emphasis / inline code / trailing colons
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "`", with: "")
-        return content.count > 1 ? content : nil
+        stepItem(of: line, using: stepRE)?.text
     }
 
     /// A heading that ends the step list: `Sources:`, `## References`, `See also`.
@@ -215,6 +232,50 @@ public enum PlanParser {
     private static let linkOnlyRE = try? NSRegularExpression(
         pattern: #"^(?:\[[ xX]\]\s*)?\[[^\]]+\]\([^)]+\)\s*$"#
     )
+
+    /// A heading that opens an acceptance-criteria block: `**Definition of
+    /// Done**`, `## Scope of Done`, `Acceptance criteria:`. The bullets under
+    /// it are verification statements, not work — the Golden Rule 8 template
+    /// puts them at column 0 ABOVE the numbered steps, so the top-level
+    /// matcher counted a real 8-step plan as 13, TodoWrite `[N]` tags never
+    /// aligned, and the ADR-0052 rebase guard distrusted every batch
+    /// (observed 2026-09-07).
+    private static let criteriaHeadingRE = try? NSRegularExpression(
+        pattern: #"^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:definition of done|scope of done|acceptance criteria|dod)\s*:?\s*(?:\*\*)?\s*:?\s*$"#,
+        options: [.caseInsensitive]
+    )
+
+    /// True for a line that opens an acceptance-criteria block. Exported so
+    /// `PlanFile.render` skips the same lines the parser skips.
+    public static func isCriteriaHeading(_ line: String) -> Bool {
+        guard let re = criteriaHeadingRE else { return false }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        return re.firstMatch(in: line, range: range) != nil
+    }
+
+    /// Indexes of the lines inside an acceptance-criteria block: the heading
+    /// plus the bullet lines directly under it, ending at the first blank or
+    /// non-bullet line. Indexes are into the array as passed, which matches
+    /// `stepRegion`'s slice indices.
+    public static func criteriaLineIndexes(of lines: [String]) -> Set<Int> {
+        var out: Set<Int> = []
+        var inBlock = false
+        for (i, line) in lines.enumerated() {
+            if isCriteriaHeading(line) {
+                inBlock = true
+                out.insert(i)
+                continue
+            }
+            guard inBlock else { continue }
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty, t.first == "-" || t.first == "*" || t.first == "•" {
+                out.insert(i)
+            } else {
+                inBlock = false
+            }
+        }
+        return out
+    }
 
     /// True for a line that opens a trailing reference section. Exported so
     /// `PlanFile.render` and `redriveSteps` apply the identical boundary.
@@ -247,28 +308,40 @@ public enum PlanParser {
         // TodoWrite `[N]` tags past 10 landed on URLs, and MARVIN reported it
         // was "executing" a blog post. Cut at the heading, and drop any
         // link-only bullet wherever it sits — a citation is never work.
-        let lines = Array(stepRegion(of: allLines))
+        // A Definition of Done block is acceptance criteria, not work — its
+        // column-0 bullets would otherwise be promoted to steps exactly like
+        // the `Sources:` bullets of addendum 4.
+        let criteria = criteriaLineIndexes(of: allLines)
+        let lines = stepRegion(of: allLines).indices
+            .filter { !criteria.contains($0) }
+            .map { allLines[$0] }
         // Top-level markers define the STEPS. Nested bullets are sub-tasks and
         // are nested by tag (ADR-0049), never promoted here.
-        var items: [String] = lines
-            .compactMap { stepText(of: $0, using: topLevelStepRE) }
-            .filter { !isLinkOnly($0) }
+        var items: [(text: String, checked: Bool?)] = lines
+            .compactMap { stepItem(of: $0, using: topLevelStepRE) }
+            .filter { !isLinkOnly($0.text) }
         if items.isEmpty {
             // A plan that indents everything would otherwise parse to zero
             // steps — worse than over-counting. Fall back to the lenient match.
             items = lines
-                .compactMap { stepText(of: $0, using: stepRE) }
-                .filter { !isLinkOnly($0) }
+                .compactMap { stepItem(of: $0, using: stepRE) }
+                .filter { !isLinkOnly($0.text) }
         }
         if items.isEmpty {
             // No list markers — take substantive non-heading lines.
             items = lines
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty && !$0.hasPrefix("#") && $0.count > 3 }
+                .map { ($0, nil) }
         }
-        if items.isEmpty { items = ["Execute the plan"] }
-        // Cap so a giant plan doesn't flood the strip.
-        return items.prefix(20).map { TodoItem(content: $0, status: "pending", activeForm: nil) }
+        if items.isEmpty { items = [("Execute the plan", nil)] }
+        // Cap so a giant plan doesn't flood the strip. A `[x]` already on the
+        // line reads back as completed — the text may BE the rendered file
+        // (re-ingest in a new session), and seeding done work as pending is
+        // what invited the agent to redo it (ADR-0102's bug, resurfaced).
+        return items.prefix(20).map {
+            TodoItem(content: $0.text, status: $0.checked == true ? "completed" : "pending", activeForm: nil)
+        }
     }
 
     /// ADR-0046 — seed a plan's top-level `PlanStep`s from its markdown. Same
@@ -653,8 +726,11 @@ public enum PlanFile {
         // are not steps, so they get no checkbox and can never absorb a
         // sub-task injection (ADR-0068 addendum 4).
         let stepLineCount = PlanParser.stepRegion(of: lines).count
+        // Criteria lines (Definition of Done bullets) are not steps — passed
+        // through verbatim, no overlay, no sub-task injection.
+        let criteria = PlanParser.criteriaLineIndexes(of: lines)
         for (index, line) in lines.enumerated() {
-            if index >= stepLineCount { out.append(line); continue }
+            if index >= stepLineCount || criteria.contains(index) { out.append(line); continue }
             if let content = PlanParser.stepText(of: line) {
                 let id = PlanProgress.normalize(content)
                 if let step = byId[id], !emitted.contains(id) {
