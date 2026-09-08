@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · September 2026 · v0.1.107 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · September 2026 · v0.1.108 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -692,4 +692,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.107; the repository is the authoritative, current reference.*
+v0.1.108; the repository is the authoritative, current reference.*

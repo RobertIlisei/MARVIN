@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.107**). `main` and `development` are fast-forwarded together at each
+> **v0.1.108**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -362,6 +362,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.108 — the terminal's shell owns its tty, and terminal tabs.** Ctrl-C in the terminal echoed `^C` and stopped nothing. Measured: the app's zsh had fds on a pty and **no controlling terminal** (`ps` tty `??`, foreground group 0), because the `posix_spawn` file-action open runs before `setsid` and attaches nothing; the Ctrl-C test had passed only because bash-as-`sh` re-attaches itself, and zsh does not. `PTYProcess` is now `forkpty` + `login_tty`, pinned with `zsh -f`. The terminal pane has tabs: "+" opens another shell, the numbered buttons switch without touching any shell, × hangs one up. 688 Swift assertions green.
 
 **v0.1.107 — the practice loop stops measuring itself.** An audit of a real project's Practice pane found five of six `regressed` rows resting on **one** recurring session in seven, and the transcripts behind them showed three extractor misreadings (a background handoff read as a missing scope-met, a finished plan read as stale, a refused grep counted as a source read) and one gate artefact (two ship-review refusals then an allowed identical commit, scored as a retried command). Three of the four hand-written gates were one-shot — refuse once, then let everything through. Extractor v7 stops counting refused calls, sees the commit the ship gate waited out, skips wakeup turns, scopes `plan.stale` to an open plan, treats a skill invoked earlier in the session as followed, and rates each skill's bypasses against its own invocations; `regressed` is now a rate (two sessions at half the old rate), proposals need an evidence share on top of the score, every gate has ADR-0104's two-denies-then-log brake, and the backtest yields to the event loop instead of stalling the sidecar for 11 s. Also lands ADR-0106: a closed plan step no longer waits on sub-task rows the model stopped tracking. 1219 sidecar tests, 686 Swift assertions green.
 

@@ -5,6 +5,11 @@
 // the PTY exists to provide. So sessions live here, keyed by project
 // workDir, and the view only attaches to one. `applicationWillTerminate`
 // tears them all down so no shell outlives the app.
+//
+// Since 2026-09-09 a project holds SEVERAL sessions — tabs — and one of them
+// is active. Switching tabs swaps which session the pane shows and never
+// touches a shell; only closing a tab hangs its shell up. (User: "open
+// multiple terminals … switch between them without killing them".)
 
 import AppKit
 import Foundation
@@ -16,6 +21,8 @@ import SwiftTerm
 final class TerminalSession: Identifiable {
     let id = UUID()
     let workDir: String
+    /// 1-based, per project, never reused — the tab's label.
+    let number: Int
     /// The SwiftTerm view is owned here too: its scrollback IS the session.
     let view: TerminalView
     private(set) var process: PTYProcess?
@@ -24,8 +31,9 @@ final class TerminalSession: Identifiable {
     private var pending = Data()
     private var attached = false
 
-    init(workDir: String) {
+    init(workDir: String, number: Int = 1) {
         self.workDir = workDir
+        self.number = number
         self.view = TerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
         start()
     }
@@ -117,17 +125,66 @@ final class TerminalSession: Identifiable {
 @Observable
 final class TerminalSessionStore {
     static let shared = TerminalSessionStore()
-    private(set) var sessions: [String: TerminalSession] = [:]
+    /// Every session per project, in tab order.
+    private(set) var sessions: [String: [TerminalSession]] = [:]
+    /// The tab the pane shows, per project.
+    private(set) var activeIds: [String: UUID] = [:]
+    /// Next tab number per project. Numbers are never reused, so a closed
+    /// "2" does not come back as a different shell called "2".
+    private var counters: [String: Int] = [:]
 
-    /// The session for a project, created on first use.
+    /// All tabs for a project, in order.
+    func sessions(for workDir: String) -> [TerminalSession] {
+        sessions[workDir] ?? []
+    }
+
+    /// The ACTIVE session for a project, created on first use. Every caller
+    /// that types into "the terminal" — build tasks, the file tree's "open
+    /// here", the command registry — lands in the tab the user is looking at.
     func session(for workDir: String) -> TerminalSession {
-        if let s = sessions[workDir] { return s }
-        let s = TerminalSession(workDir: workDir)
-        sessions[workDir] = s
+        let list = sessions(for: workDir)
+        if let id = activeIds[workDir], let s = list.first(where: { $0.id == id }) { return s }
+        if let s = list.first {
+            activeIds[workDir] = s.id
+            return s
+        }
+        return newSession(for: workDir)
+    }
+
+    /// Open another tab for a project and make it active.
+    @discardableResult
+    func newSession(for workDir: String) -> TerminalSession {
+        let n = (counters[workDir] ?? 0) + 1
+        counters[workDir] = n
+        let s = TerminalSession(workDir: workDir, number: n)
+        sessions[workDir, default: []].append(s)
+        activeIds[workDir] = s.id
         return s
     }
 
-    /// Hang up every shell. Called from `applicationWillTerminate`.
+    /// Show a tab. Never touches a shell.
+    func activate(_ s: TerminalSession) {
+        activeIds[s.workDir] = s.id
+    }
+
+    func isActive(_ s: TerminalSession) -> Bool {
+        activeIds[s.workDir] == s.id
+    }
+
+    /// Close ONE tab: hang its shell up and drop it. The other tabs, and the
+    /// other projects, are untouched. The neighbour becomes active.
+    func close(_ s: TerminalSession) {
+        s.terminate()
+        var list = sessions(for: s.workDir)
+        let idx = list.firstIndex { $0.id == s.id }
+        list.removeAll { $0.id == s.id }
+        sessions[s.workDir] = list.isEmpty ? nil : list
+        if activeIds[s.workDir] == s.id {
+            let next = list.isEmpty ? nil : list[min(idx ?? 0, list.count - 1)]
+            activeIds[s.workDir] = next?.id
+        }
+    }
+
     /// Is there a live shell for THIS project?
     ///
     /// Scoped to one `workDir`, never a global count. The store is keyed by
@@ -135,16 +192,20 @@ final class TerminalSessionStore {
     /// that counted every shell would be offering to close another project's
     /// terminal, which is precisely what stopping ONE session must not do.
     func isRunning(workDir: String) -> Bool {
-        sessions[workDir]?.isRunning ?? false
+        sessions(for: workDir).contains { $0.isRunning }
     }
 
-    /// Terminate the shell for one project, leaving every other alone.
+    /// Terminate every shell for one project, leaving every other alone.
     func terminate(workDir: String) {
-        sessions[workDir]?.terminate()
+        for s in sessions(for: workDir) { s.terminate() }
     }
 
+    /// Hang up every shell. Called from `applicationWillTerminate`.
     func terminateAll() {
-        for s in sessions.values { s.terminate() }
+        for list in sessions.values {
+            for s in list { s.terminate() }
+        }
         sessions.removeAll()
+        activeIds.removeAll()
     }
 }

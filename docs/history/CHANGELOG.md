@@ -8,6 +8,39 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-09 — v0.1.108: the terminal's shell never owned its tty (Ctrl-C did nothing), and terminal tabs (ADR-0078 addendum).**
+
+  Trigger: user, with a screenshot of `^Z^[^C^C^C` echoed under a running
+  dev script: *"commands in terminal do not work"*; and *"open multiple
+  terminals … switch between them without killing them"*.
+
+  **Diagnosis (measured first).** The app's zsh had fds 0–2 on
+  `/dev/ttys005` and no controlling terminal: `ps` tty `??`, foreground
+  group 0, `ps -t ttys005` empty, `isig` on. The line discipline turned
+  `0x03` into SIGINT for a foreground process group that did not exist.
+  Reproduced outside the app with the same `posix_spawn` shape: `cat` ends
+  with no controlling tty, `zsh -f` ends with none, `/bin/sh` (bash) ends
+  with one. ADR-0078's premise — that the file-action open runs after
+  `POSIX_SPAWN_SETSID` and so attaches the tty — is false; the Ctrl-C test
+  passed only because bash re-opens its tty by name at job-control init and
+  attaches itself. zsh, the user's shell, does not.
+
+  **Decision.** `forkpty(3)`: `openpty` + `fork` + `login_tty`. The child
+  runs only async-signal-safe calls between fork and `execve`, on C strings
+  and arrays built before the fork. `posix_spawn` is gone from `PTYProcess`.
+  The suite pins acquisition with `zsh -f`: `ps -o tty= -p $$` must not be
+  `??`, and `sleep 30` must die on `0x03`. Tabs: `TerminalSessionStore`
+  keeps an ordered list of sessions per project and an active id;
+  `session(for:)` returns the active one so build tasks, the file tree and
+  the command registry keep landing in the tab on screen; the pane header
+  gains numbered tab buttons, "+", and × on the active tab. Switching swaps
+  the SwiftTerm view through the existing session-swap path and never
+  touches a shell; only × hangs one up.
+
+  **Verification.** 688 Swift assertions green, two new. Sidecar untouched.
+
+---
+
 - **2026-09-09 — v0.1.107: the practice loop stops measuring itself (extractor v7, regressed as a rate, every gate braked).**
 
   Trigger: the Practice pane on a 404-session project showed six `regressed`

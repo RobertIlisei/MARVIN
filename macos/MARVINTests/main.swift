@@ -1993,10 +1993,12 @@ final class PTYHarness {
     let pty: PTYProcess
     private let buffer = Locked<String>("")
     private let exitStatus = Locked<Int32?>(nil)
-    init(cwd: String = "/tmp", columns: Int = 80, rows: Int = 24) throws {
+    init(cwd: String = "/tmp", columns: Int = 80, rows: Int = 24, shell: String = "/bin/sh", arguments: [String] = []) throws {
         var env = TerminalEnvironment.make(from: ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory()], columns: columns, rows: rows)
         env["PS1"] = ""  // no prompt noise in the output we assert on
-        pty = try PTYProcess(executable: "/bin/sh", argv0: "sh", environment: env, workingDirectory: cwd, columns: columns, rows: rows)
+        env["PROMPT"] = ""  // zsh's name for it
+        let argv0 = (shell as NSString).lastPathComponent
+        pty = try PTYProcess(executable: shell, argv0: argv0, arguments: arguments, environment: env, workingDirectory: cwd, columns: columns, rows: rows)
         pty.onOutput = { [buffer] data in buffer.set(buffer.get() + String(decoding: data, as: UTF8.self)) }
         pty.onExit = { [exitStatus] st in exitStatus.set(st) }
     }
@@ -2033,6 +2035,22 @@ runner.suite("PTYProcess") {
         h.pty.write("cd /usr\n")
         h.pty.write("pwd\n")
         runner.expect(h.wait(for: "/usr\n") || h.wait(for: "/usr\r\n"), "pwd after cd shows /usr")
+        h.pty.terminate()
+    }
+
+    // 2026-09-09: the spawn must ATTACH the tty. bash-as-sh attaches itself
+    // at job-control init, which hid a spawn that attached nothing for a
+    // week; zsh does not, and the user's Ctrl-C echoed `^C` and stopped
+    // nothing. `zsh -f` (no rc files) is the shell this has to hold for.
+    runner.test("the child owns the tty even when it is zsh, which does not attach itself") {
+        guard let h = try? PTYHarness(shell: "/bin/zsh", arguments: ["-f"]) else { runner.expect(false, "spawn zsh"); return }
+        h.pty.write("echo TTY_IS_$(ps -o tty= -p $$ | tr -d ' ')\n")
+        runner.expect(h.wait(for: "TTY_IS_ttys"), "zsh reports a controlling tty, not ??")
+        h.pty.write("sleep 30\n")
+        pumpRunLoop(for: 0.4)
+        h.pty.write(Data([0x03]))
+        h.pty.write("echo ALIVE_AFTER\n")
+        runner.expect(h.wait(for: "ALIVE_AFTER", timeout: 3), "zsh answers within 3s — sleep was killed by Ctrl-C")
         h.pty.terminate()
     }
 

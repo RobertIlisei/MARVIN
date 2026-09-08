@@ -62,3 +62,36 @@ unaudited shell-exec surface that never consulted the tool policy.
   Ctrl-C gate.
 - Not in scope: multiple tabs per project, a "run in terminal" for MARVIN's
   own Bash calls, and the tabbed bottom panel (plan §D).
+
+## Addendum (2026-09-09) — the controlling tty was never attached, and tabs
+
+**The bug.** User: *"commands in terminal do not work"*, with a screenshot of
+`^Z^[^C^C^C` echoed under a running dev script. Measured before touching
+code: the app's shell had fds 0–2 on `/dev/ttys005` and **no controlling
+terminal** — `ps` tty `??`, foreground group `0`, `ps -t ttys005` empty —
+with `isig` on. The line discipline was turning `0x03` into SIGINT for a
+foreground process group that did not exist. Reproduced outside the app with
+the same `posix_spawn` shape: `cat` ends with no controlling tty, `zsh -f`
+ends with none, `/bin/sh` (bash) ends with one. The Decision section above
+was wrong about the ordering: the file-action open runs before the child is
+a session leader, so nothing is acquired. The Ctrl-C test passed only because
+bash re-opens its tty by name at job-control init and attaches itself; zsh,
+the user's shell, does not.
+
+**The fix.** `forkpty(3)` — `openpty` + `fork` + `login_tty` (`setsid`,
+`TIOCSCTTY`, dup onto 0/1/2). Between the fork and `execve` the child runs
+only async-signal-safe calls (signal reset, `chdir`, exec) on C strings and
+arrays built before the fork. `posix_spawn` is gone from `PTYProcess`. The
+suite now pins acquisition with `zsh -f` — `ps -o tty= -p $$` must not be
+`??`, and `sleep 30` must die on `0x03` — the shell that does not attach
+itself.
+
+**Tabs.** "Not in scope: multiple tabs per project" is now in scope (user:
+*"open multiple terminals … switch between them without killing them"*).
+`TerminalSessionStore` holds an ordered list of sessions per project and an
+active id; `session(for:)` returns the active one so build tasks, the file
+tree's *open here* and the command registry keep landing in the tab the user
+is looking at; `newSession`, `activate` and `close` are the only verbs.
+Switching swaps the SwiftTerm view through the existing session-swap path
+in `PTYTerminalView` and never touches a shell; only closing a tab hangs its
+shell up. Tab numbers are per project and never reused.

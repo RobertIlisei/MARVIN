@@ -9,7 +9,9 @@
 //
 // IDE conventions kept:
 //   • ⌘K clears (Ctrl-L to the shell), Stop sends Ctrl-C
-//   • build tasks type into the same shell (`bridge.pendingTerminalCommand`)
+//   • build tasks type into the ACTIVE shell (`bridge.pendingTerminalCommand`)
+//   • tabs (2026-09-09): "+" opens another shell, the numbered buttons switch
+//     without touching any shell, × on the active tab hangs that one up
 
 import SwiftUI
 
@@ -17,8 +19,11 @@ struct TerminalPaneView: View {
     @State private var focusToken = 0
     @Environment(MarvinBridge.self) private var bridge
 
+    private var store: TerminalSessionStore { TerminalSessionStore.shared }
+
+    /// The ACTIVE tab for the open project, created on first use.
     private var session: TerminalSession? {
-        bridge.projectWorkDir.map { TerminalSessionStore.shared.session(for: $0) }
+        bridge.projectWorkDir.map { store.session(for: $0) }
     }
 
     var body: some View {
@@ -47,6 +52,58 @@ struct TerminalPaneView: View {
         }
     }
 
+    /// One button per shell, the active one filled, plus "+". Switching only
+    /// swaps which session the pane shows — the shells keep running. The ×
+    /// on the active tab is the one act that hangs a shell up.
+    private func tabStrip(_ cwd: String) -> some View {
+        HStack(spacing: 2) {
+            ForEach(store.sessions(for: cwd)) { s in
+                let active = store.isActive(s)
+                HStack(spacing: 3) {
+                    Button {
+                        store.activate(s)
+                        focusToken += 1
+                    } label: {
+                        Text("\(s.number)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(active ? Color.primary : Color.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(active ? Color.secondary.opacity(0.18) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(s.isRunning ? "Shell \(s.number)" : "Shell \(s.number) (exited)")
+                    if active && store.sessions(for: cwd).count > 1 {
+                        Button {
+                            store.close(s)
+                            focusToken += 1
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Close this shell")
+                    }
+                }
+            }
+            Button {
+                store.newSession(for: cwd)
+                focusToken += 1
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("New shell")
+        }
+        .fixedSize()
+    }
+
     private var header: some View {
         HStack(spacing: 8) {
             Text("TERMINAL")
@@ -54,6 +111,7 @@ struct TerminalPaneView: View {
                 .tracking(2)
                 .foregroundStyle(.tertiary)
             if let cwd = bridge.projectWorkDir {
+                tabStrip(cwd)
                 // `layoutPriority(-1)` is load-bearing, not cosmetic.
                 //
                 // A project path is long ("/Users/x/Projects/agri-saas-platform"),

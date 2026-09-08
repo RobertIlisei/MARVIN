@@ -6,14 +6,26 @@
 // expects — a tty on fds 0/1/2, a window size, job control — so it behaves
 // exactly as in Terminal.app.
 //
-// ## The load-bearing detail
+// ## The load-bearing detail (corrected 2026-09-09)
 //
-// `POSIX_SPAWN_SETSID` makes the child a session leader, and THEN opening
-// the slave as fd 0 makes that tty the child's CONTROLLING terminal (BSD
-// semantics: the first tty a session leader opens becomes controlling).
-// Without both, there is no foreground process group and Ctrl-C is
-// silently swallowed while everything else looks perfect. The test suite
-// pins this: `sleep 30` must die on 0x03.
+// The child must ACQUIRE the slave as its controlling terminal, and that
+// takes a session leader opening the tty — or `ioctl(TIOCSCTTY)`. The first
+// version used `posix_spawn` with `POSIX_SPAWN_SETSID` and opened the slave
+// as fd 0 through a file action, on the belief that the open happened after
+// `setsid`. Measured on 2026-09-09: it does not. `cat` spawned that way ends
+// with no controlling tty (`ps` tty `??`, foreground group 0), and so did
+// the user's zsh — Ctrl-C echoed as `^C` and stopped nothing, because the
+// line discipline's SIGINT had no foreground process group to go to. The
+// test suite had passed only because bash-as-`/bin/sh` re-opens its tty by
+// name at job-control init and attaches itself; zsh does not.
+//
+// So this is `forkpty(3)`: `openpty` + `fork` + `login_tty` (`setsid`,
+// `TIOCSCTTY`, dup onto 0/1/2), the way every terminal emulator does it.
+// The child runs only async-signal-safe calls between the fork and the
+// `execve` — signal reset, `chdir`, exec — with every C string and array
+// built BEFORE the fork, so nothing in the child touches the allocator or
+// the Swift runtime. The tests pin the acquisition with `zsh -f`, the shell
+// that does not attach itself.
 //
 // ## Why in-process (not node-pty in the sidecar)
 //
@@ -32,21 +44,19 @@
 import Darwin
 import Foundation
 
+/// File scope on purpose: inside the class, `signal` is the static
+/// `signal(from:)` and shadows the C call.
+private func resetSignalDispositions() {
+    for s: Int32 in 1..<32 { signal(s, SIG_DFL) }
+}
+
 public final class PTYProcess {
     public enum PTYError: Error, CustomStringConvertible {
-        case openpt(Int32)
-        case grantpt(Int32)
-        case unlockpt(Int32)
-        case ptsname
-        case spawn(Int32)
+        case fork(Int32)
 
         public var description: String {
             switch self {
-            case .openpt(let e): return "posix_openpt failed: \(String(cString: strerror(e)))"
-            case .grantpt(let e): return "grantpt failed: \(String(cString: strerror(e)))"
-            case .unlockpt(let e): return "unlockpt failed: \(String(cString: strerror(e)))"
-            case .ptsname: return "ptsname failed"
-            case .spawn(let e): return "posix_spawn failed: \(String(cString: strerror(e)))"
+            case .fork(let e): return "forkpty failed: \(String(cString: strerror(e)))"
             }
         }
     }
@@ -75,60 +85,50 @@ public final class PTYProcess {
         columns: Int,
         rows: Int
     ) throws {
-        let master = posix_openpt(O_RDWR | O_NOCTTY)
-        guard master >= 0 else { throw PTYError.openpt(errno) }
-        guard grantpt(master) == 0 else { let e = errno; close(master); throw PTYError.grantpt(e) }
-        guard unlockpt(master) == 0 else { let e = errno; close(master); throw PTYError.unlockpt(e) }
-        guard let slavePath = ptsname(master).map({ String(cString: $0) }) else { close(master); throw PTYError.ptsname }
-
         // Size the pty BEFORE the child starts so its first `ioctl(TIOCGWINSZ)`
-        // (zsh's prompt, vim's layout) sees real numbers, not 0×0.
+        // (zsh's prompt, vim's layout) sees real numbers, not 0×0. `forkpty`
+        // applies it to the slave it opens, once, in the parent.
         var size = winsize(ws_row: UInt16(rows), ws_col: UInt16(columns), ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(master, TIOCSWINSZ, &size)
 
-        var attrs: posix_spawnattr_t? = nil
-        posix_spawnattr_init(&attrs)
-        defer { posix_spawnattr_destroy(&attrs) }
-        // SETSID: new session, so the slave becomes the controlling tty when
-        // opened below. SETSIGDEF/SETSIGMASK: the app process ignores
-        // SIGPIPE and masks others; the shell must start with defaults or
-        // Ctrl-C's SIGINT would be ignored by every program it runs.
-        var all = sigset_t()
-        sigfillset(&all)
-        var none = sigset_t()
-        sigemptyset(&none)
-        posix_spawnattr_setsigdefault(&attrs, &all)
-        posix_spawnattr_setsigmask(&attrs, &none)
-        posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
-
-        var actions: posix_spawn_file_actions_t? = nil
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        // Open the slave as fd 0 in the CHILD (after setsid) — that open is
-        // what attaches the controlling terminal. Then dup it onto 1 and 2.
-        posix_spawn_file_actions_addopen(&actions, 0, slavePath, O_RDWR, 0)
-        posix_spawn_file_actions_adddup2(&actions, 0, 1)
-        posix_spawn_file_actions_adddup2(&actions, 0, 2)
-        posix_spawn_file_actions_addclose(&actions, master)
-        posix_spawn_file_actions_addchdir_np(&actions, workingDirectory)
-
+        // Everything the child will hand to execve, built here in the parent.
         let argv: [String] = [argv0 ?? executable] + arguments
         let cArgv: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
         let cEnv: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        let argvBuf = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: cArgv.count)
+        argvBuf.initialize(from: cArgv, count: cArgv.count)
+        let envBuf = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: cEnv.count)
+        envBuf.initialize(from: cEnv, count: cEnv.count)
+        let cPath = strdup(executable)
+        let cCwd = strdup(workingDirectory)
         defer {
             cArgv.forEach { free($0) }
             cEnv.forEach { free($0) }
+            argvBuf.deallocate()
+            envBuf.deallocate()
+            free(cPath)
+            free(cCwd)
         }
 
-        var pid: pid_t = 0
-        let rc = posix_spawn(&pid, executable, &actions, &attrs, cArgv, cEnv)
-        guard rc == 0 else { close(master); throw PTYError.spawn(rc) }
+        var master: Int32 = -1
+        let pid = forkpty(&master, nil, nil, &size)
+        guard pid >= 0 else { throw PTYError.fork(errno) }
+        if pid == 0 {
+            // CHILD. `login_tty` has run: new session, the slave is the
+            // controlling tty, fds 0/1/2 point at it. Only async-signal-safe
+            // calls from here to execve. The app process ignores SIGPIPE and
+            // masks others; the shell must start with defaults or Ctrl-C's
+            // SIGINT would be ignored by every program it runs.
+            var none = sigset_t()
+            sigemptyset(&none)
+            sigprocmask(SIG_SETMASK, &none, nil)
+            resetSignalDispositions()
+            _ = chdir(cCwd) // a missing directory starts the shell where it is; not fatal
+            execve(cPath, argvBuf, envBuf)
+            _exit(127)
+        }
 
         self.pid = pid
         self.master = master
-        // The pre-spawn size does not survive the child's open of the slave
-        // (observed: `stty size` read 0×0 until the first resize). Set it
-        // again now; the child is still in exec and has not asked yet.
         _ = ioctl(master, TIOCSWINSZ, &size)
         startReading()
         watchExit()

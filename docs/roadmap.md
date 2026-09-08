@@ -42,6 +42,17 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.108** — the terminal's shell owns its tty, and terminal tabs.
+
+Ctrl-C echoed `^C` and stopped nothing: measured, the app's zsh had no controlling terminal
+because the `posix_spawn` file-action open runs before `setsid`, so nothing was ever attached
+and the Ctrl-C test had passed only because bash attaches itself. `PTYProcess` now uses
+`forkpty`, pinned with `zsh -f`. The terminal pane has tabs: "+" opens another shell, the
+numbered buttons switch without touching any shell, × hangs one up. ADR-0078 addendum.
+Details in the [changelog](./history/CHANGELOG.md).
+
+_The v0.1.107 summary follows._
+
 **v0.1.107** — the practice loop stops measuring itself.
 
 An audit of a real project's Practice pane found five of six `regressed` rows resting on one
@@ -148,6 +159,13 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-09-09 — v0.1.108: the terminal's shell owns its tty, and terminal tabs
+
+_Shipped. The app's shell had no controlling terminal — `ps` tty `??`, foreground group 0 —
+so SIGINT had nowhere to go; the `posix_spawn` open never attached it and only bash-as-sh
+had been attaching itself. `forkpty` now, pinned with `zsh -f`. Tabs per project in the
+terminal pane; switching never kills a shell. ADR-0078 addendum._
 
 ### 2026-09-09 — v0.1.107: the practice loop stops measuring itself
 
