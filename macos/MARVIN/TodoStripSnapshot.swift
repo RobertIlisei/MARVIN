@@ -14,20 +14,21 @@ import MARVINLogic
 import SwiftUI
 
 enum TodoStripSnapshot {
-    /// Shapes copied from the plan that showed the overlap (agri-saas
-    /// "red-main triage"): an in_progress step with activeForm, one long
-    /// completed sub-task that must WRAP at the render width, then short
-    /// pending rows that must sit BELOW the wrapped text, not on top of it.
+    /// Shapes copied from the plan that showed the overlap (a real project's
+    /// red-CI triage, text neutralised — Golden Rule 6): an in_progress step
+    /// with activeForm, one long completed sub-task that must WRAP at the
+    /// render width, then short pending rows that must sit BELOW the wrapped
+    /// text, not on top of it.
     static var sampleSteps: [PlanStep] {
         var triage = PlanStep(
-            content: "Triage and fix red main (#2827665106) — first, on its own branch off main.",
+            content: "Triage and fix red main (#1234567) — first, on its own branch off main.",
             status: "in_progress",
-            activeForm: "Triaging red main (#2827665106)"
+            activeForm: "Triaging red main (#1234567)"
         )
         triage.subtasks = [
             TodoItem(content: "Pull failing pipeline job logs + JUnit artifacts (done: smoke job, 8 IT failures, 2 root causes identified)",
                      status: "completed", activeForm: nil),
-            TodoItem(content: "Root-cause: GRANT agricore_migrator TO agricore_app WITH INHERIT TRUE over-grants (violates ADR-0064 §3 + matview invisibility) — empirically verified INHERIT FALSE, SET TRUE fixes the smoke path with no code change",
+            TodoItem(content: "Root-cause: GRANT migrator_role TO app_role WITH INHERIT TRUE over-grants (violates ADR-0001 §3 + matview invisibility) — empirically verified INHERIT FALSE, SET TRUE fixes the smoke path with no code change",
                      status: "completed", activeForm: nil),
             TodoItem(content: "Consulting advisor on the corrected fix",
                      status: "pending", activeForm: "Consulting advisor on the corrected fix"),
@@ -36,7 +37,7 @@ enum TodoStripSnapshot {
         ]
         return [
             triage,
-            PlanStep(content: "ADR — \"App legal surface: versioned legal texts, terms-acceptance ledger, storage preferences\"",
+            PlanStep(content: "ADR — \"Legal surface: versioned legal texts, terms-acceptance ledger, storage preferences\"",
                      status: "pending", activeForm: nil),
             PlanStep(content: "Ship: pr-review + security-audit, commit, push, MR",
                      status: "pending", activeForm: nil),
@@ -51,7 +52,7 @@ enum TodoStripSnapshot {
 
         let view = TodoListStrip(
             steps: sampleSteps,
-            planTitle: "Legal surface for the AgriCore app + red-main triage (pipeline #2827665106)",
+            planTitle: "Legal surface for the app + red-main triage (pipeline #1234567)",
             onOpenPlanFile: {},
             onOpenPlansPanel: {},
             onClose: {}
