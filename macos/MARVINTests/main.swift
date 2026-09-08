@@ -610,14 +610,22 @@ runner.suite("plan-reconcile") {
 // MARK: - Hard completion invariant (ADR-0049 addendum — v0.1.50 claim)
 
 runner.suite("plan-completion-invariant") {
-    runner.test("model-declared completed is overridden while a sub-task is open") {
+    runner.test("model-declared completed is overridden while a sub-task is still listed open") {
+        // The step-[10] bug as it actually happened: the batch carries `[10]
+        // completed` AND its `[10.x]` rows still pending. The open rows are the
+        // remaining work and they win. (ADR-0106 narrowed this to rows the
+        // batch still LISTS — see plan-supersession for the omitted case.)
         var step = PlanStep(content: "Operator console panel", status: "pending")
         step.subtasks = [TodoItem(content: "DoD sub-item", status: "pending", activeForm: nil, key: "1.1")]
         let out = PlanProgress.reconcile(
             steps: [step],
-            with: [TodoItem(content: "[1] Operator console panel", status: "completed", activeForm: nil)])
+            with: [
+                TodoItem(content: "[1] Operator console panel", status: "completed", activeForm: nil),
+                TodoItem(content: "[1.1] DoD sub-item", status: "pending", activeForm: nil),
+            ])
         runner.expect(out[0].status, equals: "in_progress",
                       "a step owning open sub-tasks can never read completed (the step-[10] bug)")
+        runner.expect(out[0].subtasks.first?.status, equals: "pending", "the listed open row stays open")
     }
 
     runner.test("completed iff EVERY sub-task completed") {
@@ -642,6 +650,242 @@ runner.suite("plan-completion-invariant") {
             steps: [PlanStep(content: "A leaf step", status: "pending")],
             with: [TodoItem(content: "[1] A leaf step", status: "completed", activeForm: nil)])
         runner.expect(out[0].status, equals: "completed", "invariant only governs steps that own sub-tasks")
+    }
+}
+
+// MARK: - Snapshot semantics, lenient tags, bucket-free guard (ADR-0106 — the 2026-09-08 stuck plan)
+
+runner.suite("plan-tag-grammar") {
+    runner.test("[N] and [N.M] parse as before") {
+        let a = PlanTag.parseFull("[2] Wire the gate")
+        runner.expect(a.steps == 2...2 && a.sub == nil && a.text == "Wire the gate", "[N]")
+        let b = PlanTag.parseFull("[2.3] Cover it")
+        runner.expect(b.steps == 2...2 && b.sub == "3" && b.text == "Cover it", "[N.M]")
+        runner.expect(PlanTag.parse("[2.3] Cover it").sub, equals: "3", "parse() still exposes the sub-key")
+    }
+    runner.test("[N-M] is a range of steps") {
+        let r = PlanTag.parseFull("[3-8] Full legal-surface feature shipped as MR !203")
+        runner.expect(r.steps == 3...8 && r.sub == nil, "range parsed")
+        runner.expect(r.text, equals: "Full legal-surface feature shipped as MR !203", "tag stripped")
+        runner.expect(PlanTag.parse("[3-8] x").step, equals: 3, "parse() reports the first step")
+    }
+    runner.test("letter-suffixed and dotted sub-keys are sub-tasks, not prose") {
+        let a = PlanTag.parseFull("[8.1a] Fix authentik-setup-dev.sh")
+        runner.expect(a.steps == 8...8 && a.sub == "1a", "[N.Ma]")
+        let b = PlanTag.parseFull("[1.5d] Rewrite the guard")
+        runner.expect(b.sub, equals: "5d", "[N.Md]")
+        let c = PlanTag.parseFull("[2.1.3] third level")
+        runner.expect(c.steps == 2...2 && c.sub == "1.3", "[N.M.x]")
+    }
+    runner.test("nonsense tags stay untagged") {
+        runner.expect(PlanTag.parseFull("[8-3] descending").steps == nil, "descending range")
+        runner.expect(PlanTag.parseFull("[3-8.1] range with sub").steps == nil, "range + sub-key")
+        runner.expect(PlanTag.parseFull("no tag here").steps == nil, "plain prose")
+    }
+}
+
+runner.suite("plan-rebase-guard-adr-0106") {
+    // The 9 steps the model was shown on 2026-09-08: eight real ones plus the
+    // synthetic bucket. Ids are normalized content.
+    let realSteps = [
+        "Triage and fix red main (#2827665106) — first, on its own branch off main. Get the failing job + log; reproduce locally; fix; pr-review; commit, push, MR; confirm MR and main pipeline green",
+        "ADR — App legal surface: versioned legal texts, terms-acceptance ledger, storage disclosure without consent",
+        "Cheap real wins (single-layer): self-host Geist in the SPA; OSM attribution; duplicate AttributionControl",
+        "Versioned legal content (single source): apps/web/legal/<doc>/<version>.md + manifest.json",
+        "In-app legal pages + storage preferences (SPA slice): routes /legal/termeni etc.",
+        "Acceptance ledger — tracer bullet through every layer",
+        "SPA gate in the tenant layout (last): TENANT_ADMIN + not accepted → blocking screen",
+        "Ship: pr-review + security-audit, /graphify --update, commit on a new branch off green main, push to gitlab, MR via push options",
+    ].map(PlanTextMatch.normalize)
+    let closeOut = [
+        "Triage and fix red main (#2827665106): root-cause, fix, pr-review/security-audit, merge to main (d9093a11), tag v1.1.74",
+        "ADR-0379 authored, critiqued, approved",
+        "Cheap wins (commit 9b6399e8)",
+        "Versioned legal content (commit a2105bbc)",
+        "In-app legal pages + storage preferences (commit 19c75605)",
+        "Acceptance ledger (commit 9db67778)",
+        "SPA acceptance gate (commit a8b05f87)",
+        "Ship: pr-review + security-audit, push, MR !203 green, graph refreshed",
+    ]
+
+    runner.test("terse close-out summaries are RELATED to their steps by token overlap") {
+        var related = 0
+        for (i, t) in closeOut.enumerated()
+        where PlanTextMatch.related(realSteps[i], PlanTextMatch.normalize(t)) { related += 1 }
+        runner.expect(related >= 6, "at least 6 of 8 summaries relate (got \(related))")
+        runner.expect(!PlanTextMatch.related(
+            PlanTextMatch.normalize("Implement service wiring micro task number 5 for the signal endpoint"),
+            realSteps[2]), "the 2026-07-02 foreign text still shares nothing")
+    }
+
+    runner.test("honest 1..8 close-out against 8 real steps + a bucket is NOT a re-base") {
+        // Even with the OLD containment test the bucket exclusion alone settles
+        // it (K == real step count); the relatedness test is belt-and-braces.
+        let rebased = PlanRebaseGuard.looksRebased(
+            taggedSteps: Array(1...8), taggedTexts: closeOut, stepIds: realSteps)
+        runner.expect(!rebased, "K == real step count → full-plan update")
+        let partial = PlanRebaseGuard.looksRebased(
+            taggedSteps: Array(1...7), taggedTexts: Array(closeOut.prefix(7)), stepIds: realSteps)
+        runner.expect(!partial, "K=7 ≠ 8 but the texts are about their steps → trusted")
+    }
+}
+
+runner.suite("plan-supersession") {
+    func step(_ c: String, _ subs: [TodoItem] = []) -> PlanStep {
+        var s = PlanStep(content: c); s.subtasks = subs; return s
+    }
+    func sub(_ c: String, _ st: String, key: String? = nil) -> TodoItem {
+        TodoItem(content: c, status: st, activeForm: nil, key: key)
+    }
+
+    runner.test("a stale row the closing batch no longer lists is superseded, not a veto") {
+        let seeded = [step("Triage red main", [
+            sub("Deploy and confirm", "completed", key: "1.1"),
+            sub("Implement the grant clause", "pending", key: "1.5"),
+            sub("[1.7a] Run pr-review skill on the diff", "in_progress"),
+        ])]
+        let out = PlanProgress.reconcile(steps: seeded, with: [
+            TodoItem(content: "[1] Triage red main: root-caused, fixed, merged (d9093a11)", status: "completed", activeForm: nil),
+            TodoItem(content: "[1.1] Deploy and confirm", status: "completed", activeForm: nil),
+        ])
+        runner.expect(out[0].status, equals: "completed", "the model's close-out is honoured")
+        let statuses = out[0].subtasks.map(\.status)
+        runner.expect(statuses, equals: ["completed", TodoItem.superseded, TodoItem.superseded], "dropped rows superseded")
+        runner.expect(out[0].subtasks.count, equals: 3, "nothing deleted — the file keeps the evidence")
+    }
+
+    runner.test("a row still listed open in the closing batch keeps its veto (ADR-0049 unchanged)") {
+        let seeded = [step("Ship", [sub("Write the gate E2E spec", "pending", key: "1.1")])]
+        let out = PlanProgress.reconcile(steps: seeded, with: [
+            TodoItem(content: "[1] Ship", status: "completed", activeForm: nil),
+            TodoItem(content: "[1.1] Write the gate E2E spec", status: "pending", activeForm: nil),
+        ])
+        runner.expect(out[0].status, equals: "in_progress", "listed-open row still blocks")
+        runner.expect(out[0].subtasks.first?.status, equals: "pending", "and is not superseded")
+    }
+
+    runner.test("nothing is superseded unless the batch closes the parent") {
+        let seeded = [step("Ship", [sub("Old row", "pending", key: "1.1")])]
+        let out = PlanProgress.reconcile(steps: seeded, with: [
+            TodoItem(content: "[1.2] New row", status: "in_progress", activeForm: nil),
+        ])
+        runner.expect(out[0].subtasks[0].status, equals: "pending", "an in-flight step keeps its open rows")
+        runner.expect(out[0].status, equals: "in_progress", "parent in progress")
+    }
+
+    runner.test("superseded is sticky and never counts as done on its own") {
+        var s = step("Ship", [sub("Dropped", TodoItem.superseded, key: "1.1")])
+        s.status = "in_progress"
+        let out = PlanProgress.reconcile(steps: [s], with: [
+            TodoItem(content: "[1] Ship", status: "in_progress", activeForm: nil),
+        ])
+        runner.expect(out[0].status, equals: "in_progress",
+                      "all rows superseded + parent not closed → not completed")
+        runner.expect(out[0].subtasks[0].status, equals: TodoItem.superseded, "stays superseded")
+    }
+
+    runner.test("range tag closes every step it spans") {
+        let out = PlanProgress.reconcile(
+            steps: (1...5).map { step("Step number \($0) of the plan") },
+            with: [TodoItem(content: "[2-4] Shipped together", status: "completed", activeForm: nil)])
+        runner.expect(out.map(\.status), equals: ["pending", "completed", "completed", "completed", "pending"], "2..4 closed")
+    }
+
+    runner.test("letter-suffixed sub-key nests under its step with a stable key") {
+        let out = PlanProgress.reconcile(
+            steps: [step("One"), step("Two")],
+            with: [TodoItem(content: "[2.1a] Fix the dev script", status: "completed", activeForm: nil)])
+        runner.expect(out[1].subtasks.first?.key, equals: "2.1a", "key carries the suffix")
+        runner.expect(out[0].subtasks.isEmpty, "not misnested under step 1")
+    }
+
+    runner.test("REPLAY 2026-09-08: the final close-out batch completes a plan the old rules froze at 5/9") {
+        // Stored state as found in 274dfac9….plans.json, reduced to what matters.
+        var steps = [
+            step("Triage and fix red main (#2827665106) — first, on its own branch off main", [
+                sub("Deploy v1.1.74 and confirm Ferma Agricore provisioning retry succeeds", "completed", key: "1.1"),
+                sub("Confirm the four prod alerts actually cleared in Grafana", "completed", key: "1.2"),
+                sub("Implement fix: migration grant clause + safe role-elevation", "pending", key: "1.5"),
+                sub("pr-review + security-audit, commit, push, MR, confirm MR + main pipeline green", "pending", key: "1.7"),
+                sub("[1.7a] Run pr-review skill on the diff", "in_progress"),
+                sub("[1.7c] Commit, push to gitlab, open MR, confirm MR + main pipeline green", "pending"),
+            ]),
+            step("ADR — App legal surface: versioned legal texts, terms-acceptance ledger"),
+            step("Cheap real wins (single-layer): self-host Geist in the SPA"),
+            step("Versioned legal content (single source)"),
+            step("In-app legal pages + storage preferences (SPA slice)", [
+                sub("Add a legal-content loader", "in_progress", key: "5.1"),
+                sub("Add /legal/termeni and the other routes", "pending", key: "5.2"),
+                sub("Verify: vitest, Romanian-copy gate, typecheck", "pending", key: "5.5"),
+            ]),
+            step("Acceptance ledger — tracer bullet through every layer"),
+            step("SPA gate in the tenant layout (last)"),
+            step("Ship: pr-review + security-audit, graphify update, push, MR", [
+                sub("Full local dev stack unblocked", "completed", key: "8.1"),
+                sub("Dedicated gate E2E spec written", "completed", key: "8.2"),
+                sub("Confirm MR !203 pipeline green on final commit 27564dc7", "in_progress", key: "8.3"),
+            ]),
+            step("Additional work", [
+                sub("[8.1c] Confirm 344/344 Playwright suite green with the gate live", "in_progress"),
+            ]),
+        ]
+        for i in [1, 2, 3, 5, 6] { steps[i].status = "completed" }
+        for i in [0, 4, 7, 8] { steps[i].status = "in_progress" }
+        let before = Plan(id: "p", title: "P", text: "", path: nil, steps: steps)
+        runner.expect(before.doneCount, equals: 5, "starts at the observed 5/9")
+
+        // The 14:12:04Z TodoWrite, verbatim shape.
+        let batch = [
+            TodoItem(content: "[1] Triage and fix red main (#2827665106): root-cause, fix, pr-review/security-audit, merge to main (d9093a11), tag v1.1.74", status: "completed", activeForm: nil),
+            TodoItem(content: "[1.1] Deploy v1.1.74 and confirm Ferma Agricore provisioning retry succeeds", status: "completed", activeForm: nil),
+            TodoItem(content: "[1.2] Confirm the four prod alerts actually cleared in Grafana", status: "completed", activeForm: nil),
+            TodoItem(content: "[2-8] Full legal-surface feature shipped: ADR-0379, fonts/OSM fix, versioned content, in-app pages, acceptance ledger, SPA gate, MR !203", status: "completed", activeForm: nil),
+            TodoItem(content: "[8.1] Full local dev stack unblocked, 689-test Playwright suite run, dedicated gate E2E spec caught and fixed a real @Transactional bug", status: "completed", activeForm: nil),
+            TodoItem(content: "[9] Merge MR !203 into main (ed763252), confirm full main pipeline green, tag v1.1.75, deploy to prod, verify live", status: "completed", activeForm: nil),
+        ]
+        let out = PlanProgress.reconcile(steps: steps, with: batch)
+        let after = Plan(id: "p", title: "P", text: "", path: nil, steps: out)
+        runner.expect(after.isComplete, "9/9 — the plan the model shipped, tagged and deployed reads complete")
+        runner.expect(after.doneCount, equals: 9, "done count (got \(after.doneCount): \(out.map(\.status)))")
+        runner.expect(out[0].subtasks.filter { $0.status == TodoItem.superseded }.count, equals: 4,
+                      "step 1: the four stale rows superseded, the two listed ones completed")
+        runner.expect(out[4].subtasks.allSatisfy { $0.status == TodoItem.superseded }, "step 5's dropped decomposition superseded")
+        runner.expect(out[7].subtasks.map(\.status), equals: ["completed", "completed", TodoItem.superseded], "step 8: 8.3 superseded, 8.1 listed")
+        runner.expect(out[8].subtasks.first?.status, equals: TodoItem.superseded, "bucket row superseded via [9]")
+        runner.expect(out.count, equals: 9, "no step added or erased")
+    }
+}
+
+runner.suite("plan-superseded-rendering") {
+    runner.test("PlanFile.render writes [-] for a superseded sub-task and never [x]") {
+        var step = PlanStep(content: "Ship it", status: "completed")
+        step.subtasks = [
+            TodoItem(content: "Done row", status: "completed", activeForm: nil, key: "1.1"),
+            TodoItem(content: "Dropped row", status: TodoItem.superseded, activeForm: nil, key: "1.2"),
+        ]
+        let plan = Plan(id: "p", title: "P", text: "# Plan — P\n\n1. Ship it\n", path: nil, steps: [step])
+        let out = PlanFile.render(plan)
+        runner.expect(out.contains("1. [x] Ship it"), "step ticked")
+        runner.expect(out.contains("  - [x] Done row"), "completed sub-task ticked")
+        runner.expect(out.contains("  - [-] Dropped row"), "superseded sub-task gets [-]")
+        runner.expect(!out.contains("[x] Dropped row"), "never a false tick")
+        runner.expect(PlanFile.completedStepIds(inRenderedFile: out).contains(PlanProgress.normalize("Ship it")), "step reads back")
+    }
+
+    runner.test("PlanContextBlock shows [-] and collapses superseded rows with the completed ones") {
+        var step = PlanStep(content: "Ship it", status: "completed")
+        step.subtasks = (1...3).map { TodoItem(content: "done \($0)", status: "completed", activeForm: nil) }
+            + [TodoItem(content: "dropped a", status: TodoItem.superseded, activeForm: nil),
+               TodoItem(content: "dropped b", status: TodoItem.superseded, activeForm: nil)]
+        let plan = Plan(id: "p", title: "P", text: "", path: "/x/p.md", steps: [step])
+        let out = PlanContextBlock.render(plan: plan) ?? ""
+        runner.expect(out.contains("3 of 5 sub-tasks complete, 2 superseded"), "count states both")
+        runner.expect(!out.contains("dropped a"), "superseded rows collapsed")
+        var small = PlanStep(content: "Ship it", status: "in_progress")
+        small.subtasks = [TodoItem(content: "dropped a", status: TodoItem.superseded, activeForm: nil),
+                          TodoItem(content: "open b", status: "pending", activeForm: nil)]
+        let tiny = PlanContextBlock.render(plan: Plan(id: "p", title: "P", text: "", path: "/x/p.md", steps: [small])) ?? ""
+        runner.expect(tiny.contains("[-] 1.1 dropped a"), "uncollapsed superseded row carries the [-] glyph")
     }
 }
 

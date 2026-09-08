@@ -391,7 +391,7 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   `turnEnv`. From 0.3.142, Sonnet 5 / Opus 4.8+ sessions get **no**
   task-tracking tool unless opted in, and the opt-in family defaults to the
   id-based `TaskCreate`/`TaskUpdate`. The entire plan spine (ADR-0046 / 0049 /
-  0052 / 0068) reconciles `TodoWrite` snapshots by `[N]`/`[N.M]` tag. Remove
+  0052 / 0068 / 0106) reconciles `TodoWrite` snapshots by `[N]`/`[N.M]` tag. Remove
   either flag and every plan freezes at `pending` with no error.
 - **`alwaysLoad: true` on all five in-process MCP servers** (`marvin-graph`,
   `-memory`, `-backlog`, `-obsidian`, `-control`). 0.3 defers MCP tools behind

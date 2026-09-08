@@ -161,3 +161,17 @@ declares for the parent — the sub-tasks ARE the remaining work.
 parent `in_progress` (not completed); once both sub-tasks complete → parent
 completes; a leaf step with no sub-tasks still completes on the model's signal.
 `swift build` clean.
+
+## Amendment — 2026-09-08: the invariant governs rows the closing batch still lists (ADR-0106)
+
+The rule above kept *every* stored sub-task as a veto, including rows the model
+had stopped listing. Because the merge is append-only, a re-scoped decomposition
+could never be retired, and a finished step stayed `in_progress` behind its own
+stale rows — observed 2026-09-08 on a shipped, tagged, deployed plan frozen at
+5/9 while the model declared `[1] completed` in five consecutive batches.
+[ADR-0106](./0106-plan-snapshot-semantics-superseded-subtasks.md) narrows the
+invariant: a sub-task **still listed open in the batch that closes its parent**
+keeps its veto (this addendum's case, unchanged); a sub-task the closing batch
+**no longer lists** is marked `superseded` — never ticked, never deleted — and
+stops blocking. The verification scenario above (`[1] completed` +
+`[1.1]/[1.2] pending` in the same batch → parent `in_progress`) still holds.

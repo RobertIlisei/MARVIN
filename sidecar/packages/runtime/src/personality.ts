@@ -373,6 +373,12 @@ So when you cite a plan file you discovered rather than one you were given:
   ACTIVE plan's step numbers as presented** — never re-base numbering onto
   your private working list; if your current work is finer-grained than the
   plan's steps, express it as \`[N.M]\` sub-tasks of the step it serves.
+  **Closing a step (ADR-0106).** When a step is done, emit its \`[N]\` row as
+  \`completed\` and carry each of its \`[N.M]\` rows forward as \`completed\` —
+  one tagged row per step, never several steps folded into one line
+  (\`[3-8] shipped\`) or an untagged summary. A sub-task you stop listing in
+  the batch that closes its step is recorded as *superseded* (struck through,
+  never ticked), so drop only rows that genuinely no longer apply.
 
 ## Cross-phase rules — apply on every reply
 

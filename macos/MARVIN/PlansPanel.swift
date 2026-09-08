@@ -145,6 +145,7 @@ struct PlansPanel: View {
         switch s {
         case "completed": return "checkmark.circle.fill"
         case "in_progress": return "circle.dotted.circle"
+        case TodoItem.superseded: return "minus.circle"
         default: return "circle"
         }
     }

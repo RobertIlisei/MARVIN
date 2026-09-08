@@ -250,13 +250,11 @@ struct TodoListStrip: View {
 
     private func row(_ item: TodoItem, indent: Bool = false) -> some View {
         let running = item.status == "in_progress"
-        let completed = item.status == "completed"
+        // Superseded (ADR-0106) reads like completed here — closed, struck
+        // through, out of the way — with its own icon so it never passes as done.
+        let completed = item.status == "completed" || item.status == TodoItem.superseded
         let label = running ? (item.activeForm ?? item.content) : item.content
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
-            // Nested sub-tasks (ADR-0046) sit indented under their plan step.
-            if indent {
-                Rectangle().fill(.clear).frame(width: 14)
-            }
             Image(systemName: statusIcon(item.status))
                 .font(.system(size: indent ? 10 : 11))
                 .foregroundStyle(statusColour(item.status))
@@ -266,12 +264,20 @@ struct TodoListStrip: View {
                 .foregroundStyle(completed ? .secondary : (running ? .primary : .secondary))
             Spacer(minLength: 0)
         }
+        // Nested sub-tasks (ADR-0046) sit indented under their plan step.
+        // Padding, NOT a clear Rectangle spacer: a width-only frame has
+        // unconstrained height, and under `.firstTextBaseline` it inflated the
+        // row so a wrapped sub-task drew over the rows below it (verified by
+        // the MARVIN_SNAPSHOT_TODO probe bisect, 2026-09-08 — same lesson as
+        // v0.1.93's WidthReporter: don't insert views to do geometry's job).
+        .padding(.leading, indent ? 20 : 0)
     }
 
     private func statusIcon(_ s: String) -> String {
         switch s {
         case "completed": return "checkmark.circle.fill"
         case "in_progress": return "circle.dotted"
+        case TodoItem.superseded: return "minus.circle"
         default: return "circle"
         }
     }

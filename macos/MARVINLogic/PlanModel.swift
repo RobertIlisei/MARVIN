@@ -10,8 +10,15 @@ import Foundation
 /// One checklist item, mirroring the `TodoWrite` tool input shape.
 /// Codable — the plan spine persists server-side per session (ADR-0052).
 public struct TodoItem: Equatable, Codable {
+    /// ADR-0106 — the fourth sub-task status. A sub-task the model stopped
+    /// listing in the very batch that closed its parent step: not done (it was
+    /// never ticked), not open (the model dropped it), so it no longer vetoes
+    /// the parent's completion. Rendered `[-]` / struck through, never `[x]`.
+    /// Only sub-tasks carry it; a top-level step is never superseded.
+    public static let superseded = "superseded"
+
     public let content: String
-    /// "pending" | "in_progress" | "completed".
+    /// "pending" | "in_progress" | "completed" | `TodoItem.superseded` (sub-tasks only).
     public let status: String
     /// Present-tense label the model uses while the item is active
     /// (e.g. "Wiring the gate"); shown in place of `content` when running.
@@ -37,24 +44,49 @@ public struct TodoItem: Equatable, Codable {
 /// its exact prose. Returns the parsed ordinals plus the content with the tag
 /// stripped (so the tag never reaches the UI or the saved plan file).
 public enum PlanTag {
-    private static let re = try? NSRegularExpression(pattern: #"^\s*\[(\d+)(?:\.(\d+))?\]\s*(.*)$"#)
+    /// Accepted shapes (ADR-0106 widened the grammar):
+    ///   `[N]`       step N
+    ///   `[N-M]`     every step N…M (the model closing several steps in one row)
+    ///   `[N.M]`     sub-task M of step N
+    ///   `[N.Ma]` / `[N.M.x]`  a sub-key with a letter or dotted suffix — the
+    ///               model nests a third level when a step grows mid-flight
+    /// The 2026-09-08 session emitted `[3-8]`, `[2-8]`, `[8.1a]`…`[8.1e]` and
+    /// `[1.5a]`…`[1.7c]`; the previous grammar (`[N]` / `[N.M]` only) read all
+    /// of them as untagged prose and nested them under whichever step happened
+    /// to be in progress. Sub-keys are strings, so `1.5a` and `1.5` are distinct.
+    private static let re = try? NSRegularExpression(
+        pattern: #"^\s*\[(\d+)(?:\s*[-–]\s*(\d+))?(?:\.([0-9A-Za-z][0-9A-Za-z.]*))?\]\s*(.*)$"#)
 
-    /// (step, sub, text). `step`/`sub` are nil when absent; `text` is the
-    /// content with any leading tag removed (falls back to the original string
-    /// when no tag is present).
-    public static func parse(_ s: String) -> (step: Int?, sub: Int?, text: String) {
+    /// (step, sub, text) — the first step of a range, for callers that only
+    /// need one ordinal. `text` is the content with any leading tag removed
+    /// (falls back to the original string when no tag is present).
+    public static func parse(_ s: String) -> (step: Int?, sub: String?, text: String) {
+        let full = parseFull(s)
+        return (full.steps?.lowerBound, full.sub, full.text)
+    }
+
+    /// Full parse: the addressed step range (a single step is a one-element
+    /// range), the sub-key, and the tag-stripped text. A range never carries a
+    /// sub-key — `[3-8.1]` is nonsense and reads as untagged.
+    public static func parseFull(_ s: String) -> (steps: ClosedRange<Int>?, sub: String?, text: String) {
         guard let re else { return (nil, nil, s) }
         let range = NSRange(s.startIndex..<s.endIndex, in: s)
         guard let m = re.firstMatch(in: s, range: range),
               let rs = Range(m.range(at: 1), in: s),
-              let rt = Range(m.range(at: 3), in: s) else { return (nil, nil, s) }
-        let step = Int(s[rs])
-        var sub: Int? = nil
-        if m.range(at: 2).location != NSNotFound, let rm = Range(m.range(at: 2), in: s) {
-            sub = Int(s[rm])
+              let rt = Range(m.range(at: 4), in: s),
+              let lo = Int(s[rs]) else { return (nil, nil, s) }
+        var hi = lo
+        if m.range(at: 2).location != NSNotFound, let rh = Range(m.range(at: 2), in: s), let h = Int(s[rh]) {
+            hi = h
         }
+        var sub: String? = nil
+        if m.range(at: 3).location != NSNotFound, let rm = Range(m.range(at: 3), in: s) {
+            sub = String(s[rm])
+        }
+        // A descending range or a range with a sub-key is not a tag we understand.
+        guard hi >= lo, sub == nil || hi == lo else { return (nil, nil, s) }
         let text = String(s[rt]).trimmingCharacters(in: .whitespaces)
-        return (step, sub, text.isEmpty ? s : text)
+        return (lo...hi, sub, text.isEmpty ? s : text)
     }
 
     /// Strip a leading `[N]` / `[N.M]` tag from content for display. Tier-1
@@ -500,6 +532,13 @@ public enum PlanProgress {
         var steps = steps
         var used = Set<Int>()
         var fuzzy: [TodoItem] = []   // untagged / out-of-range → content backstop
+        let bucketId = normalize("Additional work")
+
+        // ADR-0106 — what THIS batch says, kept for the supersession pass:
+        // the steps it explicitly closed, and the sub-task rows it still lists
+        // under each step (keyed `[N.M]` rows and untagged rows nested there).
+        var closedByModel = Set<Int>()
+        var listed: [Int: [TodoItem]] = [:]
 
         // ADR-0052 — re-base guard. When the batch's `[N]` tags look like a
         // self-contained foreign list (tags exactly 1..K, K ≠ step count,
@@ -508,36 +547,50 @@ public enum PlanProgress {
         // them would overwrite step statuses with unrelated work (observed
         // 2026-07-02). Distrust the whole batch's tags and let the ADR-0046
         // content backstop place the items instead.
+        //
+        // ADR-0106 — the guard sees the steps the model was SHOWN as a plan:
+        // the synthetic "Additional work" bucket is excluded from the count.
+        // With it counted, an honest close-out tagged `[1]`…`[8]` against an
+        // 8-step plan that had grown a bucket read as "K=8 ≠ 9, foreign list",
+        // every tag was stripped, and the eight completions were nested as
+        // sub-tasks under step 1 (2026-09-08). Range tags are not evidence
+        // either way and are left out of the signature.
         var distrustTags = false
         do {
             var taggedSteps: [Int] = []
             var taggedTexts: [String] = []
             for raw in incoming {
-                let tag = PlanTag.parse(raw.content)
-                if let s = tag.step, tag.sub == nil {
-                    taggedSteps.append(s)
+                let tag = PlanTag.parseFull(raw.content)
+                if let r = tag.steps, r.count == 1, tag.sub == nil {
+                    taggedSteps.append(r.lowerBound)
                     taggedTexts.append(tag.text)
                 }
             }
             distrustTags = PlanRebaseGuard.looksRebased(
                 taggedSteps: taggedSteps,
                 taggedTexts: taggedTexts,
-                stepIds: steps.map(\.id))
+                stepIds: steps.filter { $0.id != bucketId }.map(\.id))
         }
 
         for raw in incoming {
-            var tag = PlanTag.parse(raw.content)
+            var tag = PlanTag.parseFull(raw.content)
             if distrustTags { tag = (nil, nil, tag.text) }
-            if let s = tag.step, s >= 1, s <= steps.count {
-                let idx = s - 1
+            if let r = tag.steps, r.lowerBound >= 1, r.upperBound <= steps.count {
                 if let sub = tag.sub {
+                    // parseFull guarantees a sub-key only comes with a single step.
+                    let idx = r.lowerBound - 1
                     let keyed = TodoItem(content: tag.text, status: raw.status,
-                                         activeForm: raw.activeForm, key: "\(s).\(sub)")
+                                         activeForm: raw.activeForm, key: "\(r.lowerBound).\(sub)")
                     steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, [keyed])
+                    listed[idx, default: []].append(keyed)
                 } else {
-                    steps[idx].status = raw.status
-                    steps[idx].activeForm = raw.activeForm
-                    used.insert(idx)
+                    for s in r {
+                        let idx = s - 1
+                        steps[idx].status = raw.status
+                        steps[idx].activeForm = raw.activeForm
+                        used.insert(idx)
+                        if raw.status == "completed" { closedByModel.insert(idx) }
+                    }
                 }
             } else {
                 fuzzy.append(TodoItem(content: tag.text, status: raw.status, activeForm: raw.activeForm))
@@ -553,22 +606,25 @@ public enum PlanProgress {
                 steps[idx].status = item.status
                 steps[idx].activeForm = item.activeForm
                 used.insert(idx)
+                if item.status == "completed" { closedByModel.insert(idx) }
             } else {
                 unmatched.append(item)
             }
         }
 
-        let bucketId = normalize("Additional work")
         if !unmatched.isEmpty {
             if let idx = steps.firstIndex(where: { $0.status == "in_progress" })
                 ?? steps.lastIndex(where: { $0.status != "completed" && $0.id != bucketId }) {
                 steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
+                listed[idx, default: []].append(contentsOf: unmatched)
             } else if let idx = steps.firstIndex(where: { $0.id == bucketId }) {
                 steps[idx].subtasks = mergeSubtasks(steps[idx].subtasks, unmatched)
+                listed[idx, default: []].append(contentsOf: unmatched)
             } else {
                 var bucket = PlanStep(content: "Additional work", status: "in_progress")
                 bucket.subtasks = unmatched
                 steps.append(bucket)
+                listed[steps.count - 1, default: []].append(contentsOf: unmatched)
             }
         }
 
@@ -584,19 +640,51 @@ public enum PlanProgress {
             if collapsed > 0 { steps[idx].subtasks = repaired }
         }
 
+        // ADR-0106 — SNAPSHOT SEMANTICS. `TodoWrite` is a full-list rewrite
+        // (ADR-0046: every call carries every live item), so when this batch
+        // closes step N, a sub-task of N that the same batch no longer lists is
+        // work the model DROPPED — re-scoped, folded into a summary row, or
+        // finished under another wording — not work still open. Before this
+        // pass such rows kept their last status forever (merge is append-only),
+        // and the ADR-0049 invariant below let them veto the parent for good:
+        // a shipped, tagged, deployed plan sat at 5/9 with step 1 "in progress"
+        // behind eleven rows from a superseded decomposition, while the model
+        // had declared `[1] completed` in five consecutive batches (2026-09-08).
+        //
+        // The row is marked `superseded`: never `completed` (that would be a
+        // false tick), never deleted (the file keeps the evidence of what was
+        // dropped). A sub-task the batch DOES still list as open keeps its veto
+        // — that is exactly ADR-0049's over-claim case, and it is unchanged.
+        for idx in closedByModel where !steps[idx].subtasks.isEmpty {
+            let batch = listed[idx] ?? []
+            steps[idx].subtasks = steps[idx].subtasks.map { sub in
+                guard sub.status != "completed", sub.status != TodoItem.superseded,
+                      !isListed(sub, in: batch) else { return sub }
+                return TodoItem(content: sub.content, status: TodoItem.superseded,
+                                activeForm: sub.activeForm, key: sub.key)
+            }
+        }
+
         // ADR-0049 — upward completion propagation, with a HARD invariant
         // (ADR-0049 addendum): a step that owns sub-tasks is "completed" if and
-        // ONLY IF every sub-task is completed. It can never read as done while a
-        // sub-task is still open — even if the model marked the parent done —
-        // because the sub-tasks ARE the remaining work (the user saw step [10]
-        // ticked with all its DoD/Tests sub-items unchecked). When not all are
-        // done it's in_progress if there's ANY activity (a sub-task started/done,
-        // or the model marked the parent in_progress/completed), else pending.
+        // ONLY IF every sub-task is closed — completed, or superseded per the
+        // pass above. It can never read as done while a sub-task is still open
+        // — even if the model marked the parent done — because the open
+        // sub-tasks ARE the remaining work (the user saw step [10] ticked with
+        // all its DoD/Tests sub-items unchecked). When not all are closed it's
+        // in_progress if there's ANY activity (a sub-task started/done, or the
+        // model marked the parent in_progress/completed), else pending.
         // Steps with no sub-tasks keep their model-driven status untouched.
         for idx in steps.indices where !steps[idx].subtasks.isEmpty {
             let subs = steps[idx].subtasks
-            if subs.allSatisfy({ $0.status == "completed" }) {
+            let allClosed = subs.allSatisfy { $0.status == "completed" || $0.status == TodoItem.superseded }
+            let anyCompleted = subs.contains { $0.status == "completed" }
+            if allClosed && (anyCompleted || steps[idx].status == "completed") {
                 steps[idx].status = "completed"
+            } else if allClosed {
+                // Every row superseded, none completed, and the model has not
+                // closed the parent: nothing here proves the step is done.
+                steps[idx].status = steps[idx].status == "pending" ? "pending" : "in_progress"
             } else {
                 let anyActivity = subs.contains { $0.status != "pending" }
                     || steps[idx].status != "pending"
@@ -604,6 +692,21 @@ public enum PlanProgress {
             }
         }
         return steps
+    }
+
+    /// ADR-0106 — does `batch` (this TodoWrite's rows for one step) still list
+    /// `sub`? Mirrors `mergeSubtasks`' matching exactly: a keyed row matches by
+    /// key, or by content against an unkeyed row; an unkeyed row matches by
+    /// content. Anything the merge would have updated in place counts as listed.
+    static func isListed(_ sub: TodoItem, in batch: [TodoItem]) -> Bool {
+        let ns = normalize(sub.content)
+        return batch.contains { item in
+            if let k = item.key {
+                if sub.key == k { return true }
+                return sub.key == nil && sameWork(normalize(item.content), ns)
+            }
+            return sameWork(normalize(item.content), ns)
+        }
     }
 }
 
@@ -663,7 +766,8 @@ public enum PlanFile {
             + "\n\n\(stampMarker) \(day) -->\n"
             + "_Last updated \(day). Unchecked boxes mean this plan was never "
             + "finished — not that it is still active. Check the date before "
-            + "treating it as in-flight._\n"
+            + "treating it as in-flight. A `[-]` sub-task was dropped by the model "
+            + "when it closed that step — superseded, not done._\n"
     }
 
     /// ADR-0046 (follow-up) — project the plan's live progress onto its saved
@@ -690,7 +794,17 @@ public enum PlanFile {
         // a leading checkbox already on the content (defensive idempotency)
         let boxRE = try? NSRegularExpression(pattern: #"^\[[ xX]\]\s*"#)
 
-        func box(_ status: String) -> String { status == "completed" ? "[x] " : "[ ] " }
+        // `[-]` is the superseded glyph (ADR-0106): Obsidian's "cancelled" task
+        // convention, and deliberately neither `[x]` (it was not done) nor `[ ]`
+        // (it is not open). `completedStepIds` reads only `[x]`, so a superseded
+        // row can never be recovered as done.
+        func box(_ status: String) -> String {
+            switch status {
+            case "completed": return "[x] "
+            case TodoItem.superseded: return "[-] "
+            default: return "[ ] "
+            }
+        }
 
         func overlay(_ line: String, _ status: String) -> String {
             guard let re = markerRE else { return line }

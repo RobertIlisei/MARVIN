@@ -1,6 +1,11 @@
 # ADR-0052 — Durable plan spine, plan-file ownership, and the re-base guard
 
-**Status:** Accepted — 2026-07-02
+**Status:** Accepted — 2026-07-02. Re-base guard amended by
+[ADR-0106](./0106-plan-snapshot-semantics-superseded-subtasks.md) (2026-09-08):
+the synthetic "Additional work" bucket no longer counts toward the step total,
+range tags are not evidence, and signature 3 tests relatedness by token
+overlap rather than whole-string containment — an honest `[1]`…`[8]` close-out
+against an 8-step plan with a bucket had been read as a foreign list.
 **Touches:** `runtime/plan-state.ts` (new), `/api/sessions/plans` (new),
 `runtime/sdk-runner.ts` (`classifyToolCall`), `runtime/personality.ts`
 (plan-authoring contract), `macos/MARVINLogic/PlanReconcileGuard.swift`

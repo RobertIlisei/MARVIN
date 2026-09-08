@@ -38,6 +38,7 @@ public enum PlanContextBlock {
         switch status {
         case "completed": return "[x]"
         case "in_progress": return "[~]"
+        case TodoItem.superseded: return "[-]"
         default: return "[ ]"
         }
     }
@@ -70,17 +71,24 @@ public enum PlanContextBlock {
 
             let subs = step.subtasks
             let completed = subs.filter { $0.status == "completed" }.count
-            let collapse = completed > collapseThreshold
+            // ADR-0106 — superseded rows are closed too: they carry no "what
+            // next" information and are collapsed with the completed ones.
+            let superseded = subs.filter { $0.status == TodoItem.superseded }.count
+            let closed = completed + superseded
+            let collapse = closed > collapseThreshold
 
             if collapse {
+                let dropped = superseded > 0
+                    ? ", \(superseded) superseded (dropped by you when the step closed — not done, not open)"
+                    : ""
                 lines.append(
-                    "    [x] \(completed) of \(subs.count) sub-tasks complete"
-                        + (completed == subs.count ? "" : " (completed ones omitted; the open ones follow)")
+                    "    [x] \(completed) of \(subs.count) sub-tasks complete\(dropped)"
+                        + (closed == subs.count ? "" : " (closed ones omitted; the open ones follow)")
                 )
             }
 
             for (j, sub) in subs.enumerated() {
-                if collapse && sub.status == "completed" { continue }
+                if collapse && (sub.status == "completed" || sub.status == TodoItem.superseded) { continue }
                 // NOTE: `j` is the ORIGINAL index. Renumbering after omission
                 // would silently renumber the model's own reference points and
                 // make the block disagree with the file it cites.

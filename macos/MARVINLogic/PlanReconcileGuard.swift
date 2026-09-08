@@ -74,6 +74,35 @@ public enum PlanTextMatch {
         guard a.count > sameWorkPrefix, b.count > sameWorkPrefix else { return false }
         return a.prefix(sameWorkPrefix) == b.prefix(sameWorkPrefix)
     }
+
+    /// Minimum token length that counts as evidence in `related`. Three-letter
+    /// words ("the", "for", "and") are shared by everything.
+    public static let relatedTokenMinLength = 4
+    /// Share of the SHORTER side's significant tokens that must reappear in
+    /// the longer side for two texts to be `related`.
+    public static let relatedOverlap = 1.0 / 3.0
+
+    /// Significant tokens of a normalized string.
+    public static func tokens(_ normalized: String) -> Set<String> {
+        Set(normalized.split(separator: " ")
+            .filter { $0.count >= relatedTokenMinLength }
+            .map(String.init))
+    }
+
+    /// ADR-0106 — "is this text about that step?", the question the re-base
+    /// guard actually asks. `matches` (whole-string containment) is the right
+    /// test for *identity*, but a close-out row is a terse summary — "Cheap
+    /// wins (commit 9b6399e8)" against a 40-word step — and shares words, not
+    /// substrings. Token overlap catches that; the 2026-07-02 foreign list
+    /// ("Implement service wiring micro task…" vs "G-1 shared disclaimer
+    /// fragment…") shares no significant token and still fails.
+    public static func related(_ a: String, _ b: String) -> Bool {
+        if matches(a, b) { return true }
+        let ta = tokens(a), tb = tokens(b)
+        let floor = min(ta.count, tb.count)
+        guard floor >= 2 else { return false }
+        return Double(ta.intersection(tb).count) / Double(floor) >= relatedOverlap
+    }
 }
 
 public enum PlanRebaseGuard {
@@ -117,7 +146,7 @@ public enum PlanRebaseGuard {
         var addressed = 0
         for (i, step) in taggedSteps.enumerated() where step >= 1 && step <= stepIds.count {
             addressed += 1
-            if PlanTextMatch.matches(stepIds[step - 1], PlanTextMatch.normalize(taggedTexts[i])) {
+            if PlanTextMatch.related(stepIds[step - 1], PlanTextMatch.normalize(taggedTexts[i])) {
                 matched += 1
             }
         }

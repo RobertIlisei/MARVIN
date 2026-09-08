@@ -351,6 +351,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if MarkdownSnapshot.runIfRequested() {
             exit(0)
         }
+        // Dev-only: `MARVIN_SNAPSHOT_TODO=<path>` rasterises the plan
+        // checklist strip the same way. Inert unless set.
+        if TodoStripSnapshot.runIfRequested() {
+            exit(0)
+        }
 
         // Spawn the bundled sidecar FIRST — Process.run() returns the
         // moment the child is forked, well before Next.js binds to
