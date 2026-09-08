@@ -34,6 +34,7 @@ import {
   resetShipReviewState,
   runDesignHooks,
   SAVE_RESULT_GRAPH_THRESHOLD,
+  BUILTIN_GATE_MAX_DENIES,
   SHIP_REVIEW_MAX_DENIES,
   type ShipDiff,
   shipReviewSkillOf,
@@ -205,26 +206,19 @@ describe("design-hooks · graphify-first", () => {
     }
   });
 
-  it("doesn't double-fire — once the hook has denied a Read this turn, subsequent reads pass through", () => {
+  it("has ADR-0104's brake: two refusals carry the instruction, the third read is allowed and the bypass counted", () => {
     seedGraph(cwd);
+    ensureBuiltinRules(); // the row that carries the bypass count
     const ctx = createTurnDesignContext(turnId, cwd);
-    // First Read denied.
-    const first = runDesignHooks({
-      ctx,
-      toolName: "Read",
-      toolInput: { file_path: join(cwd, "a.ts") },
-      mode: "enforce",
-    });
-    expect(first?.behavior).toBe("deny");
+    const read = (f: string) => runDesignHooks({ ctx, toolName: "Read", toolInput: { file_path: join(cwd, f) }, mode: "enforce" });
+    expect(read("a.ts")?.behavior).toBe("deny");
     expect(ctx.graphifyHookFired).toBe(true);
-    // Second Read no longer triggers the deny — model got the hint already.
-    const second = runDesignHooks({
-      ctx,
-      toolName: "Read",
-      toolInput: { file_path: join(cwd, "b.ts") },
-      mode: "enforce",
-    });
-    expect(second).toBeNull();
+    // 2026-09-09: the gate used to be one-shot — a real wakeup turn did seven
+    // greps after one refusal. Ignoring it now costs a second refusal.
+    expect(read("b.ts")?.behavior).toBe("deny");
+    expect(ctx.graphifyDenies).toBe(BUILTIN_GATE_MAX_DENIES);
+    expect(read("c.ts")).toBeNull();
+    expect(readRules().find((r) => r.id === "builtin:graphify-first")?.metrics.bypasses).toBe(1);
   });
 
   it("does not deny in measure mode", () => {
@@ -325,7 +319,8 @@ describe("design-hooks · graphify-first", () => {
       mode: "enforce",
     });
     expect(ctx.graphifyHookFired).toBe(true);
-    // Subsequent Read should not double-deny — hook state is one-shot.
+    // A search that LANDED (was allowed and recorded) satisfies the hook.
+    recordAllowedTool(ctx, "Grep", { pattern: "bar", path: cwd });
     expect(
       runDesignHooks({
         ctx,
@@ -639,23 +634,17 @@ describe("design-hooks · advisor-on-ADR-trigger", () => {
     expect(result?.behavior).toBe("deny");
   });
 
-  it("doesn't double-fire — once denied for a target, the same target passes the next time", () => {
+  it("has ADR-0104's brake per turn, not per path: two refusals, then the edit is allowed and the bypass counted", () => {
+    ensureBuiltinRules(); // the row that carries the bypass count
     const ctx = createTurnDesignContext(turnId, cwd);
-    const target = join(cwd, "src", "auth", "login.ts");
-    const first = runDesignHooks({
-      ctx,
-      toolName: "Edit",
-      toolInput: { file_path: target },
-      mode: "enforce",
-    });
-    expect(first?.behavior).toBe("deny");
-    const second = runDesignHooks({
-      ctx,
-      toolName: "Edit",
-      toolInput: { file_path: target },
-      mode: "enforce",
-    });
-    expect(second).toBeNull();
+    const edit = (f: string) => runDesignHooks({ ctx, toolName: "Edit", toolInput: { file_path: join(cwd, "src", "auth", f) }, mode: "enforce" });
+    // 2026-09-09: the per-path exemption let three trigger paths through on
+    // three single refusals with no consult (39 sessions, 143 denies).
+    expect(edit("login.ts")?.behavior).toBe("deny");
+    expect(edit("login.ts")?.behavior).toBe("deny");
+    expect(ctx.advisorAdrDenies).toBe(BUILTIN_GATE_MAX_DENIES);
+    expect(edit("session.ts")).toBeNull();
+    expect(readRules().find((r) => r.id === "builtin:advisor-on-adr")?.metrics.bypasses).toBe(1);
   });
 
   it("does not deny in measure or off mode", () => {

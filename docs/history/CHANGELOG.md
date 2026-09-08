@@ -8,6 +8,84 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-09 — v0.1.107: the practice loop stops measuring itself (extractor v7, regressed as a rate, every gate braked).**
+
+  Trigger: the Practice pane on a 404-session project showed six `regressed`
+  rows labelled *the code fix did not hold*, ten findings proposed, and a
+  Working tab where every row scored 0.88.
+
+  **Diagnosis (measured against the transcripts).** Five of the six
+  regressions rested on ONE recurring session in seven after the fix. Opened:
+  the `scope.met.missing` turn ended "Compile is running in the background
+  now; I'll react to its result automatically" after `run_background_job` +
+  `schedule_wakeup`; the `plan.stale` turn was four doc edits after a plan
+  whose every item was completed; the `command.retried` command was `git
+  commit`, refused twice by the ship-review gate and allowed on the third
+  identical try; the `graph.first.skipped` turn was a scheduled wakeup whose
+  first grep was refused and then did six more reads, the refused call
+  counted as the first. The gates themselves: graphify-first was one-shot
+  (`graphifyHookFired`), advisor-on-ADR exempted a path after one refusal
+  (39 sessions, 143 denies, three trigger paths per turn on three single
+  refusals), ship-review allowed the third try — and `ship.unreviewed` could
+  not see that commit because it named no files. Scoring: reliability and
+  actionability contribute 0.35 flat and recurrence saturates at eight
+  sessions, so every templated failure on a large project clears 0.6; success
+  kinds compute to a constant. `skill.bypassed:<name>` divided by ALL skill
+  invocations (graphify read as 2 %). The backtest ran synchronously in the
+  route: 11.4 s and 12.7 s in the run records, the sidecar and every live
+  chat stream held for the duration.
+
+  **Decision.** Extractor v7: a gate refusal is not a read / failure / commit;
+  a commit allowed after ship-review refusals with no review in between IS
+  `ship.unreviewed`; wakeup turns are not judged graph-first; a turn that armed
+  a wakeup or background job handed off; `plan.stale` needs an open plan and
+  looks at the next human turn; a skill invoked earlier in the session is
+  followed when its files are read later; successes are `skill.invoked:<name>`
+  so the rate is per skill; the overbudget detail carries cache-creation
+  tokens. `regressed` = two recurring sessions after acceptance at ≥ half the
+  rate before; `minEvidence` (0.5, the recurrence+cost+rate share) joins the
+  proposal test. `BUILTIN_GATE_MAX_DENIES` (2) applies to graphify-first and
+  advisor-on-ADR (per turn, not per path), bypass counted on the row.
+  `runPracticeAsync` reads off the event loop and yields between transcripts.
+  Pane: "N of M since fix" shown for fixes, Approve on a regressed fix, the
+  Working tab hides the constant score, "newly proposed" in the header.
+  Dismissing a ruled finding retires the rule; approving clears a fix's clock;
+  a finding with no sessions and no rule is dropped. ADR-0105 addendum.
+
+  **Verification.** Three new pinned tests cover each extractor change and
+  the rate rule; the one-shot gate tests became brake tests. 1219 sidecar
+  tests, 686 Swift assertions green. Ships alongside ADR-0106.
+
+---
+
+- **2026-09-08 — plan spine: a closed step no longer waits on rows the model stopped tracking (ADR-0106).**
+
+  Trigger: a shipped, tagged, deployed plan read **Paused — 5/9 · Next:
+  Triaging and fixing red main** while MARVIN said the plan was complete and
+  refused to redo verification.
+
+  **Diagnosis (measured before touching code).** 24 `TodoWrite` calls in the
+  transcript; `[1] completed` in each of the last five. The stored spine held
+  step 1 behind eleven open rows from a superseded decomposition
+  (`[1.5]`…`[1.8]`, `[1.5a]`…`[1.7c]`) that later batches never re-listed —
+  the append-only merge kept them, the ADR-0049 invariant let them veto, and
+  the model's close was overridden every time. Two amplifiers: the ADR-0052
+  re-base guard counted the synthetic bucket as a ninth step, so an honest
+  `[1]`…`[8]` close-out looked foreign and its eight completions were nested
+  under step 1; and `[3-8]`, `[2-8]`, `[8.1a]`…`[8.1e]` were not tags at all
+  to the parser.
+
+  **Decision.** Snapshot semantics in one narrow place: when a batch closes
+  step N, a sub-task of N it no longer lists is `superseded` — `[-]`, struck
+  through, never ticked, never deleted; a row still listed open keeps its veto
+  (ADR-0049's case, unchanged). Guard sees only the steps the model was shown;
+  relatedness by token overlap; ranges and suffixed sub-keys parse; one prompt
+  paragraph on closing a step.
+
+  **Verification.** Verbatim replay of the incident's final batch against the
+  stored 9-step state: 5/9 → 9/9. `swift run MARVINTests` 686 assertions, 0
+  failed; `tsc --noEmit` clean. Not bumped as a release; ships with the next.
+
 - **2026-09-07 — v0.1.106: plan spine — DoD bullets are criteria, not steps, and `[x]` reads back.**
 
   Trigger: the user showed a finished agri-saas session whose plan card read

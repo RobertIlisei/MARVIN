@@ -19,6 +19,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { discoverAreas, type ProjectAreas } from "@marvin/graphify-bridge";
@@ -60,7 +61,18 @@ export interface PracticeConfig {
   /** Local hour (0–23) the nightly run fires. */
   hour: number;
   weights: PracticeWeights;
-  thresholds: { minSessions: number; minValue: number; turnOverbudgetUsd: number };
+  thresholds: {
+    minSessions: number;
+    minValue: number;
+    /** The evidence share of the score — recurrence, cost, rate — that a
+     *  proposal needs on its own. `value` carries 0.35 of constants
+     *  (reliability + actionability) and its recurrence term saturates at
+     *  eight sessions, so on a 400-session project every templated failure
+     *  clears `minValue` whatever its rate; this is the term that still
+     *  discriminates (2026-09-09). */
+    minEvidence: number;
+    turnOverbudgetUsd: number;
+  };
   /** Per-kind cost that counts as "1.0" in the cost factor. */
   costScale: Record<string, number>;
   /** Sessions after acceptance with no recurrence before a rule is confirmed. */
@@ -73,7 +85,7 @@ export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
   enabled: true,
   hour: 3,
   weights: { recurrence: 0.3, cost: 0.2, rate: 0.15, reliability: 0.2, actionability: 0.15, decay: 0.15 },
-  thresholds: { minSessions: 3, minValue: 0.6, turnOverbudgetUsd: 10 },
+  thresholds: { minSessions: 3, minValue: 0.6, minEvidence: 0.5, turnOverbudgetUsd: 10 },
   costScale: {
     "ship.unreviewed": 1,
     "graph.first.skipped": 15,
@@ -459,6 +471,8 @@ export interface LedgerFinding {
   /** failures / (failures + paired successes), by distinct session; null when unpaired. */
   rate: number | null;
   value: number;
+  /** The evidence share of `value`: recurrence, cost and rate alone, in [0, 1]. */
+  evidence?: number;
   proposedAt?: string;
   dismissedAt?: string;
   dismissReason?: string;
@@ -645,6 +659,15 @@ export function scoreFinding(input: ScoreInput, config: PracticeConfig = readPra
   return scoreWithWeights(scoreFactors(input, config), config.weights);
 }
 
+/** Recurrence, cost and rate, weighted and normalised to [0, 1] — the part
+ *  of the score the transcripts actually supply. */
+export function evidenceWithWeights(f: ScoreFactors, w: PracticeWeights): number {
+  const denom = w.recurrence + w.cost + w.rate;
+  if (denom <= 0) return 0;
+  const v = (w.recurrence * f.recurrence + w.cost * f.cost + w.rate * f.rate) / denom;
+  return Math.round(Math.max(0, Math.min(1, v)) * 1000) / 1000;
+}
+
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
@@ -717,21 +740,31 @@ function emptyFinding(id: string, kind: FingerprintKind, at: string): LedgerFind
   };
 }
 
-/**
- * One run. Reads transcripts whose watermark moved, replaces each session's
- * entry in every finding it touches (so a session that grew is re-counted,
- * never double-counted), rescoring everything, then applies the day-two
- * transitions and verifies active rules.
- */
-export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord {
+/** Everything a run holds between its three phases. */
+interface RunState {
+  projectId: string;
+  started: number;
+  wallStart: number;
+  config: PracticeConfig;
+  ledger: Ledger;
+  areas: ProjectAreas | null;
+  liveGrace: number;
+  files: Array<{ sessionId: string; mtime: number; size: number }>;
+  sessionsRead: number;
+  skippedLive: number;
+  occurrencesTotal: number;
+  statesBefore: Map<string, FindingState>;
+  touched: Set<string>;
+  opts: RunOptions;
+}
+
+/** Phase 1 — read config and ledger, handle an extractor bump, list files. */
+function beginRun(projectId: string, opts: RunOptions): RunState {
   const started = opts.now ?? Date.now();
-  const wallStart = Date.now();
   const config = readPracticeConfig();
   const ledger = readLedger(projectId);
   const listFiles = opts.listSessionFiles ?? defaultListSessionFiles;
-  const readTranscript = opts.readTranscript ?? defaultReadTranscript;
   const areas = opts.areas !== undefined ? opts.areas : defaultAreas(projectId);
-  const liveGrace = opts.liveGraceMs ?? 5 * 60 * 1000;
 
   // Extractor version bump: every count on file was produced by a different
   // definition. Reset to `observed` and re-read everything rather than
@@ -749,63 +782,129 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
   }
   if (opts.force) ledger.watermarks = {};
 
-  const files = listFiles(projectId);
-  let sessionsRead = 0;
-  let skippedLive = 0;
-  let occurrencesTotal = 0;
-  const statesBefore = new Map(Object.entries(ledger.findings).map(([id, f]) => [id, f.state]));
-  const touched = new Set<string>();
+  return {
+    projectId,
+    started,
+    wallStart: Date.now(),
+    config,
+    ledger,
+    areas,
+    liveGrace: opts.liveGraceMs ?? 5 * 60 * 1000,
+    files: listFiles(projectId),
+    sessionsRead: 0,
+    skippedLive: 0,
+    occurrencesTotal: 0,
+    statesBefore: new Map(Object.entries(ledger.findings).map(([id, f]) => [id, f.state])),
+    touched: new Set<string>(),
+    opts,
+  };
+}
 
-  for (const file of files) {
-    if (started - file.mtime < liveGrace) {
-      skippedLive += 1;
-      continue;
+/** Does this session need reading? Live sessions are skipped, watermarked ones unchanged. */
+function wantsRead(st: RunState, file: RunState["files"][number]): boolean {
+  if (st.started - file.mtime < st.liveGrace) {
+    st.skippedLive += 1;
+    return false;
+  }
+  const wm = st.ledger.watermarks[file.sessionId];
+  return !(wm && wm.mtime === file.mtime && wm.size === file.size);
+}
+
+/** Phase 2 — one transcript: replace the session's entry in every finding it
+ *  touches (so a session that grew is re-counted, never double-counted). */
+function ingestSession(st: RunState, file: RunState["files"][number], raw: string): void {
+  const { ledger } = st;
+  const occurrences = extractAll(parseSessionTranscript(file.sessionId, raw), {
+    turnOverbudgetUsd: st.config.thresholds.turnOverbudgetUsd,
+    areas: st.areas,
+  });
+  st.sessionsRead += 1;
+  st.occurrencesTotal += occurrences.length;
+
+  for (const f of Object.values(ledger.findings)) delete f.sessions[file.sessionId];
+  const bySession = new Map<string, LedgerSessionEntry & { first: string }>();
+  for (const occ of occurrences) {
+    const cur = bySession.get(occ.fingerprint) ?? {
+      count: 0,
+      cost: 0,
+      lastAt: occ.at,
+      detail: occ.detail,
+      mtime: file.mtime,
+      first: occ.at,
+    };
+    cur.count += 1;
+    cur.cost += occ.cost;
+    if (occ.at > cur.lastAt) {
+      cur.lastAt = occ.at;
+      cur.detail = occ.detail;
     }
-    const wm = ledger.watermarks[file.sessionId];
-    if (wm && wm.mtime === file.mtime && wm.size === file.size) continue;
+    if (occ.at < cur.first) cur.first = occ.at;
+    bySession.set(occ.fingerprint, cur);
+  }
+  for (const [fingerprint, entry] of bySession) {
+    const kind = kindOf(fingerprint);
+    if (!kind) continue;
+    const f = ledger.findings[fingerprint] ?? emptyFinding(fingerprint, kind, entry.first);
+    ledger.findings[fingerprint] = f;
+    const { first, ...rest } = entry;
+    f.sessions[file.sessionId] = rest;
+    if (first < f.firstSeen) f.firstSeen = first;
+    if (entry.lastAt > f.lastSeen) f.lastSeen = entry.lastAt;
+    st.touched.add(fingerprint);
+  }
+  ledger.watermarks[file.sessionId] = { mtime: file.mtime, size: file.size };
+}
+
+/**
+ * One run. Reads transcripts whose watermark moved, replaces each session's
+ * entry in every finding it touches (so a session that grew is re-counted,
+ * never double-counted), rescoring everything, then applies the day-two
+ * transitions and verifies active rules.
+ *
+ * Synchronous: the test seam and the scheduler. The pane's "Run now" and
+ * the backtest go through `runPracticeAsync`, which yields to the event
+ * loop between transcripts — measured 2026-09-07, a synchronous backtest
+ * over 399 transcripts held the sidecar for 11–13 s, and every live chat
+ * stream with it.
+ */
+export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord {
+  const st = beginRun(projectId, opts);
+  const readTranscript = opts.readTranscript ?? defaultReadTranscript;
+  for (const file of st.files) {
+    if (!wantsRead(st, file)) continue;
     const raw = readTranscript(projectId, file.sessionId);
     if (raw === null) continue;
-    const occurrences = extractAll(parseSessionTranscript(file.sessionId, raw), {
-      turnOverbudgetUsd: config.thresholds.turnOverbudgetUsd,
-      areas,
-    });
-    sessionsRead += 1;
-    occurrencesTotal += occurrences.length;
-
-    // Drop this session's old entries everywhere, then re-add.
-    for (const f of Object.values(ledger.findings)) delete f.sessions[file.sessionId];
-    const bySession = new Map<string, LedgerSessionEntry & { first: string }>();
-    for (const occ of occurrences) {
-      const cur = bySession.get(occ.fingerprint) ?? {
-        count: 0,
-        cost: 0,
-        lastAt: occ.at,
-        detail: occ.detail,
-        mtime: file.mtime,
-        first: occ.at,
-      };
-      cur.count += 1;
-      cur.cost += occ.cost;
-      if (occ.at > cur.lastAt) {
-        cur.lastAt = occ.at;
-        cur.detail = occ.detail;
-      }
-      if (occ.at < cur.first) cur.first = occ.at;
-      bySession.set(occ.fingerprint, cur);
-    }
-    for (const [fingerprint, entry] of bySession) {
-      const kind = kindOf(fingerprint);
-      if (!kind) continue;
-      const f = ledger.findings[fingerprint] ?? emptyFinding(fingerprint, kind, entry.first);
-      ledger.findings[fingerprint] = f;
-      const { first, ...rest } = entry;
-      f.sessions[file.sessionId] = rest;
-      if (first < f.firstSeen) f.firstSeen = first;
-      if (entry.lastAt > f.lastSeen) f.lastSeen = entry.lastAt;
-      touched.add(fingerprint);
-    }
-    ledger.watermarks[file.sessionId] = { mtime: file.mtime, size: file.size };
+    ingestSession(st, file, raw);
   }
+  return finishRun(st);
+}
+
+export async function runPracticeAsync(projectId: string, opts: RunOptions = {}): Promise<RunRecord> {
+  const st = beginRun(projectId, opts);
+  for (const file of st.files) {
+    if (!wantsRead(st, file)) continue;
+    let raw: string | null;
+    if (opts.readTranscript) raw = opts.readTranscript(projectId, file.sessionId);
+    else {
+      try {
+        raw = await readFile(marvinPaths.sessionFile(projectId, file.sessionId), "utf-8");
+      } catch {
+        raw = null;
+      }
+    }
+    if (raw === null) continue;
+    ingestSession(st, file, raw);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return finishRun(st);
+}
+
+/** Phase 3 — rescore, apply the day-two transitions, verify, write. */
+function finishRun(st: RunState): RunRecord {
+  const { ledger, config, started, wallStart, statesBefore, touched, opts } = st;
+  const sessionsRead = st.sessionsRead;
+  const skippedLive = st.skippedLive;
+  const occurrencesTotal = st.occurrencesTotal;
 
   // Sessions in processing order, for "since last seen" and "after acceptance".
   const processedMtimes = Object.entries(ledger.watermarks)
@@ -830,17 +929,19 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
     const sinceLastSeen = lastMtime ? sessionsAfterTime(lastMtime) : 0;
     f.sessionsSinceLastSeen = sinceLastSeen;
 
-    // Rate against the paired success kind, by distinct session.
+    // Rate against the paired success kind, by distinct session. A
+    // namespaced failure (`skill.bypassed:graphify`) pairs with the same
+    // name's success (`skill.invoked:graphify`), never the aggregate.
     const pair = SUCCESS_PAIR[f.kind];
     if (pair) {
-      const s = ledger.findings[pair];
+      const s = ledger.findings[pair + f.id.slice(f.kind.length)];
       const successSessions = s ? Object.keys(s.sessions).length : 0;
       const total = f.distinctSessions + successSessions;
       f.rate = total > 0 ? f.distinctSessions / total : null;
     } else {
       f.rate = null;
     }
-    f.value = scoreFinding(
+    const factors = scoreFactors(
       {
         kind: f.kind,
         distinctSessions: f.distinctSessions,
@@ -850,10 +951,20 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
       },
       config,
     );
+    f.value = scoreWithWeights(factors, config.weights);
+    f.evidence = evidenceWithWeights(factors, config.weights);
 
     const before = statesBefore.get(f.id);
     if (!before) findingsNew += 1;
     else if (touched.has(f.id)) recurring += 1;
+
+    // Nothing left to count and nothing to verify: a session file that went
+    // away, or a kind an extractor bump stopped seeing. Keep the row only
+    // while a rule hangs off it.
+    if (f.distinctSessions === 0 && !f.ruleId) {
+      delete ledger.findings[f.id];
+      continue;
+    }
 
     if (f.polarity === "success") {
       f.state = f.distinctSessions >= config.thresholds.minSessions ? "practice" : "observed";
@@ -864,7 +975,10 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
     // A finding back in the pool (dismissal lifted, rule retired) is judged
     // against the threshold in the SAME run — the evidence is already there.
     const promoteIfCrossed = (): void => {
-      const crossed = f.distinctSessions >= config.thresholds.minSessions && f.value >= config.thresholds.minValue;
+      const crossed =
+        f.distinctSessions >= config.thresholds.minSessions &&
+        f.value >= config.thresholds.minValue &&
+        (f.evidence ?? 1) >= config.thresholds.minEvidence;
       if (!crossed) return;
       if (template) {
         f.state = "proposed";
@@ -914,13 +1028,23 @@ export function runPractice(projectId: string, opts: RunOptions = {}): RunRecord
         // straddles the date, and its earlier hits are not evidence against
         // the rule. `lastAt` is the newest occurrence in that session.
         f.recurrenceAfter = sessionsList.filter((s) => Date.parse(s.lastAt) > acceptedMs).length;
-        if (f.recurrenceAfter > 0) {
+        // Regressed is a RATE, not a hit (2026-09-09). One recurrence in
+        // seven sessions after a fix that had been hitting 44 % of sessions
+        // is the fix holding, and five of six "regressed" rows on a real
+        // project were exactly that. It takes two recurring sessions AND a
+        // rate after acceptance of at least half the rate before it.
+        const hitsBefore = sessionsList.length - f.recurrenceAfter;
+        const processedBefore = processedMtimes.length - f.sessionsAfter;
+        const rateBefore = processedBefore > 0 ? hitsBefore / processedBefore : 0;
+        const rateAfter = f.sessionsAfter > 0 ? f.recurrenceAfter / f.sessionsAfter : 0;
+        const regressedNow = f.recurrenceAfter >= 2 && (rateBefore === 0 || rateAfter >= rateBefore / 2);
+        if (regressedNow) {
           if (f.state !== "regressed") regressed += 1;
           f.state = "regressed";
         } else if (f.sessionsAfter >= config.verifyWindow) {
           // Fired-and-held is a success: the rule met the act and the act
-          // did not recur. Zero fires and zero recurrence is also confirmed —
-          // the behaviour stopped, whichever tier did it.
+          // did not recur at its old rate. Zero fires and zero recurrence is
+          // also confirmed — the behaviour stopped, whichever tier did it.
           if (f.state !== "confirmed") confirmed += 1;
           f.state = "confirmed";
         } else {
@@ -1006,6 +1130,10 @@ export function approveFinding(
   f.acceptedAt = now;
   f.sessionsAfter = 0;
   f.recurrenceAfter = 0;
+  // The rule's clock replaces the fix's; a retired rule must not silently
+  // resume verifying against a fix date the user has moved past.
+  delete f.fixedAt;
+  delete f.fixNote;
   writeLedger(ledger);
   return { ok: true, rule };
 }
@@ -1034,6 +1162,15 @@ export function dismissFinding(projectId: string, findingId: string, reason: str
   const ledger = readLedger(projectId);
   const f = ledger.findings[findingId];
   if (!f) return false;
+  // Dismissing a finding that carries a rule retires the rule: nothing would
+  // verify it any more, and an unverified rule is MemGuard's failure mode.
+  if (f.ruleId) {
+    retireRule(f.ruleId);
+    delete f.ruleId;
+    delete f.acceptedAt;
+    delete f.sessionsAfter;
+    delete f.recurrenceAfter;
+  }
   f.state = "dismissed";
   delete f.fixedAt;
   delete f.fixNote;
@@ -1377,7 +1514,13 @@ export function armPracticeSchedule(args: {
   now?: () => Date;
 }): () => void {
   if (scheduleTimer) clearInterval(scheduleTimer);
-  const run = args.run ?? ((id: string) => runPractice(id, { trigger: "schedule" }));
+  const run =
+    args.run ??
+    ((id: string) => {
+      void runPracticeAsync(id, { trigger: "schedule" }).catch(() => {
+        /* a failed run must never take the timer down */
+      });
+    });
   const now = args.now ?? (() => new Date());
   const tick = () => {
     const config = readPracticeConfig();

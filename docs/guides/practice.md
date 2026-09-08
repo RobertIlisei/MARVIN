@@ -40,14 +40,17 @@ sessions on disk ─▶ extractors ─▶ findings (per project) ─▶ score �
 2. **Findings** collect occurrences per project, counted by **distinct
    session**. Thirty hits of the same wall in one session is one lesson.
 3. **Score** is a small linear model over recurrence, cost, rate, reliability
-   and actionability, minus decay. Three sessions and a score of 0.6 make a
+   and actionability, minus decay. Three sessions, a score of 0.6 and an
+   evidence share of 0.5 (recurrence, cost and rate on their own) make a
    finding **proposed**.
 4. **You decide.** Approve creates a rule. Dismiss silences it until it
    recurs at double the count. Fixed in MARVIN says you changed MARVIN's code
    instead.
 5. **Enforcement** happens at one of three tiers (below).
-6. **Verification** runs on the next sessions. A recurrence after acceptance
-   is `regressed`; five quiet sessions are `confirmed`.
+6. **Verification** runs on the next sessions. Two recurring sessions after
+   acceptance at half the old rate or more is `regressed`; five sessions
+   below that are `confirmed`. The row shows `N of M since rule` (or `since
+   fix`) so you can see the ratio behind either verdict.
 
 ---
 
@@ -106,8 +109,8 @@ confirmed or dismissed ones fold away.
 | `proposed` | earned a rule; waiting on you |
 | `active` | rule accepted, verification running |
 | `fixed` | you changed MARVIN's code for it; verification running |
-| `regressed` | it happened again after the rule or fix |
-| `confirmed` | five quiet sessions since |
+| `regressed` | it kept happening after the rule or fix — two sessions, at half the old rate or more |
+| `confirmed` | five sessions since, below that |
 | `dismissed` | silenced, with your reason |
 | `report` | report-only kind past the threshold |
 
@@ -226,7 +229,7 @@ proposal.
    fixed it, dismiss the third with a reason.
 3. Leave **Nightly** on. Come back in a week. Rules that held say
    `confirmed`; anything that did not says `regressed`, with an escalate
-   button next to it.
+   button next to it (or, for a fix, an Approve menu to try a rule instead).
 4. Once a few outcomes exist, try **Fit weights**.
 
 ---

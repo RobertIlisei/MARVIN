@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.106
+code. Written for contributors and deep evaluators. Covers v0.1.107
 (2026-09-07). Where this document and the repository disagree, the
 repository wins.*
 
@@ -264,7 +264,13 @@ tier, on/off state and message are editable from the pane; when no row
 exists the gate runs natively, which is why the 93 gate tests did not move.
 ADR-0104's brakes apply to every family: a deny needs a discharge path,
 `measure` mode logs instead of denying, two denies per rule per turn, and a
-bypass is logged. Since v0.1.104 three more MARVIN-owned hooks came out of
+bypass is logged — since v0.1.107 the graphify-first and advisor-on-ADR
+gates included (`BUILTIN_GATE_MAX_DENIES`; they had been one-shot), with the
+bypass counted on the gate's row. v0.1.107 also made `regressed` a rate (two
+recurring sessions at half the pre-acceptance rate), added an evidence
+threshold to the proposal test, moved the runner to `runPracticeAsync`, and
+shipped extractor v7 after an audit found five of six regressed rows on a
+real project to be the loop misreading its own gates (ADR-0105 addendum). Since v0.1.104 three more MARVIN-owned hooks came out of
 the first practice report: a bare project-local skill name is rewritten to
 its plugin-namespaced form at the gate (the ADR-0058 `updatedInput`
 mechanism), a `PostToolUseFailure` hook remembers a failed Bash command for

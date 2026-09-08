@@ -184,7 +184,7 @@ describe("practice extractors (ADR-0105 §1)", () => {
   it("finds the paired successes in the good session, and no failures", () => {
     const occ = extractAll(parseSessionTranscript("s2", goodSession("2026-09-01")));
     const names = occ.map((o) => o.fingerprint).sort();
-    expect(names).toEqual(["graph.first.followed", "scope.met.present", "ship.reviewed", "skill.invoked", "turn.continued"]);
+    expect(names).toEqual(["graph.first.followed", "scope.met.present", "ship.reviewed", "skill.invoked:security-audit", "turn.continued"]);
   });
 
   it("ignores subagent calls entirely", () => {
@@ -222,7 +222,7 @@ describe("phase 2 extractors", () => {
       "skill.bypassed:pr-review",
     ]);
     const invokedFirst = jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "review this", tools: [skill("marvin:pr-review"), skillRead("pr-review")], text: "ok?" }));
-    expect(ids(invokedFirst)).toEqual(["skill.invoked"]);
+    expect(ids(invokedFirst)).toEqual(["skill.invoked:pr-review"]);
     const occ = extractAll(parseSessionTranscript("p2", jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "m", tools: [skillRead("tdd"), skillRead("tdd"), skillRead("tdd")] }))));
     expect(occ.find((o) => o.fingerprint === "skill.bypassed:tdd")?.cost).toBe(3);
     // A shell listing of the folder names the skill, not its arguments.
@@ -387,7 +387,14 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
 
     const acceptedAt = Date.parse(readRules()[0]!.acceptedAt);
     files.set("d", { raw: badSession("2027-01-04"), mtime: acceptedAt + 1000 }); // occurrences dated AFTER acceptance
-    const r = runPractice(projectId, { ...seams, now: acceptedAt + 2000 });
+    const one = runPractice(projectId, { ...seams, now: acceptedAt + 2000 });
+    // One recurring session is not a regression (2026-09-09): the rate before
+    // was 3 of 3 sessions, one of one after is above half of it, but a single
+    // session is not evidence. Two are.
+    expect(one.regressed).toBe(0);
+    expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("active");
+    files.set("d2", { raw: badSession("2027-01-05"), mtime: acceptedAt + 1500 });
+    const r = runPractice(projectId, { ...seams, now: acceptedAt + 3000 });
     expect(r.regressed).toBe(1);
     expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("regressed");
     expect(escalateFinding(projectId, "ship.unreviewed").ok).toBe(false); // deny is the top
@@ -395,7 +402,9 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     // A nudge-tier rule escalates to deny and restarts verification.
     const g = approveFinding(projectId, "graph.first.skipped");
     expect(g.ok && g.rule.tier).toBe("nudge");
-    files.set("e", { raw: badSession("2027-01-05"), mtime: Date.parse((g as { rule: PracticeRule }).rule.acceptedAt) + 1000 });
+    const gAt = Date.parse((g as { rule: PracticeRule }).rule.acceptedAt);
+    files.set("e", { raw: badSession("2027-01-06"), mtime: gAt + 1000 });
+    files.set("e2", { raw: badSession("2027-01-07"), mtime: gAt + 1500 });
     runPractice(projectId, { ...seams, now: Date.now() + 5000 });
     expect(readLedger(projectId).findings["graph.first.skipped"]?.state).toBe("regressed");
     const esc = escalateFinding(projectId, "graph.first.skipped");
@@ -432,14 +441,109 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     expect(rc.confirmed).toBe(1);
     expect(readLedger(projectId).findings["ship.unreviewed"]?.state).toBe("confirmed");
 
+    // A fix that did not hold: the rate after is the rate before. Here the
+    // five quiet sessions above sit AFTER this later fix by mtime, so two
+    // recurrences in seven are below half the old rate and the fix is
+    // confirmed — the pane shows "2 of 7 since fix" and the user decides.
     expect(markFindingFixed(projectId, "graph.first.skipped", "pre-orientation")).toBe(true);
     const fx2 = Date.parse(readLedger(projectId).findings["graph.first.skipped"]!.fixedAt!);
     files.set("bad-again", { raw: badSession("2027-01-20"), mtime: fx2 + 1000 });
+    files.set("bad-again-2", { raw: badSession("2027-01-21"), mtime: fx2 + 1500 });
     runPractice(projectId, { ...seams, now: fx2 + 2000 });
     f = readLedger(projectId).findings["graph.first.skipped"]!;
+    expect(f.recurrenceAfter).toBe(2);
+    expect(f.sessionsAfter).toBe(7);
+    expect(f.state).toBe("confirmed");
+
+    // On a fresh ledger with nothing quiet after the fix, two recurring
+    // sessions at the old rate ARE a regression, and there is nothing to escalate.
+    const p2 = "p-fix-regressed";
+    runPractice(p2, { ...seams, now: day(3) + 1 });
+    expect(markFindingFixed(p2, "graph.first.skipped", "pre-orientation")).toBe(true);
+    const fx3 = Date.parse(readLedger(p2).findings["graph.first.skipped"]!.fixedAt!);
+    files.set("bad-again", { raw: badSession("2027-01-20"), mtime: fx3 + 1000 });
+    files.set("bad-again-2", { raw: badSession("2027-01-21"), mtime: fx3 + 1500 });
+    runPractice(p2, { ...seams, now: fx3 + 2000 });
+    f = readLedger(p2).findings["graph.first.skipped"]!;
     expect(f.state).toBe("regressed");
     expect(f.ruleId).toBeUndefined();
-    expect(escalateFinding(projectId, "graph.first.skipped").ok).toBe(false); // nothing to escalate
+    expect(escalateFinding(p2, "graph.first.skipped").ok).toBe(false); // nothing to escalate
+  });
+
+  it("2026-09-09: what the extractors no longer count, and what they now do", () => {
+    const denyRead = (p: string) => ({ name: "Read", input: { file_path: p }, error: "graphify-first: Read on `x` would be the first structural search" });
+    const grep = (q: string) => ({ name: "Bash", input: { command: `grep -n "${q}" /p/src` } });
+    const shipDeny = { name: "Bash", input: { command: "git commit -m x" }, error: "ship-review gate (ADR-0104): this commit seals 7 files, and `pr-review` has not run" };
+    const commit = { name: "Bash", input: { command: "git commit -m x" } };
+    const wakeup = { name: "mcp__marvin-control__schedule_wakeup", input: { seconds: 90 } };
+    const cwdInit = { type: "cli.event", at: "2026-09-08T10:00:00Z", event: { type: "system", subtype: "init", cwd: "/p" } };
+    const ids = (lines: Line[]) => extractAll(parseSessionTranscript("p3", jsonl([cwdInit, ...lines]))).map((o) => o.fingerprint);
+
+    // A refused read is not a read; a wakeup turn is not judged graph-first.
+    const refusedThenSix = ids(turn({ at: "2026-09-08T10:00:00Z", message: "look", tools: [denyRead("/p/src/a.ts"), ...reads(4)], text: "?" }));
+    expect(refusedThenSix).not.toContain("graph.first.skipped"); // 4 real reads, under the five-read opportunity
+    const wake = ids(turn({ at: "2026-09-08T10:00:00Z", message: "[scheduled wakeup — background job done]", tools: [grep("a"), ...reads(6)], text: "?" }));
+    expect(wake).not.toContain("graph.first.skipped");
+
+    // A ship-review refusal is not a command failure; the commit it let through IS unreviewed.
+    const waitedOut = ids(turn({ at: "2026-09-08T10:00:00Z", message: "commit", tools: [shipDeny, shipDeny, commit], text: "Committed." }));
+    expect(waitedOut).not.toContain("command.retried");
+    expect(waitedOut).toContain("ship.unreviewed");
+    const reviewedBetween = ids(turn({ at: "2026-09-08T10:00:00Z", message: "commit", tools: [shipDeny, { name: "Skill", input: { skill: "pr-review" } }, commit], text: "Committed." }));
+    expect(reviewedBetween).not.toContain("ship.unreviewed");
+
+    // A turn that armed a wakeup handed off, whatever it said last.
+    const handoff = ids(turn({ at: "2026-09-08T10:00:00Z", message: "fix it", tools: [edit, ...filler(9), wakeup], text: "Compile is running now; I'll react to its result." }));
+    expect(handoff).not.toContain("scope.met.missing");
+
+    // A finished plan is not stale; the next HUMAN turn counts, a wakeup does not.
+    const open = { name: "TodoWrite", input: { todos: [{ content: "[1] x", status: "in_progress" }] } };
+    const closed = { name: "TodoWrite", input: { todos: [{ content: "[1] x", status: "completed" }] } };
+    const finished = ids([
+      ...turn({ at: "2026-09-08T10:00:00Z", message: "plan", tools: [open], text: "?" }),
+      ...turn({ at: "2026-09-08T10:10:00Z", message: "go", tools: [edit, edit, edit, closed], text: "Done. ?" }),
+      ...turn({ at: "2026-09-08T10:20:00Z", message: "docs", tools: [edit, edit, edit, edit], text: "?" }),
+      ...turn({ at: "2026-09-08T10:30:00Z", message: "next", text: "?" }),
+    ]);
+    expect(finished).not.toContain("plan.stale");
+    const viaWakeup = ids([
+      ...turn({ at: "2026-09-08T10:00:00Z", message: "plan", tools: [open], text: "?" }),
+      ...turn({ at: "2026-09-08T10:10:00Z", message: "go", tools: [edit, edit, edit], text: "?" }),
+      ...turn({ at: "2026-09-08T10:20:00Z", message: "[scheduled wakeup — background job done]", text: "?" }),
+      ...turn({ at: "2026-09-08T10:30:00Z", message: "next", tools: [open], text: "?" }),
+    ]);
+    expect(viaWakeup).toContain("plan.kept");
+    expect(viaWakeup).not.toContain("plan.stale");
+
+    // A skill invoked in an earlier turn is followed, not bypassed, when its files are read later.
+    const later = ids([
+      ...turn({ at: "2026-09-08T10:00:00Z", message: "graph", tools: [{ name: "Skill", input: { skill: "graphify" } }], text: "?" }),
+      ...turn({ at: "2026-09-08T10:10:00Z", message: "update", tools: [{ name: "Read", input: { file_path: "/Users/x/.claude/skills/graphify/references/update.md" } }], text: "?" }),
+    ]);
+    expect(later).toContain("skill.invoked:graphify");
+    expect(later).not.toContain("skill.bypassed:graphify");
+
+    // The overbudget report says where the money went.
+    const pricey = extractAll(parseSessionTranscript("p3", jsonl(turn({ at: "2026-09-08T10:00:00Z", message: "big", text: "?", costUsd: 12, cacheCreation: 480_000 }))));
+    expect(pricey.find((o) => o.fingerprint === "turn.overbudget")?.detail).toContain("480k cache-creation tokens");
+  });
+
+  it("2026-09-09: a namespaced failure rates against its own skill, and dismissing a ruled finding retires the rule", () => {
+    const sess = (n: number) => jsonl([
+      ...turn({ at: `2026-09-0${n}T10:00:00Z`, message: "a", tools: [{ name: "Skill", input: { skill: "pr-review" } }], text: "?" }),
+      ...turn({ at: `2026-09-0${n}T11:00:00Z`, message: "b", tools: [{ name: "Read", input: { file_path: "/Users/x/.claude/skills/hetzner-ssh/SKILL.md" } }], text: "?" }),
+    ]);
+    for (let i = 1; i <= 3; i++) files.set(`s${i}`, { raw: sess(i), mtime: day(i) });
+    runPractice(projectId, { ...seams, now: day(3) + 1 });
+    const led = readLedger(projectId);
+    expect(led.findings["skill.bypassed:hetzner-ssh"]?.rate).toBe(1); // no hetzner-ssh invocations: 3 of 3
+    expect(led.findings["skill.invoked:pr-review"]?.distinctSessions).toBe(3);
+    expect(led.findings["skill.bypassed:hetzner-ssh"]?.state).toBe("proposed");
+    const ap = approveFinding(projectId, "skill.bypassed:hetzner-ssh");
+    expect(ap.ok).toBe(true);
+    expect(dismissFinding(projectId, "skill.bypassed:hetzner-ssh", "reads are fine here")).toBe(true);
+    expect(readRules()[0]?.status).toBe("retired");
+    expect(readLedger(projectId).findings["skill.bypassed:hetzner-ssh"]?.ruleId).toBeUndefined();
   });
 
   it("dismiss suppresses until distinct sessions double, then re-surfaces", () => {

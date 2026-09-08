@@ -316,3 +316,55 @@ Phases 2–6 (v0.1.103):
 - [x] Weight fit: pinned worked examples reproduce through `scoreFactors`; a predictive factor's weight rises; sum is one; cost-share fallback below eight labels; nothing written until applied — tested.
 - [x] Draft: packet is aggregates only (asserted transcript-free), two-line parse, malformed output fails closed — tested through the dispatch seam.
 - [x] Pane: Built-in gates group, Fit weights sheet, Draft message sheets, promotion banner, fit provenance line.
+
+## Addendum (2026-09-09) — the first regressed backlog was the loop measuring itself
+
+The 2026-09-08 pane for a 404-session project showed six `regressed` rows,
+each labelled *the code fix did not hold*. Opening the transcripts behind
+them: five rested on **one** recurring session in seven after the fix, and
+of those, three were extractor misreadings and one was a gate artefact.
+
+| row | what the transcript held |
+|---|---|
+| `scope.met.missing` | the turn ended "Compile is running in the background now; I'll react to its result automatically" after `run_background_job` + `schedule_wakeup` — a handoff none of the prose patterns matched |
+| `plan.stale` | four doc edits after a plan whose every item was completed, judged against a checklist with nothing left to tick |
+| `command.retried` | `git commit` refused twice by the ship-review gate and allowed on the third identical try — the refusals counted as failures, the allowed commit was invisible |
+| `graph.first.skipped` | a wakeup turn: one grep refused, then six greps and reads with no graph call, the refused call counted as the first read |
+| `skill.bypassed:*` | one hand-read of `SKILL.md` in one session, down from 32 sessions |
+
+Three of the four hand-written gates were also **one-shot**: graphify-first
+stopped after one refusal (`graphifyHookFired`), advisor-on-ADR exempted a
+path after refusing it once, and ship-review allowed the third try. Each
+had a second, silent discharge — try again — and the extractors then scored
+that as behaviour.
+
+**What changed.**
+
+- **Extractor v7.** A call a gate refused is not a read, a failed command or
+  a commit. A commit allowed after ship-review refusals with no review skill
+  run in between is `ship.unreviewed`. A wakeup turn is not judged
+  graph-first. A turn that armed a wakeup or a background job in its last
+  three calls handed off. `plan.stale` needs an open plan and looks at the
+  next human turn. A skill invoked earlier in the session is followed, not
+  bypassed, when its files are read later. Successes are per skill
+  (`skill.invoked:<name>`), so a bypass rate divides by that skill's own
+  invocations. The overbudget detail carries the cache-creation share.
+- **Regressed is a rate.** §2's row *active + an occurrence after acceptedAt
+  → regressed* now reads: two or more recurring sessions after acceptance
+  **and** a rate after of at least half the rate before. Below that, five
+  sessions confirm, and the pane shows `N of M since fix` either way.
+- **Evidence threshold.** §3's proposal test gains `minEvidence` (0.5): the
+  weighted share of recurrence, cost and rate alone. `value` carries 0.35 of
+  constants and saturates at eight sessions, so on a large project it
+  stopped discriminating.
+- **Every gate has the brake.** graphify-first and advisor-on-ADR deny at
+  most `BUILTIN_GATE_MAX_DENIES` (2) per turn, then allow and count the
+  bypass on their row, as ship-review already did. The advisor cap is per
+  turn, not per path.
+- **The run yields.** `runPracticeAsync` reads transcripts off the event
+  loop and yields between them; the measured 11–13 s synchronous backtest
+  had been stalling every live chat stream.
+- Smaller: dismissing a ruled finding retires the rule; approving clears a
+  fix's clock; a finding with no sessions and no rule is dropped; the pane
+  hides the constant score on the Working tab and offers Approve on a
+  regressed fix.

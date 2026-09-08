@@ -327,12 +327,37 @@ function ownCalls(turn: ParsedTurn): ParsedToolCall[] {
   return turn.tools.filter((c) => !c.parentId);
 }
 
+/** A tool_result that is one of MARVIN's own gates refusing the call. The
+ *  call never ran, so it is not a read, not a failed command and not a
+ *  commit. The 2026-09-08 ledger counted a refused grep as the first of
+ *  "7 source reads" and two ship-review refusals as a command "re-run
+ *  unchanged" — the gate firing, scored as the behaviour it exists to stop. */
+function isGateDeny(call: ParsedToolCall): boolean {
+  if (!call.isError || !call.result) return false;
+  const r = call.result;
+  return HOOK_DENY_PREFIXES.some(({ regex }) => regex.test(r));
+}
+
+const BACKGROUND_HANDOFF_TOOL = /(^|__)(schedule_wakeup|run_background_job)$/;
+
+/** A turn that armed a wakeup or started a background job in its last few
+ *  calls handed off to the runtime, whatever its closing sentence says.
+ *  Measured 2026-09-08: "Compile is running in the background now; I'll
+ *  react to its result automatically" matched none of the prose patterns
+ *  and the turn was scored as a missing scope-met handoff. */
+function endsInBackgroundHandoff(turn: ParsedTurn): boolean {
+  return ownCalls(turn)
+    .slice(-3)
+    .some((c) => BACKGROUND_HANDOFF_TOOL.test(c.name) && !c.isError);
+}
+
 /** Mirrors the graphify-first gate exactly (`bash-search.ts`): a source-file
  *  Read inside the project, or a search-shaped Bash command whose root is
  *  inside it. `cat docs/x.md` and a `find` under `~/.claude` are neither —
- *  the 2026-09-07 ledger counted ten of those as "source reads". */
+ *  the 2026-09-07 ledger counted ten of those as "source reads". A call a
+ *  gate refused read nothing. */
 function isSourceRead(call: ParsedToolCall, cwd: string | null): boolean {
-  if (call.parentId) return false;
+  if (call.parentId || isGateDeny(call)) return false;
   if (call.name === "Read") {
     const p = typeof call.input.file_path === "string" ? call.input.file_path : "";
     return isSourceFile(p) && (cwd === null || isInsideCwd(cwd, p));
@@ -393,16 +418,40 @@ function shipCommits(s: ParsedSession): Occurrence[] {
   const out: Occurrence[] = [];
   let reviewed = false;
   for (const turn of s.turns) {
+    // ADR-0104 lets a commit through after two refusals. The refusal text
+    // says what the diff needed, so a commit that lands in the same turn
+    // with no review skill run since the refusal is the gate being waited
+    // out — the one unreviewed commit the command-line heuristic below is
+    // blind to (the third try names no files). 2026-09-03: exactly that.
+    let gateDenies = 0;
     for (const call of ownCalls(turn)) {
       if (call.name === "Skill") {
         const skill = typeof call.input.skill === "string" ? call.input.skill : "";
-        if (REVIEW_SKILL.test(skill)) reviewed = true;
+        if (REVIEW_SKILL.test(skill)) {
+          reviewed = true;
+          gateDenies = 0;
+        }
         continue;
       }
       if (call.name !== "Bash") continue;
       const cmd = typeof call.input.command === "string" ? call.input.command : "";
       if (!COMMIT_CMD.test(cmd)) continue;
-      if (call.isError) continue; // the gate refused it — that is a rule holding, not a commit
+      if (call.isError) {
+        if (call.result && /ship-review gate/.test(call.result)) gateDenies += 1;
+        continue; // the gate refused it — that is a rule holding, not a commit
+      }
+      if (gateDenies > 0) {
+        out.push({
+          fingerprint: "ship.unreviewed",
+          sessionId: s.sessionId,
+          turnId: turn.turnId,
+          at: turn.startedAt,
+          cost: 1,
+          detail: `commit allowed after ${gateDenies} ship-review refusal${gateDenies === 1 ? "" : "s"} with no review skill run in between`,
+        });
+        gateDenies = 0;
+        continue;
+      }
       const named = cmd.match(/[\w./-]+\.[a-z]{1,5}\b|\.gitlab-ci\.ya?ml|Dockerfile|sudoers/gi) ?? [];
       const boundary = named.filter((p) => SHIP_BOUNDARY.test(p));
       if (boundary.length === 0) continue;
@@ -429,6 +478,10 @@ const shipReviewed: Extractor = (s) => shipCommits(s).filter((o) => o.fingerprin
 function graphFirstTurns(s: ParsedSession): Occurrence[] {
   const out: Occurrence[] = [];
   for (const turn of s.turns) {
+    // A wakeup continues work the turn before already oriented; every other
+    // extractor skips machine turns and this one read a 7-grep wakeup as
+    // "no graph call at all" (2026-09-08).
+    if (turn.machine) continue;
     let readsBeforeGraph = 0;
     let totalReads = 0;
     let graphSeen = false;
@@ -477,7 +530,7 @@ function turnEndings(s: ParsedSession): Occurrence[] {
     const turn = s.turns[i]!;
     const next = s.turns[i + 1]!;
     if (turn.machine || next.machine || turn.error) continue;
-    const ending = classifyTurnEnding(turn.lastText);
+    const ending = endsInBackgroundHandoff(turn) ? "background" : classifyTurnEnding(turn.lastText);
     if (ending === "stopped" && BARE_CONTINUE.test(next.message)) {
       const waited = turn.endedAt ? secondsBetween(turn.endedAt, next.startedAt) : 0;
       out.push({
@@ -513,7 +566,7 @@ function scopeMetTurns(s: ParsedSession): Occurrence[] {
     const own = ownCalls(turn);
     const mutations = own.filter((c) => c.name === "Edit" || c.name === "Write").length;
     if (mutations < 1 || own.length < 10) continue;
-    const ending = classifyTurnEnding(turn.lastText);
+    const ending = endsInBackgroundHandoff(turn) ? "background" : classifyTurnEnding(turn.lastText);
     // A question is a handoff too (ADR-0067 gates on a real trade-off); only
     // a turn that simply stopped, or ended empty, is missing its handoff.
     if (ending === "background" || ending === "blocked-on-human" || ending === "asked" || ending === "scope-not-met") continue;
@@ -589,7 +642,7 @@ const hookDenyRepeated: Extractor = (s) => {
       turnId,
       at,
       cost: n,
-      detail: `the ${rule} gate was hit again ${n} times in the same turn after a deny`,
+      detail: `the ${rule} gate denied ${n} more call${n === 1 ? "" : "s"} in turns it had already refused once`,
     });
   }
   return out;
@@ -629,14 +682,19 @@ const SKILL_DIR = /(^|[/\s])\.(claude|marvin)\/skills\/([A-Za-z0-9._-]+)(?:\/|\s
 const skillBase = (name: string): string => (name.split(":").pop() ?? name).trim().toLowerCase();
 
 /** Skills read by hand vs invoked. A `Read` (or read-shaped Bash) into a
- *  skill's folder with no `Skill` call for that name earlier in the turn is
- *  the model re-deriving what the tool would have loaded for it. */
+ *  skill's folder with no `Skill` call for that name earlier in the SESSION
+ *  is the model re-deriving what the tool would have loaded for it. Earlier
+ *  in the session, not the turn: a skill's own body says "see
+ *  references/x.md", and reading that two turns after invoking it is the
+ *  skill being followed (2026-09-07: twelve such reads scored as a bypass).
+ *  Successes are per skill (`skill.invoked:<name>`) so a bypass rate is
+ *  measured against that skill's own invocations, not every skill's. */
 function skillUsage(s: ParsedSession): Occurrence[] {
   const out: Occurrence[] = [];
+  const invokedEarlier = new Set<string>(); // names invoked in a previous turn
   for (const turn of s.turns) {
     const own = ownCalls(turn);
-    const invoked = new Map<string, number>(); // name → seq
-    let anySkill = false;
+    const invoked = new Map<string, number>(); // name → seq, this turn
     const bypassed = new Map<string, number>();
     // A turn that EDITS a skill's folder is maintaining the skill, and reading
     // it first is how an edit is done — not a bypass. (2026-09-03: a backlog
@@ -652,10 +710,7 @@ function skillUsage(s: ParsedSession): Occurrence[] {
     for (const call of own) {
       if (call.name === "Skill") {
         const name = typeof call.input.skill === "string" ? skillBase(call.input.skill) : "";
-        if (name) {
-          invoked.set(name, call.seq);
-          anySkill = true;
-        }
+        if (name && !invoked.has(name)) invoked.set(name, call.seq);
         continue;
       }
       let target = "";
@@ -667,7 +722,7 @@ function skillUsage(s: ParsedSession): Occurrence[] {
       const m = target ? SKILL_DIR.exec(target) : null;
       if (!m) continue;
       const name = (m[3] ?? "").toLowerCase();
-      if (edited.has(name)) continue;
+      if (edited.has(name) || invokedEarlier.has(name)) continue;
       const at = invoked.get(name);
       if (at !== undefined && at < call.seq) continue;
       bypassed.set(name, (bypassed.get(name) ?? 0) + 1);
@@ -682,21 +737,22 @@ function skillUsage(s: ParsedSession): Occurrence[] {
         detail: `read ${reads} file${reads === 1 ? "" : "s"} of the \`${name}\` skill by hand instead of invoking it`,
       });
     }
-    if (anySkill) {
+    for (const name of invoked.keys()) {
       out.push({
-        fingerprint: "skill.invoked",
+        fingerprint: `skill.invoked:${name}`,
         sessionId: s.sessionId,
         turnId: turn.turnId,
         at: turn.startedAt,
         cost: 1,
-        detail: `invoked ${[...invoked.keys()].slice(0, 3).join(", ")} through the Skill tool`,
+        detail: `invoked \`${name}\` through the Skill tool`,
       });
+      invokedEarlier.add(name);
     }
   }
   return out;
 }
 const skillBypassed: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint.startsWith("skill.bypassed:"));
-const skillInvoked: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint === "skill.invoked");
+const skillInvoked: Extractor = (s) => skillUsage(s).filter((o) => o.fingerprint.startsWith("skill.invoked:"));
 
 /** The two review skills' documented finding formats. Conservative: nit-only
  *  or clean reports do not count as findings. "N critical" followed by "CVE"
@@ -744,20 +800,38 @@ function reviewOutcome(s: ParsedSession): Occurrence[] {
 const reviewIgnored: Extractor = (s) => reviewOutcome(s).filter((o) => o.fingerprint === "review.ignored");
 const reviewActed: Extractor = (s) => reviewOutcome(s).filter((o) => o.fingerprint === "review.acted");
 
-/** A plan that was started (a TodoWrite in an earlier turn) and then left
- *  behind by a turn that did real work without touching it — or the next. */
+/** A plan that is OPEN (its last TodoWrite still had an unfinished item) and
+ *  then left behind by a turn that did real work without touching it — or
+ *  the next human turn. A plan whose every item is completed is done, not
+ *  stale: the 2026-09-08 "regression" was four doc edits after a finished
+ *  plan, judged against a checklist with nothing left to tick. */
 function planTracking(s: ParsedSession): Occurrence[] {
   const out: Occurrence[] = [];
-  let todoSeen = false;
+  let planOpen = false;
   const hasTodo = (t: ParsedTurn): boolean => ownCalls(t).some((c) => c.name === "TodoWrite");
+  const openAfter = (t: ParsedTurn): boolean | null => {
+    let state: boolean | null = null;
+    for (const c of ownCalls(t)) {
+      if (c.name !== "TodoWrite") continue;
+      const todos = Array.isArray(c.input.todos) ? (c.input.todos as Array<Record<string, unknown>>) : [];
+      state = todos.some((x) => x && typeof x === "object" && x.status !== "completed");
+    }
+    return state;
+  };
+  const nextHuman = (i: number): ParsedTurn | null => {
+    for (let j = i + 1; j < s.turns.length; j++) if (!s.turns[j]!.machine) return s.turns[j]!;
+    return null;
+  };
   for (let i = 0; i < s.turns.length; i++) {
     const turn = s.turns[i]!;
-    const seenBefore = todoSeen;
-    if (hasTodo(turn)) todoSeen = true;
-    if (!seenBefore || turn.machine || i === s.turns.length - 1) continue;
+    const openBefore = planOpen;
+    const after = openAfter(turn);
+    if (after !== null) planOpen = after;
+    const next = nextHuman(i);
+    if (!openBefore || turn.machine || !next) continue;
     const edits = ownCalls(turn).filter((c) => c.name === "Edit" || c.name === "Write").length;
     if (edits < 3) continue;
-    const kept = hasTodo(turn) || hasTodo(s.turns[i + 1]!);
+    const kept = hasTodo(turn) || hasTodo(next);
     out.push({
       fingerprint: kept ? "plan.kept" : "plan.stale",
       sessionId: s.sessionId,
@@ -916,7 +990,7 @@ function commandRetries(s: ParsedSession): Occurrence[] {
   for (const turn of s.turns) {
     const failures = new Map<string, number>();
     for (const c of ownCalls(turn)) {
-      if (c.name !== "Bash" || !c.isError) continue;
+      if (c.name !== "Bash" || !c.isError || isGateDeny(c)) continue;
       const cmd = typeof c.input.command === "string" ? c.input.command.replace(/\s+/g, " ").trim() : "";
       if (!cmd) continue;
       failures.set(cmd, (failures.get(cmd) ?? 0) + 1);
@@ -977,7 +1051,11 @@ const turnOverbudget: Extractor = (s) => {
       turnId: turn.turnId,
       at: turn.endedAt ?? turn.startedAt,
       cost: turn.costUsd,
-      detail: `one turn cost $${turn.costUsd.toFixed(2)} (threshold $${overbudgetThreshold})`,
+      // The cache-creation count says whether the money went on context
+      // (a re-created prompt cache) or on work; the report is useless without it.
+      detail:
+        `one turn cost $${turn.costUsd.toFixed(2)} (threshold $${overbudgetThreshold}); ` +
+        `${Math.round(turn.cacheCreationTokens / 1000)}k cache-creation tokens, ${ownCalls(turn).length} tool calls`,
     });
   }
   return out;
@@ -1011,7 +1089,13 @@ export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
 /** Bump when an extractor's definition changes; the ledger records it per
  *  finding so a count produced by an older definition is never compared
  *  against one from a newer definition as if they were the same measurement. */
-export const EXTRACTOR_VERSION = 6;
+export const EXTRACTOR_VERSION = 7;
+// v7 (2026-09-09): a call a gate refused is not a read, a failed command or a commit; a
+//   commit allowed after ship-review refusals with no review in between IS unreviewed; a
+//   wakeup turn is not judged graph-first; a turn that armed a wakeup / background job
+//   handed off; plan.stale needs an OPEN plan and looks at the next HUMAN turn; a skill
+//   invoked earlier in the session is followed, not bypassed; successes are per skill;
+//   the overbudget detail carries the cache-creation share
 // v3 (2026-09-03): Phase 2 kinds — skill / review / plan / command / budget
 // v4 (2026-09-04): a scope-NOT-met handoff is a handoff; pre-orientation counts
 //   as the first graph call; reading a skill you edit this turn is not a bypass

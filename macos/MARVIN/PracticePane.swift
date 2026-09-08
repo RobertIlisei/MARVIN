@@ -179,7 +179,7 @@ struct PracticePane: View {
                     howRow("Every night", "plain code reads this project's session transcripts and counts each failure kind by distinct session — and the same act done right, so a finding carries a rate.")
                     howRow("Proposed", "three sessions and a score of 0.6. Approve makes a rule; Dismiss silences it with a reason; Fixed in MARVIN says you changed MARVIN's code.")
                     howRow("Tiers", "prompt = a line in the system prompt. nudge = the call runs, MARVIN sees the message first. deny = the call is refused, twice per turn, then allowed and counted. A deny needs a checkable way out, or it acts as a nudge.")
-                    howRow("Verified", "a recurrence after acceptance is regressed; five quiet sessions confirm. Same for a fix.")
+                    howRow("Verified", "regressed means two recurring sessions after acceptance at half the old rate or more; five sessions below that confirm. Same for a fix.")
                     howRow("Built-in gates", "MARVIN's own gates are rows too — tier, off, message, fired counts. No row means native behaviour.")
                     howRow("Never", "no model reads a transcript; nothing changes without your click. Draft message is the only model call, and it sees aggregates.")
                     Text("Full guide: docs/guides/practice.md · design: ADR-0105")
@@ -205,7 +205,7 @@ struct PracticePane: View {
                     .controlSize(.mini)
                     Spacer(minLength: 0)
                 }
-                Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) proposed" } ?? "never run")
+                Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
                     .font(.caption2.monospaced()).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let fitInfo = view.config.fit {
@@ -328,9 +328,13 @@ struct PracticePane: View {
                 stateChip(f.state)
                 Text(f.id).font(.caption.monospaced().bold())
                 Spacer()
-                Text(String(format: "%.2f", f.value))
-                    .font(.caption.monospaced()).foregroundStyle(.secondary)
-                    .help("Value: recurrence, cost, rate, reliability, actionability, minus decay (ADR-0105 §3).")
+                // A success has no template and no pair, so its score is a
+                // constant (0.88 minus decay) — the session count is the fact.
+                if !f.isSuccess {
+                    Text(String(format: "%.2f", f.value))
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .help("Value: recurrence, cost, rate, reliability, actionability, minus decay (ADR-0105 §3).")
+                }
             }
             Text(f.latestDetail.isEmpty ? "—" : f.latestDetail)
                 .font(.caption).foregroundStyle(.secondary)
@@ -357,10 +361,10 @@ struct PracticePane: View {
 
     private func metaLine(_ f: PracticeFinding) -> String {
         var parts = ["\(f.distinctSessions) session\(f.distinctSessions == 1 ? "" : "s")"]
-        if let rate = f.rate { parts.append(String(format: "%.0f%% of the time", rate * 100)) }
+        if let rate = f.rate { parts.append(String(format: "%.0f%% of sessions", rate * 100)) }
         parts.append("\(Self.compact(f.costTotal)) \(f.unit)")
-        if let after = f.sessionsAfter, let rec = f.recurrenceAfter, f.ruleId != nil {
-            parts.append("\(rec) of \(after) since rule")
+        if let after = f.sessionsAfter, let rec = f.recurrenceAfter, f.ruleId != nil || f.fixNote != nil {
+            parts.append("\(rec) of \(after) since \(f.ruleId != nil ? "rule" : "fix")")
         }
         parts.append("last \(Self.relative(f.lastSeen))")
         return parts.joined(separator: " · ")
@@ -372,19 +376,7 @@ struct PracticePane: View {
             switch f.state {
             case "proposed", "observed":
                 if f.template {
-                    Menu {
-                        Button("Approve at the template tier") { Task { await approve(f, tier: nil, global: false) } }
-                        Button("Approve as prompt") { Task { await approve(f, tier: "prompt", global: false) } }
-                        Button("Approve as nudge") { Task { await approve(f, tier: "nudge", global: false) } }
-                        Button("Approve as deny") { Task { await approve(f, tier: "deny", global: false) } }
-                        Divider()
-                        Button("Approve for every project") { Task { await approve(f, tier: nil, global: true) } }
-                    } label: {
-                        Label("Approve", systemImage: "checkmark.circle")
-                    }
-                    .menuStyle(.borderlessButton).fixedSize()
-                    .disabled(busy || f.state == "observed")
-                    .help(f.state == "observed" ? "Under the proposal threshold — needs more sessions." : "Create a rule from this finding.")
+                    approveMenu(f)
                 } else {
                     Text("report only — about MARVIN itself, not a behaviour a rule can change")
                         .font(.caption2).foregroundStyle(.tertiary)
@@ -412,6 +404,7 @@ struct PracticePane: View {
                     .disabled(busy)
                 } else {
                     Text("the code fix did not hold").font(.caption2).foregroundStyle(.orange)
+                    if f.template { approveMenu(f) }
                 }
                 fixedButton(f)
                 Button("Dismiss") { dismissReason = ""; dismissing = f }
@@ -424,6 +417,22 @@ struct PracticePane: View {
                 EmptyView()
             }
         }
+    }
+
+    private func approveMenu(_ f: PracticeFinding) -> some View {
+        Menu {
+            Button("Approve at the template tier") { Task { await approve(f, tier: nil, global: false) } }
+            Button("Approve as prompt") { Task { await approve(f, tier: "prompt", global: false) } }
+            Button("Approve as nudge") { Task { await approve(f, tier: "nudge", global: false) } }
+            Button("Approve as deny") { Task { await approve(f, tier: "deny", global: false) } }
+            Divider()
+            Button("Approve for every project") { Task { await approve(f, tier: nil, global: true) } }
+        } label: {
+            Label("Approve", systemImage: "checkmark.circle")
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .disabled(busy || f.state == "observed")
+        .help(f.state == "observed" ? "Under the proposal threshold — needs more sessions." : "Create a rule from this finding.")
     }
 
     private func fixedButton(_ f: PracticeFinding) -> some View {

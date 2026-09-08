@@ -77,6 +77,14 @@ export interface DesignTurnContext {
    *  reads in the same turn even if the graph stays unqueried — that
    *  becomes a measurement signal, not a wall. */
   graphifyHookFired: boolean;
+  /** 2026-09-09 — graphify-first denies issued this turn. The gate was
+   *  one-shot: one refusal, then every read went through unanswered, and a
+   *  real wakeup turn did seven greps after being refused once. It now has
+   *  ADR-0104's brake like the ship gate: `BUILTIN_GATE_MAX_DENIES`, then
+   *  allow + logged bypass on the row. */
+  graphifyDenies: number;
+  /** 2026-09-09 — advisor-on-ADR denies issued this turn, all paths. */
+  advisorAdrDenies: number;
   /** ADR-0095 — what the advisor actually SAID, once a consult has returned.
    *  Written by the advisor-verdict PostToolUse hook; `undefined` until then.
    *  Before this, the gate observed only the dispatch, so a `reject`
@@ -104,9 +112,10 @@ export interface DesignTurnContext {
    *  `personality.ts`, and the 2026-05-22 audit measured what soft-nudge
    *  language is worth: it fires ~0×. This makes it mechanical. */
   advisorReconsultDenyFired: boolean;
-  /** Has the advisor-on-ADR hook already fired-and-blocked once for this
-   *  same target path? Same logic — first deny carries the steering
-   *  signal, subsequent calls don't keep tripping. */
+  /** Paths the advisor-on-ADR hook has refused this turn. Telemetry since
+   *  2026-09-09: the per-path exemption let three trigger paths through on
+   *  three single refusals with no consult (39 sessions, 143 denies); the
+   *  cap is now per turn (`advisorAdrDenies`), not per path. */
   advisorHookFiredForPaths: Set<string>;
   /** ADR-0060 — source files ALREADY seen this turn. Re-reading one of
    *  these is *work* (editing a file you already located), not exploration,
@@ -303,6 +312,8 @@ export function createTurnDesignContext(
     advisorReconsultDenyFired: false,
     sourceFilesRead: 0,
     graphifyHookFired: false,
+    graphifyDenies: 0,
+    advisorAdrDenies: 0,
     advisorHookFiredForPaths: new Set(),
   };
   turnContexts.set(turnId, ctx);
@@ -1046,6 +1057,10 @@ export function runDesignHooks(args: {
   // is silent at tool time (prompt tier), or is off — and carries the
   // fired/bypass counts. No row on disk means native behaviour.
   const gateOf = (id: BuiltinRuleId): BuiltinGate => builtinGate(id);
+  // A deny gets ADR-0104's brake — two refusals carry the instruction, the
+  // third call is allowed and the bypass counted on the row. A nudge says
+  // its piece once.
+  const gateCap = (gate: BuiltinGate): number => (gate.tier === "deny" ? BUILTIN_GATE_MAX_DENIES : 1);
   const applyGate = (
     id: BuiltinRuleId,
     gate: BuiltinGate,
@@ -1086,9 +1101,15 @@ export function runDesignHooks(args: {
   if (graphifyDeny) {
     if (mode === "measure") {
       // Caller is responsible for logging; we just don't deny.
+    } else if (ctx.graphifyDenies >= gateCap(graphifyGate)) {
+      if (graphifyGate.tier === "deny") {
+        logDesignHookEvent({ kind: "graph.first.bypass", turnId: ctx.turnId, tool: toolName, denies: ctx.graphifyDenies });
+        notePracticeRuleFired("builtin:graphify-first", "bypass");
+      }
     } else {
       const out = applyGate("builtin:graphify-first", graphifyGate, graphifyDeny, () => {
         ctx.graphifyHookFired = true;
+        ctx.graphifyDenies += 1;
       });
       if (out) return out;
     }
@@ -1127,10 +1148,16 @@ export function runDesignHooks(args: {
   if (advisorDeny) {
     if (mode === "measure") {
       // Caller logs; allow the call.
+    } else if (ctx.advisorAdrDenies >= gateCap(advisorGate)) {
+      if (advisorGate.tier === "deny") {
+        logDesignHookEvent({ kind: "advisor.adr.bypass", turnId: ctx.turnId, tool: toolName, denies: ctx.advisorAdrDenies });
+        notePracticeRuleFired("builtin:advisor-on-adr", "bypass");
+      }
     } else {
       const out = applyGate("builtin:advisor-on-adr", advisorGate, advisorDeny, () => {
         const path = pickPath(toolInput, ["file_path", "path"]);
         if (path) ctx.advisorHookFiredForPaths.add(path);
+        ctx.advisorAdrDenies += 1;
       });
       if (out) return out;
     }
@@ -1247,7 +1274,10 @@ export function checkPracticeRules(
 export type ShipReviewSkill = "pr-review" | "security-audit";
 
 /** Denies per skill per turn before the commit is let through anyway. */
-export const SHIP_REVIEW_MAX_DENIES = 2;
+/** Denies per built-in gate per turn before the call is let through and the
+ *  bypass logged (ADR-0104's brake, applied to every gate since 2026-09-09). */
+export const BUILTIN_GATE_MAX_DENIES = 2;
+export const SHIP_REVIEW_MAX_DENIES = BUILTIN_GATE_MAX_DENIES;
 /** Personality §Skill triggers: pr-review MUST run above either threshold. */
 export const SHIP_REVIEW_PR_LINES = 50;
 export const SHIP_REVIEW_PR_FILES = 3;
@@ -1561,6 +1591,7 @@ export function checkShipReview(
       files: diff.files.length,
       changedLines: diff.changedLines,
     });
+    notePracticeRuleFired("builtin:ship-review", "bypass");
     return null;
   }
   for (const n of stillDeniable) {
@@ -1602,7 +1633,6 @@ function checkGraphifyFirst(
   toolInput: Record<string, unknown>,
 ): DesignHookDeny | null {
   if (!ctx.hasGraph) return null;
-  if (ctx.graphifyHookFired) return null;
   if (ctx.graphCallCount > 0) return null;
   if (ctx.sourceFilesRead > 0) return null;
 
@@ -1737,7 +1767,6 @@ function checkAdvisorOnAdrTrigger(
   if (ctx.advisorCallCount > 0) return null;
   const target = pickPath(toolInput, ["file_path", "path"]);
   if (!target) return null;
-  if (ctx.advisorHookFiredForPaths.has(target)) return null;
   if (isExemptFromAdrTriggers(target)) return null;
   const triggerLabel = matchAdrTrigger(ctx.cwd, target);
   if (!triggerLabel) return null;

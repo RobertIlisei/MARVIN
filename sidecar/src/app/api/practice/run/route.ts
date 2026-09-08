@@ -6,7 +6,7 @@
  */
 
 import { type NextRequest, NextResponse } from "next/server";
-import { practiceView, runPractice } from "@marvin/runtime/practice";
+import { practiceView, runPracticeAsync } from "@marvin/runtime/practice";
 import { requireMarvinClient } from "@/lib/csrf";
 import { projectIdFrom } from "@/lib/practice-project";
 
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   const projectId = projectIdFrom(req, body);
   if (!projectId) return NextResponse.json({ error: "unknown or missing projectId" }, { status: 400 });
   try {
-    const run = runPractice(projectId, { force: body.force === true, trigger: body.force ? "backtest" : "manual" });
+    const run = await runPracticeAsync(projectId, { force: body.force === true, trigger: body.force ? "backtest" : "manual" });
     return NextResponse.json({ run, view: practiceView(projectId) });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });

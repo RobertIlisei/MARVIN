@@ -4,6 +4,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## In flight
 
+- **A finished plan froze at 5/9 while the model said it was done (2026-09-08).** User: *"for some reason, plan is not updated when marvin is working on it."* Measured first: the transcript held 24 `TodoWrite` calls and the last five all said `[1] completed`; the stored spine showed why none landed. Three interlocking rules: the append-only sub-task merge never retires a row, ADR-0049's invariant let every stale row veto its parent forever (step 1 sat behind eleven rows from a superseded decomposition), the ADR-0052 re-base guard counted the synthetic "Additional work" bucket as a step and read an honest `[1]`…`[8]` close-out as a foreign list (eight completions nested under step 1), and the tag grammar rejected `[3-8]` / `[8.1a]` outright. Fix in [ADR-0106](./decisions/0106-plan-snapshot-semantics-superseded-subtasks.md): a row the closing batch no longer lists becomes `superseded` (`[-]`, never `[x]`, never deleted), the guard sees only the steps the model was shown, relatedness is token overlap, ranges and suffixed sub-keys parse. Replay of the real 14:12 batch: **5/9 → 9/9**, 686 assertions green. Shipped in v0.1.107.
+
 - **An implementer's branch now has a lifecycle, and it is derived from git (2026-09-01).** User: *"when they finish work, their branches remain… the merge happened because i asked for a merge but marvin has no mechanism unless i ask him."* Measured before designing: five `marvin/*` branches on a real project — three merged by hand into `chore/backlog-parallel-triage`, two with **zero commits** whose checkouts had been removed, which dropped them from the registry and made them permanently invisible to `worktree_list`. After a *successful* merge: 3 checkouts still on disk, 5 refs still present, **3.1 GB / 159,358 files** (the same nested checkouts that broke the file-tree walker at 49,304). ADR-0081 had the policy right and built no mechanism — steps 4 and 5 of the protocol were prose, and step 5 was gated on a merge MARVIN never witnessed. **The fix derives rather than records:** `reconcileWorktrees` recomputes `running | empty | ready | merged` from git on every read (one `git branch --contains` call answers "merged, and into what"), adopts branches the registry lost, and drops records whose branch is gone — so a merge performed in a terminal or another session is seen. `task_notification` is now consumed for *identity* (`background_tasks_changed` stays the liveness signal), with the `task_id` persisted onto the record so it outlives `clearSubagentsForTurn`. `sweepWorktrees` reclaims `empty` and `merged` — checkout **and** branch — and never touches a `ready` branch, a running implementer, or anything dirty; no TTL is needed because a derived `merged` is stronger than Anthropic's age heuristic. `worktree_merge` merges **locally into the current branch and never pushes**: measured on the user's GitLab Free project, a merge to `main` runs the full smoke suite at **19.8–27.7 min on a 2× cost-factor runner (~48 compute-min)** against a 400/month allowance already exceeded and paid in cash, so three branches merged individually cost ~144 compute-min versus ~48 batched — and implementer branches are cut from the current `HEAD`, so merging them there costs **zero** extra pipelines. New `GET/POST /api/worktrees` and a Worktrees section in Source Control (replacing a row keyed on dirty count, which reported **0** for an implementer that had correctly committed — finished work rendered identically to none). Also fixed: the slug collision that derived its suffix from the registry array's *length*, which shrinks on removal. See [ADR-0103](./decisions/0103-implementer-branch-lifecycle.md); amends [ADR-0012](./decisions/0012-source-control-mutation-channel.md) (one bounded merge moves off its out-of-scope list) and [ADR-0081](./decisions/0081-implementer-subagents-on-isolated-worktrees.md).
 
 - **"Tree truncated" — the cap was never the problem (2026-09-01).** User: *"we need to remove this limit."* Measured first: the project's real source is ~9,000 entries, comfortably inside the 20,000 cap. What filled it was `.marvin/worktrees/` — **five MARVIN-created worktrees, 49,304 files**, each a full checkout of the repository nested inside the repository, which the walker descended into. **Third repeat of an identical failure:** graphify's extraction cache (12,195 files, 2026-08-15) and its Obsidian export (34,463 files, 2026-08-30) were both fixed the same way, and each time the banner told the user to raise a number while their own `apps/` and `docs/` fell off the end. So: the entry cap is now **off by default** (`MARVIN_TREE_MAX_ENTRIES` sets one only if you want it) and `.marvin/worktrees/` + `plugins-stage/` join the walker's skip list — `.marvin` itself stays browsable, since `plans/`, `memory/` and `backlog/` are documents people open. Measured on the reporting project: **36,815 → 11,115 entries, 1.33 MB → 0.39 MB, 0.13 s → 0.02 s**, no truncation. Lazy-load-on-expand is still the right answer for a genuinely enormous repo and is still unbuilt.
@@ -39,6 +41,19 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 - **~~One session per working tree is a rule with no enforcement.~~ Superseded 2026-09-01 — the requirement changed.** This entry asked for a mechanical check that *forbids* a second session in a checkout, after two sessions collided on 2026-09-01 (one found an uncommitted ADR edit with a 50-second-old mtime it never wrote, plus a `git pull` and a branch checkout it never issued, and correctly refused to push or tag). The user's answer to that incident was the opposite: *"i still need to be able to have multiple sessions in 1 worktree."* Golden Rule 1 permits it — the banned shape is model dispatching model on shared state, not two human-steered sessions — and Anthropic's own agent teams run several sessions in one directory without isolation. So the enforcement is not "one session per tree" but "name the collision when it happens": [ADR-0102](./decisions/0102-multiple-sessions-one-worktree.md). Golden Rule 1's wording ("two sessions must not point at the same working tree") is now narrower than what MARVIN supports and should be amended when this lands.
 
 ## Current version
+
+**v0.1.107** — the practice loop stops measuring itself.
+
+An audit of a real project's Practice pane found five of six `regressed` rows resting on one
+recurring session in seven; the transcripts showed extractor misreadings and gate artefacts,
+not behaviour. Extractor v7 stops counting refused calls, sees the commit the ship gate waited
+out, skips wakeup turns, scopes `plan.stale` to an open plan and rates each skill against its
+own invocations; `regressed` is a rate, proposals need an evidence share, every built-in gate
+has the two-denies-then-log brake, and the backtest no longer stalls the sidecar. Also lands
+ADR-0106 (closed plan steps stop waiting on superseded sub-tasks). Details in the
+[changelog](./history/CHANGELOG.md).
+
+_The v0.1.106 summary follows._
 
 **v0.1.106** — plan spine: DoD bullets are criteria, not steps, and `[x]` reads back.
 
@@ -133,6 +148,16 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-09-09 — v0.1.107: the practice loop stops measuring itself
+
+_Shipped. Five of six `regressed` rows on a 404-session project rested on one recurring
+session in seven, and the transcripts behind them were a background handoff read as a missing
+scope-met, a finished plan read as stale, a refused grep counted as a read, and a ship-review
+refusal counted as a retried command. Extractor v7 fixes each; `regressed` is now two sessions
+at half the old rate; proposals need an evidence share; graphify-first and advisor-on-ADR gain
+the ship gate's two-denies-then-log brake (they were one-shot); the backtest yields to the event
+loop. ADR-0105 addendum. Ships with ADR-0106._
 
 ### 2026-09-07 — v0.1.105: vertical-slice milestones, and the layers come from the project
 
