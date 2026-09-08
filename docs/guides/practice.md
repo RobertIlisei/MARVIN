@@ -182,6 +182,21 @@ in the header afterwards.
 
 ---
 
+## Ageing and clearing
+
+Findings are counted over a **window** — 45 days by default, the stepper in
+the header. A session older than that leaves every count at the end of the
+next run: the session total, the rate, the decay, and the "N of M since"
+clock. Its watermark stays, so it is never read again. Widen the window and
+run **Backtest** to bring old sessions back.
+
+**Reset findings…** (header) clears every finding, watermark and run record
+for the project and keeps your rules. The next run re-reads every session
+inside the window; a fingerprint that already has a rule attaches to that
+rule's verification instead of being proposed a second time. Use it after a
+batch of MARVIN fixes when the old rows are noise, or when the extractors
+changed under you.
+
 ## Where the data lives
 
 Practice is about MARVIN, not your project, so nothing is written into the

@@ -42,6 +42,15 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.109** — the practice loop gets a window and a reset.
+
+Findings are counted over a window (45 days by default) so old sessions age out of every
+rate and clock without being re-read, and *Reset findings…* clears a project's ledger while
+keeping its rules; the next run re-attaches a ruled fingerprint instead of re-proposing it.
+Details in the [changelog](./history/CHANGELOG.md).
+
+_The v0.1.108 summary follows._
+
 **v0.1.108** — the terminal's shell owns its tty, and terminal tabs.
 
 Ctrl-C echoed `^C` and stopped nothing: measured, the app's zsh had no controlling terminal
@@ -159,6 +168,12 @@ switch has no known cause, only new telemetry that will name it next time.
 ## Recent milestones
 
 The high-water marks. Diagnostic detail per release in the [changelog](./history/CHANGELOG.md).
+
+### 2026-09-09 — v0.1.109: the practice loop gets a window and a reset
+
+_Shipped. `windowDays` ages sessions out of every count at the end of a run (watermarks kept,
+nothing re-read); *Reset findings…* clears the ledger and keeps the rules, and a ruled
+fingerprint re-attaches on the next run. ADR-0105 addendum._
 
 ### 2026-09-09 — v0.1.108: the terminal's shell owns its tty, and terminal tabs
 

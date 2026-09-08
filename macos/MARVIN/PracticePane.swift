@@ -38,6 +38,7 @@ struct PracticePane: View {
     @State private var dismissing: PracticeFinding?
     @State private var dismissReason = ""
     @State private var fixing: PracticeFinding?
+    @State private var confirmingReset = false
     @State private var fixNote = ""
     @State private var editingRule: PracticeRule?
     @State private var ruleMessage = ""
@@ -203,7 +204,23 @@ struct PracticePane: View {
                         Text(String(format: "at %02d:00", view.config.hour)).font(.caption.monospaced())
                     }
                     .controlSize(.mini)
+                    Stepper(value: Binding(
+                        get: { view.config.windowDays ?? 45 },
+                        set: { d in Task { await setSchedule(enabled: nil, hour: nil, windowDays: d) } }
+                    ), in: 1...365, step: 5) {
+                        Text("window \(view.config.windowDays ?? 45) d").font(.caption.monospaced())
+                    }
+                    .controlSize(.mini)
+                    .help("Sessions older than this age out of every count. Watermarks stay, so nothing is re-read.")
                     Spacer(minLength: 0)
+                    Button("Reset findings…") { confirmingReset = true }
+                        .buttonStyle(.link).font(.caption2).disabled(busy)
+                        .help("Clear every finding, watermark and run record for this project. Rules stay; the next run re-reads the window and re-attaches findings to their rules.")
+                        .confirmationDialog("Reset this project's findings?", isPresented: $confirmingReset) {
+                            Button("Reset findings", role: .destructive) { Task { await resetFindings() } }
+                        } message: {
+                            Text("Findings, watermarks and run records are cleared. Rules are kept. The next run re-reads every session inside the window.")
+                        }
                 }
                 Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
                     .font(.caption2.monospaced()).foregroundStyle(.tertiary)
@@ -832,10 +849,20 @@ struct PracticePane: View {
         } catch { flash(error.localizedDescription) }
     }
 
-    private func setSchedule(enabled: Bool?, hour: Int?) async {
+    private func setSchedule(enabled: Bool?, hour: Int?, windowDays: Int? = nil) async {
         do {
-            _ = try await PracticeService.shared.updateConfig(enabled: enabled, hour: hour)
+            _ = try await PracticeService.shared.updateConfig(enabled: enabled, hour: hour, windowDays: windowDays)
             await refresh()
+        } catch { flash(error.localizedDescription) }
+    }
+
+    private func resetFindings() async {
+        guard let projectId else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            view = try await PracticeService.shared.resetFindings(projectId: projectId)
+            flash("findings cleared — run the pass to re-read the window")
         } catch { flash(error.localizedDescription) }
     }
 

@@ -13,6 +13,7 @@ import {
   armPracticeSchedule,
   DEFAULT_PRACTICE_CONFIG,
   dismissFinding,
+  resetPracticeLedger,
   effectiveTier,
   escalateFinding,
   evaluatePracticeRules,
@@ -526,6 +527,35 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     // The overbudget report says where the money went.
     const pricey = extractAll(parseSessionTranscript("p3", jsonl(turn({ at: "2026-09-08T10:00:00Z", message: "big", text: "?", costUsd: 12, cacheCreation: 480_000 }))));
     expect(pricey.find((o) => o.fingerprint === "turn.overbudget")?.detail).toContain("480k cache-creation tokens");
+  });
+
+  it("2026-09-09: sessions outside the window leave every count; reset clears the ledger and a ruled fingerprint re-attaches", () => {
+    threeBadSessions();
+    const led1 = readLedger(projectId);
+    expect(led1.findings["ship.unreviewed"]?.distinctSessions).toBe(3);
+    // Seen from 60 days after day 3, with a 45-day window, every fixture session is gone.
+    const later = day(3) + 60 * 86_400_000;
+    runPractice(projectId, { ...seams, now: later });
+    const led2 = readLedger(projectId);
+    expect(led2.findings["ship.unreviewed"]).toBeUndefined(); // aged out and pruned
+    expect(Object.keys(led2.watermarks)).toHaveLength(3); // never re-read
+    // The dropped sessions come back only through a backtest (the watermarks
+    // protect a scheduled run from re-reading them).
+    writePracticeConfig({ windowDays: 365 });
+    runPractice(projectId, { ...seams, now: later, force: true });
+    expect(readLedger(projectId).findings["ship.unreviewed"]?.distinctSessions).toBe(3);
+
+    // Reset keeps the rule; the next run attaches the fingerprint to it instead of proposing again.
+    const ap = approveFinding(projectId, "ship.unreviewed");
+    expect(ap.ok).toBe(true);
+    resetPracticeLedger(projectId);
+    expect(Object.keys(readLedger(projectId).findings)).toHaveLength(0);
+    expect(readRules()).toHaveLength(1);
+    runPractice(projectId, { ...seams, now: later });
+    const f = readLedger(projectId).findings["ship.unreviewed"]!;
+    expect(f.state).toBe("active");
+    expect(f.ruleId).toBe(readRules()[0]!.id);
+    expect(readRules()).toHaveLength(1); // no second rule
   });
 
   it("2026-09-09: a namespaced failure rates against its own skill, and dismissing a ruled finding retires the rule", () => {

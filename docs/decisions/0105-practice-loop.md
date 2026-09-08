@@ -368,3 +368,12 @@ that as behaviour.
   fix's clock; a finding with no sessions and no rule is dropped; the pane
   hides the constant score on the Working tab and offers Approve on a
   regressed fix.
+- **A window, and a reset** (same day; user: *"how can we clear those
+  existing findings? … perhaps we implemented fixes but the older sessions'
+  findings still pop up"*). `windowDays` (default 45): a session older than
+  that leaves every finding's count at the end of a run, and the rate,
+  decay and verification clocks see only the window; its watermark stays,
+  so nothing is re-read. *Reset findings* clears the ledger — findings,
+  watermarks, runs — and keeps the rules; on the next run a fingerprint that
+  already has an active rule for the project attaches to it instead of
+  being proposed again. Both are pinned by tests.

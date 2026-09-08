@@ -4,6 +4,7 @@
  *   { projectId, id, action: "dismiss", reason }
  *   { projectId, id, action: "escalate" }
  *   { projectId, id, action: "fixed", reason }   ← "I changed MARVIN's code"; verified like a rule
+ *   { projectId, action: "reset" }               ← clear findings, watermarks and runs; rules stay
  * → { ok, rule?, view }
  *
  * The three verbs a finding has (ADR-0105 §6). Approve creates the rule from
@@ -18,6 +19,7 @@ import {
   escalateFinding,
   markFindingFixed,
   practiceView,
+  resetPracticeLedger,
   type RuleTier,
 } from "@marvin/runtime/practice";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -47,6 +49,10 @@ export async function POST(req: NextRequest) {
   }
   const projectId = projectIdFrom(req, body);
   if (!projectId) return NextResponse.json({ error: "unknown or missing projectId" }, { status: 400 });
+  if (body.action === "reset") {
+    resetPracticeLedger(projectId);
+    return NextResponse.json({ ok: true, view: practiceView(projectId) });
+  }
   const id = body.id?.trim();
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
@@ -77,6 +83,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, rule: res.rule, view: practiceView(projectId) });
     }
     default:
-      return NextResponse.json({ error: "action must be approve | dismiss | escalate | fixed" }, { status: 400 });
+      return NextResponse.json({ error: "action must be approve | dismiss | escalate | fixed | reset" }, { status: 400 });
   }
 }

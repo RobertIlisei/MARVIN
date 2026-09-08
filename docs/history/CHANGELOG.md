@@ -8,6 +8,30 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-09 — v0.1.109: the practice loop gets a window and a reset.**
+
+  Trigger: user: *"how can we clear those existing findings? how can we
+  handle findings from accumulating, perhaps in time they are not correct,
+  or perhaps we implemented fixes but the older sessions findings still pop
+  up"* — asked right after the v0.1.107 re-read showed a June session still
+  counted on a September row.
+
+  **Decision.** `windowDays` (default 45, header stepper): at the end of a
+  run a session older than that leaves every finding's sessions; rate, decay
+  and the verification clocks use the windowed session list; the watermark
+  stays so nothing is re-read; a finding left with no sessions and no rule is
+  pruned. `POST /api/practice/findings { action: "reset" }` and a *Reset
+  findings…* button (confirmation dialog) clear findings, watermarks and runs
+  and keep the rules; the next run re-attaches a fingerprint with an active
+  project or global rule to that rule instead of proposing it again — which
+  also closes a gap adopted rules already had. ADR-0105 addendum, guide
+  section "Ageing and clearing".
+
+  **Verification.** Window, backtest-recovery, reset and re-attach pinned in
+  one test; 42 practice tests, 688 Swift assertions green.
+
+---
+
 - **2026-09-09 — v0.1.108: the terminal's shell never owned its tty (Ctrl-C did nothing), and terminal tabs (ADR-0078 addendum).**
 
   Trigger: user, with a screenshot of `^Z^[^C^C^C` echoed under a running

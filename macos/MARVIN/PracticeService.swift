@@ -117,6 +117,8 @@ struct PracticeConfig: Codable, Equatable {
     var hour: Int
     var thresholds: PracticeThresholds
     var verifyWindow: Int
+    /// Sessions older than this age out of every count (2026-09-09).
+    var windowDays: Int?
     var weights: PracticeWeights?
     var fit: PracticeFitProvenance?
 }
@@ -201,6 +203,11 @@ final class PracticeService {
         try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "dismiss", "reason": reason])
     }
 
+    /// Clear findings, watermarks and runs; rules stay (2026-09-09).
+    func resetFindings(projectId: String) async throws -> PracticeView {
+        try await mutate("api/practice/findings", ["projectId": projectId, "action": "reset"])
+    }
+
     func markFixed(projectId: String, id: String, note: String) async throws -> PracticeView {
         try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "fixed", "reason": note])
     }
@@ -240,10 +247,11 @@ final class PracticeService {
         try await mutate("api/practice/rules", ["projectId": projectId, "adopt": ruleId])
     }
 
-    func updateConfig(enabled: Bool? = nil, hour: Int? = nil) async throws -> PracticeConfig {
+    func updateConfig(enabled: Bool? = nil, hour: Int? = nil, windowDays: Int? = nil) async throws -> PracticeConfig {
         var config: [String: Any] = [:]
         if let enabled { config["enabled"] = enabled }
         if let hour { config["hour"] = hour }
+        if let windowDays { config["windowDays"] = windowDays }
         let data = try await post("api/practice", ["config": config])
         return try JSONDecoder().decode(ConfigResponse.self, from: data).config
     }

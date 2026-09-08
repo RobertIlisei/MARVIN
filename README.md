@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.108**). `main` and `development` are fast-forwarded together at each
+> **v0.1.109**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -362,6 +362,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.109 — the practice loop gets a window and a reset.** Findings are counted over a window (45 days by default, a header stepper): a session older than that leaves every count, rate and verification clock at the end of the next run, without being re-read. *Reset findings…* clears a project's findings, watermarks and runs and keeps its rules; on the next run a fingerprint that already has a rule attaches to that rule instead of being proposed again.
 
 **v0.1.108 — the terminal's shell owns its tty, and terminal tabs.** Ctrl-C in the terminal echoed `^C` and stopped nothing. Measured: the app's zsh had fds on a pty and **no controlling terminal** (`ps` tty `??`, foreground group 0), because the `posix_spawn` file-action open runs before `setsid` and attaches nothing; the Ctrl-C test had passed only because bash-as-`sh` re-attaches itself, and zsh does not. `PTYProcess` is now `forkpty` + `login_tty`, pinned with `zsh -f`. The terminal pane has tabs: "+" opens another shell, the numbered buttons switch without touching any shell, × hangs one up. 688 Swift assertions green.
 

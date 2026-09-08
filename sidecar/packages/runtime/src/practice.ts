@@ -77,6 +77,11 @@ export interface PracticeConfig {
   costScale: Record<string, number>;
   /** Sessions after acceptance with no recurrence before a rule is confirmed. */
   verifyWindow: number;
+  /** Sessions older than this age out of every count at the end of a run
+   *  (2026-09-09). Without it a June session weighed on a September finding
+   *  forever and a fixed behaviour kept its historic session count. The
+   *  watermark is kept, so an aged-out transcript is never re-read. */
+  windowDays: number;
   /** Phase 5 — where the current weights came from, when they were fitted. */
   fit?: { at: string; samples: number; labelled: number; method: string; rho: number } | undefined;
 }
@@ -102,6 +107,7 @@ export const DEFAULT_PRACTICE_CONFIG: PracticeConfig = {
     "plan.horizontal": 1,
   },
   verifyWindow: 5,
+  windowDays: 45,
 };
 
 /** Reliability of the signal per kind. Every v1 extractor is deterministic. */
@@ -560,6 +566,7 @@ export function writePracticeConfig(patch: Partial<PracticeConfig>): PracticeCon
     costScale: { ...next.costScale, ...(patch.costScale ?? {}) },
   };
   merged.hour = Math.min(23, Math.max(0, Math.round(merged.hour)));
+  merged.windowDays = Math.max(1, Math.round(merged.windowDays));
   if (patch.fit === undefined && !("fit" in patch)) merged.fit = next.fit;
   writeJson(practicePaths.config(), merged);
   return merged;
@@ -578,6 +585,14 @@ export function readLedger(projectId: string): Ledger {
 
 export function writeLedger(ledger: Ledger): void {
   writeJson(practicePaths.ledger(ledger.projectId), ledger);
+}
+
+/** "Clear the findings." Findings, watermarks and run records go; the
+ *  rules stay, and the next run re-reads every transcript inside the window
+ *  and re-attaches a fingerprint that has an active rule to that rule
+ *  instead of proposing it again. */
+export function resetPracticeLedger(projectId: string): void {
+  writeLedger({ version: 1, projectId, extractorVersion: EXTRACTOR_VERSION, watermarks: {}, findings: {}, runs: [] });
 }
 
 interface RulesFile {
@@ -906,9 +921,17 @@ function finishRun(st: RunState): RunRecord {
   const skippedLive = st.skippedLive;
   const occurrencesTotal = st.occurrencesTotal;
 
+  // The window: a session older than `windowDays` leaves every finding's
+  // count. The watermark stays so it is never read again.
+  const cutoff = started - config.windowDays * 86_400_000;
+  for (const f of Object.values(ledger.findings)) {
+    for (const [sid, e] of Object.entries(f.sessions)) if (e.mtime < cutoff) delete f.sessions[sid];
+  }
+
   // Sessions in processing order, for "since last seen" and "after acceptance".
   const processedMtimes = Object.entries(ledger.watermarks)
     .map(([, w]) => w.mtime)
+    .filter((m) => m >= cutoff)
     .sort((a, b) => a - b);
   const sessionsAfterTime = (t: number): number => processedMtimes.filter((m) => m > t).length;
 
@@ -969,6 +992,21 @@ function finishRun(st: RunState): RunRecord {
     if (f.polarity === "success") {
       f.state = f.distinctSessions >= config.thresholds.minSessions ? "practice" : "observed";
       continue;
+    }
+
+    // A fingerprint that already has an active rule for this project (after
+    // a reset, or a rule adopted before the finding existed here) belongs to
+    // that rule's verification, not to the proposal pool.
+    if (!f.ruleId && (f.state === "observed" || f.state === "proposed" || f.state === "report")) {
+      const owner = rules.find(
+        (r) => r.status === "active" && !r.builtin && r.fingerprint === f.id && (r.scope.projectId === null || r.scope.projectId === ledger.projectId),
+      );
+      if (owner) {
+        f.state = "active";
+        f.ruleId = owner.id;
+        f.acceptedAt = owner.acceptedAt;
+        delete f.proposedAt;
+      }
     }
 
     const template = RULE_TEMPLATES[f.kind];
