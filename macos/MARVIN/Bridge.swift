@@ -390,6 +390,19 @@ final class MarvinBridge {
     /// switches; nil means "no request outstanding".
     var requestedLeftTab: String? = nil
 
+    /// ADR-0107 — a chat-tab action asked for from OUTSIDE the chat view (the
+    /// Sessions pane, a command). `ChatPreviewModel` is `@State` inside
+    /// `ChatPreviewView`, so nothing else can call it directly; this is the
+    /// same one-shot shape as `requestedLeftTab`: set, observed, cleared.
+    enum ChatTabRequest: Equatable {
+        case select(String)
+        case close(String)
+        case new
+    }
+    private(set) var chatTabRequest: ChatTabRequest? = nil
+    func requestChatTab(_ request: ChatTabRequest) { chatTabRequest = request }
+    func clearChatTabRequest() { chatTabRequest = nil }
+
     func triggerCommandPalette() { commandPaletteTriggerCount &+= 1 }
     func triggerGoToLine()       { goToLineTriggerCount       &+= 1 }
     func triggerOpenProject()    { openProjectTriggerCount    &+= 1 }

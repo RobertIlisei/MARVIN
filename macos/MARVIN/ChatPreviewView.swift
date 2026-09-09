@@ -545,48 +545,54 @@ final class ChatPreviewModel {
     /// Cursor-style OPEN tabs — the ordered session IDs the user has
     /// opened in this window. Distinct from `sessions` (everything on
     /// disk): a chat joins this list when opened (new turn, or picked from
-    /// the clock menu) and leaves it when its tab is closed. Persisted per
-    /// project so tabs survive a relaunch.
-    private(set) var openTabSessionIds: [String] = []
+    /// the clock menu) and leaves it when its tab is closed. Owned by
+    /// `SessionRegistry` (ADR-0107) — the one store that knows every session
+    /// of the project — and persisted there under `marvin.chatTabs.<pid>`.
+    var openTabSessionIds: [String] { SessionRegistry.shared.openTabs }
 
     /// Add a session to the open-tab strip (idempotent, appends right).
     func openTab(_ sessionId: String) {
-        guard !openTabSessionIds.contains(sessionId) else { return }
-        openTabSessionIds.append(sessionId)
-        persistOpenTabs()
+        SessionRegistry.shared.openTab(sessionId)
     }
 
     /// Close a tab. If it was the active one, fall back to a neighbour
-    /// tab, or to a fresh chat when none remain.
+    /// tab, or to a fresh draft tab when none remain.
     func closeTab(_ sessionId: String) {
         let wasActive = loadedSessionId == sessionId
-        let idx = openTabSessionIds.firstIndex(of: sessionId)
-        openTabSessionIds.removeAll { $0 == sessionId }
-        persistOpenTabs()
+        let next = SessionRegistry.shared.closeTab(sessionId)
         guard wasActive else { return }
-        // Prefer the tab that was to the right (or the new last one).
-        let next: String? = {
-            guard let idx else { return openTabSessionIds.last }
-            if idx < openTabSessionIds.count { return openTabSessionIds[idx] }
-            return openTabSessionIds.last
-        }()
         if let next {
             selectSession(next, fallbackProjectId: MarvinBridge.shared.activeProjectId)
         } else {
-            clear()
+            newTab()
         }
     }
 
-    private func persistOpenTabs() {
-        guard let pid = loadedProjectId else { return }
-        UserDefaults.standard.set(openTabSessionIds, forKey: "marvin.openTabs.\(pid)")
+    /// A NEW chat tab (ADR-0107): `+`, header "New", ⌘⇧N, "Start fresh".
+    ///
+    /// Local teardown of the session being left (`clear()`, which never stops
+    /// its agent), then a real tab with a CLIENT-minted id. The server accepts
+    /// a client-supplied `marvinSessionId` on the first message, so the tab —
+    /// and its tree mode — exist before anything is typed, and nothing on disk
+    /// is created for a tab that is never typed into.
+    func newTab() {
+        guard let pid = loadedProjectId ?? MarvinBridge.shared.activeProjectId else {
+            clear()
+            return
+        }
+        clear()
+        startDraft(projectId: pid, sessionId: SessionRegistry.shared.mintDraft())
     }
 
-    /// Restore the persisted open-tab set for a project. Called when the
-    /// active project resolves. Keeps only ids that still exist on disk.
-    func loadOpenTabs(projectId: String) {
-        let saved = UserDefaults.standard.stringArray(forKey: "marvin.openTabs.\(projectId)") ?? []
-        openTabSessionIds = saved
+    private func startDraft(projectId: String, sessionId: String) {
+        loadedProjectId = projectId
+        loadedSessionId = sessionId
+        marvinSessionId = sessionId
+        MarvinBridge.shared.setActiveMarvinSession(sessionId)
+        // ADR-0043 — a draft has no hydrate; arm the announce loop now so the
+        // session catches server-initiated turns from its first message on.
+        ensureAnnounceLoop(projectId: projectId)
+        refreshBacklogCount()
     }
 
     /// Auto-hydrate: fetch sessions and load the right one. Called
@@ -661,6 +667,9 @@ final class ChatPreviewModel {
                 )
                 guard !Task.isCancelled else { return }
                 sessions = res.sessions
+                // ADR-0107 — a tab whose transcript is gone (deleted, archived)
+                // must not linger; drafts are exempt (no transcript yet).
+                SessionRegistry.shared.reconcileTabs(with: res.sessions)
             } catch is CancellationError {
                 /* quiet */
             } catch {
@@ -1536,6 +1545,10 @@ final class ChatPreviewModel {
                 // ADR-0043 — a brand-new chat has no hydrate; arm the announce
                 // loop now so this session catches its own background-job turns.
                 ensureAnnounceLoop(projectId: pid)
+            } else if s.marvinSessionId == loadedSessionId, let pid = loadedProjectId {
+                // ADR-0107 — a draft tab's first turn: it has a transcript now.
+                SessionRegistry.shared.promoteDraft(s.marvinSessionId)
+                NativePrefs.shared.setLastSessionId(s.marvinSessionId, forProject: pid)
             }
             // ADR-0021 M4: drive brain profile natively from SSE.
             b.setMarvinState("thinking", forSession: marvinSessionId)
@@ -2014,7 +2027,7 @@ struct ChatPreviewView: View {
                 queue: .main
             ) { _ in
                 Task { @MainActor in
-                    model.clear()
+                    model.newTab()
                     if let pid = MarvinBridge.shared.activeProjectId {
                         model.refreshSessions(projectId: pid)
                     }
@@ -2346,7 +2359,7 @@ struct ChatPreviewView: View {
             }
             Spacer(minLength: 4)
             Button {
-                model.clear()
+                model.newTab()
                 if let pid = bridge.activeProjectId { model.refreshSessions(projectId: pid) }
             } label: {
                 Image(systemName: "plus")
@@ -2365,15 +2378,29 @@ struct ChatPreviewView: View {
         .background(MarvinTheme.background)
         .onAppear {
             if let pid = bridge.activeProjectId {
-                model.loadOpenTabs(projectId: pid)
+                SessionRegistry.shared.start(projectId: pid)
                 model.refreshSessions(projectId: pid)
             }
         }
         .onChange(of: bridge.activeProjectId) { _, pid in
             if let pid {
-                model.loadOpenTabs(projectId: pid)
+                SessionRegistry.shared.start(projectId: pid)
                 model.refreshSessions(projectId: pid)
             }
+        }
+        // ADR-0107 — tab actions asked for from outside this view (the
+        // Sessions pane, commands) arrive as a one-shot on the bridge.
+        .onChange(of: bridge.chatTabRequest) { _, request in
+            guard let request else { return }
+            switch request {
+            case .select(let id):
+                model.selectSession(id, fallbackProjectId: bridge.activeProjectId)
+            case .close(let id):
+                model.closeTab(id)
+            case .new:
+                model.newTab()
+            }
+            bridge.clearChatTabRequest()
         }
     }
 
@@ -2431,6 +2458,7 @@ struct ChatPreviewView: View {
     /// or its date, looked up from the loaded session list. Falls back to
     /// the id prefix when the summary isn't loaded yet.
     private func tabTitle(forSessionId sid: String) -> String {
+        if SessionRegistry.shared.isDraft(sid) { return "New chat" }
         guard let s = model.sessions.first(where: { $0.sessionId == sid }) else {
             return String(sid.prefix(8))
         }
@@ -2884,7 +2912,7 @@ struct ChatPreviewView: View {
             // in-flight turn, and resets the bridge state captured
             // from the last turn.started.
             Button("New") {
-                model.clear()
+                model.newTab()
             }
             .controlSize(.small)
             .disabled(model.messages.isEmpty && !model.isSending)
@@ -3025,7 +3053,7 @@ struct ChatPreviewView: View {
             .controlSize(.small)
             .help("Append a one-line summary of the just-completed scope to .marvin/session-notes.md. Durable facts (invariants/gotchas/constraints) are recorded by MARVIN via the remember tool into memory.md (ADR-0042).")
             Button {
-                model.clear()
+                model.newTab()
             } label: {
                 Label("Start fresh next turn", systemImage: "arrow.uturn.left")
                     .font(.caption)

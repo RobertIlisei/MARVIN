@@ -39,6 +39,11 @@ export type SessionTurn =
       personality: "marvin" | "neutral" | "ultron";
       permissionStrategy: "auto" | "gated";
       turnId: string;
+      /** ADR-0107 — the checkout this turn ran in (a session worktree or the
+       *  project root) and the tree mode. Optional: pre-0107 records have neither. */
+      cwd?: string;
+      tree?: { mode: "worktree"; slug: string; path: string; branch: string; base: string }
+        | { mode: "shared"; lane?: string[] };
     }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {
@@ -53,6 +58,10 @@ export type SessionTurn =
       type: "turn.error";
       at: string;
       error: string;
+      /** ADR-0107 — appended at sidecar boot for a turn that was cut off by a
+       *  crash or restart (no terminal record followed its `turn.started`). */
+      interrupted?: true;
+      code?: string;
     }
   | {
       type: "confirm.request";

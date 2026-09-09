@@ -30,7 +30,11 @@ import { createWorktree, describeWorktree, mergeWorktree, reconcileWorktrees, re
 export interface WakeupToolContext {
   marvinSessionId: string;
   projectId: string;
+  /** The checkout this turn runs in (a session worktree or the project root). */
   cwd: string;
+  /** ADR-0107 — the project root. Implementer worktrees, the registry and every
+   *  `.marvin/` surface hang off THIS, never off a session worktree. */
+  workDir?: string | undefined;
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
@@ -86,6 +90,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
         marvinSessionId: ctx.marvinSessionId,
         projectId: ctx.projectId,
         cwd: ctx.cwd,
+        workDir: ctx.workDir ?? ctx.cwd,
         model: ctx.model,
         advisorModel: ctx.advisorModel,
         personality: ctx.personality,
@@ -159,6 +164,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
           marvinSessionId: ctx.marvinSessionId,
           projectId: ctx.projectId,
           cwd: ctx.cwd,
+          workDir: ctx.workDir ?? ctx.cwd,
           model: ctx.model,
           advisorModel: ctx.advisorModel,
           personality: ctx.personality,
@@ -208,7 +214,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     },
     async ({ task }) => {
       try {
-        const rec = createWorktree(ctx.cwd, task);
+        const rec = createWorktree(ctx.workDir ?? ctx.cwd, task);
         return { content: [{ type: "text", text: `Worktree ready.\npath: ${rec.path}\nbranch: ${rec.branch}\nbase: ${rec.base}\n\nDispatch: Agent { subagent_type: "implementer", prompt: "Your worktree is ${rec.path} (branch ${rec.branch}). Task: ${task} …" }` }] };
       } catch (err) {
         return { content: [{ type: "text", text: `worktree_create failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
@@ -220,10 +226,10 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     "List this project's implementer worktrees with their DERIVED state — running / empty / ready / merged — plus commits, files changed, and whether the checkout holds uncommitted work. State is recomputed from git on every call, so a branch you merged in a terminal or in another session shows as `merged` here. Use it to report finished work: `ready` is the deliverable, and `git diff <base>...<branch>` reviews it.",
     {},
     async () => {
-      const all = reconcileWorktrees(ctx.cwd);
+      const all = reconcileWorktrees(ctx.workDir ?? ctx.cwd);
       if (all.length === 0) return textResult("No worktrees registered.");
       const ready = all.filter((w) => w.state === "ready").length;
-      const lines = all.map((w) => describeWorktree(ctx.cwd, w));
+      const lines = all.map((w) => describeWorktree(ctx.workDir ?? ctx.cwd, w));
       const hint = ready > 0
         ? `\n\n${ready} branch(es) ready. Merge locally with worktree_merge — that costs no CI run, because the commits ride along in whatever pipeline the current branch already runs. Never push an implementer branch on its own.`
         : "";
@@ -235,7 +241,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     "Merge ONE ready implementer branch into the current branch of the main tree, locally. Never pushes and never opens a PR/MR — the commits ride along in whatever pipeline the current branch was already going to run, so N branches cost zero extra CI. Refuses if the implementer is still running, the branch is empty or already merged, the main tree is dirty, or the merge conflicts (it aborts cleanly). After merging, the checkout and branch are reclaimed by worktree_sweep.",
     { slug: z.string().min(1).describe("The worktree slug from worktree_list.") },
     async ({ slug }) => {
-      const out = mergeWorktree(ctx.cwd, slug);
+      const out = mergeWorktree(ctx.workDir ?? ctx.cwd, slug);
       return out.ok ? textResult(out.message) : { content: [{ type: "text" as const, text: out.message }], isError: true };
     },
   );
@@ -244,7 +250,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     "Reclaim every worktree that is provably safe to remove: branches with no commits, and branches already merged somewhere. Deletes the checkout AND the branch for those. NEVER touches a `ready` branch, a running implementer, or any checkout holding uncommitted work. Run it after merging, or when the user asks about leftover worktrees.",
     {},
     async () => {
-      const swept = sweepWorktrees(ctx.cwd);
+      const swept = sweepWorktrees(ctx.workDir ?? ctx.cwd);
       if (swept.length === 0) return textResult("Nothing to reclaim — no empty or merged worktrees.");
       return textResult(swept.map((s) => `${s.slug} (${s.state}): ${s.reason}`).join("\n"));
     },
@@ -257,7 +263,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
       force: z.boolean().optional().describe("Remove even if the implementer is still running. Discards its uncommitted work."),
     },
     async ({ slug, force }) => {
-      const out = removeWorktree(ctx.cwd, slug, force === true ? { force: true } : undefined);
+      const out = removeWorktree(ctx.workDir ?? ctx.cwd, slug, force === true ? { force: true } : undefined);
       if (out.refused) return { content: [{ type: "text" as const, text: out.refused }], isError: true };
       const rec = out.removed;
       return { content: [{ type: "text", text: rec ? `Removed checkout ${rec.path}; branch ${rec.branch} kept.` : `No worktree named ${slug}.` }] };

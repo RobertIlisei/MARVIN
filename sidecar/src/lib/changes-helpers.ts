@@ -6,7 +6,8 @@
  * and resolves it to the checkpoint-store key.
  */
 
-import { slugifyWorkDir, validateProjectCwd } from "@marvin/runtime/projects";
+import { slugifyWorkDir } from "@marvin/runtime/projects";
+import { validateSessionCwd } from "@marvin/runtime/session-cwd";
 import { type NextRequest, NextResponse } from "next/server";
 
 export interface ChangesKey {
@@ -27,12 +28,14 @@ export function resolveChangesKey(
       ),
     };
   }
-  const check = validateProjectCwd(cwd);
+  // ADR-0107 — a session worktree is an accepted cwd; the checkpoint key
+  // stays the PROJECT (never slugified from the worktree path).
+  const check = validateSessionCwd(cwd);
   if (!check.ok) {
     return { error: NextResponse.json({ error: check.error }, { status: 400 }) };
   }
-  const projectId = source.projectId?.trim() || slugifyWorkDir(cwd);
-  return { key: { projectId, marvinSessionId }, cwd };
+  const projectId = source.projectId?.trim() || slugifyWorkDir(check.workDir);
+  return { key: { projectId, marvinSessionId }, cwd: check.cwd };
 }
 
 export function keyFromQuery(req: NextRequest) {

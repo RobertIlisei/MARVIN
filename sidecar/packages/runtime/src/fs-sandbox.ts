@@ -31,7 +31,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { validateProjectCwd } from "./projects";
+import { validateSessionCwd } from "./session-cwd";
 
 export type SandboxErrorCode =
   | "cwd-not-absolute"
@@ -114,7 +114,10 @@ export async function checkFsPath(
   // allow writes anywhere under /etc. The registered-project
   // check makes the sandbox boundary the project root the user
   // actually opened, not an attacker-supplied path.
-  const projectCheck = validateProjectCwd(cwd);
+  // ADR-0107 — a chat session may run in its own worktree; the boundary is
+  // then that worktree's root. Only a REGISTERED worktree of a registered
+  // project passes (see `validateSessionCwd`), never an arbitrary directory.
+  const projectCheck = validateSessionCwd(cwd);
   if (!projectCheck.ok) {
     return err(
       "cwd-not-registered",

@@ -60,7 +60,11 @@ export interface WakeupRecord {
   id: string;
   marvinSessionId: string;
   projectId: string;
+  /** The checkout the fired turn runs in (a session worktree or the project root). */
   cwd: string;
+  /** ADR-0107 — the project root, for everything `.marvin/`-scoped. Optional so
+   *  pre-0107 persisted records keep parsing; readers fall back to `cwd`. */
+  workDir?: string;
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
@@ -106,6 +110,8 @@ export interface ScheduleWakeupInput {
   marvinSessionId: string;
   projectId: string;
   cwd: string;
+  /** ADR-0107 — project root; defaults to `cwd` when omitted. */
+  workDir?: string | undefined;
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
@@ -253,6 +259,7 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
     marvinSessionId: input.marvinSessionId,
     projectId: input.projectId,
     cwd: input.cwd,
+    ...(input.workDir ? { workDir: input.workDir } : {}),
     model: input.model,
     advisorModel: input.advisorModel,
     personality: input.personality,

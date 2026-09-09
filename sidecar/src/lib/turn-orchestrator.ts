@@ -53,6 +53,7 @@ import {
   classifyTurnError,
   MAX_AUTO_CONTINUES,
 } from "@marvin/runtime/transient-errors";
+import { updateSessionMeta } from "@marvin/runtime/session-meta";
 import {
   deferIfSessionBusy,
   noteMachineTurnStarted,
@@ -75,7 +76,9 @@ import {
  * snapshot, which MARVIN cannot pin from outside.
  */
 export async function buildTurnSystemPrompt(args: {
-  cwd: string;
+  /** The PROJECT root (ADR-0107) — never a session worktree, so every tab on a
+   *  project shares one identical append string (the cache prefix). */
+  workDir: string;
   personality: PersonalityMode;
   firstMessage: boolean;
   skipProjectContext?: boolean | undefined;
@@ -84,7 +87,7 @@ export async function buildTurnSystemPrompt(args: {
   const projectContext = args.skipProjectContext
     ? ""
     : (
-        await buildProjectContext({ workDir: args.cwd, firstMessage: args.firstMessage }).catch(
+        await buildProjectContext({ workDir: args.workDir, firstMessage: args.firstMessage }).catch(
           () => ({ text: "", breakdown: [] }),
         )
       ).text;
@@ -93,7 +96,7 @@ export async function buildTurnSystemPrompt(args: {
   // block a turn on skill enablement.
   let activeSkillsBlock = "";
   try {
-    activeSkillsBlock = formatActiveSkillsBlock(args.cwd);
+    activeSkillsBlock = formatActiveSkillsBlock(args.workDir);
   } catch {
     /* best-effort */
   }
@@ -102,7 +105,7 @@ export async function buildTurnSystemPrompt(args: {
   // not disturb the cache prefix the builder exists to protect.
   let practiceBlock = "";
   try {
-    practiceBlock = practicePromptBlock(slugifyWorkDir(args.cwd));
+    practiceBlock = practicePromptBlock(slugifyWorkDir(args.workDir));
   } catch {
     /* best-effort */
   }
@@ -115,7 +118,12 @@ export interface DetachedTurnParams {
   marvinSessionId: string;
   turnId: string;
   message: string;
+  /** The checkout the turn runs in (a session worktree or the project root). */
   cwd: string;
+  /** ADR-0107 — the project root; defaults to `cwd`. */
+  workDir?: string | undefined;
+  /** ADR-0107 — per-session tree context for the user-turn suffix. */
+  sessionContext?: string | undefined;
   model: string;
   advisorModel?: string | undefined;
   permissionStrategy: PermissionStrategy;
@@ -141,6 +149,7 @@ interface AutoContinueParams {
   projectId: string;
   marvinSessionId: string;
   cwd: string;
+  workDir?: string | undefined;
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
@@ -184,6 +193,7 @@ function maybeAutoContinue(p: AutoContinueParams): void {
     marvinSessionId: p.marvinSessionId,
     projectId: p.projectId,
     cwd: p.cwd,
+    workDir: p.workDir ?? p.cwd,
     model: p.model,
     advisorModel: p.advisorModel,
     personality: p.personality,
@@ -229,6 +239,8 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     turnId,
     message,
     cwd,
+    workDir,
+    sessionContext,
     model,
     advisorModel,
     permissionStrategy,
@@ -252,6 +264,8 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     message,
     inputChannel,
     cwd,
+    ...(workDir ? { workDir } : {}),
+    ...(sessionContext ? { sessionContext } : {}),
     model,
     ...(advisorModel ? { advisorModel } : {}),
     permissionStrategy,
@@ -321,11 +335,15 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // through the EXISTING wakeup scheduler rather than a bespoke retry loop,
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
+    updateSessionMeta(projectId, marvinSessionId, {
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "error", error: payload.error.slice(0, 200) },
+    });
     maybeAutoContinue({
       error: payload.error,
       projectId,
       marvinSessionId,
       cwd,
+      workDir,
       model,
       advisorModel: advisorModel ?? null,
       personality,
@@ -362,6 +380,9 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   if (result.sessionId) {
     rememberSdkSessionId(projectId, marvinSessionId, result.sessionId);
   }
+  updateSessionMeta(projectId, marvinSessionId, {
+    lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
+  });
   recordTurnCost({
     projectId,
     costUsd: finalCostUsd,
@@ -509,11 +530,13 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
 export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const turnId = randomUUID();
   const { projectId, marvinSessionId, cwd } = record;
+  // ADR-0107 — pre-0107 records carry no workDir; for them cwd IS the root.
+  const workDir = record.workDir ?? cwd;
 
   const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
   const appendSystemPrompt = await buildTurnSystemPrompt({
-    cwd,
+    workDir,
     personality: record.personality,
     firstMessage: false,
   });
@@ -577,6 +600,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     turnId,
     message,
     cwd,
+    workDir,
     model: record.model,
     advisorModel: record.advisorModel ?? undefined,
     permissionStrategy: record.permissionStrategy,

@@ -63,6 +63,9 @@ export const marvinPaths = {
   /** Individual session transcript (JSONL). */
   sessionFile: (projectId: string, sessionId: string) =>
     join(getMarvinDataDir(), "sessions", projectId, `${sessionId}.jsonl`),
+  /** Per-session tree + posture record beside the transcript (ADR-0107). */
+  sessionMetaFile: (projectId: string, sessionId: string) =>
+    join(getMarvinDataDir(), "sessions", projectId, `${sessionId}.meta.json`),
   /** Active project pointer (last project the user opened). */
   activeProject: () => join(getMarvinDataDir(), "active-project.json"),
   /** Directory of per-project pending-wakeup files (ADR-0031). */

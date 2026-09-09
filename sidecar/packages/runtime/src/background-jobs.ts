@@ -59,7 +59,10 @@ const STOP_SIGNALS = new Set<NodeJS.Signals>([
 export interface BackgroundJobContext {
   marvinSessionId: string;
   projectId: string;
+  /** The checkout the job runs in (a session worktree or the project root). */
   cwd: string;
+  /** ADR-0107 — project root; optional so persisted pre-0107 jobs keep parsing. */
+  workDir?: string | undefined;
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
@@ -228,6 +231,7 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
     marvinSessionId: rec.ctx.marvinSessionId,
     projectId: rec.ctx.projectId,
     cwd: rec.ctx.cwd,
+    ...(rec.ctx.workDir ? { workDir: rec.ctx.workDir } : {}),
     model: rec.ctx.model,
     advisorModel: rec.ctx.advisorModel,
     personality: rec.ctx.personality,

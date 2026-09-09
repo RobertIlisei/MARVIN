@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
   maybeRefreshGraphify,
@@ -7,7 +7,11 @@ import {
 } from "@marvin/graphify-bridge";
 import { defaultModel } from "@marvin/runtime/claude-cli";
 import type { PersonalityMode } from "@marvin/runtime/personality";
-import { slugifyWorkDir, validateProjectCwd } from "@marvin/runtime/projects";
+import { marvinPaths } from "@marvin/runtime/paths";
+import { slugifyWorkDir } from "@marvin/runtime/projects";
+import { validateSessionCwd } from "@marvin/runtime/session-cwd";
+import { type SessionTree, upsertSessionMeta } from "@marvin/runtime/session-meta";
+import type { WorktreeRecord } from "@marvin/runtime/worktrees";
 import {
   type AgentMode,
   type PermissionStrategy,
@@ -122,14 +126,17 @@ export async function POST(req: NextRequest) {
   // own source tree — a self-modifying agent surface. Reject early.
   // Audit finding #7.
   const rawCwd = body.cwd?.trim();
-  const cwdError = validateCwd(rawCwd);
-  if (cwdError) {
+  const cwdCheck = validateCwd(rawCwd);
+  if (!cwdCheck.ok) {
     return new Response(
-      JSON.stringify({ error: cwdError, code: "invalid-cwd" }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ error: cwdCheck.error, code: "invalid-cwd" }),
+      { status: cwdCheck.status, headers: { "Content-Type": "application/json" } },
     );
   }
-  const cwd = rawCwd as string;
+  // ADR-0107 — `workDir` is the project root; `cwd` is the checkout the turn
+  // runs in (the same dir, or a registered session worktree).
+  const { workDir } = cwdCheck;
+  const cwd = cwdCheck.cwd;
 
   // ADR-0041 — MARVIN owns the ACTIVE PROJECT's graph lifecycle. Fire-and-
   // forget a refresh of both graphs for this project's workDir (never MARVIN's
@@ -138,10 +145,10 @@ export async function POST(req: NextRequest) {
   // calling per-turn is cheap and usually a no-op. Non-blocking: the turn
   // proceeds immediately; an out-of-date graph just means this turn reads
   // files and the next turn has the fresh graph.
-  void maybeRefreshGraphify(cwd, { source: "chat-turn" }).catch(() => {});
-  void maybeRefreshKnowledgeGraph(cwd, { source: "chat-turn" }).catch(() => {});
+  void maybeRefreshGraphify(workDir, { source: "chat-turn" }).catch(() => {});
+  void maybeRefreshKnowledgeGraph(workDir, { source: "chat-turn" }).catch(() => {});
 
-  const projectId = body.projectId?.trim() || slugifyWorkDir(cwd);
+  const projectId = body.projectId?.trim() || slugifyWorkDir(workDir);
   const marvinSessionId = body.marvinSessionId?.trim() || randomUUID();
   const turnId = randomUUID();
 
@@ -236,17 +243,37 @@ export async function POST(req: NextRequest) {
   // the executor. So with executor=Opus / advisor=Fable, you plan on Fable
   // and execute on Opus exactly as selected.
   const model = mode === "plan" && advisorModel ? advisorModel : executorModel;
-  const firstMessage = !body.marvinSessionId;
+  // ADR-0107 — a client may mint the session id before its first message (a
+  // tab exists before anything is typed), so "no id sent" no longer means
+  // "first message". The transcript's existence does.
+  const firstMessage = !existsSync(marvinPaths.sessionFile(projectId, marvinSessionId));
 
   // One builder for every turn-starting path (route / wakeup / drained
   // queue) — the prompt is the cache prefix, and two builders is how the
   // wakeup path came to re-create ~650K tokens of cache per transition.
   const appendSystemPrompt = await buildTurnSystemPrompt({
-    cwd,
+    workDir,
     personality,
     firstMessage,
     skipProjectContext: body.skipProjectContext,
   });
+
+  // ADR-0107 — persist the tree + posture beside the transcript so a
+  // server-initiated resume (and the watch feed) can rebuild this turn.
+  const sessionTree: SessionTree = cwdCheck.worktree
+    ? { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base }
+    : { mode: "shared" };
+  const posture = {
+    model,
+    advisorModel: advisorModel ?? null,
+    personality,
+    permissionStrategy,
+    playwrightEnabled,
+    thinkingMode,
+    ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
+    mode,
+  };
+  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture });
 
   // Resolve the SDK resume id BEFORE we append turn.user (and before
   // `runAgentDetached` is dispatched below). Two distinct ids exist:
@@ -298,6 +325,8 @@ export async function POST(req: NextRequest) {
     advisorThinkingMode: advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
+    cwd,
+    tree: sessionTree,
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   // SessionTurn union now admits `turn.started` natively (audit
@@ -323,6 +352,7 @@ export async function POST(req: NextRequest) {
     // uses. Non-commands pass through untouched.
     message: expandNativeCommand(message) ?? message,
     cwd,
+    workDir,
     model,
     advisorModel,
     permissionStrategy,
@@ -409,31 +439,36 @@ export async function POST(req: NextRequest) {
  * of `checkFsPath` in `@marvin/runtime/fs-sandbox`. This helper is
  * scoped to the project-root question only.
  */
-function validateCwd(rawCwd: string | undefined): string | null {
-  if (!rawCwd) return "cwd is required — pick a project before chatting";
-  if (!isAbsolute(rawCwd)) return "cwd must be an absolute path";
+type CwdCheck =
+  | { ok: true; workDir: string; cwd: string; worktree: WorktreeRecord | null }
+  | { ok: false; status: number; error: string };
+
+function validateCwd(rawCwd: string | undefined): CwdCheck {
+  if (!rawCwd) return { ok: false, status: 400, error: "cwd is required — pick a project before chatting" };
+  if (!isAbsolute(rawCwd)) return { ok: false, status: 400, error: "cwd must be an absolute path" };
   // Audit 🟠 #9: check the cwd is a registered project. The check
   // implicitly rejects MARVIN's own install root (not in projects.json)
   // AND replaces the existsSync / statSync fallback (the user can
   // only add a project via the picker, which already verified the
   // path exists + is a directory).
-  const projectCheck = validateProjectCwd(rawCwd);
+  // ADR-0107 — a registered session worktree of a registered project is the
+  // one other accepted shape; `workDir` is then the project root.
+  const projectCheck = validateSessionCwd(rawCwd);
   if (!projectCheck.ok) {
     // The picker may have a stale entry pointing at a now-deleted dir;
     // fall back to the existence check so the error message is
     // diagnosable.
     const resolvedCwd = resolve(rawCwd);
-    if (!existsSync(resolvedCwd)) return `cwd does not exist: ${resolvedCwd}`;
-    return projectCheck.error;
+    if (!existsSync(resolvedCwd)) return { ok: false, status: 400, error: `cwd does not exist: ${resolvedCwd}` };
+    return { ok: false, status: projectCheck.status === 409 ? 409 : 400, error: projectCheck.error };
   }
   // Defence in depth: still refuse equality with MARVIN's process root.
   // validateProjectCwd already rejects this (MARVIN's repo isn't a
   // registered project) but a future contributor might add it for some
   // testing reason — keep the explicit check.
-  const resolvedCwd = resolve(rawCwd);
   const marvinRoot = resolve(process.cwd());
-  if (resolvedCwd === marvinRoot) {
-    return "cwd cannot be MARVIN's own install root";
+  if (projectCheck.workDir === marvinRoot || projectCheck.cwd === marvinRoot) {
+    return { ok: false, status: 400, error: "cwd cannot be MARVIN's own install root" };
   }
-  return null;
+  return projectCheck;
 }

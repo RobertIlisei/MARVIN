@@ -3105,6 +3105,31 @@ runner.suite("constraint-pass-budget") {
     }
 }
 
+runner.suite("chat-tabs-migration") {
+    // ADR-0107 — the chat strip moves off the key it shared with the editor.
+    runner.test("the new key wins and nothing is written") {
+        let r = ChatTabsMigration.resolve(newValue: ["a", "b"], legacyStringArray: ["z"])
+        runner.expect(r.tabs, equals: ["a", "b"], "new key used")
+        runner.expect(!r.writeNewKey && !r.removeLegacyKey, "no writes")
+    }
+    runner.test("a legacy chat list migrates once and frees the key") {
+        let r = ChatTabsMigration.resolve(newValue: nil, legacyStringArray: ["a", "a", "b", ""])
+        runner.expect(r.tabs, equals: ["a", "b"], "deduped, blanks dropped")
+        runner.expect(r.writeNewKey && r.removeLegacyKey, "migrated and legacy removed")
+    }
+    runner.test("the editor's Data under the legacy key is never touched") {
+        // The caller passes nil when stringArray(forKey:) finds Data there.
+        let r = ChatTabsMigration.resolve(newValue: nil, legacyStringArray: nil)
+        runner.expect(r.tabs.isEmpty && !r.writeNewKey && !r.removeLegacyKey, "nothing to do, nothing written")
+    }
+    runner.test("closing a tab selects its right neighbour, else the new last") {
+        runner.expect(ChatTabsMigration.neighbour(after: "b", in: ["a", "b", "c"]), equals: "c", "right neighbour")
+        runner.expect(ChatTabsMigration.neighbour(after: "c", in: ["a", "b", "c"]), equals: "b", "last falls back left")
+        runner.expect(ChatTabsMigration.neighbour(after: "a", in: ["a"]), equals: nil, "nothing left")
+        runner.expect(ChatTabsMigration.neighbour(after: "x", in: ["a", "b"]), equals: "b", "unknown id → last")
+    }
+}
+
 runner.suite("brain-state-gate") {
     runner.test("a session that is not on screen cannot drive the brain") {
         runner.expect(BrainStateGate.accepts(writer: "b", active: "a"), equals: false,

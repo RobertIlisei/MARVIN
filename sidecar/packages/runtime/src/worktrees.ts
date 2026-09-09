@@ -253,6 +253,19 @@ function gitOr(workDir: string, args: string[], fallback: string): string {
   }
 }
 
+/** ADR-0107 — the registered record whose checkout is `path` (canonical
+ *  compare, so `/var` vs `/private/var` never hides a match). */
+export function findWorktreeByPath(workDir: string, path: string): WorktreeRecord | null {
+  const target = canonical(path);
+  return listWorktrees(workDir).find((w) => canonical(w.path) === target) ?? null;
+}
+
+/** ADR-0107 — canonical absolute paths git currently lists as worktrees of
+ *  `workDir` (the main checkout included). */
+export function listGitWorktreePaths(workDir: string): string[] {
+  return [...checkoutPaths(workDir)];
+}
+
 /** Absolute paths git currently considers checked-out worktrees. */
 function checkoutPaths(workDir: string): Set<string> {
   const out = gitOr(workDir, ["worktree", "list", "--porcelain"], "");

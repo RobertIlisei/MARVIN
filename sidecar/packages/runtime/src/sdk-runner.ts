@@ -281,7 +281,20 @@ export interface RunAgentInput {
    * `turn.user` records). Absent when no plan is active.
    */
   planContext?: string | undefined;
+  /**
+   * ADR-0107 — per-session tree context ("you are in worktree X on branch
+   * Y…"). Same volatile user-turn suffix as `planContext`; never part of the
+   * cached system prefix, never persisted.
+   */
+  sessionContext?: string | undefined;
+  /** The checkout this turn runs in — the SDK's `cwd`. A session worktree, or the project root. */
   cwd: string;
+  /**
+   * ADR-0107 — the PROJECT root. Everything `.marvin/`-scoped (memory, backlog,
+   * graph, audit, wakeups, implementer worktrees, plugins, skills) hangs off
+   * this, never off a session worktree. Defaults to `cwd`.
+   */
+  workDir?: string | undefined;
   model: string;
   /**
    * Optional advisor model. The ONE wired consumer is the registered
@@ -1400,6 +1413,8 @@ function maybeSharedTreeConfirm(args: {
  */
 export function makeAutoModeLogger(args: {
   cwd: string;
+  /** ADR-0107 — project root for the auto-audit ledger; defaults to `cwd`. */
+  workDir?: string;
   turnId: string;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
   checkpoint?: { projectId: string; marvinSessionId: string };
@@ -1458,7 +1473,7 @@ export function makeAutoModeLogger(args: {
     // at the gate — the model saving no longer depends on the prose steer.
     const remapped = remapGraphExtractionDispatch(toolName, safeInput);
     const finalInput = remapped ?? cls.updatedInput ?? safeInput;
-    appendAutoAuditEntry(cwd, {
+    appendAutoAuditEntry(args.workDir ?? cwd, {
       tool: toolName as AutoAuditEntryKind,
       reason:
         (cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`) +
@@ -1481,6 +1496,8 @@ export function makeAutoModeLogger(args: {
  */
 export function makeGatedCanUseTool(args: {
   cwd: string;
+  /** ADR-0107 — project root for the auto-audit ledger; defaults to `cwd`. */
+  workDir?: string;
   turnId: string;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
@@ -1531,7 +1548,7 @@ export function makeGatedCanUseTool(args: {
       // Grep / Glob fall through `appendAutoAuditEntry`'s
       // TOOLS_WORTH_LOGGING filter, so only Edit / Write / Bash
       // actually land in the JSONL — no log explosion.
-      appendAutoAuditEntry(cwd, {
+      appendAutoAuditEntry(args.workDir ?? cwd, {
         tool: toolName as AutoAuditEntryKind,
         reason: cls.reason + (remapped ? " [remapped → graph-extractor, ADR-0058]" : ""),
         input: finalInput,
@@ -1600,7 +1617,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // Two concurrent turns for two different projects with different
   // Honeycomb configs each get their own env via `Options.env`
   // below, so they don't clobber each other. Audit finding #4.
-  const { env: honeycombEnv } = computeHoneycombTelemetryEnv(cwd);
+  // ADR-0107 — `cwd` is the checkout the turn runs in; `workDir` is the
+  // project root every `.marvin/`-scoped surface below must keep using.
+  const workDir = input.workDir ?? cwd;
+  const { env: honeycombEnv } = computeHoneycombTelemetryEnv(workDir);
   const authEnv = buildSubprocessEnv();
   const turnEnv: Record<string, string | undefined> = {
     ...authEnv,
@@ -1645,9 +1665,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // Per-turn design context — drives the graphify-first and
   // advisor-on-ADR-trigger hooks (PreToolUse). Cleared in the `finally`
   // block alongside `clearTurnConfirms`.
-  const designCtx = createTurnDesignContext(turnId, cwd);
+  const designCtx = createTurnDesignContext(turnId, workDir);
   const designPreToolUseHook = makeDesignHooksPreToolUse({
-    cwd,
+    cwd: workDir,
     turnId,
     designCtx,
   });
@@ -1683,7 +1703,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // ANSWER, so a `reject` stops discharging the gate like a `go` and the
   // caveats outlive the context window.
   const advisorVerdictHook = makeAdvisorVerdictPostToolUse({
-    workDir: cwd,
+    workDir,
     marvinSessionId: input.marvinSessionId ?? "unscoped",
     turnId,
     advisorModel: advisorModelResolved,
@@ -1705,31 +1725,31 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // re-planning that the SDK's coupled plan permissionMode caused.
   const mode: AgentMode = input.mode ?? "agent";
   const readOnly = mode === "ask" || mode === "plan";
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
-  const autoModeLogger = makeAutoModeLogger({ cwd, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
+  const autoModeLogger = makeAutoModeLogger({ cwd, workDir, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
   // include: if the project has no `graphify-out/`, the tools politely report
   // that instead of failing the turn.
-  const graphMcp = createGraphMcpServer(cwd);
+  const graphMcp = createGraphMcpServer(workDir);
 
   // In-process MCP server for the curated durable-facts memory (ADR-0042).
   // The enforced write path for `.marvin/memory.md` — `remember` caps + rejects
   // activity/status content so the log can't bloat back to a redundant blob.
   // Scoped to the active project's workDir (never MARVIN's own repo).
-  const memoryMcp = createMemoryMcpServer(cwd);
+  const memoryMcp = createMemoryMcpServer(workDir);
 
   // In-process MCP server for the project backlog (ADR-0044) — the enforced
   // write path for `.marvin/backlog/`. `backlog_add` rejects fact/status/
   // decision payloads + caps length so the parking lot can't bloat. Scoped to
   // the active project's workDir; carries the session id for the source link.
-  const backlogMcp = createBacklogMcpServer({ cwd, marvinSessionId: input.marvinSessionId });
+  const backlogMcp = createBacklogMcpServer({ cwd: workDir, marvinSessionId: input.marvinSessionId });
 
   // Obsidian vault integration (ADR-0065). Status is read-only; init writes
   // only `.obsidian/app.json`, `MARVIN.md` and `graphify-out/obsidian/` — never
   // a note the user wrote. Scoped to the active project's workDir.
-  const obsidianMcp = createObsidianMcpServer({ cwd });
+  const obsidianMcp = createObsidianMcpServer({ cwd: workDir });
 
   // In-process MCP server exposing the self-wakeup tools (ADR-0031). Only
   // wired when we know which session to resume — a wakeup turn must be able
@@ -1741,6 +1761,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           marvinSessionId: input.marvinSessionId,
           projectId: input.projectId,
           cwd,
+          workDir,
           model,
           advisorModel: advisorModel ?? null,
           personality: input.personality ?? "ultron",
@@ -1760,7 +1781,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // plugin spec to the SDK so the project-local skills become callable
   // from this session. No skills committed → `null` returned, the
   // option is omitted, the SDK runs with user-global skills only.
-  const projectSkillsPlugin = projectSkillsPluginConfig(cwd);
+  const projectSkillsPlugin = projectSkillsPluginConfig(workDir);
 
   // Installed Claude Code plugins, opt-in per project (ADR-0053). Discovered
   // from `~/.claude/plugins/`, activated only when listed in
@@ -1769,7 +1790,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // v1 loads skills + commands via a sanitised staged copy (agents/hooks
   // stripped); plugin-declared MCP servers are merged into `mcpServers` below,
   // where the ADR-0053 gate routes their tools through `confirm`.
-  const enabledPlugins = loadEnabledPlugins(cwd);
+  const enabledPlugins = loadEnabledPlugins(workDir);
 
   // Permission wiring. Both modes install a `canUseTool` callback so the
   // hard-deny floor (rm -rf /, force-push to main, etc.) and the auto-
@@ -1810,6 +1831,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // safety-critical promise must not be reachable.
     disallowedTools: [
       "ScheduleWakeup",
+      // ADR-0107 — MARVIN owns worktree lifecycle (it creates a session's
+      // worktree itself and passes it as `cwd`). A model-initiated
+      // EnterWorktree inside that would nest a checkout the registry cannot
+      // see and leave the watch feed pointing at a stale cwd.
+      "EnterWorktree",
+      "ExitWorktree",
       ...(readOnly ? ["Edit", "Write", "NotebookEdit"] : []),
     ],
     // PreToolUse fires on EVERY tool call BEFORE the SDK's permission
@@ -2011,7 +2038,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const query = buildOrientationQuery(message);
       if (query) {
         try {
-          const hits = searchGraph(join(cwd, "graphify-out", "graph.json"), query, 8);
+          const hits = searchGraph(join(workDir, "graphify-out", "graph.json"), query, 8);
           orientation = formatOrientation(query, hits);
           if (orientation) {
             recordAllowedTool(designCtx, "mcp__marvin-graph__graph_search", { query });
@@ -2028,7 +2055,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         }
       }
     }
-    const reminders = [orientation, input.planContext].filter((x): x is string => Boolean(x));
+    const reminders = [orientation, input.sessionContext, input.planContext].filter((x): x is string => Boolean(x));
     const turnPrompt =
       reminders.length > 0
         ? `${message}\n\n${reminders.map((r) => `<system-reminder>\n${r}\n</system-reminder>`).join("\n\n")}`
@@ -2078,7 +2105,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // implementer to the worktree its dispatch prompt names.
       const started = taskStartedPayload(ev);
       if (started) {
-        const known = listWorktrees(cwd).map((w) => w.path);
+        const known = listWorktrees(workDir).map((w) => w.path);
         const binding = registerSubagent({
           turnId,
           taskId: started.task_id,
@@ -2092,7 +2119,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         // arrives later still be matched to the branch it produced.
         if (binding.worktree) {
           try {
-            bindWorktreeTask(cwd, binding.worktree, started.task_id);
+            bindWorktreeTask(workDir, binding.worktree, started.task_id);
           } catch {
             /* the dispatch matters more than the bookkeeping */
           }
@@ -2123,9 +2150,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       const finished = taskNotificationPayload(ev);
       if (finished) {
         try {
-          const wt = markWorktreeFinished(cwd, finished.task_id);
+          const wt = markWorktreeFinished(workDir, finished.task_id);
           if (wt) {
-            const cleaned = wt.state === "empty" && !wt.dirty ? sweepWorktrees(cwd) : [];
+            const cleaned = wt.state === "empty" && !wt.dirty ? sweepWorktrees(workDir) : [];
             onWorktreeFinished?.({
               slug: wt.slug,
               branch: wt.branch,

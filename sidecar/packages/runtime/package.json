@@ -13,6 +13,8 @@
     "./claude-cli": "./src/claude-cli.ts",
     "./session": "./src/session.ts",
     "./plan-state": "./src/plan-state.ts",
+    "./session-cwd": "./src/session-cwd.ts",
+    "./session-meta": "./src/session-meta.ts",
     "./personality": "./src/personality.ts",
     "./sdk-runner": "./src/sdk-runner.ts",
     "./transient-errors": "./src/transient-errors.ts",
