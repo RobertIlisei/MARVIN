@@ -197,12 +197,56 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_ENV_ENTRIES = 64;
 const MAX_ENV_VALUE = 4096;
 
+/**
+ * Names a project may NOT set, because `.marvin/worktree.json` is a file
+ * inside the repository and a repository can be hostile.
+ *
+ * These variables reach every subprocess a turn spawns, so the ones that
+ * choose which CODE runs (loader injection, interpreter options, the search
+ * path) would be arbitrary code execution on clone, and the ones carrying
+ * MARVIN's own credentials and contracts would be a way to redirect or
+ * silence the agent. A project that needs any of these is asking for
+ * something this mechanism is not for.
+ *
+ * Prefix-matched where a family exists (`DYLD_*`, `LD_*`, `CLAUDE_*`), exact
+ * otherwise. Rejected entries are dropped like any other malformed one.
+ */
+const RESERVED_ENV_PREFIXES = ["DYLD_", "LD_", "CLAUDE_", "MARVIN_", "ANTHROPIC_", "AWS_", "OTEL_"];
+const RESERVED_ENV_NAMES = new Set([
+  "PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "HOME",
+  "SHELL",
+  "TMPDIR",
+  "PYTHONPATH",
+  "PYTHONSTARTUP",
+  "PERL5OPT",
+  "RUBYOPT",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_CONFIG_GLOBAL",
+  "SSH_ASKPASS",
+  "EDITOR",
+  "VISUAL",
+  "PAGER",
+]);
+
+/** True when a project must not be allowed to set this variable. */
+export function isReservedWorktreeEnvName(name: string): boolean {
+  const upper = name.toUpperCase();
+  if (RESERVED_ENV_NAMES.has(upper)) return true;
+  return RESERVED_ENV_PREFIXES.some((p) => upper.startsWith(p));
+}
+
 function readEnvMap(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (Object.keys(out).length >= MAX_ENV_ENTRIES) break;
     if (!ENV_NAME.test(k)) continue;
+    if (isReservedWorktreeEnvName(k)) continue;
     if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
     const value = String(v);
     if (value.length > MAX_ENV_VALUE) continue;

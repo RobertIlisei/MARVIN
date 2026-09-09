@@ -1843,6 +1843,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const { env: honeycombEnv } = computeHoneycombTelemetryEnv(workDir);
   const authEnv = buildSubprocessEnv();
   const turnEnv: Record<string, string | undefined> = {
+    // ADR-0110 — a session worktree isolates the FILESYSTEM, never the
+    // machine. Docker, host ports, databases and anything keyed on $HOME are
+    // still shared with every other tab, and the project is the only thing
+    // that knows which variables make its runs independent. Applied only for a
+    // tab in its own worktree: in the shared checkout there is nothing to make
+    // independent from.
+    //
+    // FIRST in the object on purpose. `.marvin/worktree.json` lives inside the
+    // repository, so a hostile clone controls its contents; `readEnvMap`
+    // already refuses the names that would choose which code runs (PATH,
+    // loader injection, interpreter options) or carry MARVIN's credentials,
+    // and this ordering means every MARVIN-owned variable below still wins
+    // even if that list is ever wrong.
+    ...(input.sessionTree?.mode === "worktree" ? readWorktreeSetupConfig(workDir).env : {}),
     ...authEnv,
     ...honeycombEnv,
     // ADR-0073 — keep the TodoWrite contract across the SDK 0.3 upgrade.
@@ -1859,13 +1873,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
     // when MARVIN was launched from Finder with the minimal launchd PATH.
     PATH: enrichedToolPath(),
-    // ADR-0110 — a session worktree isolates the FILESYSTEM, never the
-    // machine. Docker, host ports, databases and anything keyed on $HOME are
-    // still shared with every other tab, and the project is the only thing
-    // that knows which variables make its runs independent. Applied only for a
-    // tab in its own worktree: in the shared checkout there is nothing to make
-    // independent from.
-    ...(input.sessionTree?.mode === "worktree" ? readWorktreeSetupConfig(workDir).env : {}),
     // SUBAGENT RAILS (ADR-0079). MARVIN's sanctioned subagents — advisor,
     // scout, graph-extractor, plugin agents, dynamic-workflow children — are
     // all ONE level deep by design: `personality.ts` tells a scout "no nested

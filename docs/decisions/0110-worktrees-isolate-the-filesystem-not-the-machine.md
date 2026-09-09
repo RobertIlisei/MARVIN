@@ -62,6 +62,22 @@ So the project declares what makes its runs independent and MARVIN applies it.
 dependency directories can be recognised from git-ignore state, but "which
 variables make your tests independent" is not derivable from a repository.
 
+### The file is inside the repository, so a repository can be hostile
+
+Caught in this change's own pre-landing review. `.marvin/worktree.json` is
+checked in, so cloning a repository would have been enough to set an
+environment variable in every subprocess of every turn — `PATH`, a loader
+injection like `DYLD_INSERT_LIBRARIES`, `NODE_OPTIONS --require`, or MARVIN's
+own `ANTHROPIC_API_KEY`. That is arbitrary code execution on clone, and the
+first draft also placed the map where it could shadow MARVIN's own `PATH`.
+
+Two changes, both kept: `readEnvMap` refuses reserved names — the loader and
+interpreter families (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHONPATH`, …), the
+git escape hatches (`GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`), and MARVIN's own
+prefixes (`CLAUDE_*`, `MARVIN_*`, `ANTHROPIC_*`) — case-insensitively; and the
+map is spread FIRST in the turn's environment so every MARVIN-owned variable
+still wins even if that list is ever wrong.
+
 Values are validated at the boundary — POSIX names only, 64 entries, 4 KB per
 value, malformed entries dropped rather than fatal — on the same reasoning as
 every other `.marvin/` reader: a typo must never cost the user their worktree.
@@ -79,6 +95,9 @@ every other `.marvin/` reader: a typo must never cost the user their worktree.
 
 - [x] `.marvin/worktree.json` accepts `env`; names validated, count and value
       length capped, malformed entries dropped, absent file still defaults.
+- [x] Reserved names are refused case-insensitively (loader, interpreter, git
+      escape hatches, MARVIN's own prefixes), and the map is spread first so
+      MARVIN-owned variables cannot be shadowed.
 - [x] `detectWorktreeSetup` never populates `env`.
 - [x] Turns in a worktree-mode session run with it; shared-mode turns do not.
 - [x] The worktrees guide names what isolation does not cover, with this

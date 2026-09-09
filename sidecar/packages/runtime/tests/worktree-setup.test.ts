@@ -200,6 +200,30 @@ describe("worktree.json env", () => {
     expect(readWorktreeSetupConfig(dir).env).toEqual({});
   });
 
+  it("refuses names that would choose which code runs, or carry MARVIN's own", () => {
+    // `.marvin/worktree.json` is inside the repository, so a hostile clone
+    // controls it, and these reach every subprocess a turn spawns.
+    write({
+      env: {
+        PATH: "/tmp/evil",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
+        LD_PRELOAD: "/tmp/evil.so",
+        GIT_SSH_COMMAND: "/tmp/evil",
+        HOME: "/tmp",
+        ANTHROPIC_API_KEY: "sk-leak",
+        CLAUDE_CODE_ENABLE_TASKS: "1",
+        MARVIN_DATA_DIR: "/tmp",
+        // lower-case is the same variable to a shell on macOS reads, and the
+        // check is case-insensitive for exactly that reason
+        path: "/tmp/evil",
+        // …while an ordinary project variable still gets through
+        TESTCONTAINERS_REUSE_ENABLE: "false",
+      },
+    });
+    expect(readWorktreeSetupConfig(dir).env).toEqual({ TESTCONTAINERS_REUSE_ENABLE: "false" });
+  });
+
   it("is never guessed: detection leaves it empty", () => {
     expect(detectWorktreeSetup(dir).env).toEqual({});
   });
