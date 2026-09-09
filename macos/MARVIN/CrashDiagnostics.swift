@@ -48,6 +48,7 @@
 // about a crash, not whether it happens.
 
 import AppKit
+import MARVINLogic
 import Foundation
 
 extension NSApplication {
@@ -108,6 +109,7 @@ enum ExceptionLog {
         let armed = swizzleReportException()
         let fatalArmed = swizzleCrashOnException()
         let stormArmed = swizzleSetNeedsUpdateConstraints()
+        let breakerArmed = swizzleUpdateConstraintsIfNeeded()
         let splitArmed: Bool = {
             guard let a = class_getInstanceMethod(NSSplitViewController.self, #selector(NSViewController.loadView)),
                   let b = class_getInstanceMethod(NSSplitViewController.self, #selector(NSSplitViewController.marvin_loadView))
@@ -130,6 +132,7 @@ enum ExceptionLog {
                 + "reportException hook: \(armed ? "ARMED (swizzled)" : "NOT ARMED — only NSSetUncaughtExceptionHandler is live")\n"
                 + "_crashOnException hook: \(fatalArmed ? "ARMED (swizzled) — fatal layout exceptions are LOGGED WITH THE VIEW TREE, then still fatal" : "NOT ARMED — a layout-loop crash will die silently")\n"
                 + "constraint-storm monitor: \(stormArmed ? "ARMED (\(ConstraintStorm.threshold) invalidations / \(ConstraintStorm.windowSeconds)s)" : "NOT ARMED")\n"
+                + "constraint-pass breaker: \(breakerArmed && stormArmed ? "ARMED (defers past \(ConstraintPassBudget.floor)+ in-pass transitions, allowance = views - \(ConstraintPassBudget.margin))" : "NOT ARMED — a non-converging layout pass is still fatal")\n"
                 + "split-view rebuild counter: \(splitArmed ? "ARMED" : "NOT ARMED")\n"
                 + "NSApplicationCrashOnExceptions: \(crashOnException) "
                 + "(\(survivalNote))\n"
@@ -253,6 +256,22 @@ enum ExceptionLog {
         return true
     }
 
+    /// Exchange `-[NSWindow updateConstraintsIfNeeded]` so the pass breaker
+    /// knows when a window is INSIDE an Update Constraints pass — the only time
+    /// a `setNeedsUpdateConstraints:` counts against AppKit's per-view limit.
+    @discardableResult
+    private static func swizzleUpdateConstraintsIfNeeded() -> Bool {
+        guard let original = class_getInstanceMethod(
+                  NSWindow.self, #selector(NSWindow.updateConstraintsIfNeeded)
+              ),
+              let replacement = class_getInstanceMethod(
+                  NSWindow.self, #selector(NSWindow.marvin_updateConstraintsIfNeeded)
+              )
+        else { return false }
+        method_exchangeImplementations(original, replacement)
+        return true
+    }
+
     /// Write one exception record. Deliberately synchronous and allocation-light
     /// — this runs while the process is on its way down, so anything deferred
     /// (a queue hop, an async write) would never land.
@@ -313,8 +332,149 @@ enum ExceptionLog {
 // diagnostic can never become the pathology.
 extension NSView {
     @objc func marvin_setNeedsUpdateConstraints(_ flag: Bool) {
-        if flag { ConstraintStorm.note(self) }
+        if flag {
+            ConstraintStorm.note(self)
+            // ADR-0062 addendum 5 — past the window's budget for one pass the
+            // request is re-issued on the next run-loop turn instead of being
+            // forwarded now; forwarding it is exactly the call that raises.
+            if ConstraintPassBreaker.deferIfOverBudget(self) { return }
+        }
         marvin_setNeedsUpdateConstraints(flag)
+    }
+}
+
+extension NSWindow {
+    @objc func marvin_updateConstraintsIfNeeded() {
+        ConstraintPassBreaker.enterPass()
+        marvin_updateConstraintsIfNeeded()
+        ConstraintPassBreaker.exitPass()
+    }
+}
+
+/// Stops the fatal layout loop at the call that raises it (ADR-0062 addendum 5).
+///
+/// Four crashes in eight days (2026-09-01, -09-03 ×2, -09-08) with the same
+/// exception, each after a different oscillator was removed — the storm
+/// monitor named `LeftPane`'s collapse latch, then the nested `VSplitView`,
+/// and on 2026-09-08 a divider drag with the Practice pane open still went
+/// `NSHostingView.updateConstraints → _prepareForTwoPassConstraintsUpdateIfNeeded
+/// → setNeedsUpdateConstraints → _postWindowNeedsUpdateConstraints → throw`.
+/// Removing oscillators one capture at a time has not converged, and the
+/// exception is fatal on the layout path whatever `NSApplicationCrashOnExceptions`
+/// says. So the limit AppKit enforces by dying is enforced here by DEFERRING:
+/// inside a pass, once a window's transitions to "needs update" exceed
+/// `ConstraintPassBudget.allowance`, the remaining requests are coalesced per
+/// view and re-issued from the next run-loop turn, where the pass counter has
+/// reset. A layout that genuinely never converges now costs a frame per turn
+/// (visible to the storm monitor) instead of the session.
+///
+/// Main-thread only, allocation-free until the floor is crossed, and it never
+/// touches a request made OUTSIDE a pass — those are the normal way layout is
+/// scheduled and cannot trip AppKit's breaker.
+enum ConstraintPassBreaker {
+    /// Nesting depth of `NSWindow.updateConstraintsIfNeeded` on the main
+    /// thread. Windows do not nest passes into each other in practice; a
+    /// single depth keeps the hot path to one compare.
+    private static var passDepth = 0
+    /// Transitions per window since the last run-loop turn. Keyed by identity
+    /// because the reset block must not retain a window past its close.
+    private static var transitions: [ObjectIdentifier: Int] = [:]
+    private static var viewCounts: [ObjectIdentifier: Int] = [:]
+    /// Views already re-requested this turn — one deferred block each, not
+    /// one per call.
+    private static var deferred: Set<ObjectIdentifier> = []
+    private static var resetScheduled = false
+    private static var tripsThisLaunch = 0
+    static let maxTripReportsPerLaunch = 3
+
+    static func enterPass() {
+        guard Thread.isMainThread else { return }
+        passDepth += 1
+    }
+
+    static func exitPass() {
+        guard Thread.isMainThread else { return }
+        passDepth = max(0, passDepth - 1)
+    }
+
+    /// True when the caller must NOT forward this `setNeedsUpdateConstraints(true)`.
+    static func deferIfOverBudget(_ view: NSView) -> Bool {
+        guard Thread.isMainThread, passDepth > 0,
+              !view.needsUpdateConstraints,          // only a TRANSITION posts a pass
+              let window = view.window else { return false }
+        let key = ObjectIdentifier(window)
+        let n = (transitions[key] ?? 0) + 1
+        transitions[key] = n
+        scheduleReset()
+        if n <= ConstraintPassBudget.floor { return false }
+        let views: Int
+        if let cached = viewCounts[key] {
+            views = cached
+        } else {
+            views = countViews(in: window)
+            viewCounts[key] = views
+        }
+        guard ConstraintPassBudget.shouldDefer(transitionsInPass: n, viewsInWindow: views) else {
+            return false
+        }
+        let id = ObjectIdentifier(view)
+        if !deferred.contains(id) {
+            deferred.insert(id)
+            DispatchQueue.main.async { [weak view] in
+                view?.needsUpdateConstraints = true
+            }
+        }
+        if n == ConstraintPassBudget.allowance(viewsInWindow: views) + 1 {
+            report(view, transitions: n, views: views)
+        }
+        return true
+    }
+
+    /// Counters live for one run-loop turn. Enqueued BEFORE any deferred
+    /// re-request, so by the time those run the slate is clean.
+    private static func scheduleReset() {
+        guard !resetScheduled else { return }
+        resetScheduled = true
+        DispatchQueue.main.async {
+            transitions.removeAll(keepingCapacity: true)
+            viewCounts.removeAll(keepingCapacity: true)
+            deferred.removeAll(keepingCapacity: true)
+            resetScheduled = false
+        }
+    }
+
+    /// AppKit counts "views in the window" from the frame view, not the content
+    /// view — the theme frame's title-bar and toolbar subviews are in that
+    /// number, so they are in this one. Capped: a runaway tree must not turn
+    /// the breaker into the storm.
+    private static func countViews(in window: NSWindow) -> Int {
+        guard let root = window.contentView?.superview ?? window.contentView else { return 0 }
+        var n = 0
+        func walk(_ v: NSView) {
+            if n >= 20_000 { return }
+            n += 1
+            for s in v.subviews { walk(s) }
+        }
+        walk(root)
+        return n
+    }
+
+    private static func report(_ view: NSView, transitions: Int, views: Int) {
+        guard tripsThisLaunch < maxTripReportsPerLaunch else { return }
+        tripsThisLaunch += 1
+        var out = "\n----- constraint-pass breaker tripped: \(transitions) in-pass transitions, \(views) views in window -----\n"
+        out += "deferred view: \(objcClassName(view)) frame=\(view.frame)\n"
+        out += "ancestry:\n"
+        var node: NSView? = view
+        var depth = 0
+        while let n = node, depth < 16 {
+            out += "  \(String(repeating: " ", count: depth))\(objcClassName(n)) constraints=\(n.constraints.count)\n"
+            node = n.superview
+            depth += 1
+        }
+        out += "(further requests this turn are re-issued next turn; the pass that would have raised did not)\n"
+        if tripsThisLaunch == maxTripReportsPerLaunch { out += "(report cap reached for this launch)\n" }
+        ExceptionLog.appendPublic(out)
     }
 }
 

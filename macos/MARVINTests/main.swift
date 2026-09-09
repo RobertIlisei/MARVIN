@@ -3082,6 +3082,29 @@ runner.suite("sidebar-collapse") {
 }
 
 
+runner.suite("constraint-pass-budget") {
+    // ADR-0062 addendum 5 — the breaker's policy, pinned. AppKit raises once a
+    // window has had more passes than views; the allowance must always sit
+    // strictly under that, and never below a usable floor.
+    runner.test("allowance is a margin under the view count") {
+        runner.expect(ConstraintPassBudget.allowance(viewsInWindow: 401), equals: 401 - ConstraintPassBudget.margin,
+                      "the 2026-08-18 window (401 views)")
+        runner.expect(ConstraintPassBudget.allowance(viewsInWindow: 78), equals: 78 - ConstraintPassBudget.margin,
+                      "the 2026-09-01 window (78 views)")
+        runner.expect(ConstraintPassBudget.allowance(viewsInWindow: 401) < 401, "strictly under AppKit's limit")
+    }
+    runner.test("tiny windows keep the floor") {
+        runner.expect(ConstraintPassBudget.allowance(viewsInWindow: 5), equals: ConstraintPassBudget.floor, "floor wins")
+        runner.expect(ConstraintPassBudget.allowance(viewsInWindow: 0), equals: ConstraintPassBudget.floor, "even for zero")
+    }
+    runner.test("defers exactly past the allowance, never before") {
+        let a = ConstraintPassBudget.allowance(viewsInWindow: 401)
+        runner.expect(!ConstraintPassBudget.shouldDefer(transitionsInPass: a, viewsInWindow: 401), "at the allowance: forward")
+        runner.expect(ConstraintPassBudget.shouldDefer(transitionsInPass: a + 1, viewsInWindow: 401), "one past: defer")
+        runner.expect(!ConstraintPassBudget.shouldDefer(transitionsInPass: 1, viewsInWindow: 401), "a healthy pass is untouched")
+    }
+}
+
 runner.suite("brain-state-gate") {
     runner.test("a session that is not on screen cannot drive the brain") {
         runner.expect(BrainStateGate.accepts(writer: "b", active: "a"), equals: false,

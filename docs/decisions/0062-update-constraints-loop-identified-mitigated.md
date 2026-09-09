@@ -282,3 +282,64 @@ captured. The mitigation note stands — `NSApplicationCrashOnExceptions: false`
 does not cover this exception, because AppKit calls `_crashOnException:`
 directly on the layout path, so any future occurrence is still fatal and still
 logged with its view tree.
+
+## Addendum 5 (2026-09-08) — a fourth oscillator, and a breaker at the call that raises
+
+MARVIN died again: `MARVIN-2026-09-09-010641.ips`, v0.1.106, while the user
+dragged the left divider with the **Practice** pane open ("this i minimized and
+marvin crashed"). Same `NSGenericException`, fatal through
+`+[NSApplication _crashOnException:]`, from `-[NSSplitView mouseDown:]`'s
+tracking loop. Fourth occurrence in eight days — 2026-09-01 (v0.1.101),
+2026-09-03 ×2 (v0.1.103), now v0.1.106 — each after a different oscillator had
+been removed. The captured stack this time:
+
+```
+NSHostingView.updateConstraints
+ → -[NSView(NSConstraintBasedLayoutInternal) _prepareForTwoPassConstraintsUpdateIfNeeded]
+  → NSView.marvin_setNeedsUpdateConstraints        ← our swizzle, already on the path
+   → -[NSView setNeedsUpdateConstraints:]
+    → -[NSView _informContainerThatSubviewsNeedUpdateConstraints] ×5
+     → -[NSWindow(NSDisplayCycle) _postWindowNeedsUpdateConstraints] + 1716   ← throws
+```
+
+SwiftUI's two-pass sizing re-requests a pass from INSIDE the pass; with the
+pane's collapse state written synchronously from the geometry callback, the
+hosting view is re-rooted mid-pass, the second pass produces a different size,
+and the ring never converges. Five storms (three on the `NavigationPaneModifier`
+hosting view, two on a toolbar item) preceded the throw, as in every capture
+since addendum 2.
+
+### Decision — stop removing oscillators one at a time; cap the requests
+
+Two changes, both shipped:
+
+1. **`ConstraintPassBreaker`** (`CrashDiagnostics.swift`) + **`ConstraintPassBudget`**
+   (`MARVINLogic`, pure, 3 tests). `-[NSWindow updateConstraintsIfNeeded]` is
+   swizzled to mark when a window is inside a pass. Inside one, the existing
+   `setNeedsUpdateConstraints:` swizzle counts each TRANSITION to "needs update"
+   per window per run-loop turn; past `allowance = max(16, views − 16)` the
+   request is not forwarded — it is coalesced per view and re-issued from the
+   next turn via `DispatchQueue.main.async`, where AppKit's counter has reset.
+   Forwarding it is exactly the call that raises. Requests made outside a pass
+   are untouched. The first trip per launch (cap 3) is logged with the deferred
+   view's ancestry so the remaining oscillator is still named.
+2. **`LeftPane.updateCollapsed` writes on the next turn.** The deadband still
+   decides (re-evaluated at write time); the write no longer happens inside the
+   pass that measured the width.
+
+### Why a breaker and not another fix
+
+Addenda 1–4 each removed a real loop and the crash returned with a new
+ancestry. The exception is AppKit's *own* loop breaker — its effect is a stale
+frame — and it is fatal on the layout path regardless of
+`NSApplicationCrashOnExceptions`. Enforcing the same limit by deferral turns
+"the session dies" into "a frame per turn until it settles", which the storm
+monitor makes visible. The floor/margin are conservative because passes ≤
+transitions and AppKit's exact counting point is undocumented.
+
+### What would prove it
+
+An `exceptions.log` entry `constraint-pass breaker tripped` during a divider
+drag with **no** `.ips` after it. Five storms per launch persisting means the
+oscillator is still there and merely survivable — that is the intended state
+until the ancestry in the trip report points at it.

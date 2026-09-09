@@ -115,6 +115,23 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-08 — the Update-Constraints loop crash is capped at the call that raises (ADR-0062 addendum 5).**
+
+  Trigger: MARVIN crashed while the user dragged the left divider with the
+  Practice pane open. Fourth identical `NSGenericException` since 2026-09-01,
+  each after a different oscillator was removed.
+
+  **Decision.** Stop chasing oscillators one capture at a time. The existing
+  `setNeedsUpdateConstraints:` swizzle sits on the exact path that throws, so
+  it now counts in-pass transitions per window (a new
+  `NSWindow.updateConstraintsIfNeeded` swizzle marks the pass) and, past
+  `ConstraintPassBudget.allowance`, defers the request to the next run-loop
+  turn instead of forwarding it. `LeftPane` writes its collapse decision on
+  the next turn too. First trip per launch is logged with the view's ancestry.
+
+  **Verification.** `swift run MARVINTests` 696 assertions, 0 failed. Live
+  proof pending: a `constraint-pass breaker tripped` log line with no `.ips`.
+
 - **2026-09-08 — plan spine: a closed step no longer waits on rows the model stopped tracking (ADR-0106).**
 
   Trigger: a shipped, tagged, deployed plan read **Paused — 5/9 · Next:

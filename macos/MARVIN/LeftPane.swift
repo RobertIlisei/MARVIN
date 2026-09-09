@@ -218,8 +218,21 @@ struct LeftPane: View {
         // obvious version latched `collapsed = true` from a default of 0
         // before any real layout, and rendered rail-only at full width.
         guard paneWidth > 0 else { return }
-        let next = SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed)
-        if next != collapsed { collapsed = next }
+        guard SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed) != collapsed else { return }
+        // ADR-0062 addendum 5 — decide here, WRITE on the next run-loop turn.
+        // The geometry callback runs inside the window's Update Constraints
+        // pass; a synchronous state write there re-roots this hosting view
+        // mid-pass and asks the window for another pass, which is the request
+        // AppKit counts against its per-view limit and eventually raises on
+        // (fatal, 2026-09-08, dragging the divider with the Practice pane
+        // open). One turn later the pass counter has reset, the pane is drawn
+        // at the measured width for a single frame, and the deadband still
+        // decides. Re-evaluated at write time so a width that crossed back
+        // in between does not land a stale decision.
+        DispatchQueue.main.async {
+            let next = SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed)
+            if next != collapsed { collapsed = next }
+        }
     }
 
     private func pane(collapsed: Bool) -> some View {
