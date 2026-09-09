@@ -3253,6 +3253,29 @@ runner.suite("session-ledger") {
     }
 }
 
+runner.suite("replay-banner") {
+    // ADR-0107 addendum 4 — the banner belongs to the last terminal event.
+    runner.test("only a trailing error banners; a later turn supersedes it") {
+        runner.expect(ReplayBanner.trailing([]) == nil, "empty transcript")
+        runner.expect(ReplayBanner.trailing([.started, .error(message: "boom", interrupted: false)]) == "boom", "trailing error shows")
+        runner.expect(ReplayBanner.trailing([
+            .started, .error(message: "boom", interrupted: false), .started, .completed,
+        ]) == nil, "a later completed turn clears the old failure")
+        runner.expect(ReplayBanner.trailing([
+            .started, .error(message: "old", interrupted: false), .started,
+        ]) == nil, "a turn that started and is still running clears it")
+        runner.expect(ReplayBanner.trailing([
+            .error(message: "first", interrupted: false), .started, .error(message: "second", interrupted: false),
+        ]) == "second", "the newest failure wins")
+    }
+    runner.test("an interrupted turn leaves the banner to the Resume chip") {
+        runner.expect(ReplayBanner.trailing([.started, .error(message: "cut off", interrupted: true)]) == nil, "interrupted is silent")
+        runner.expect(ReplayBanner.trailing([
+            .started, .error(message: "real failure", interrupted: false), .started, .error(message: "cut off", interrupted: true),
+        ]) == nil, "an interruption after a failure still clears")
+    }
+}
+
 runner.suite("session-row-state") {
     func entry(_ f: (inout SessionEntry) -> Void) -> SessionEntry { var e = SessionEntry(id: "s"); f(&e); return e }
     runner.test("precedence: needs-you > working > interrupted > failed > draft > idle") {

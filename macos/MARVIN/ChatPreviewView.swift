@@ -1298,14 +1298,18 @@ final class ChatPreviewModel {
                     replayCounts.graphSummaryCalls += d.graphSummaryCalls
                     replayAgents.apply(cliEventData: data)
                 }
-            case let .turnError(_, err):
-                // Match the live path's surface: a banner on the
-                // most recent terminal failure. We don't replay a
-                // separate row because the row UI for errors is
-                // inline (and historical errors aren't actionable).
-                lastError = err
-            case .turnStarted, .turnCompleted, .confirmRequest,
-                 .confirmDecision, .unknown:
+            case let .turnError(_, err, cut):
+                // ADR-0107 addendum 4 — the banner belongs to the LAST
+                // terminal event only (`ReplayBanner`). Assigning it from
+                // every error in the window meant a failure from hours ago
+                // re-appeared on every switch into the session, over the
+                // top of a newer turn. An interrupted turn is left to the
+                // Resume chip, which says the same thing and can act.
+                lastError = cut ? nil : err
+            case .turnStarted, .turnCompleted:
+                // A later turn supersedes an earlier turn's banner.
+                lastError = nil
+            case .confirmRequest, .confirmDecision, .unknown:
                 // turn.started — we already have marvinSessionId
                 // set from the hydrate args; no row needed.
                 // turn.completed — the cli.event `result` already
@@ -1399,6 +1403,10 @@ final class ChatPreviewModel {
                     // live, so reaching this line IS the liveness signal.
                     if !isSending {
                         isSending = true
+                        // ADR-0107 addendum 4 — attaching mid-turn emits no
+                        // `turn.started`, so nothing else clears a previous
+                        // turn's banner while this one streams underneath it.
+                        lastError = nil
                         MarvinBridge.shared.setBusy(true, forSession: marvinSessionId)
                         if MarvinBridge.shared.marvinState == "idle" {
                             MarvinBridge.shared.setMarvinState("thinking", forSession: marvinSessionId)
@@ -1811,7 +1819,9 @@ final class ChatPreviewModel {
             if let sid = marvinSessionId {
                 SessionRegistry.shared.noteLocalTurnEnded(id: sid, outcome: .error, costUsd: nil)
             }
-            lastError = e.error
+            // ADR-0107 addendum 4 — an interrupted turn is the Resume chip's
+            // to report; a second banner in different words only confused.
+            lastError = e.interrupted == true ? nil : e.error
             currentActivity = nil
             // ADR-0043 — a server-initiated turn errored; settle the affordance
             // so the chip doesn't linger as a phantom "running" forever.

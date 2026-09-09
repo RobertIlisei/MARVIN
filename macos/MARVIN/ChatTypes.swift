@@ -134,6 +134,10 @@ struct TokenUsage: Codable {
 /// reason — log it, surface in the UI as a red banner with retry.
 struct TurnError: Codable {
     let error: String
+    /// ADR-0107 addendum 3 — the turn was cut off by an app quit or restart,
+    /// not by Stop and not by a failure. The Resume chip speaks for it, so
+    /// the error banner stays quiet.
+    let interrupted: Bool?
 }
 
 // MARK: - Request bodies
@@ -298,12 +302,12 @@ enum SessionTurn: Codable {
     case confirmRequest(at: String, payload: ConfirmRequest)
     case confirmDecision(at: String, turnId: String, toolUseId: String, decision: String)
     case turnCompleted(at: String, durationMs: Int?, costUsd: Double?, sessionId: String?)
-    case turnError(at: String, error: String)
+    case turnError(at: String, error: String, interrupted: Bool)
     case unknown(type: String, at: String?)
 
     private enum CodingKeys: String, CodingKey {
         case type, at, message, marvinSessionId, turnId, event, payload,
-             toolUseId, decision, durationMs, costUsd, sessionId, error
+             toolUseId, decision, durationMs, costUsd, sessionId, error, interrupted
     }
 
     init(from decoder: Decoder) throws {
@@ -336,7 +340,8 @@ enum SessionTurn: Codable {
             self = .turnCompleted(at: at ?? "", durationMs: ms, costUsd: cost, sessionId: sid)
         case "turn.error":
             let err = try c.decode(String.self, forKey: .error)
-            self = .turnError(at: at ?? "", error: err)
+            let cut = try c.decodeIfPresent(Bool.self, forKey: .interrupted) ?? false
+            self = .turnError(at: at ?? "", error: err, interrupted: cut)
         default:
             self = .unknown(type: type, at: at)
         }
@@ -378,10 +383,11 @@ enum SessionTurn: Codable {
             try c.encodeIfPresent(ms, forKey: .durationMs)
             try c.encodeIfPresent(cost, forKey: .costUsd)
             try c.encodeIfPresent(sid, forKey: .sessionId)
-        case let .turnError(at, err):
+        case let .turnError(at, err, cut):
             try c.encode("turn.error", forKey: .type)
             try c.encode(at, forKey: .at)
             try c.encode(err, forKey: .error)
+            if cut { try c.encode(true, forKey: .interrupted) }
         case let .unknown(type, at):
             try c.encode(type, forKey: .type)
             try c.encodeIfPresent(at, forKey: .at)
