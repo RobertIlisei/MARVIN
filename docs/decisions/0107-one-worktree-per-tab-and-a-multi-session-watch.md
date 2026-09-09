@@ -43,7 +43,7 @@ The research pass (25 Anthropic-primary claims, 0 refuted) settled the direction
 
 - The registry file gains `kind` and `sessionId` on records and a `session` state; pre-0107 records reconcile exactly as before (pinned by test).
 - Persisted wakeup and background-job records gain an optional `workDir`; readers fall back to `cwd`.
-- `PlanTag` / `ChatRequest` grow optional fields; older clients keep working (shared mode, no lane).
+- `ChatRequest` grows optional fields (`tree`, `lane`, `sessionTitle`); older clients keep working (shared mode, no lane).
 - The editor, terminal, file tree and LSP stay on the project root; only the agent's turns, the changes badge and the review sheet follow the session's worktree. The chip says so.
 - `buildProjectContext` reads context docs from the main tree (keeps the cache prefix identical across tabs); a tab's edits to `PROJECT_STATUS.md` in its worktree are not seen next turn.
 - A mode switch mid-session changes the change-ledger's base directory; entries recorded before the switch may read stale until the next turn.
