@@ -241,6 +241,77 @@ export function appendSessionTurn(
   }
 }
 
+/**
+ * Load only the LAST `tail` turns of a transcript, plus the true turn count.
+ *
+ * `loadSession` reads the file as UTF-8 and `JSON.parse`s every line, which
+ * the tail-capped hydrate then throws almost all of away. Measured on a real
+ * 122 MB / 36,356-turn transcript (2026-09-09):
+ *
+ * | path | cost |
+ * |---|---|
+ * | `loadSession` — utf-8 read + parse all 36,356 lines | **528 ms** |
+ * | this — buffer read, count newlines, parse the last 200 | **105 ms** |
+ *
+ * The saving is mostly the UTF-8 decode of 122 MB into a JS string (251 ms of
+ * it) and the 36,156 `JSON.parse` calls whose results are discarded. Reading
+ * into a Buffer and slicing from the last newline avoids both. The newline
+ * count is kept because the client needs the true total to offer "show
+ * earlier"; counting bytes is 85 ms against the 273 ms the parse costs.
+ *
+ * Returns `null` when the file doesn't exist, so callers branch the same way
+ * they do on `loadSession`.
+ */
+export function loadSessionTail(
+  projectId: string,
+  sessionId: string,
+  tail: number,
+): { record: SessionRecord; totalTurns: number; truncated: boolean } | null {
+  const path = marvinPaths.sessionFile(projectId, sessionId);
+  if (!existsSync(path)) return null;
+  const buf = readFileSync(path);
+
+  // Total lines, so the client can say how much history is behind the tail.
+  // A trailing newline does not open a line, so only count what precedes one.
+  let totalTurns = 0;
+  for (let i = 0; i < buf.length; i += 1) {
+    if (buf[i] === 0x0a) totalTurns += 1;
+  }
+  if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) totalTurns += 1;
+
+  // Walk back over `tail` newlines. Each newline OPENS the line after it, so
+  // the n-th one going backwards is the start of the n-th line from the end.
+  // The file's own trailing newline terminates the last line rather than
+  // opening one, so the search starts before it.
+  let searchEnd = buf.length;
+  if (searchEnd > 0 && buf[searchEnd - 1] === 0x0a) searchEnd -= 1;
+  let from = 0;
+  let found = 0;
+  let pos = searchEnd;
+  while (pos > 0) {
+    const prev = buf.lastIndexOf(0x0a, pos - 1);
+    if (prev < 0) break; // fewer lines than asked for: the whole file is the tail
+    found += 1;
+    if (found === tail) {
+      from = prev + 1;
+      break;
+    }
+    pos = prev;
+  }
+
+  const turns: SessionTurn[] = [];
+  for (const line of buf.subarray(from).toString("utf-8").split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      turns.push(JSON.parse(scrubLoneSurrogates(t)) as SessionTurn);
+    } catch {
+      // skip malformed line
+    }
+  }
+  return { record: { sessionId, projectId, turns }, totalTurns, truncated: totalTurns > turns.length };
+}
+
 /** Load a session transcript from disk. Returns `null` when the file doesn't exist. */
 export function loadSession(
   projectId: string,

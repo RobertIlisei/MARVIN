@@ -502,6 +502,39 @@ final class ChatPreviewModel {
     /// see an empty list and assume the project has no history.
     private(set) var isHydrating: Bool = false
 
+    /// Rows for sessions the user has already visited this launch, so
+    /// switching back to a tab paints on the same run-loop turn instead of
+    /// blanking until the fetch lands (user, 2026-09-09: switching sessions
+    /// "does not load the right pane smoothly and cleanly and fluid").
+    ///
+    /// The fetch still runs and still replaces these — the cache decides what
+    /// is on screen for the ~150 ms in between, not what is true. Bounded to
+    /// `messageCacheCapacity` tabs, most-recent first, because these are the
+    /// rendered rows of a transcript and a user with fifty historical sessions
+    /// should not be holding fifty of them.
+    private var messageCache: [(sessionId: String, messages: [ChatMessage])] = []
+    private static let messageCacheCapacity = 6
+
+    /// Stash the rows on screen under the session leaving the pane.
+    private func cacheMessages(for sessionId: String) {
+        guard !sessionId.isEmpty, !messages.isEmpty else { return }
+        messageCache.removeAll { $0.sessionId == sessionId }
+        messageCache.insert((sessionId, messages), at: 0)
+        if messageCache.count > Self.messageCacheCapacity {
+            messageCache.removeLast(messageCache.count - Self.messageCacheCapacity)
+        }
+    }
+
+    private func cachedMessages(for sessionId: String) -> [ChatMessage]? {
+        messageCache.first { $0.sessionId == sessionId }?.messages
+    }
+
+    /// Drop a session's cached rows — on close, so a reopened tab re-reads
+    /// from disk rather than showing what it looked like before.
+    func forgetCachedMessages(for sessionId: String) {
+        messageCache.removeAll { $0.sessionId == sessionId }
+    }
+
     /// ADR-0048 — incremental history paging. Cold start paints the last
     /// `HISTORY_PAGE` lines; a top-of-list control loads the next page (and so
     /// on, up to the full log). `historyWindow` is how many lines are currently
@@ -577,6 +610,7 @@ final class ChatPreviewModel {
     /// tab, or to a fresh draft tab when none remain.
     func closeTab(_ sessionId: String) {
         let wasActive = loadedSessionId == sessionId
+        forgetCachedMessages(for: sessionId)
         let next = SessionRegistry.shared.closeTab(sessionId)
         guard wasActive else { return }
         if let next {
@@ -697,6 +731,16 @@ final class ChatPreviewModel {
         }
     }
 
+    /// Move to the previous / next OPEN tab, wrapping at both ends.
+    func stepSession(_ direction: SessionTabNavigation.Direction) {
+        guard let target = SessionTabNavigation.step(
+            from: loadedSessionId,
+            in: SessionRegistry.shared.openTabs,
+            direction
+        ) else { return }
+        selectSession(target, fallbackProjectId: MarvinBridge.shared.activeProjectId)
+    }
+
     /// Pick a past session — re-route hydrate to that sessionId.
     /// `fallbackProjectId` is passed by the view (from the bridge)
     /// so this works even before the first hydrate has set loadedProjectId.
@@ -705,7 +749,15 @@ final class ChatPreviewModel {
         openTab(sessionId)  // opening a chat makes it a tab (Cursor-style)
         if loadedSessionId == sessionId { return }
         loadedSessionId = nil
-        hydrate(projectId: projectId, sessionId: sessionId)
+        // Tail-capped, like `autoHydrate`. This used to pull the FULL
+        // transcript on the grounds that picking a session from the history
+        // menu is a deliberate act worth the cost — true when it was a menu,
+        // false since ADR-0107 made this the tab-strip click. Measured on a
+        // real 122 MB / 36,356-turn session: the full path shipped 122 MB over
+        // loopback and spent seconds rebuilding rows the render window then
+        // clipped to 200 anyway. ADR-0048's "show earlier" control is how the
+        // rest is reached, and it always was.
+        hydrate(projectId: projectId, sessionId: sessionId, tail: Self.historyPage)
     }
 
     /// The last user-typed message, retained so the retry button
@@ -798,27 +850,33 @@ final class ChatPreviewModel {
     /// ADR-0076 — the same body a normal turn POST sends, for a message
     /// aimed at the turn already running on `marvinSessionId`.
     private func injectRequest(message: String, cwd: String?) -> ChatRequest {
-        let prefs = NativePrefs.shared
+        // ADR-0108 — the posture of THIS tab, not the app-wide defaults.
+        let posture = NativePrefs.shared.posture(for: sessionPostureKey)
         let fields = treeFields(for: message)
         return ChatRequest(
             message: message,
             cwd: cwd,
             projectId: loadedProjectId,
             marvinSessionId: marvinSessionId,
-            personality: prefs.personality,
-            model: prefs.executorModel,
-            advisorModel: prefs.advisorModel,
-            permissionStrategy: UserDefaults.standard.string(forKey: "marvin.permissionStrategy")
-                ?? NativePermissionStrategy.auto.rawValue,
+            personality: posture.personality,
+            model: posture.executorModel,
+            advisorModel: posture.advisorModel,
+            permissionStrategy: posture.permissionStrategy,
             playwrightEnabled: UserDefaults.standard.bool(forKey: "marvin.playwrightEnabled"),
             planContext: nil,
-            mode: prefs.mode,
-            thinkingMode: prefs.thinkingMode,
-            advisorThinkingMode: prefs.advisorThinkingMode,
+            mode: posture.mode,
+            thinkingMode: posture.thinkingMode,
+            advisorThinkingMode: posture.advisorThinkingMode,
             resetSdkSession: nil,
             lane: fields.lane
         )
     }
+
+    /// ADR-0108 — the id a posture is filed under. `marvinSessionId` once the
+    /// server has minted one, the draft id before that; they are the same
+    /// value for a client-minted draft, so a tab's posture survives its
+    /// first turn.
+    private var sessionPostureKey: String? { marvinSessionId ?? loadedSessionId }
 
     /// Drop a queued message before it dispatches. Called by the
     /// queued-chip strip's per-row remove button.
@@ -858,26 +916,18 @@ final class ChatPreviewModel {
         // instead of a user bubble.
         messages.append(display ?? .userText(message))
 
-        // Phase 2g.1 — read permission strategy from UserDefaults
-        // instead of hardcoding gated. The user picks via the
-        // Settings panel (default: auto). Phase 2e hardcoded gated
-        // so the confirm sheet path was exercisable while the
-        // native chat lived in a side preview window; now that
-        // Phase 2g.3 promotes it to the main chat surface, gated-
-        // by-default would mean every tool call hit a confirm
-        // prompt for users running in auto-mode — frustrating UX.
-        let strategy = UserDefaults.standard.string(
-            forKey: "marvin.permissionStrategy"
-        ) ?? NativePermissionStrategy.auto.rawValue
-        // ADR-0045 — read fresh from UserDefaults (like `strategy`) so the
-        // Settings toggle is honored without NativePrefs in-memory staleness.
+        // ADR-0108 — models, voice, autonomy mode, effort and the permission
+        // gate are all per-session now, so one lookup replaces the mixture of
+        // NativePrefs reads and direct UserDefaults reads that used to sit
+        // here. The gate in particular was read straight from UserDefaults
+        // (Phase 2g.1) to dodge NativePrefs staleness; the posture record is
+        // the authoritative value for this tab, so that dodge is no longer
+        // needed. These must be in the request body — the server otherwise
+        // falls through to `runtimeMode` and uses opus regardless of the pick.
+        let posture = NativePrefs.shared.posture(for: sessionPostureKey)
+        // ADR-0045 — the Playwright MCP server stays app-wide: it is a
+        // machine-level opt-in, not something a tab chooses.
         let playwrightOn = UserDefaults.standard.bool(forKey: "marvin.playwrightEnabled")
-        // Pull executor / advisor / personality from NativePrefs.
-        // These are configured via the agents bar (the pills above
-        // the messages) and must be sent in the request body — the
-        // server otherwise falls through to `runtimeMode` and ends
-        // up using opus regardless of what the user picked.
-        let prefs = NativePrefs.shared
         // Phase 2h — pass the captured/hydrated marvinSessionId so
         // the server appends to the same session the web has been
         // writing to. Without this, every native send minted a fresh
@@ -898,18 +948,18 @@ final class ChatPreviewModel {
             cwd: cwd,
             projectId: loadedProjectId,
             marvinSessionId: marvinSessionId,
-            personality: prefs.personality,
-            model: prefs.executorModel,
-            advisorModel: prefs.advisorModel,
-            permissionStrategy: strategy,
+            personality: posture.personality,
+            model: posture.executorModel,
+            advisorModel: posture.advisorModel,
+            permissionStrategy: posture.permissionStrategy,
             playwrightEnabled: playwrightOn,
             // ADR-0051 — inject the active plan's live status into the model's
             // context this turn (the strip alone never reached the model). nil
             // when no plan is active. `message` (the persisted bubble) stays clean.
             planContext: activePlanContextBlock(),
-            mode: prefs.mode,
-            thinkingMode: prefs.thinkingMode,
-            advisorThinkingMode: prefs.advisorThinkingMode,
+            mode: posture.mode,
+            thinkingMode: posture.thinkingMode,
+            advisorThinkingMode: posture.advisorThinkingMode,
             resetSdkSession: resetThisTurn ? true : nil,
             tree: fields.tree,
             lane: fields.lane,
@@ -1027,6 +1077,10 @@ final class ChatPreviewModel {
     /// `cancel()` is the Stop button, and nothing else.
     func clear() {
         detachLocalStream()
+        // Keep the leaving tab's rows: "New" is a switch away from a session
+        // that still exists, so coming back to it should be as instant as any
+        // other switch.
+        if let leaving = loadedSessionId { cacheMessages(for: leaving) }
         // The brain reflects the session ON SCREEN, which is about to be an
         // empty one — idle it locally without touching the turn left behind.
         MarvinBridge.shared.setMarvinState("idle", forSession: marvinSessionId)
@@ -1140,6 +1194,9 @@ final class ChatPreviewModel {
         resumeTask?.cancel()
         resumeTask = nil
 
+        // Keep the leaving tab's rows so coming back to it is instant.
+        if let leaving = loadedSessionId { cacheMessages(for: leaving) }
+
         loadedProjectId = projectId
         loadedSessionId = sessionId
         // ADR-0043 — keep the announce stream live for this project so an idle
@@ -1153,7 +1210,13 @@ final class ChatPreviewModel {
         // scratch. We don't preserve `lastSentMessage` across
         // hydrate because retry semantics belong to the in-memory
         // turn, not the hydrated transcript.
-        messages.removeAll()
+        //
+        // A tab visited earlier this launch paints its cached rows here rather
+        // than an empty list. `replay` overwrites them wholesale when the
+        // fetch lands, so this only decides what the user looks at while it is
+        // in flight — never what is finally shown.
+        messages = cachedMessages(for: sessionId) ?? []
+        renderWindow = Self.historyPage
         pendingConfirms.removeAll()
         resolvedConfirms.removeAll()
         marvinSessionId = sessionId
@@ -1171,12 +1234,14 @@ final class ChatPreviewModel {
 
         Task { @MainActor in
             defer { isHydrating = false }
+            let began = Date()
             do {
                 let record = try await ChatService.shared.fetchSession(
                     projectId: projectId,
                     sessionId: sessionId,
                     tail: tail
                 )
+                let fetched = Date()
                 // Drop the result if the session changed under us
                 // mid-fetch (user clicked another project). The
                 // observer will re-fire hydrate for the new pair.
@@ -1189,6 +1254,14 @@ final class ChatPreviewModel {
                     historyWindow = record.turns.count
                     historyTotalTurns = record.totalTurns
                     historyTruncated = record.truncated ?? false
+                    // Session switching is a thing the user feels, so the two
+                    // costs that make it slow are logged rather than guessed at
+                    // (2026-09-09: three wrong theories died to one measurement).
+                    // `fetch` is server read + wire + decode; `replay` is the
+                    // main-thread rebuild of the rows.
+                    let fetchMs = Int(fetched.timeIntervalSince(began) * 1000)
+                    let replayMs = Int(Date().timeIntervalSince(fetched) * 1000)
+                    NSLog("[ChatPreview] hydrate \(sessionId.prefix(8)) turns=\(record.turns.count) fetch=\(fetchMs)ms replay=\(replayMs)ms")
                 }
                 // ADR-0052 — the durable spine is authoritative over replay's
                 // transcript scrape: the scrape only sees the hydrated tail
@@ -1290,7 +1363,7 @@ final class ChatPreviewModel {
                 // carry — single source of truth for the rendering
                 // pipeline.
                 if let data = try? encoder.encode(event) {
-                    rebuilt = ChatStreamReducer.apply(rebuilt, cliEventData: data)
+                    ChatStreamReducer.apply(to: &rebuilt, cliEventData: data)
                     if let todos = TodoExtractor.todos(from: data) { replayTodos = todos }
                     let d = ToolUseCounter.deltaForCliEvent(data)
                     replayCounts.graphCalls += d.graphCalls
@@ -1638,7 +1711,7 @@ final class ChatPreviewModel {
             // The reducer mutation must stay synchronous — the chat
             // list IS the rendered surface, so the SwiftUI commit
             // that follows is what the user actually sees on screen.
-            messages = ChatStreamReducer.apply(messages, cliEventData: data)
+            ChatStreamReducer.apply(to: &messages, cliEventData: data)
             // ADR-0043 — MARVIN just started a tracked background job; light the
             // "running" affordance until its completion turn lands.
             if cliEventStartsBackgroundJob(data) {
@@ -2409,31 +2482,45 @@ struct ChatPreviewView: View {
     /// clock menu in the header stays as the full-history overflow.
     private var sessionTabs: some View {
         HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    // A brand-new chat (nothing loaded yet) shows as its
-                    // own active "New chat" tab until the first turn mints
-                    // a session id that joins the open tabs.
-                    if model.loadedSessionId == nil {
-                        chatTab(title: "New chat", systemImage: "bubble.left.fill",
-                                active: true, onSelect: {}, onClose: nil)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        // A brand-new chat (nothing loaded yet) shows as its
+                        // own active "New chat" tab until the first turn mints
+                        // a session id that joins the open tabs.
+                        if model.loadedSessionId == nil {
+                            chatTab(title: "New chat", systemImage: "bubble.left.fill",
+                                    active: true, onSelect: {}, onClose: nil)
+                        }
+                        ForEach(model.openTabSessionIds, id: \.self) { sid in
+                            chatTab(
+                                title: tabTitle(forSessionId: sid),
+                                systemImage: "bubble.left",
+                                active: sid == model.loadedSessionId,
+                                state: SessionRegistry.shared.rowState(sid),
+                                onSelect: {
+                                    model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                                },
+                                onClose: { requestCloseTab(sid) }
+                            )
+                            .id(sid)
+                        }
                     }
-                    ForEach(model.openTabSessionIds, id: \.self) { sid in
-                        chatTab(
-                            title: tabTitle(forSessionId: sid),
-                            systemImage: "bubble.left",
-                            active: sid == model.loadedSessionId,
-                            state: SessionRegistry.shared.rowState(sid),
-                            onSelect: {
-                                model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
-                            },
-                            onClose: { requestCloseTab(sid) }
-                        )
+                    .padding(.horizontal, 8)
+                }
+                // Selecting a session from anywhere — the menu below, the
+                // Sessions pane, ⇧⌘[ / ⇧⌘] — used to be able to activate a tab
+                // that was entirely off the right edge, which reads as the
+                // click doing nothing. Bring it into view.
+                .onChange(of: model.loadedSessionId) { _, sid in
+                    guard let sid else { return }
+                    withAnimation(MarvinTheme.transition) {
+                        proxy.scrollTo(sid, anchor: .center)
                     }
                 }
-                .padding(.horizontal, 8)
             }
             Spacer(minLength: 4)
+            openSessionsMenu
             Button {
                 model.newTab()
                 if let pid = bridge.activeProjectId { model.refreshSessions(projectId: pid) }
@@ -2562,6 +2649,75 @@ struct ChatPreviewView: View {
                 model.lastError = "Could not save the lane: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Every open session in one list — the way to reach a tab past the edge
+    /// of the strip, and the way to tell two tabs apart when their first
+    /// messages are identical.
+    ///
+    /// A menu rather than the ‹ › arrows the editor's file tabs use. Arrows
+    /// need the strip's content and viewport widths, and measuring those means
+    /// `background(GeometryReader)` — extra subviews in a window whose view
+    /// COUNT is what AppKit's runaway-pass breaker budgets against (ADR-0062;
+    /// v0.1.93's `WidthReporter` fixed a storm and shipped a crash doing
+    /// exactly that). This adds one button, measures nothing, and unlike a pair
+    /// of arrows it shows you what you are navigating to. Tabs also scroll
+    /// themselves into view now, which is the other half of what the arrows
+    /// were for.
+    private var openSessionsMenu: some View {
+        let tabs = model.openTabSessionIds
+        return Menu {
+            if tabs.isEmpty {
+                Text("No open sessions")
+            }
+            ForEach(tabs, id: \.self) { sid in
+                Button {
+                    model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                } label: {
+                    Label(
+                        openSessionMenuTitle(sid),
+                        systemImage: sid == model.loadedSessionId ? "checkmark" : "bubble.left"
+                    )
+                }
+            }
+            Divider()
+            Button("Previous Session") { model.stepSession(.previous) }
+            Button("Next Session") { model.stepSession(.next) }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "square.stack")
+                    .font(.system(size: 10))
+                Text("\(tabs.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .monospacedDigit()
+            }
+            .frame(height: 22)
+            .padding(.horizontal, 6)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Open sessions (⇧⌘[ / ⇧⌘])")
+    }
+
+    /// A menu row's text. The strip truncates to ~24 characters, which is why
+    /// six tabs opened from the same prompt all read "Plan the implementation
+    /// …" and none of them can be told apart. Here there is room for the
+    /// worktree branch, which ADR-0107 already makes unique per tab.
+    private func openSessionMenuTitle(_ sid: String) -> String {
+        var title = tabTitle(forSessionId: sid)
+        if let slug = SessionRegistry.shared.entry(sid)?.tree?.slug, !slug.isEmpty {
+            title += "  ·  \(slug)"
+        }
+        let state = SessionRegistry.shared.rowState(sid)
+        switch state {
+        case .working: title += "  ·  working"
+        case .needsYou(let n): title += "  ·  needs you (\(n))"
+        case .failed: title += "  ·  failed"
+        case .interrupted: title += "  ·  interrupted"
+        case .draft, .idle: break
+        }
+        return title
     }
 
     /// One open tab: a click-to-switch label + a close ✕. `onClose` nil

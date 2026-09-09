@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   bindWorktreeTask,
+  createSessionWorktree,
   createWorktree,
+  mergeAllWorktrees,
   listWorktrees,
   markWorktreeFinished,
   mergeWorktree,
@@ -82,6 +84,95 @@ describe("worktree lifecycle", () => {
     git("commit", "-qm", "chore(hooks): add commit-msg");
     git("config", "core.hooksPath", ".githooks");
   };
+
+
+  // ── Batch integration (ADR-0109) ─────────────────────────────────────────
+  //
+  // Five chat tabs produce five branches, and one merge request each costs
+  // ~48 compute-minutes against an allowance already exceeded. Folding them
+  // in locally costs nothing, so the batch path has to be as trustworthy as
+  // the single one: it must merge in a defined order, refuse to touch a
+  // branch that is not finished, and stop rather than half-integrate.
+
+  it("merges every ready branch in one pass, oldest first", () => {
+    const a = createWorktree(repo, "first task");
+    const b = createWorktree(repo, "second task");
+    const c = createWorktree(repo, "third task");
+    commitIn(a.path, "a.ts");
+    commitIn(b.path, "b.ts");
+    commitIn(c.path, "c.ts");
+
+    const out = mergeAllWorktrees(repo);
+
+    expect(out.stopped).toBeUndefined();
+    expect(out.merged.map((m) => m.branch)).toEqual([a.branch, b.branch, c.branch]);
+    for (const f of ["a.ts", "b.ts", "c.ts"]) {
+      expect(existsSync(join(repo, f)), f).toBe(true);
+    }
+    // Local only — the message says so, because that is the whole point.
+    expect(out.message).toMatch(/Not pushed/);
+  }, 30_000);
+
+  it("says so plainly when there is nothing to merge", () => {
+    const out = mergeAllWorktrees(repo);
+    expect(out.merged).toEqual([]);
+    expect(out.message).toMatch(/No finished branches/);
+  });
+
+  it("never touches a branch that is not finished, and says why", () => {
+    const ready = createWorktree(repo, "done");
+    commitIn(ready.path, "done.ts");
+    // An open chat tab's tree: its branch is decided at tab close, not here.
+    const session = createSessionWorktree(repo, { sessionId: "s1", title: "an open tab" });
+    commitIn(session.path, "tab.ts");
+    // An implementer still building: `running` is the one state that is
+    // RECORDED rather than derived, and binding the task is what records it.
+    const running = createWorktree(repo, "in flight");
+    commitIn(running.path, "wip.ts");
+    bindWorktreeTask(repo, running.path, "task-1");
+
+    const out = mergeAllWorktrees(repo);
+
+    expect(out.merged.map((m) => m.branch)).toEqual([ready.branch]);
+    const skipped = Object.fromEntries(out.skipped.map((s) => [s.slug, s.reason]));
+    expect(skipped[session.slug]).toMatch(/open chat tab/);
+    expect(skipped[running.slug]).toMatch(/implementer/);
+    expect(existsSync(join(repo, "tab.ts"))).toBe(false);
+  }, 30_000);
+
+  it("stops at the first conflict instead of half-integrating", () => {
+    // Two branches that change the same line: the second cannot apply.
+    const a = createWorktree(repo, "first");
+    const b = createWorktree(repo, "second");
+    commitIn(a.path, "shared.ts", "from a\n");
+    commitIn(b.path, "shared.ts", "from b\n");
+
+    const out = mergeAllWorktrees(repo);
+
+    expect(out.merged).toHaveLength(1);
+    expect(out.stopped?.branch).toBe(b.branch);
+    // The aborted merge left nothing behind: no half-applied merge, and the
+    // branch still exists to be resolved by hand. (`.marvin/` is untracked
+    // bookkeeping and is what `workingTreeDirty` deliberately ignores.)
+    const status = git("status", "--porcelain")
+      .split("\n")
+      .filter((l) => l.trim() && !l.includes(".marvin/"));
+    expect(status).toEqual([]);
+    expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(git("branch", "--list", b.branch).trim()).not.toBe("");
+    expect(out.message).toMatch(/Stopped at/);
+  }, 30_000);
+
+  it("refuses while the main tree is dirty, before merging anything", () => {
+    const a = createWorktree(repo, "ready one");
+    commitIn(a.path, "x.ts");
+    writeFileSync(join(repo, "README.md"), "edited but not committed\n");
+
+    const out = mergeAllWorktrees(repo);
+
+    expect(out.merged).toEqual([]);
+    expect(out.message).toMatch(/uncommitted changes/);
+  });
 
   it("merges past a Conventional-Commits commit-msg hook", () => {
     installConventionalCommitHook();

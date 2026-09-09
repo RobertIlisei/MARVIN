@@ -148,6 +148,14 @@ final class SessionRegistry {
             guard let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: ids),
                   self.projectId == pid else { return }
             self.ledger.apply(snapshot: rows, now: Date())
+            // ADR-0108 — a tab restored from disk has no local posture, but
+            // the sidecar recorded one on its last turn. Seed from that so a
+            // reopened session comes back in the mode it was left in rather
+            // than in the app-wide defaults.
+            for row in rows {
+                guard let wire = row.posture else { continue }
+                NativePrefs.shared.adoptPosture(wire, for: row.marvinSessionId)
+            }
         }
     }
 

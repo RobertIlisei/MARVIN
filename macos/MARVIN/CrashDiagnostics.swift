@@ -109,7 +109,11 @@ enum ExceptionLog {
         let armed = swizzleReportException()
         let fatalArmed = swizzleCrashOnException()
         let stormArmed = swizzleSetNeedsUpdateConstraints()
-        let breakerArmed = swizzleUpdateConstraintsIfNeeded()
+        // Both entry points, because a pass reached through only one of them
+        // is a breaker that never fires (ADR-0062 addendum 6).
+        let breakerUpdateArmed = swizzleUpdateConstraintsIfNeeded()
+        let breakerLayoutArmed = swizzleWindowLayoutIfNeeded()
+        let breakerArmed = breakerUpdateArmed && breakerLayoutArmed
         let splitArmed: Bool = {
             guard let a = class_getInstanceMethod(NSSplitViewController.self, #selector(NSViewController.loadView)),
                   let b = class_getInstanceMethod(NSSplitViewController.self, #selector(NSSplitViewController.marvin_loadView))
@@ -133,6 +137,7 @@ enum ExceptionLog {
                 + "_crashOnException hook: \(fatalArmed ? "ARMED (swizzled) — fatal layout exceptions are LOGGED WITH THE VIEW TREE, then still fatal" : "NOT ARMED — a layout-loop crash will die silently")\n"
                 + "constraint-storm monitor: \(stormArmed ? "ARMED (\(ConstraintStorm.threshold) invalidations / \(ConstraintStorm.windowSeconds)s)" : "NOT ARMED")\n"
                 + "constraint-pass breaker: \(breakerArmed && stormArmed ? "ARMED (defers past \(ConstraintPassBudget.floor)+ in-pass transitions, allowance = views - \(ConstraintPassBudget.margin))" : "NOT ARMED — a non-converging layout pass is still fatal")\n"
+                + "  pass entries hooked: updateConstraintsIfNeeded=\(breakerUpdateArmed) layoutIfNeeded=\(breakerLayoutArmed)\n"
                 + "split-view rebuild counter: \(splitArmed ? "ARMED" : "NOT ARMED")\n"
                 + "NSApplicationCrashOnExceptions: \(crashOnException) "
                 + "(\(survivalNote))\n"
@@ -272,6 +277,23 @@ enum ExceptionLog {
         return true
     }
 
+    /// The display cycle's layout phase — the entry the crashes actually take
+    /// (ADR-0062 addendum 6). `layoutIfNeeded` is declared in the
+    /// `NSConstraintBasedLayoutInternal` category, so it is looked up by
+    /// selector name rather than through `#selector`.
+    @discardableResult
+    private static func swizzleWindowLayoutIfNeeded() -> Bool {
+        guard let original = class_getInstanceMethod(
+                  NSWindow.self, NSSelectorFromString("layoutIfNeeded")
+              ),
+              let replacement = class_getInstanceMethod(
+                  NSWindow.self, #selector(NSWindow.marvin_layoutIfNeeded)
+              )
+        else { return false }
+        method_exchangeImplementations(original, replacement)
+        return true
+    }
+
     /// Write one exception record. Deliberately synchronous and allocation-light
     /// — this runs while the process is on its way down, so anything deferred
     /// (a queue hop, an async write) would never land.
@@ -347,6 +369,34 @@ extension NSWindow {
     @objc func marvin_updateConstraintsIfNeeded() {
         ConstraintPassBreaker.enterPass()
         marvin_updateConstraintsIfNeeded()
+        ConstraintPassBreaker.exitPass()
+    }
+
+    /// The OTHER way AppKit runs constraints for a window, and the one the
+    /// crashes actually take (ADR-0062 addendum 6).
+    ///
+    /// Addendum 5's breaker recognised a pass only by
+    /// `updateConstraintsIfNeeded`. Measured on the 2026-09-09 crash: **0
+    /// breaker trips across 8 armed launches and 5 fatal exceptions** — it had
+    /// never once engaged. The raising stack says why; `updateConstraintsIfNeeded`
+    /// is nowhere on it:
+    ///
+    ///     _postWindowNeedsUpdateConstraints            ← throws
+    ///       _informContainerThatSubviewsNeedUpdateConstraints ×6
+    ///         NSView.setNeedsUpdateConstraints          ← our hook, did not defer
+    ///           NSHostingView.setNeedsUpdate
+    ///             LazyLayoutViewCache.invalidateSize    ← the lazy list resizing
+    ///               NSHostingView.layout
+    ///                 NSView.layoutSubtreeIfNeeded
+    ///                   NSWindow._layoutViewTree
+    ///                     NSWindow.layoutIfNeeded       ← the pass, unhooked
+    ///                       NSDisplayCycleObserverInvoke
+    ///
+    /// The display cycle's layout phase runs constraints too, and AppKit counts
+    /// those passes the same way. So it opens a pass here as well.
+    @objc func marvin_layoutIfNeeded() {
+        ConstraintPassBreaker.enterPass()
+        marvin_layoutIfNeeded()
         ConstraintPassBreaker.exitPass()
     }
 }

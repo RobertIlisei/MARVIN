@@ -33,6 +33,8 @@ import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { makeTurnCloseStopHook } from "./turn-close-hook";
 import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { readWorktreeSetupConfig } from "./worktree-setup";
+import { classifyMeteredCiRisk, describeMeteredCiRisk, meteredCiAlternative } from "@marvin/tools/metered-ci";
 import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { describeLane, laneVerdict } from "@marvin/tools/lanes";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
@@ -1428,6 +1430,78 @@ function maybeSharedTreeConfirm(args: {
 }
 
 /**
+ * Spending the user's CI minutes reaches them, in every permission mode
+ * (ADR-0109).
+ *
+ * The fourth member of the `maybeAskUserQuestion` / `maybePlanApproval` /
+ * `maybeSharedTreeConfirm` family, and here for the same structural reason:
+ * the ordinary `confirm` class is bypassed wholesale in `auto` mode, which is
+ * MARVIN's default, so a gate that only prompts in `gated` mode would not stop
+ * the thing it exists to stop.
+ *
+ * Why this is worth a gate at all is arithmetic, not caution. ADR-0103
+ * measured this project: a merge request costs ~10 pipeline-minutes to open
+ * and ~48 compute-minutes to merge to the default branch, against a 400/month
+ * allowance already exceeded and paid in cash. ADR-0107 then gave every chat
+ * tab its own branch, so "each session opens its own MR" turned into five
+ * times that bill for work that could have been folded into one.
+ *
+ * And unlike the local destructive commands `confirm` usually guards, this one
+ * cannot be taken back: closing an MR does not refund the pipeline that opening
+ * it started.
+ *
+ * `git push` is deliberately NOT gated. On a pipeline-gated project a push to a
+ * branch with no open request starts nothing, and pushing is how work is kept
+ * safe — see `metered-ci.ts`.
+ *
+ * With no UI attached (a headless wakeup, a background job) the call is DENIED
+ * rather than run: an unattended turn is the worst one to let spend money, and
+ * the message names the free alternative.
+ */
+function maybeMeteredCiConfirm(args: {
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | null {
+  const { toolName, turnId, toolUseID, input, onConfirmRequest } = args;
+  if (toolName !== "Bash") return null;
+  const command = typeof input.command === "string" ? input.command : "";
+  if (!command) return null;
+  const verdict = classifyMeteredCiRisk(command);
+  if (!verdict) return null;
+
+  const reason =
+    `\`${verdict.verb}\` ${describeMeteredCiRisk(verdict.risk)}. ` +
+    meteredCiAlternative(verdict.risk);
+
+  if (!onConfirmRequest) {
+    return Promise.resolve({
+      behavior: "deny",
+      message:
+        `${reason} No interactive UI is attached to this turn, so it was denied ` +
+        `rather than spending CI minutes unattended.`,
+      interrupt: false,
+    } as PermissionResult);
+  }
+
+  return new Promise<PermissionResult>((resolve) => {
+    // No auto-deny timer, same reasoning as the rest of the family: this is a
+    // human decision about their own budget, and a silent timeout would be the
+    // mystery failure the confirm exists to replace.
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
+    onConfirmRequest({
+      turnId,
+      toolUseId: toolUseID,
+      toolName: "Bash",
+      input,
+      reason,
+    });
+  });
+}
+
+/**
  * ADR-0107 — ownership lanes for a tab in the SHARED checkout. Anthropic's
  * only guidance for several sessions in one directory is partitioned file
  * ownership, with no enforcement; this is the enforcement: an Edit / Write /
@@ -1559,6 +1633,11 @@ export function makeAutoModeLogger(args: {
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0109 — spending CI minutes reaches the user in every mode.
+    const meteredCi = maybeMeteredCiConfirm({
+      toolName, turnId, toolUseID, input: safeInput, onConfirmRequest,
+    });
+    if (meteredCi) return meteredCi;
     // ADR-0107 — a tab in its own worktree stays in it (main loop only; a
     // bound implementer has its own containment below).
     const contained = maybeSessionWorktreeGate({
@@ -1655,6 +1734,11 @@ export function makeGatedCanUseTool(args: {
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0109 — spending CI minutes reaches the user in every mode.
+    const meteredCi = maybeMeteredCiConfirm({
+      toolName, turnId, toolUseID, input: safeInput, onConfirmRequest,
+    });
+    if (meteredCi) return meteredCi;
     // ADR-0107 — a tab in its own worktree stays in it (main loop only).
     const contained = maybeSessionWorktreeGate({
       toolName, turnId, toolUseID, input: safeInput, agentID,
@@ -1775,6 +1859,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
     // when MARVIN was launched from Finder with the minimal launchd PATH.
     PATH: enrichedToolPath(),
+    // ADR-0110 — a session worktree isolates the FILESYSTEM, never the
+    // machine. Docker, host ports, databases and anything keyed on $HOME are
+    // still shared with every other tab, and the project is the only thing
+    // that knows which variables make its runs independent. Applied only for a
+    // tab in its own worktree: in the shared checkout there is nothing to make
+    // independent from.
+    ...(input.sessionTree?.mode === "worktree" ? readWorktreeSetupConfig(workDir).env : {}),
     // SUBAGENT RAILS (ADR-0079). MARVIN's sanctioned subagents — advisor,
     // scout, graph-extractor, plugin agents, dynamic-workflow children — are
     // all ONE level deep by design: `personality.ts` tells a scout "no nested

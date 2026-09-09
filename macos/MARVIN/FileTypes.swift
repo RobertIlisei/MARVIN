@@ -414,6 +414,32 @@ struct WorktreeMergeResponse: Codable, Equatable {
     let error: String?
 }
 
+/// ADR-0109 — what one batch integration did. `stopped` is present when a
+/// branch failed to apply; everything before it is already in, and nothing
+/// after it was attempted.
+struct WorktreeMergeAllResponse: Codable, Equatable {
+    struct Merged: Codable, Equatable {
+        let slug: String
+        let branch: String
+        let message: String
+    }
+    struct Stopped: Codable, Equatable {
+        let slug: String
+        let branch: String
+        let message: String
+    }
+    struct Skipped: Codable, Equatable {
+        let slug: String
+        let branch: String
+        let reason: String
+    }
+    let merged: [Merged]?
+    let stopped: Stopped?
+    let skipped: [Skipped]?
+    let message: String?
+    let error: String?
+}
+
 struct WorktreeSweepEntry: Codable, Equatable {
     let slug: String
     let state: String

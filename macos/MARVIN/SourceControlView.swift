@@ -141,6 +141,33 @@ final class SourceControlModel {
         }
     }
 
+    /// Fold every finished branch into the current branch, in one pass,
+    /// locally (ADR-0109).
+    ///
+    /// One trip instead of N. The friction of merging one at a time is what
+    /// pushes people toward a merge request per branch, which is the expensive
+    /// path: ~10 pipeline-minutes to open and ~48 compute-minutes to merge, per
+    /// branch, against an allowance already exceeded. Batched, five branches
+    /// still cost one pipeline.
+    func mergeAllWorktrees() {
+        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        worktreeBusy = true
+        Task { @MainActor in
+            defer { worktreeBusy = false }
+            do {
+                let out = try await FilesService.shared.mergeAllWorktrees(cwd: cwd)
+                var lines: [String] = [out.message ?? out.error ?? "Merge finished."]
+                // Name what was passed over. "It did nothing" and "there was
+                // nothing to do" must not read the same.
+                for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
+                worktreeNotice = lines.joined(separator: "\n")
+            } catch {
+                worktreeNotice = "Merge all failed: \(error)"
+            }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
     /// Remove one checkout, keeping its branch — the ADR-0081 semantics.
     func dropWorktree(slug: String) {
         guard let cwd = loadedCwd, !worktreeBusy else { return }
@@ -1023,6 +1050,14 @@ struct SourceControlView: View {
                         .padding(.horizontal, 5)
                         .background(Capsule().fill(MarvinTheme.elevated))
                         .foregroundStyle(GitDecorationColor.added)
+                }
+                if ready > 1 {
+                    Button("Merge all") { model.mergeAllWorktrees() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .disabled(model.worktreeBusy)
+                        .help("Fold all \(ready) finished branches into this branch, locally. Never pushes — one push covers all of them, so N branches still cost one pipeline instead of N. Stops at the first conflict.")
                 }
                 if model.worktrees.contains(where: \.isSpent) {
                     Button("Reclaim") { model.sweepWorktrees() }

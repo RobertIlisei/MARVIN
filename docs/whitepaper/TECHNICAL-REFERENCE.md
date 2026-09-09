@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.109
+code. Written for contributors and deep evaluators. Covers v0.1.110
 (2026-09-07). Where this document and the repository disagree, the
 repository wins.*
 
@@ -369,6 +369,42 @@ running infra" without any hardcoded service list. Both files live in
 `sidecar/packages/project-context/src/`.
 
 ---
+
+### 3.x Per-session posture, and what a worktree does not isolate
+
+Since v0.1.110 the seven per-turn controls — autonomy mode, executor and
+advisor model, executor and advisor effort, personality, permission strategy —
+are **per session** rather than app-wide. They live in a capped MRU store keyed
+by marvin session id; the former app-wide values became the defaults a new tab
+inherits. The sidecar had already modelled this correctly (`SessionPosture` in
+`session-meta.ts`, written on every turn start so a server-initiated resume can
+rebuild the turn), so the client hydrates a restored tab from the session-watch
+snapshot it already fetches. A local record always outranks the server's: the
+server's is history, the local one is a choice.
+
+`MarvinBridge`'s posture fields were redefined to mean "the tab on screen",
+which made every existing reader session-aware without change. `setActiveMarvinSession`
+applies the arriving session's posture, in the bridge rather than at each call
+site, so a tab switch cannot come apart from a posture switch.
+
+**Isolation boundary.** A session worktree isolates the working tree and the
+branch, and nothing else: the Docker daemon, host ports, databases, global
+caches and anything keyed on `$HOME` remain machine-global. `.marvin/worktree.json`
+carries an `env` map applied to every turn in a worktree-mode tab (and thus to
+every subprocess a turn spawns), validated at the boundary — POSIX names, 64
+entries, 4 KB per value, malformed entries dropped. It is deliberately never
+auto-detected, unlike `symlinkDirectories`: which variables make a project's
+runs independent is not derivable from a repository, and guessing it would be
+project knowledge MARVIN must not hold ([ADR-0110](../decisions/0110-worktrees-isolate-the-filesystem-not-the-machine.md)).
+
+**Integration cost.** Branch integration is a local merge and never a push;
+`mergeAllWorktrees` folds every `ready` branch in one pass, oldest first,
+stopping at the first conflict. Commands that spend CI minutes — opening a
+merge/pull request, merging one, starting a pipeline — are classified by
+`classifyMeteredCiRisk` and confirmed in **every** permission mode, alongside
+`AskUserQuestion`, plan approval and the shared-tree gate. `git push` is not
+classified: on a pipeline-gated project a push to a branch with no open request
+starts nothing ([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md)).
 
 ## 4. Cross-session persistence
 

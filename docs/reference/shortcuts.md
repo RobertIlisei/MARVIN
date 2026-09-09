@@ -52,6 +52,13 @@ Pane toggles persist across launches (`NativePrefs.shared.togglePane`, mirrored 
 | `⏎` | Send message | `ChatInputView` |
 | `⌘ .` | Cancel the currently-running turn | `ChatInputView` |
 | `⌘ ⇧ A` | Add attachment | `ChatAttachments` |
+| `⌘ ⇧ [` | Previous open session (wraps) | `CommandRegistry` ▸ File |
+| `⌘ ⇧ ]` | Next open session (wraps) | `CommandRegistry` ▸ File |
+
+The tab strip also carries an **open-sessions menu** (the `▣ N` button on its
+right) listing every open tab with its worktree slug and state — the way to
+reach a tab scrolled past the edge, and to tell apart tabs whose first messages
+are identical. Selecting a session from anywhere scrolls its tab into view.
 
 ## File viewer (when an editor pane is focused)
 

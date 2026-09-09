@@ -698,6 +698,109 @@ export function mergeWorktree(
   };
 }
 
+/** What one batch integration did. */
+export interface MergeAllOutcome {
+  merged: Array<{ slug: string; branch: string; message: string }>;
+  /** The branch that stopped the run, and why. Absent when everything merged. */
+  stopped?: { slug: string; branch: string; message: string };
+  /** Branches not attempted, with the reason each was passed over. */
+  skipped: Array<{ slug: string; branch: string; reason: string }>;
+  message: string;
+}
+
+/**
+ * Fold every finished branch into the current branch of the main tree, in one
+ * pass, locally (ADR-0109).
+ *
+ * `mergeWorktree` integrates one branch, which was the whole surface until
+ * every chat tab started producing one (ADR-0107). Five tabs meant five trips
+ * through the same dialog, and the friction is what pushes people toward the
+ * expensive path — one merge request per branch, which ADR-0103 measured at
+ * ~10 pipeline-minutes to open and ~48 compute-minutes to merge, against an
+ * allowance already exceeded. Batching is free: the branches are cut from this
+ * checkout's HEAD, so their commits ride along in whatever run this branch was
+ * already going to have.
+ *
+ * ## Only `ready` branches
+ *
+ * A `session` tree belongs to an OPEN chat tab. Folding one in behind the
+ * user's back would merge work they may still be in the middle of, and the tab
+ * already asks at close time — that dialog is where a live tab's branch gets
+ * its decision, not here. `running` is an implementer mid-flight, `empty` has
+ * nothing, `merged` is already in. So the set is exactly `ready`: finished
+ * work, no tab holding it, not yet integrated. Everything else is reported as
+ * skipped rather than silently ignored, because "it did nothing" and "there
+ * was nothing to do" must not look the same.
+ *
+ * ## Stops at the first conflict
+ *
+ * `mergeWorktree` aborts a conflicting merge and leaves the branch untouched,
+ * so a failure costs nothing. But continuing past one would leave the user
+ * holding a half-integrated tree plus a conflict to resolve, with no obvious
+ * order to resume in. Stopping means the tree is always "everything up to X is
+ * in, X is what needs you".
+ */
+export function mergeAllWorktrees(
+  workDir: string,
+  opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
+): MergeAllOutcome {
+  const all = reconcileWorktrees(workDir);
+  const merged: MergeAllOutcome["merged"] = [];
+  const skipped: MergeAllOutcome["skipped"] = [];
+
+  for (const w of all) {
+    if (w.state === "ready") continue;
+    const reason =
+      w.state === "session"
+        ? "belongs to an open chat tab — close the tab to decide its branch"
+        : w.state === "running"
+          ? "still being built by its implementer"
+          : w.state === "empty"
+            ? "has no commits"
+            : `already merged into ${w.mergedInto ?? "another branch"}`;
+    skipped.push({ slug: w.slug, branch: w.branch, reason });
+  }
+
+  // Oldest first: the branches were cut in this order, so integrating them in
+  // it is the order most likely to apply cleanly.
+  const candidates = all
+    .filter((w) => w.state === "ready")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  if (candidates.length === 0) {
+    return { merged, skipped, message: "No finished branches to merge." };
+  }
+  if (workingTreeDirty(workDir)) {
+    return {
+      merged,
+      skipped,
+      message: "The main working tree has uncommitted changes — commit or stash before merging.",
+    };
+  }
+
+  let stopped: MergeAllOutcome["stopped"];
+  for (const w of candidates) {
+    const out = mergeWorktree(workDir, w.slug, opts);
+    if (out.ok) {
+      merged.push({ slug: out.slug, branch: out.branch, message: out.message });
+      continue;
+    }
+    stopped = { slug: out.slug, branch: out.branch || w.branch, message: out.message };
+    break;
+  }
+
+  const onto = gitOr(workDir, ["rev-parse", "--abbrev-ref", "HEAD"], "HEAD");
+  const head = merged.length === 0
+    ? "Nothing merged."
+    : `Merged ${merged.length} branch(es) into ${onto}. Not pushed — one push covers all of them.`;
+  return {
+    merged,
+    skipped,
+    ...(stopped ? { stopped } : {}),
+    message: stopped ? `${head} Stopped at ${stopped.branch}: ${stopped.message}` : head,
+  };
+}
+
 // ── Containment (pure) ────────────────────────────────────────────────────
 
 /** True when `target` is `worktree` itself or strictly inside it. */

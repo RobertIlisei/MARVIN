@@ -39,6 +39,24 @@ export interface WorktreeSetupConfig {
   symlinkDirectories: string[];
   copyIgnored: string[];
   honorWorktreeInclude: boolean;
+  /**
+   * Environment variables every turn in a SESSION worktree runs with
+   * (ADR-0110).
+   *
+   * A worktree isolates the filesystem and the branch. It does not isolate the
+   * machine: the Docker daemon, host ports, databases, global caches and
+   * anything keyed on `$HOME` are still shared by every session. The user hit
+   * exactly that on 2026-09-10 — `~/.testcontainers.properties` had
+   * `testcontainers.reuse.enable=true`, so three tabs running integration
+   * tests concurrently were handed the SAME reused Postgres container, and two
+   * suites that both `DROP TABLE` in setup corrupted each other's runs.
+   *
+   * MARVIN ships no knowledge of Testcontainers or of any other tool (Golden
+   * Rule 6). This is the general mechanism: the project states which variables
+   * make its per-session runs independent, and MARVIN applies them to that
+   * tab's turns.
+   */
+  env: Record<string, string>;
 }
 
 export interface WorktreeSetupReport {
@@ -51,6 +69,7 @@ export const DEFAULT_SETUP: WorktreeSetupConfig = {
   symlinkDirectories: [],
   copyIgnored: [],
   honorWorktreeInclude: true,
+  env: {},
 };
 
 const MAX_COPY_FILES = 500;
@@ -110,7 +129,10 @@ export function detectWorktreeSetup(workDir: string): WorktreeSetupConfig {
     }
   }
   const copyIgnored = DETECTABLE_COPY_PATTERNS.filter((pat) => ignored.some((rel) => matchesInclude(pat, rel)));
-  return { symlinkDirectories, copyIgnored, honorWorktreeInclude: true };
+  // `env` is never detected — MARVIN cannot know which variables make a
+  // project's runs independent, and guessing would be project knowledge
+  // (Golden Rule 6). The user fills it in; the guide explains why.
+  return { symlinkDirectories, copyIgnored, honorWorktreeInclude: true, env: {} };
 }
 
 function isDir(p: string): boolean {
@@ -156,10 +178,37 @@ export function readWorktreeSetupConfig(workDir: string): WorktreeSetupConfig {
       symlinkDirectories: [...new Set(dirs)],
       copyIgnored: [...new Set(copy)],
       honorWorktreeInclude: raw.honorWorktreeInclude !== false,
+      env: readEnvMap(raw.env),
     };
   } catch {
     return { ...DEFAULT_SETUP };
   }
+}
+
+/**
+ * `env` from `.marvin/worktree.json`, as a string map (ADR-0110).
+ *
+ * Names are restricted to the POSIX shape and values are capped, because these
+ * end up in the environment of every subprocess a turn spawns. A malformed
+ * entry is dropped rather than failing the read: a typo in this file must not
+ * cost the user their worktree.
+ */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_ENV_ENTRIES = 64;
+const MAX_ENV_VALUE = 4096;
+
+function readEnvMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (Object.keys(out).length >= MAX_ENV_ENTRIES) break;
+    if (!ENV_NAME.test(k)) continue;
+    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+    const value = String(v);
+    if (value.length > MAX_ENV_VALUE) continue;
+    out[k] = value;
+  }
+  return out;
 }
 
 /** Patterns from `<workDir>/.worktreeinclude`, comments and blanks stripped. */

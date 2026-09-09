@@ -602,6 +602,24 @@ final class MarvinBridge {
     func setActiveMarvinSession(_ id: String?) {
         guard activeMarvinSessionId != id else { return }
         activeMarvinSessionId = id
+        // ADR-0108 — the posture fields below describe the session ON SCREEN,
+        // so switching tabs swaps them. Done here rather than at the four
+        // call sites because a tab switch that forgot to re-read the posture
+        // would silently run the next turn under the previous tab's mode.
+        NativePrefs.shared.activateSession(id)
+    }
+
+    /// ADR-0108 — adopt one session's posture into the live UI fields. The
+    /// only writer is `NativePrefs`, which owns persistence; this is the
+    /// projection every view already reads.
+    func applyPosture(_ p: SessionPosture) {
+        personality = p.personality
+        executorModel = p.executorModel
+        advisorModel = p.advisorModel
+        permissionStrategy = p.permissionStrategy
+        mode = p.mode
+        thinkingMode = p.thinkingMode
+        advisorThinkingMode = p.advisorThinkingMode
     }
 
     /// Phase 5a — currently-selected file path in the native file

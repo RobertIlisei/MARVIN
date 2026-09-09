@@ -3507,6 +3507,140 @@ runner.suite("plan-file-completed-steps") {
 }
 
 
+runner.suite("session-posture") {
+    let defaults = SessionPosture.fallback
+
+    runner.test("a session with no record inherits the defaults") {
+        var store = SessionPostureStore()
+        runner.expect(store.posture(for: "s1") == nil, equals: true, "nothing stored yet")
+        store.set(defaults, for: "s1")
+        runner.expect(store.posture(for: "s1") == defaults, equals: true, "round-trips")
+    }
+
+    runner.test("one session's change leaves the others alone") {
+        var store = SessionPostureStore()
+        var plan = defaults
+        plan.mode = "plan"
+        store.set(plan, for: "planning-tab")
+        store.set(defaults, for: "working-tab")
+        runner.expect(store.posture(for: "planning-tab")?.mode, equals: "plan", "the tab that was switched")
+        runner.expect(store.posture(for: "working-tab")?.mode, equals: "agent", "the tab that was not")
+    }
+
+    runner.test("touching a session moves it to the front") {
+        var store = SessionPostureStore()
+        store.set(defaults, for: "a")
+        store.set(defaults, for: "b")
+        runner.expect(store.sessionIds, equals: ["b", "a"], "most recent first")
+        store.set(defaults, for: "a")
+        runner.expect(store.sessionIds, equals: ["a", "b"], "re-set promotes rather than duplicates")
+        runner.expect(store.count, equals: 2, "no duplicate entry")
+    }
+
+    runner.test("the store is capped, and the oldest session is what goes") {
+        var store = SessionPostureStore()
+        for i in 0..<(SessionPostureStore.capacity + 5) { store.set(defaults, for: "s\(i)") }
+        runner.expect(store.count, equals: SessionPostureStore.capacity, "capped")
+        runner.expect(store.posture(for: "s0") == nil, equals: true, "the oldest was evicted")
+        runner.expect(store.posture(for: "s\(SessionPostureStore.capacity + 4)") != nil,
+                      equals: true, "the newest survived")
+    }
+
+    runner.test("seeding never overwrites what the user already chose here") {
+        var store = SessionPostureStore()
+        var local = defaults
+        local.mode = "ask"
+        store.set(local, for: "s1")
+        var fromServer = defaults
+        fromServer.mode = "plan"
+        runner.expect(store.seedIfAbsent(fromServer, for: "s1"), equals: false, "declined")
+        runner.expect(store.posture(for: "s1")?.mode, equals: "ask", "local record wins")
+        runner.expect(store.seedIfAbsent(fromServer, for: "s2"), equals: true, "accepted for an unknown tab")
+        runner.expect(store.posture(for: "s2")?.mode, equals: "plan", "server posture adopted")
+    }
+
+    runner.test("an empty session id is not a session") {
+        var store = SessionPostureStore()
+        store.set(defaults, for: "")
+        runner.expect(store.count, equals: 0, "nothing filed under nothing")
+    }
+
+    runner.test("persistence survives a round trip, and junk decodes as empty") {
+        var store = SessionPostureStore()
+        var p = defaults
+        p.executorModel = "claude-opus-5"
+        p.thinkingMode = "max"
+        store.set(p, for: "s1")
+        let restored = SessionPostureStore.decode(store.jsonString)
+        runner.expect(restored.posture(for: "s1")?.executorModel, equals: "claude-opus-5", "model kept")
+        runner.expect(restored.posture(for: "s1")?.thinkingMode, equals: "max", "effort kept")
+        runner.expect(SessionPostureStore.decode("not json").count, equals: 0, "a corrupt pref reads as empty")
+        runner.expect(SessionPostureStore.decode(nil).count, equals: 0, "an absent pref reads as empty")
+    }
+
+    runner.test("a partial wire record fills its gaps from the defaults") {
+        var base = defaults
+        base.executorModel = "claude-sonnet-5"
+        base.personality = "neutral"
+        let wire = SessionPostureWire(model: "", personality: nil, mode: "plan")
+        let resolved = wire.resolved(against: base)
+        runner.expect(resolved.mode, equals: "plan", "what the server knew")
+        runner.expect(resolved.executorModel, equals: "claude-sonnet-5", "an empty model is not a choice")
+        runner.expect(resolved.personality, equals: "neutral", "a missing field falls back")
+    }
+
+    runner.test("nil advisor fields stay nil rather than inheriting") {
+        var base = defaults
+        base.advisorModel = "claude-opus-5"
+        base.advisorThinkingMode = "max"
+        let resolved = SessionPostureWire(mode: "agent").resolved(against: base)
+        runner.expect(resolved.advisorModel == nil, equals: true, "no advisor means no advisor")
+        runner.expect(resolved.advisorThinkingMode == nil, equals: true, "and it follows the executor")
+    }
+}
+
+runner.suite("session-tab-navigation") {
+    let tabs = ["a", "b", "c"]
+    func step(_ from: String?, _ d: SessionTabNavigation.Direction, _ list: [String] = ["a", "b", "c"]) -> String? {
+        SessionTabNavigation.step(from: from, in: list, d)
+    }
+
+    runner.test("steps to the neighbour in both directions") {
+        runner.expect(step("a", .next), equals: "b", "forward")
+        runner.expect(step("b", .previous), equals: "a", "back")
+        runner.expect(step("b", .next), equals: "c", "forward again")
+    }
+
+    runner.test("wraps at both ends") {
+        runner.expect(step("c", .next), equals: "a", "past the last is the first")
+        runner.expect(step("a", .previous), equals: "c", "before the first is the last")
+    }
+
+    runner.test("a single tab has nowhere to go") {
+        runner.expect(step("only", .next, ["only"]) == nil, equals: true, "next is a no-op")
+        runner.expect(step("only", .previous, ["only"]) == nil, equals: true, "previous is a no-op")
+    }
+
+    runner.test("no open tabs is not a crash") {
+        runner.expect(step("a", .next, []) == nil, equals: true, "nothing to step to")
+        runner.expect(step(nil, .next, []) == nil, equals: true, "and nothing selected either")
+    }
+
+    runner.test("a selection that is not in the strip still lands somewhere") {
+        // A freshly minted draft is selected before it joins the strip, and a
+        // session can be closed from the Sessions pane while it is on screen.
+        runner.expect(step(nil, .next), equals: "a", "next enters at the front")
+        runner.expect(step(nil, .previous), equals: "c", "previous enters at the back")
+        runner.expect(step("gone", .next), equals: "a", "an unknown id is not an error")
+        runner.expect(step("gone", .previous), equals: "c", "either way")
+    }
+
+    runner.test("two tabs alternate rather than sticking") {
+        runner.expect(step("a", .next, tabs.prefix(2).map { $0 }), equals: "b", "forward")
+        runner.expect(step("b", .next, tabs.prefix(2).map { $0 }), equals: "a", "wraps back")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

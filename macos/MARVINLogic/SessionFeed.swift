@@ -206,6 +206,10 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     public let cost: Cost?
     public let title: String?
     public let updatedAt: String?
+    /// ADR-0108 — the posture this session's turns last ran with, so a tab
+    /// restored from disk (or opened on another machine) comes back with the
+    /// mode, models and gate it had rather than the app-wide defaults.
+    public let posture: SessionPostureWire?
 
     public static func decodeSnapshot(_ data: Data) -> [SessionWatchRowWire]? {
         struct Envelope: Decodable { let rows: [SessionWatchRowWire] }

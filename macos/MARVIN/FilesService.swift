@@ -757,6 +757,19 @@ final class FilesService {
         )
     }
 
+    /// POST /api/worktrees {action:"merge-all"} — fold EVERY finished branch
+    /// into the current branch in one pass, locally (ADR-0109). Same rule as
+    /// `merge`, and the reason it exists: five chat tabs produce five
+    /// branches, and one merge request each costs ~48 compute-minutes on a
+    /// metered runner where folding them in locally costs nothing.
+    func mergeAllWorktrees(cwd: String) async throws -> WorktreeMergeAllResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: ["cwd": cwd, "action": "merge-all"],
+            as: WorktreeMergeAllResponse.self
+        )
+    }
+
     /// POST /api/worktrees {action:"drop"} — remove one checkout and keep
     /// its branch. Reclaims disk from a `ready` tree without discarding work.
     func dropWorktree(cwd: String, slug: String) async throws -> WorktreeMergeResponse {

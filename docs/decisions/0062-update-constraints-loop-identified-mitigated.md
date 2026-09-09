@@ -343,3 +343,53 @@ An `exceptions.log` entry `constraint-pass breaker tripped` during a divider
 drag with **no** `.ips` after it. Five storms per launch persisting means the
 oscillator is still there and merely survivable — that is the intended state
 until the ancestry in the trip report points at it.
+
+## Addendum 6 — 2026-09-09: the breaker was armed and had never once fired
+
+Fifth `NSGenericException`, same window, same reason. The user reported it as
+"marvin just crashed"; `ps` first said otherwise — pid 65514 at **100.1 % CPU,
+`STAT R`** — the spin signature, with `sample` showing the main thread wholly
+inside SwiftUI's layout engine (688 samples in `LayoutEngineBox.sizeThatFits`,
+nested through `StackLayout.placeChildren`). It threw a minute later.
+
+**The measurement that mattered was a count, not a stack.** Across the whole
+log: `constraint-pass breaker: ARMED` **8 times**, fatal exceptions **5**,
+`constraint-pass breaker tripped` reports **0**. Addendum 5's mitigation had
+been shipping for a day and had never engaged once.
+
+The raising stack says why. `ConstraintPassBreaker.deferIfOverBudget` guards on
+`passDepth > 0`, and `passDepth` is incremented only by the hook on
+`-[NSWindow updateConstraintsIfNeeded]`. That method is nowhere on the stack:
+
+    _postWindowNeedsUpdateConstraints                    ← throws
+      _informContainerThatSubviewsNeedUpdateConstraints ×6
+        NSView.setNeedsUpdateConstraints
+          marvin_setNeedsUpdateConstraints               ← our hook ran, did not defer
+            NSHostingView.setNeedsUpdate
+              LazyLayoutViewCache.invalidateSize         ← a lazy list resizing
+                NSHostingView.layout
+                  NSView.layoutSubtreeIfNeeded
+                    NSWindow._layoutViewTree
+                      NSWindow.layoutIfNeeded            ← the pass — unhooked
+                        NSDisplayCycleObserverInvoke
+
+AppKit runs constraints from **two** entries and counts passes from both: the
+explicit `updateConstraintsIfNeeded`, and the display cycle's layout phase via
+`layoutIfNeeded`. The breaker recognised one. Every crash so far took the other.
+
+**Change:** `-[NSWindow layoutIfNeeded]` opens a pass too. Looked up by
+selector name (`NSConstraintBasedLayoutInternal` is a category, so there is no
+`#selector` for it) and verified to resolve on `NSWindow` before shipping,
+because a silent swizzle miss is the failure this file already warns about. The
+session-start line now names both entries, so the next log says which armed
+rather than leaving it to be inferred.
+
+**How to tell it worked:** a `constraint-pass breaker tripped` entry in
+`exceptions.log` with no `.ips` after it. Zero trips and another crash means
+the pass is entered a third way.
+
+The trigger named in frame 16 is worth recording separately: `LazyLayoutViewCache`
+is the lazy list, i.e. the chat transcript. That is the same subtree
+`renderWindow` was introduced to bound (2026-09-02). Four attempts to remove the
+oscillator have not converged, which is why this addendum fixes the BREAKER
+rather than adding a fifth.

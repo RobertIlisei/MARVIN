@@ -91,6 +91,21 @@ enum CommandRegistry {
         ) {
             NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil)
         })
+        // Navigating the OPEN chat tabs. The strip could only be driven by
+        // clicking a tab, and a tab past the right edge could not be reached
+        // at all (user, 2026-09-09: "we do not have a nav bar through the
+        // sessions, the opened ones"). ⇧⌘[ / ⇧⌘] is the macOS tab convention
+        // and neither was bound. Both wrap, and both are no-ops with one tab.
+        c.append(AppCommand(
+            id: "file.previousSession", title: "Previous Session",
+            slot: .file, shortcut: "⇧⌘[", keywords: ["tab", "chat", "switch", "back"],
+            isEnabled: { SessionRegistry.shared.openTabs.count > 1 }
+        ) { stepSession(.previous) })
+        c.append(AppCommand(
+            id: "file.nextSession", title: "Next Session",
+            slot: .file, shortcut: "⇧⌘]", keywords: ["tab", "chat", "switch", "forward"],
+            isEnabled: { SessionRegistry.shared.openTabs.count > 1 }
+        ) { stepSession(.next) })
         c.append(AppCommand(
             id: "file.openProject", title: "Open Project…",
             slot: .file, shortcut: "⌘O", keywords: ["folder", "workspace"]
@@ -403,6 +418,19 @@ enum CommandRegistry {
         ) { AppDiagnosticsReport.copyToPasteboard() })
 
         return c
+    }
+
+    /// Ask the chat view to move a tab. `ChatPreviewModel` is `@State` inside
+    /// `ChatPreviewView`, so a command reaches it through the bridge's
+    /// one-shot request, the same way the Sessions pane does.
+    private static func stepSession(_ direction: SessionTabNavigation.Direction) {
+        let bridge = MarvinBridge.shared
+        guard let target = SessionTabNavigation.step(
+            from: bridge.activeMarvinSessionId,
+            in: SessionRegistry.shared.openTabs,
+            direction
+        ) else { return }
+        bridge.requestChatTab(.select(target))
     }
 
     private static func shortcutLabel(for tab: BottomPanelTab) -> String {

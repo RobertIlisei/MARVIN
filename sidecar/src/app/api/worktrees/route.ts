@@ -1,6 +1,7 @@
 /**
  * GET  /api/worktrees?cwd=…            — implementer worktrees, state derived from git
- * POST /api/worktrees { cwd, action }  — merge one branch locally, or sweep what is spent
+ * POST /api/worktrees { cwd, action }  — merge one branch (or every finished
+ *                                        one) locally, or sweep what is spent
  *
  * The surface ADR-0081 never built. Implementers produced branches and nothing
  * ever said so: the only worktree-aware UI was a Source Control row keyed on
@@ -17,7 +18,7 @@
  */
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
-import { mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
+import { mergeAllWorktrees, mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -84,6 +85,12 @@ export async function POST(req: NextRequest) {
       if (!body.slug) return NextResponse.json({ error: "slug required" }, { status: 400 });
       const out = mergeWorktree(resolved.cwd, body.slug);
       return NextResponse.json(out, { status: out.ok ? 200 : 409 });
+    }
+    // ADR-0109 — fold every `ready` branch in one pass. Same local-only rule
+    // as `merge`; the point is that N branches still cost one pipeline, not N.
+    if (body.action === "merge-all") {
+      const out = mergeAllWorktrees(resolved.cwd);
+      return NextResponse.json(out, { status: out.stopped ? 409 : 200 });
     }
     return NextResponse.json({ error: `unknown action ${body.action ?? "(none)"}` }, { status: 400 });
   } catch (err) {

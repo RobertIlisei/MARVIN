@@ -8,6 +8,94 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-10 — v0.1.110: several sessions at once, and what that actually costs.**
+
+  Six changes, all from running seven chat tabs against one project.
+
+  **Posture is per session ([ADR-0108](../decisions/0108-per-session-posture.md)).**
+  Trigger: user: *"i believe the agent mode: Plan / Agent / Ask are not
+  session separated… if i put agent on Plan in 1 session, the rest of the
+  sessions will have the same mode."* Correct, and it was seven controls, not
+  one — each a single `UserDefaults` key and a single field on the
+  `MarvinBridge` singleton. The sidecar had modelled it right all along
+  (`SessionPosture` in the session meta records these fields per session on
+  every turn); the client sent a posture per turn, the server filed it, and
+  the client threw its own copy away. Now a capped MRU store keyed by session
+  id, with the old scalars demoted to the DEFAULTS a new tab inherits, and the
+  bridge's fields redefined as "the tab on screen" — which made the mode
+  toolbar, agents footer, top-bar popovers and status bar session-aware with
+  no edits to any of them. **Verified** on seven live tabs: two written in the
+  same millisecond with different modes and different models.
+
+  **Switching tabs was quadratic ([ADR-0048 addendum](../decisions/0048-full-session-history-tail-first.md)).**
+  Trigger: user: *"switching sessions does not load the right pane smoothly
+  and cleanly and fluid."* Measured on the real 122 MB / 36,356-turn
+  transcript. Three causes: a tab click fetched the WHOLE transcript (ADR-0048
+  reasoned a history-menu pick was worth the cost — true until ADR-0107 made
+  the same call the tab-strip click); `loadSession` UTF-8 decoded and parsed
+  all 36,356 lines and then sliced (528 ms to produce a 200-turn answer); and
+  `ChatStreamReducer.apply` took the message array **by value and returned a
+  new one**, so every event copied the whole list — **6.3 s of array copying
+  against 6 ms in place** at the same N. That last one is invisible in the
+  source: `rebuilt = apply(rebuilt, …)` reads as linear, and copy-on-write
+  fires because the caller still holds what it passed. Fixed by tailing the
+  tab switch, a `loadSessionTail` that parses only what it returns (113 ms,
+  byte-identical to load-then-slice, 7 tests), and an in-place reducer used by
+  both replay and the live stream. The pane also stops blanking: rows for the
+  last six visited tabs are kept and painted immediately.
+
+  **A nav bar through the open sessions.** Trigger: user: *"we do not have a
+  nav bar through the sessions, the opened ones."* Six tabs opened from the
+  same prompt all truncated to "Plan the implementation …", nothing past the
+  right edge reachable, no key bound. The editor's file tabs solved this with
+  ‹ › arrows — deliberately not copied, because arrows need content-vs-viewport
+  widths, which means `background(GeometryReader)`, which adds subviews to a
+  window whose view COUNT is what AppKit's runaway-pass breaker budgets
+  against (v0.1.93's `WidthReporter` fixed a storm and shipped a crash doing
+  exactly that). Instead: an open-sessions menu listing every tab with its
+  worktree slug and state, tabs that scroll themselves into view, and
+  ⇧⌘[ / ⇧⌘].
+
+  **The layout-loop breaker had never fired ([ADR-0062 addendum 6](../decisions/0062-update-constraints-loop-identified-mitigated.md)).**
+  Fifth `NSGenericException` of the family. User: *"aaand marvin just
+  crashed"* — `ps` said otherwise first: 100.1 % CPU, `STAT R`, the spin
+  signature. The decisive measurement was a **count**: 8 launches logging
+  `breaker: ARMED`, 5 fatal exceptions, **0** trips. Its `passDepth > 0` guard
+  is fed only by the hook on `NSWindow.updateConstraintsIfNeeded`, and that
+  method is nowhere on the raising stack — every crash arrives through the
+  display cycle's LAYOUT phase. `layoutIfNeeded` now opens a pass too.
+
+  **Integration is batched, and CI minutes ask first ([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md)).**
+  Trigger: user: *"working 5 sessions and all commiting and pushing and
+  merging to main, each with his own MR, means 5x~45 min."* ADR-0103 had
+  measured the terms — ~10 pipeline-minutes to open a request, ~48
+  compute-minutes to merge to the default branch, against a 400/month
+  allowance already exceeded — so five branches one-request-each is ~240
+  against ~48 batched. `mergeAllWorktrees` folds every `ready` branch in one
+  pass, oldest first, stopping at the first conflict; `classifyMeteredCiRisk`
+  gates request creation, request merges and manual pipeline runs as the
+  fourth member of the confirm family that survives `auto` mode. `git push`
+  is deliberately not gated — it starts no pipeline and is how work is kept
+  safe.
+
+  **A worktree isolates the filesystem, not the machine ([ADR-0110](../decisions/0110-worktrees-isolate-the-filesystem-not-the-machine.md)).**
+  Three tabs, three worktrees — and one Postgres container between them:
+  `~/.testcontainers.properties` had reuse enabled, and reusable containers
+  are shared across every JVM on the same Docker daemon. Two suites `DROP
+  TABLE` in setup. ADR-0107's isolation did its job; the shared resource was
+  outside all of it. `.marvin/worktree.json` gains an `env` map applied to
+  worktree-mode turns, and the guide names the class. A Testcontainers rule
+  would have been one line and is exactly what Golden Rule 6 forbids.
+
+  **Also:** line numbers were one pixel from the file text — the 3pt diff
+  strip sits inside upstream's 6pt trailing inset, and `STLineNumberRulerView`
+  sizes itself from the widest number currently VISIBLE, so a long file stays
+  narrow until a scroll reaches a wide number. The gutter is now sized up
+  front from the real line count.
+
+  **Verification.** 1328 sidecar tests, 815 Swift assertions, `swift build`
+  and `tsc` clean.
+
 - **2026-09-09 — v0.1.109: the practice loop gets a window and a reset.**
 
   Trigger: user: *"how can we clear those existing findings? how can we

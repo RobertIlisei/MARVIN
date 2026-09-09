@@ -25,6 +25,12 @@ final class NativePrefs {
 
     // MARK: - In-memory prefs (authoritative after init)
 
+    // ADR-0108 — the seven posture fields below are the DEFAULTS a new chat
+    // tab starts from, not the values any given turn runs with. Each session
+    // keeps its own copy in `postures`; a setter writes the active session's
+    // copy AND updates the default here, so the next new tab inherits what
+    // the user last chose. Views read the active session's posture off
+    // `MarvinBridge`, which `activateSession` keeps in step.
     private(set) var personality: String = "ultron"
     private(set) var executorModel: String? = nil
     private(set) var advisorModel: String? = nil
@@ -62,6 +68,15 @@ final class NativePrefs {
     /// user wants to see the flow again.
     private(set) var hasCompletedOnboarding: Bool = false
 
+    /// ADR-0108 — per-session posture, keyed by marvin session id. Capped and
+    /// MRU-ordered by `SessionPostureStore`, so a user who opens hundreds of
+    /// tabs does not accumulate an unbounded pref.
+    private(set) var postures = SessionPostureStore()
+    /// The session whose posture the setters write and the bridge shows.
+    /// Nil before the first tab is selected — setters then move the defaults
+    /// only, which is the pre-0108 behaviour.
+    private(set) var activeSessionId: String?
+
     private init() {
         loadFromDefaults()
         // Silence the bridge's pref message handlers so the web side
@@ -82,21 +97,21 @@ final class NativePrefs {
         guard v == "marvin" || v == "neutral" || v == "ultron" else { return }
         personality = v
         UserDefaults.standard.set(v, forKey: "marvin.personality")
-        MarvinBridge.shared.personality = v
+        update { $0.personality = v }
     }
 
     func setExecutorModel(_ v: String?) {
         executorModel = v
         if let v { UserDefaults.standard.set(v, forKey: "marvin.model.executor") }
         else { UserDefaults.standard.removeObject(forKey: "marvin.model.executor") }
-        MarvinBridge.shared.executorModel = v
+        update { $0.executorModel = v }
     }
 
     func setAdvisorModel(_ v: String?) {
         advisorModel = v
         if let v { UserDefaults.standard.set(v, forKey: "marvin.model.advisor") }
         else { UserDefaults.standard.removeObject(forKey: "marvin.model.advisor") }
-        MarvinBridge.shared.advisorModel = v
+        update { $0.advisorModel = v }
     }
 
     func setModels(executor: String?, advisor: String?) {
@@ -108,7 +123,7 @@ final class NativePrefs {
         guard v == "auto" || v == "gated" else { return }
         permissionStrategy = v
         UserDefaults.standard.set(v, forKey: "marvin.permissionStrategy")
-        MarvinBridge.shared.permissionStrategy = v
+        update { $0.permissionStrategy = v }
     }
 
     /// Opt-in Playwright MCP browser server (ADR-0045).
@@ -123,7 +138,7 @@ final class NativePrefs {
         guard v == "ask" || v == "agent" || v == "plan" else { return }
         mode = v
         UserDefaults.standard.set(v, forKey: "marvin.mode")
-        MarvinBridge.shared.mode = v
+        update { $0.mode = v }
     }
 
     /// User-facing reasoning-effort selection. The full SDK ladder
@@ -139,7 +154,7 @@ final class NativePrefs {
         guard let level = normalised else { return }
         thinkingMode = level
         UserDefaults.standard.set(level, forKey: "marvin.thinkingMode")
-        MarvinBridge.shared.thinkingMode = level
+        update { $0.thinkingMode = level }
     }
 
     /// Advisor-specific reasoning effort (ADR-0033). `nil` means
@@ -149,13 +164,73 @@ final class NativePrefs {
         guard let v else {
             advisorThinkingMode = nil
             UserDefaults.standard.removeObject(forKey: "marvin.advisorThinkingMode")
-            MarvinBridge.shared.advisorThinkingMode = nil
+            update { $0.advisorThinkingMode = nil }
             return
         }
         guard let level = NativePrefs.normaliseEffort(v) else { return }
         advisorThinkingMode = level
         UserDefaults.standard.set(level, forKey: "marvin.advisorThinkingMode")
-        MarvinBridge.shared.advisorThinkingMode = level
+        update { $0.advisorThinkingMode = level }
+    }
+
+    // MARK: - Per-session posture (ADR-0108)
+
+    /// What a brand-new tab starts from — the last values the user chose.
+    var defaultPosture: SessionPosture {
+        SessionPosture(
+            personality: personality,
+            executorModel: executorModel,
+            advisorModel: advisorModel,
+            permissionStrategy: permissionStrategy,
+            mode: mode,
+            thinkingMode: thinkingMode,
+            advisorThinkingMode: advisorThinkingMode
+        )
+    }
+
+    /// The posture a session's turns run with. A session with no record of
+    /// its own inherits the defaults — which is every session that existed
+    /// before this shipped.
+    func posture(for sessionId: String?) -> SessionPosture {
+        guard let sessionId, let stored = postures.posture(for: sessionId) else { return defaultPosture }
+        return stored
+    }
+
+    /// Select the session the setters write and the bridge reflects. Called
+    /// from `MarvinBridge.setActiveMarvinSession`, so a tab switch and a
+    /// posture switch cannot come apart.
+    func activateSession(_ sessionId: String?) {
+        activeSessionId = sessionId
+        MarvinBridge.shared.applyPosture(posture(for: sessionId))
+    }
+
+    /// Seed a session's posture from what the sidecar recorded for it, for a
+    /// tab this install has never driven (restored from disk, or created in
+    /// another session of the app). Never overwrites a local record — the
+    /// user's last local choice outranks the server's history.
+    func adoptPosture(_ wire: SessionPostureWire, for sessionId: String) {
+        guard postures.seedIfAbsent(wire.resolved(against: defaultPosture), for: sessionId) else { return }
+        savePostures()
+        if sessionId == activeSessionId { MarvinBridge.shared.applyPosture(posture(for: sessionId)) }
+    }
+
+    /// Apply one field change to the active session's posture and push it to
+    /// the bridge. The caller has already moved the matching default, so a
+    /// new tab inherits the change.
+    private func update(_ mutate: (inout SessionPosture) -> Void) {
+        var next = posture(for: activeSessionId)
+        mutate(&next)
+        if let id = activeSessionId {
+            postures.set(next, for: id)
+            savePostures()
+        }
+        MarvinBridge.shared.applyPosture(next)
+    }
+
+    private func savePostures() {
+        if let json = postures.jsonString {
+            UserDefaults.standard.set(json, forKey: "marvin.sessionPostures")
+        }
     }
 
     /// Map any accepted input (ladder value or legacy alias) onto the
@@ -402,6 +477,7 @@ final class NativePrefs {
         if saved > 0 || d.object(forKey: "marvin.indentSize") != nil {
             indentSize = max(0, min(saved, 8))
         }
+        postures = SessionPostureStore.decode(d.string(forKey: "marvin.sessionPostures"))
         hasCompletedOnboarding = d.bool(forKey: "marvin.onboarding.completed")
         wordWrap = d.bool(forKey: "marvin.wordWrap")
         autoSave = d.bool(forKey: "marvin.autoSave")

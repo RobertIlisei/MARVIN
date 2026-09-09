@@ -100,6 +100,65 @@ over a file that exists. Build output is never symlinked, whatever git ignores.
 
 Set both lists to `[]` for a strictly clean worktree.
 
+## A worktree isolates the filesystem, not the machine
+
+This is the sharp edge, and it has bitten once already.
+
+Each tab gets its own checkout and its own branch. It does **not** get its own
+Docker daemon, host ports, databases, global caches, or anything keyed on
+`$HOME`. Those are shared by every session on the machine, and by anything else
+you happen to be running.
+
+The real case, 2026-09-10. Three tabs were running Java integration tests at
+once. `~/.testcontainers.properties` — a HOME-level file, nothing to do with
+the project — had:
+
+```properties
+testcontainers.reuse.enable=true
+```
+
+Reusable containers are keyed by a config hash and shared across every JVM on
+the same Docker daemon, so all three tabs were handed the **same** Postgres
+container. Two of the suites `DROP TABLE` in their schema setup. They corrupted
+each other's runs, and the failure surfaced as a connection refused when one
+suite's lifecycle management tore the container down mid-run in another.
+
+Nothing was wrong with the worktrees. The tests were sharing a resource that
+lives outside them.
+
+### Making per-session runs independent
+
+Declare the variables that do it in `.marvin/worktree.json`. MARVIN applies
+them to every turn in a tab that has its own worktree, and to every subprocess
+those turns spawn:
+
+```json
+{
+  "symlinkDirectories": ["node_modules"],
+  "env": {
+    "TESTCONTAINERS_REUSE_ENABLE": "false"
+  }
+}
+```
+
+MARVIN ships no knowledge of Testcontainers, or of any other tool — it cannot
+know what makes *your* runs independent, and guessing would be project
+knowledge it has no business holding. `env` is never auto-detected; the
+`symlinkDirectories` above may be.
+
+Things worth checking for your stack:
+
+| Shared by every session | Typical fix |
+|---|---|
+| Reused test containers | a variable that disables reuse for the run |
+| A fixed host port | bind port 0, or a per-session port |
+| One dev database | a per-session schema or database name |
+| A shared build/test cache | a per-session cache directory |
+| A single dev server | run it in one tab, not all of them |
+
+Two independent signs you have this problem: tests that pass alone and fail
+when tabs overlap, and failures that move between tabs run to run.
+
 ## Caveats worth knowing
 
 - **A symlinked `node_modules` is shared.** Installing a package from one tab

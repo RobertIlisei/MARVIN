@@ -89,3 +89,46 @@ load and can load as much as they want, never auto-paying the 120 MB cost.
   `macos/MARVIN/ChatPreviewView.swift`, `macos/MARVIN/ChatTypes.swift`,
   `macos/MARVIN/ChatService.swift`
 - Builds on: Phase-2h hydration/replay; ADR-0046/0047 plan rehydration in replay.
+
+## Addendum — 2026-09-09: the tab strip was paying the full-log price
+
+User: *"switching sessions does not load the right pane smoothly and cleanly
+and fluid. We need to find a way to improve performance."*
+
+Measured before theorising, on the real 122 MB / 36,356-turn transcript this
+ADR was written against. Three causes, one of them a factor of a thousand:
+
+| Cause | Cost |
+|---|---|
+| `selectSession` passed no `tail`, so a tab click fetched the WHOLE transcript | 122 MB over loopback; ~470 ms in `JSONSerialization` alone, more through `Codable` |
+| `loadSession` UTF-8 decoded and `JSON.parse`d all 36,356 lines, then sliced | 528 ms, to produce a 200-turn answer |
+| `ChatStreamReducer.apply` took the array by value and returned a new one, so each of the 36,356 events copied the whole list | **6.3 s** against **6 ms** in place, benchmarked at the same N |
+
+The last one is the interesting one, and it was not visible in the code: the
+call reads `rebuilt = ChatStreamReducer.apply(rebuilt, …)`, which looks linear.
+The caller still holds the array it passed, so copy-on-write fires on the
+reducer's first mutation — an O(n) copy per event, O(n²) per replay, on the
+main actor.
+
+This ADR's own reasoning is what aged: it said the manual history-pick
+"intentionally pays that cost since the user asked". That was true when the
+only way in was the history menu. ADR-0107 made the same function the
+tab-strip click, and a deliberate act became a routine one.
+
+**Changes.** `selectSession` passes `tail: historyPage`, like every other
+hydrate — "show earlier" is still how the rest is reached. A `tail` request
+takes a new `loadSessionTail`, which reads the file as a Buffer, counts
+newlines for the true total, and parses only the lines it returns (113 ms,
+byte-identical to load-then-slice at every tail, pinned by tests). And the
+reducer gained `apply(to:cliEventData:)`, which mutates in place; the
+value-returning `apply` stays as a wrapper for the older call sites.
+
+**Prefer `apply(to:…)` on any path that runs per event.** The value-returning
+form is not a style choice at scale, it is the O(n²).
+
+Two smaller things fell out. Switching sessions never reset `renderWindow`, so
+a widened window followed you into the next tab; it resets on hydrate now. And
+the pane no longer blanks: rows for the last six visited tabs are kept in
+memory and painted immediately on switch, with the fetch replacing them when it
+lands. `hydrate` now logs `turns=… fetch=…ms replay=…ms` so the next person
+measures instead of guessing.

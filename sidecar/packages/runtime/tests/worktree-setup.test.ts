@@ -140,6 +140,67 @@ describe("prepareSessionWorktree", () => {
   it("a malformed config reads as the defaults", () => {
     mkdirSync(join(repo, ".marvin"), { recursive: true });
     writeFileSync(join(repo, ".marvin", "worktree.json"), "{nope");
-    expect(readWorktreeSetupConfig(repo)).toEqual({ symlinkDirectories: [], copyIgnored: [], honorWorktreeInclude: true });
+    expect(readWorktreeSetupConfig(repo)).toEqual({ symlinkDirectories: [], copyIgnored: [], honorWorktreeInclude: true, env: {} });
+  });
+});
+
+
+// ── Per-session env (ADR-0110) ───────────────────────────────────────────────
+//
+// A worktree isolates the filesystem, not the machine. The user hit that on
+// 2026-09-10: `~/.testcontainers.properties` had reuse enabled, so three tabs
+// running integration tests concurrently shared one Postgres container and two
+// suites that DROP TABLE in setup corrupted each other. MARVIN ships no
+// knowledge of Testcontainers; the project declares what makes its runs
+// independent, and this is the parsing of that declaration.
+
+describe("worktree.json env", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "marvin-wt-env-"));
+    mkdirSync(join(dir, ".marvin"), { recursive: true });
+  });
+
+  const write = (obj: unknown) =>
+    writeFileSync(join(dir, ".marvin", "worktree.json"), JSON.stringify(obj), "utf-8");
+
+  it("reads a plain string map", () => {
+    write({ env: { TESTCONTAINERS_REUSE_ENABLE: "false", PGPORT: "0" } });
+    expect(readWorktreeSetupConfig(dir).env).toEqual({
+      TESTCONTAINERS_REUSE_ENABLE: "false",
+      PGPORT: "0",
+    });
+  });
+
+  it("coerces numbers and booleans, which is how people write JSON", () => {
+    write({ env: { PORT: 5432, DEBUG: true } });
+    expect(readWorktreeSetupConfig(dir).env).toEqual({ PORT: "5432", DEBUG: "true" });
+  });
+
+  it("drops entries that are not usable as environment variables", () => {
+    write({ env: { "not-a-name": "x", "2START": "x", GOOD: "y", NESTED: { a: 1 }, NULLY: null } });
+    expect(readWorktreeSetupConfig(dir).env).toEqual({ GOOD: "y" });
+  });
+
+  it("caps entry count and value length rather than trusting the file", () => {
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 200; i += 1) many[`V${i}`] = "x";
+    many.HUGE = "x".repeat(5000);
+    write({ env: many });
+    const env = readWorktreeSetupConfig(dir).env;
+    expect(Object.keys(env).length).toBeLessThanOrEqual(64);
+    expect(env.HUGE).toBeUndefined();
+  });
+
+  it("defaults to empty, and a malformed file is not fatal", () => {
+    write({ symlinkDirectories: ["node_modules"] });
+    expect(readWorktreeSetupConfig(dir).env).toEqual({});
+    writeFileSync(join(dir, ".marvin", "worktree.json"), "{ not json", "utf-8");
+    expect(readWorktreeSetupConfig(dir).env).toEqual({});
+  });
+
+  it("is never guessed: detection leaves it empty", () => {
+    expect(detectWorktreeSetup(dir).env).toEqual({});
   });
 });

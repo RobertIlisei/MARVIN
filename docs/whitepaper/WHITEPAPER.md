@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · September 2026 · v0.1.109 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · September 2026 · v0.1.110 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -122,6 +122,37 @@ the permission gate hard-denies any mutating tool call carrying a subagent
 ID — including shell commands its classifier judges mutating.⁴ Parallel
 *reading* scales fine. Parallel *implementation* is the failure mode the
 literature documents, and MARVIN forbids it at the gate, not in prose.
+
+#### Several loops, not several agents
+
+One assistant per conversation does not mean one conversation. A person can run
+several MARVIN tabs at once, each on its own git worktree and branch, each
+steered by them — that is this topology multiplied, not violated, because no
+model dispatches another. The tabs are genuinely independent: since v0.1.110
+each carries its own autonomy mode, models, effort, voice and permission
+posture, so a tab planning a refactor at maximum effort sits beside one
+answering questions read-only and cheaply.
+
+Two things fall out of that which are worth stating plainly, because both were
+learned by being wrong about them.
+
+**A worktree isolates the filesystem, not the machine.** Each tab gets its own
+checkout and branch. It does not get its own Docker daemon, host ports,
+databases, or anything keyed on `$HOME`. Three tabs running integration tests
+concurrently once shared a single reused Postgres container, and two suites
+that drop tables in setup corrupted each other. MARVIN ships no knowledge of
+any specific tool, so the remedy is a lever rather than a rule: a project
+declares the environment that makes its per-session runs independent, and
+MARVIN applies it to that tab's turns.
+
+**Parallelism has a bill, and it is not the model's.** On a metered CI runner,
+five tabs each opening their own merge request costs five full pipeline runs.
+Because a tab's branch is cut from the checkout's current HEAD, folding all
+five in locally costs none — the commits ride along in whatever run that branch
+was already going to have. MARVIN therefore batches integration by default and
+asks before anything opens a request or starts a pipeline, in every permission
+mode. Pushing a branch is left entirely alone; it starts no pipeline, and it is
+how work is kept safe.
 
 ### Bet 2 — The knowledge graph comes before the file read
 
@@ -692,4 +723,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.109; the repository is the authoritative, current reference.*
+v0.1.110; the repository is the authoritative, current reference.*

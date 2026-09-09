@@ -440,16 +440,29 @@ struct FileViewerNSView: NSViewRepresentable {
         let ruler = STLineNumberRulerView(textView: textView)
         ruler.drawSeparator = true
         ruler.highlightSelectedLine = false
+        // The diff strip lives INSIDE the ruler's trailing inset, so the inset
+        // has to clear it or the numbers butt up against the text. Measured on
+        // a user screenshot (2026-09-10): the rightmost pixel of a line number
+        // and the leftmost pixel of the text were **one pixel apart**, which is
+        // what reads as the two "overlapping".
+        ruler.rulerInsets = STRulerInsets(
+            leading: Self.gutterLeadingInset,
+            trailing: Self.gutterTrailingInset
+        )
         scroll.verticalRulerView = ruler
         scroll.hasVerticalRuler = true
         scroll.rulersVisible = true
 
-        // M5: diff gutter — 3px strip on the right edge of the ruler.
+        // M5: diff gutter — a thin strip on the right edge of the ruler.
         let gutterBar = DiffGutterBar(textView: textView)
         ruler.addSubview(gutterBar)
         gutterBar.autoresizingMask = [.minXMargin, .height]
-        gutterBar.frame = NSRect(x: ruler.bounds.width - 3, y: 0, width: 3, height: ruler.bounds.height)
+        gutterBar.frame = NSRect(
+            x: ruler.bounds.width - Self.diffStripWidth, y: 0,
+            width: Self.diffStripWidth, height: ruler.bounds.height
+        )
         context.coordinator.diffGutterBar = gutterBar
+        Self.applyGutterWidth(ruler: ruler, textView: textView)
 
         // Overview ruler — the change map on the scrollbar track. Placed
         // below the scroller so the knob draws over the ticks.
@@ -520,6 +533,12 @@ struct FileViewerNSView: NSViewRepresentable {
             // edits would clobber selection + undo stack.
             context.coordinator.suppressNextChange = true
             textView.string = content
+            // Re-size the gutter for the new file's line count. Without this a
+            // 4-digit file opened after a 2-digit one keeps the narrow ruler
+            // until a scroll happens to reach a wide number.
+            if let ruler = scroll.verticalRulerView as? STLineNumberRulerView {
+                Self.applyGutterWidth(ruler: ruler, textView: textView)
+            }
             if pathChanged {
                 // Fresh tab → scroll to top so the user reads from
                 // the start. Otherwise (reload) leave scroll where
@@ -602,6 +621,36 @@ struct FileViewerNSView: NSViewRepresentable {
             remaining -= 1
         }
         return min(offset, ns.length)
+    }
+
+    // MARK: - Gutter width
+
+    /// The diff strip's width, and the room the ruler keeps for it.
+    static let diffStripWidth: CGFloat = 3
+    static let gutterLeadingInset: CGFloat = 8
+    /// Wide enough for the diff strip AND a readable gap to the text. Upstream
+    /// defaults to 6 on both sides, and the strip eats half of the trailing
+    /// one.
+    static var gutterTrailingInset: CGFloat { diffStripWidth + 7 }
+
+    /// Size the gutter for the line count it actually has to show.
+    ///
+    /// `STLineNumberRulerView` grows `ruleThickness` from the widest number in
+    /// the CURRENTLY VISIBLE range, and only ever grows it. Two consequences
+    /// the user sees: at the top of a long file the ruler is sized for two
+    /// digits while line 1,247 is one scroll away, and the width it settles on
+    /// is whatever the deepest scroll happened to need. Sizing it up front from
+    /// the real line count removes both, and removes the reflow that happens
+    /// when the number column widens mid-scroll.
+    static func applyGutterWidth(ruler: STLineNumberRulerView, textView: STTextView) {
+        let lines = max(1, textView.string.reduce(into: 1) { n, c in if c == "\n" { n += 1 } })
+        let digits = max(2, String(lines).count)
+        let sample = String(repeating: "0", count: digits)
+        let width = (sample as NSString)
+            .size(withAttributes: [.font: ruler.font])
+            .width
+        let needed = ceil(width) + gutterLeadingInset + gutterTrailingInset
+        if ruler.ruleThickness < needed { ruler.ruleThickness = needed }
     }
 
     /// Switch the text container between "as wide as it needs to be" and

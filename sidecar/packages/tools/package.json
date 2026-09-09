@@ -11,7 +11,8 @@
     "./fs-constants": "./src/fs-constants.ts",
     "./fs-write-policy": "./src/fs-write-policy.ts",
     "./shared-tree": "./src/shared-tree.ts",
-    "./lanes": "./src/lanes.ts"
+    "./lanes": "./src/lanes.ts",
+    "./metered-ci": "./src/metered-ci.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
