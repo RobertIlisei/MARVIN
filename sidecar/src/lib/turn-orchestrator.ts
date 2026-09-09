@@ -41,6 +41,7 @@ import {
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
 import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
 import {
   autoContinueDelaySeconds,
@@ -135,7 +136,9 @@ export function buildSessionContext(
     return (
       `You are working in an isolated git worktree at ${tree.path} on branch ${tree.branch} ` +
       `(cut from ${tree.base.slice(0, 7)}). The project checkout at ${workDir} is read-only from this tab; ` +
-      `edits belong in the worktree, relative paths already resolve there. Commit on this branch — the user merges.${prepared}`
+      `edits belong in the worktree, relative paths already resolve there; the same tracked files exist in both, so ` +
+      `name files by their worktree path, not the main checkout's. Reading from the main checkout is allowed; a command that ` +
+      `writes into it raises a confirm. Commit on this branch — the user merges.${prepared}`
     );
   }
   if (tree.lane && tree.lane.length > 0) {
@@ -377,11 +380,19 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
 
   if (!result.ok) {
-    const payload = { error: result.error ?? "Unknown error" };
+    // ADR-0107 addendum 3 — an external SIGTERM (app quit, sidecar replaced)
+    // is an interruption the user can resume, not a user stop and not an
+    // error; only the abort signal tells the two apart.
+    const failure = classifyTurnFailure(result.error ?? "Unknown error", liveTurn.abortController.signal.aborted);
+    const payload = {
+      error: failure.error,
+      ...(failure.interrupted ? { interrupted: true as const, code: "interrupted" } : {}),
+    };
     appendSessionTurn(projectId, marvinSessionId, {
       type: "turn.error",
       at: new Date().toISOString(),
       error: payload.error,
+      ...(failure.interrupted ? { interrupted: true as const, code: "interrupted" } : {}),
     });
     // AUTO-CONTINUE ON TRANSPORT FAILURE (ADR-0067). A dropped socket is not a
     // verdict about the work, but it used to end the session as if it were:
@@ -391,7 +402,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "error", error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.interrupted ? "interrupted" : "error", error: payload.error.slice(0, 200) },
     });
     maybeAutoContinue({
       error: payload.error,

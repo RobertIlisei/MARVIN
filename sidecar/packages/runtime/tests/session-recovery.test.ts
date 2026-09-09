@@ -11,8 +11,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { marvinPaths } from "../src/paths";
 import { addProject } from "../src/projects";
-import { buildResumeRecord, findInterruptedSessions, markInterruptedAtBoot, scanTail } from "../src/session-recovery";
 import { readSessionMeta, upsertSessionMeta } from "../src/session-meta";
+import { buildResumeRecord, 
+  classifyTurnFailure,findInterruptedSessions, 
+  INTERRUPTED_BY_SHUTDOWN_MESSAGE,markInterruptedAtBoot, scanTail,
+} from "../src/session-recovery";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
 
 // A cut-off turn counts as interrupted only inside a recent window (addendum
@@ -38,6 +41,17 @@ describe("scanTail", () => {
     const marked = scanTail([started("t1"), JSON.stringify({ type: "turn.error", at: "x", error: "interrupted", interrupted: true })].join("\n"));
     expect(marked.newest).toBe("turn.error");
     expect(marked.markedInterrupted).toBe(true);
+  });
+});
+
+describe("classifyTurnFailure", () => {
+  // Addendum 3 — the SDK text is identical for Stop and for an external kill.
+  it("an external SIGTERM is an interruption; a user Stop and other errors stay as they are", () => {
+    const sigterm = "Turn cancelled (subprocess received SIGTERM — usually Stop / ⌘.).";
+    expect(classifyTurnFailure(sigterm, false)).toEqual({ error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true });
+    expect(classifyTurnFailure("claude exited with code 143", false).interrupted).toBe(true);
+    expect(classifyTurnFailure(sigterm, true)).toEqual({ error: sigterm, interrupted: false });
+    expect(classifyTurnFailure("socket hang up", false)).toEqual({ error: "socket hang up", interrupted: false });
   });
 });
 

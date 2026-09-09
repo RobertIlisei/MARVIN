@@ -1577,6 +1577,10 @@ final class ChatPreviewModel {
         let b = MarvinBridge.shared
         switch event {
         case .turnStarted(let s):
+            // ADR-0107 addendum 3 — a new turn supersedes the previous
+            // turn's error banner (the replayed "SIGTERM" of a restart sat
+            // above a streaming reply and read as a live failure).
+            lastError = nil
             // Phase 2f — capture the marvinSessionId so cancel can
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId

@@ -120,6 +120,25 @@ function postureFrom(started: Record<string, unknown> | null): SessionPosture | 
  */
 export const INTERRUPTED_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 
+/**
+ * ADR-0107 addendum 3 — a turn whose subprocess was SIGTERMed while the
+ * user did NOT press Stop was killed from outside: the app quit, the
+ * sidecar was replaced, macOS reclaimed it. The SDK text for both cases is
+ * identical ("subprocess received SIGTERM — usually Stop / ⌘."), so the
+ * transcript read like a user stop and the tab showed a stream error with
+ * no way back. Classified here from the one fact the orchestrator has that
+ * the SDK does not: whether the turn's abort signal was pulled.
+ */
+export const INTERRUPTED_BY_SHUTDOWN_MESSAGE =
+  "Turn interrupted — the MARVIN process was stopped (app quit or restart), not by Stop. Resume it from the banner or the Sessions pane.";
+
+export function classifyTurnFailure(error: string, userCancelled: boolean): { error: string; interrupted: boolean } {
+  if (!userCancelled && /subprocess received SIGTERM|exited with code 143\b/.test(error)) {
+    return { error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true };
+  }
+  return { error, interrupted: false };
+}
+
 /** Sessions of a project whose last turn was cut off RECENTLY and is not running now. */
 export function findInterruptedSessions(
   projectId: string,

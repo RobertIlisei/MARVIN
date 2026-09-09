@@ -72,8 +72,39 @@ describe("sessionWorktreePolicy (pure)", () => {
     expect(sessionWorktreePolicy("Bash", { command: `cd ${root} && git status` }, wt, root)?.decision).toBe("confirm");
     expect(sessionWorktreePolicy("Bash", { command: `git -C ${root} rebase main` }, wt, root)?.decision).toBe("confirm");
     expect(sessionWorktreePolicy("Bash", { command: `GIT_WORK_TREE=${root} git status` }, wt, root)?.decision).toBe("confirm");
-    expect(sessionWorktreePolicy("Bash", { command: `cat ${root}/README.md` }, wt, root)?.decision).toBe("confirm");
+    // Addendum 3 — reading the shared checkout is not contained; writing into it is.
+    expect(sessionWorktreePolicy("Bash", { command: `cat ${root}/README.md` }, wt, root)).toBeNull();
+    expect(sessionWorktreePolicy("Bash", { command: `echo hi > ${root}/notes.md` }, wt, root)?.decision).toBe("confirm");
     expect(sessionWorktreePolicy("Read", { file_path: path.join(root, "x") }, wt, root)).toBeNull();
+  });
+
+  it("mainTreeRedirect: reads of the main tree fall through, writes in every shape confirm", () => {
+    const reads = [
+      `cat ${root}/README.md`,
+      `grep -rn foo ${root}/docs | head`,
+      `python3 -c "import json; json.load(open('${root}/docs/spec.json'))"`,
+      `git log --oneline ${root}/docs`,
+      `git diff HEAD -- ${root}/docs/x.md`,
+      `ls -la "${root}/apps"`,
+      `node -e "require('fs').readFileSync('${root}/package.json')"`,
+    ];
+    for (const c of reads) expect(mainTreeRedirect(c, root, wt), c).toBeNull();
+    const writes = [
+      `echo hi > ${root}/notes.md`,
+      `cat x >> "${root}/notes.md"`,
+      `rm -rf ${root}/build`,
+      `cp a.txt ${root}/b.txt`,
+      `mkdir -p ${root}/tmp/out`,
+      `sed -i '' 's/a/b/' ${root}/x.md`,
+      `git add ${root}/x.md`,
+      `git checkout -- ${root}/x.md`,
+      `python3 -c "open('${root}/x.json','w').write('1')"`,
+      `python3 -c "open('${root}/x.json', mode='a')"`,
+      `node -e "require('fs').writeFileSync('${root}/x.json','1')"`,
+      `tee ${root}/x.log`,
+      `npm test && rm ${root}/x`,
+    ];
+    for (const c of writes) expect(mainTreeRedirect(c, root, wt), c).not.toBeNull();
   });
 
   it("mainTreeRedirect names the fragment and ignores worktree paths", () => {

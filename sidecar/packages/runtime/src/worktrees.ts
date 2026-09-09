@@ -831,7 +831,19 @@ export function sessionWorktreePolicy(
   return null;
 }
 
-/** The fragment of `cmd` that points at the main tree, or null. */
+/**
+ * The fragment of `cmd` that would act ON the main tree, or null.
+ *
+ * Addendum 3: a bare mention of a main-checkout path used to confirm, so a
+ * tab that READ a spec file from the root (`open('<root>/docs/x.json')`) hit
+ * a prompt under the auto gate — the containment exists to keep WRITES in
+ * the worktree, and reading the shared checkout is harmless. Now: `cd`,
+ * `git -C`, `--git-dir`, `GIT_WORK_TREE` still confirm (they move the
+ * whole command there); a root path elsewhere confirms only in a write
+ * position — a redirection into it, a mutating shell tool, an in-place
+ * `sed`/`perl`, a mutating git verb, or a Python/Node file API opening it
+ * for writing. Everything else falls through.
+ */
 export function mainTreeRedirect(cmd: string, workDir: string, worktree: string): string | null {
   const root = resolve(workDir);
   const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -845,12 +857,27 @@ export function mainTreeRedirect(cmd: string, workDir: string, worktree: string)
     const m = re.exec(cmd);
     if (m) return m[0].trim();
   }
-  // A bare absolute path under the main tree that is not under a worktree.
-  const absolutes = [...cmd.matchAll(/(?:^|[\s"'=])(\/[^\s"'|;&)]*)/g)].map((m) => m[1] ?? "");
-  for (const a of absolutes) {
-    if (isInsideWorktree(a, worktree)) continue;
-    if (a.startsWith(join(root, ".marvin", "worktrees"))) continue;
-    if (isInsideWorktree(a, root)) return a;
+  // Root paths that are NOT under a worktree, per shell segment, in a write position.
+  const underRoot = (a: string): boolean =>
+    !isInsideWorktree(a, worktree) && !a.startsWith(join(root, ".marvin", "worktrees")) && isInsideWorktree(a, root);
+  for (const segment of cmd.split(/\n|;|&&|\|\||\|/)) {
+    const paths = [...segment.matchAll(/(?:^|[\s"'=(,])(\/[^\s"'|;&),]*)/g)].map((m) => m[1] ?? "").filter(underRoot);
+    if (paths.length === 0) continue;
+    const hit = paths[0] as string;
+    const pathAlt = paths.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    // Redirection into the main tree.
+    if (new RegExp(`>>?\\s*['"]?(?:${pathAlt})`).test(segment)) return hit;
+    // The segment's command word (past env assignments / sudo / env / nohup / time).
+    const words = segment.trim().split(/\s+/);
+    let i = 0;
+    while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "") || /^(?:sudo|env|nohup|time|command)$/.test(words[i] ?? ""))) i++;
+    const tool = (words[i] ?? "").replace(/^.*\//, "");
+    if (/^(?:rm|rmdir|mv|cp|mkdir|touch|chmod|chown|chgrp|ln|rsync|install|truncate|dd|tee|unlink|shred|patch)$/.test(tool)) return hit;
+    if (/^(?:sed|perl)$/.test(tool) && /(?:^|\s)-[a-zA-Z]*i/.test(segment)) return hit;
+    if (tool === "git" && /\bgit\s+(?:add|rm|mv|checkout|restore|reset|commit|stash|apply|am|rebase|merge|cherry-pick|revert|clean|switch|worktree|branch|tag)\b/.test(segment)) return hit;
+    // Python / Node file APIs opening a root path for writing.
+    if (new RegExp(`open\\(\\s*['"](?:${pathAlt})[^'"]*['"]\\s*,\\s*(?:mode\\s*=\\s*)?['"][^'"]*[wax+]`).test(segment)) return hit;
+    if (/\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|shutil\.(?:copy\w*|move|rmtree)|os\.(?:remove|rename|unlink|makedirs|mkdir|rmdir)|Path\([^)]*\)\.(?:write_text|write_bytes|unlink|mkdir|rmdir|touch))\s*\(/.test(segment)) return hit;
   }
   return null;
 }
