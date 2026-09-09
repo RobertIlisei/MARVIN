@@ -3156,6 +3156,13 @@ runner.suite("session-feed-decode") {
         let tree = d("session.tree", #"{"marvinSessionId":"s","projectId":"p","tree":{"mode":"worktree","slug":"x","path":"/w","branch":"marvin/tab/x","base":"abc"}}"#)
         runner.expect(tree == .tree(sessionId: "s", tree: SessionTreeWire(mode: .worktree, slug: "x", path: "/w", branch: "marvin/tab/x", base: "abc")), "tree")
     }
+    runner.test("session.activity decodes the three states, tool name only for tool") {
+        runner.expect(d("session.activity", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","state":"tool","tool":"Bash"}"#)
+                      == .activity(sessionId: "s", turnId: "t", state: .tool, tool: "Bash"), "tool with name")
+        runner.expect(d("session.activity", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","state":"writing"}"#)
+                      == .activity(sessionId: "s", turnId: "t", state: .writing, tool: nil), "writing")
+        runner.expect(d("session.activity", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","state":"dancing"}"#) == nil, "unknown state → nil")
+    }
     runner.test("unknown names, heartbeats and malformed data are nil, never a throw") {
         runner.expect(d("announce.attached", #"{"projectId":"p"}"#) == nil, "attached ignored")
         runner.expect(d("turn.registered", "{not json") == nil, "malformed → nil")
@@ -3213,6 +3220,30 @@ runner.suite("session-ledger") {
         runner.expect(l["fresh"]?.isLive == true, "fresh kept live through the grace window")
         runner.expect(l["old"]?.isLive == false, "old cleared by the snapshot")
         runner.expect(l["old"]?.costUsd == 1.5 && l["old"]?.title == "Hello", "snapshot fields land")
+    }
+    runner.test("activity is per session, follows the live turn, and clears on ended / a new turn") {
+        var l = SessionLedger()
+        l.apply(.registered(sessionId: "a", turnId: "t1", kind: nil, startedAt: 0), now: t0)
+        l.apply(.registered(sessionId: "b", turnId: "t9", kind: nil, startedAt: 0), now: t0)
+        runner.expect(l["a"]?.brainState == "thinking" && l["b"]?.brainState == "thinking", "live with no word yet = thinking")
+        l.apply(.activity(sessionId: "a", turnId: "t1", state: .tool, tool: "Bash"), now: t0)
+        l.apply(.activity(sessionId: "b", turnId: "t9", state: .writing, tool: nil), now: t0)
+        runner.expect(l["a"]?.brainState == "tool" && l["a"]?.activityLabel == "using Bash", "a uses Bash")
+        runner.expect(l["b"]?.brainState == "writing" && l["b"]?.activityLabel == "writing", "b writes — independently")
+        l.apply(.activity(sessionId: "a", turnId: "t0-stale", state: .writing, tool: nil), now: t0)
+        runner.expect(l["a"]?.brainState == "tool", "activity for another turn is ignored")
+        l.apply(.ended(sessionId: "a", turnId: "t1", outcome: .completed, costUsd: nil), now: t0)
+        runner.expect(l["a"]?.brainState == "idle" && l["a"]?.activity == nil, "ended clears activity")
+        l.apply(.activity(sessionId: "c", turnId: "t5", state: .thinking, tool: nil), now: t0)
+        runner.expect(l["c"]?.isLive == true && l["c"]?.brainState == "thinking", "activity before registered still means live")
+        l.apply(.registered(sessionId: "b", turnId: "t10", kind: nil, startedAt: 0), now: t0)
+        runner.expect(l["b"]?.activity == nil && l["b"]?.brainState == "thinking", "a new turn starts over")
+    }
+    runner.test("a snapshot carries activity for the live turn") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"working","turn":{"turnId":"t"},"activity":{"state":"tool","tool":"Read","turnId":"t"}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0)
+        runner.expect(l["s"]?.brainState == "tool" && l["s"]?.activityTool == "Read", "snapshot activity lands")
     }
     runner.test("a snapshot marks interrupted sessions") {
         var l = SessionLedger()

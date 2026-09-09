@@ -16,6 +16,11 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var liveTurnId: String?
     public var liveKind: String?
     public var liveSince: Date?
+    /// What the live turn is doing now, from the project feed. nil until the
+    /// sidecar has said (a turn starts as "thinking" on the sidecar side).
+    public var activity: SessionActivityState?
+    /// The tool in use when `activity == .tool`.
+    public var activityTool: String?
     /// Keyed by toolUseId, so a re-announced confirm never double-counts.
     public var pendingConfirms: [String: PendingConfirmInfo] = [:]
     public var lastOutcome: TurnOutcome?
@@ -34,6 +39,24 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
 
     public var isLive: Bool { liveTurnId != nil }
     public var needsYou: Int { pendingConfirms.count }
+
+    /// The brain state this session would show if it were on screen — the
+    /// string vocabulary `MarvinBridge.marvinState` already uses. A live turn
+    /// the feed has not described yet is "thinking"; nothing live is "idle".
+    public var brainState: String {
+        if !isLive { return "idle" }
+        return activity?.rawValue ?? "thinking"
+    }
+
+    /// Short human phrase for a row subtitle: "thinking", "writing", "using Bash".
+    public var activityLabel: String? {
+        guard isLive, let a = activity else { return nil }
+        switch a {
+        case .thinking: return "thinking"
+        case .writing: return "writing"
+        case .tool: return activityTool.map { "using \($0)" } ?? "using a tool"
+        }
+    }
 }
 
 public struct SessionLedger: Equatable, Sendable {
@@ -66,6 +89,7 @@ public struct SessionLedger: Equatable, Sendable {
         var e = ensure(event.sessionId)
         switch event {
         case .registered(_, let turnId, let kind, let startedAt):
+            if e.liveTurnId != turnId { e.activity = nil; e.activityTool = nil }
             e.liveTurnId = turnId
             e.liveKind = kind
             e.liveSince = Date(timeIntervalSince1970: startedAt / 1000)
@@ -79,6 +103,8 @@ public struct SessionLedger: Equatable, Sendable {
             e.liveTurnId = nil
             e.liveKind = nil
             e.liveSince = nil
+            e.activity = nil
+            e.activityTool = nil
             // The sidecar auto-denies every pending confirm when a turn ends.
             e.pendingConfirms.removeAll()
             e.lastOutcome = outcome
@@ -92,6 +118,13 @@ public struct SessionLedger: Equatable, Sendable {
         case .tree(_, let tree):
             e.tree = tree
             e.mode = tree.mode
+        case .activity(_, let turnId, let state, let tool):
+            // Activity for a turn we have not heard `registered` for yet still
+            // means the session is live (the two frames race on the wire).
+            if let live = e.liveTurnId, live != turnId { break }
+            if e.liveTurnId == nil { e.liveTurnId = turnId; e.isDraft = false }
+            e.activity = state
+            e.activityTool = state == .tool ? tool : nil
         }
         entries[event.sessionId] = e
     }
@@ -110,12 +143,18 @@ public struct SessionLedger: Equatable, Sendable {
                 e.liveKind = t.kind
                 if let s = t.startedAt, let d = Self.parseISO(s) { e.liveSince = d }
                 e.isDraft = false
+                if let a = row.activity {
+                    e.activity = a.state
+                    e.activityTool = a.state == .tool ? a.tool : nil
+                }
             } else if let since = e.liveSince, now.timeIntervalSince(since) < graceSeconds {
                 // Keep it: registered too recently for this snapshot to know.
             } else {
                 e.liveTurnId = nil
                 e.liveKind = nil
                 e.liveSince = nil
+                e.activity = nil
+                e.activityTool = nil
             }
             if let pending = row.pending {
                 e.pendingConfirms = Dictionary(uniqueKeysWithValues: pending.map { ($0.toolUseId, $0) })

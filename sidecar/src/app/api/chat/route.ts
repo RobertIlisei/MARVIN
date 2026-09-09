@@ -7,32 +7,32 @@ import {
   maybeRefreshKnowledgeGraph,
 } from "@marvin/graphify-bridge";
 import { defaultModel } from "@marvin/runtime/claude-cli";
-import type { PersonalityMode } from "@marvin/runtime/personality";
 import { marvinPaths } from "@marvin/runtime/paths";
+import { enqueuePending } from "@marvin/runtime/pending-input";
+import type { PersonalityMode } from "@marvin/runtime/personality";
 import { slugifyWorkDir } from "@marvin/runtime/projects";
-import { validateSessionCwd } from "@marvin/runtime/session-cwd";
-import { normaliseLane, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta, upsertSessionMeta } from "@marvin/runtime/session-meta";
-import { prepareSessionWorktree } from "@marvin/runtime/worktree-setup";
-import { createSessionWorktree, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import {
   type AgentMode,
   type PermissionStrategy,
   type RuntimeMode,
   resolveRuntimeMode,
 } from "@marvin/runtime/sdk-runner";
-import { expandNativeCommand } from "@marvin/runtime/slash-commands";
 import { appendSessionTurn, lastSdkSessionId } from "@marvin/runtime/session";
+import { validateSessionCwd } from "@marvin/runtime/session-cwd";
+import { normaliseLane, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta, upsertSessionMeta } from "@marvin/runtime/session-meta";
+import { expandNativeCommand } from "@marvin/runtime/slash-commands";
 import {
+  announceProjectEvent,
   emitTurnEvent,
   endLiveTurn,
   getLiveTurn,
   isPreemptible,
   registerLiveTurn,
-  announceProjectEvent,
 } from "@marvin/runtime/turn-registry";
+import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
+import { createSessionWorktree, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
-import { enqueuePending } from "@marvin/runtime/pending-input";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
 
 /** ADR-0107 — is `dir` inside a git work tree with at least one commit? */
@@ -297,6 +297,7 @@ export async function POST(req: NextRequest) {
   const existingMeta = readSessionMeta(projectId, marvinSessionId);
   let sessionTree: SessionTree;
   let treeFallback: string | undefined;
+  let setupRecord: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean } | undefined;
   if (cwdCheck.worktree) {
     // The client addressed a registered worktree directly.
     sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base };
@@ -324,8 +325,10 @@ export async function POST(req: NextRequest) {
     if (wanted === "worktree") {
       try {
         const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: body.sessionTitle });
-        const setup = prepareSessionWorktree(workDir, rec.path);
-        logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length });
+        const { config, detected } = readOrDetectWorktreeSetup(workDir);
+        const setup = prepareSessionWorktree(workDir, rec.path, config);
+        logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, detected, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length });
+        setupRecord = { symlinked: setup.symlinked, copied: setup.copied, skipped: setup.skipped.length, detected };
         sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base };
         cwd = rec.path;
       } catch (err) {
@@ -339,7 +342,7 @@ export async function POST(req: NextRequest) {
       sessionTree = { mode: "shared", ...(lane && lane.length ? { lane } : {}) };
     }
   }
-  const sessionContext = buildSessionContext(sessionTree, workDir);
+  const sessionContext = buildSessionContext(sessionTree, workDir, setupRecord ?? existingMeta?.setup);
 
   // ADR-0107 — persist the tree + posture beside the transcript so a
   // server-initiated resume (and the watch feed) can rebuild this turn.
@@ -353,7 +356,7 @@ export async function POST(req: NextRequest) {
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     mode,
   };
-  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}) });
+  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}), ...(setupRecord ? { setup: setupRecord } : {}) });
   if (!existingMeta) {
     announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree: sessionTree } });
   }

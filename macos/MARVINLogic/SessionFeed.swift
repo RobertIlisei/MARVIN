@@ -79,6 +79,14 @@ public struct SessionPlanProgress: Codable, Equatable, Sendable {
     public init(done: Int, total: Int) { self.done = done; self.total = total }
 }
 
+/// What a session's live turn is doing now (ADR-0107 addendum). The same
+/// three states the brain renders; `tool` carries the tool's name.
+public enum SessionActivityState: String, Codable, Sendable, Equatable {
+    case thinking
+    case writing
+    case tool
+}
+
 /// One live event from the project feed.
 public enum SessionFeedEvent: Equatable, Sendable {
     case registered(sessionId: String, turnId: String, kind: String?, startedAt: Double)
@@ -86,6 +94,7 @@ public enum SessionFeedEvent: Equatable, Sendable {
     case confirmPending(sessionId: String, turnId: String, toolUseId: String, toolName: String)
     case confirmResolved(sessionId: String, turnId: String, toolUseId: String)
     case tree(sessionId: String, tree: SessionTreeWire)
+    case activity(sessionId: String, turnId: String, state: SessionActivityState, tool: String?)
 
     private struct Registered: Decodable {
         let marvinSessionId: String; let turnId: String; let kind: String?; let startedAt: Double
@@ -102,6 +111,9 @@ public enum SessionFeedEvent: Equatable, Sendable {
     }
     private struct Tree: Decodable {
         let marvinSessionId: String; let tree: SessionTreeWire
+    }
+    private struct Activity: Decodable {
+        let marvinSessionId: String; let turnId: String; let state: SessionActivityState; let tool: String?
     }
 
     /// Decode one SSE frame. nil = not a feed event (`announce.attached`,
@@ -126,6 +138,9 @@ public enum SessionFeedEvent: Equatable, Sendable {
         case "session.tree":
             guard let t = try? d.decode(Tree.self, from: data) else { return nil }
             return .tree(sessionId: t.marvinSessionId, tree: t.tree)
+        case "session.activity":
+            guard let a = try? d.decode(Activity.self, from: data) else { return nil }
+            return .activity(sessionId: a.marvinSessionId, turnId: a.turnId, state: a.state, tool: a.tool)
         default:
             return nil
         }
@@ -134,7 +149,7 @@ public enum SessionFeedEvent: Equatable, Sendable {
     public var sessionId: String {
         switch self {
         case .registered(let s, _, _, _), .ended(let s, _, _, _), .confirmPending(let s, _, _, _),
-             .confirmResolved(let s, _, _), .tree(let s, _):
+             .confirmResolved(let s, _, _), .tree(let s, _), .activity(let s, _, _, _):
             return s
         }
     }
@@ -173,10 +188,16 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
         public let turns: Int
         public let costUsd: Double
     }
+    public struct Activity: Decodable, Equatable, Sendable {
+        public let state: SessionActivityState
+        public let tool: String?
+        public let turnId: String?
+    }
 
     public let marvinSessionId: String
     public let state: String
     public let turn: Turn?
+    public let activity: Activity?
     public let pending: [PendingConfirmInfo]?
     public let tree: Tree?
     public let diff: SessionDiffSummary?

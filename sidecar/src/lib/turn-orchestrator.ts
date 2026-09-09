@@ -16,17 +16,21 @@
 
 import { randomUUID } from "node:crypto";
 import { buildProjectContext } from "@marvin/project-context";
-import { recordTurnCost, pollOpenRouterBalance } from "@marvin/runtime/cost-tracker";
 import { readAuthConfig } from "@marvin/runtime/auth-config";
+import { pollOpenRouterBalance, recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { calculateEstimatedCost } from "@marvin/runtime/models";
+import {
+  drainPending,
+  enqueuePending,
+  renderPendingPrompt,
+} from "@marvin/runtime/pending-input";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
-import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
-import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
 import { practicePromptBlock } from "@marvin/runtime/practice";
+import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
 import {
   type AgentMode,
-  type PermissionStrategy,
   clampEffort,
+  type PermissionStrategy,
   runAgent,
 } from "@marvin/runtime/sdk-runner";
 import {
@@ -34,27 +38,24 @@ import {
   lastSdkSessionId,
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
-import {
-  type LiveTurn,
-  emitTurnEvent,
-  endLiveTurn,
-  getLiveTurn,
-  registerLiveTurn,
-  announceProjectEvent,
-} from "@marvin/runtime/turn-registry";
-import {
-  drainPending,
-  enqueuePending,
-  renderPendingPrompt,
-} from "@marvin/runtime/pending-input";
-import { TurnInputChannel } from "@marvin/runtime/turn-input";
+import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
+import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
 import {
   autoContinueDelaySeconds,
   autoContinuePrompt,
   classifyTurnError,
   MAX_AUTO_CONTINUES,
 } from "@marvin/runtime/transient-errors";
-import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { TurnInputChannel } from "@marvin/runtime/turn-input";
+import {
+  announceProjectEvent,
+  emitTurnEvent,
+  endLiveTurn,
+  getLiveTurn,
+  type LiveTurn,
+  registerLiveTurn,
+} from "@marvin/runtime/turn-registry";
 import {
   deferIfSessionBusy,
   noteMachineTurnStarted,
@@ -118,12 +119,22 @@ export async function buildTurnSystemPrompt(args: {
  * `planContext`), never part of `buildTurnSystemPrompt`: every tab on a
  * project must keep the identical cached prefix. Three short lines at most.
  */
-export function buildSessionContext(tree: SessionTree, workDir: string): string | undefined {
+export function buildSessionContext(
+  tree: SessionTree,
+  workDir: string,
+  setup?: { symlinked: string[]; copied: string[] } | undefined,
+): string | undefined {
   if (tree.mode === "worktree") {
+    const prepared =
+      setup && (setup.symlinked.length || setup.copied.length)
+        ? ` Dependencies are shared with the main checkout by symlink (${setup.symlinked.join(", ") || "none"}); ` +
+          `ignored files copied in: ${setup.copied.length ? setup.copied.slice(0, 6).join(", ") : "none"}. ` +
+          `Do not reinstall dependencies unless a symlinked directory is missing.`
+        : "";
     return (
       `You are working in an isolated git worktree at ${tree.path} on branch ${tree.branch} ` +
       `(cut from ${tree.base.slice(0, 7)}). The project checkout at ${workDir} is read-only from this tab; ` +
-      `edits belong in the worktree, relative paths already resolve there. Commit on this branch — the user merges.`
+      `edits belong in the worktree, relative paths already resolve there. Commit on this branch — the user merges.${prepared}`
     );
   }
   if (tree.lane && tree.lane.length > 0) {
@@ -286,6 +297,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   const inputChannel = new TurnInputChannel();
   liveTurn.inject = (text) => inputChannel.push(text);
 
+  // ADR-0107 addendum — per-session activity for every watcher, not just
+  // the tab on screen. Thinking until the stream says otherwise.
+  const activityIds = { projectId, marvinSessionId, turnId };
+  setActivity(activityIds, "thinking");
+
   const result = await runAgent({
     message,
     inputChannel,
@@ -315,6 +331,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
         event,
       });
       emitTurnEvent(liveTurn, "cli.event", event);
+      noteActivityEvent(activityIds, event);
     },
     onConfirmRequest: (payload) => {
       appendSessionTurn(projectId, marvinSessionId, {
@@ -350,6 +367,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   // the drain below runs it (ADR-0069: no user message is ever lost).
   liveTurn.inject = undefined;
   inputChannel.close();
+  clearActivity(marvinSessionId);
   for (const text of inputChannel.drainUnconsumed()) {
     enqueuePending(projectId, marvinSessionId, text);
   }
@@ -582,7 +600,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   }
   const cwd = resolved.cwd;
   const sessionTree = meta?.tree;
-  const sessionContext = sessionTree ? buildSessionContext(sessionTree, workDir) : undefined;
+  const sessionContext = sessionTree ? buildSessionContext(sessionTree, workDir, meta?.setup) : undefined;
 
   const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 

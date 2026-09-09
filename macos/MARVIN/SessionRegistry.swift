@@ -163,6 +163,10 @@ final class SessionRegistry {
                         if !self.feedConnected { self.feedConnected = true; backoffMs = 1_500 }
                         self.ledger.apply(event, now: Date())
                         if case .registered = event { self.promoteDraft(event.sessionId) }
+                        // ADR-0107 addendum — the brain follows the SELECTED
+                        // session's activity from the feed, so switching to a
+                        // tab that is mid-tool shows "tool", not a generic busy.
+                        if case .activity = event { self.pushBrainState(for: event.sessionId) }
                     }
                 } catch {
                     /* fall through to the reconnect wait */
@@ -182,6 +186,18 @@ final class SessionRegistry {
                 self?.now = Date()
             }
         }
+    }
+
+    // MARK: - Brain (one slot, described by the selected session — ADR-0107 addendum)
+
+    /// Push the session's known activity into the brain, if it is the one on
+    /// screen. `BrainStateGate` drops the write otherwise. A cancel in
+    /// progress keeps "cancelling" until the turn actually ends.
+    func pushBrainState(for id: String) {
+        let bridge = MarvinBridge.shared
+        guard bridge.activeMarvinSessionId == id, bridge.marvinState != "cancelling" else { return }
+        guard let e = ledger[id] else { return }
+        bridge.setMarvinState(e.brainState, forSession: id)
     }
 
     // MARK: - Local observations (the selected session sees its own events first)

@@ -120,7 +120,12 @@ export type ProjectEvent =
       event: "confirm.resolved";
       data: { marvinSessionId: string; projectId: string; turnId: string; toolUseId: string; decision: "allow" | "deny" };
     }
-  | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } };
+  | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } }
+  | {
+      /** ADR-0107 addendum — what the session's live turn is doing now. */
+      event: "session.activity";
+      data: { marvinSessionId: string; projectId: string; turnId: string; state: "thinking" | "writing" | "tool"; tool?: string };
+    };
 
 const live = new Map<string, LiveTurn>();
 

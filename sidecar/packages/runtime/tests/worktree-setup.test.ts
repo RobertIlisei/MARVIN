@@ -10,7 +10,13 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { matchesInclude, prepareSessionWorktree, readWorktreeSetupConfig } from "../src/worktree-setup";
+import {
+  detectWorktreeSetup,
+  matchesInclude,
+  prepareSessionWorktree,
+  readOrDetectWorktreeSetup,
+  readWorktreeSetupConfig,
+} from "../src/worktree-setup";
 import { createSessionWorktree } from "../src/worktrees";
 
 describe("matchesInclude", () => {
@@ -51,6 +57,40 @@ describe("prepareSessionWorktree", () => {
 
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("detects ignored dependency dirs (root and nested) and env-file patterns, never build output or tracked files", () => {
+    mkdirSync(join(repo, "apps", "web", "node_modules", "x"), { recursive: true });
+    writeFileSync(join(repo, "apps", "web", "node_modules", "x", "i.js"), "");
+    mkdirSync(join(repo, ".venv", "bin"), { recursive: true });
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n.env\n*.local\nbuild/\n.venv/\n");
+    git("add", ".gitignore");
+    git("commit", "-qm", "ignore more");
+    const cfg = detectWorktreeSetup(repo);
+    expect(cfg.symlinkDirectories.sort()).toEqual(["apps/web/node_modules", ".venv", "node_modules"].sort());
+    expect(cfg.copyIgnored).toEqual([".env", "*.local"]);
+    expect(cfg.honorWorktreeInclude).toBe(true);
+    expect(cfg.symlinkDirectories).not.toContain("build");
+  });
+
+  it("without a config file, detection is used and written to .marvin/worktree.json for the user to edit", () => {
+    const first = readOrDetectWorktreeSetup(repo);
+    expect(first.detected).toBe(true);
+    expect(first.config.symlinkDirectories).toEqual(["node_modules"]);
+    const written = JSON.parse(readFileSync(join(repo, ".marvin", "worktree.json"), "utf-8")) as { detected?: boolean; symlinkDirectories: string[] };
+    expect(written.detected).toBe(true);
+    expect(written.symlinkDirectories).toEqual(["node_modules"]);
+    // Now it is the user's file: a later read honours edits, no re-detection.
+    writeFileSync(join(repo, ".marvin", "worktree.json"), JSON.stringify({ symlinkDirectories: [], copyIgnored: [] }));
+    const second = readOrDetectWorktreeSetup(repo);
+    expect(second.detected).toBe(false);
+    expect(second.config.symlinkDirectories).toEqual([]);
+
+    const rec = createSessionWorktree(repo, { sessionId: "s-detect" });
+    const report = prepareSessionWorktree(repo, rec.path, first.config);
+    expect(report.symlinked).toEqual(["node_modules"]);
+    expect(lstatSync(join(rec.path, "node_modules")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(rec.path, ".env"), "utf-8")).toBe("SECRET=1\n");
   });
 
   it("does nothing without configuration", () => {

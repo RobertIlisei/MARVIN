@@ -319,7 +319,9 @@ struct SessionsPane: View {
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(first.toolName)")
         } else if e.isLive, let since = e.liveSince {
-            parts.append("running \(elapsed(since))")
+            parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
+        } else if e.isLive, let label = e.activityLabel {
+            parts.append(label)
         } else if let at = e.lastTurnAt {
             parts.append(elapsed(at) + " ago")
         }

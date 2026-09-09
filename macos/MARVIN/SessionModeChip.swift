@@ -133,6 +133,11 @@ struct SessionModePopover: View {
             Text("The editor, terminal and file tree stay on the main checkout; only MARVIN's turns run in the worktree.")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+            if mode == .worktree {
+                Text("Dependencies (node_modules, .venv, …) are symlinked from the main checkout and ignored .env files copied, as .marvin/worktree.json says. MARVIN writes that file from the project the first time; edit it to change what a new tab gets. See docs/guides/worktrees.md.")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
         .onAppear { laneText = (entry?.tree?.lane ?? []).joined(separator: "\n") }

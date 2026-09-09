@@ -19,7 +19,7 @@ import {
   updateSessionMeta,
 } from "@marvin/runtime/session-meta";
 import { announceProjectEvent, getLiveTurn } from "@marvin/runtime/turn-registry";
-import { prepareSessionWorktree } from "@marvin/runtime/worktree-setup";
+import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
 import {
   createSessionWorktree,
   discardWorktree,
@@ -113,7 +113,7 @@ export async function PUT(req: NextRequest) {
       // Enter a worktree: reopen a kept one, or create from the current HEAD.
       const kept = findSessionWorktree(workDir, sessionId);
       const rec = kept ? (reopenSessionWorktree(workDir, sessionId) ?? kept) : createSessionWorktree(workDir, { sessionId, title: meta.title });
-      if (!kept) prepareSessionWorktree(workDir, rec.path);
+      if (!kept) prepareSessionWorktree(workDir, rec.path, readOrDetectWorktreeSetup(workDir).config);
       tree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base };
     }
     patch.tree = tree;

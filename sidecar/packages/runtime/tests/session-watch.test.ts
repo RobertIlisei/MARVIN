@@ -21,6 +21,7 @@ import {
   deriveSessionState,
   sessionDiff,
 } from "../src/session-watch";
+import { __resetActivityForTests, setActivity } from "../src/session-activity";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
 import { createWorktree } from "../src/worktrees";
 
@@ -62,6 +63,7 @@ describe("buildSessionWatch", () => {
     git("add", ".");
     git("commit", "-qm", "init");
     __resetSessionDiffMemoForTests();
+    __resetActivityForTests();
   });
 
   afterEach(() => {
@@ -102,6 +104,7 @@ describe("buildSessionWatch", () => {
   it("live turn, pending confirm, plan progress and cost land on the row", () => {
     upsertSessionMeta(projectId, "live-sess", { workDir: repo, tree: { mode: "shared" }, posture });
     const t = registerLiveTurn({ turnId: "watch-t1", marvinSessionId: "live-sess", projectId, kind: "human" });
+    setActivity({ projectId, marvinSessionId: "live-sess", turnId: "watch-t1" }, "tool", "Bash");
     registerPendingConfirm("watch-t1", "u1", () => {}, {}, 0, { toolName: "Bash" });
     writePlanState(projectId, "live-sess", {
       activePlanId: "p1",
@@ -110,6 +113,7 @@ describe("buildSessionWatch", () => {
     recordTurnCost({ projectId, marvinSessionId: "live-sess", costUsd: 0.5, tokenUsage: { input_tokens: 1 } });
     try {
       const row = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["live-sess"] })[0]!;
+      expect(row.activity).toMatchObject({ state: "tool", tool: "Bash", turnId: "watch-t1" });
       expect(row.state).toBe("awaiting-you");
       expect(row.turn).toMatchObject({ turnId: "watch-t1", kind: "human", mutated: false });
       expect(row.pending.map((p) => p.toolName)).toEqual(["Bash"]);

@@ -294,8 +294,12 @@ directory makes it the user's thing, not MARVIN's.
   or shared + lane), the posture its turns run with, last turn outcome,
   `closedAt` ([ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)).
   Written by the chat route on every turn; a server-initiated resume rebuilds
-  the turn from it. Project-local: `<workDir>/.marvin/worktree.json`
-  (`symlinkDirectories`, `copyIgnored`) makes a fresh session worktree usable.
+  the turn from it, plus `setup` (what was symlinked / copied into the tab's
+  worktree). Project-local: `<workDir>/.marvin/worktree.json`
+  (`symlinkDirectories`, `copyIgnored`) makes a fresh session worktree usable;
+  when the project has none, MARVIN detects one from git-ignored dependency
+  dirs and env files and writes it (`"detected": true`) for the user to edit.
+  User guide: [`docs/guides/worktrees.md`](./docs/guides/worktrees.md).
 - `sessions/<projectId>/.summaries.json` — picker cache for the session list
   ([ADR-0072](./docs/decisions/0072-session-list-must-not-parse-transcripts.md)):
   per-session `firstUserMessage` + `turnCount`, keyed on `(mtime, size)`.

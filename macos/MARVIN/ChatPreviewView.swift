@@ -607,6 +607,7 @@ final class ChatPreviewModel {
         loadedSessionId = sessionId
         marvinSessionId = sessionId
         MarvinBridge.shared.setActiveMarvinSession(sessionId)
+        SessionRegistry.shared.pushBrainState(for: sessionId)
         // ADR-0043 — a draft has no hydrate; arm the announce loop now so the
         // session catches server-initiated turns from its first message on.
         ensureAnnounceLoop(projectId: projectId)
@@ -1157,6 +1158,10 @@ final class ChatPreviewModel {
         resolvedConfirms.removeAll()
         marvinSessionId = sessionId
         MarvinBridge.shared.setActiveMarvinSession(sessionId)
+        // ADR-0107 addendum — the brain describes the tab now on screen from
+        // what the feed already knows (thinking / writing / tool), not the
+        // tab we just left.
+        SessionRegistry.shared.pushBrainState(for: sessionId)
         lastSentMessage = nil
         // Plan / todo / changed-files strips are per-session — clear the
         // leaving session's before the new one's changed set refreshes below.

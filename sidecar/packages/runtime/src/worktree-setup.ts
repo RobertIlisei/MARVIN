@@ -31,6 +31,7 @@ import {
   readFileSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 
@@ -60,6 +61,71 @@ function safeRelative(entry: unknown): string | null {
   const s = entry.trim().replace(/\\/g, "/");
   if (!s || s.startsWith("/") || s === ".." || s.startsWith("../") || s.includes("/../") || s.endsWith("/..")) return null;
   return s.replace(/\/+$/, "");
+}
+
+/**
+ * Dependency directories worth symlinking when they exist in the main
+ * checkout and git ignores them. Caches and installed dependencies only —
+ * never build OUTPUT (`target`, `.next`, `dist`), which would make two
+ * worktrees share stale artefacts. A project overrides all of this in
+ * `.marvin/worktree.json`.
+ */
+export const DETECTABLE_DEPENDENCY_DIRS = ["node_modules", ".venv", "venv", ".pnpm-store", "vendor", ".yarn/cache", ".gradle"];
+
+/** Ignored files a fresh worktree almost always needs: local environment. */
+export const DETECTABLE_COPY_PATTERNS = [".env", ".env.*", ".envrc", "*.local"];
+
+/**
+ * ADR-0107 addendum — work out a sensible setup for a project that has no
+ * `.marvin/worktree.json`: every detectable dependency dir that exists and is
+ * git-ignored (root and one level into workspace packages, e.g.
+ * `apps/web/node_modules`), plus the environment-file patterns when at least
+ * one ignored file matches them. Pure with respect to the config; reads git.
+ */
+export function detectWorktreeSetup(workDir: string): WorktreeSetupConfig {
+  const ignored = ignoredCandidates(workDir).map((c) => c.replace(/\/$/, ""));
+  const ignoredSet = new Set(ignored);
+  const symlinkDirectories: string[] = [];
+  for (const dir of DETECTABLE_DEPENDENCY_DIRS) {
+    if (ignoredSet.has(dir) && isDir(join(workDir, dir))) symlinkDirectories.push(dir);
+  }
+  // Nested dependency dirs (monorepo packages), one or two levels deep.
+  for (const rel of ignored) {
+    const parts = rel.split("/");
+    const last = parts[parts.length - 1] ?? "";
+    if (parts.length >= 2 && parts.length <= 3 && DETECTABLE_DEPENDENCY_DIRS.includes(last) && isDir(join(workDir, rel))) {
+      if (!symlinkDirectories.includes(rel)) symlinkDirectories.push(rel);
+    }
+  }
+  const copyIgnored = DETECTABLE_COPY_PATTERNS.filter((pat) => ignored.some((rel) => matchesInclude(pat, rel)));
+  return { symlinkDirectories, copyIgnored, honorWorktreeInclude: true };
+}
+
+function isDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read the project's config, or — when there is none — DETECT one and write
+ * it to `.marvin/worktree.json` (marked `"detected": true`) so the user can
+ * see and edit what MARVIN chose. Golden Rule 6 holds: nothing project-
+ * specific ships in MARVIN; the detection reads the project itself.
+ */
+export function readOrDetectWorktreeSetup(workDir: string): { config: WorktreeSetupConfig; detected: boolean } {
+  const p = join(workDir, ".marvin", "worktree.json");
+  if (existsSync(p)) return { config: readWorktreeSetupConfig(workDir), detected: false };
+  const config = detectWorktreeSetup(workDir);
+  try {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, `${JSON.stringify({ ...config, detected: true }, null, 2)}\n`, "utf-8");
+  } catch {
+    /* best-effort: the detected config still applies to this worktree */
+  }
+  return { config, detected: true };
 }
 
 /** Tolerant read of `<workDir>/.marvin/worktree.json`; defaults when absent or malformed. */
@@ -154,7 +220,7 @@ function walkFiles(root: string, cap: number): string[] {
     }
     for (const name of entries) {
       const p = join(dir, name);
-      let st;
+      let st: ReturnType<typeof lstatSync>;
       try {
         st = lstatSync(p);
       } catch {
