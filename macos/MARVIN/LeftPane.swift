@@ -18,6 +18,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
     case files
     case search
     case sourceControl
+    case sessions
     case skills
     case plugins
     case practice
@@ -28,6 +29,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .files: return "Files"
         case .search: return "Search"
         case .sourceControl: return "Source Control"
+        case .sessions: return "Sessions"
         case .skills: return "Skills"
         case .plugins: return "Plugins"
         case .practice: return "Practice"
@@ -39,6 +41,7 @@ private enum LeftPaneTab: String, CaseIterable, Identifiable {
         case .files: return "doc.text"
         case .search: return "magnifyingglass"
         case .sourceControl: return "arrow.triangle.branch"
+        case .sessions: return "rectangle.stack"
         case .skills: return "sparkle"
         case .plugins: return "puzzlepiece.extension"
         case .practice: return "moon.zzz"
@@ -268,6 +271,7 @@ struct LeftPane: View {
                 )
                 paneSlot(FindInFilesView(), active: tab == .search)
                 paneSlot(SourceControlView(), active: tab == .sourceControl)
+                paneSlot(SessionsPane(), active: tab == .sessions)
                 paneSlot(SkillsPane(), active: tab == .skills)
                 paneSlot(PluginsPane(), active: tab == .plugins)
                 paneSlot(PracticePane(), active: tab == .practice)

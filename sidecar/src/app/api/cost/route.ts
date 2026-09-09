@@ -7,8 +7,12 @@ export const dynamic = "force-dynamic";
 /** GET /api/cost?projectId=… → CostSummary */
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId")?.trim() || undefined;
+  const marvinSessionId = req.nextUrl.searchParams.get("marvinSessionId")?.trim() || undefined;
   await pollOpenRouterBalance().catch(() => {});
-  const summary = summarizeCost(projectId ? { projectId } : {});
+  const summary = summarizeCost({
+    ...(projectId ? { projectId } : {}),
+    ...(marvinSessionId ? { marvinSessionId } : {}),
+  });
   return NextResponse.json(summary, {
     headers: { "Cache-Control": "no-store" },
   });

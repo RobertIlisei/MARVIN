@@ -19,6 +19,7 @@
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +48,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  // ADR-0107 — this route mutates branches; it had no CSRF guard.
+  const guard = requireMarvinClient(req);
+  if (guard) return guard;
   let body: { cwd?: string; action?: string; slug?: string };
   try {
     body = (await req.json()) as typeof body;

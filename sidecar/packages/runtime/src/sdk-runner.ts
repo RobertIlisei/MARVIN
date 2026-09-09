@@ -34,6 +34,7 @@ import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { makeTurnCloseStopHook } from "./turn-close-hook";
 import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
+import { describeLane, laneVerdict } from "@marvin/tools/lanes";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
 import { buildSubprocessEnv } from "./auth";
 import {
@@ -72,6 +73,7 @@ import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { readPlanState } from "./plan-state";
 import { loadEnabledPlugins } from "./plugin-loader";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
+import type { SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { TurnInputChannel } from "./turn-input";
@@ -87,7 +89,10 @@ import {
   scopeOfDoneEntirelyUnticked,
   type WorkflowGap,
 } from "./workflow-guard";
-import { bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, sweepWorktrees, type WorktreeState } from "./worktrees";
+import {
+  bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, sweepWorktrees, type WorktreeState,
+  sessionWorktreePolicy,
+} from "./worktrees";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -289,6 +294,13 @@ export interface RunAgentInput {
   sessionContext?: string | undefined;
   /** The checkout this turn runs in — the SDK's `cwd`. A session worktree, or the project root. */
   cwd: string;
+  /**
+   * ADR-0107 — the session's tree. In worktree mode the main loop is
+   * contained to that worktree (writes into the project root are denied,
+   * shell that names the root raises a confirm) and the shared-tree collision
+   * confirm is skipped — there is no co-tenant in a private checkout.
+   */
+  sessionTree?: SessionTree | undefined;
   /**
    * ADR-0107 — the PROJECT root. Everything `.marvin/`-scoped (memory, backlog,
    * graph, audit, wakeups, implementer worktrees, plugins, skills) hangs off
@@ -1297,7 +1309,7 @@ function maybeAskUserQuestion(args: {
     // user's pending answer and making a later "Send choice" click hit a
     // resolved/gone confirm (404 → "nothing happens"). It now waits for the
     // human; the turn's `finally` (clearTurnConfirms) + Stop are the escapes.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0);
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "AskUserQuestion" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1355,10 +1367,13 @@ function maybeSharedTreeConfirm(args: {
   input: Record<string, unknown>;
   /** Absent for turns with no session identity (nothing to collide with). */
   session?: { projectId: string; marvinSessionId: string };
+  /** ADR-0107 — a tab in its own worktree has no co-tenant; the gate is skipped. */
+  sessionTree?: SessionTree | undefined;
   onConfirmRequest?: (request: ConfirmRequestPayload) => void;
 }): Promise<PermissionResult> | null {
   const { toolName, turnId, toolUseID, input, session, onConfirmRequest } = args;
   if (toolName !== "Bash" || !session) return null;
+  if (args.sessionTree?.mode === "worktree") return null;
   const command = typeof input.command === "string" ? input.command : "";
   if (!command) return null;
   const verdict = classifySharedTreeRisk(command);
@@ -1367,15 +1382,24 @@ function maybeSharedTreeConfirm(args: {
   const others = listLiveTurns(session.projectId).filter(
     (t) => t.marvinSessionId !== session.marvinSessionId,
   );
-  if (others.length === 0) return null;
+  // ADR-0107 — a tab that declared a lane has said other tabs share this
+  // checkout; a HEAD-moving command then confirms even when none is live at
+  // this instant (the other tab may be idle between turns, and its files are
+  // still here).
+  const lane = args.sessionTree?.mode === "shared" ? (args.sessionTree.lane ?? []) : [];
+  if (others.length === 0 && lane.length === 0) return null;
 
   const names = others.map((t) => t.marvinSessionId.slice(0, 8)).join(", ");
   const plural = others.length === 1 ? "session" : "sessions";
   const reason =
-    `\`${verdict.verb}\` ${describeSharedTreeRisk(verdict.risk)}. ` +
-    `${others.length} other ${plural} (${names}) ${others.length === 1 ? "is" : "are"} ` +
-    `running a turn in this same checkout right now. ` +
-    `Allow to proceed anyway, or deny and run it in a worktree instead.`;
+    others.length > 0
+      ? `\`${verdict.verb}\` ${describeSharedTreeRisk(verdict.risk)}. ` +
+        `${others.length} other ${plural} (${names}) ${others.length === 1 ? "is" : "are"} ` +
+        `running a turn in this same checkout right now. ` +
+        `Allow to proceed anyway, or deny and run it in a worktree instead.`
+      : `\`${verdict.verb}\` ${describeSharedTreeRisk(verdict.risk)}. This tab owns the lane ` +
+        `${describeLane(lane)} in a checkout shared with other tabs; moving HEAD or rewriting the tree affects all of them. ` +
+        `Allow to proceed anyway, or deny and run it in a worktree instead.`;
 
   if (!onConfirmRequest) {
     return Promise.resolve({
@@ -1392,7 +1416,7 @@ function maybeSharedTreeConfirm(args: {
     // No auto-deny timer, same reasoning as AskUserQuestion: this is a human
     // decision about their own two sessions, and a silent timeout would turn
     // into the mystery failure the confirm exists to replace.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0);
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1400,6 +1424,87 @@ function maybeSharedTreeConfirm(args: {
       input,
       reason,
     });
+  });
+}
+
+/**
+ * ADR-0107 — ownership lanes for a tab in the SHARED checkout. Anthropic's
+ * only guidance for several sessions in one directory is partitioned file
+ * ownership, with no enforcement; this is the enforcement: an Edit / Write /
+ * NotebookEdit outside the tab's declared lane raises a confirm in every
+ * permission mode (deny with no UI). Main loop only; a path outside the
+ * checkout is the normal ladder's business.
+ */
+function maybeLaneConfirm(args: {
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  agentID?: string | undefined;
+  sessionTree?: SessionTree | undefined;
+  cwd: string;
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | null {
+  const { toolName, turnId, toolUseID, input, agentID, sessionTree, cwd, onConfirmRequest } = args;
+  if (agentID || sessionTree?.mode !== "shared") return null;
+  const lane = sessionTree.lane ?? [];
+  if (lane.length === 0) return null;
+  if (toolName !== "Edit" && toolName !== "Write" && toolName !== "NotebookEdit") return null;
+  const raw = input.file_path ?? input.notebook_path ?? input.path;
+  if (typeof raw !== "string" || !raw) return null;
+  const verdict = laneVerdict(raw, lane, cwd);
+  if (!verdict || verdict.inside) return null;
+  const reason =
+    `${toolName} targets ${verdict.rel}, outside this tab's lane (${describeLane(lane)}). Another tab may own it. ` +
+    `Allow to edit it anyway, or deny and keep this tab inside its lane.`;
+  if (!onConfirmRequest) {
+    return Promise.resolve({
+      behavior: "deny",
+      message: `${reason} No interactive UI is attached to this turn, so it was denied rather than run unattended.`,
+      interrupt: false,
+    } as PermissionResult);
+  }
+  return new Promise<PermissionResult>((resolve) => {
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason });
+  });
+}
+
+/**
+ * ADR-0107 — containment for a chat session running in its own worktree.
+ * Main loop only (`agentID` absent): a bound implementer is contained by its
+ * own policy further down. `deny` returns immediately; `confirm` reaches the
+ * user in every permission mode (deny when no UI is attached, like the
+ * shared-tree gate); anything else falls through to the normal ladder.
+ */
+function maybeSessionWorktreeGate(args: {
+  toolName: string;
+  turnId: string;
+  toolUseID: string;
+  input: Record<string, unknown>;
+  agentID?: string | undefined;
+  sessionTree?: SessionTree | undefined;
+  workDir: string;
+  onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+}): Promise<PermissionResult> | PermissionResult | null {
+  const { toolName, turnId, toolUseID, input, agentID, sessionTree, workDir, onConfirmRequest } = args;
+  if (agentID || sessionTree?.mode !== "worktree") return null;
+  const verdict = sessionWorktreePolicy(toolName, input, sessionTree.path, workDir);
+  if (!verdict) return null;
+  if (verdict.decision === "allow") return null;
+  if (verdict.decision === "deny") {
+    return { behavior: "deny", message: verdict.reason, interrupt: false } as PermissionResult;
+  }
+  if (!onConfirmRequest) {
+    return Promise.resolve({
+      behavior: "deny",
+      message: `${verdict.reason} No interactive UI is attached to this turn, so it was denied rather than run unattended.`,
+      interrupt: false,
+    } as PermissionResult);
+  }
+  return new Promise<PermissionResult>((resolve) => {
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason: verdict.reason });
   });
 }
 
@@ -1415,6 +1520,8 @@ export function makeAutoModeLogger(args: {
   cwd: string;
   /** ADR-0107 — project root for the auto-audit ledger; defaults to `cwd`. */
   workDir?: string;
+  /** ADR-0107 — the session's tree; worktree mode contains the main loop. */
+  sessionTree?: SessionTree | undefined;
   turnId: string;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
   checkpoint?: { projectId: string; marvinSessionId: string };
@@ -1439,12 +1546,26 @@ export function makeAutoModeLogger(args: {
     // every mode. `checkpoint` is where this callback already carries the
     // session's identity; the gate is a no-op without it, and without a second
     // live session — which is every single-session turn.
+    // ADR-0107 — a shared tab that declared a lane is confirmed outside it.
+    const laneGate = maybeLaneConfirm({
+      toolName, turnId, toolUseID, input: safeInput, agentID,
+      sessionTree: args.sessionTree, cwd, onConfirmRequest,
+    });
+    if (laneGate) return laneGate;
     const sharedTree = maybeSharedTreeConfirm({
       toolName, turnId, toolUseID, input: safeInput,
       ...(checkpoint ? { session: checkpoint } : {}),
+      sessionTree: args.sessionTree,
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0107 — a tab in its own worktree stays in it (main loop only; a
+    // bound implementer has its own containment below).
+    const contained = maybeSessionWorktreeGate({
+      toolName, turnId, toolUseID, input: safeInput, agentID,
+      sessionTree: args.sessionTree, workDir: args.workDir ?? cwd, onConfirmRequest,
+    });
+    if (contained) return contained;
     const binding = lookupSubagent(agentID);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
@@ -1498,6 +1619,8 @@ export function makeGatedCanUseTool(args: {
   cwd: string;
   /** ADR-0107 — project root for the auto-audit ledger; defaults to `cwd`. */
   workDir?: string;
+  /** ADR-0107 — the session's tree; worktree mode contains the main loop. */
+  sessionTree?: SessionTree | undefined;
   turnId: string;
   onConfirmRequest: (request: ConfirmRequestPayload) => void;
   /** Per-session change-review checkpointing (ADR-0034); omit to disable. */
@@ -1519,12 +1642,25 @@ export function makeGatedCanUseTool(args: {
     // Two sessions, one checkout. Ahead of `classifyToolCall` because the
     // conflict is about WHO ELSE is in the tree, not about the command's own
     // risk class — several of these commands auto-allow on their own merits.
+    // ADR-0107 — a shared tab that declared a lane is confirmed outside it.
+    const laneGate = maybeLaneConfirm({
+      toolName, turnId, toolUseID, input: safeInput, agentID,
+      sessionTree: args.sessionTree, cwd, onConfirmRequest,
+    });
+    if (laneGate) return laneGate;
     const sharedTree = maybeSharedTreeConfirm({
       toolName, turnId, toolUseID, input: safeInput,
       ...(checkpoint ? { session: checkpoint } : {}),
+      sessionTree: args.sessionTree,
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0107 — a tab in its own worktree stays in it (main loop only).
+    const contained = maybeSessionWorktreeGate({
+      toolName, turnId, toolUseID, input: safeInput, agentID,
+      sessionTree: args.sessionTree, workDir: args.workDir ?? cwd, onConfirmRequest,
+    });
+    if (contained) return contained;
     const binding = lookupSubagent(agentID);
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
@@ -1566,7 +1702,7 @@ export function makeGatedCanUseTool(args: {
     }
     // confirm — wait on the client.
     return new Promise<PermissionResult>((resolve) => {
-      registerPendingConfirm(turnId, toolUseID, resolve, safeInput);
+      registerPendingConfirm(turnId, toolUseID, resolve, safeInput, undefined, { toolName });
       onConfirmRequest({
         turnId,
         toolUseId: toolUseID,
@@ -1725,8 +1861,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // re-planning that the SDK's coupled plan permissionMode caused.
   const mode: AgentMode = input.mode ?? "agent";
   const readOnly = mode === "ask" || mode === "plan";
-  const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
-  const autoModeLogger = makeAutoModeLogger({ cwd, workDir, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
+  const autoModeLogger = makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always

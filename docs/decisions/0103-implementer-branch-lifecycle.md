@@ -249,3 +249,23 @@ derive `merged` from `--contains` rather than record it is what made that safe.
 - [x] 11 lifecycle tests, including "never deletes an unmerged branch"
 - [x] (2026-09-02) merge subject passes a Conventional-Commits hook; `worktree_remove`
       refuses a running implementer — 13 lifecycle tests
+
+## Amendment — 2026-09-09: a `session` state for chat-tab worktrees (ADR-0107)
+
+The registry now also holds the worktree a chat tab runs in (`kind: "session"`,
+branch prefix `marvin/tab/`, directory prefix `tab-`). One row joins the
+derivation table above:
+
+| kind | condition | state | sweep | merge |
+|---|---|---|---|---|
+| session | tab open (`finishedAt` unset) | `session` | never | only while no turn is live in that tab |
+| session | closed | `ready` / `empty` / `merged` as derived | `empty` + clean, `merged` + clean | `ready` |
+
+No staleness timer applies to `session`: a tab's lifetime is the client's, not
+a clock's. `adoptOrphans` classifies a lost `marvin/tab/*` branch as an open
+tab (never swept) rather than a spent orphan. `discardWorktree` — checkout and
+branch — exists only for a closed session tree; implementer trees keep the
+sweep-under-proof rule. Every pre-0107 record reconciles exactly as before
+(pinned by `session-worktrees.test.ts`). See
+[ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md).
+

@@ -143,3 +143,17 @@ what the other session is looking at.
       worktree escape, not allowed and not hung.
 - [x] The confirm reason names the other session id and what the command does
       to it.
+
+## Amendment — 2026-09-09: shared mode stays, and becomes a per-tab choice (ADR-0107)
+
+The requirement this ADR served — several sessions in one worktree must keep
+working — is unchanged. What changed is the default: a new chat tab now runs
+in **its own git worktree** cut from the current HEAD, and a per-tab chip
+switches it to the shared checkout. In shared mode this ADR's HEAD-moving
+confirm applies exactly as before, and a tab may additionally declare a
+**lane** (repo-relative prefixes it owns): an edit outside the lane confirms,
+and a HEAD-moving command confirms once a lane is declared even when no other
+session is live at that instant. In worktree mode the collision confirm is
+skipped — there is no co-tenant in a private checkout. See
+[ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md).
+

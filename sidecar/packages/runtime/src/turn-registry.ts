@@ -87,7 +87,40 @@ export interface TurnAnnouncement {
   turnId: string;
   /** Epoch ms the turn was registered. */
   startedAt: number;
+  /** ADR-0107 — human or machine (wakeup / resume) turn. */
+  kind?: "human" | "machine";
 }
+
+/**
+ * ADR-0107 — everything a project-wide watcher needs to know about ANY
+ * session of a project without attaching to each turn's own bus: a turn
+ * started or ended, a confirm is waiting or was answered, a session's tree
+ * changed. Carried by `/api/chat/announce` next to the original
+ * `turn.registered`, and by nothing else — one long-lived stream per project.
+ */
+export type ProjectEvent =
+  | { event: "turn.registered"; data: TurnAnnouncement }
+  | {
+      event: "turn.ended";
+      data: {
+        marvinSessionId: string;
+        projectId: string;
+        turnId: string;
+        outcome: "completed" | "error";
+        error?: string;
+        cancelled?: boolean;
+        costUsd?: number | null;
+      };
+    }
+  | {
+      event: "confirm.pending";
+      data: { marvinSessionId: string; projectId: string; turnId: string; toolUseId: string; toolName: string };
+    }
+  | {
+      event: "confirm.resolved";
+      data: { marvinSessionId: string; projectId: string; turnId: string; toolUseId: string; decision: "allow" | "deny" };
+    }
+  | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } };
 
 const live = new Map<string, LiveTurn>();
 
@@ -111,6 +144,18 @@ export function subscribeTurnAnnouncements(
   return () => {
     announcer.off("turn", listener);
   };
+}
+
+/** ADR-0107 — subscribe to every {@link ProjectEvent}. Returns an unsubscribe fn. */
+export function subscribeProjectEvents(listener: (event: ProjectEvent) => void): () => void {
+  announcer.on("project", listener);
+  return () => {
+    announcer.off("project", listener);
+  };
+}
+
+export function announceProjectEvent(event: ProjectEvent): void {
+  announcer.emit("project", event);
 }
 
 export function registerLiveTurn(input: {
@@ -157,12 +202,15 @@ export function registerLiveTurn(input: {
   live.set(input.marvinSessionId, turn);
   // Announce AFTER the turn is in the map, so any listener that reacts by
   // calling getLiveTurn / resume finds it. ADR-0043.
-  announcer.emit("turn", {
+  const announcement: TurnAnnouncement = {
     marvinSessionId: turn.marvinSessionId,
     projectId: turn.projectId,
     turnId: turn.turnId,
     startedAt: turn.startedAt,
-  } satisfies TurnAnnouncement);
+    kind: turn.kind,
+  };
+  announcer.emit("turn", announcement);
+  announceProjectEvent({ event: "turn.registered", data: announcement });
   return turn;
 }
 
@@ -216,6 +264,22 @@ export function endLiveTurn(
   if (turn.ended) return;
   turn.ended = true;
   turn.bus.emit("event", { event: terminal.event, data: terminal.data });
+  // ADR-0107 — tell project-wide watchers the turn is over. The terminal
+  // payload's shape is the orchestrator's; read the two fields the watch
+  // UI shows defensively rather than typing the whole thing here.
+  const d = (terminal.data && typeof terminal.data === "object" ? terminal.data : {}) as Record<string, unknown>;
+  announceProjectEvent({
+    event: "turn.ended",
+    data: {
+      marvinSessionId: turn.marvinSessionId,
+      projectId: turn.projectId,
+      turnId: turn.turnId,
+      outcome: terminal.event === "turn.completed" ? "completed" : "error",
+      ...(typeof d.error === "string" ? { error: d.error } : {}),
+      ...(d.cancelled === true ? { cancelled: true } : {}),
+      ...(typeof d.costUsd === "number" ? { costUsd: d.costUsd } : {}),
+    },
+  });
   // 60 seconds is plenty for a reconnecting tab to notice and pick up
   // the terminal event. After that, GC the entry.
   setTimeout(() => {

@@ -225,6 +225,11 @@ enum CommandRegistry {
             isEnabled: { hasProject }
         ) { MarvinBridge.shared.revealLeftTab("sourceControl") })
         c.append(AppCommand(
+            id: "view.sessions", title: "Sessions",
+            slot: .view, keywords: ["tabs", "worktrees", "watch", "multi-session"],
+            isEnabled: { hasProject }
+        ) { MarvinBridge.shared.revealLeftTab("sessions") })
+        c.append(AppCommand(
             id: "view.skills", title: "Skills",
             slot: .view, keywords: ["catalog"], isEnabled: { hasProject }
         ) { MarvinBridge.shared.revealLeftTab("skills") })

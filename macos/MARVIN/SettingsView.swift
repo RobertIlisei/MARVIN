@@ -34,6 +34,11 @@ struct SettingsView: View {
     /// gated browser tools; `browser_run_code_unsafe` stays denied.
     @AppStorage("marvin.playwrightEnabled") private var playwrightEnabled: Bool = false
 
+    /// ADR-0107 — new chat tabs start in their own git worktree (Anthropic's
+    /// desktop default). Off = new tabs share the checkout; the per-tab chip
+    /// switches either way.
+    @AppStorage("marvin.newTabsIsolated") private var newTabsIsolated: Bool = true
+
     /// Phase 1d.36 — Launch-at-login toggle. The actual registration
     /// lives in SMAppService.mainApp; the @AppStorage value mirrors
     /// it so the Toggle has reactive state. We resync on appear in
@@ -93,6 +98,13 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.inline)
                 Text("Gated mode raises a confirm sheet on Edit / Write / unsafe Bash. Auto mode bypasses with an audit log entry per ADR-0015.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Sessions") {
+                Toggle("New chat tabs start in an isolated worktree", isOn: $newTabsIsolated)
+                Text("Each new tab gets its own git worktree cut from your current HEAD, so several tabs can work at once without moving each other's HEAD. Off: new tabs share the checkout (ADR-0102). The chip in the chat header switches a tab either way.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

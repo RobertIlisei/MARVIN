@@ -15,6 +15,8 @@ import { ensureDir, marvinPaths } from "./paths";
 export interface CostEntry {
   at: string; // ISO
   projectId: string;
+  /** ADR-0107 — which session the turn belonged to; absent on pre-0107 entries. */
+  marvinSessionId?: string;
   /** Claude CLI reported cost in USD for the turn. */
   costUsd: number;
   inputTokens: number;
@@ -76,6 +78,8 @@ function writeCostFile(data: CostFileShape): void {
 
 export interface RecordTurnInput {
   projectId: string;
+  /** ADR-0107 — the session the turn belongs to. */
+  marvinSessionId?: string | undefined;
   costUsd?: number | null;
   tokenUsage?: {
     input_tokens?: number;
@@ -91,6 +95,7 @@ export function recordTurnCost(input: RecordTurnInput): void {
   const entry: CostEntry = {
     at: new Date().toISOString(),
     projectId: input.projectId,
+    ...(input.marvinSessionId ? { marvinSessionId: input.marvinSessionId } : {}),
     costUsd: typeof input.costUsd === "number" ? input.costUsd : 0,
     inputTokens: input.tokenUsage?.input_tokens ?? 0,
     outputTokens: input.tokenUsage?.output_tokens ?? 0,
@@ -278,13 +283,27 @@ function windowRank(type: string): number {
   return 3;
 }
 
-/** Optional filter: if `projectId` is set, only entries for that project. */
-export function summarizeCost(options: { projectId?: string } = {}): CostSummary {
-  const { projectId } = options;
+/** ADR-0107 — per-session totals for one project, in a single pass. Entries
+ *  recorded before sessions were tagged count for the project, not here. */
+export function sessionCostTotals(projectId: string): Map<string, { turns: number; costUsd: number }> {
+  const out = new Map<string, { turns: number; costUsd: number }>();
+  for (const e of readCostFile().entries) {
+    if (e.projectId !== projectId || !e.marvinSessionId) continue;
+    const cur = out.get(e.marvinSessionId) ?? { turns: 0, costUsd: 0 };
+    cur.turns += 1;
+    cur.costUsd += e.costUsd;
+    out.set(e.marvinSessionId, cur);
+  }
+  return out;
+}
+
+/** Optional filters: `projectId` narrows to a project; `marvinSessionId` to one session. */
+export function summarizeCost(options: { projectId?: string; marvinSessionId?: string } = {}): CostSummary {
+  const { projectId, marvinSessionId } = options;
   const file = readCostFile();
-  const entries = projectId
-    ? file.entries.filter((e) => e.projectId === projectId)
-    : file.entries;
+  const entries = file.entries.filter(
+    (e) => (!projectId || e.projectId === projectId) && (!marvinSessionId || e.marvinSessionId === marvinSessionId),
+  );
 
   const today = emptyAggregate();
   const week = emptyAggregate();

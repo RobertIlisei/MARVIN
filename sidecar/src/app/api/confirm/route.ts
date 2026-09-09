@@ -2,6 +2,7 @@ import {
   getPendingOriginalInput,
   resolvePendingConfirm,
 } from "@marvin/runtime/confirm-registry";
+import { announceProjectEvent, getLiveTurnByTurnId } from "@marvin/runtime/turn-registry";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -69,6 +70,15 @@ export async function POST(req: NextRequest) {
       { error: "no pending confirm for that (turnId, toolUseId)" },
       { status: 404 },
     );
+  }
+  // ADR-0107 — clear the "needs you" signal on every watcher, not just the
+  // tab that answered.
+  const owner = getLiveTurnByTurnId(turnId);
+  if (owner) {
+    announceProjectEvent({
+      event: "confirm.resolved",
+      data: { marvinSessionId: owner.marvinSessionId, projectId: owner.projectId, turnId, toolUseId, decision },
+    });
   }
   return NextResponse.json({ ok: true, decision });
 }

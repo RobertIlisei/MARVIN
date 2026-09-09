@@ -1,7 +1,4 @@
-import {
-  subscribeTurnAnnouncements,
-  type TurnAnnouncement,
-} from "@marvin/runtime/turn-registry";
+import { type ProjectEvent, subscribeProjectEvents } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -54,9 +51,12 @@ export async function GET(req: NextRequest) {
 
       send("announce.attached", { projectId });
 
-      const unsubscribe = subscribeTurnAnnouncements((a: TurnAnnouncement) => {
-        if (a.projectId !== projectId) return;
-        send("turn.registered", a);
+      // ADR-0107 — the whole project event set rides this one stream:
+      // turn.registered (as before), turn.ended, confirm.pending,
+      // confirm.resolved, session.tree. Filtered to this project.
+      const unsubscribe = subscribeProjectEvents((e: ProjectEvent) => {
+        if (e.data.projectId !== projectId) return;
+        send(e.event, e.data);
       });
 
       const heartbeat = setInterval(() => write(`: ping\n\n`), HEARTBEAT_MS);

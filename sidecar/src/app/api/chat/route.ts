@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
@@ -10,8 +11,9 @@ import type { PersonalityMode } from "@marvin/runtime/personality";
 import { marvinPaths } from "@marvin/runtime/paths";
 import { slugifyWorkDir } from "@marvin/runtime/projects";
 import { validateSessionCwd } from "@marvin/runtime/session-cwd";
-import { type SessionTree, upsertSessionMeta } from "@marvin/runtime/session-meta";
-import type { WorktreeRecord } from "@marvin/runtime/worktrees";
+import { normaliseLane, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta, upsertSessionMeta } from "@marvin/runtime/session-meta";
+import { prepareSessionWorktree } from "@marvin/runtime/worktree-setup";
+import { createSessionWorktree, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import {
   type AgentMode,
   type PermissionStrategy,
@@ -26,11 +28,30 @@ import {
   getLiveTurn,
   isPreemptible,
   registerLiveTurn,
+  announceProjectEvent,
 } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { enqueuePending } from "@marvin/runtime/pending-input";
-import { buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
+import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
+
+/** ADR-0107 — is `dir` inside a git work tree with at least one commit? */
+function isGitRepo(dir: string): boolean {
+  try {
+    execFileSync("git", ["-C", dir, "rev-parse", "--verify", "-q", "HEAD"], { stdio: "ignore", timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function logTelemetry(fields: Record<string, unknown>): void {
+  try {
+    console.info("[marvin.telemetry] " + JSON.stringify({ ...fields, at: new Date().toISOString() }));
+  } catch {
+    /* never break the turn on a log */
+  }
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,6 +97,16 @@ interface ChatRequestBody {
   advisorThinkingMode?: string;
   /** When true, skip the PROJECT_STATUS/BUSINESS_OVERVIEW/probe injection. */
   skipProjectContext?: boolean;
+  /**
+   * ADR-0107 — which tree a NEW session runs in. Honoured on the first message
+   * only; later messages follow the persisted meta. Absent = worktree when the
+   * project is a git repo, shared otherwise.
+   */
+  tree?: "worktree" | "shared";
+  /** ADR-0107 — repo-relative path prefixes a shared tab owns (lanes). */
+  lane?: string[];
+  /** ADR-0107 — a title for the tab's branch/dir name on first message. */
+  sessionTitle?: string;
   /**
    * When true, ignore the auto-resume lookup and start the next SDK
    * turn with a fresh server-side session — i.e. drop the cumulative
@@ -134,9 +165,10 @@ export async function POST(req: NextRequest) {
     );
   }
   // ADR-0107 — `workDir` is the project root; `cwd` is the checkout the turn
-  // runs in (the same dir, or a registered session worktree).
+  // runs in. The client sends the project root; the session's persisted tree
+  // (or, on the first message, the requested tree) decides the actual cwd.
   const { workDir } = cwdCheck;
-  const cwd = cwdCheck.cwd;
+  let cwd = cwdCheck.cwd;
 
   // ADR-0041 — MARVIN owns the ACTIVE PROJECT's graph lifecycle. Fire-and-
   // forget a refresh of both graphs for this project's workDir (never MARVIN's
@@ -258,11 +290,59 @@ export async function POST(req: NextRequest) {
     skipProjectContext: body.skipProjectContext,
   });
 
+  // ADR-0107 — resolve the session's tree. First message: create the worktree
+  // the tab asked for (default: worktree on a git repo). Later messages: the
+  // persisted meta decides, and a missing worktree is refused, never silently
+  // run in the main tree.
+  const existingMeta = readSessionMeta(projectId, marvinSessionId);
+  let sessionTree: SessionTree;
+  let treeFallback: string | undefined;
+  if (cwdCheck.worktree) {
+    // The client addressed a registered worktree directly.
+    sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base };
+  } else if (existingMeta) {
+    const resolved = resolveSessionCwd(existingMeta);
+    if (!resolved.present) {
+      return new Response(
+        JSON.stringify({ error: `this tab's worktree is missing: ${resolved.cwd}`, code: "worktree-missing", tree: existingMeta.tree }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    sessionTree = existingMeta.tree;
+    cwd = resolved.cwd;
+    if (existingMeta.closedAt) {
+      // A message to a closed tab reopens it (a kept worktree returns to `session`).
+      updateSessionMeta(projectId, marvinSessionId, { closedAt: undefined });
+      if (sessionTree.mode === "worktree") reopenSessionWorktree(workDir, marvinSessionId);
+    }
+    if (sessionTree.mode === "shared" && body.lane) {
+      const lane = normaliseLane(body.lane);
+      if (lane) sessionTree = { mode: "shared", lane };
+    }
+  } else {
+    const wanted = body.tree ?? (isGitRepo(workDir) ? "worktree" : "shared");
+    if (wanted === "worktree") {
+      try {
+        const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: body.sessionTitle });
+        const setup = prepareSessionWorktree(workDir, rec.path);
+        logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length });
+        sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base };
+        cwd = rec.path;
+      } catch (err) {
+        // An unborn HEAD, a bare layout, a submodule: fall back to shared and
+        // say so in the record rather than failing the user's first message.
+        treeFallback = err instanceof Error ? err.message : String(err);
+        sessionTree = { mode: "shared", ...(normaliseLane(body.lane) ? { lane: normaliseLane(body.lane) as string[] } : {}) };
+      }
+    } else {
+      const lane = normaliseLane(body.lane);
+      sessionTree = { mode: "shared", ...(lane && lane.length ? { lane } : {}) };
+    }
+  }
+  const sessionContext = buildSessionContext(sessionTree, workDir);
+
   // ADR-0107 — persist the tree + posture beside the transcript so a
   // server-initiated resume (and the watch feed) can rebuild this turn.
-  const sessionTree: SessionTree = cwdCheck.worktree
-    ? { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base }
-    : { mode: "shared" };
   const posture = {
     model,
     advisorModel: advisorModel ?? null,
@@ -273,7 +353,10 @@ export async function POST(req: NextRequest) {
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     mode,
   };
-  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture });
+  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}) });
+  if (!existingMeta) {
+    announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree: sessionTree } });
+  }
 
   // Resolve the SDK resume id BEFORE we append turn.user (and before
   // `runAgentDetached` is dispatched below). Two distinct ids exist:
@@ -327,6 +410,7 @@ export async function POST(req: NextRequest) {
     turnId,
     cwd,
     tree: sessionTree,
+    ...(treeFallback ? { treeFallback } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   // SessionTurn union now admits `turn.started` natively (audit
@@ -353,6 +437,8 @@ export async function POST(req: NextRequest) {
     message: expandNativeCommand(message) ?? message,
     cwd,
     workDir,
+    ...(sessionContext ? { sessionContext } : {}),
+    sessionTree,
     model,
     advisorModel,
     permissionStrategy,

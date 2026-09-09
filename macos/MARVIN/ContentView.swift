@@ -152,8 +152,11 @@ struct ContentView: View {
         }
         .navigationTitle(bridge.webTitle ?? "MARVIN")
         .navigationSubtitle(composeSubtitle())
-        .onChange(of: bridge.webTitle ?? "") { _, newTitle in
-            let count = parseConfirmCount(newTitle)
+        // ADR-0107 — the dock badge counts confirms and questions waiting
+        // across EVERY session of the project, from the session registry.
+        // (It used to parse `bridge.webTitle`, which nothing has written since
+        // the WebView was removed — so it was permanently zero.)
+        .onChange(of: SessionRegistry.shared.needsYouCount) { _, count in
             updateDockBadge(count: count)
             NotificationManager.shared.updateConfirmCount(count)
         }
@@ -373,18 +376,6 @@ struct ContentView: View {
             return true
         }
         return defaults.bool(forKey: "marvin.autoStartSidecar")
-    }
-
-    /// Parse the leading `(N)` pending-confirm count out of a
-    /// document.title. Anchored prefix match to avoid false
-    /// positives like "(deferred) MARVIN". Returns 0 when no match.
-    private func parseConfirmCount(_ title: String) -> Int {
-        let pattern = #"^\((\d+)\)"#
-        guard let range = title.range(of: pattern, options: .regularExpression) else {
-            return 0
-        }
-        let inner = title[range].dropFirst().dropLast() // strip "(" and ")"
-        return Int(inner) ?? 0
     }
 
     /// Set the macOS Dock badge to a non-empty count, or clear it.

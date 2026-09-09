@@ -40,6 +40,7 @@ import {
   endLiveTurn,
   getLiveTurn,
   registerLiveTurn,
+  announceProjectEvent,
 } from "@marvin/runtime/turn-registry";
 import {
   drainPending,
@@ -53,7 +54,7 @@ import {
   classifyTurnError,
   MAX_AUTO_CONTINUES,
 } from "@marvin/runtime/transient-errors";
-import { updateSessionMeta } from "@marvin/runtime/session-meta";
+import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import {
   deferIfSessionBusy,
   noteMachineTurnStarted,
@@ -112,6 +113,28 @@ export async function buildTurnSystemPrompt(args: {
   return [systemPrompt, projectContext, activeSkillsBlock, practiceBlock].filter(Boolean).join("\n\n");
 }
 
+/**
+ * ADR-0107 — the per-session tree note. A VOLATILE user-turn suffix (like
+ * `planContext`), never part of `buildTurnSystemPrompt`: every tab on a
+ * project must keep the identical cached prefix. Three short lines at most.
+ */
+export function buildSessionContext(tree: SessionTree, workDir: string): string | undefined {
+  if (tree.mode === "worktree") {
+    return (
+      `You are working in an isolated git worktree at ${tree.path} on branch ${tree.branch} ` +
+      `(cut from ${tree.base.slice(0, 7)}). The project checkout at ${workDir} is read-only from this tab; ` +
+      `edits belong in the worktree, relative paths already resolve there. Commit on this branch — the user merges.`
+    );
+  }
+  if (tree.lane && tree.lane.length > 0) {
+    return (
+      `This tab shares the project checkout with other sessions and owns these paths: ${tree.lane.join(", ")}. ` +
+      `Edits outside them and HEAD-moving git commands raise a confirm.`
+    );
+  }
+  return undefined;
+}
+
 export interface DetachedTurnParams {
   liveTurn: LiveTurn;
   projectId: string;
@@ -124,6 +147,8 @@ export interface DetachedTurnParams {
   workDir?: string | undefined;
   /** ADR-0107 — per-session tree context for the user-turn suffix. */
   sessionContext?: string | undefined;
+  /** ADR-0107 — the session's tree; drives main-loop containment. */
+  sessionTree?: SessionTree | undefined;
   model: string;
   advisorModel?: string | undefined;
   permissionStrategy: PermissionStrategy;
@@ -241,6 +266,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     cwd,
     workDir,
     sessionContext,
+    sessionTree,
     model,
     advisorModel,
     permissionStrategy,
@@ -266,6 +292,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     cwd,
     ...(workDir ? { workDir } : {}),
     ...(sessionContext ? { sessionContext } : {}),
+    ...(sessionTree ? { sessionTree } : {}),
     model,
     ...(advisorModel ? { advisorModel } : {}),
     permissionStrategy,
@@ -296,6 +323,12 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
         payload,
       });
       emitTurnEvent(liveTurn, "confirm.request", payload);
+      // ADR-0107 — a project-wide "needs you" signal, so a tab that is not on
+      // screen can still light up. AskUserQuestion rides the same channel.
+      announceProjectEvent({
+        event: "confirm.pending",
+        data: { marvinSessionId, projectId, turnId, toolUseId: payload.toolUseId, toolName: payload.toolName },
+      });
     },
     // ADR-0103 — an implementer finished and its branch is now a
     // deliverable. Persisted like any other turn event so the fact
@@ -385,6 +418,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   });
   recordTurnCost({
     projectId,
+    marvinSessionId,
     costUsd: finalCostUsd,
     tokenUsage: result.tokenUsage ?? null,
   });
@@ -529,9 +563,26 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
  */
 export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const turnId = randomUUID();
-  const { projectId, marvinSessionId, cwd } = record;
+  const { projectId, marvinSessionId } = record;
   // ADR-0107 — pre-0107 records carry no workDir; for them cwd IS the root.
-  const workDir = record.workDir ?? cwd;
+  const workDir = record.workDir ?? record.cwd;
+  // ADR-0107 — the tab may have changed tree since this wakeup was armed
+  // (worktree → shared, or the reverse). Run where the tab is NOW, and refuse
+  // rather than silently fall back to the main tree when its worktree is gone.
+  const meta = readSessionMeta(projectId, marvinSessionId);
+  const resolved = meta ? resolveSessionCwd(meta) : { cwd: record.cwd, present: true };
+  if (!resolved.present) {
+    appendSessionTurn(projectId, marvinSessionId, {
+      type: "turn.error",
+      at: new Date().toISOString(),
+      error: `wakeup skipped — the session's worktree is missing (${resolved.cwd})`,
+      code: "worktree-missing",
+    });
+    return;
+  }
+  const cwd = resolved.cwd;
+  const sessionTree = meta?.tree;
+  const sessionContext = sessionTree ? buildSessionContext(sessionTree, workDir) : undefined;
 
   const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
@@ -601,6 +652,8 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     message,
     cwd,
     workDir,
+    ...(sessionContext ? { sessionContext } : {}),
+    ...(sessionTree ? { sessionTree } : {}),
     model: record.model,
     advisorModel: record.advisorModel ?? undefined,
     permissionStrategy: record.permissionStrategy,

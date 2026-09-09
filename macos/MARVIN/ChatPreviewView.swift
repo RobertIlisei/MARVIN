@@ -416,9 +416,21 @@ final class ChatPreviewModel {
 
     /// Fetch the changed set for the active session. `force` skips the
     /// throttle (turn boundaries, post-review mutations).
+    /// ADR-0107 — the directory this session's turns run in: its worktree when
+    /// isolated, the project root otherwise. Only the changes badge and the
+    /// review sheet follow it; the editor and terminal stay on the root.
+    var turnCwd: String? {
+        guard let sid = loadedSessionId, let root = MarvinBridge.shared.projectWorkDir, !root.isEmpty else {
+            return MarvinBridge.shared.projectWorkDir
+        }
+        let entry = SessionRegistry.shared.entry(sid)
+        if let tree = entry?.tree, tree.mode == .worktree, let path = tree.path, !path.isEmpty { return path }
+        return root
+    }
+
     func refreshAgentChanges(force: Bool = false) {
         guard let sid = marvinSessionId ?? loadedSessionId,
-              let cwd = MarvinBridge.shared.projectWorkDir, !cwd.isEmpty
+              let cwd = turnCwd, !cwd.isEmpty
         else { return }
         let now = Date()
         if !force, now.timeIntervalSince(lastChangesRefresh) < 2 { return }
@@ -427,6 +439,12 @@ final class ChatPreviewModel {
             let files = (try? await ChangesService.shared.fetchChanges(
                 cwd: cwd, marvinSessionId: sid)) ?? []
             self.agentChangedFiles = files
+            SessionRegistry.shared.noteDiff(
+                id: sid,
+                added: files.reduce(0) { $0 + $1.additions },
+                removed: files.reduce(0) { $0 + $1.deletions },
+                files: files.count
+            )
         }
     }
 
@@ -760,10 +778,27 @@ final class ChatPreviewModel {
         sendInternal(message: composed, cwd: cwd)
     }
 
+    /// ADR-0107 — what the first message of a draft tab declares about its
+    /// tree, and what a shared tab declares about its lane, every message.
+    private func treeFields(for message: String) -> (tree: String?, lane: [String]?, title: String?) {
+        guard let sid = loadedSessionId else { return (nil, nil, nil) }
+        let registry = SessionRegistry.shared
+        let entry = registry.entry(sid)
+        if registry.isDraft(sid) {
+            let isolatedDefault = UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true
+            let mode = entry?.tree?.mode ?? (isolatedDefault ? .worktree : .shared)
+            let title = String(message.replacingOccurrences(of: "\n", with: " ").prefix(48))
+            return (mode.rawValue, mode == .shared ? entry?.tree?.lane : nil, title)
+        }
+        if entry?.mode == .shared, let lane = entry?.tree?.lane, !lane.isEmpty { return (nil, lane, nil) }
+        return (nil, nil, nil)
+    }
+
     /// ADR-0076 — the same body a normal turn POST sends, for a message
     /// aimed at the turn already running on `marvinSessionId`.
     private func injectRequest(message: String, cwd: String?) -> ChatRequest {
         let prefs = NativePrefs.shared
+        let fields = treeFields(for: message)
         return ChatRequest(
             message: message,
             cwd: cwd,
@@ -779,7 +814,8 @@ final class ChatPreviewModel {
             mode: prefs.mode,
             thinkingMode: prefs.thinkingMode,
             advisorThinkingMode: prefs.advisorThinkingMode,
-            resetSdkSession: nil
+            resetSdkSession: nil,
+            lane: fields.lane
         )
     }
 
@@ -855,6 +891,7 @@ final class ChatPreviewModel {
         // doesn't double-reset.
         let resetThisTurn = resetSdkOnNextSend
         if resetThisTurn { resetSdkOnNextSend = false }
+        let fields = treeFields(for: message)
         let request = ChatRequest(
             message: message,
             cwd: cwd,
@@ -872,7 +909,10 @@ final class ChatPreviewModel {
             mode: prefs.mode,
             thinkingMode: prefs.thinkingMode,
             advisorThinkingMode: prefs.advisorThinkingMode,
-            resetSdkSession: resetThisTurn ? true : nil
+            resetSdkSession: resetThisTurn ? true : nil,
+            tree: fields.tree,
+            lane: fields.lane,
+            sessionTitle: fields.title
         )
         activeTask = Task { @MainActor in
             defer {
@@ -1468,6 +1508,9 @@ final class ChatPreviewModel {
                     updatedInput: updatedInput
                 )
                 resolvedConfirms[request.toolUseId] = decision
+                if let sid = marvinSessionId {
+                    SessionRegistry.shared.noteLocalConfirmResolved(id: sid, turnId: request.turnId, toolUseId: request.toolUseId)
+                }
                 pendingConfirms.removeAll { $0.toolUseId == request.toolUseId }
             } catch ChatServiceError.httpStatus(404, _) {
                 // Registry doesn't have this confirm anymore — the turn
@@ -1533,6 +1576,8 @@ final class ChatPreviewModel {
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId
             MarvinBridge.shared.setActiveMarvinSession(s.marvinSessionId)
+            // ADR-0107 — the selected tab's dot must not wait for the feed.
+            SessionRegistry.shared.noteLocalTurnStarted(id: s.marvinSessionId, turnId: s.turnId)
             // First turn on a new session has no loadedSessionId yet —
             // adopt the server-minted id so relaunch can autoHydrate
             // back into this conversation.
@@ -1626,6 +1671,9 @@ final class ChatPreviewModel {
             if !pendingConfirms.contains(where: { $0.toolUseId == c.toolUseId }) {
                 pendingConfirms.append(c)
             }
+            if let sid = marvinSessionId {
+                SessionRegistry.shared.noteLocalConfirm(id: sid, turnId: c.turnId, toolUseId: c.toolUseId, toolName: c.toolName)
+            }
             // ADR-0036 — Plan mode: when the plan arrives (ExitPlanMode),
             // persist it in the chat AND seed the to-do checklist from its
             // steps, so the plan survives closing the approval window and is
@@ -1638,7 +1686,10 @@ final class ChatPreviewModel {
                 // plan came from a tool input (no inline card) → announce it.
                 ingestPlan(plan, announce: true)
             }
-        case .turnCompleted:
+        case .turnCompleted(let done):
+            if let sid = marvinSessionId {
+                SessionRegistry.shared.noteLocalTurnEnded(id: sid, outcome: .completed, costUsd: done.costUsd)
+            }
             // Post a notification entry for the bell log.
             let prompt = lastSentMessage.flatMap { s in
                 s.count > 60 ? String(s.prefix(60)) + "…" : s
@@ -1748,6 +1799,9 @@ final class ChatPreviewModel {
                 }
             }
         case .turnError(let e):
+            if let sid = marvinSessionId {
+                SessionRegistry.shared.noteLocalTurnEnded(id: sid, outcome: .error, costUsd: nil)
+            }
             lastError = e.error
             currentActivity = nil
             // ADR-0043 — a server-initiated turn errored; settle the affordance
@@ -1800,6 +1854,8 @@ struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.openWindow) private var openWindow
     @State private var model = ChatPreviewModel()
+    /// ADR-0107 — a tab close awaiting a worktree decision.
+    @State private var pendingClose: TabCloseChoice? = nil
     /// Pending "stop this session" confirmation, captured at confirm time so
     /// the alert and the action cannot disagree about the scope.
     @State private var stopAllPlan: StopAllPlan? = nil
@@ -2348,10 +2404,11 @@ struct ChatPreviewView: View {
                             title: tabTitle(forSessionId: sid),
                             systemImage: "bubble.left",
                             active: sid == model.loadedSessionId,
+                            state: SessionRegistry.shared.rowState(sid),
                             onSelect: {
                                 model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
                             },
-                            onClose: { model.closeTab(sid) }
+                            onClose: { requestCloseTab(sid) }
                         )
                     }
                 }
@@ -2396,11 +2453,95 @@ struct ChatPreviewView: View {
             case .select(let id):
                 model.selectSession(id, fallbackProjectId: bridge.activeProjectId)
             case .close(let id):
-                model.closeTab(id)
+                requestCloseTab(id)
             case .new:
                 model.newTab()
             }
             bridge.clearChatTabRequest()
+        }
+        .tabCloseDialog(
+            choice: $pendingClose,
+            onStop: { id in Task { await SessionRegistry.shared.stop(id) } },
+            onAction: { id, action in closeTab(id, action: action) }
+        )
+    }
+
+    /// ADR-0107 — closing a tab asks what to do with its worktree, when that
+    /// question has more than one answer.
+    private func requestCloseTab(_ sid: String) {
+        let registry = SessionRegistry.shared
+        let entry = registry.entry(sid)
+        let outcome = TabCloseDecision.decide(
+            isLive: entry?.isLive ?? false,
+            mode: registry.isDraft(sid) ? .shared : (entry?.mode ?? .shared),
+            hasWorktree: entry?.tree?.mode == .worktree,
+            worktreeState: nil,
+            commits: entry?.diff?.files,
+            dirty: (entry?.diff?.untracked ?? 0) > 0,
+            branch: entry?.tree?.branch
+        )
+        switch outcome {
+        case .closeNow:
+            closeTab(sid, action: nil)
+        case .reclaimSilently:
+            closeTab(sid, action: .keepBranch)
+        case .stopTurnFirst, .offer:
+            pendingClose = TabCloseChoice(id: sid, outcome: outcome, branch: entry?.tree?.branch)
+        }
+    }
+
+    /// Close locally; when the tab had a transcript, tell the sidecar so its
+    /// worktree leaves the `session` state (merged / kept / discarded).
+    private func closeTab(_ sid: String, action: TabCloseDecision.Action?) {
+        let registry = SessionRegistry.shared
+        guard let action, !registry.isDraft(sid), let pid = bridge.activeProjectId else {
+            model.closeTab(sid)
+            return
+        }
+        Task { @MainActor in
+            do {
+                _ = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action == .merge)
+                model.closeTab(sid)
+            } catch {
+                model.lastError = "Could not close the tab's worktree: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// ADR-0107 — the chip's mode switch / lane edit, applied server-side and
+    /// mirrored into the registry so the next send declares it.
+    private func applyTreeSwitch(_ sid: String, to mode: SessionMode, action: TabCloseDecision.Action?) {
+        let registry = SessionRegistry.shared
+        if registry.isDraft(sid) {
+            registry.noteTree(id: sid, tree: SessionTreeWire(mode: mode))
+            return
+        }
+        guard let pid = bridge.activeProjectId else { return }
+        Task { @MainActor in
+            do {
+                let meta = try await SessionMetaService.setTree(projectId: pid, sessionId: sid, mode: mode, worktreeAction: action)
+                registry.noteTree(id: sid, tree: meta.tree)
+                model.refreshAgentChanges(force: true)
+            } catch {
+                model.lastError = "Could not switch this tab's tree: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func applyLane(_ sid: String, lane: [String]) {
+        let registry = SessionRegistry.shared
+        if registry.isDraft(sid) {
+            registry.noteTree(id: sid, tree: SessionTreeWire(mode: .shared, lane: lane))
+            return
+        }
+        guard let pid = bridge.activeProjectId else { return }
+        Task { @MainActor in
+            do {
+                let meta = try await SessionMetaService.setLane(projectId: pid, sessionId: sid, lane: lane)
+                registry.noteTree(id: sid, tree: meta.tree)
+            } catch {
+                model.lastError = "Could not save the lane: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -2410,18 +2551,40 @@ struct ChatPreviewView: View {
         title: String,
         systemImage: String,
         active: Bool,
+        state: SessionRowState = .draft,
         onSelect: @escaping () -> Void,
         onClose: (() -> Void)?
     ) -> some View {
         HStack(spacing: 4) {
             Button(action: onSelect) {
                 HStack(spacing: 5) {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 9))
+                    // ADR-0107 — a state dot for a real session (working /
+                    // needs-you / failed / idle); the bubble stays for drafts.
+                    if state == .draft {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 9))
+                    } else {
+                        Circle()
+                            .fill(Self.tabTint(state))
+                            .frame(width: 6, height: 6)
+                    }
                     Text(title)
                         .font(.system(size: 11))
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    if case .needsYou(let n) = state {
+                        Text("\(n)")
+                            .font(.system(size: 9, weight: .semibold))
+                            .monospacedDigit()
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange))
+                            .foregroundStyle(.white)
+                    } else if state == .interrupted {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(Color.orange)
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -2452,6 +2615,18 @@ struct ChatPreviewView: View {
                 )
         )
         .help(title)
+    }
+
+    /// ADR-0107 — one tint per session state, shared with the Sessions pane.
+    static func tabTint(_ state: SessionRowState) -> Color {
+        switch state {
+        case .needsYou: return .orange
+        case .working: return GitDecorationColor.modified
+        case .interrupted: return .orange
+        case .failed: return GitDecorationColor.deleted
+        case .idle: return MarvinTheme.textMuted
+        case .draft: return .secondary
+        }
     }
 
     /// Short tab title for an open session id — its first user message,
@@ -2817,6 +2992,44 @@ struct ChatPreviewView: View {
         )
     }
 
+    /// ADR-0107 — "this turn was cut off" + Resume. The resume is
+    /// server-initiated (wakeup path), so nothing synthetic enters the chat.
+    private func interruptedChip(_ sid: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.clockwise.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This turn was cut off before it finished")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("MARVIN restarted under it. Resume picks up from the transcript's last step.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Resume") {
+                Task { await SessionRegistry.shared.resume(sid) }
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            Button {
+                SessionRegistry.shared.dismissInterrupted(sid)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.06))
+    }
+
     /// One opaque, clearly-separated tray for every contextual strip, docked
     /// above the input. A hard top border separates it from the scrolling
     /// message log (no more "the plan is in front of the log"), and each
@@ -2844,6 +3057,11 @@ struct ChatPreviewView: View {
     /// The active strips, in priority order, as type-erased rows.
     private var trayRows: [AnyView] {
         var rows: [AnyView] = []
+        // ADR-0107 — a turn a restart cut off, with the way back.
+        if let sid = model.loadedSessionId, !model.isSending,
+           SessionRegistry.shared.entry(sid)?.interrupted == true {
+            rows.append(AnyView(interruptedChip(sid)))
+        }
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
         if model.backgroundJobRunning { rows.append(AnyView(backgroundJobChip)) }
         if model.backlogOpenCount > 0 { rows.append(AnyView(backlogChip)) }
@@ -2903,6 +3121,15 @@ struct ChatPreviewView: View {
                 }
             }
             Spacer()
+            if let sid = model.loadedSessionId {
+                SessionModeChip(
+                    entry: SessionRegistry.shared.entry(sid),
+                    isDraft: SessionRegistry.shared.isDraft(sid),
+                    draftIsolated: UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true,
+                    onSwitch: { mode, action in applyTreeSwitch(sid, to: mode, action: action) },
+                    onLane: { lane in applyLane(sid, lane: lane) }
+                )
+            }
             sessionsMenu
             // Stop moved to ChatInputBar so it sits next to Send / Queue
             // (where the eye is during a turn). ⌘. shortcut is wired

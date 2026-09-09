@@ -1,0 +1,69 @@
+# ADR-0107 — One worktree per chat tab, a project-wide session feed, lanes for shared tabs, and resume after a restart
+
+- **Status:** Accepted — implemented 2026-09-09
+- **Date:** 2026-09-09
+- **Related:** [ADR-0081](./0081-implementer-subagents-on-isolated-worktrees.md) (implementer worktrees — the machinery this reuses), [ADR-0102](./0102-multiple-sessions-one-worktree.md) (two sessions, one tree — **amended**: shared mode stays supported and becomes per-tab opt-in), [ADR-0103](./0103-implementer-branch-lifecycle.md) (worktree lifecycle — **amended**: a `session` state), [ADR-0043](./0043-server-turn-announcements.md) (the announce stream this extends), [ADR-0069](./0069-never-drop-a-user-message.md) (preemption rails the resume path inherits), [ADR-0072](./0072-session-list-must-not-parse-transcripts.md) (no transcript parsing on the hot path), [ADR-0062](./0062-update-constraints-loop-identified-mitigated.md) (layout rules the new pane obeys), research: `docs/research/2026-09-09-multi-session-management.md`
+- **Touches:** sidecar `packages/runtime/src/{session-meta, session-cwd, session-watch, session-recovery, worktree-setup}.ts` (new), `worktrees.ts`, `sdk-runner.ts`, `turn-registry.ts`, `confirm-registry.ts`, `cost-tracker.ts`, `wakeup-scheduler.ts`, `wakeup-tools.ts`, `background-jobs.ts`, `session.ts`, `paths.ts`, `fs-sandbox.ts`; `packages/tools/src/lanes.ts` (new); `src/lib/turn-orchestrator.ts`, `changes-helpers.ts`; routes `api/chat`, `api/chat/announce`, `api/confirm`, `api/cost`, `api/worktrees`, `api/sessions/{meta,close,watch,interrupted,resume}` (new); `instrumentation.ts`. macOS `MARVINLogic/{SessionFeed, SessionLedger, SessionRowState, SessionCwdPolicy, TabCloseDecision, ChatTabsMigration}.swift` (new), `MARVIN/{SessionRegistry, SessionMetaService, SessionsPane, SessionModeChip, ChatTabCloseDialog}.swift` (new), `ChatPreviewView`, `ChatService`, `ChatTypes`, `Bridge`, `ContentView`, `LeftPane`, `CommandRegistry`, `SettingsView`.
+
+## Context
+
+> "i have 3 sessions running simultaneously but i want marvin to be able to run multiple sessions simultaneously, perhaps we need some sort of environment constraints or sandboxes? How does anthropic fix this? What does their documentation say?"
+
+Two problems, measured before designing:
+
+1. **Sessions sharing one checkout collide.** ADR-0102 made the collision *visible* (a HEAD-moving git command raises a confirm naming the other live session) because the user then required the shared tree. It did not make it impossible, and it could not: git has one HEAD per checkout.
+2. **Only one session is visible at a time.** `ChatPreviewModel` holds the selected session; the open-tab list was a bare `[String]` with no state. The project-wide announce stream (ADR-0043) already carried every session's `turn.registered`, and the client discarded everything not on screen. A tab that needed an answer, failed, or finished was invisible until you switched to it; the dock badge parsed `bridge.webTitle`, which nothing had written since the WebView was removed, so it was permanently zero.
+3. **A restart cut three turns off** on 2026-09-08 and left no way back but a hand-crafted API call: no marker in the transcript, no meta, the tab looked idle.
+
+The research pass (25 Anthropic-primary claims, 0 refuted) settled the direction: sessions persist the conversation, not the filesystem; Anthropic's own answer to this scenario is **one git worktree per session** (the Claude Code desktop default, harness-enforced since CLI 2.1.218 — for worktrees the CLI creates); sandboxes are an orthogonal access-control layer; agent teams are unavailable in SDK sessions; a watch UI is built on the SDK's session APIs plus each session's live stream, with Anthropic's agent panel and web session list as the precedents. MARVIN already owned the worktree machinery for implementer subagents (ADR-0081/0103); it was not wired to chat sessions.
+
+**Decisions taken with the user:** new tabs isolated by default; a per-tab chip switches to the shared checkout; scope = per-tab worktree + lifecycle, status dots + a Sessions pane, lanes for shared tabs, resume after restart. One transcript on screen; the brain keeps describing the selected session.
+
+## Decision
+
+1. **`projectId` stays the project; only `cwd` varies per session.** Every turn now carries `cwd` (the checkout the SDK runs in) *and* `workDir` (the project root). The twelve `.marvin/`-scoped services in `runAgent` — memory, backlog, graph, audit, design hooks, plugins, skills, wakeups, implementer worktrees — take `workDir`, so a session worktree can never fork them; `practicePromptBlock(slugifyWorkDir(…))` and the prompt cache prefix are keyed on the root. Transcripts, cost, wakeups and checkpoints remain keyed by project.
+2. **A per-session meta file beside the transcript** (`<id>.meta.json`, plan-state discipline): the tree (`worktree` | `shared` + lane), the posture every turn ran with, the last turn's outcome, `closedAt`. The chat route creates it on the first message and patches it on every turn; a server-initiated resume rebuilds the turn from it.
+3. **MARVIN creates the worktree; the SDK is not told.** `createSessionWorktree` reuses the implementer git path — cut from the **current HEAD** (`baseRef: head` semantics; the CLI's default `fresh` would silently drop unpushed work), branch `marvin/tab/<slug>`, dir `.marvin/worktrees/tab-<slug>`, so a lost record classifies from its ref name. No `Options.settings.worktree` is passed and **`EnterWorktree` / `ExitWorktree` are disallowed**: a model-initiated worktree inside a MARVIN worktree would nest a checkout the registry cannot see. `.marvin/worktree.json` (`symlinkDirectories`, `copyIgnored`) plus the project's `.worktreeinclude` amortise the fresh-checkout cost; nothing is symlinked or copied by default (Golden Rule 6), only git-ignored files are ever copied, nothing is overwritten.
+4. **Lifecycle** (amends ADR-0103's table): `session` while the tab is open — never swept, no staleness timer; on close it derives to `ready` / `empty` / `merged` like any tree; `discard` (checkout **and** branch) only after close and only for a session tree; merge of an open tab is refused only while it has a turn in flight; adoption of a lost `marvin/tab/*` branch yields an open-tab tree, not a spent orphan. Closing a tab offers **Merge** (local, never pushed; commits uncommitted work first on request; conflict aborts and keeps the branch), **Keep**, **Discard**; an empty clean tree is reclaimed silently.
+5. **Main-loop containment, MARVIN-enforced** (Anthropic's four checks arm only for CLI-created worktrees): a write into the main checkout from a worktree tab is denied naming the tab's tree and the way out; shell that names the main tree (`cd <root>`, `git -C <root>`, `--git-dir`, `GIT_WORK_TREE`, a bare absolute path under it) raises a **confirm** in every permission mode, deny when no UI — never a rewrite (the implementer's `cd '<wt>' &&` rewrite exists only because subagent dispatch ignores cwd; the main query honours it). The shared-tree collision confirm (ADR-0102) is skipped for a worktree tab: there is no co-tenant in a private checkout.
+6. **Lanes for shared tabs** (Anthropic's only shared-directory guidance is partitioned file ownership, with no enforcement): a shared tab may declare repo-relative prefixes; an Edit/Write/NotebookEdit outside them confirms, and a HEAD-moving git command confirms once a lane is declared even with no other session live. Prefix-by-segment (`src/api` never owns `src/api-v2`).
+7. **One project event bus, extended, not duplicated.** `/api/chat/announce` now carries `turn.registered` (with `kind`), `turn.ended` (outcome, cost), `confirm.pending` / `confirm.resolved` (AskUserQuestion rides the same channel), `session.tree`. `GET /api/sessions/watch` is the cold-start snapshot: per session, state (`working | idle | awaiting-you | failed | interrupted`), live turn, pending confirms (the registry now records the tool name), tree + current branch, a `+N −M` badge (worktree: vs its base, committed and uncommitted; shared: vs HEAD; memoised 2 s), plan done/total from the persisted spine, cost (the ledger now carries `marvinSessionId`). Nothing parses a transcript on the hot path (ADR-0072).
+8. **On the client, `SessionRegistry`** owns the tab set (a new key, `marvin.chatTabs.<pid>` — the old one was shared with the editor's file tabs and each writer blanked the other; a one-time migration frees it) and a `SessionLedger` reduced from the feed and the snapshot (a snapshot cannot clear a turn registered within a 5 s grace). Tab dots, an orange needs-you count, an interrupted glyph, the dock badge and a **Sessions** left-pane tab (PracticePane shape; sections Needs you / Working / Interrupted / Failed / Idle — collapsing after 30 s, first three stay, selected never — / Recent) are observers over it. New chats are draft tabs with a client-minted id; the first message declares the tree.
+9. **Resume after restart.** At boot the sidecar stamps every transcript whose newest boundary is a `turn.started` with an `interrupted` terminal (tail scan, idempotent) and marks the meta. `POST /api/sessions/resume` builds a `WakeupRecord` from the meta's posture and dispatches it through `fireNow → startScheduledTurn`, which yields to a live human turn, re-resolves the tab's tree at fire time, and refuses when the worktree is missing. The client shows a banner and a Sessions row with Resume; nothing synthetic enters the chat.
+
+### Considered and not taken
+
+- **The SDK's own worktree support** (`Options.settings.worktree`, `EnterWorktree`, `isolation: worktree`): applies only to worktrees the CLI creates, ignores dispatch `cwd`, and is unusable in MARVIN's isolation mode (ADR-0081).
+- **Sandboxing as the answer:** orthogonal; Anthropic states it does not address two sessions in one tree.
+- **A second SSE stream per session for the watch UI:** one project-wide stream already existed; extending it costs nothing.
+- **Forbidding the shared tree:** the user's requirement (ADR-0102) stands; it is now a per-tab choice with lanes for the cases that need it.
+- **Auto-merge on close:** ADR-0081's position — the user merges — unchanged; merge is one of three explicit choices.
+
+## Consequences
+
+- The registry file gains `kind` and `sessionId` on records and a `session` state; pre-0107 records reconcile exactly as before (pinned by test).
+- Persisted wakeup and background-job records gain an optional `workDir`; readers fall back to `cwd`.
+- `PlanTag` / `ChatRequest` grow optional fields; older clients keep working (shared mode, no lane).
+- The editor, terminal, file tree and LSP stay on the project root; only the agent's turns, the changes badge and the review sheet follow the session's worktree. The chip says so.
+- `buildProjectContext` reads context docs from the main tree (keeps the cache prefix identical across tabs); a tab's edits to `PROJECT_STATUS.md` in its worktree are not seen next turn.
+- A mode switch mid-session changes the change-ledger's base directory; entries recorded before the switch may read stale until the next turn.
+- **Unverified live:** SDK `resume` of a session whose cwd changed between turns (mode switch). The chip permits the switch only while no turn is live; a live run is the next check.
+
+## Verification
+
+- Sidecar: `session-meta`, `session-cwd`, `project-events`, `confirm-registry-list`, `cost-per-session`, `session-watch`, `session-worktrees`, `worktree-setup`, `session-worktree-gate`, `session-recovery`, `lanes`, `lane-gate` (12 new files); the pre-existing `shared-tree-gate`, `worktree-lifecycle`, `fs-sandbox` suites unchanged and green. Full run 2026-09-09: 79 files, **1178 tests, 0 failed**.
+- macOS: `chat-tabs-migration`, `session-feed-decode`, `session-ledger`, `session-row-state`, `session-idle-collapse`, `session-cwd-policy`, `tab-close-decision`; `swift run MARVINTests` 758 assertions, 0 failures.
+- Live check (user, after relaunch): `+` → a tab reading `isolated · pending`; first message → chip `isolated: marvin/tab/…`, `git worktree list` shows the tree, the registry has `kind: session`; an edit lands in the worktree and the main checkout is untouched; `cd <root> && …` from that tab raises a confirm; closing offers Merge / Keep / Discard; two tabs, a turn in one, the other's dot turns and the Sessions pane sorts it under Working; an AskUserQuestion in a hidden tab lights the badge and the dock; a killed sidecar leaves the tab marked interrupted with Resume.
+
+## Scope of Done
+
+- [x] `workDir`/`cwd` split through runner, orchestrator, wakeups, jobs, chat route; `.marvin/` services never fork into a worktree
+- [x] Per-session meta beside the transcript; session-aware cwd validation (registered worktrees only)
+- [x] Session worktrees: create / close / reopen / discard, `session` state, sweep and adopt rules, merge guard, setup config
+- [x] Main-loop containment (deny writes into the root, confirm shell naming it); shared-tree confirm skipped in worktree mode
+- [x] Lanes: gate + shared-tree extension + client editor
+- [x] Project event bus, confirm index, per-session cost, watch snapshot and route
+- [x] Client registry, tab dots/badges, dock badge, chip + popover, close dialog, Sessions pane, settings default
+- [x] Boot marker, interrupted listing, server-initiated resume, client banner and row
+- [x] ADR-0102 and ADR-0103 amended; roadmap, CLAUDE.md, changelog
+- [ ] Live check on the rebuilt app (the user relaunches; Claude never restarts MARVIN)

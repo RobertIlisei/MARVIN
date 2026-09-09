@@ -10,7 +10,8 @@
     "./policy": "./src/policy.ts",
     "./fs-constants": "./src/fs-constants.ts",
     "./fs-write-policy": "./src/fs-write-policy.ts",
-    "./shared-tree": "./src/shared-tree.ts"
+    "./shared-tree": "./src/shared-tree.ts",
+    "./lanes": "./src/lanes.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

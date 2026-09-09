@@ -109,6 +109,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0097](./0097-verify-against-what-runs.md) | The SDK spawns its own bundled native CLI, so ADR-0087/0093 both missed it — the bundle linked 0.2.113 beside a 0.3.251 SDK; and the Skills pane listed skills the loader had skipped (29 `Unknown skill` calls) | Accepted | 2026-08-30 |
 | [0098](./0098-the-rail-must-outlive-the-tool-surface.md) | CLI 2.1.251 removed `Grep`/`Glob`, so searching moved to `Bash` where the graphify-first rail could not see it — 15 of 18 Bash calls search-shaped against 2 graph calls | Accepted | 2026-08-30 |
 | [0106](./0106-plan-snapshot-semantics-superseded-subtasks.md) | Plan spine: snapshot semantics for sub-tasks, `superseded` status, lenient tags, bucket-free re-base guard | Accepted | 2026-09-08 |
+| [0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) | One worktree per chat tab, a project-wide session feed, lanes for shared tabs, resume after a restart | Accepted | 2026-09-09 |
 
 ## Template
 

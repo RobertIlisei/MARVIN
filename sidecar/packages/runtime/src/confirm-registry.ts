@@ -25,6 +25,18 @@ interface PendingEntry {
   originalInput: Record<string, unknown>;
   /** Optional auto-deny timer; cleared on resolve / clear. */
   timeoutHandle?: ReturnType<typeof setTimeout>;
+  /** ADR-0107 — what is waiting, for the watch UI. */
+  toolName: string;
+  registeredAt: number;
+}
+
+/** ADR-0107 — one pending confirm as the watch feed reports it. */
+export interface PendingConfirmSummary {
+  turnId: string;
+  toolUseId: string;
+  toolName: string;
+  /** ISO timestamp the confirm was raised. */
+  since: string;
 }
 
 const registry = new Map<string, Map<string, PendingEntry>>();
@@ -55,13 +67,19 @@ export function registerPendingConfirm(
   resolver: Resolver,
   originalInput: Record<string, unknown> = {},
   timeoutMs: number = DEFAULT_CONFIRM_TIMEOUT_MS,
+  meta: { toolName?: string } = {},
 ): void {
   let bucket = registry.get(turnId);
   if (!bucket) {
     bucket = new Map();
     registry.set(turnId, bucket);
   }
-  const entry: PendingEntry = { resolver, originalInput };
+  const entry: PendingEntry = {
+    resolver,
+    originalInput,
+    toolName: meta.toolName ?? "tool",
+    registeredAt: Date.now(),
+  };
   bucket.set(toolUseId, entry);
   if (timeoutMs > 0) {
     // The resolved branch in resolvePendingConfirm clears this handle
@@ -75,6 +93,20 @@ export function registerPendingConfirm(
       });
     }, timeoutMs);
   }
+}
+
+/** ADR-0107 — the confirms still waiting on a turn, oldest first. */
+export function listPendingConfirms(turnId: string): PendingConfirmSummary[] {
+  const bucket = registry.get(turnId);
+  if (!bucket) return [];
+  return [...bucket.entries()]
+    .map(([toolUseId, e]) => ({
+      turnId,
+      toolUseId,
+      toolName: e.toolName,
+      since: new Date(e.registeredAt).toISOString(),
+    }))
+    .sort((a, b) => a.since.localeCompare(b.since));
 }
 
 export function getPendingOriginalInput(

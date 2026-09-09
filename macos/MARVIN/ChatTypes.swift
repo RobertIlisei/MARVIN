@@ -180,6 +180,13 @@ struct ChatRequest: Codable {
     /// visible chat. Set by clicking the "Reset context" chip on the
     /// AppStatusBar context segment.
     let resetSdkSession: Bool?
+    /// ADR-0107 — which tree a NEW session runs in ("worktree" | "shared");
+    /// honoured on the first message only.
+    let tree: String?
+    /// ADR-0107 — repo-relative path prefixes a shared tab owns.
+    let lane: [String]?
+    /// ADR-0107 — a title for the tab's branch name on the first message.
+    let sessionTitle: String?
 
     init(
         message: String,
@@ -197,7 +204,10 @@ struct ChatRequest: Codable {
         mode: String? = nil,
         thinkingMode: String? = nil,
         advisorThinkingMode: String? = nil,
-        resetSdkSession: Bool? = nil
+        resetSdkSession: Bool? = nil,
+        tree: String? = nil,
+        lane: [String]? = nil,
+        sessionTitle: String? = nil
     ) {
         self.message = message
         self.cwd = cwd
@@ -215,6 +225,9 @@ struct ChatRequest: Codable {
         self.thinkingMode = thinkingMode
         self.advisorThinkingMode = advisorThinkingMode
         self.resetSdkSession = resetSdkSession
+        self.tree = tree
+        self.lane = lane
+        self.sessionTitle = sessionTitle
     }
 }
 

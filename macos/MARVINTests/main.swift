@@ -3130,6 +3130,169 @@ runner.suite("chat-tabs-migration") {
     }
 }
 
+runner.suite("session-feed-decode") {
+    func d(_ name: String, _ json: String) -> SessionFeedEvent? {
+        SessionFeedEvent.decode(name: name, data: Data(json.utf8))
+    }
+    runner.test("turn.registered with and without kind") {
+        let a = d("turn.registered", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","startedAt":1000,"kind":"machine"}"#)
+        runner.expect(a == .registered(sessionId: "s", turnId: "t", kind: "machine", startedAt: 1000), "with kind")
+        let b = d("turn.registered", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","startedAt":1000}"#)
+        runner.expect(b == .registered(sessionId: "s", turnId: "t", kind: nil, startedAt: 1000), "without kind")
+    }
+    runner.test("turn.ended maps outcomes, cancelled, and a missing cost") {
+        runner.expect(d("turn.ended", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","outcome":"completed","costUsd":0.5}"#)
+                      == .ended(sessionId: "s", turnId: "t", outcome: .completed, costUsd: 0.5), "completed with cost")
+        runner.expect(d("turn.ended", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","outcome":"error"}"#)
+                      == .ended(sessionId: "s", turnId: "t", outcome: .error, costUsd: nil), "error, no cost")
+        runner.expect(d("turn.ended", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","outcome":"error","cancelled":true}"#)
+                      == .ended(sessionId: "s", turnId: "t", outcome: .cancelled, costUsd: nil), "cancelled flag wins")
+    }
+    runner.test("confirm events and session.tree") {
+        runner.expect(d("confirm.pending", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","toolUseId":"u","toolName":"Bash"}"#)
+                      == .confirmPending(sessionId: "s", turnId: "t", toolUseId: "u", toolName: "Bash"), "pending")
+        runner.expect(d("confirm.resolved", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","toolUseId":"u","decision":"allow"}"#)
+                      == .confirmResolved(sessionId: "s", turnId: "t", toolUseId: "u"), "resolved")
+        let tree = d("session.tree", #"{"marvinSessionId":"s","projectId":"p","tree":{"mode":"worktree","slug":"x","path":"/w","branch":"marvin/tab/x","base":"abc"}}"#)
+        runner.expect(tree == .tree(sessionId: "s", tree: SessionTreeWire(mode: .worktree, slug: "x", path: "/w", branch: "marvin/tab/x", base: "abc")), "tree")
+    }
+    runner.test("unknown names, heartbeats and malformed data are nil, never a throw") {
+        runner.expect(d("announce.attached", #"{"projectId":"p"}"#) == nil, "attached ignored")
+        runner.expect(d("turn.registered", "{not json") == nil, "malformed → nil")
+        runner.expect(d("something.else", "{}") == nil, "unknown → nil")
+    }
+    runner.test("a watch snapshot decodes with every optional field absent") {
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle"}]}"#.utf8))
+        runner.expect(rows?.count, equals: 1, "one row")
+        runner.expect(rows?.first?.turn == nil && rows?.first?.tree == nil, "optionals nil")
+    }
+}
+
+runner.suite("session-ledger") {
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    runner.test("registered creates an unknown session live, and clears history flags") {
+        var l = SessionLedger()
+        l.ensure("s", draft: true)
+        l.markInterrupted("s", true)
+        l.apply(.registered(sessionId: "s", turnId: "t1", kind: "human", startedAt: 1_000_000_000), now: t0)
+        let e = l["s"]!
+        runner.expect(e.isLive && e.liveTurnId == "t1" && !e.interrupted && !e.isDraft, "live, not interrupted, not draft")
+    }
+    runner.test("ended clears live and every pending confirm, records outcome and cost") {
+        var l = SessionLedger()
+        l.apply(.registered(sessionId: "s", turnId: "t1", kind: nil, startedAt: 0), now: t0)
+        l.apply(.confirmPending(sessionId: "s", turnId: "t1", toolUseId: "u1", toolName: "Bash"), now: t0)
+        l.apply(.confirmPending(sessionId: "s", turnId: "t1", toolUseId: "u1", toolName: "Bash"), now: t0)
+        runner.expect(l.needsYouCount, equals: 1, "pending is idempotent by toolUseId")
+        l.apply(.ended(sessionId: "s", turnId: "t1", outcome: .completed, costUsd: 0.25), now: t0)
+        l.apply(.ended(sessionId: "s", turnId: "t1", outcome: .completed, costUsd: 0.25), now: t0)
+        let e = l["s"]!
+        runner.expect(!e.isLive && e.needsYou == 0 && e.lastOutcome == .completed, "closed")
+        runner.expect(e.costUsd, equals: 0.5, "cost accumulates per ended")
+        runner.expect(l.needsYouCount, equals: 0, "nothing waiting")
+    }
+    runner.test("a stale ended for an older turn does not close the newer one") {
+        var l = SessionLedger()
+        l.apply(.registered(sessionId: "s", turnId: "t2", kind: nil, startedAt: 0), now: t0)
+        l.apply(.ended(sessionId: "s", turnId: "t1", outcome: .error, costUsd: nil), now: t0)
+        runner.expect(l["s"]?.isLive == true, "still live")
+    }
+    runner.test("resolving an unknown confirm is a no-op; tree sets the mode") {
+        var l = SessionLedger()
+        l.apply(.confirmResolved(sessionId: "s", turnId: "t", toolUseId: "nope"), now: t0)
+        runner.expect(l["s"]?.needsYou, equals: 0, "no-op")
+        l.apply(.tree(sessionId: "s", tree: SessionTreeWire(mode: .worktree, slug: "x", path: "/w", branch: "b", base: "c")), now: t0)
+        runner.expect(l["s"]?.mode == .worktree && l["s"]?.tree?.branch == "b", "mode + tree")
+    }
+    runner.test("a snapshot keeps a turn registered within the grace window, clears an older one") {
+        var l = SessionLedger()
+        l.apply(.registered(sessionId: "fresh", turnId: "t", kind: nil, startedAt: t0.timeIntervalSince1970 * 1000), now: t0)
+        l.apply(.registered(sessionId: "old", turnId: "t", kind: nil, startedAt: (t0.timeIntervalSince1970 - 60) * 1000), now: t0)
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"fresh","state":"idle"},{"marvinSessionId":"old","state":"idle","cost":{"turns":2,"costUsd":1.5},"title":"Hello"}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0.addingTimeInterval(2), graceSeconds: 5)
+        runner.expect(l["fresh"]?.isLive == true, "fresh kept live through the grace window")
+        runner.expect(l["old"]?.isLive == false, "old cleared by the snapshot")
+        runner.expect(l["old"]?.costUsd == 1.5 && l["old"]?.title == "Hello", "snapshot fields land")
+    }
+    runner.test("a snapshot marks interrupted sessions") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"interrupted","lastTurn":{"turnId":"t","outcome":"interrupted"}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0)
+        runner.expect(l["s"]?.interrupted == true, "interrupted")
+    }
+}
+
+runner.suite("session-row-state") {
+    func entry(_ f: (inout SessionEntry) -> Void) -> SessionEntry { var e = SessionEntry(id: "s"); f(&e); return e }
+    runner.test("precedence: needs-you > working > interrupted > failed > draft > idle") {
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.liveTurnId = "t"; $0.pendingConfirms["u"] = PendingConfirmInfo(turnId: "t", toolUseId: "u", toolName: "Bash") }) == .needsYou(1), "needs you")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.liveTurnId = "t"; $0.interrupted = true }) == .working, "working")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.interrupted = true; $0.lastOutcome = .error }) == .interrupted, "interrupted")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .error }) == .failed, "failed")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.lastOutcome = .cancelled }) == .idle, "cancelled reads idle")
+        runner.expect(SessionRowStateDeriver.derive(entry { $0.isDraft = true }) == .draft, "draft")
+        runner.expect(SessionRowStateDeriver.derive(entry { _ in }) == .idle, "idle")
+    }
+    runner.test("sort rank puts attention first") {
+        let ranks = [SessionRowState.idle, .needsYou(2), .draft, .working, .failed, .interrupted].sorted { $0.sortRank < $1.sortRank }
+        runner.expect(ranks.first == .needsYou(2) && ranks.last == .draft, "ordering")
+    }
+}
+
+runner.suite("session-idle-collapse") {
+    let now = Date(timeIntervalSince1970: 10_000)
+    func row(_ id: String, _ s: SessionRowState, age: TimeInterval? = nil) -> SessionIdleCollapse.Row {
+        SessionIdleCollapse.Row(id: id, state: s, idleSince: age.map { now.addingTimeInterval(-$0) })
+    }
+    runner.test("the first three idle rows stay; older ones past 30 s collapse; selected never collapses") {
+        let rows = [row("w", .working), row("i1", .idle, age: 100), row("i2", .idle, age: 100), row("i3", .idle, age: 100),
+                    row("i4", .idle, age: 29), row("i5", .idle, age: 30), row("sel", .idle, age: 500)]
+        let p = SessionIdleCollapse.partition(rows, selected: "sel", now: now, expanded: false)
+        runner.expect(p.visible, equals: ["w", "i1", "i2", "i3", "i4", "sel"], "visible in input order")
+        runner.expect(p.collapsed, equals: ["i5"], "only the old, non-selected extra idle row")
+    }
+    runner.test("expanded shows everything; a working row is never collapsed") {
+        let rows = [row("a", .idle, age: 999), row("b", .idle, age: 999), row("c", .idle, age: 999), row("d", .idle, age: 999), row("e", .working)]
+        runner.expect(SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: true).collapsed.isEmpty, "expanded")
+        let p = SessionIdleCollapse.partition(rows, selected: nil, now: now, expanded: false)
+        runner.expect(p.collapsed, equals: ["d"], "fourth old idle collapses")
+        runner.expect(p.visible.contains("e"), "working stays")
+    }
+}
+
+runner.suite("session-cwd-policy") {
+    let wt = SessionTreeWire(mode: .worktree, slug: "x", path: "/proj/.marvin/worktrees/tab-x", branch: "marvin/tab/x", base: "abc")
+    runner.test("shared → the project root; an override wins everywhere") {
+        runner.expect(SessionCwdPolicy.resolve(mode: .shared, tree: nil, present: nil, projectWorkDir: "/proj") == .cwd("/proj"), "shared")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: true, projectWorkDir: "/proj", override: "/elsewhere") == .cwd("/elsewhere"), "override")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: true, projectWorkDir: "/proj", override: "") == .cwd(wt.path!), "empty override ignored")
+    }
+    runner.test("isolated: the worktree when present, needsWorktree when none, missing when gone — never the root") {
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: true, projectWorkDir: "/proj") == .cwd(wt.path!), "present")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: nil, projectWorkDir: "/proj") == .cwd(wt.path!), "unknown presence still runs there")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: nil, present: nil, projectWorkDir: "/proj") == .needsWorktree, "no tree yet")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: false, projectWorkDir: "/proj") == .worktreeMissing(branch: "marvin/tab/x"), "gone")
+        runner.expect(SessionCwdPolicy.resolve(mode: .worktree, tree: wt, present: true, projectWorkDir: nil) == .noProject, "no project")
+    }
+}
+
+runner.suite("tab-close-decision") {
+    func d(live: Bool = false, mode: SessionMode = .worktree, hasWorktree: Bool = true, state: String? = nil, commits: Int? = nil, dirty: Bool? = nil) -> TabCloseDecision.Outcome {
+        TabCloseDecision.decide(isLive: live, mode: mode, hasWorktree: hasWorktree, worktreeState: state, commits: commits, dirty: dirty, branch: "marvin/tab/x")
+    }
+    runner.test("shared, no worktree, or a live turn decide before anything else") {
+        runner.expect(d(mode: .shared) == .closeNow, "shared closes")
+        runner.expect(d(hasWorktree: false) == .closeNow, "no worktree closes")
+        runner.expect(d(live: true, commits: 3) == .stopTurnFirst, "live turn first")
+    }
+    runner.test("empty and clean reclaims silently; anything holding work asks") {
+        runner.expect(d(commits: 0, dirty: false) == .reclaimSilently, "nothing to lose")
+        if case .offer(let a, _) = d(commits: 0, dirty: true) { runner.expect(a, equals: [.merge, .keepBranch, .discard], "dirty, no commits") } else { runner.expect(false, "dirty offers") }
+        if case .offer(let a, _) = d(commits: 2, dirty: false) { runner.expect(a, equals: [.merge, .keepBranch, .discard], "commits") } else { runner.expect(false, "commits offer") }
+        if case .offer(let a, _) = d(state: "merged", commits: 2) { runner.expect(a, equals: [.keepBranch, .discard], "merged: nothing to merge") } else { runner.expect(false, "merged offers") }
+    }
+}
+
 runner.suite("brain-state-gate") {
     runner.test("a session that is not on screen cannot drive the brain") {
         runner.expect(BrainStateGate.accepts(writer: "b", active: "a"), equals: false,

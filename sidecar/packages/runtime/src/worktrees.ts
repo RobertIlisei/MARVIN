@@ -35,7 +35,10 @@ import { toolPolicy } from "@marvin/tools/policy";
  * in another session, or by hand, and MARVIN is not there to see it. A state
  * we only recorded would be wrong the moment that happened (ADR-0103).
  */
-export type WorktreeState = "running" | "empty" | "ready" | "merged";
+export type WorktreeState = "running" | "session" | "empty" | "ready" | "merged";
+
+/** ADR-0107 — who the tree belongs to. Absent on pre-0107 records = implementer. */
+export type WorktreeKind = "implementer" | "session";
 
 export interface WorktreeRecord {
   slug: string;
@@ -45,8 +48,12 @@ export interface WorktreeRecord {
   /** Commit the branch was cut from. */
   base: string;
   createdAt: string;
-  /** One line: what the implementer was asked to do. */
+  /** One line: what the implementer was asked to do, or the chat tab's title. */
   task: string;
+  /** ADR-0107 — implementer (default) or a chat session's own tree. */
+  kind?: WorktreeKind;
+  /** ADR-0107 — the marvinSessionId a `session` tree belongs to. */
+  sessionId?: string;
   /** SDK `task_id` of the implementer bound to this tree, once dispatched. */
   taskId?: string;
   /** Set when the implementer's `task_notification` lands. */
@@ -72,6 +79,10 @@ export interface ReconciledWorktree extends WorktreeRecord {
 const REGISTRY = "worktrees.json";
 const DIR = "worktrees";
 const BRANCH_PREFIX = "marvin/";
+/** ADR-0107 — session trees get their own prefixes so a lost record can be
+ *  classified from the ref name alone, and never swept as an orphan. */
+export const SESSION_BRANCH_PREFIX = "marvin/tab/";
+export const SESSION_DIR_PREFIX = "tab-";
 
 export function worktreesDir(workDir: string): string {
   return join(workDir, ".marvin", DIR);
@@ -149,6 +160,90 @@ export function createWorktree(workDir: string, task: string): WorktreeRecord {
 }
 
 /**
+ * ADR-0107 — create the worktree a chat tab runs in. Same git path as an
+ * implementer's (cut from the CURRENT HEAD, so the tab sees the user's
+ * unpushed work), its own prefixes, and a record bound to the session. State
+ * is `session` for as long as the tab is open; the lifecycle derivation below
+ * never sweeps that state.
+ */
+export function createSessionWorktree(
+  workDir: string,
+  input: { sessionId: string; title?: string | undefined },
+): WorktreeRecord {
+  const existing = listWorktrees(workDir);
+  const already = existing.find((w) => w.kind === "session" && w.sessionId === input.sessionId);
+  if (already) return already;
+  const base = worktreeSlug(input.title?.trim() || input.sessionId.slice(0, 8));
+  const slug = uniqueSlug(workDir, base, existing, SESSION_BRANCH_PREFIX);
+  const path = join(worktreesDir(workDir), `${SESSION_DIR_PREFIX}${slug}`);
+  const branch = `${SESSION_BRANCH_PREFIX}${slug}`;
+  mkdirSync(worktreesDir(workDir), { recursive: true });
+  git(workDir, ["worktree", "add", "-q", "-b", branch, path, "HEAD"]);
+  const baseCommit = git(workDir, ["rev-parse", "HEAD"]);
+  excludeWorktreesDir(workDir);
+  const record: WorktreeRecord = {
+    slug,
+    path,
+    branch,
+    base: baseCommit,
+    createdAt: new Date().toISOString(),
+    task: input.title?.trim() || `chat tab ${input.sessionId.slice(0, 8)}`,
+    kind: "session",
+    sessionId: input.sessionId,
+    state: "session",
+  };
+  saveWorktrees(workDir, [...existing, record]);
+  return record;
+}
+
+/** ADR-0107 — the tab closed: the tree becomes an ordinary deliverable
+ *  (`ready` / `empty` / `merged` by derivation). Nothing is deleted. */
+export function markSessionWorktreeClosed(workDir: string, sessionId: string, now = Date.now()): WorktreeRecord | null {
+  const all = listWorktrees(workDir);
+  const idx = all.findIndex((w) => w.kind === "session" && w.sessionId === sessionId);
+  if (idx < 0) return null;
+  const rec = all[idx] as WorktreeRecord;
+  if (!rec.finishedAt) {
+    all[idx] = { ...rec, finishedAt: new Date(now).toISOString() };
+    saveWorktrees(workDir, all);
+  }
+  return all[idx] as WorktreeRecord;
+}
+
+/** ADR-0107 — a kept tab reopened: back to `session`, never swept. */
+export function reopenSessionWorktree(workDir: string, sessionId: string): WorktreeRecord | null {
+  const all = listWorktrees(workDir);
+  const idx = all.findIndex((w) => w.kind === "session" && w.sessionId === sessionId);
+  if (idx < 0) return null;
+  const { finishedAt: _drop, ...rest } = all[idx] as WorktreeRecord;
+  all[idx] = { ...rest, state: "session" };
+  saveWorktrees(workDir, all);
+  return all[idx] as WorktreeRecord;
+}
+
+/** ADR-0107 — the session tree bound to `sessionId`, if any. */
+export function findSessionWorktree(workDir: string, sessionId: string): WorktreeRecord | null {
+  return listWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === sessionId) ?? null;
+}
+
+/**
+ * ADR-0107 — an explicit user decision to throw a closed tab's tree away:
+ * checkout AND branch, whatever they hold. Only for a `session` tree that has
+ * been closed; an open tab's tree and every implementer tree are refused.
+ */
+export function discardWorktree(workDir: string, slug: string): { ok: boolean; message: string } {
+  const rec = listWorktrees(workDir).find((w) => w.slug === slug);
+  if (!rec) return { ok: false, message: `No worktree named ${slug}.` };
+  if (rec.kind !== "session") return { ok: false, message: `${slug} is an implementer worktree — use sweep or drop.` };
+  if (!rec.finishedAt) return { ok: false, message: `${slug} belongs to an open tab — close the tab first.` };
+  gitOk(workDir, ["worktree", "remove", "--force", rec.path]);
+  gitOk(workDir, ["worktree", "prune"]);
+  const deleted = gitOk(workDir, ["branch", "-D", rec.branch]);
+  saveWorktrees(workDir, listWorktrees(workDir).filter((w) => w.slug !== slug));
+  return { ok: true, message: deleted ? `Discarded ${rec.branch} and its checkout.` : `Removed the checkout; branch ${rec.branch} could not be deleted.` };
+}
+
+/**
  * Remove a worktree checkout. The BRANCH is kept — it is the deliverable, and
  * deleting it is the user's decision after they have merged or rejected it.
  */
@@ -176,6 +271,12 @@ export function removeWorktree(workDir: string, slug: string, opts?: { force?: b
   if (!record) return { removed: null };
   if (!opts?.force) {
     const state = reconcileOne(workDir, record, checkoutPaths(workDir)).state;
+    if (state === "session") {
+      return {
+        removed: null,
+        refused: `${slug} is the checkout of an open chat tab — close the tab first, or pass force.`,
+      };
+    }
     if (state === "running") {
       return {
         removed: null,
@@ -202,8 +303,9 @@ export function describeWorktree(workDir: string, record: WorktreeRecord): strin
   const w = reconcileOne(workDir, record, checkoutPaths(workDir));
   const where = w.state === "merged" && w.mergedInto ? ` into ${w.mergedInto}` : "";
   const dirty = w.dirty ? ", dirty" : "";
+  const tab = w.kind === "session" ? " (chat tab)" : "";
   return (
-    `${w.slug} [${w.state}${where}${dirty}]: ${w.branch} — ` +
+    `${w.slug}${tab} [${w.state}${where}${dirty}]: ${w.branch} — ` +
     `${w.commits} commit(s), ${w.filesChanged} file(s) vs ${w.base.slice(0, 7)} — ${w.task}`
   );
 }
@@ -293,9 +395,9 @@ function containingRefs(workDir: string, branch: string): string[] {
 }
 
 /** A slug no existing record and no live branch is already using. */
-function uniqueSlug(workDir: string, base: string, existing: readonly WorktreeRecord[]): string {
+function uniqueSlug(workDir: string, base: string, existing: readonly WorktreeRecord[], prefix = BRANCH_PREFIX): string {
   const taken = (s: string) =>
-    existing.some((w) => w.slug === s) || gitOk(workDir, ["rev-parse", "--verify", "--quiet", `${BRANCH_PREFIX}${s}`]);
+    existing.some((w) => w.slug === s) || gitOk(workDir, ["rev-parse", "--verify", "--quiet", `${prefix}${s}`]);
   if (!taken(base)) return base;
   for (let n = 2; n < 1000; n++) {
     const candidate = `${base}-${n}`;
@@ -320,8 +422,14 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
   const startedAt = Date.parse(record.createdAt);
   const stillRunning =
     !!record.taskId && !record.finishedAt && Number.isFinite(startedAt) && now - startedAt < RUNNING_STALE_MS;
+  // ADR-0107 — a session tree is `session` for as long as its tab is open. No
+  // staleness timer: a tab's lifetime is the client's, not a clock's. Once
+  // closed (finishedAt set) it derives like any other tree.
+  const openSession = record.kind === "session" && !record.finishedAt;
   let mergedInto: string | undefined;
-  if (stillRunning) {
+  if (openSession) {
+    state = "session";
+  } else if (stillRunning) {
     state = "running";
   } else if (commits === 0) {
     state = "empty";
@@ -355,19 +463,23 @@ function adoptOrphans(workDir: string, known: readonly WorktreeRecord[], checkou
     .map((b) => b.trim())
     .filter((b) => b && !knownBranches.has(b));
   return branches.map((branch) => {
-    const slug = branch.slice(BRANCH_PREFIX.length);
-    const guessed = join(worktreesDir(workDir), slug);
+    // ADR-0107 — a lost SESSION record is classified from its ref name and
+    // adopted as an open-tab tree: state `session`, never swept. The user
+    // reclaims it from the UI once they know it exists.
+    const isSession = branch.startsWith(SESSION_BRANCH_PREFIX);
+    const slug = isSession ? branch.slice(SESSION_BRANCH_PREFIX.length) : branch.slice(BRANCH_PREFIX.length);
+    const guessed = join(worktreesDir(workDir), isSession ? `${SESSION_DIR_PREFIX}${slug}` : slug);
     const path = checkouts.has(canonical(guessed))
       ? guessed
-      : [...checkouts].find((c) => c.endsWith(`/${slug}`)) ?? guessed;
+      : [...checkouts].find((c) => c.endsWith(`/${isSession ? `${SESSION_DIR_PREFIX}${slug}` : slug}`)) ?? guessed;
     return {
       slug,
       path,
       branch,
       base: gitOr(workDir, ["merge-base", branch, "HEAD"], gitOr(workDir, ["rev-parse", branch], "")),
       createdAt: new Date(0).toISOString(),
-      task: "(adopted — branch found outside the registry)",
-      finishedAt: new Date(0).toISOString(),
+      task: isSession ? "(adopted session worktree)" : "(adopted — branch found outside the registry)",
+      ...(isSession ? { kind: "session" as const } : { finishedAt: new Date(0).toISOString() }),
     } satisfies WorktreeRecord;
   });
 }
@@ -391,6 +503,8 @@ export function reconcileWorktrees(workDir: string, now = Date.now()): Reconcile
     base: w.base,
     createdAt: w.createdAt,
     task: w.task,
+    ...(w.kind ? { kind: w.kind } : {}),
+    ...(w.sessionId ? { sessionId: w.sessionId } : {}),
     ...(w.taskId ? { taskId: w.taskId } : {}),
     ...(w.finishedAt ? { finishedAt: w.finishedAt } : {}),
     state: w.state,
@@ -455,7 +569,7 @@ export interface SweepOutcome {
 export function sweepWorktrees(workDir: string, now = Date.now()): SweepOutcome[] {
   const out: SweepOutcome[] = [];
   for (const w of reconcileWorktrees(workDir, now)) {
-    if (w.state === "running" || w.state === "ready") continue;
+    if (w.state === "running" || w.state === "session" || w.state === "ready") continue;
     if (w.dirty) {
       out.push({
         slug: w.slug,
@@ -550,11 +664,20 @@ function mergeSubject(branch: string): string {
   return `Merge branch '${branch}'`;
 }
 
-export function mergeWorktree(workDir: string, slug: string): MergeOutcome {
+export function mergeWorktree(
+  workDir: string,
+  slug: string,
+  opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
+): MergeOutcome {
   const w = reconcileWorktrees(workDir).find((r) => r.slug === slug);
   if (!w) return { ok: false, message: `No worktree named ${slug}.`, slug, branch: "" };
   const fail = (message: string): MergeOutcome => ({ ok: false, message, slug, branch: w.branch });
   if (w.state === "running") return fail(`${w.branch} is still being built by its implementer.`);
+  // ADR-0107 — an open tab's tree may be merged (the user is folding their
+  // own work back), but never while that tab has a turn running.
+  if (w.state === "session" && w.sessionId && opts.isSessionBusy?.(w.sessionId)) {
+    return fail(`${w.branch} belongs to a chat tab with a turn in flight — wait for it or stop it first.`);
+  }
   if (w.state === "empty") return fail(`${w.branch} has no commits to merge.`);
   if (w.state === "merged") return fail(`${w.branch} is already merged into ${w.mergedInto}.`);
   if (workingTreeDirty(workDir)) {
@@ -651,6 +774,83 @@ export function implementerWorktreePolicy(
       reason: `Implementer shell pinned to its worktree (${worktree}).`,
       ...(pinned ? {} : { updatedInput: { ...input, command: rewritten } }),
     };
+  }
+  return null;
+}
+
+/**
+ * ADR-0107 — main-loop containment for a chat session that runs in its own
+ * worktree. Anthropic's harness enforces this only for worktrees the CLI
+ * created; MARVIN created this one, so MARVIN checks:
+ *
+ *   - Edit/Write/NotebookEdit into the MAIN checkout → deny, naming the tab's
+ *     tree and the way out (switch the tab to shared). Relative paths resolve
+ *     against `worktree` — the SDK honours `cwd` for the main query — so an
+ *     ordinary relative edit is allowed untouched.
+ *   - Bash that names the main tree (`cd <root>`, `git -C <root>`,
+ *     `--git-dir=<root>/.git`, `GIT_WORK_TREE=<root>`, or a bare absolute
+ *     path under it that is not under `.marvin/worktrees/`) → CONFIRM, never a
+ *     rewrite and never a silent deny: the main tree is the user's own checkout
+ *     and a regex over a shell string will over-match.
+ *   - everything else → null (the normal ladder).
+ */
+export function sessionWorktreePolicy(
+  name: string,
+  input: Record<string, unknown>,
+  worktree: string,
+  workDir: string,
+): { decision: "allow" | "deny" | "confirm"; reason: string } | null {
+  if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
+    const raw = input.file_path ?? input.notebook_path ?? input.path;
+    if (typeof raw !== "string" || raw.length === 0) return null;
+    const target = isAbsolute(raw) ? raw : resolve(worktree, raw);
+    if (isInsideWorktree(target, worktree)) return null;
+    if (isInsideWorktree(target, workDir)) {
+      return {
+        decision: "deny",
+        reason:
+          `${name} targets ${target}, which is the project's MAIN checkout. This tab is isolated in ` +
+          `its own worktree at ${worktree}; edits belong there (relative paths already resolve into it). ` +
+          `To edit the shared checkout, switch this tab to "shared" (ADR-0107).`,
+      };
+    }
+    return null;
+  }
+  if (name === "Bash") {
+    const cmd = typeof input.command === "string" ? input.command : "";
+    if (!cmd) return null;
+    const hit = mainTreeRedirect(cmd, workDir, worktree);
+    if (!hit) return null;
+    return {
+      decision: "confirm",
+      reason:
+        `This command references the project's main checkout (${hit}) while this tab is isolated in ` +
+        `${worktree}. Allow to run it against the shared checkout anyway, or deny and keep the work in the worktree.`,
+    };
+  }
+  return null;
+}
+
+/** The fragment of `cmd` that points at the main tree, or null. */
+export function mainTreeRedirect(cmd: string, workDir: string, worktree: string): string | null {
+  const root = resolve(workDir);
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`(?:^|[\\s;&|(])cd\\s+['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
+    new RegExp(`git\\s+-C\\s+['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
+    new RegExp(`--git-dir=['"]?${escaped}/\\.git`),
+    new RegExp(`GIT_WORK_TREE=['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
+  ];
+  for (const re of patterns) {
+    const m = re.exec(cmd);
+    if (m) return m[0].trim();
+  }
+  // A bare absolute path under the main tree that is not under a worktree.
+  const absolutes = [...cmd.matchAll(/(?:^|[\s"'=])(\/[^\s"'|;&)]*)/g)].map((m) => m[1] ?? "");
+  for (const a of absolutes) {
+    if (isInsideWorktree(a, worktree)) continue;
+    if (a.startsWith(join(root, ".marvin", "worktrees"))) continue;
+    if (isInsideWorktree(a, root)) return a;
   }
   return null;
 }

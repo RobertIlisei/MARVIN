@@ -24,6 +24,20 @@ export async function register(): Promise<void> {
   const { listProjects } = await import("@marvin/runtime/projects");
   armPracticeSchedule({ listProjectIds: () => listProjects().map((p) => p.id) });
 
+  // ADR-0107 — stamp every turn the previous process cut off BEFORE any
+  // past-due wakeup fires into the same session.
+  try {
+    const { markInterruptedAtBoot } = await import("@marvin/runtime/session-recovery");
+    const { marked } = markInterruptedAtBoot();
+    if (marked) {
+      // eslint-disable-next-line no-console
+      console.log(`[session-recovery] marked ${marked} interrupted turn(s) from the previous process`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[session-recovery] boot scan failed:", err);
+  }
+
   const stats = armAll();
   if (stats.armed || stats.firedImmediately || stats.dropped) {
     // eslint-disable-next-line no-console

@@ -46,6 +46,16 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    `gated`. Anthropic's own agent teams run several sessions in one directory
    on the same basis — partitioned file ownership, not separate checkouts.
    Two sessions must still never be *dispatched* by a model.
+   **Since [ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)
+   (2026-09-09) a new chat tab runs in its own git worktree by default** —
+   `marvin/tab/<slug>` under `.marvin/worktrees/tab-<slug>`, cut from the
+   current HEAD, contained at the gate (a write into the main checkout is
+   denied, shell that names it confirms) — and a per-tab chip switches it to
+   the shared checkout, where ADR-0102's confirm and optional **lanes** apply.
+   Every `.marvin/`-scoped service keys on `workDir` (the project root), never
+   on a session's `cwd`. The **Sessions** left-pane tab and the tab dots show
+   every session's state from one project-wide feed; the brain still
+   describes the selected session only.
    Any new subagent type requires a new ADR; these carve-outs are
    not a precedent for general multi-agent dispatch.
    **A standing supervisor agent was considered and rejected** (2026-07-24) —
@@ -280,6 +290,12 @@ directory makes it the user's thing, not MARVIN's.
 
 `MARVIN_DATA_DIR` env var, default `~/.marvin/`. Stores:
 - `sessions/<projectId>/<sessionId>.jsonl` — conversation transcripts
+- `sessions/<projectId>/<sessionId>.meta.json` — the session's tree (worktree
+  or shared + lane), the posture its turns run with, last turn outcome,
+  `closedAt` ([ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)).
+  Written by the chat route on every turn; a server-initiated resume rebuilds
+  the turn from it. Project-local: `<workDir>/.marvin/worktree.json`
+  (`symlinkDirectories`, `copyIgnored`) makes a fresh session worktree usable.
 - `sessions/<projectId>/.summaries.json` — picker cache for the session list
   ([ADR-0072](./docs/decisions/0072-session-list-must-not-parse-transcripts.md)):
   per-session `firstUserMessage` + `turnCount`, keyed on `(mtime, size)`.

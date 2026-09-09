@@ -417,6 +417,72 @@ final class ChatService {
         }
     }
 
+    /// ADR-0107 — the same `/api/chat/announce` stream, decoded as the full
+    /// project event set (`SessionFeedEvent`) for the session registry.
+    /// Kept separate from `announceStream` so the chat model's re-attach
+    /// logic is untouched; the two connections are loopback and cheap.
+    func liveFeed(projectId: String) -> AsyncThrowingStream<SessionFeedEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await runLiveFeed(projectId: projectId, continuation: continuation)
+                    continuation.finish()
+                } catch {
+                    if !(error is CancellationError) {
+                        continuation.finish(throwing: error)
+                    } else {
+                        continuation.finish()
+                    }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func runLiveFeed(
+        projectId: String,
+        continuation: AsyncThrowingStream<SessionFeedEvent, Error>.Continuation
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/chat/announce")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "projectId", value: projectId)]
+        guard let composed = comps.url else {
+            throw ChatServiceError.transport(underlying: URLError(.badURL))
+        }
+        var req = URLRequest(url: composed)
+        req.httpMethod = "GET"
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        let (bytes, response) = try await session.bytes(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ChatServiceError.transport(underlying: URLError(.badServerResponse))
+        }
+        try await pumpSSE(bytes) { frame in
+            guard let name = frame.name,
+                  let event = SessionFeedEvent.decode(name: name, data: Data(frame.data.utf8))
+            else { return }
+            continuation.yield(event)
+        }
+    }
+
+    /// GET /api/sessions/watch — the cold-start rows for every session of a
+    /// project (ADR-0107). nil on any failure; the feed carries on regardless.
+    func fetchSessionWatch(projectId: String, ids: [String]) async -> [SessionWatchRowWire]? {
+        let url = baseURL.appendingPathComponent("api/sessions/watch")
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "projectId", value: projectId),
+            URLQueryItem(name: "ids", value: ids.joined(separator: ",")),
+        ]
+        guard let composed = comps.url else { return nil }
+        var req = URLRequest(url: composed)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (data, response) = try? await session.data(for: req),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { return nil }
+        return SessionWatchRowWire.decodeSnapshot(data)
+    }
+
     private func runAnnounce(
         projectId: String,
         continuation: AsyncThrowingStream<TurnAnnouncement, Error>.Continuation

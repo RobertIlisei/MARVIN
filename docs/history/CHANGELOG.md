@@ -115,6 +115,33 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-09 — one worktree per chat tab, a project-wide session feed, lanes, resume after restart (ADR-0107).**
+
+  Trigger: three sessions on one checkout, one transcript visible at a time,
+  and a restart that cut three turns off with no way back. Research first
+  (`docs/research/2026-09-09-multi-session-management.md`): Anthropic's own
+  answer is one git worktree per session; sessions persist the conversation,
+  not the filesystem; sandboxes are orthogonal.
+
+  **Decision.** Reuse the implementer-worktree machinery for chat tabs. M0:
+  `workDir`/`cwd` split through the runner, orchestrator, wakeups and jobs;
+  per-session meta beside the transcript; cwd validation that accepts only
+  the project root or a registered worktree; registry-owned chat tabs under a
+  new key (the old one collided with the editor's tabs). M1: the announce
+  stream becomes a project event bus (`turn.ended`, `confirm.pending/resolved`,
+  `session.tree`), `GET /api/sessions/watch`, per-session cost, tab dots and a
+  live dock badge. M2: session worktrees (`session` state, never swept while
+  open; Merge / Keep / Discard on close; `.marvin/worktree.json` +
+  `.worktreeinclude` setup), main-loop containment, the header chip. M3: the
+  Sessions left-pane tab. M4: boot-time `interrupted` marker and a
+  server-initiated resume through the wakeup path. M5: lanes for shared
+  tabs. `EnterWorktree`/`ExitWorktree` are disallowed — MARVIN owns worktree
+  lifecycle.
+
+  **Verification.** Sidecar 79 files / 1178 tests, macOS 758 assertions, all
+  green. Live check on the rebuilt app is the user's (Claude never restarts
+  MARVIN).
+
 - **2026-09-08 — the Update-Constraints loop crash is capped at the call that raises (ADR-0062 addendum 5).**
 
   Trigger: MARVIN crashed while the user dragged the left divider with the
