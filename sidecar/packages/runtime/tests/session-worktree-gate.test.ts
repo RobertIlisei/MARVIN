@@ -89,6 +89,26 @@ describe("sessionWorktreePolicy (pure)", () => {
       `node -e "require('fs').readFileSync('${root}/package.json')"`,
     ];
     for (const c of reads) expect(mainTreeRedirect(c, root, wt), c).toBeNull();
+    // The reported false positive: copying a spec file FROM the main
+    // checkout INTO the worktree reads the source and writes here.
+    const sourceReads = [
+      `mkdir -p docs && cp ${root}/docs/smartbill-openapi-spec.json docs/smartbill-openapi-spec.json && ls -la docs/smartbill-openapi-spec.json`,
+      `cp ${root}/docs/spec.json ./docs/spec.json`,
+      `cp -r ${root}/apps/web/src ./src`,
+      `rsync -a ${root}/fixtures/ ./fixtures/`,
+      `dd if=${root}/a.img of=./b.img`,
+      `ln -s ${root}/node_modules node_modules`,
+    ];
+    for (const c of sourceReads) expect(mainTreeRedirect(c, root, wt), c).toBeNull();
+    const destWrites = [
+      `cp ./out.json ${root}/docs/out.json`,
+      `mv ./a ${root}/b`,
+      `cp -t ${root}/docs ./a.json`,
+      `cp --target-directory=${root}/docs ./a.json`,
+      `rsync -a ./dist/ ${root}/dist/`,
+      `dd if=./a of=${root}/b.img`,
+    ];
+    for (const c of destWrites) expect(mainTreeRedirect(c, root, wt), c).not.toBeNull();
     const writes = [
       `echo hi > ${root}/notes.md`,
       `cat x >> "${root}/notes.md"`,

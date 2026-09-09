@@ -832,6 +832,22 @@ export function sessionWorktreePolicy(
 }
 
 /**
+ * The destination argument of a `cp`/`mv`/`rsync`-shaped command: whatever
+ * `-t` / `--target-directory` names, else the last positional argument.
+ * `null` when there is only one positional (nothing is being written).
+ */
+function destinationArg(argv: string[]): string | null {
+  for (let k = 0; k < argv.length; k++) {
+    const a = argv[k] ?? "";
+    if (a === "-t" || a === "--target-directory") return argv[k + 1] ?? null;
+    const m = /^--target-directory=(.*)$/.exec(a);
+    if (m) return m[1] ?? null;
+  }
+  const positional = argv.filter((a) => a.length > 0 && !a.startsWith("-"));
+  return positional.length >= 2 ? (positional[positional.length - 1] ?? null) : null;
+}
+
+/**
  * The fragment of `cmd` that would act ON the main tree, or null.
  *
  * Addendum 3: a bare mention of a main-checkout path used to confirm, so a
@@ -872,7 +888,16 @@ export function mainTreeRedirect(cmd: string, workDir: string, worktree: string)
     let i = 0;
     while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "") || /^(?:sudo|env|nohup|time|command)$/.test(words[i] ?? ""))) i++;
     const tool = (words[i] ?? "").replace(/^.*\//, "");
-    if (/^(?:rm|rmdir|mv|cp|mkdir|touch|chmod|chown|chgrp|ln|rsync|install|truncate|dd|tee|unlink|shred|patch)$/.test(tool)) return hit;
+    // Every path argument is a target: a root path here IS written to.
+    if (/^(?:rm|rmdir|mkdir|touch|chmod|chown|chgrp|truncate|shred|unlink|mkfifo|tee|patch)$/.test(tool)) return hit;
+    // Source → destination tools: a root path in the SOURCE position is a
+    // read — copying a spec file FROM the main checkout INTO the worktree is
+    // the normal thing to do — so only a root DESTINATION is contained.
+    if (/^(?:cp|mv|ln|install|rsync|scp)$/.test(tool)) {
+      const dest = destinationArg(words.slice(i + 1).map((w) => w.replace(/^['"]|['"]$/g, "")));
+      if (dest && underRoot(isAbsolute(dest) ? dest : resolve(worktree, dest))) return dest;
+    }
+    if (tool === "dd" && new RegExp(`\\bof=['"]?(?:${pathAlt})`).test(segment)) return hit;
     if (/^(?:sed|perl)$/.test(tool) && /(?:^|\s)-[a-zA-Z]*i/.test(segment)) return hit;
     if (tool === "git" && /\bgit\s+(?:add|rm|mv|checkout|restore|reset|commit|stash|apply|am|rebase|merge|cherry-pick|revert|clean|switch|worktree|branch|tag)\b/.test(segment)) return hit;
     // Python / Node file APIs opening a root path for writing.
