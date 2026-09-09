@@ -848,61 +848,108 @@ function destinationArg(argv: string[]): string | null {
 }
 
 /**
- * The fragment of `cmd` that would act ON the main tree, or null.
+ * The fragment of `cmd` that would WRITE INTO the main checkout, or null.
  *
- * Addendum 3: a bare mention of a main-checkout path used to confirm, so a
- * tab that READ a spec file from the root (`open('<root>/docs/x.json')`) hit
- * a prompt under the auto gate — the containment exists to keep WRITES in
- * the worktree, and reading the shared checkout is harmless. Now: `cd`,
- * `git -C`, `--git-dir`, `GIT_WORK_TREE` still confirm (they move the
- * whole command there); a root path elsewhere confirms only in a write
- * position — a redirection into it, a mutating shell tool, an in-place
- * `sed`/`perl`, a mutating git verb, or a Python/Node file API opening it
- * for writing. Everything else falls through.
+ * Addendum 5: `cd <root>` used to confirm on its own, which put a prompt in
+ * front of every read the model does in the shared checkout — graph queries
+ * above all, since `graphify-out/` lives there and not in the worktree, and
+ * the graphify-first rail makes them constant. A directory change is not a
+ * write; what runs there decides. So the effective cwd is tracked across
+ * `&&` / `;` / `|` segments, relative paths resolve against it, and a
+ * confirm is raised only for a write-shaped command whose target lands in
+ * the main tree: a redirection, a mutating shell tool, an in-place
+ * `sed`/`perl`, a mutating git verb, a `cp`/`mv`-style DESTINATION, `dd`'s
+ * `of=`, or a Python/Node file API opening for write. Reads fall through
+ * wherever they run. `Edit`/`Write` into the main tree remain a hard deny,
+ * so the model's normal way of changing a file is still contained.
  */
+const MUTATING_GIT =
+  /\bgit\b[^|;&]*?\s(?:add|rm|mv|checkout|restore|reset|commit|stash|apply|am|rebase|merge|cherry-pick|revert|clean|switch|branch|tag|worktree|push|pull|fetch|gc|prune)\b/;
+const TARGET_ALL_TOOLS = /^(?:rm|rmdir|mkdir|touch|chmod|chown|chgrp|truncate|shred|unlink|mkfifo|tee|patch)$/;
+const DEST_TOOLS = /^(?:cp|mv|ln|install|rsync|scp)$/;
+const WRITE_API =
+  /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|rename(?:Sync)?|unlink(?:Sync)?|rmSync|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|shutil\.(?:copy\w*|move|rmtree)|os\.(?:remove|rename|unlink|makedirs|mkdir|rmdir)|write_text|write_bytes)\s*\(/;
+
 export function mainTreeRedirect(cmd: string, workDir: string, worktree: string): string | null {
   const root = resolve(workDir);
-  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const patterns = [
-    new RegExp(`(?:^|[\\s;&|(])cd\\s+['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
-    new RegExp(`git\\s+-C\\s+['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
-    new RegExp(`--git-dir=['"]?${escaped}/\\.git`),
-    new RegExp(`GIT_WORK_TREE=['"]?${escaped}(?:['"]|[\\s;&|)]|$)`),
-  ];
-  for (const re of patterns) {
-    const m = re.exec(cmd);
-    if (m) return m[0].trim();
-  }
-  // Root paths that are NOT under a worktree, per shell segment, in a write position.
-  const underRoot = (a: string): boolean =>
-    !isInsideWorktree(a, worktree) && !a.startsWith(join(root, ".marvin", "worktrees")) && isInsideWorktree(a, root);
+  const underRoot = (abs: string): boolean =>
+    !isInsideWorktree(abs, worktree) &&
+    !isInsideWorktree(abs, join(root, ".marvin", "worktrees")) &&
+    isInsideWorktree(abs, root);
+
+  let cwd = worktree;
   for (const segment of cmd.split(/\n|;|&&|\|\||\|/)) {
-    const paths = [...segment.matchAll(/(?:^|[\s"'=(,])(\/[^\s"'|;&),]*)/g)].map((m) => m[1] ?? "").filter(underRoot);
-    if (paths.length === 0) continue;
-    const hit = paths[0] as string;
-    const pathAlt = paths.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    // Redirection into the main tree.
-    if (new RegExp(`>>?\\s*['"]?(?:${pathAlt})`).test(segment)) return hit;
-    // The segment's command word (past env assignments / sudo / env / nohup / time).
-    const words = segment.trim().split(/\s+/);
+    const seg = segment.trim();
+    if (!seg) continue;
+    const abs = (p: string): string => (isAbsolute(p) ? resolve(p) : resolve(cwd, p));
+
+    // `cd <path>` moves everything after it; it writes nothing itself.
+    const cd = /^cd\s+(?:-{1,2}\S+\s+)*(['"]?)([^'"]+)\1$/.exec(seg);
+    if (cd) {
+      const target = (cd[2] ?? "").trim();
+      if (target && target !== "-") cwd = abs(target);
+      continue;
+    }
+
+    const words = seg.split(/\s+/);
     let i = 0;
     while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "") || /^(?:sudo|env|nohup|time|command)$/.test(words[i] ?? ""))) i++;
     const tool = (words[i] ?? "").replace(/^.*\//, "");
-    // Every path argument is a target: a root path here IS written to.
-    if (/^(?:rm|rmdir|mkdir|touch|chmod|chown|chgrp|truncate|shred|unlink|mkfifo|tee|patch)$/.test(tool)) return hit;
-    // Source → destination tools: a root path in the SOURCE position is a
-    // read — copying a spec file FROM the main checkout INTO the worktree is
-    // the normal thing to do — so only a root DESTINATION is contained.
-    if (/^(?:cp|mv|ln|install|rsync|scp)$/.test(tool)) {
-      const dest = destinationArg(words.slice(i + 1).map((w) => w.replace(/^['"]|['"]$/g, "")));
-      if (dest && underRoot(isAbsolute(dest) ? dest : resolve(worktree, dest))) return dest;
+    const argv = words.slice(i + 1).map((w) => w.replace(/^['"]|['"]$/g, ""));
+    const positional = argv.filter((a) => a.length > 0 && !a.startsWith("-"));
+    const inMainTree = underRoot(cwd);
+    const firstUnderRoot = (list: string[]): string | null => list.find((p) => underRoot(abs(p))) ?? null;
+
+    // Redirection into the main tree.
+    const redir = /(?:^|[^>\d])>>?\s*(['"]?)([^\s'"|;&]+)\1/.exec(seg);
+    if (redir?.[2] && underRoot(abs(redir[2]))) return redir[2];
+
+    // git forced onto the main tree by flag, from anywhere.
+    const forced =
+      /git\s+-C\s+(['"]?)([^\s'"]+)\1/.exec(seg) ??
+      /--git-dir=(['"]?)([^\s'"]+)\1/.exec(seg) ??
+      /GIT_WORK_TREE=(['"]?)([^\s'"]+)\1/.exec(seg);
+    if (forced?.[2] && underRoot(abs(forced[2].replace(/\/\.git$/, ""))) && MUTATING_GIT.test(seg)) return forced[0].trim();
+
+    // Every path argument is a target.
+    if (TARGET_ALL_TOOLS.test(tool)) {
+      const hit = firstUnderRoot(positional);
+      if (hit) return hit;
     }
-    if (tool === "dd" && new RegExp(`\\bof=['"]?(?:${pathAlt})`).test(segment)) return hit;
-    if (/^(?:sed|perl)$/.test(tool) && /(?:^|\s)-[a-zA-Z]*i/.test(segment)) return hit;
-    if (tool === "git" && /\bgit\s+(?:add|rm|mv|checkout|restore|reset|commit|stash|apply|am|rebase|merge|cherry-pick|revert|clean|switch|worktree|branch|tag)\b/.test(segment)) return hit;
-    // Python / Node file APIs opening a root path for writing.
-    if (new RegExp(`open\\(\\s*['"](?:${pathAlt})[^'"]*['"]\\s*,\\s*(?:mode\\s*=\\s*)?['"][^'"]*[wax+]`).test(segment)) return hit;
-    if (/\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|shutil\.(?:copy\w*|move|rmtree)|os\.(?:remove|rename|unlink|makedirs|mkdir|rmdir)|Path\([^)]*\)\.(?:write_text|write_bytes|unlink|mkdir|rmdir|touch))\s*\(/.test(segment)) return hit;
+    // Source → destination: only the destination writes.
+    if (DEST_TOOLS.test(tool)) {
+      const dest = destinationArg(argv);
+      if (dest && underRoot(abs(dest))) return dest;
+    }
+    if (tool === "dd") {
+      const of = /\bof=(['"]?)([^\s'"]+)\1/.exec(seg);
+      if (of?.[2] && underRoot(abs(of[2]))) return of[2];
+    }
+    if (/^(?:sed|perl)$/.test(tool) && /(?:^|\s)-[a-zA-Z]*i/.test(seg)) {
+      const hit = firstUnderRoot(positional);
+      if (hit) return hit;
+    }
+    // A mutating git verb: in the main checkout by cwd, or naming it by path.
+    if (tool === "git" && MUTATING_GIT.test(seg)) {
+      if (inMainTree) return seg.length > 60 ? `${seg.slice(0, 57)}...` : seg;
+      const hit = firstUnderRoot(positional);
+      if (hit) return hit;
+    }
+    // Python / Node file APIs writing to a path in the main tree.
+    // Single- and double-quoted runs are collected SEPARATELY: a shell
+    // `node -e "…'/abs/path'…"` nests one inside the other, and one pass over
+    // `['"]` pairs them off wrongly and loses the path.
+    const quoted = [
+      ...[...seg.matchAll(/'([^']*)'/g)].map((m) => m[1] ?? ""),
+      ...[...seg.matchAll(/"([^"]*)"/g)].map((m) => m[1] ?? ""),
+    ];
+    const openWrite = [...seg.matchAll(/open\(\s*['"]([^'"]+)['"]\s*,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+]/g)].map((m) => m[1] ?? "");
+    const openHit = firstUnderRoot(openWrite);
+    if (openHit) return openHit;
+    if (WRITE_API.test(seg)) {
+      const hit = firstUnderRoot(quoted);
+      if (hit) return hit;
+    }
   }
   return null;
 }

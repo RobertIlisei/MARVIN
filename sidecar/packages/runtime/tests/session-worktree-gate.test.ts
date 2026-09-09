@@ -69,9 +69,13 @@ describe("sessionWorktreePolicy (pure)", () => {
   it("shell that names the main tree confirms; plain shell falls through", () => {
     expect(sessionWorktreePolicy("Bash", { command: "npm test" }, wt, root)).toBeNull();
     expect(sessionWorktreePolicy("Bash", { command: `cd '${wt}' && npm test` }, wt, root)).toBeNull();
-    expect(sessionWorktreePolicy("Bash", { command: `cd ${root} && git status` }, wt, root)?.decision).toBe("confirm");
+    // Addendum 5 — a `cd` into the main checkout is not itself a write; what
+    // runs there decides. Reading is the common case (graph queries).
+    expect(sessionWorktreePolicy("Bash", { command: `cd ${root} && git status` }, wt, root)).toBeNull();
+    expect(sessionWorktreePolicy("Bash", { command: `cd ${root} && git checkout main` }, wt, root)?.decision).toBe("confirm");
     expect(sessionWorktreePolicy("Bash", { command: `git -C ${root} rebase main` }, wt, root)?.decision).toBe("confirm");
-    expect(sessionWorktreePolicy("Bash", { command: `GIT_WORK_TREE=${root} git status` }, wt, root)?.decision).toBe("confirm");
+    expect(sessionWorktreePolicy("Bash", { command: `GIT_WORK_TREE=${root} git status` }, wt, root)).toBeNull();
+    expect(sessionWorktreePolicy("Bash", { command: `GIT_WORK_TREE=${root} git reset --hard` }, wt, root)?.decision).toBe("confirm");
     // Addendum 3 — reading the shared checkout is not contained; writing into it is.
     expect(sessionWorktreePolicy("Bash", { command: `cat ${root}/README.md` }, wt, root)).toBeNull();
     expect(sessionWorktreePolicy("Bash", { command: `echo hi > ${root}/notes.md` }, wt, root)?.decision).toBe("confirm");
@@ -87,6 +91,12 @@ describe("sessionWorktreePolicy (pure)", () => {
       `git diff HEAD -- ${root}/docs/x.md`,
       `ls -la "${root}/apps"`,
       `node -e "require('fs').readFileSync('${root}/package.json')"`,
+      // The reported case: a graph query, which must run where graphify-out is.
+      `cd ${root} && $(cat graphify-out/.graphify_python) -c "import json; from pathlib import Path; print(json.loads(Path('graphify-out/.graphify_cached.json').read_text(encoding='utf-8')))"`,
+      `cd ${root} && cat package.json`,
+      `cd ${root} && git log --oneline -5`,
+      `cd ${root} && ls docs | head`,
+      `cd ${root}`,
     ];
     for (const c of reads) expect(mainTreeRedirect(c, root, wt), c).toBeNull();
     // The reported false positive: copying a spec file FROM the main
@@ -123,13 +133,24 @@ describe("sessionWorktreePolicy (pure)", () => {
       `node -e "require('fs').writeFileSync('${root}/x.json','1')"`,
       `tee ${root}/x.log`,
       `npm test && rm ${root}/x`,
+      // Addendum 5 — writes run FROM the main checkout, by relative path.
+      `cd ${root} && rm -rf build`,
+      `cd ${root} && git checkout main`,
+      `cd ${root} && git reset --hard HEAD~1`,
+      `cd ${root} && echo x > notes.md`,
+      `cd ${root} && sed -i '' 's/a/b/' README.md`,
+      `cd ${root} && python3 -c "open('out.json','w').write('1')"`,
+      `cd ${root} && mkdir newdir`,
+      `cd ${root} && cp ./a.txt ./b.txt`,
     ];
     for (const c of writes) expect(mainTreeRedirect(c, root, wt), c).not.toBeNull();
   });
 
   it("mainTreeRedirect names the fragment and ignores worktree paths", () => {
-    expect(mainTreeRedirect(`cd ${root}`, root, wt)).toBe(`cd ${root}`);
+    expect(mainTreeRedirect(`rm ${root}/x`, root, wt)).toBe(`${root}/x`);
     expect(mainTreeRedirect(`ls ${wt}/src`, root, wt)).toBeNull();
+    // Coming back to the worktree ends the main-tree scope.
+    expect(mainTreeRedirect(`cd ${root} && cat a.txt && cd ${wt} && rm b.txt`, root, wt)).toBeNull();
     expect(mainTreeRedirect(`ls ${root}/.marvin/worktrees/tab-other`, root, wt)).toBeNull();
     expect(mainTreeRedirect("echo hello", root, wt)).toBeNull();
     // A prefix-sibling of the root is not the root.
@@ -149,7 +170,7 @@ describe("session-worktree gate — through makeAutoModeLogger", () => {
 
   it("confirms shell that names the main tree — in auto mode, with the UI", async () => {
     const g = gate("worktree");
-    const pending = g("Bash", { command: `cd ${root} && npm test` }, meta("u3"));
+    const pending = g("Bash", { command: `cd ${root} && rm -rf build` }, meta("u3"));
     await new Promise((r) => setTimeout(r, 10));
     expect(opened.map((o) => [o.toolUseId, o.toolName])).toEqual([["u3", "Bash"]]);
     expect(opened[0]?.reason).toMatch(/main checkout/);
@@ -162,7 +183,7 @@ describe("session-worktree gate — through makeAutoModeLogger", () => {
 
   it("denies rather than runs when no UI is attached", async () => {
     const g = gate("worktree", false);
-    const r = decided(await g("Bash", { command: `git -C ${root} status` }, meta("u4")));
+    const r = decided(await g("Bash", { command: `git -C ${root} reset --hard` }, meta("u4")));
     expect(r.behavior).toBe("deny");
   });
 

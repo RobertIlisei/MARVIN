@@ -107,3 +107,15 @@ User, after addendum 3 shipped: *"still appears when switching sessions."* Adden
 The rule is now one line in `MARVINLogic/ReplayBanner.swift` and pinned by tests: **only an error that is the last terminal event still holds**; a later start or completion supersedes it. Replay follows it, `attachLive` clears the banner when it confirms a live turn, and an **interrupted** turn banners nothing at all — the "cut off before it finished" chip with Resume already says it, and two banners in different words for one event was the confusion being reported. `turn.error` on the wire now carries `interrupted` through to the client (`ChatSessionEvent.turnError`, `TurnError`).
 
 Tests: Swift `replay-banner` (7 assertions: trailing-only, newest-wins, interrupted-silent); 776 assertions total.
+
+## Addendum 5 (2026-09-09, night) — `cd` is not a write, and the graph lives in the main checkout
+
+User, on a confirm for a read-only graph query while the tab was on **auto**: *"why do we still get this? marvin is on Auto."* The transcript shows fourteen such confirms in four minutes, one per graph query, each on a command of the shape `cd <root> && $(cat graphify-out/.graphify_python) -c "…read…"`.
+
+Two causes, both fixed here.
+
+**A directory change was treated as a write.** `cd <root>`, `git -C <root>`, `--git-dir` and `GIT_WORK_TREE` confirmed unconditionally, on the reasoning that they move the whole command into the main tree. They do — but *what runs there* is what matters, and the model's reason for going there is almost always to read. `mainTreeRedirect` now tracks the effective cwd across `&&` / `;` / `|` segments, resolves relative paths against it, and confirms only for a write-shaped command whose target lands in the main tree: a redirection, a mutating shell tool, an in-place `sed`/`perl`, a **mutating** git verb (`checkout`, `reset`, `commit`, `rebase`, …, never `log`/`status`/`diff`), a `cp`/`mv`-style destination, `dd`'s `of=`, or a Python/Node file API opening for write. A mutating git verb run *from* the main checkout confirms even with no path, which is the ADR-0102 collision this gate exists for. `Edit`/`Write`/`NotebookEdit` into the main tree remain a hard **deny**, so the model's ordinary way of changing a file is still contained.
+
+**The graph was only in the main checkout.** `graphify-out/` is git-ignored, so a fresh worktree has none, and every graph query had to leave the tab's tree. It joins the auto-detected symlink set — not project knowledge: MARVIN's own `graphify-bridge` already reads `<workDir>/graphify-out`, and the model reaches for the same directory by relative path. New session worktrees get it linked; existing ones rely on the `cd` rule above.
+
+Tests: `session-worktree-gate` grows five read shapes that now fall through (including the reported command verbatim) and eight write shapes run *from* the main checkout that still confirm; the four "`cd` alone confirms" expectations are inverted. A nested-quote bug found by the suite: `node -e "…'/abs/path'…"` needs single- and double-quoted runs collected separately, or the path is lost. 1188 sidecar tests green.

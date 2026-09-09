@@ -70,7 +70,19 @@ function safeRelative(entry: unknown): string | null {
  * worktrees share stale artefacts. A project overrides all of this in
  * `.marvin/worktree.json`.
  */
-export const DETECTABLE_DEPENDENCY_DIRS = ["node_modules", ".venv", "venv", ".pnpm-store", "vendor", ".yarn/cache", ".gradle"];
+export const DETECTABLE_DEPENDENCY_DIRS = [
+  "node_modules",
+  ".venv",
+  "venv",
+  ".pnpm-store",
+  "vendor",
+  ".yarn/cache",
+  ".gradle",
+  // MARVIN's own graph output. `graphify-bridge` already reads it from
+  // `workDir`, but the MODEL reaches for `graphify-out/…` by relative path,
+  // and an absent one sent it back to the main checkout on every query.
+  "graphify-out",
+];
 
 /** Ignored files a fresh worktree almost always needs: local environment. */
 export const DETECTABLE_COPY_PATTERNS = [".env", ".env.*", ".envrc", "*.local"];
