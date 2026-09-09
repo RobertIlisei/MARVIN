@@ -15,7 +15,10 @@ import { buildResumeRecord, findInterruptedSessions, markInterruptedAtBoot, scan
 import { readSessionMeta, upsertSessionMeta } from "../src/session-meta";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
 
-const started = (turnId: string, at = "2026-09-08T23:10:07.205Z") =>
+// A cut-off turn counts as interrupted only inside a recent window (addendum
+// 2), so the default start time is "a minute ago", never a fixed date.
+const RECENT_START = new Date(Date.now() - 60_000).toISOString();
+const started = (turnId: string, at = RECENT_START) =>
   JSON.stringify({ type: "turn.started", at, marvinSessionId: "s", projectId: "p", model: "claude-sonnet-5", advisorModel: "claude-fable-5-1", runtimeMode: "opus", personality: "ultron", permissionStrategy: "auto", thinkingMode: "max", turnId });
 const completed = (at = "2026-09-08T23:11:36.111Z") => JSON.stringify({ type: "turn.completed", at, durationMs: 1, costUsd: 0.1, tokenUsage: null, sessionId: "sdk" });
 const user = (message: string) => JSON.stringify({ type: "turn.user", at: "2026-09-08T23:10:00.000Z", message });
@@ -86,6 +89,19 @@ describe("recovery on disk", () => {
     } finally {
       endLiveTurn(live, { event: "turn.completed", data: {} });
     }
+  });
+
+  // ADR-0107 addendum 2 — a dangling turn.started from months ago is not an
+  // interruption anyone resumes; the first boot with the marker flagged nine.
+  it("ignores cut-off turns older than the window, and the boot marker leaves them alone", () => {
+    const old = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const startedOld = JSON.stringify({ ...JSON.parse(started("t-old")), at: old });
+    transcript("ancient", [user("long ago"), startedOld]);
+    transcript("fresh", [user("just now"), started("t-fresh")]);
+    expect(findInterruptedSessions(projectId).map((s) => s.marvinSessionId)).toEqual(["fresh"]);
+    expect(findInterruptedSessions(projectId, { maxAgeMs: 365 * 24 * 3600 * 1000 }).map((s) => s.marvinSessionId).sort()).toEqual(["ancient", "fresh"]);
+    expect(markInterruptedAtBoot()).toEqual({ marked: 1 });
+    expect(readFileSync(marvinPaths.sessionFile(projectId, "ancient"), "utf8")).not.toContain('"interrupted":true');
   });
 
   it("builds a resume record from the meta's posture and tree", () => {

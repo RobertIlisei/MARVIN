@@ -28,6 +28,13 @@ interface PendingEntry {
   /** ADR-0107 — what is waiting, for the watch UI. */
   toolName: string;
   registeredAt: number;
+  /**
+   * ADR-0107 addendum 2 — the exact `confirm.request` payload the turn bus
+   * carried, kept so a client that attaches AFTER the confirm was raised
+   * (the user switched to this tab late) can be shown the same sheet.
+   * Attached by the orchestrator right after it emits the event.
+   */
+  payload?: unknown;
 }
 
 /** ADR-0107 — one pending confirm as the watch feed reports it. */
@@ -107,6 +114,28 @@ export function listPendingConfirms(turnId: string): PendingConfirmSummary[] {
       since: new Date(e.registeredAt).toISOString(),
     }))
     .sort((a, b) => a.since.localeCompare(b.since));
+}
+
+/** Keep the wire payload beside the resolver (no-op when nothing is pending). */
+export function attachPendingPayload(turnId: string, toolUseId: string, payload: unknown): boolean {
+  const entry = registry.get(turnId)?.get(toolUseId);
+  if (!entry) return false;
+  entry.payload = payload;
+  return true;
+}
+
+/**
+ * The still-pending confirms of a turn as `confirm.request` payloads, oldest
+ * first — what `/api/chat/resume` replays to a late attacher. Entries with
+ * no payload (registered by a path that never announced) are skipped.
+ */
+export function listPendingConfirmPayloads(turnId: string): unknown[] {
+  const bucket = registry.get(turnId);
+  if (!bucket) return [];
+  return [...bucket.values()]
+    .filter((e) => e.payload !== undefined)
+    .sort((a, b) => a.registeredAt - b.registeredAt)
+    .map((e) => e.payload);
 }
 
 export function getPendingOriginalInput(

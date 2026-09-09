@@ -17,6 +17,7 @@
 import { randomUUID } from "node:crypto";
 import { buildProjectContext } from "@marvin/project-context";
 import { readAuthConfig } from "@marvin/runtime/auth-config";
+import { attachPendingPayload } from "@marvin/runtime/confirm-registry";
 import { pollOpenRouterBalance, recordTurnCost } from "@marvin/runtime/cost-tracker";
 import { calculateEstimatedCost } from "@marvin/runtime/models";
 import {
@@ -340,6 +341,9 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
         payload,
       });
       emitTurnEvent(liveTurn, "confirm.request", payload);
+      // ADR-0107 addendum 2 — keep the payload with the pending entry so a
+      // tab attaching later (`/api/chat/resume`) gets the sheet it missed.
+      attachPendingPayload(turnId, payload.toolUseId, payload);
       // ADR-0107 — a project-wide "needs you" signal, so a tab that is not on
       // screen can still light up. AskUserQuestion rides the same channel.
       announceProjectEvent({

@@ -111,9 +111,23 @@ function postureFrom(started: Record<string, unknown> | null): SessionPosture | 
   };
 }
 
-/** Sessions of a project whose last turn was cut off and is not running now. */
-export function findInterruptedSessions(projectId: string, opts: { includeMarked?: boolean } = {}): InterruptedSession[] {
+/**
+ * ADR-0107 addendum 2 — how old a cut-off turn may be and still count as
+ * "interrupted". The first boot with the marker flagged transcripts whose
+ * dangling `turn.started` dated from months earlier (every restart since
+ * had left them that way), so the Sessions pane offered Resume on nine
+ * sessions nobody would resume. Same window as the watch's recent set.
+ */
+export const INTERRUPTED_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+
+/** Sessions of a project whose last turn was cut off RECENTLY and is not running now. */
+export function findInterruptedSessions(
+  projectId: string,
+  opts: { includeMarked?: boolean; maxAgeMs?: number; now?: number } = {},
+): InterruptedSession[] {
   const out: InterruptedSession[] = [];
+  const now = opts.now ?? Date.now();
+  const maxAge = opts.maxAgeMs ?? INTERRUPTED_MAX_AGE_MS;
   for (const s of listSessions(projectId)) {
     const live = getLiveTurn(s.sessionId);
     if (live && !live.ended) continue;
@@ -127,6 +141,8 @@ export function findInterruptedSessions(projectId: string, opts: { includeMarked
     }
     const cutOff = scan.newest === "turn.started" || (scan.newest === "turn.error" && scan.markedInterrupted && opts.includeMarked === true);
     if (!cutOff || !scan.started) continue;
+    const startedAtMs = typeof scan.started.at === "string" ? Date.parse(scan.started.at) : Number.NaN;
+    if (!Number.isFinite(startedAtMs) || now - startedAtMs > maxAge) continue;
     const meta = readSessionMeta(projectId, s.sessionId);
     const cwdPresent = meta ? resolveSessionCwd(meta).present : true;
     out.push({

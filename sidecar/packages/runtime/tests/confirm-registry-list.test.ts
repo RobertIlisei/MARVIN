@@ -6,7 +6,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  attachPendingPayload,
   clearTurnConfirms,
+  listPendingConfirmPayloads,
   listPendingConfirms,
   registerPendingConfirm,
   resolvePendingConfirm,
@@ -25,6 +27,24 @@ describe("listPendingConfirms", () => {
     expect(listPendingConfirms(turn).map((p) => p.toolUseId)).toEqual(["u2"]);
     clearTurnConfirms(turn);
     expect(listPendingConfirms(turn)).toEqual([]);
+  });
+
+  // ADR-0107 addendum 2 — a late attacher gets the sheet it missed.
+  it("keeps the confirm.request payload for replay, oldest first, gone once resolved", () => {
+    const turn = "cr-replay-1";
+    registerPendingConfirm(turn, "u1", () => {}, { command: "ls" }, 0, { toolName: "Bash" });
+    registerPendingConfirm(turn, "u2", () => {}, {}, 0, { toolName: "AskUserQuestion" });
+    registerPendingConfirm(turn, "u3", () => {}, {}, 0, { toolName: "Edit" });
+    expect(listPendingConfirmPayloads(turn)).toEqual([]);
+    expect(attachPendingPayload(turn, "u2", { turnId: turn, toolUseId: "u2", toolName: "AskUserQuestion", input: {}, reason: "choose" })).toBe(true);
+    expect(attachPendingPayload(turn, "u1", { turnId: turn, toolUseId: "u1", toolName: "Bash", input: { command: "ls" }, reason: "r" })).toBe(true);
+    expect(attachPendingPayload(turn, "nope", {})).toBe(false);
+    // u3 never announced → not replayed; order is registration order, not attach order.
+    expect(listPendingConfirmPayloads(turn).map((p) => (p as { toolUseId: string }).toolUseId)).toEqual(["u1", "u2"]);
+    resolvePendingConfirm(turn, "u1", { behavior: "allow", updatedInput: {} });
+    expect(listPendingConfirmPayloads(turn).map((p) => (p as { toolUseId: string }).toolUseId)).toEqual(["u2"]);
+    clearTurnConfirms(turn);
+    expect(listPendingConfirmPayloads(turn)).toEqual([]);
   });
 
   it("an unnamed confirm still lists, as a generic tool", () => {

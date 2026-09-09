@@ -1,3 +1,4 @@
+import { listPendingConfirmPayloads } from "@marvin/runtime/confirm-registry";
 import { getLiveTurn } from "@marvin/runtime/turn-registry";
 import type { NextRequest } from "next/server";
 
@@ -18,6 +19,12 @@ export const dynamic = "force-dynamic";
  *     emit an `turn.completed`/`turn.error` catch-up and close.
  *   - If there's no known live turn at all: respond 204 so the client
  *     knows to fall back to loading the session transcript from disk.
+ *   - ADR-0107 addendum 2: confirms still PENDING on the turn are replayed
+ *     as `confirm.request` right after `resume.attached`. The bus only
+ *     carries future events and the transcript replay treats every stored
+ *     confirm as settled, so a tab the user switched to late showed no
+ *     sheet and the turn sat until the auto-deny (or forever, for
+ *     AskUserQuestion, which has no timer).
  */
 export async function GET(req: NextRequest) {
   const marvinSessionId = req.nextUrl.searchParams.get("marvinSessionId")?.trim();
@@ -76,6 +83,8 @@ export async function GET(req: NextRequest) {
         return;
       }
 
+      // Subscribe BEFORE replaying so a confirm resolved between the two
+      // steps still reaches the client as a later event, never as a gap.
       const onEvent = (e: { event: string; data: unknown }) => {
         send(e.event, e.data);
         if (e.event === "turn.completed" || e.event === "turn.error") {
@@ -88,6 +97,9 @@ export async function GET(req: NextRequest) {
         }
       };
       live.bus.on("event", onEvent);
+      for (const payload of listPendingConfirmPayloads(live.turnId)) {
+        send("confirm.request", payload);
+      }
 
       // Detach this listener if the client goes away again — without
       // aborting the underlying SDK work.

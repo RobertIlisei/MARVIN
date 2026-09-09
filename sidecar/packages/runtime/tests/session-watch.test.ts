@@ -11,9 +11,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { registerPendingConfirm, clearTurnConfirms } from "../src/confirm-registry";
+import { clearTurnConfirms, registerPendingConfirm } from "../src/confirm-registry";
 import { recordTurnCost } from "../src/cost-tracker";
 import { writePlanState } from "../src/plan-state";
+import { __resetActivityForTests, setActivity } from "../src/session-activity";
 import { upsertSessionMeta } from "../src/session-meta";
 import {
   __resetSessionDiffMemoForTests,
@@ -21,7 +22,6 @@ import {
   deriveSessionState,
   sessionDiff,
 } from "../src/session-watch";
-import { __resetActivityForTests, setActivity } from "../src/session-activity";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
 import { createWorktree } from "../src/worktrees";
 
@@ -35,6 +35,18 @@ describe("deriveSessionState", () => {
     expect(deriveSessionState({ live: false, pending: 0 })).toBe("idle");
     // A pending confirm on a turn that is no longer live cannot exist; idle.
     expect(deriveSessionState({ live: false, pending: 3 })).toBe("idle");
+  });
+});
+
+describe("deriveSessionState", () => {
+  it("an interrupted last turn older than the window reads as idle; a recent one as interrupted", () => {
+    const now = Date.parse("2026-09-09T12:00:00Z");
+    const recent = new Date(now - 3600 * 1000).toISOString();
+    const stale = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
+    expect(deriveSessionState({ live: false, pending: 0, lastOutcome: "interrupted", lastStartedAt: recent, now })).toBe("interrupted");
+    expect(deriveSessionState({ live: false, pending: 0, lastOutcome: "interrupted", lastStartedAt: stale, now })).toBe("idle");
+    expect(deriveSessionState({ live: false, pending: 0, lastOutcome: "interrupted" })).toBe("interrupted");
+    expect(deriveSessionState({ live: true, pending: 1, lastOutcome: "interrupted", lastStartedAt: stale, now })).toBe("awaiting-you");
   });
 });
 
