@@ -669,7 +669,17 @@ export function mergeWorktree(
   slug: string,
   opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
 ): MergeOutcome {
-  const w = reconcileWorktrees(workDir).find((r) => r.slug === slug);
+  // Reconcile only the branch being merged.
+  //
+  // This used to call `reconcileWorktrees` and pick one row out of the
+  // result, which runs several git subprocesses PER worktree. Measured on a
+  // real project with 12 of them: **1,159–1,221 ms**, against ~100 ms for the
+  // one that matters. Every one of those is `execFileSync` inside a route
+  // handler, so it is not merely slow — it holds Node's single event loop, and
+  // the session feed, chat streaming and every other request queue behind it.
+  // That is what "MARVIN becomes unresponsive when I merge" was.
+  const stored = listWorktrees(workDir).find((r) => r.slug === slug);
+  const w = stored ? reconcileOne(workDir, stored, checkoutPaths(workDir)) : undefined;
   if (!w) return { ok: false, message: `No worktree named ${slug}.`, slug, branch: "" };
   const fail = (message: string): MergeOutcome => ({ ok: false, message, slug, branch: w.branch });
   if (w.state === "running") return fail(`${w.branch} is still being built by its implementer.`);

@@ -497,6 +497,22 @@ final class ChatPreviewModel {
         }
     }
 
+    /// The outcome of an action whose own surface disappears when it
+    /// finishes — closing a tab is the only one today.
+    ///
+    /// A merge on close said nothing at all: the response carrying "Merged
+    /// marvin/tab/… into development (3 commits, 12 files). Not pushed." was
+    /// discarded at the call site, and the tab that would have shown it is
+    /// gone by then. Only a thrown error surfaced, so a merge that WORKED and
+    /// a merge that never ran looked identical (user, 2026-09-10: *"i can't
+    /// see any message that it worked, or failed, if it was done or not"*).
+    var transientNotice: String? = nil
+
+    /// True while a tab close is talking to the sidecar. A merge is seconds
+    /// of synchronous git, and without this the dialog dismissed instantly
+    /// and nothing said anything was happening.
+    var isClosingTab: Bool = false
+
     /// Phase 2h — true while we're fetching the transcript JSON.
     /// Surfaces a thin "loading" affordance so the user doesn't
     /// see an empty list and assume the project has no history.
@@ -2081,6 +2097,24 @@ struct ChatPreviewView: View {
             if let err = model.lastError {
                 errorBanner(err)
             }
+            if model.isClosingTab {
+                // A confirmation dialog dismisses the instant a button is
+                // tapped, so the in-flight signal cannot live there. A merge
+                // is seconds of synchronous git; without this the app just
+                // goes quiet.
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Closing the tab and folding its branch in…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(MarvinTheme.elevated)
+            } else if let notice = model.transientNotice {
+                noticeBanner(notice)
+            }
             // One clean, OPAQUE tray for every contextual strip, docked above
             // the input with a hard top border. Each strip is separated, so
             // session controls (Save to memory / Start fresh), the plan
@@ -2605,9 +2639,17 @@ struct ChatPreviewView: View {
             return
         }
         Task { @MainActor in
+            model.isClosingTab = true
+            defer { model.isClosingTab = false }
             do {
-                _ = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action == .merge)
+                let out = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action == .merge)
                 model.closeTab(sid)
+                // Say what happened. The tab that asked is gone by now, so the
+                // message lands on whichever session is on screen next — which
+                // is where the user is looking.
+                if let message = out.message, !message.isEmpty {
+                    model.transientNotice = message
+                }
             } catch {
                 model.lastError = "Could not close the tab's worktree: \(error.localizedDescription)"
             }
@@ -3910,6 +3952,41 @@ struct ChatPreviewView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The quiet sibling of `errorBanner`: something finished, and it worked.
+    ///
+    /// Dismissible, and it clears itself — a result is worth a glance, not a
+    /// permanent row. Kept visually distinct from the error banner so "merged"
+    /// can never be mistaken for "failed".
+    private func noticeBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(4)
+            Spacer()
+            Button {
+                model.transientNotice = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(MarvinTheme.elevated)
+        .task(id: message) {
+            // Long enough to read a merge summary, short enough that it is
+            // never mistaken for state.
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            if model.transientNotice == message { model.transientNotice = nil }
+        }
     }
 
     private func errorBanner(_ message: String) -> some View {
