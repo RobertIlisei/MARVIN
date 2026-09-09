@@ -107,3 +107,62 @@ describe("loadSessionTail", () => {
     expect(tailed?.record.projectId).toBe(projectId);
   });
 });
+
+
+// `confirm.decision` — the half of the confirm pair that was never written.
+//
+// The type has been declared since the confirm gate shipped, and a survey of a
+// real project's transcripts found **zero** records against 14 requests in one
+// evening. The cost surfaced when the user asked whether background sessions
+// were really working: the transcripts could say a question had been asked and
+// not whether it was ever answered. These pin the record's shape, because a
+// half-written pair reads as an answer.
+
+describe("confirm.decision records", () => {
+  it("round-trips beside the request that asked", () => {
+    const sid = "s-confirm";
+    appendSessionTurn(projectId, sid, {
+      type: "confirm.request",
+      at: "2026-09-10T00:00:00.000Z",
+      payload: {
+        turnId: "t1",
+        toolUseId: "u1",
+        toolName: "AskUserQuestion",
+        input: {},
+        reason: "which approach?",
+      },
+    } as SessionTurn);
+    appendSessionTurn(projectId, sid, {
+      type: "confirm.decision",
+      at: "2026-09-10T00:04:00.000Z",
+      turnId: "t1",
+      toolUseId: "u1",
+      decision: "allow",
+    } as SessionTurn);
+
+    const turns = loadSession(projectId, sid)?.turns ?? [];
+    expect(turns).toHaveLength(2);
+    const decision = turns[1] as { type: string; turnId: string; toolUseId: string; decision: string };
+    expect(decision.type).toBe("confirm.decision");
+    // Pairing is by (turnId, toolUseId) — the same key the registry resolves
+    // on, so a reader can compute how long a session waited on a person.
+    expect(decision.turnId).toBe("t1");
+    expect(decision.toolUseId).toBe("u1");
+    expect(decision.decision).toBe("allow");
+  });
+
+  it("keeps a deny's message", () => {
+    const sid = "s-confirm-deny";
+    appendSessionTurn(projectId, sid, {
+      type: "confirm.decision",
+      at: "2026-09-10T00:00:00.000Z",
+      turnId: "t2",
+      toolUseId: "u2",
+      decision: "deny",
+      message: "not on the default branch",
+    } as SessionTurn);
+    const t = (loadSession(projectId, sid)?.turns ?? [])[0] as { message?: string; decision?: string };
+    expect(t.decision).toBe("deny");
+    expect(t.message).toBe("not on the default branch");
+  });
+});

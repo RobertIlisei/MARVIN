@@ -2,6 +2,7 @@ import {
   getPendingOriginalInput,
   resolvePendingConfirm,
 } from "@marvin/runtime/confirm-registry";
+import { appendSessionTurn } from "@marvin/runtime/session";
 import { announceProjectEvent, getLiveTurnByTurnId } from "@marvin/runtime/turn-registry";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -75,6 +76,34 @@ export async function POST(req: NextRequest) {
   // tab that answered.
   const owner = getLiveTurnByTurnId(turnId);
   if (owner) {
+    // Record what was decided, beside the `confirm.request` that asked.
+    //
+    // `confirm.decision` has been a declared transcript event since the
+    // confirm gate shipped and **nothing has ever written one** — 0 records
+    // across every transcript of a real project, against 14 requests in a
+    // single evening. The consequence showed up the moment it was needed: the
+    // user asked whether background sessions were really working, and the
+    // transcripts could say a question had been ASKED but not whether it was
+    // ever answered, nor how long it waited. A half-written pair is worse than
+    // no pair, because it reads as an answer.
+    //
+    // Written before the announce so a crash between the two loses the
+    // notification rather than the record. Failure here must not fail the
+    // decision: the tool call is already resolved and the turn is moving.
+    try {
+      appendSessionTurn(owner.projectId, owner.marvinSessionId, {
+        type: "confirm.decision",
+        at: new Date().toISOString(),
+        turnId,
+        toolUseId,
+        decision,
+        ...(decision === "deny" && typeof body.message === "string" && body.message.trim()
+          ? { message: body.message.trim().slice(0, 500) }
+          : {}),
+      });
+    } catch {
+      /* the decision stands; only the record is lost */
+    }
     announceProjectEvent({
       event: "confirm.resolved",
       data: { marvinSessionId: owner.marvinSessionId, projectId: owner.projectId, turnId, toolUseId, decision },

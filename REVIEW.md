@@ -145,6 +145,33 @@ important signal.
   POSTs would reach the handler. A new multipart route without this
   guard is a 🔴 Important finding. See
   [ADR-0009](./docs/decisions/0009-file-uploads-from-os.md).
+- **Project-controlled files must not choose what runs.** A file inside the
+  user's repository — `.marvin/worktree.json`, `.marvin/plugins.json`,
+  `.marvin/skills.json`, `.worktreeinclude`, anything else MARVIN reads from
+  `workDir` — is written by whoever wrote the repository, and cloning a
+  repository must never be enough to execute code. A new reader whose values
+  reach a **subprocess environment**, an **argv**, a **path that gets
+  executed**, or an **interpreter option** is a 🔴 Important finding unless it
+  (a) validates at the read boundary against an allow-shape, (b) refuses the
+  names/values that select code — `PATH`, the `DYLD_*` / `LD_*` loader
+  families, `NODE_OPTIONS`, `PYTHONPATH`, `GIT_SSH_COMMAND` and friends — and
+  MARVIN's own `CLAUDE_*` / `MARVIN_*` / `ANTHROPIC_*` prefixes, and (c) is
+  applied so that MARVIN-owned values still win if that list is ever wrong.
+  Caught exactly this way on the `env` map's own pre-landing review; see
+  [ADR-0110](./docs/decisions/0110-worktrees-isolate-the-filesystem-not-the-machine.md).
+- **A declared record that nothing writes.** A new event added to
+  `SessionTurn`, `ProjectEvent`, or any persisted union must have a writer in
+  the same change, and a test that round-trips it. `confirm.decision` was
+  declared when the confirm gate shipped and had **zero** records across every
+  transcript of a real project — so the transcripts could say a question had
+  been asked and not whether it was ever answered. A half-written pair is
+  worse than no pair: it reads as an answer.
+- **Isolation claims are scoped to what they isolate.** A change that says
+  "sessions are isolated" must say by what mechanism and therefore what it
+  does NOT cover. A git worktree isolates the working tree and the branch;
+  the Docker daemon, host ports, databases, global caches and anything keyed
+  on `$HOME` stay shared. Shipping the claim without the boundary is how three
+  tabs came to share one database container.
 - **Hardcoded model identifiers** (`claude-opus-4-7` in UI strings or
   headers). Must read from `executorModel` / `advisorModel` state, not
   inline literals. The `<BranchBadge>`-era stale "model: claude-opus-4-7"
