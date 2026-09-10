@@ -387,9 +387,21 @@ struct WorktreeEntry: Codable, Equatable, Identifiable {
     let dirty: Bool
     let checkoutPresent: Bool
     let mergedInto: String?
+    /// ISO date of the branch tip — the section sorts on it, newest first.
+    let lastCommitAt: String?
+    /// Lines added / removed against the base; only sent for unmerged work.
+    let added: Int?
+    let removed: Int?
 
     /// The deliverable: committed, unmerged work waiting on the user.
     var isReady: Bool { state == "ready" }
+    /// An open chat tab's branch — decided at tab close, never folded behind it.
+    var isSession: Bool { state == "session" }
+    /// "+12 −3", when the server measured it.
+    var diffBadge: String? {
+        guard let added, let removed, added + removed > 0 else { return nil }
+        return "+\(added) −\(removed)"
+    }
     /// Spent — reclaimable with nothing to lose.
     var isSpent: Bool { (state == "empty" || state == "merged") && !dirty }
 
@@ -437,6 +449,66 @@ struct WorktreeMergeAllResponse: Codable, Equatable {
     let stopped: Stopped?
     let skipped: [Skipped]?
     let message: String?
+    let error: String?
+}
+
+/// What "Prepare MR" did: one squash commit on an `mr/…` branch, every fold
+/// and every skip named, and the push / merge-request outcome when asked.
+struct WorktreePrepareMRResponse: Codable, Equatable {
+    struct Pushed: Codable, Equatable {
+        let remote: String
+        let target: String
+        let mergeRequest: Bool
+        let url: String?
+    }
+    let ok: Bool?
+    let branch: String?
+    let commit: String?
+    let message: String?
+    let merged: [WorktreeMergeAllResponse.Merged]?
+    let stopped: WorktreeMergeAllResponse.Stopped?
+    let skipped: [WorktreeMergeAllResponse.Skipped]?
+    let pushed: Pushed?
+    let summary: String?
+    let error: String?
+}
+
+/// ADR-0111 — the dry-run verdict for one finished branch against the
+/// current branch: clean, or the files that would conflict; and how far
+/// behind the target the branch sits.
+struct IntegrationPreviewRow: Codable, Equatable, Identifiable {
+    var id: String { slug }
+    let slug: String
+    let branch: String
+    let sessionId: String?
+    let task: String
+    let state: String
+    let commits: Int
+    let added: Int
+    let removed: Int
+    let behind: Int
+    /// "clean" | "conflict" | "unknown"
+    let verdict: String
+    let conflicts: [String]
+    let skipReason: String?
+
+    var isConflict: Bool { verdict == "conflict" }
+    /// Short human verdict for a row: "clean", "behind by 2", "conflicts in a.ts, b.ts".
+    var verdictLabel: String {
+        if isConflict {
+            let names = conflicts.prefix(3).joined(separator: ", ")
+            return "conflicts in \(names)\(conflicts.count > 3 ? " +\(conflicts.count - 3)" : "")"
+        }
+        if verdict == "unknown" { return "preview unavailable" }
+        return behind > 0 ? "clean · behind by \(behind)" : "clean"
+    }
+}
+
+struct IntegrationPreviewResponse: Codable, Equatable {
+    let target: String?
+    let targetHead: String?
+    let previewAvailable: Bool?
+    let rows: [IntegrationPreviewRow]?
     let error: String?
 }
 

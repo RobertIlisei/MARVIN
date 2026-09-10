@@ -178,7 +178,7 @@ struct SessionModePopover: View {
     private func actionLabel(_ a: TabCloseDecision.Action) -> String {
         switch a {
         case .merge: return "Merge & switch"
-        case .keepBranch: return "Keep branch & switch"
+        case .keepBranch: return "Keep for integration & switch"
         case .discard: return "Discard & switch"
         }
     }

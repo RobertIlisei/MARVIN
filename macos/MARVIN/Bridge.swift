@@ -402,6 +402,17 @@ final class MarvinBridge {
     private(set) var chatTabRequest: ChatTabRequest? = nil
     func requestChatTab(_ request: ChatTabRequest) { chatTabRequest = request }
     func clearChatTabRequest() { chatTabRequest = nil }
+    /// ADR-0111 — a Source Control action asked for from outside that pane
+    /// (the Sessions pane's integration footer). Same one-shot shape.
+    enum SourceControlRequest: Equatable {
+        case prepareMR
+    }
+    private(set) var sourceControlRequest: SourceControlRequest? = nil
+    func requestSourceControl(_ request: SourceControlRequest) {
+        revealLeftTab("sourceControl")
+        sourceControlRequest = request
+    }
+    func clearSourceControlRequest() { sourceControlRequest = nil }
 
     func triggerCommandPalette() { commandPaletteTriggerCount &+= 1 }
     func triggerGoToLine()       { goToLineTriggerCount       &+= 1 }

@@ -86,6 +86,22 @@ enum SessionMetaService {
         guard (200..<300).contains(status) else { throw failure(status: status, data: data) }
     }
 
+    /// ADR-0111 — ask the session that owns a branch to bring it up to date
+    /// with the current branch, in its own worktree: merge, resolve, test,
+    /// commit. One turn through the resume path; 202 when dispatched.
+    static func sync(projectId: String, sessionId: String) async throws -> (branch: String, target: String) {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/sessions/sync"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["projectId": projectId, "marvinSessionId": sessionId])
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw failure(status: status, data: data) }
+        struct Out: Decodable { let branch: String?; let target: String? }
+        let out = try JSONDecoder().decode(Out.self, from: data)
+        return (out.branch ?? "", out.target ?? "")
+    }
     private static func put(_ body: [String: Any]) async throws -> MetaWire {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/sessions/meta"))
         req.httpMethod = "PUT"

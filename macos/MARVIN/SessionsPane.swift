@@ -40,13 +40,17 @@ struct SessionsPane: View {
                     section("Interrupted", rows(where: { $0 == .interrupted }), tint: .orange)
                     section("Failed", rows(where: { $0 == .failed }), tint: GitDecorationColor.deleted)
                     idleSection
+                    integrateSection
                     recentSection
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
-        .task { registry.refreshSnapshot() }
+        .task {
+            registry.refreshSnapshot()
+            registry.refreshIntegrationPreview()
+        }
     }
 
     // MARK: - Data
@@ -75,7 +79,9 @@ struct SessionsPane: View {
 
     private var recent: [SessionEntry] {
         registry.ledger.entries.values
-            .filter { $0.closedAt != nil }
+            // ADR-0111 — a closed tab whose branch holds work lives in the
+            // integration section, not here.
+            .filter { $0.closedAt != nil && $0.worktree?.state != "ready" }
             .sorted { ($0.closedAt ?? .distantPast) > ($1.closedAt ?? .distantPast) }
             .prefix(8)
             .map { $0 }
@@ -200,6 +206,146 @@ struct SessionsPane: View {
         }
     }
 
+    // MARK: - Ready to integrate (ADR-0111)
+
+    /// Closed tabs whose branch holds commits: the day's deliverables, with
+    /// the dry-run verdict per row and the two integration flows in the
+    /// footer. Nothing here runs a merge without a click.
+    @ViewBuilder
+    private var integrateSection: some View {
+        let items = registry.readyEntries
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    sectionHeader("Ready to integrate", count: items.count, tint: GitDecorationColor.added)
+                    Spacer()
+                    if let target = registry.integrationTarget {
+                        Text("→ \(target)")
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Button {
+                        registry.refreshIntegrationPreview()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Re-run the dry-run preview")
+                }
+                ForEach(items) { e in integrateRow(e) }
+                integrateFooter(items)
+            }
+        }
+    }
+
+    private func integrateRow(_ e: SessionEntry) -> some View {
+        let w = e.worktree
+        let preview = w.flatMap { registry.integrationPreview[$0.slug] }
+        let needsSync = preview.map { $0.isConflict || $0.behind > 0 } ?? false
+        return HStack(spacing: 6) {
+            Circle()
+                .fill(preview?.isConflict == true ? Color.orange : GitDecorationColor.added)
+                .frame(width: 6, height: 6)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title(e))
+                    .font(.system(size: 11))
+                    .foregroundStyle(MarvinTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(integrateSubtitle(e, preview: preview))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(preview?.isConflict == true ? Color.orange : MarvinTheme.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            if needsSync {
+                smallAction("Sync", tint: .orange) { Task { await registry.sync(e.id) } }
+                    .help("Ask this tab to merge \(registry.integrationTarget ?? "the current branch") into its branch in its own worktree, resolve conflicts, test, and commit. Never pushes.")
+            }
+            smallAction("Merge", tint: GitDecorationColor.added) { Task { await registry.mergeKept(e.id) } }
+                .help("Merge \(w?.branch ?? "this branch") into \(registry.integrationTarget ?? "the current branch"), locally. Never pushes.")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .help([e.id, w?.branch, e.tree?.path].compactMap { $0 }.joined(separator: "\n"))
+        .contextMenu {
+            Button("Reopen tab") { Task { await registry.reopen(e.id) } }
+            if let branch = w?.branch {
+                Button("Copy branch name") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(branch, forType: .string)
+                }
+            }
+            if let path = e.tree?.path {
+                Button("Reveal worktree in Finder") {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+                }
+            }
+            Divider()
+            Button("Discard branch", role: .destructive) { Task { await registry.discardKept(e.id) } }
+        }
+        .disabled(registry.integrationBusy)
+    }
+
+    private func integrateSubtitle(_ e: SessionEntry, preview: IntegrationPreviewRow?) -> String {
+        var parts: [String] = []
+        if let w = e.worktree {
+            parts.append(w.branch.hasPrefix("marvin/tab/") ? String(w.branch.dropFirst("marvin/tab/".count)) : w.branch)
+            parts.append("\(w.commits) commit\(w.commits == 1 ? "" : "s")")
+            if w.dirty { parts.append("uncommitted") }
+        }
+        if let p = preview {
+            if p.added + p.removed > 0 { parts.append("+\(p.added) −\(p.removed)") }
+            parts.append(p.verdictLabel)
+        } else if let w = e.worktree, let behind = w.behind, behind > 0 {
+            parts.append("behind by \(behind)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func integrateFooter(_ items: [SessionEntry]) -> some View {
+        let conflicts = items.filter { e in e.worktree.flatMap { registry.integrationPreview[$0.slug] }?.isConflict == true }.count
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                if items.count > 1 {
+                    Button("Merge all") { Task { await registry.mergeAllKept() } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(GitDecorationColor.added)
+                        .disabled(registry.integrationBusy)
+                        .help("Fold all \(items.count) branches into \(registry.integrationTarget ?? "the current branch"), oldest first, locally. Stops at the first conflict. Never pushes.")
+                }
+                Button("Prepare MR…") { bridge.requestSourceControl(.prepareMR) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request (ADR-0109).")
+                Spacer()
+                if conflicts > 0 {
+                    Text("\(conflicts) would conflict — Sync first")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            if let notice = registry.integrationNotice {
+                Text(notice)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(3)
+                    .padding(.horizontal, 14)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
     private func sectionHeader(_ title: String, count: Int, tint: Color) -> some View {
         HStack(spacing: 6) {
             Text(title.uppercased())
@@ -308,6 +454,10 @@ struct SessionsPane: View {
         var parts: [String] = []
         if let tree = e.tree, tree.mode == .worktree {
             parts.append("isolated: \(tree.branch ?? "worktree")")
+            if let w = e.worktree, w.commits > 0 {
+                parts.append("\(w.commits) commit\(w.commits == 1 ? "" : "s")")
+                if let b = w.behind, b > 0 { parts.append("behind by \(b)") }
+            }
         } else if e.isDraft {
             parts.append("draft")
         } else {

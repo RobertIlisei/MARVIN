@@ -757,6 +757,17 @@ final class FilesService {
         )
     }
 
+    /// POST /api/worktrees {action:"preview"} — dry-run every finished branch
+    /// against the current branch with `git merge-tree` (ADR-0111). Nothing
+    /// is checked out; the answer is per branch: clean, or the conflicting
+    /// files, plus how far behind the target it sits.
+    func previewIntegration(cwd: String) async throws -> IntegrationPreviewResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: ["cwd": cwd, "action": "preview"],
+            as: IntegrationPreviewResponse.self
+        )
+    }
     /// POST /api/worktrees {action:"merge-all"} — fold EVERY finished branch
     /// into the current branch in one pass, locally (ADR-0109). Same rule as
     /// `merge`, and the reason it exists: five chat tabs produce five
@@ -767,6 +778,29 @@ final class FilesService {
             url: gitURL("api/worktrees"),
             body: ["cwd": cwd, "action": "merge-all"],
             as: WorktreeMergeAllResponse.self
+        )
+    }
+
+    /// POST /api/worktrees {action:"prepare-mr"} — squash the chosen
+    /// finished branches into one commit on an `mr/…` branch. `push` and
+    /// `openMergeRequest` are the sheet's own toggles; nothing leaves the
+    /// machine unless the user set them.
+    func prepareMergeRequest(
+        cwd: String,
+        slugs: [String],
+        name: String,
+        message: String,
+        push: Bool,
+        openMergeRequest: Bool
+    ) async throws -> WorktreePrepareMRResponse {
+        try await postJSON(
+            url: gitURL("api/worktrees"),
+            body: [
+                "cwd": cwd, "action": "prepare-mr", "slugs": slugs,
+                "name": name, "message": message,
+                "push": push, "openMergeRequest": openMergeRequest,
+            ],
+            as: WorktreePrepareMRResponse.self
         )
     }
 

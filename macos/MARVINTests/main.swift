@@ -3336,6 +3336,16 @@ runner.suite("session-cwd-policy") {
     }
 }
 
+runner.suite("session-title") {
+    runner.test("attachment mentions are not a title; a tab branch humanises") {
+        runner.expect(SessionTitle.stripAttachmentMentions("@/Users/x/.marvin/attachments/6B57DF3 review this spec") == "review this spec", "strips leading mention")
+        runner.expect(SessionTitle.stripAttachmentMentions("@/Users/x/a.json @~/b.json") == "", "only mentions → empty")
+        runner.expect(SessionTitle.stripAttachmentMentions("plan the backlog") == "plan the backlog", "plain text unchanged")
+        runner.expect(SessionTitle.humanised(branch: "marvin/tab/fix-the-thing") == "fix the thing", "humanised")
+        runner.expect(SessionTitle.humanised(branch: "main") == "main", "other branches unchanged")
+    }
+}
+
 runner.suite("tab-close-decision") {
     // ADR-0111 — nothing survives a tab unless it holds a commit.
     func wt(state: String = "session", commits: Int = 0, dirty: Bool = false, mergedInto: String? = nil) -> SessionWatchRowWire.Worktree {

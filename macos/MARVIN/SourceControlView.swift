@@ -66,6 +66,7 @@ final class SourceControlModel {
     private(set) var worktreeBusy: Bool = false
 
     private var fetchTask: Task<Void, Never>?
+    private var probeRetryTask: Task<Void, Never>?
 
     /// Commit message input. Reset to "" after a successful commit.
     /// In-memory only; a draft does not survive a relaunch.
@@ -95,7 +96,11 @@ final class SourceControlModel {
     /// that branch's state to `merged`), so refreshing them separately
     /// would guarantee one of them is stale on screen.
     func refresh(cwd: String, force: Bool = false) {
-        if !force, response != nil, loadedCwd == cwd, !isLoading { return }
+        // A `enabled: false` answer is never settled: `probe-failed` means
+        // the sidecar was busy, and even `not-a-git-repo` should be asked
+        // again on the next appear — a repo can be initialised underneath
+        // an open project.
+        if !force, let r = response, r.enabled, loadedCwd == cwd, !isLoading { return }
         fetchTask?.cancel()
         isLoading = true
         lastError = nil
@@ -110,9 +115,13 @@ final class SourceControlModel {
                 guard !Task.isCancelled else { return }
                 response = res
                 loadedCwd = cwd
+                if !res.enabled, res.reason == "probe-failed" { scheduleProbeRetry(cwd: cwd) }
                 repos = (try? await repoList)?.repos ?? []
                 stashes = (try? await stashList)?.entries ?? []
-                worktrees = (try? await worktreeList)?.worktrees ?? []
+                // Newest tip first: the section answers "what did I work on
+                // lately across these tabs" before it offers to integrate it.
+                worktrees = ((try? await worktreeList)?.worktrees ?? [])
+                    .sorted { ($0.lastCommitAt ?? "") > ($1.lastCommitAt ?? "") }
             } catch is CancellationError {
                 /* racing a project switch — quiet */
             } catch {
@@ -128,6 +137,16 @@ final class SourceControlModel {
     /// own MR costs a full CI run each; merging where the implementer was cut
     /// from costs nothing, because those commits ride along in the pipeline
     /// the current branch already runs.
+    /// ADR-0111 — the dry-run verdict per finished branch, keyed by slug.
+    var integrationPreview: [String: IntegrationPreviewRow] = [:]
+    func refreshIntegrationPreview() {
+        guard let cwd = loadedCwd else { return }
+        Task { @MainActor in
+            if let out = try? await FilesService.shared.previewIntegration(cwd: cwd), loadedCwd == cwd {
+                integrationPreview = Dictionary(uniqueKeysWithValues: (out.rows ?? []).map { ($0.slug, $0) })
+            }
+        }
+    }
     func mergeWorktree(slug: String) {
         guard let cwd = loadedCwd, !worktreeBusy else { return }
         worktreeBusy = true
@@ -138,6 +157,30 @@ final class SourceControlModel {
                 worktreeNotice = out.message ?? out.error ?? "Merge finished."
             } catch {
                 worktreeNotice = "Merge failed: \(error)"
+            }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
+    /// Squash the chosen finished branches into one commit on an `mr/…`
+    /// branch, and push / open the merge request when the sheet said so.
+    /// The tab branches are untouched; the user's checkout is never entered.
+    func prepareMergeRequest(slugs: [String], name: String, message: String, push: Bool, openMergeRequest: Bool) {
+        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        worktreeBusy = true
+        Task { @MainActor in
+            defer { worktreeBusy = false }
+            do {
+                let out = try await FilesService.shared.prepareMergeRequest(
+                    cwd: cwd, slugs: slugs, name: name, message: message,
+                    push: push, openMergeRequest: openMergeRequest
+                )
+                var lines: [String] = [out.summary ?? out.error ?? "Done."]
+                for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
+                worktreeNotice = lines.joined(separator: "\n")
+                if let url = out.pushed?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+            } catch {
+                worktreeNotice = "Prepare MR failed: \(error)"
             }
             refresh(cwd: cwd, force: true)
         }
@@ -206,9 +249,24 @@ final class SourceControlModel {
         }
     }
 
+    /// The status probe timed out because the sidecar's event loop was
+    /// busy (the worktree reconcile is synchronous git, ~1.5 s on 15
+    /// trees), not because the answer was "no". Ask again after a beat.
+    /// A real non-repo answers `not-a-git-repo` and does not come here.
+    private func scheduleProbeRetry(cwd: String) {
+        probeRetryTask?.cancel()
+        probeRetryTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, loadedCwd == cwd else { return }
+            refresh(cwd: cwd, force: true)
+        }
+    }
+
     func clear() {
         fetchTask?.cancel()
         fetchTask = nil
+        probeRetryTask?.cancel()
+        probeRetryTask = nil
         response = nil
         repos = []
         stashes = []
@@ -470,6 +528,7 @@ struct SourceControlView: View {
 
     @State private var diffSheet: DiffSheetModel? = nil
     @State private var branchPickerOpen = false
+    @State private var prepareMROpen = false
 
     /// Collapsed section ids. Sections default to open; storing the
     /// closed ones means a newly-added section is visible by default.
@@ -532,6 +591,22 @@ struct SourceControlView: View {
             GitRefPickerSheet(cwd: cwd) {
                 model.refresh(cwd: cwd, force: true)
                 graphModel.refresh(cwd: cwd, force: true)
+            }
+        }
+        // ADR-0111 — the Sessions pane's "Prepare MR…" lands here.
+        .onChange(of: bridge.sourceControlRequest) { _, request in
+            guard let request else { return }
+            switch request {
+            case .prepareMR:
+                model.refresh(cwd: cwd, force: true)
+                model.refreshIntegrationPreview()
+                prepareMROpen = true
+            }
+            bridge.clearSourceControlRequest()
+        }
+        .sheet(isPresented: $prepareMROpen) {
+            PrepareMRSheet(worktrees: model.worktrees, preview: model.integrationPreview) { slugs, name, message, push, openMR in
+                model.prepareMergeRequest(slugs: slugs, name: name, message: message, push: push, openMergeRequest: openMR)
             }
         }
     }
@@ -658,7 +733,9 @@ struct SourceControlView: View {
             if response.enabled == false {
                 placeholder(response.reason == "not-a-git-repo"
                     ? "(not a git repository)"
-                    : "(git unavailable)")
+                    : response.reason == "probe-failed"
+                        ? "(git is busy — retrying…)"
+                        : "(git unavailable)")
             } else if let error = response.error, !error.isEmpty {
                 placeholder("git error: \(error)")
             } else {
@@ -1053,6 +1130,14 @@ struct SourceControlView: View {
                         .background(Capsule().fill(MarvinTheme.elevated))
                         .foregroundStyle(GitDecorationColor.added)
                 }
+                if ready > 0 {
+                    Button("Prepare MR") { model.refreshIntegrationPreview(); prepareMROpen = true }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .disabled(model.worktreeBusy)
+                        .help("Squash the finished branches you pick into one commit on a new mr/… branch, then push it and open one merge request. The tab branches stay as they are.")
+                }
                 if ready > 1 {
                     Button("Merge all") { model.mergeAllWorktrees() }
                         .buttonStyle(.plain)
@@ -1099,7 +1184,7 @@ struct SourceControlView: View {
                     .foregroundStyle(MarvinTheme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(w.summary)
+                Text(w.diffBadge.map { "\(w.summary) · \($0)" } ?? w.summary)
                     .font(.system(size: 9.5))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)

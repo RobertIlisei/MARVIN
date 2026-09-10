@@ -239,6 +239,101 @@ final class SessionRegistry {
         ledger.setPlan(id, done: done, total: total)
     }
 
+    // MARK: - Integration (ADR-0111)
+
+    /// The latest dry-run of every finished branch against the current
+    /// branch, keyed by slug. Refreshed when the Sessions pane shows the
+    /// section and after every integration action.
+    private(set) var integrationPreview: [String: IntegrationPreviewRow] = [:]
+    private(set) var integrationTarget: String? = nil
+    private(set) var integrationBusy = false
+    var integrationNotice: String? = nil
+
+    /// Closed tabs whose branch still holds work, newest first.
+    var readyEntries: [SessionEntry] {
+        ledger.entries.values
+            .filter { $0.worktree?.state == "ready" }
+            .sorted { ($0.closedAt ?? $0.lastTurnAt ?? .distantPast) > ($1.closedAt ?? $1.lastTurnAt ?? .distantPast) }
+    }
+
+    func refreshIntegrationPreview() {
+        guard let cwd = MarvinBridge.shared.projectWorkDir, !cwd.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let out = try await FilesService.shared.previewIntegration(cwd: cwd)
+                guard MarvinBridge.shared.projectWorkDir == cwd else { return }
+                integrationTarget = out.target
+                integrationPreview = Dictionary(uniqueKeysWithValues: (out.rows ?? []).map { ($0.slug, $0) })
+            } catch {
+                NSLog("[SessionRegistry] preview failed: \(error)")
+            }
+        }
+    }
+
+    /// Ask the owning session to bring its branch up to date with the
+    /// target, in its own worktree. The feed's `registered` turns the row
+    /// working; the next preview shows the result.
+    func sync(_ id: String) async {
+        guard let pid = projectId else { return }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        do {
+            let out = try await SessionMetaService.sync(projectId: pid, sessionId: id)
+            integrationNotice = "Sync started: \(out.branch) ← \(out.target)"
+        } catch {
+            integrationNotice = "Sync refused: \(error.localizedDescription)"
+        }
+    }
+
+    /// Fold one kept branch into the current branch, locally (ADR-0103 rules).
+    func mergeKept(_ id: String) async {
+        guard let cwd = MarvinBridge.shared.projectWorkDir, let slug = entry(id)?.worktree?.slug else { return }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        do {
+            let out = try await FilesService.shared.mergeWorktree(cwd: cwd, slug: slug)
+            integrationNotice = out.message ?? out.error ?? "Merged."
+        } catch {
+            integrationNotice = "Merge failed: \(error.localizedDescription)"
+        }
+        refreshSnapshot()
+        refreshIntegrationPreview()
+    }
+
+    /// Fold every finished branch into the current branch, oldest first,
+    /// stopping at the first conflict (ADR-0109).
+    func mergeAllKept() async {
+        guard let cwd = MarvinBridge.shared.projectWorkDir else { return }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        do {
+            let out = try await FilesService.shared.mergeAllWorktrees(cwd: cwd)
+            var lines = [out.message ?? out.error ?? "Merge finished."]
+            for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
+            integrationNotice = lines.joined(separator: "\n")
+        } catch {
+            integrationNotice = "Merge all failed: \(error.localizedDescription)"
+        }
+        refreshSnapshot()
+        refreshIntegrationPreview()
+    }
+
+    /// Delete a kept branch and its checkout. Only ever on an explicit click.
+    func discardKept(_ id: String) async {
+        guard let pid = projectId else { return }
+        integrationBusy = true
+        defer { integrationBusy = false }
+        do {
+            let out = try await SessionMetaService.close(projectId: pid, sessionId: id, action: .discard)
+            integrationNotice = out.message ?? "Discarded."
+            ledger.remove(id)
+        } catch {
+            integrationNotice = "Discard failed: \(error.localizedDescription)"
+        }
+        refreshSnapshot()
+        refreshIntegrationPreview()
+    }
+
     // MARK: - Actions that need no model
 
     /// Stop a session's turn from outside its tab (the Sessions pane).

@@ -2952,9 +2952,14 @@ struct ChatPreviewView: View {
         guard let s = model.sessions.first(where: { $0.sessionId == sid }) else {
             return String(sid.prefix(8))
         }
-        if let msg = s.firstUserMessage?.replacingOccurrences(of: "\n", with: " "),
-           !msg.trimmingCharacters(in: .whitespaces).isEmpty {
-            return msg.count > 26 ? String(msg.prefix(24)) + "…" : msg
+        // ADR-0111 — a tab that opened with an attachment used to be titled
+        // by the attachment's path; the words after it are the title.
+        if let raw = s.firstUserMessage?.replacingOccurrences(of: "\n", with: " ") {
+            let msg = SessionTitle.stripAttachmentMentions(raw)
+            if !msg.isEmpty { return msg.count > 26 ? String(msg.prefix(24)) + "…" : msg }
+        }
+        if let branch = SessionRegistry.shared.entry(sid)?.worktree?.branch, branch.hasPrefix("marvin/tab/") {
+            return SessionTitle.humanised(branch: branch)
         }
         return friendlyDate(s.updatedAt)
     }
