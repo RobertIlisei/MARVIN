@@ -29,6 +29,7 @@
 // The layout is pure and `Sendable`, which keeps it testable and off
 // the view: `GitGraphLayout.build(commits)` in, rows out.
 
+import MARVINLogic
 import SwiftUI
 
 /// One rendered row: the commit plus everything needed to draw its
@@ -190,6 +191,14 @@ final class GitGraphModel {
             } catch is CancellationError {
                 /* project switch raced us */
             } catch {
+                // `refresh` cancels the previous request on every call, and a
+                // cancelled URLSession task arrives as URLError(.cancelled)
+                // (NSURLErrorDomain -999), never as CancellationError — so the
+                // clause above never caught it and the pane rendered a page of
+                // NSError internals for work that was simply superseded. Every
+                // session switch triggers a refresh, so this fired constantly
+                // (user, 2026-09-10).
+                guard !BenignCancellation.matches(error) else { return }
                 loadError = "\(error)"
             }
         }

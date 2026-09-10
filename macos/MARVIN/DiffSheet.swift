@@ -19,6 +19,7 @@
 // viewer; the unified-text approach here is deliberately minimal
 // per ADR-0018 §4 (out of scope: side-by-side until Phase 5).
 
+import MARVINLogic
 import SwiftUI
 
 /// Diff mode the sheet's Picker drives. Wire values match the
@@ -84,6 +85,7 @@ final class DiffSheetModel {
             } catch is CancellationError {
                 /* mode flipped under us — quiet */
             } catch {
+                guard !BenignCancellation.matches(error) else { return }
                 lastError = "\(error)"
             }
         }

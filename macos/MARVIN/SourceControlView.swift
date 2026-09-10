@@ -42,6 +42,7 @@
 // being invisible.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 /// View-model for the SCM panel. Owns the status fetch, the repo list,
@@ -115,6 +116,7 @@ final class SourceControlModel {
             } catch is CancellationError {
                 /* racing a project switch — quiet */
             } catch {
+                guard !BenignCancellation.matches(error) else { return }
                 lastError = "\(error)"
             }
         }

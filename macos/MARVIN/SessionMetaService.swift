@@ -111,6 +111,13 @@ enum SessionMetaService {
             "projectId": projectId, "marvinSessionId": sessionId,
             "worktree": action.rawValue, "commitFirst": commitFirst,
         ] as [String: Any])
+        // A merge is real git work on the user's repository — `git status`,
+        // `git merge`, a checkout of every changed file — and it is served
+        // synchronously. `URLSession`'s default request timeout is 60 s, which
+        // a merge into a large repository can exceed; the request would then
+        // fail while the merge went on to SUCCEED server-side, and the user
+        // would be told the close failed for work that actually landed.
+        req.timeoutInterval = 600
         let (data, response) = try await URLSession.shared.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw failure(status: status, data: data) }

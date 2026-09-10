@@ -508,10 +508,26 @@ final class ChatPreviewModel {
     /// see any message that it worked, or failed, if it was done or not"*).
     var transientNotice: String? = nil
 
-    /// True while a tab close is talking to the sidecar. A merge is seconds
-    /// of synchronous git, and without this the dialog dismissed instantly
-    /// and nothing said anything was happening.
-    var isClosingTab: Bool = false
+    /// True when `transientNotice` is reporting a FAILURE rather than a result.
+    ///
+    /// A failed close used to go to `lastError`, which the replay logic clears
+    /// on the next hydrate — so the one message explaining why nothing had
+    /// happened disappeared the moment the user switched tabs to look. This
+    /// slot is not cleared by hydrate, and a failure does not auto-dismiss.
+    var transientNoticeIsFailure: Bool = false
+
+    /// Which tab is being closed, while the sidecar works on it — nil when
+    /// none is.
+    ///
+    /// A merge is seconds of synchronous git, and without a signal the dialog
+    /// dismissed instantly and nothing said anything was happening. It holds
+    /// the tab's NAME rather than a bool because this model is the SELECTED
+    /// session's, and the user can switch tabs while the merge runs: a bare
+    /// "closing the tab…" then follows them onto a tab that is not closing and
+    /// reads as that one being taken away (user, 2026-09-10). Naming it keeps
+    /// the message true wherever it is read, and a merge you walked away from
+    /// is still worth knowing about.
+    var closingTabLabel: String? = nil
 
     /// Phase 2h — true while we're fetching the transcript JSON.
     /// Surfaces a thin "loading" affordance so the user doesn't
@@ -1278,6 +1294,28 @@ final class ChatPreviewModel {
                     let fetchMs = Int(fetched.timeIntervalSince(began) * 1000)
                     let replayMs = Int(Date().timeIntervalSince(fetched) * 1000)
                     NSLog("[ChatPreview] hydrate \(sessionId.prefix(8)) turns=\(record.turns.count) fetch=\(fetchMs)ms replay=\(replayMs)ms")
+                    // A transcript that HAS turns but produced no rows is the
+                    // "(no messages yet)" empty pane the user hit on a session
+                    // with 900 turns on disk. Record it where it can be read
+                    // after the fact — NSLog from an ad-hoc-signed bundle does
+                    // not reliably reach the unified log.
+                    if messages.isEmpty && record.turns.count > 0 {
+                        ExceptionLog.appendPublic(
+                            "\n----- hydrate produced no rows -----\n"
+                                + "session: \(sessionId)  turns fetched: \(record.turns.count)"
+                                + "  total on disk: \(record.totalTurns ?? -1)\n"
+                                + "fetch \(fetchMs) ms, replay \(replayMs) ms\n"
+                        )
+                    }
+                } else {
+                    // 404, or the fetch returned nothing. Silent until now: the
+                    // pane simply stayed empty with no error, which is
+                    // indistinguishable from a session that has never been
+                    // used.
+                    ExceptionLog.appendPublic(
+                        "\n----- hydrate fetched nothing -----\nsession: \(sessionId) (404 or empty body)\n"
+                    )
+                    lastError = "Could not load this session's transcript."
                 }
                 // ADR-0052 — the durable spine is authoritative over replay's
                 // transcript scrape: the scrape only sees the hydrated tail
@@ -1310,6 +1348,12 @@ final class ChatPreviewModel {
                 // live turn. 204 → harmless no-op.
                 attachLive(marvinSessionId: sessionId)
             } catch {
+                // A hydrate cancelled by a newer one is not a failure; the
+                // newer hydrate owns the pane.
+                guard !BenignCancellation.matches(error) else { return }
+                ExceptionLog.appendPublic(
+                    "\n----- hydrate failed -----\nsession: \(sessionId)\n\(error)\n"
+                )
                 lastError = "Hydrate failed: \(error)"
             }
         }
@@ -2097,16 +2141,19 @@ struct ChatPreviewView: View {
             if let err = model.lastError {
                 errorBanner(err)
             }
-            if model.isClosingTab {
+            if let closing = model.closingTabLabel {
                 // A confirmation dialog dismisses the instant a button is
                 // tapped, so the in-flight signal cannot live there. A merge
                 // is seconds of synchronous git; without this the app just
-                // goes quiet.
+                // goes quiet. Named, because you may be on a different tab by
+                // the time it finishes.
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Closing the tab and folding its branch in…")
+                    Text("Closing \(closing) and folding its branch in…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -2638,9 +2685,12 @@ struct ChatPreviewView: View {
             model.closeTab(sid)
             return
         }
+        let label = SessionRegistry.shared.entry(sid)?.tree?.branch
+            ?? SessionRegistry.shared.entry(sid)?.title
+            ?? String(sid.prefix(8))
         Task { @MainActor in
-            model.isClosingTab = true
-            defer { model.isClosingTab = false }
+            model.closingTabLabel = label
+            defer { model.closingTabLabel = nil }
             do {
                 let out = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action == .merge)
                 model.closeTab(sid)
@@ -2649,9 +2699,17 @@ struct ChatPreviewView: View {
                 // is where the user is looking.
                 if let message = out.message, !message.isEmpty {
                     model.transientNotice = message
+                    model.transientNoticeIsFailure = false
                 }
             } catch {
-                model.lastError = "Could not close the tab's worktree: \(error.localizedDescription)"
+                // NOT `lastError`: hydrate clears that, so the explanation
+                // vanished the moment the user switched tabs to see why the
+                // tab had not closed. A refused merge is the common case here
+                // — an uncommitted file in the main tree is enough — and "I
+                // clicked Merge and nothing happened" is the report it
+                // produced (user, 2026-09-10).
+                model.transientNotice = "Could not close \(label): \(error.localizedDescription)"
+                model.transientNoticeIsFailure = true
             }
         }
     }
@@ -3960,9 +4018,10 @@ struct ChatPreviewView: View {
     /// permanent row. Kept visually distinct from the error banner so "merged"
     /// can never be mistaken for "failed".
     private func noticeBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+        let failed = model.transientNoticeIsFailure
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(failed ? .orange : .green)
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -3971,6 +4030,7 @@ struct ChatPreviewView: View {
             Spacer()
             Button {
                 model.transientNotice = nil
+                model.transientNoticeIsFailure = false
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))
@@ -3982,8 +4042,10 @@ struct ChatPreviewView: View {
         .padding(.vertical, 8)
         .background(MarvinTheme.elevated)
         .task(id: message) {
-            // Long enough to read a merge summary, short enough that it is
-            // never mistaken for state.
+            // A result is worth a glance; a FAILURE waits to be dismissed.
+            // Auto-hiding the reason a merge did not happen is how the user
+            // ends up believing the button does nothing.
+            guard !failed else { return }
             try? await Task.sleep(nanoseconds: 12_000_000_000)
             if model.transientNotice == message { model.transientNotice = nil }
         }

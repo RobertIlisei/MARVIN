@@ -4,6 +4,7 @@
 // collapsible per-file result groups, click-to-navigate.
 // Results come from /api/files/search (rg --json).
 
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Models
@@ -383,6 +384,7 @@ struct FindInFilesView: View {
             truncated = decoded.truncated
         } catch is CancellationError {
         } catch {
+            guard !BenignCancellation.matches(error) else { return }
             errorMessage = error.localizedDescription
         }
     }
