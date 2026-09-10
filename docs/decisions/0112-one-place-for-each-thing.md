@@ -145,3 +145,9 @@ User, with four tabs from the same prompt: *"we miss navigation through sessions
 **Navigation.** Removing the open-sessions menu also removed the only visible way to step between tabs. The History menu now carries **Previous Session** and **Next Session** with their shortcuts (⇧⌘[ / ⇧⌘]), and four tabs that read identically until their first commit names them carry an ordinal, `Plan the implementation … ·2`; the tab tooltip adds the branch and when it was last active.
 
 **The crash** was ADR-0062's layout loop through a counter the breaker did not hook, triggered by a selectable notice this ADR added to the Sessions pane. Both are fixed in [ADR-0062 addendum 7](./0062-update-constraints-loop-identified-mitigated.md).
+
+## Amendment 2 (2026-09-10, later) — a tab bar has three parts
+
+User, with four tabs from one prompt cut off at the strip's edge: *"still not behaving like a nav bar, i have no buttons and no ability to circle through sessions."* Fair. Removing the open-sessions menu left fixed-width tabs in a scroll view with no affordance, which reads as "the fourth tab is gone".
+
+The tab strip now has the three parts a tab bar has on this platform (Safari, Xcode): **tabs that compress** to fit the width, between 84 and 190 pt each, so four or six tabs share the row; **‹ ›** steppers, the visible form of ⇧⌘[ / ⇧⌘]; and an **overflow list** at the end of the strip showing every open tab with its full title and branch, the current one ticked. The list is not a fourth switcher: it is the part of the tab bar that shows what the strip cannot fit, and it appears only with more than one tab. Duplicate titles carry their ordinal **in front**, `2 · Plan the implementation…`, so truncation cannot eat it.

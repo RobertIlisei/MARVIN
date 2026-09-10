@@ -2594,42 +2594,55 @@ struct ChatPreviewView: View {
     /// clock menu in the header stays as the full-history overflow.
     private var sessionTabs: some View {
         HStack(spacing: 4) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        // A brand-new chat (nothing loaded yet) shows as its
-                        // own active "New chat" tab until the first turn mints
-                        // a session id that joins the open tabs.
-                        if model.loadedSessionId == nil {
-                            chatTab(title: "New chat", systemImage: "bubble.left.fill",
-                                    active: true, onSelect: {}, onClose: nil)
+            // ADR-0112 amendment — a tab bar has three parts: tabs that COMPRESS
+            // to fit (Safari, Xcode), steppers to walk them, and an overflow
+            // list when even the minimum width does not fit. Fixed-width tabs
+            // in a scroll view with no affordance read as "the fourth tab is
+            // gone", which is what the user reported.
+            GeometryReader { geo in
+                let ids = model.openTabSessionIds
+                let count = max(1, ids.count + (model.loadedSessionId == nil ? 1 : 0))
+                let available = max(0, geo.size.width - 16)
+                let tabWidth = min(190, max(84, floor(available / CGFloat(count)) - 4))
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            // A brand-new chat (nothing loaded yet) shows as its
+                            // own active "New chat" tab until the first turn mints
+                            // a session id that joins the open tabs.
+                            if model.loadedSessionId == nil {
+                                chatTab(title: "New chat", systemImage: "bubble.left.fill",
+                                        active: true, width: tabWidth, onSelect: {}, onClose: nil)
+                            }
+                            ForEach(ids, id: \.self) { sid in
+                                chatTab(
+                                    title: tabTitle(forSessionId: sid),
+                                    systemImage: "bubble.left",
+                                    active: sid == model.loadedSessionId,
+                                    state: SessionRegistry.shared.rowState(sid),
+                                    width: tabWidth,
+                                    onSelect: {
+                                        model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                                    },
+                                    onClose: { requestCloseTab(sid) }
+                                )
+                                .id(sid)
+                            }
                         }
-                        ForEach(model.openTabSessionIds, id: \.self) { sid in
-                            chatTab(
-                                title: tabTitle(forSessionId: sid),
-                                systemImage: "bubble.left",
-                                active: sid == model.loadedSessionId,
-                                state: SessionRegistry.shared.rowState(sid),
-                                onSelect: {
-                                    model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
-                                },
-                                onClose: { requestCloseTab(sid) }
-                            )
-                            .id(sid)
+                        .padding(.horizontal, 8)
+                    }
+                    .onChange(of: model.loadedSessionId) { _, sid in
+                        guard let sid else { return }
+                        withAnimation(MarvinTheme.transition) {
+                            proxy.scrollTo(sid, anchor: .center)
                         }
                     }
-                    .padding(.horizontal, 8)
                 }
-                // Selecting a session from anywhere — the menu below, the
-                // Sessions pane, ⇧⌘[ / ⇧⌘] — used to be able to activate a tab
-                // that was entirely off the right edge, which reads as the
-                // click doing nothing. Bring it into view.
-                .onChange(of: model.loadedSessionId) { _, sid in
-                    guard let sid else { return }
-                    withAnimation(MarvinTheme.transition) {
-                        proxy.scrollTo(sid, anchor: .center)
-                    }
-                }
+            }
+            .frame(height: 32)
+            if model.openTabSessionIds.count > 1 {
+                tabSteppers
+                tabOverflowMenu
             }
             Spacer(minLength: 4)
             // ADR-0112 — the tab strip is the only switcher: the open-sessions
@@ -2829,6 +2842,7 @@ struct ChatPreviewView: View {
         systemImage: String,
         active: Bool,
         state: SessionRowState = .draft,
+        width: CGFloat = 190,
         onSelect: @escaping () -> Void,
         onClose: (() -> Void)?
     ) -> some View {
@@ -2892,7 +2906,7 @@ struct ChatPreviewView: View {
         .padding(.leading, 9)
         .padding(.trailing, onClose == nil ? 9 : 5)
         .padding(.vertical, 4)
-        .frame(maxWidth: 190, alignment: .leading)
+        .frame(width: width, alignment: .leading)
         .foregroundStyle(active ? Color.primary : .secondary)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -2916,6 +2930,59 @@ struct ChatPreviewView: View {
         return lines.joined(separator: "\n")
     }
 
+    /// ‹ › — walk the open tabs. The same commands as ⇧⌘[ / ⇧⌘], visible.
+    private var tabSteppers: some View {
+        HStack(spacing: 0) {
+            Button { model.stepSession(.previous) } label: {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold)).frame(width: 20, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Previous tab (⇧⌘[)")
+            Button { model.stepSession(.next) } label: {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).frame(width: 20, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("Next tab (⇧⌘])")
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    /// The tab bar's own overflow list: every open tab with its full title
+    /// and branch, the current one ticked. This is not a fourth switcher; it
+    /// is the part of a tab bar that shows what the strip cannot fit.
+    private var tabOverflowMenu: some View {
+        let ids = model.openTabSessionIds
+        return Menu {
+            ForEach(ids, id: \.self) { sid in
+                Button {
+                    model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
+                } label: {
+                    Label(overflowTitle(sid), systemImage: sid == model.loadedSessionId ? "checkmark" : "bubble.left")
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                Text("\(ids.count)").font(.system(size: 10, design: .monospaced)).monospacedDigit()
+            }
+            .frame(height: 22)
+            .padding(.horizontal, 5)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(.secondary)
+        .help("All open tabs")
+    }
+
+    private func overflowTitle(_ sid: String) -> String {
+        var t = tabTitle(forSessionId: sid)
+        if let b = SessionRegistry.shared.entry(sid)?.tree?.branch, b.hasPrefix("marvin/tab/") {
+            t += "  ·  " + SessionTitle.humanised(branch: b)
+        }
+        return t
+    }
+
     /// ADR-0107 — one tint per session state, shared with the Sessions pane.
     static func tabTint(_ state: SessionRowState) -> Color {
         switch state {
@@ -2936,8 +3003,8 @@ struct ChatPreviewView: View {
     private func tabTitle(forSessionId sid: String) -> String {
         let base = baseTabTitle(forSessionId: sid)
         let twins = model.openTabSessionIds.filter { baseTabTitle(forSessionId: $0) == base }
-        guard twins.count > 1, let index = twins.firstIndex(of: sid), index > 0 else { return base }
-        return "\(base) ·\(index + 1)"
+        guard twins.count > 1, let index = twins.firstIndex(of: sid) else { return base }
+        return "\(index + 1) · \(base)"
     }
 
     private func baseTabTitle(forSessionId sid: String) -> String {
