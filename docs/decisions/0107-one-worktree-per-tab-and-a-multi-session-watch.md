@@ -119,3 +119,53 @@ Two causes, both fixed here.
 **The graph was only in the main checkout.** `graphify-out/` is git-ignored, so a fresh worktree has none, and every graph query had to leave the tab's tree. It joins the auto-detected symlink set — not project knowledge: MARVIN's own `graphify-bridge` already reads `<workDir>/graphify-out`, and the model reaches for the same directory by relative path. New session worktrees get it linked; existing ones rely on the `cd` rule above.
 
 Tests: `session-worktree-gate` grows five read shapes that now fall through (including the reported command verbatim) and eight write shapes run *from* the main checkout that still confirm; the four "`cd` alone confirms" expectations are inverted. A nested-quote bug found by the suite: `node -e "…'/abs/path'…"` needs single- and double-quoted runs collected separately, or the path is lost. 1188 sidecar tests green.
+
+## Addendum 6 (2026-09-10) — the graph directory is MARVIN's, not the user's checkout
+
+Same complaint as Addendum 5, one day later, same tab state (**auto**, isolated
+tab): *"why do we still get these if marvin is on auto?"* Addendum 5 stopped
+confirming on `cd <root>` and on reads. The command that still confirmed was
+graphify's own incremental-detect snippet — `cd <root> && $(cat
+graphify-out/.graphify_python) -c "…"` — which **writes**
+`graphify-out/.graphify_detect.json`. A write into the main tree is exactly
+what the rule is for, so it fired, and it named the hit correctly. The rule
+was right about the shape and wrong about the target.
+
+**`graphify-out/` is not the user's checkout.** It is git-ignored, built by
+MARVIN per project at the root (ADR-0041), read by `graphify-bridge` from
+`<workDir>/graphify-out` on every turn, and now written by graphify's own
+detect pass on many of them. Golden Rule 7 makes it the first thing MARVIN
+touches on a codebase question. A reach into it from a worktree tab is not a
+reach into the user's work, any more than a reach into `.marvin/worktrees/`
+is — and that directory was already carved out of `underRoot`. `graphify-out/`
+joins it: reads and writes there fall through the containment, in every mode.
+
+Not changed: `Edit`/`Write` into the main tree still deny; a command that
+touches `graphify-out/` *and* something else in the main tree still confirms,
+named after the something else.
+
+Tests: three cases in `session-worktree-gate` — the reported command
+verbatim, the mixed command, and an absolute `graphify-out` path beside an
+absolute `src` path. 1343 sidecar tests green.
+
+## Addendum 7 (2026-09-10) — the plain chat gets its own button back
+
+User: *"i also want a way when opening a new session, to be separate of our
+multi-session-branches and behavior, like a normal chat that marvin had
+previously … we need buttons and functionalities in the marvin UI for this."*
+
+The shape existed — a shared-checkout tab is exactly the pre-ADR-0107 chat —
+but only as an app-wide Settings default and a header chip on an already-open
+draft. Nothing at the moment of *opening* a tab said there were two shapes.
+
+Now the tab strip's `+` and the header's **New** are split buttons: click
+takes the Settings default, the menu offers **New Chat — shared checkout** and
+**New Isolated Tab — own branch**. The File menu carries the same two as
+commands with their own keys (⌥⌘N shared, ⌃⌘N isolated; ⇧⌘N stays the
+default), so they are in the ⇧⌘P palette and the ⌘/ help sheet too. The choice
+is recorded on the draft the way the chip records it — nothing on disk until
+the first message — and `newTab(mode:)` is the one entry point all of them use.
+
+## Amendment (2026-09-10, ADR-0111) — the close rules are remade
+
+The rule table in this ADR ("closed, 0 commits → `empty` → sweep if clean") described a sweep that ran from one button and never automatically, and the client's "reclaim silently" sent `keep`. Measured: 17 session worktrees on disk, 16 for closed tabs, 0 ever swept. [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) replaces the close decision (from the sidecar's derived state; empty and merged trees discarded without asking; keep commits work first; Merge names its target), runs the sweep at boot and after every close, previews conflicts before integration, lets the owning session resolve them, names branches by their first commit, and cuts a fresh tree when an integrated tab is reopened.

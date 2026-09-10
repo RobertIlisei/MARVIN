@@ -43,6 +43,7 @@ import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/s
 import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
+import { logTelemetry } from "@marvin/runtime/telemetry";
 import {
   autoContinueDelaySeconds,
   autoContinuePrompt,
@@ -65,6 +66,7 @@ import {
   setWakeupFireHandler,
   type WakeupRecord,
 } from "@marvin/runtime/wakeup-scheduler";
+import { nameSessionBranchFromCommit } from "@marvin/runtime/worktrees";
 
 /**
  * The `append` half of the SDK system prompt, built the SAME way for every
@@ -449,6 +451,22 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
   });
+  // ADR-0111 — the first turn that leaves a commit on the tab's branch names
+  // the branch after that commit; the chip follows through `session.tree`.
+  try {
+    const metaNow = readSessionMeta(projectId, marvinSessionId);
+    if (metaNow?.tree.mode === "worktree") {
+      const renamed = nameSessionBranchFromCommit(workDir ?? cwd, marvinSessionId);
+      if (renamed) {
+        const tree = { ...metaNow.tree, branch: renamed.to };
+        updateSessionMeta(projectId, marvinSessionId, { tree });
+        announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree } });
+        logTelemetry({ kind: "worktree.session.renamed", marvinSessionId, from: renamed.from, to: renamed.to });
+      }
+    }
+  } catch {
+    /* naming is cosmetic; never fail a completed turn on it */
+  }
   recordTurnCost({
     projectId,
     marvinSessionId,

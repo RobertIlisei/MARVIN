@@ -1,6 +1,6 @@
 # ADR-0111 — Nothing survives a tab unless it holds a commit; integration previews conflicts, and the owning session resolves them
 
-- **Status:** Accepted — in implementation 2026-09-10
+- **Status:** Accepted — implemented 2026-09-10
 - **Date:** 2026-09-10
 - **Related:** [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) (one worktree per tab; the close dialog this amends), [ADR-0109](./0109-batch-integration-and-metered-ci.md) (Merge all, Prepare MR, the metered-CI confirm — this builds on them, it does not replace them), [ADR-0103](./0103-implementer-branch-lifecycle.md) (the derived lifecycle and the sweep), [ADR-0102](./0102-multiple-sessions-one-worktree.md)
 
@@ -167,10 +167,20 @@ the sweep. Reopening a kept `ready` tab returns to it, as before.
 
 ## Scope of Done
 
-- [ ] M1 — close: silent reclaim discards; decision from fetched sidecar state; keep commits WIP; Merge names its target; sweep at boot and after close
-- [ ] M2 — `previewIntegration` with merge-tree; `POST /api/worktrees {action:"preview"}`; `POST /api/sessions/sync` through `resumeSession`
-- [ ] M3 — Sessions pane: Ready to integrate section, row verdicts and actions, footer to Merge all / Prepare MR; watch universe includes closed `ready`
-- [ ] M4 — branch renamed from the first commit subject, once, with `session.tree` announced
-- [ ] M5 — reopening a `merged` tab cuts a fresh worktree
-- [ ] Docs: ADR-0107 and ADR-0109 amended; worktrees guide close and integrate sections; roadmap
-- [ ] Tests green: sidecar suites (`session-worktrees`, `session-watch`, new `integration`), Swift (`tab-close-decision` rewritten, `session-ledger`)
+- [x] M1 — close: silent reclaim discards; decision from fetched sidecar state; keep commits WIP; Merge names its target; sweep at boot and after close (aaf5f894)
+- [x] M2 — `previewIntegration` with merge-tree; `POST /api/worktrees {action:"preview"}`; `POST /api/sessions/sync` through `resumeSession` (8141c262)
+- [x] M3 — Sessions pane: Ready to integrate section, row verdicts and actions, footer to Merge all / Prepare MR; conflict chips in the Prepare MR sheet; watch universe includes closed `ready` (683f062e)
+- [x] M4 — branch renamed from the first commit subject, once, directory kept, `session.tree` announced
+- [x] M5 — reopening a `merged` tab cuts a fresh worktree from HEAD; the old record is detached and swept
+- [x] Docs: ADR-0107 and ADR-0109 amended; worktrees guide close and integrate sections; roadmap
+- [x] Tests green: sidecar `session-worktrees` (+3), `session-watch` (+1), `integration` (5, new); Swift `tab-close-decision` rewritten, `session-ledger` (+1), `session-title` (new) — 826 assertions
+
+## Front-end review (2026-09-10)
+
+Requested alongside: *"Review also the front end, we built some things there also that might need rework."* Read: tab strip, Sessions pane, close dialog, mode chip and popover, Source Control worktree section, Prepare MR sheet.
+
+Fixed in M3: a tab opened with an attachment was titled by the attachment's path (`SessionTitle.stripAttachmentMentions`, falling back to the branch name); the Prepare MR list was labelled "newest first" and was not sorted; the sheet had no conflict signal until the third fold failed; the chip's leave-worktree action said "Keep branch" where it now means "Keep for integration".
+
+Left as is, deliberately: two row types for a branch (session-centric in the Sessions pane, branch-centric in Source Control) — they answer different questions and share one tint table; the close dialog as a `confirmationDialog` rather than a sheet; the chip popover's two paragraphs of tertiary text.
+
+Worth a later pass, not done here: the tab strip's 190 pt tabs with a 24-character title truncate most titles to their first three words — a two-line tab, or title-on-hover with the branch as the second line, would say more; the Sessions pane's Idle section and the tab strip both encode state as a 6 pt dot, which is hard to read for colour-blind users — a glyph per state (the interrupted row already has one) would fix both at once.

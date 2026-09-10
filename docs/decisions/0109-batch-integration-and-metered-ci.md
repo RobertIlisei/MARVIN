@@ -117,3 +117,67 @@ money, and the message names the free path.
       every read-only forge command alone.
 - [x] The gate fires in `auto` mode as well as `gated`, and denies with no UI.
 - [x] 1322 sidecar tests green; `swift build` and `tsc` clean.
+
+## Amendment — 2026-09-10: Prepare MR — squash the day's tabs into one commit, push, open the request
+
+**What was watched.** User: *"we need to find a way to understand what were the
+latest branches we worked on in the multisession and then to have a way to
+group them into a commit and push to gitlab for a MR."* And, twenty minutes
+later, MARVIN doing exactly that by hand in a tab — `git merge --no-ff` twice
+into the tab's own branch, `git push gitlab HEAD:…`, then `glab mr create` —
+and stopping at the metered-CI confirm this ADR installs, while the user was
+away: *"if i'm away, no work gets done."* The gate did its job; the job was in
+the wrong place. Opening the request is a decision for the user to make once,
+in advance, not for a model turn to wait on.
+
+**What changes.** A third integration shape beside `mergeWorktree` and
+`mergeAllWorktrees`: **`prepareMergeRequest`** squashes the chosen `ready`
+branches, oldest first, into **one commit** on a fresh `mr/<date>-<name>`
+branch, then — only when asked — pushes it and opens the request from the push
+(`-o merge_request.create`, target detected from the current branch's
+upstream). Surfaced as **Prepare MR** in Source Control ▸ Worktrees, a sheet
+with the finished branches ticked, open tabs listed greyed with the way to
+include them, the generated Conventional-Commits message editable, and the two
+opt-ins as toggles whose wording states the pipeline cost.
+
+**Why a squash.** `mergeAllWorktrees` folds each tab's commits into the
+*current* branch as merge commits — right when the user's branch is the
+integration point, wrong when the integration point is a review. A day of tabs
+is one piece of work to a reviewer. The per-tab history is not lost: the tab
+branches are never touched.
+
+**Why a temporary worktree.** The squash writes into an index and a working
+tree, and the user's checkout is dirty with MARVIN's own `.marvin/*` files
+essentially always — the same fact that broke branch switching (ADR-0012
+amendment, same day). A disposable checkout cut from HEAD means no stash, no
+HEAD move under an open tab (ADR-0102), and a failed run that costs nothing.
+One temporary commit per branch, so a conflict on the third loses only the
+third; the temporaries collapse into the one commit, hooks honoured, since that
+is the commit a reviewer reads. The branch prefix is `mr/`, deliberately not
+`marvin/`, or `adoptOrphans` would list it as a lost implementer tree.
+
+**Why the metered-CI gate does not fire here.** The gate exists so a *model*
+cannot spend money mid-turn. Here the user ticks "Open a merge request from
+the push" with the cost written on the toggle. Same decision, made by the
+same person, moved to where they are.
+
+**Also.** `reconcileWorktrees` now reports each branch's tip date and, for
+unmerged work, lines added / removed; the section sorts newest first and shows
+`+N −M`, so "what did I work on lately" is answered where the action lives.
+The cost is one `git log -1` per tree and a `numstat` for ready and session
+trees only — the reconcile is still synchronous git on the event loop, and
+that remains the open item.
+
+### Scope of Done
+
+- Five tests in `prepare-merge-request.test.ts`: one commit on the `mr/`
+  branch with every folded file, the user's HEAD and dirty file untouched, no
+  temp worktree left; open-tab and unknown slugs skipped with reasons and a
+  conflict stopping the run with the earlier fold kept; nothing finished →
+  no branch; push to a bare remote lands, and an MR push option the remote
+  refuses is reported with the branch kept on disk. Full suite green.
+- The sheet builds; `swift build` clean.
+
+## Amendment (2026-09-10, ADR-0111) — a preview before the first fold, and an owner for each conflict
+
+Merge all and Prepare MR stop at the first conflict, correctly, and left the user holding it. [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) adds `previewIntegration` (`git merge-tree --write-tree`, nothing checked out) so the verdict per branch — clean, behind by N, or the conflicting files — is known before either flow runs; the Prepare MR sheet shows it as a chip per row. A conflicting branch gets **Sync**: one turn in the tab's own worktree that merges the target in, resolves, tests and commits, dispatched through the resume path. The metered-CI confirm is unchanged and still stops that turn from opening a request. The Sessions pane gains a Ready-to-integrate section whose footer calls this ADR's two flows.

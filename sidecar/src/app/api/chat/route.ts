@@ -30,7 +30,7 @@ import {
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
-import { createSessionWorktree, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { createSessionWorktree, reconcileWorktrees, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -300,7 +300,7 @@ export async function POST(req: NextRequest) {
   let setupRecord: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean } | undefined;
   if (cwdCheck.worktree) {
     // The client addressed a registered worktree directly.
-    sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base };
+    sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base, ...(cwdCheck.worktree.baseRef ? { baseRef: cwdCheck.worktree.baseRef } : {}) };
   } else if (existingMeta) {
     const resolved = resolveSessionCwd(existingMeta);
     if (!resolved.present) {
@@ -314,7 +314,25 @@ export async function POST(req: NextRequest) {
     if (existingMeta.closedAt) {
       // A message to a closed tab reopens it (a kept worktree returns to `session`).
       updateSessionMeta(projectId, marvinSessionId, { closedAt: undefined });
-      if (sessionTree.mode === "worktree") reopenSessionWorktree(workDir, marvinSessionId);
+      if (sessionTree.mode === "worktree") {
+        // ADR-0111 — a branch that was already integrated is history, not a
+        // place to keep working: cut a fresh tree from the current HEAD.
+        const state = reconcileWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === marvinSessionId)?.state;
+        if (state === "merged") {
+          try {
+            const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: existingMeta.title, replace: true });
+            const { config } = readOrDetectWorktreeSetup(workDir);
+            prepareSessionWorktree(workDir, rec.path, config);
+            sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
+            cwd = rec.path;
+            logTelemetry({ kind: "worktree.session.recut", marvinSessionId, slug: rec.slug, branch: rec.branch });
+          } catch {
+            reopenSessionWorktree(workDir, marvinSessionId);
+          }
+        } else {
+          reopenSessionWorktree(workDir, marvinSessionId);
+        }
+      }
     }
     if (sessionTree.mode === "shared" && body.lane) {
       const lane = normaliseLane(body.lane);
@@ -329,7 +347,7 @@ export async function POST(req: NextRequest) {
         const setup = prepareSessionWorktree(workDir, rec.path, config);
         logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, detected, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length });
         setupRecord = { symlinked: setup.symlinked, copied: setup.copied, skipped: setup.skipped.length, detected };
-        sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base };
+        sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
         cwd = rec.path;
       } catch (err) {
         // An unborn HEAD, a bare layout, a submodule: fall back to shared and

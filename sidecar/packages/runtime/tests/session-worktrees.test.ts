@@ -20,6 +20,7 @@ import {
   listWorktrees,
   markSessionWorktreeClosed,
   mergeWorktree,
+  nameSessionBranchFromCommit,
   reconcileWorktrees,
   removeWorktree,
   reopenSessionWorktree,
@@ -104,6 +105,51 @@ describe("session worktrees", () => {
     const swept = sweepWorktrees(repo, Date.now(), { isSessionBusy: () => false });
     expect(swept.map((s) => [s.branch, s.deletedBranch])).toEqual([[rec.branch, true]]);
     expect(existsSync(rec.path)).toBe(false);
+  });
+
+  // ADR-0111 — a branch is named by its first commit, once; the directory stays.
+  it("renames the branch from the first commit subject, once, keeping the directory", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "name-sess", title: "@/Users/x/.marvin/attachments/6B57DF3" });
+    expect(nameSessionBranchFromCommit(repo, "name-sess")).toBeNull(); // nothing committed yet
+    commitIn(rec.path, "a.ts", "a\n"); // subject: "add a.ts"
+    commitIn(rec.path, "b.ts", "b\n");
+    const renamed = nameSessionBranchFromCommit(repo, "name-sess");
+    expect(renamed).toEqual({ from: rec.branch, to: `${SESSION_BRANCH_PREFIX}add-a-ts` });
+    expect(git("rev-parse", "--verify", "--quiet", `${SESSION_BRANCH_PREFIX}add-a-ts`)).toBeTruthy();
+    expect(() => git("rev-parse", "--verify", "--quiet", rec.branch)).toThrow();
+    const after = findSessionWorktree(repo, "name-sess")!;
+    expect(after.branch).toBe(`${SESSION_BRANCH_PREFIX}add-a-ts`);
+    expect(after.slug).toBe(rec.slug);
+    expect(after.path).toBe(rec.path);
+    expect(existsSync(rec.path)).toBe(true);
+    // The worktree follows its branch, and reconcile still derives from it.
+    expect(reconcileWorktrees(repo).find((w) => w.slug === rec.slug)).toMatchObject({ branch: `${SESSION_BRANCH_PREFIX}add-a-ts`, commits: 2, state: "session" });
+    // Once: a later commit with a different subject does not rename again.
+    commitIn(rec.path, "c.ts", "c\n");
+    expect(nameSessionBranchFromCommit(repo, "name-sess")).toBeNull();
+    // A second tab whose first commit has the same subject gets a suffix.
+    const other = createSessionWorktree(repo, { sessionId: "other-sess", title: "other" });
+    commitIn(other.path, "a.ts", "again\n");
+    expect(nameSessionBranchFromCommit(repo, "other-sess")?.to).toBe(`${SESSION_BRANCH_PREFIX}add-a-ts-2`);
+  });
+
+  // ADR-0111 — reopening an integrated tab cuts a fresh tree; the old one is swept.
+  it("replace cuts a fresh worktree for the same session and detaches the merged one", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "recut-sess", title: "first go" });
+    commitIn(rec.path, "x.ts", "x\n");
+    markSessionWorktreeClosed(repo, "recut-sess");
+    expect(mergeWorktree(repo, rec.slug).ok).toBe(true);
+    expect(reconcileWorktrees(repo).find((w) => w.slug === rec.slug)?.state).toBe("merged");
+    const fresh = createSessionWorktree(repo, { sessionId: "recut-sess", title: "first go", replace: true });
+    expect(fresh.slug).not.toBe(rec.slug);
+    expect(fresh.base).toBe(git("rev-parse", "HEAD"));
+    expect(findSessionWorktree(repo, "recut-sess")?.slug).toBe(fresh.slug);
+    const old = listWorktrees(repo).find((w) => w.slug === rec.slug)!;
+    expect(old.sessionId).toBeUndefined();
+    expect(old.finishedAt).toBeTruthy();
+    // The detached, merged tree is exactly what the sweep reclaims.
+    expect(sweepWorktrees(repo).map((s) => [s.slug, s.deletedBranch])).toEqual([[rec.slug, true]]);
+    expect(reconcileWorktrees(repo).find((w) => w.slug === fresh.slug)?.state).toBe("session");
   });
 
   it("merge folds a closed tab's branch into the main tree and derives `merged`", () => {

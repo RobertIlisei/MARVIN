@@ -28,6 +28,36 @@ MARVIN's turns run in the worktree. Closing the tab offers **Merge** (a local
 `--no-ff` merge into your current branch, never a push), **Keep** the branch,
 or **Discard** it.
 
+## Closing a tab, and what survives
+
+Nothing survives a tab unless it holds a commit ([ADR-0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md)).
+
+| When you close | MARVIN does | Asks |
+|---|---|---|
+| a shared tab, or a draft | closes it | no |
+| a tab with a turn running | offers to stop the turn first | yes |
+| an isolated tab with no commits and no changes | removes its worktree and branch | no |
+| an isolated tab whose branch is already merged | removes its worktree and branch | no |
+| an isolated tab with changes but no commits | **Keep** (commits them as work in progress) · Discard | yes |
+| an isolated tab with commits | **Keep for integration** · Merge into *your current branch* · Discard | yes |
+
+Keep is the default. It leaves the branch for the integration step below. Merge folds the tab into the branch you have checked out, locally, and the button names that branch. Discard is the only destructive option and is only ever taken on a click.
+
+Trees that are empty or already merged, and clean, are removed automatically: when MARVIN starts, and after every tab close. A tree with uncommitted work, unmerged commits, or a turn in flight is never touched by that sweep.
+
+## Integrating what the tabs produced
+
+The Sessions pane has a **Ready to integrate** section: every closed tab whose branch holds commits, with a verdict per row from a dry run against your current branch — `clean`, `clean · behind by 2`, or `conflicts in a.ts, b.ts`. The dry run checks nothing out and moves nothing.
+
+- **Sync** appears on a row that is behind or would conflict. It asks the tab that owns the branch to merge your current branch into its own worktree, resolve every conflict, run the relevant tests, and commit. That session knows what its changes were for; you, in the main checkout, do not. After a sync the row reads clean.
+- **Merge** folds one branch into your current branch, locally. Never pushes.
+- **Merge all** folds every ready branch, oldest first, and stops at the first conflict, with everything before it already in.
+- **Prepare MR…** squashes the branches you tick into one commit on a new `mr/…` branch, pushes it, and opens one merge request — one pipeline for the day's work instead of one per branch ([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md)). The sheet shows the same conflict chips, so a branch that needs a Sync is visible before anything is squashed.
+
+Branches are named by their first commit, not by the first message: `marvin/tab/add-etransport-retry` rather than `marvin/tab/users-robertilisei-marvin-attachments-6b`. The rename happens once, on the first turn that leaves a commit; the worktree directory keeps its original name.
+
+Sending a message to a closed tab whose branch was already integrated starts it on a fresh worktree cut from your current HEAD. A kept, unmerged tab reopens where it was.
+
 ## What a fresh worktree does not have
 
 A worktree is a clean checkout of **tracked** files. Everything git ignores is

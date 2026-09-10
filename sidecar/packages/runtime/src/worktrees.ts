@@ -65,6 +65,8 @@ export interface WorktreeRecord {
   taskId?: string;
   /** Set when the implementer's `task_notification` lands. */
   finishedAt?: string;
+  /** ADR-0111 — the branch was renamed from its first commit subject; done once. */
+  named?: boolean;
   /** Last derived state, cached for surfaces that read the file directly. */
   state?: WorktreeState;
   /** Ref the branch was found merged into, when `state === "merged"`. */
@@ -210,11 +212,19 @@ export function createWorktree(workDir: string, task: string): WorktreeRecord {
  */
 export function createSessionWorktree(
   workDir: string,
-  input: { sessionId: string; title?: string | undefined },
+  input: { sessionId: string; title?: string | undefined; replace?: boolean | undefined },
 ): WorktreeRecord {
-  const existing = listWorktrees(workDir);
+  let existing = listWorktrees(workDir);
   const already = existing.find((w) => w.kind === "session" && w.sessionId === input.sessionId);
-  if (already) return already;
+  if (already && !input.replace) return already;
+  if (already) {
+    // ADR-0111 — reopening a tab whose branch was already integrated cuts a
+    // FRESH tree from the current HEAD; the old record loses its session
+    // binding, stays closed, derives `merged`, and the sweep reclaims it.
+    const { sessionId: _drop, ...detached } = already;
+    existing = existing.map((w) => (w.slug === already.slug ? { ...detached, finishedAt: already.finishedAt ?? new Date().toISOString() } : w));
+    saveWorktrees(workDir, existing);
+  }
   const base = worktreeSlug(input.title?.trim() || input.sessionId.slice(0, 8));
   const slug = uniqueSlug(workDir, base, existing, SESSION_BRANCH_PREFIX);
   const path = join(worktreesDir(workDir), `${SESSION_DIR_PREFIX}${slug}`);
@@ -242,6 +252,43 @@ export function createSessionWorktree(
 
 /** ADR-0107 — the tab closed: the tree becomes an ordinary deliverable
  *  (`ready` / `empty` / `merged` by derivation). Nothing is deleted. */
+/**
+ * ADR-0111 — a branch is named by its first commit, not its first message.
+ * Before a commit exists the name is irrelevant (the branch will not
+ * survive); on the first turn that ends with a commit, rename it from the
+ * first commit's subject, once. The directory keeps its name — moving a
+ * checkout under a live session is not worth what it saves — and the
+ * record's `slug` with it; only `branch` changes.
+ */
+export function nameSessionBranchFromCommit(workDir: string, sessionId: string): { from: string; to: string } | null {
+  const all = listWorktrees(workDir);
+  const idx = all.findIndex((w) => w.kind === "session" && w.sessionId === sessionId);
+  if (idx < 0) return null;
+  const rec = all[idx] as WorktreeRecord;
+  if (rec.named) return null;
+  const commits = Number(gitOr(workDir, ["rev-list", "--count", `${rec.base}..${rec.branch}`], "0")) || 0;
+  if (commits === 0) return null;
+  const subject = gitOr(workDir, ["log", "--reverse", "--format=%s", `${rec.base}..${rec.branch}`], "").split("\n")[0]?.trim() ?? "";
+  const mark = (branch: string) => {
+    all[idx] = { ...rec, branch, named: true };
+    saveWorktrees(workDir, all);
+  };
+  const wanted = worktreeSlug(subject);
+  if (!subject || wanted === rec.slug || `${SESSION_BRANCH_PREFIX}${wanted}` === rec.branch) {
+    mark(rec.branch);
+    return null;
+  }
+  const others = all.filter((_, i) => i !== idx);
+  const slug = uniqueSlug(workDir, wanted, others, SESSION_BRANCH_PREFIX);
+  const to = `${SESSION_BRANCH_PREFIX}${slug}`;
+  if (!gitOk(workDir, ["branch", "-m", rec.branch, to])) {
+    mark(rec.branch);
+    return null;
+  }
+  mark(to);
+  return { from: rec.branch, to };
+}
+
 export function markSessionWorktreeClosed(workDir: string, sessionId: string, now = Date.now()): WorktreeRecord | null {
   const all = listWorktrees(workDir);
   const idx = all.findIndex((w) => w.kind === "session" && w.sessionId === sessionId);
