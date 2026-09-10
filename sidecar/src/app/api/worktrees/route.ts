@@ -18,7 +18,8 @@
  */
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
-import { mergeAllWorktrees, mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
+import { previewIntegration } from "@marvin/runtime/integration";
+import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -52,7 +53,17 @@ export async function POST(req: NextRequest) {
   // ADR-0107 — this route mutates branches; it had no CSRF guard.
   const guard = requireMarvinClient(req);
   if (guard) return guard;
-  let body: { cwd?: string; action?: string; slug?: string };
+  let body: {
+    cwd?: string;
+    action?: string;
+    slug?: string;
+    slugs?: unknown;
+    name?: unknown;
+    message?: unknown;
+    push?: unknown;
+    openMergeRequest?: unknown;
+    target?: unknown;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -62,6 +73,11 @@ export async function POST(req: NextRequest) {
   if (resolved.error) return resolved.error;
 
   try {
+    // ADR-0111 — dry-run every finished branch against the current branch.
+    if (body.action === "preview") {
+      const slugs = Array.isArray(body.slugs) ? body.slugs.filter((x): x is string => typeof x === "string") : undefined;
+      return NextResponse.json(previewIntegration(resolved.cwd, { slugs, includeOpen: true }));
+    }
     if (body.action === "sweep") {
       return NextResponse.json({ swept: sweepWorktrees(resolved.cwd) });
     }
@@ -91,6 +107,25 @@ export async function POST(req: NextRequest) {
     if (body.action === "merge-all") {
       const out = mergeAllWorktrees(resolved.cwd);
       return NextResponse.json(out, { status: out.stopped ? 409 : 200 });
+    }
+    // Squash chosen finished branches into ONE commit on an `mr/…` branch;
+    // push and MR-open are explicit opt-ins the sheet's own toggles set. The
+    // user clicked this — it is not a model turn, so the metered-CI gate
+    // (ADR-0109) is the sheet's wording, not a confirm card.
+    if (body.action === "prepare-mr") {
+      const slugs = Array.isArray(body.slugs) ? body.slugs.filter((s): s is string => typeof s === "string") : [];
+      if (slugs.length === 0) return NextResponse.json({ error: "slugs required" }, { status: 400 });
+      const target = typeof body.target === "string" ? body.target.trim() : "";
+      if (target && !/^[A-Za-z0-9._\/-]{1,120}$/.test(target)) return NextResponse.json({ error: "invalid target" }, { status: 400 });
+      const out = await prepareMergeRequest(resolved.cwd, {
+        slugs,
+        ...(typeof body.name === "string" ? { name: body.name.slice(0, 120) } : {}),
+        ...(typeof body.message === "string" ? { message: body.message.slice(0, 8000) } : {}),
+        push: body.push === true,
+        openMergeRequest: body.openMergeRequest === true,
+        ...(target ? { target } : {}),
+      });
+      return NextResponse.json(out, { status: out.ok ? 200 : 409 });
     }
     return NextResponse.json({ error: `unknown action ${body.action ?? "(none)"}` }, { status: 400 });
   } catch (err) {
