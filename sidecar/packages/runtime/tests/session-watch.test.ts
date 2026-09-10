@@ -15,15 +15,16 @@ import { clearTurnConfirms, registerPendingConfirm } from "../src/confirm-regist
 import { recordTurnCost } from "../src/cost-tracker";
 import { writePlanState } from "../src/plan-state";
 import { __resetActivityForTests, setActivity } from "../src/session-activity";
-import { upsertSessionMeta } from "../src/session-meta";
+import { updateSessionMeta, upsertSessionMeta } from "../src/session-meta";
 import {
   __resetSessionDiffMemoForTests,
+  __resetSessionReconcileMemoForTests,
   buildSessionWatch,
   deriveSessionState,
   sessionDiff,
 } from "../src/session-watch";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
-import { createWorktree } from "../src/worktrees";
+import { createSessionWorktree, createWorktree, markSessionWorktreeClosed } from "../src/worktrees";
 
 describe("deriveSessionState", () => {
   it("needs-you beats working beats interrupted beats failed beats idle", () => {
@@ -82,6 +83,38 @@ describe("buildSessionWatch", () => {
     delete process.env.MARVIN_DATA_DIR;
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  // ADR-0111 — the row carries the sidecar's derived worktree state, and a
+  // closed tab whose branch holds work stays in the universe.
+  it("a worktree row carries state, commits, dirty and behind; a closed ready tab is still listed", () => {
+    const wt = createSessionWorktree(repo, { sessionId: "ready-sess", title: "ready tab" });
+    upsertSessionMeta(projectId, "ready-sess", {
+      workDir: repo,
+      tree: { mode: "worktree", slug: wt.slug, path: wt.path, branch: wt.branch, base: wt.base },
+      posture,
+    });
+    writeFileSync(join(wt.path, "work.md"), "w\n");
+    execFileSync("git", ["add", "work.md"], { cwd: wt.path, stdio: "pipe" });
+    execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "tab work"], { cwd: wt.path, stdio: "pipe" });
+    // The main checkout moves on by one commit: the tab is now behind by one.
+    writeFileSync(join(repo, "main.md"), "m\n");
+    git("add", "main.md");
+    git("commit", "-qm", "main moved");
+    __resetSessionReconcileMemoForTests();
+
+    const open = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["ready-sess"] })[0]!;
+    expect(open.worktree).toMatchObject({ slug: wt.slug, branch: wt.branch, state: "session", commits: 1, dirty: false, behind: 1, closed: false });
+
+    // Close the tab: the meta is closed (so the recent-metas universe drops
+    // it) but the branch is `ready` — the reconcile puts it back.
+    markSessionWorktreeClosed(repo, "ready-sess");
+    updateSessionMeta(projectId, "ready-sess", { closedAt: new Date().toISOString() });
+    __resetSessionReconcileMemoForTests();
+    const rows = buildSessionWatch({ projectId, workDir: repo });
+    const row = rows.find((r) => r.marvinSessionId === "ready-sess");
+    expect(row?.worktree).toMatchObject({ state: "ready", commits: 1, closed: true });
+    expect(buildSessionWatch({ projectId, workDir: repo, sessionIds: ["shared-x"] }).find((r) => r.marvinSessionId === "shared-x")?.worktree).toBeNull();
   });
 
   it("a worktree session's badge is measured against its base, a shared one against HEAD", () => {

@@ -23,6 +23,13 @@ struct SessionModeChip: View {
 
     private var mode: SessionMode {
         if let entry, !entry.isDraft { return entry.mode }
+        // A draft tab that has already picked. Nothing exists on the server
+        // until the first message, so `applyTreeSwitch` records the choice on
+        // the entry and `treeFields` reads it back when that message is sent.
+        // Read the same record here: without it the picker re-renders the
+        // app-wide default, the segment snaps back to Isolated, and the click
+        // looks ignored even though the choice was taken.
+        if let chosen = entry?.tree?.mode { return chosen }
         return draftIsolated ? .worktree : .shared
     }
 
@@ -120,7 +127,7 @@ struct SessionModePopover: View {
             if mode == .worktree, let tree, tree.mode == .worktree {
                 facts(tree)
             } else if mode == .worktree {
-                Text(isDraft ? "The worktree is cut from your current HEAD when you send the first message."
+                Text(isDraft ? "The worktree is cut from \(currentBranchLabel) when you send the first message."
                              : "Worktree details arrive after the first message.")
                     .font(.system(size: 10.5)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -150,18 +157,19 @@ struct SessionModePopover: View {
             return
         }
         // Leaving a worktree: what happens to it?
+        // ADR-0111 — decided from the sidecar's derived state (last snapshot);
+        // a tree holding nothing is discarded, not kept.
         let outcome = TabCloseDecision.decide(
             isLive: entry?.isLive ?? false,
             mode: .worktree,
-            hasWorktree: entry?.tree?.mode == .worktree,
-            worktreeState: nil,
-            commits: entry?.diff?.files,
-            dirty: (entry?.diff?.untracked ?? 0) > 0 || (entry?.diff?.files ?? 0) > 0,
-            branch: entry?.tree?.branch
+            worktree: entry?.tree?.mode == .worktree ? entry?.worktree : nil,
+            target: nil
         )
         switch outcome {
-        case .closeNow, .reclaimSilently:
+        case .closeNow:
             onSwitch(.shared, .keepBranch)
+        case .reclaimSilently:
+            onSwitch(.shared, .discard)
         case .stopTurnFirst, .offer:
             leaving = outcome
         }
@@ -180,7 +188,7 @@ struct SessionModePopover: View {
         VStack(alignment: .leading, spacing: 3) {
             fact("Branch", tree.branch ?? "—")
             fact("Path", tree.path ?? "—")
-            fact("Base", tree.base.map { String($0.prefix(7)) } ?? "—")
+            fact("Cut from", baseLabel(tree))
             if let diff = entry?.diff {
                 fact("Changes", "+\(diff.added) −\(diff.removed) in \(diff.files) file\(diff.files == 1 ? "" : "s")")
             }
@@ -199,6 +207,27 @@ struct SessionModePopover: View {
             }
             .padding(.top, 2)
         }
+    }
+
+    /// "main @ 244d5a8" — the branch HEAD was on at the cut, then the
+    /// commit. A sha alone answers "which commit", never "which branch",
+    /// which is the question a user asks when a new tab's branch appears
+    /// in the picker with no visible parent.
+    private func baseLabel(_ tree: SessionTreeWire) -> String {
+        let sha = tree.base.map { String($0.prefix(7)) }
+        switch (tree.baseRef, sha) {
+        case let (ref?, sha?): return "\(ref) @ \(sha)"
+        case let (ref?, nil): return ref
+        case let (nil, sha?): return sha
+        case (nil, nil): return "—"
+        }
+    }
+
+    /// Names the branch a draft tab's worktree will be cut from: the
+    /// shared checkout's current branch, as the status bar shows it.
+    private var currentBranchLabel: String {
+        if let b = MarvinBridge.shared.branch, !b.isEmpty { return "`\(b)` (your current HEAD)" }
+        return "your current HEAD"
     }
 
     private func fact(_ k: String, _ v: String) -> some View {

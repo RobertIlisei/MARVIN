@@ -19,6 +19,7 @@
     "./worktree-setup": "./src/worktree-setup.ts",
     "./session-recovery": "./src/session-recovery.ts",
     "./session-activity": "./src/session-activity.ts",
+    "./telemetry": "./src/telemetry.ts",
     "./personality": "./src/personality.ts",
     "./sdk-runner": "./src/sdk-runner.ts",
     "./transient-errors": "./src/transient-errors.ts",

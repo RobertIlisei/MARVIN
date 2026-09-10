@@ -9,17 +9,22 @@
  *             locally, never pushed (ADR-0103). A dirty worktree is refused
  *             unless `commitFirst`, which commits everything in it first.
  *             A conflict aborts cleanly and leaves the branch in place.
- *   keep    — nothing more; the tree derives to ready / empty and shows in
- *             Source Control. An `empty` clean tree is reclaimed by the next
- *             sweep.
- *   discard — checkout AND branch removed. The one destructive option, and
- *             only ever taken on an explicit request.
+ *   keep    — the branch is kept for integration (Merge all / Prepare MR,
+ *             ADR-0109). With `commitFirst`, uncommitted work is committed
+ *             as WIP first so nothing kept can be lost to a sweep (ADR-0111).
+ *   discard — checkout AND branch removed. Taken on an explicit request, and
+ *             by the client's silent path for a tree with nothing in it
+ *             (ADR-0111: nothing survives a tab unless it holds a commit).
+ *
+ * After every close the sweep runs, bounded and best-effort, so closed
+ * `empty` and `merged` trees leave the disk without a button (ADR-0111).
  *
  * Refused while the tab has a live turn.
  */
 
 import { getProject } from "@marvin/runtime/projects";
 import { readSessionMeta, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { logTelemetry } from "@marvin/runtime/telemetry";
 import { getLiveTurn } from "@marvin/runtime/turn-registry";
 import { readWorktreeSetupConfig } from "@marvin/runtime/worktree-setup";
 import {
@@ -30,6 +35,7 @@ import {
   markSessionWorktreeClosed,
   mergeWorktree,
   reopenSessionWorktree,
+  sweepWorktrees,
   symlinkExcludePattern,
   unstageSymlinkedDirs,
   worktreeHasWork,
@@ -119,7 +125,30 @@ export async function POST(req: NextRequest) {
     const out = discardWorktree(workDir, rec.slug);
     if (!out.ok) return NextResponse.json({ error: out.message, code: "discard-failed" }, { status: 409 });
     message = out.message;
+  } else if (body.commitFirst && worktreeHasWork(rec.path)) {
+    // ADR-0111 — "keep" on a dirty tree commits the work so the kept branch
+    // holds it; a clean tree is left exactly as it is.
+    const linked = readWorktreeSetupConfig(workDir).symlinkDirectories;
+    excludeFromStatus(workDir, linked.map(symlinkExcludePattern));
+    unstageSymlinkedDirs(rec.path, linked);
+    const committed = await commitWorktreeWorkInProgress(rec.path, rec.slug);
+    if (!committed.ok) {
+      reopenSessionWorktree(workDir, sessionId);
+      return NextResponse.json(
+        { error: `could not commit the worktree: ${committed.message}`, code: "commit-failed", branch: rec.branch },
+        { status: 409 },
+      );
+    }
+    message = `kept ${rec.branch} with its changes committed`;
   }
   if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
-  return NextResponse.json({ ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message });
+  // ADR-0111 — reclaim what this close (or an earlier one) left spent.
+  let swept = 0;
+  try {
+    swept = sweepWorktrees(workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended }).filter((s) => s.deletedBranch).length;
+    if (swept) logTelemetry({ kind: "worktree.session.swept", trigger: "close", swept });
+  } catch {
+    /* best-effort */
+  }
+  return NextResponse.json({ ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message, swept });
 }

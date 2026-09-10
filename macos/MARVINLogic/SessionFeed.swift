@@ -32,15 +32,18 @@ public struct SessionTreeWire: Codable, Equatable, Sendable {
     public let path: String?
     public let branch: String?
     public let base: String?
+    /// Branch HEAD was on when the worktree was cut — what `base` is a sha of.
+    public let baseRef: String?
     public let lane: [String]?
 
     public init(mode: SessionMode, slug: String? = nil, path: String? = nil, branch: String? = nil,
-                base: String? = nil, lane: [String]? = nil) {
+                base: String? = nil, baseRef: String? = nil, lane: [String]? = nil) {
         self.mode = mode
         self.slug = slug
         self.path = path
         self.branch = branch
         self.base = base
+        self.baseRef = baseRef
         self.lane = lane
     }
 }
@@ -169,12 +172,13 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
         public let path: String?
         public let branch: String?
         public let base: String?
+        public let baseRef: String?
         public let lane: [String]?
         public let cwd: String?
         public let currentBranch: String?
         public let present: Bool?
         public var wire: SessionTreeWire {
-            SessionTreeWire(mode: mode, slug: slug, path: path, branch: branch, base: base, lane: lane)
+            SessionTreeWire(mode: mode, slug: slug, path: path, branch: branch, base: base, baseRef: baseRef, lane: lane)
         }
     }
     public struct LastTurn: Decodable, Equatable, Sendable {
@@ -193,11 +197,29 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
         public let tool: String?
         public let turnId: String?
     }
+    /// ADR-0111 — the sidecar's derived state of the tab's worktree.
+    public struct Worktree: Decodable, Equatable, Sendable {
+        public let slug: String
+        public let branch: String
+        public let state: String
+        public let commits: Int
+        public let dirty: Bool
+        public let base: String?
+        public let behind: Int?
+        public let closed: Bool?
+        public let mergedInto: String?
+        public init(slug: String, branch: String, state: String, commits: Int, dirty: Bool,
+                    base: String? = nil, behind: Int? = nil, closed: Bool? = nil, mergedInto: String? = nil) {
+            self.slug = slug; self.branch = branch; self.state = state; self.commits = commits; self.dirty = dirty
+            self.base = base; self.behind = behind; self.closed = closed; self.mergedInto = mergedInto
+        }
+    }
 
     public let marvinSessionId: String
     public let state: String
     public let turn: Turn?
     public let activity: Activity?
+    public let worktree: Worktree?
     public let pending: [PendingConfirmInfo]?
     public let tree: Tree?
     public let diff: SessionDiffSummary?

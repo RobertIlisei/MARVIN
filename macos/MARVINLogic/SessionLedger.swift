@@ -34,6 +34,8 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var isDraft: Bool = false
     /// Set when the tab was closed; feeds a "Recent" section.
     public var closedAt: Date?
+    /// ADR-0111 — the sidecar's derived worktree state, from the last snapshot.
+    public var worktree: SessionWatchRowWire.Worktree?
 
     public init(id: String) { self.id = id }
 
@@ -165,6 +167,7 @@ public struct SessionLedger: Equatable, Sendable {
                 e.tree = tree.wire
                 e.mode = tree.mode
             }
+            e.worktree = row.worktree
             if let diff = row.diff { e.diff = diff }
             if let plan = row.plan { e.plan = plan }
             if let cost = row.cost { e.costUsd = cost.costUsd }

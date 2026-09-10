@@ -38,6 +38,31 @@ export async function register(): Promise<void> {
     console.error("[session-recovery] boot scan failed:", err);
   }
 
+  // ADR-0111 — closed `empty` and `merged` session trees leave the disk at
+  // boot, under ADR-0103's guards (never dirty, never ready, never live).
+  // Bounded: one reconcile per registered project.
+  try {
+    const { sweepWorktrees } = await import("@marvin/runtime/worktrees");
+    const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
+    const { logTelemetry } = await import("@marvin/runtime/telemetry");
+    let swept = 0;
+    for (const p of listProjects()) {
+      try {
+        swept += sweepWorktrees(p.workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended })
+          .filter((s) => s.deletedBranch).length;
+      } catch {
+        /* a project whose checkout is gone or not a repo: nothing to sweep */
+      }
+    }
+    if (swept) {
+      logTelemetry({ kind: "worktree.session.swept", trigger: "boot", swept });
+      // eslint-disable-next-line no-console
+      console.log(`[worktrees] reclaimed ${swept} spent session worktree(s) at boot`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[worktrees] boot sweep failed:", err);
+  }
   const stats = armAll();
   if (stats.armed || stats.firedImmediately || stats.dropped) {
     // eslint-disable-next-line no-console

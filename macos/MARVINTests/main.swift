@@ -3245,6 +3245,12 @@ runner.suite("session-ledger") {
         l.apply(snapshot: rows, now: t0)
         runner.expect(l["s"]?.brainState == "tool" && l["s"]?.activityTool == "Read", "snapshot activity lands")
     }
+    runner.test("a snapshot carries the derived worktree state") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","worktree":{"slug":"x","branch":"marvin/tab/x","state":"ready","commits":3,"dirty":false,"base":"abc","behind":2,"closed":true}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0)
+        runner.expect(l["s"]?.worktree?.state == "ready" && l["s"]?.worktree?.commits == 3 && l["s"]?.worktree?.behind == 2, "worktree lands")
+    }
     runner.test("a snapshot marks interrupted sessions") {
         var l = SessionLedger()
         let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"interrupted","lastTurn":{"turnId":"t","outcome":"interrupted"}}]}"#.utf8))!
@@ -3331,19 +3337,38 @@ runner.suite("session-cwd-policy") {
 }
 
 runner.suite("tab-close-decision") {
-    func d(live: Bool = false, mode: SessionMode = .worktree, hasWorktree: Bool = true, state: String? = nil, commits: Int? = nil, dirty: Bool? = nil) -> TabCloseDecision.Outcome {
-        TabCloseDecision.decide(isLive: live, mode: mode, hasWorktree: hasWorktree, worktreeState: state, commits: commits, dirty: dirty, branch: "marvin/tab/x")
+    // ADR-0111 — nothing survives a tab unless it holds a commit.
+    func wt(state: String = "session", commits: Int = 0, dirty: Bool = false, mergedInto: String? = nil) -> SessionWatchRowWire.Worktree {
+        SessionWatchRowWire.Worktree(slug: "x", branch: "marvin/tab/x", state: state, commits: commits, dirty: dirty, base: "abc", behind: 0, closed: false, mergedInto: mergedInto)
     }
-    runner.test("shared, no worktree, or a live turn decide before anything else") {
-        runner.expect(d(mode: .shared) == .closeNow, "shared closes")
-        runner.expect(d(hasWorktree: false) == .closeNow, "no worktree closes")
-        runner.expect(d(live: true, commits: 3) == .stopTurnFirst, "live turn first")
+    func d(live: Bool = false, mode: SessionMode = .worktree, worktree: SessionWatchRowWire.Worktree? = nil, target: String? = "main") -> TabCloseDecision.Outcome {
+        TabCloseDecision.decide(isLive: live, mode: mode, worktree: worktree, target: target)
     }
-    runner.test("empty and clean reclaims silently; anything holding work asks") {
-        runner.expect(d(commits: 0, dirty: false) == .reclaimSilently, "nothing to lose")
-        if case .offer(let a, _) = d(commits: 0, dirty: true) { runner.expect(a, equals: [.merge, .keepBranch, .discard], "dirty, no commits") } else { runner.expect(false, "dirty offers") }
-        if case .offer(let a, _) = d(commits: 2, dirty: false) { runner.expect(a, equals: [.merge, .keepBranch, .discard], "commits") } else { runner.expect(false, "commits offer") }
-        if case .offer(let a, _) = d(state: "merged", commits: 2) { runner.expect(a, equals: [.keepBranch, .discard], "merged: nothing to merge") } else { runner.expect(false, "merged offers") }
+    runner.test("shared, no worktree yet, or a live turn decide before anything else") {
+        runner.expect(d(mode: .shared, worktree: wt()) == .closeNow, "shared closes")
+        runner.expect(d(worktree: nil) == .closeNow, "no tree yet closes")
+        runner.expect(d(live: true, worktree: wt(commits: 3)) == .stopTurnFirst, "live turn first")
+    }
+    runner.test("a tree holding nothing is discarded without asking") {
+        runner.expect(d(worktree: wt(commits: 0, dirty: false)) == .reclaimSilently, "empty and clean")
+        runner.expect(d(worktree: wt(state: "merged", commits: 2, dirty: false, mergedInto: "main")) == .reclaimSilently, "merged and clean")
+    }
+    runner.test("work asks; keep is first and the merge names its target") {
+        if case .offer(let a, let note) = d(worktree: wt(commits: 0, dirty: true)) {
+            runner.expect(a, equals: [.keepBranch, .discard], "dirty, no commits: no merge offered")
+            runner.expect(note.contains("work in progress"), "keep commits WIP")
+        } else { runner.expect(false, "dirty offers") }
+        if case .offer(let a, let note) = d(worktree: wt(commits: 2, dirty: false), target: "fix/thing") {
+            runner.expect(a, equals: [.keepBranch, .merge, .discard], "commits: keep first")
+            runner.expect(note.contains("fix/thing"), "merge names the target")
+            runner.expect(note.contains("2 commits"), "counts commits")
+        } else { runner.expect(false, "commits offer") }
+        if case .offer(let a, _) = d(worktree: wt(commits: 2, dirty: true)) {
+            runner.expect(a, equals: [.keepBranch, .merge, .discard], "commits and dirty")
+        } else { runner.expect(false, "dirty commits offer") }
+        if case .offer(let a, _) = d(worktree: wt(state: "merged", commits: 2, dirty: true, mergedInto: "main")) {
+            runner.expect(a, equals: [.keepBranch, .discard], "merged but dirty: nothing to merge again")
+        } else { runner.expect(false, "merged dirty offers") }
     }
 }
 

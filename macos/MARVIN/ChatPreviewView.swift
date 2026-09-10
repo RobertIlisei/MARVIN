@@ -659,13 +659,27 @@ final class ChatPreviewModel {
     /// a client-supplied `marvinSessionId` on the first message, so the tab —
     /// and its tree mode — exist before anything is typed, and nothing on disk
     /// is created for a tab that is never typed into.
-    func newTab() {
+    ///
+    /// `mode` picks the tab's tree up front — a plain chat on the shared
+    /// checkout (the pre-ADR-0107 shape), or an isolated worktree with its
+    /// own branch. `nil` takes the app-wide default. The choice is recorded
+    /// on the draft exactly as the header chip records it, so the first
+    /// message declares it and nothing is cut until then.
+    func newTab(mode: SessionMode? = nil) {
         guard let pid = loadedProjectId ?? MarvinBridge.shared.activeProjectId else {
             clear()
             return
         }
+        // An empty draft is already a new tab. Re-shape it rather than stack
+        // another empty one — this is what "New Chat" on a blank tab means.
+        if let sid = loadedSessionId, SessionRegistry.shared.isDraft(sid), messages.isEmpty, !isSending {
+            if let mode { SessionRegistry.shared.noteTree(id: sid, tree: SessionTreeWire(mode: mode)) }
+            return
+        }
         clear()
-        startDraft(projectId: pid, sessionId: SessionRegistry.shared.mintDraft())
+        let sid = SessionRegistry.shared.mintDraft()
+        startDraft(projectId: pid, sessionId: sid)
+        if let mode { SessionRegistry.shared.noteTree(id: sid, tree: SessionTreeWire(mode: mode)) }
     }
 
     private func startDraft(projectId: String, sessionId: String) {
@@ -2254,9 +2268,10 @@ struct ChatPreviewView: View {
                 forName: .marvinRequestNewSession,
                 object: nil,
                 queue: .main
-            ) { _ in
+            ) { note in
+                let mode = (note.userInfo?["mode"] as? String).flatMap(SessionMode.init(rawValue:))
                 Task { @MainActor in
-                    model.newTab()
+                    model.newTab(mode: mode)
                     if let pid = MarvinBridge.shared.activeProjectId {
                         model.refreshSessions(projectId: pid)
                     }
@@ -2602,14 +2617,22 @@ struct ChatPreviewView: View {
             }
             Spacer(minLength: 4)
             openSessionsMenu
-            Button {
-                model.newTab()
-                if let pid = bridge.activeProjectId { model.refreshSessions(projectId: pid) }
+            // Click = the app-wide default; the menu makes the other shape one
+            // click away. "A normal chat like MARVIN had before" is a shared
+            // tab — no branch, no worktree, no containment confirms.
+            Menu {
+                newTabMenuItems
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .medium))
                     .frame(width: 24, height: 22)
+            } primaryAction: {
+                startNewTab(mode: nil)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("New tab — click for the default, hold for shared chat or isolated worktree")
             .buttonStyle(.plain)
             // ⌘⇧N is owned by File ▸ New Session, which posts
             // .marvinRequestNewSession to the observer above — the same
@@ -2654,26 +2677,41 @@ struct ChatPreviewView: View {
     }
 
     /// ADR-0107 — closing a tab asks what to do with its worktree, when that
-    /// question has more than one answer.
+    /// question has more than one answer. ADR-0111 — the answer comes from the
+    /// sidecar's derived state, fetched now, never from the ledger's guess; a
+    /// tree holding nothing is discarded without asking.
     private func requestCloseTab(_ sid: String) {
         let registry = SessionRegistry.shared
         let entry = registry.entry(sid)
-        let outcome = TabCloseDecision.decide(
-            isLive: entry?.isLive ?? false,
-            mode: registry.isDraft(sid) ? .shared : (entry?.mode ?? .shared),
-            hasWorktree: entry?.tree?.mode == .worktree,
-            worktreeState: nil,
-            commits: entry?.diff?.files,
-            dirty: (entry?.diff?.untracked ?? 0) > 0,
-            branch: entry?.tree?.branch
-        )
-        switch outcome {
-        case .closeNow:
+        let mode: SessionMode = registry.isDraft(sid) ? .shared : (entry?.mode ?? .shared)
+        // Fast paths need no fetch: a draft, a shared tab, a live turn.
+        if entry?.isLive == true {
+            pendingClose = TabCloseChoice(id: sid, outcome: .stopTurnFirst, branch: entry?.tree?.branch)
+            return
+        }
+        guard mode == .worktree, entry?.tree?.mode == .worktree, let pid = bridge.activeProjectId else {
             closeTab(sid, action: nil)
-        case .reclaimSilently:
-            closeTab(sid, action: .keepBranch)
-        case .stopTurnFirst, .offer:
-            pendingClose = TabCloseChoice(id: sid, outcome: outcome, branch: entry?.tree?.branch)
+            return
+        }
+        Task { @MainActor in
+            let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: [sid]) ?? []
+            let row = rows.first(where: { $0.marvinSessionId == sid })
+            let worktree = row?.worktree ?? entry?.worktree
+            let target = row?.tree?.currentBranch
+            let outcome = TabCloseDecision.decide(
+                isLive: row?.turn != nil,
+                mode: .worktree,
+                worktree: worktree,
+                target: target
+            )
+            switch outcome {
+            case .closeNow:
+                closeTab(sid, action: nil)
+            case .reclaimSilently:
+                closeTab(sid, action: .discard)
+            case .stopTurnFirst, .offer:
+                pendingClose = TabCloseChoice(id: sid, outcome: outcome, branch: worktree?.branch ?? entry?.tree?.branch, target: target)
+            }
         }
     }
 
@@ -2692,7 +2730,9 @@ struct ChatPreviewView: View {
             model.closingTabLabel = label
             defer { model.closingTabLabel = nil }
             do {
-                let out = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action == .merge)
+                // ADR-0111 — keep and merge both commit uncommitted work first, so
+                // nothing that leaves a tab can be lost to a sweep.
+                let out = try await SessionMetaService.close(projectId: pid, sessionId: sid, action: action, commitFirst: action != .discard)
                 model.closeTab(sid)
                 // Say what happened. The tab that asked is gone by now, so the
                 // message lands on whichever session is on screen next — which
@@ -3413,14 +3453,42 @@ struct ChatPreviewView: View {
             // Phase 2f — Clear (⌘⇧N) wipes the list, cancels any
             // in-flight turn, and resets the bridge state captured
             // from the last turn.started.
-            Button("New") {
-                model.newTab()
+            Menu {
+                newTabMenuItems
+            } label: {
+                Text("New")
+            } primaryAction: {
+                startNewTab(mode: nil)
             }
             .controlSize(.small)
-            .disabled(model.messages.isEmpty && !model.isSending)
-            .help("Reset preview state. ⌘⇧N")
+            .fixedSize()
+            .help("New tab (⌘⇧N). Menu: plain chat on the shared checkout, or an isolated worktree with its own branch.")
         }
         .padding(12)
+    }
+
+    /// The two shapes a new tab can take, named by what they mean for the
+    /// user rather than by the mechanism. Shared first: it is the plain chat.
+    @ViewBuilder
+    private var newTabMenuItems: some View {
+        Button {
+            startNewTab(mode: .shared)
+        } label: {
+            Label("New Chat — shared checkout", systemImage: "rectangle.split.2x1")
+        }
+        Button {
+            startNewTab(mode: .worktree)
+        } label: {
+            Label("New Isolated Tab — own branch", systemImage: "arrow.triangle.branch")
+        }
+        Divider()
+        let isolatedDefault = UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true
+        Text("Default (⌘⇧N): \(isolatedDefault ? "isolated" : "shared") — change in Settings")
+    }
+
+    private func startNewTab(mode: SessionMode?) {
+        model.newTab(mode: mode)
+        if let pid = bridge.activeProjectId { model.refreshSessions(projectId: pid) }
     }
 
     /// ADR-0048 — top-of-list history paging control: load the next page of

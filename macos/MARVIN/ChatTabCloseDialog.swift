@@ -10,6 +10,8 @@ struct TabCloseChoice: Identifiable, Equatable {
     let id: String              // marvinSessionId
     let outcome: TabCloseDecision.Outcome
     let branch: String?
+    /// ADR-0111 — the branch a merge would land on, named on the button.
+    var target: String? = nil
 }
 
 extension View {
@@ -33,17 +35,22 @@ extension View {
             case .offer(let actions, _):
                 ForEach(actions, id: \.rawValue) { action in
                     switch action {
-                    case .merge:
-                        Button("Merge into my branch") { onAction(c.id, .merge) }
                     case .keepBranch:
-                        Button("Keep the branch, close the tab") { onAction(c.id, .keepBranch) }
+                        Button("Keep for integration") { onAction(c.id, .keepBranch) }
+                    case .merge:
+                        Button("Merge into \(c.target ?? "my branch")") { onAction(c.id, .merge) }
                     case .discard:
                         Button("Discard the branch", role: .destructive) { onAction(c.id, .discard) }
                     }
                 }
                 Button("Cancel", role: .cancel) {}
-            case .closeNow, .reclaimSilently:
+            case .closeNow:
                 Button("Close") { onAction(c.id, .keepBranch) }
+                Button("Cancel", role: .cancel) {}
+            case .reclaimSilently:
+                // Not normally presented (the caller discards without asking);
+                // if it is, the honest button is the discard.
+                Button("Close and discard the empty branch") { onAction(c.id, .discard) }
                 Button("Cancel", role: .cancel) {}
             }
         } message: { c in

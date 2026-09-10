@@ -48,6 +48,12 @@ export interface WorktreeRecord {
   branch: string;
   /** Commit the branch was cut from. */
   base: string;
+  /**
+   * Branch HEAD was on when the tree was cut (`main`, a feature branch…).
+   * `base` alone is a sha nobody can place; the popover shows this beside
+   * it. Absent when HEAD was detached, and on records from before 2026-09-10.
+   */
+  baseRef?: string;
   createdAt: string;
   /** One line: what the implementer was asked to do, or the chat tab's title. */
   task: string;
@@ -75,6 +81,11 @@ export interface ReconciledWorktree extends WorktreeRecord {
   dirty: boolean;
   /** False once the checkout has been removed but the branch survives. */
   checkoutPresent: boolean;
+  /** ISO date of the branch tip — what "latest branches I worked on" sorts by. */
+  lastCommitAt?: string;
+  /** Lines added / removed against the base. Only computed for unmerged work. */
+  added?: number;
+  removed?: number;
 }
 
 const REGISTRY = "worktrees.json";
@@ -180,8 +191,12 @@ export function createWorktree(workDir: string, task: string): WorktreeRecord {
   mkdirSync(worktreesDir(workDir), { recursive: true });
   git(workDir, ["worktree", "add", "-q", "-b", branch, path, "HEAD"]);
   const base = git(workDir, ["rev-parse", "HEAD"]);
+  const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
   excludeWorktreesDir(workDir);
-  const record: WorktreeRecord = { slug, path, branch, base, createdAt: new Date().toISOString(), task, state: "running" };
+  const record: WorktreeRecord = {
+    slug, path, branch, base, ...(baseRef ? { baseRef } : {}),
+    createdAt: new Date().toISOString(), task, state: "running",
+  };
   saveWorktrees(workDir, [...existing, record]);
   return record;
 }
@@ -207,12 +222,14 @@ export function createSessionWorktree(
   mkdirSync(worktreesDir(workDir), { recursive: true });
   git(workDir, ["worktree", "add", "-q", "-b", branch, path, "HEAD"]);
   const baseCommit = git(workDir, ["rev-parse", "HEAD"]);
+  const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
   excludeWorktreesDir(workDir);
   const record: WorktreeRecord = {
     slug,
     path,
     branch,
     base: baseCommit,
+    ...(baseRef ? { baseRef } : {}),
     createdAt: new Date().toISOString(),
     task: input.title?.trim() || `chat tab ${input.sessionId.slice(0, 8)}`,
     kind: "session",
@@ -464,6 +481,21 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
     mergedInto = containingRefs(workDir, record.branch)[0];
     state = mergedInto ? "merged" : "ready";
   }
+  const lastCommitAt = gitOr(workDir, ["log", "-1", "--format=%cI", record.branch], "");
+  // Line counts only where they inform a decision — a branch still waiting to
+  // be integrated. Merged and empty trees are not worth a numstat each on a
+  // reconcile that already runs several git calls per tree.
+  let added: number | undefined;
+  let removed: number | undefined;
+  if (commits > 0 && (state === "ready" || state === "session")) {
+    added = 0;
+    removed = 0;
+    for (const line of gitOr(workDir, ["diff", "--numstat", `${record.base}..${record.branch}`], "").split("\n")) {
+      const [a, r] = line.split("\t");
+      added += Number(a) || 0;
+      removed += Number(r) || 0;
+    }
+  }
   return {
     ...record,
     state,
@@ -472,6 +504,8 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
     dirty,
     checkoutPresent,
     ...(mergedInto ? { mergedInto } : {}),
+    ...(lastCommitAt ? { lastCommitAt } : {}),
+    ...(added !== undefined && removed !== undefined ? { added, removed } : {}),
   };
 }
 
@@ -528,6 +562,7 @@ export function reconcileWorktrees(workDir: string, now = Date.now()): Reconcile
     path: w.path,
     branch: w.branch,
     base: w.base,
+    ...(w.baseRef ? { baseRef: w.baseRef } : {}),
     createdAt: w.createdAt,
     task: w.task,
     ...(w.kind ? { kind: w.kind } : {}),
@@ -593,10 +628,17 @@ export interface SweepOutcome {
  *   running        → NEVER touched. The implementer is still working.
  *   dirty          → NEVER touched, in any state. It holds uncommitted work.
  */
-export function sweepWorktrees(workDir: string, now = Date.now()): SweepOutcome[] {
+export function sweepWorktrees(
+  workDir: string,
+  now = Date.now(),
+  opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
+): SweepOutcome[] {
   const out: SweepOutcome[] = [];
   for (const w of reconcileWorktrees(workDir, now)) {
     if (w.state === "running" || w.state === "session" || w.state === "ready") continue;
+    // ADR-0111 — a closed tab can still have a turn in its tree (a Sync turn
+    // dispatched through the resume path); never pull the floor from under it.
+    if (w.kind === "session" && w.sessionId && opts.isSessionBusy?.(w.sessionId)) continue;
     if (w.dirty) {
       out.push({
         slug: w.slug,
@@ -1094,9 +1136,17 @@ const WRITE_API =
 
 export function mainTreeRedirect(cmd: string, workDir: string, worktree: string): string | null {
   const root = resolve(workDir);
+  // `graphify-out/` is the project's knowledge graph — MARVIN-owned,
+  // git-ignored, built per project at the root (ADR-0041) and read on
+  // nearly every turn (Golden Rule 7). Graphify's own incremental-detect
+  // snippet writes `.graphify_detect.json` there, so from a worktree tab
+  // every graph query raised this confirm — in auto mode too, since
+  // containment confirms in every mode. The graph is not the user's
+  // checkout; a reach into it is not a reach into their work.
   const underRoot = (abs: string): boolean =>
     !isInsideWorktree(abs, worktree) &&
     !isInsideWorktree(abs, join(root, ".marvin", "worktrees")) &&
+    !isInsideWorktree(abs, join(root, "graphify-out")) &&
     isInsideWorktree(abs, root);
 
   let cwd = worktree;
@@ -1174,4 +1224,218 @@ export function mainTreeRedirect(cmd: string, workDir: string, worktree: string)
     }
   }
   return null;
+}
+
+// ── Prepare a merge request: squash chosen branches into one commit ────────
+
+export interface PrepareMergeRequestInput {
+  /** Worktree slugs to fold in. Only `ready` ones are used; the rest are reported. */
+  slugs: string[];
+  /** Human name for the branch; slugged and dated. Defaults to the first task. */
+  name?: string;
+  /** Commit message (subject + body). Generated from the tasks when absent. */
+  message?: string;
+  /** Push the branch to the project's remote. Nothing leaves the machine otherwise. */
+  push?: boolean;
+  /** With `push`: open a merge request from the push (`-o merge_request.create`). */
+  openMergeRequest?: boolean;
+  /** MR target branch. Defaults to the current branch's upstream branch. */
+  target?: string;
+}
+
+export interface PrepareMergeRequestOutcome {
+  ok: boolean;
+  branch: string;
+  /** The squash commit, once made. */
+  commit?: string;
+  /** Message the commit was made with — the sheet shows it back. */
+  message: string;
+  merged: Array<{ slug: string; branch: string; message: string }>;
+  stopped?: { slug: string; branch: string; message: string };
+  skipped: Array<{ slug: string; branch: string; reason: string }>;
+  pushed?: { remote: string; target: string; mergeRequest: boolean; url?: string; output: string };
+  summary: string;
+}
+
+/** Branch prefix for integration branches. NOT under `marvin/`, or `adoptOrphans` would list it as a lost implementer tree. */
+const MR_BRANCH_PREFIX = "mr/";
+const PUSH_TIMEOUT_MS = 120_000;
+
+/** The remote and branch the current branch tracks — where an MR is aimed. */
+export function detectMergeTarget(workDir: string): { remote: string; target: string } | null {
+  const upstream = gitOr(workDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], "");
+  const slash = upstream.indexOf("/");
+  if (slash > 0) return { remote: upstream.slice(0, slash), target: upstream.slice(slash + 1) };
+  const remote = gitOr(workDir, ["remote"], "").split("\n").map((r) => r.trim()).find(Boolean);
+  if (!remote) return null;
+  const head = gitOr(workDir, ["symbolic-ref", "--short", "-q", `refs/remotes/${remote}/HEAD`], "");
+  const target = head ? head.slice(remote.length + 1) : gitOr(workDir, ["rev-parse", "--abbrev-ref", "HEAD"], "main");
+  return { remote, target };
+}
+
+/** Subject + body from the branches being folded. Conventional-Commits shaped so a `commit-msg` hook accepts it. */
+export function mergeRequestMessage(rows: ReconciledWorktree[]): string {
+  const subject = rows.length === 1
+    ? `chore: integrate ${rows[0]?.task.slice(0, 50) ?? "one branch"}`
+    : `chore: integrate ${rows.length} branches`;
+  const body = rows
+    .map((w) => `- ${w.branch}: ${w.task} (${w.commits} commit${w.commits === 1 ? "" : "s"}, ${w.filesChanged} file${w.filesChanged === 1 ? "" : "s"})`)
+    .join("\n");
+  return `${subject.slice(0, 72)}\n\n${body}\n`;
+}
+
+/**
+ * Squash the chosen `ready` branches into ONE commit on a fresh `mr/…` branch,
+ * then optionally push it and open a merge request from the push.
+ *
+ * Why a squash and not `mergeAllWorktrees` (ADR-0109): that folds each tab's
+ * commits into the CURRENT branch as merge commits — right when the user's
+ * branch is the integration point, wrong when the integration point is a
+ * review on GitLab. A day of tabs is one piece of work to a reviewer; the
+ * per-tab history stays on the tab branches, which this never touches.
+ *
+ * Why a temporary worktree: the squash writes into an index and a working
+ * tree, and the user's checkout is dirty with MARVIN's own `.marvin/*` files
+ * essentially always. A disposable checkout cut from HEAD means no stash, no
+ * HEAD move under an open tab (ADR-0102), and a failure that costs nothing —
+ * the tree is removed either way, the branch survives only if a commit landed.
+ *
+ * Oldest first, stop at the first conflict, report every skip with its
+ * reason — the same rules as `mergeAllWorktrees`, for the same reasons.
+ */
+export async function prepareMergeRequest(
+  workDir: string,
+  input: PrepareMergeRequestInput,
+): Promise<PrepareMergeRequestOutcome> {
+  const all = reconcileWorktrees(workDir);
+  const merged: PrepareMergeRequestOutcome["merged"] = [];
+  const skipped: PrepareMergeRequestOutcome["skipped"] = [];
+  const wanted = new Set(input.slugs);
+  const rows: ReconciledWorktree[] = [];
+  for (const slug of wanted) {
+    const w = all.find((r) => r.slug === slug);
+    if (!w) {
+      skipped.push({ slug, branch: "", reason: "no such worktree" });
+      continue;
+    }
+    if (w.state === "ready") {
+      rows.push(w);
+      continue;
+    }
+    const reason =
+      w.state === "session"
+        ? "belongs to an open tab — close the tab (keeping the branch) to include it"
+        : w.state === "running"
+          ? "still being built by its implementer"
+          : w.state === "empty"
+            ? "has no commits"
+            : `already merged into ${w.mergedInto ?? "another branch"}`;
+    skipped.push({ slug: w.slug, branch: w.branch, reason });
+  }
+  rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  const message = input.message?.trim() ? input.message : mergeRequestMessage(rows);
+  const fail = (branch: string, summary: string): PrepareMergeRequestOutcome => ({
+    ok: false, branch, message, merged, skipped, summary,
+  });
+  if (rows.length === 0) return fail("", "Nothing to integrate — no finished branch was selected.");
+
+  const day = new Date().toISOString().slice(0, 10);
+  const baseName = worktreeSlug(input.name?.trim() || rows[0]?.task || "integration");
+  let branch = `${MR_BRANCH_PREFIX}${day}-${baseName}`;
+  for (let n = 2; gitOk(workDir, ["rev-parse", "--verify", "--quiet", branch]); n++) {
+    branch = `${MR_BRANCH_PREFIX}${day}-${baseName}-${n}`;
+  }
+  const tmp = join(worktreesDir(workDir), `mr-${day}-${baseName}-${process.pid}`);
+  mkdirSync(worktreesDir(workDir), { recursive: true });
+  try {
+    git(workDir, ["worktree", "add", "-q", "-b", branch, tmp, "HEAD"]);
+  } catch (err) {
+    return fail(branch, `Could not cut ${branch} from HEAD: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const base = git(workDir, ["rev-parse", "HEAD"]);
+  const cleanup = () => {
+    gitOk(workDir, ["worktree", "remove", "--force", tmp]);
+    gitOk(workDir, ["worktree", "prune"]);
+  };
+
+  // One temporary commit per branch, so a conflict on the third loses only the
+  // third: `reset --hard` there drops the failed squash and keeps the two that
+  // applied. The temporaries collapse into one commit below.
+  let stopped: PrepareMergeRequestOutcome["stopped"];
+  for (const w of rows) {
+    try {
+      git(tmp, ["merge", "--squash", "-q", w.branch]);
+      git(tmp, ["commit", "-q", "--no-verify", "-m", `squash ${w.branch}`]);
+      merged.push({ slug: w.slug, branch: w.branch, message: `${w.commits} commit(s), ${w.filesChanged} file(s)` });
+    } catch (err) {
+      gitOk(tmp, ["reset", "--hard", "HEAD"]);
+      gitOk(tmp, ["clean", "-fdq"]);
+      stopped = { slug: w.slug, branch: w.branch, message: `conflicts with what is already integrated: ${err instanceof Error ? err.message.split("\n").slice(-3).join(" ") : String(err)}` };
+      break;
+    }
+  }
+  if (merged.length === 0) {
+    cleanup();
+    gitOk(workDir, ["branch", "-D", branch]);
+    return { ...fail(branch, `Nothing integrated. ${stopped ? `${stopped.branch} ${stopped.message}` : ""}`.trim()), ...(stopped ? { stopped } : {}) };
+  }
+
+  // Collapse to the one commit, hooks honoured — this is the commit a
+  // reviewer will read, so it must pass what the project enforces.
+  let commit: string;
+  try {
+    git(tmp, ["reset", "--soft", base]);
+    await execFileAsync("git", ["commit", "-q", "-m", message], {
+      cwd: tmp, encoding: "utf-8", timeout: COMMIT_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    commit = git(tmp, ["rev-parse", "HEAD"]);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
+    const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-6).join("\n");
+    cleanup();
+    gitOk(workDir, ["branch", "-D", branch]);
+    return { ...fail(branch, `The squash commit was refused${detail ? `:\n${detail}` : `: ${e.message}`}`), ...(stopped ? { stopped } : {}) };
+  }
+  cleanup();
+
+  const folded = `Squashed ${merged.length} branch(es) into one commit on ${branch}.`;
+  if (!input.push) {
+    return {
+      ok: true, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}),
+      summary: `${folded} Not pushed.${stopped ? ` Stopped at ${stopped.branch}: ${stopped.message}` : ""}`,
+    };
+  }
+
+  const aim = detectMergeTarget(workDir);
+  if (!aim) {
+    return { ok: true, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}), summary: `${folded} Not pushed: this repository has no remote.` };
+  }
+  const target = input.target?.trim() || aim.target;
+  const args = ["push", "-u", aim.remote, `${branch}:${branch}`];
+  if (input.openMergeRequest) {
+    const title = message.split("\n")[0] ?? branch;
+    args.push("-o", "merge_request.create", "-o", `merge_request.target=${target}`, "-o", `merge_request.title=${title}`);
+  }
+  try {
+    const out = await execFileAsync("git", args, {
+      cwd: workDir, encoding: "utf-8", timeout: PUSH_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    const output = `${out.stdout ?? ""}${out.stderr ?? ""}`.trim();
+    const url = /https?:\/\/\S+\/merge_requests\/\d+/.exec(output)?.[0];
+    return {
+      ok: true, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}),
+      pushed: { remote: aim.remote, target, mergeRequest: !!input.openMergeRequest, ...(url ? { url } : {}), output },
+      summary: `${folded} Pushed to ${aim.remote}.${input.openMergeRequest ? (url ? ` Merge request: ${url}` : " Merge request requested — see the push output.") : ""}${stopped ? ` Stopped at ${stopped.branch}: ${stopped.message}` : ""}`,
+    };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string; killed?: boolean };
+    const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-6).join("\n");
+    return {
+      ok: false, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}),
+      summary: `${folded} Push to ${aim.remote} failed${e.killed ? " (timed out)" : ""}${detail ? `:\n${detail}` : `: ${e.message}`}. The branch is on disk; push it yourself when the remote is reachable.`,
+    };
+  }
 }

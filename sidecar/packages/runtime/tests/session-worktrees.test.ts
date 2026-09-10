@@ -94,6 +94,18 @@ describe("session worktrees", () => {
     expect(reconcileWorktrees(repo).find((w) => w.sessionId === "s-work")?.state).toBe("session");
   });
 
+  // ADR-0111 — the sweep runs at boot and after every close now, so its
+  // guards matter more: a closed tree with a turn in it (a Sync turn) stays.
+  it("sweep leaves a closed, spent tree alone while its session has a turn in flight", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "busy-sess" });
+    markSessionWorktreeClosed(repo, "busy-sess");
+    expect(sweepWorktrees(repo, Date.now(), { isSessionBusy: (id) => id === "busy-sess" })).toEqual([]);
+    expect(existsSync(rec.path)).toBe(true);
+    const swept = sweepWorktrees(repo, Date.now(), { isSessionBusy: () => false });
+    expect(swept.map((s) => [s.branch, s.deletedBranch])).toEqual([[rec.branch, true]]);
+    expect(existsSync(rec.path)).toBe(false);
+  });
+
   it("merge folds a closed tab's branch into the main tree and derives `merged`", () => {
     const rec = createSessionWorktree(repo, { sessionId: "s-merge" });
     commitIn(rec.path, "c.txt");

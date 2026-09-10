@@ -110,6 +110,10 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0098](./0098-the-rail-must-outlive-the-tool-surface.md) | CLI 2.1.251 removed `Grep`/`Glob`, so searching moved to `Bash` where the graphify-first rail could not see it — 15 of 18 Bash calls search-shaped against 2 graph calls | Accepted | 2026-08-30 |
 | [0106](./0106-plan-snapshot-semantics-superseded-subtasks.md) | Plan spine: snapshot semantics for sub-tasks, `superseded` status, lenient tags, bucket-free re-base guard | Accepted | 2026-09-08 |
 | [0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) | One worktree per chat tab, a project-wide session feed, lanes for shared tabs, resume after a restart | Accepted | 2026-09-09 |
+| [0108](./0108-per-session-posture.md) | Posture is per session, not per app | Accepted | 2026-09-09 |
+| [0109](./0109-batch-integration-and-metered-ci.md) | Integration is batched, and spending CI minutes asks first | Accepted | 2026-09-10 |
+| [0110](./0110-worktrees-isolate-the-filesystem-not-the-machine.md) | A worktree isolates the filesystem, not the machine | Accepted | 2026-09-10 |
+| [0111](./0111-nothing-survives-a-tab-without-a-commit.md) | Nothing survives a tab unless it holds a commit; integration previews conflicts, the owning session resolves them | Accepted | 2026-09-10 |
 
 ## Template
 
