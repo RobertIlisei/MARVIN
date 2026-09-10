@@ -33,11 +33,12 @@ struct SessionModeChip: View {
         return draftIsolated ? .worktree : .shared
     }
 
+    /// ADR-0112 — one vocabulary: "own branch · <humanised branch>" or "shared".
     private var label: String {
         switch mode {
         case .worktree:
-            if let branch = entry?.tree?.branch, !branch.isEmpty { return "isolated: \(branch)" }
-            return isDraft || entry?.tree == nil ? "isolated · pending" : "isolated"
+            if let branch = entry?.tree?.branch, !branch.isEmpty { return "own branch · \(SessionTitle.humanised(branch: branch))" }
+            return "own branch · pending"
         case .shared:
             let lane = entry?.tree?.lane ?? []
             return lane.isEmpty ? "shared" : "shared · lane: \(lane.count) path\(lane.count == 1 ? "" : "s")"
@@ -64,7 +65,7 @@ struct SessionModeChip: View {
             .foregroundStyle(mode == .worktree ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
-        .help(mode == .worktree ? "This tab runs in its own git worktree" : "This tab runs in the shared checkout")
+        .help(mode == .worktree ? "This tab works on its own branch: \(entry?.tree?.branch ?? "cut on the first message")" : "This tab works in your checkout")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             SessionModePopover(entry: entry, isDraft: isDraft, mode: mode, onSwitch: { m, a in
                 open = false
@@ -98,8 +99,8 @@ struct SessionModePopover: View {
                 get: { mode },
                 set: { requestSwitch(to: $0) }
             )) {
-                Text("Isolated worktree").tag(SessionMode.worktree)
-                Text("Shared checkout").tag(SessionMode.shared)
+                Text("Own branch").tag(SessionMode.worktree)
+                Text("Shared").tag(SessionMode.shared)
             }
             .pickerStyle(.segmented)
             .labelsHidden()

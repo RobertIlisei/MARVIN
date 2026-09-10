@@ -103,8 +103,8 @@ struct SettingsView: View {
             }
 
             Section("Sessions") {
-                Toggle("New chat tabs start in an isolated worktree", isOn: $newTabsIsolated)
-                Text("Each new tab gets its own git worktree cut from your current HEAD, so several tabs can work at once without moving each other's HEAD. Off: new tabs share the checkout (ADR-0102). The chip in the chat header switches a tab either way.")
+                Toggle("New tabs start on their own branch", isOn: $newTabsIsolated)
+                Text("A tab on its own branch works in a separate git worktree cut from your current HEAD, so several tabs can work at once without touching each other's files. Off: new tabs share your checkout. The `+` menu beside the tabs offers either shape; the chip in the header switches a tab later.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

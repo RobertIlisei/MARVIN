@@ -2528,13 +2528,17 @@ struct ChatPreviewView: View {
     /// each time it opens so a turn that just completed in another
     /// surface (or just landed) shows up without a relaunch. Hidden
     /// when no project is active (the menu would have nothing useful).
+    /// ADR-0112 — History: sessions that are NOT open as tabs. Open ones are
+    /// already on the strip; listing them twice was one of four switchers.
     private var sessionsMenu: some View {
-        Menu {
-            if model.sessions.isEmpty {
-                Button("(no past sessions)") {}
+        let open = Set(model.openTabSessionIds)
+        let closed = model.sessions.filter { !open.contains($0.sessionId) }
+        return Menu {
+            if closed.isEmpty {
+                Button("No closed sessions") {}
                     .disabled(true)
             } else {
-                ForEach(model.sessions) { summary in
+                ForEach(closed.prefix(20)) { summary in
                     Button {
                         model.selectSession(
                             summary.sessionId,
@@ -2546,20 +2550,17 @@ struct ChatPreviewView: View {
                 }
             }
             Divider()
-            Button("Refresh") {
-                if let pid = bridge.activeProjectId {
-                    model.refreshSessions(projectId: pid)
-                }
-            }
+            Button("Show all in Sessions pane") { bridge.revealLeftTab("sessions") }
         } label: {
-            Image(systemName: "clock.arrow.circlepath")
+            Label("History", systemImage: "clock.arrow.circlepath")
+                .labelStyle(.iconOnly)
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)
         .menuIndicator(.hidden)
         .frame(width: 28)
         .disabled(bridge.activeProjectId == nil)
-        .help("Past sessions for this project")
+        .help("History — closed sessions of this project")
         .onAppear {
             if let pid = bridge.activeProjectId {
                 model.refreshSessions(projectId: pid)
@@ -2616,7 +2617,8 @@ struct ChatPreviewView: View {
                 }
             }
             Spacer(minLength: 4)
-            openSessionsMenu
+            // ADR-0112 — the tab strip is the only switcher: the open-sessions
+            // menu that sat here is gone (⇧⌘[ / ⇧⌘] remain as commands).
             // Click = the app-wide default; the menu makes the other shape one
             // click away. "A normal chat like MARVIN had before" is a shared
             // tab — no branch, no worktree, no containment confirms.
@@ -2804,61 +2806,6 @@ struct ChatPreviewView: View {
     /// of arrows it shows you what you are navigating to. Tabs also scroll
     /// themselves into view now, which is the other half of what the arrows
     /// were for.
-    private var openSessionsMenu: some View {
-        let tabs = model.openTabSessionIds
-        return Menu {
-            if tabs.isEmpty {
-                Text("No open sessions")
-            }
-            ForEach(tabs, id: \.self) { sid in
-                Button {
-                    model.selectSession(sid, fallbackProjectId: bridge.activeProjectId)
-                } label: {
-                    Label(
-                        openSessionMenuTitle(sid),
-                        systemImage: sid == model.loadedSessionId ? "checkmark" : "bubble.left"
-                    )
-                }
-            }
-            Divider()
-            Button("Previous Session") { model.stepSession(.previous) }
-            Button("Next Session") { model.stepSession(.next) }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "square.stack")
-                    .font(.system(size: 10))
-                Text("\(tabs.count)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .monospacedDigit()
-            }
-            .frame(height: 22)
-            .padding(.horizontal, 6)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Open sessions (⇧⌘[ / ⇧⌘])")
-    }
-
-    /// A menu row's text. The strip truncates to ~24 characters, which is why
-    /// six tabs opened from the same prompt all read "Plan the implementation
-    /// …" and none of them can be told apart. Here there is room for the
-    /// worktree branch, which ADR-0107 already makes unique per tab.
-    private func openSessionMenuTitle(_ sid: String) -> String {
-        var title = tabTitle(forSessionId: sid)
-        if let slug = SessionRegistry.shared.entry(sid)?.tree?.slug, !slug.isEmpty {
-            title += "  ·  \(slug)"
-        }
-        let state = SessionRegistry.shared.rowState(sid)
-        switch state {
-        case .working: title += "  ·  working"
-        case .needsYou(let n): title += "  ·  needs you (\(n))"
-        case .failed: title += "  ·  failed"
-        case .interrupted: title += "  ·  interrupted"
-        case .draft, .idle: break
-        }
-        return title
-    }
 
     /// One open tab: a click-to-switch label + a close ✕. `onClose` nil
     /// hides the ✕ (the ephemeral "New chat" tab can't be closed).
@@ -2875,9 +2822,17 @@ struct ChatPreviewView: View {
                 HStack(spacing: 5) {
                     // ADR-0107 — a state dot for a real session (working /
                     // needs-you / failed / idle); the bubble stays for drafts.
+                    // ADR-0112 — a glyph per state beside the dot, so colour is
+                    // never the only signal: a spinner while working, a count
+                    // while waiting on you, an arrow when interrupted, a cross
+                    // when failed. The bubble stays for drafts.
                     if state == .draft {
                         Image(systemName: systemImage)
                             .font(.system(size: 9))
+                    } else if state == .working {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 10, height: 10)
                     } else {
                         Circle()
                             .fill(Self.tabTint(state))
@@ -2899,6 +2854,10 @@ struct ChatPreviewView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(Color.orange)
+                    } else if state == .failed {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(GitDecorationColor.deleted)
                     }
                 }
             }
@@ -3427,20 +3386,17 @@ struct ChatPreviewView: View {
         return rows
     }
 
+    /// ADR-0112 — the context bar: where you are (project, then the tab's
+    /// branch chip) and the way back to what is closed (History). The session
+    /// hash lives in the tooltip; the header's New button is gone — the `+`
+    /// beside the tabs is the one place a tab starts.
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bridge.projectName ?? "no project active")
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let sid = model.loadedSessionId {
-                    Text(sid.prefix(8))
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            Spacer()
+        HStack(spacing: 8) {
+            Text(bridge.projectName ?? "no project active")
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(model.loadedSessionId.map { "Session \($0)" } ?? "No session loaded")
             if let sid = model.loadedSessionId {
                 SessionModeChip(
                     entry: SessionRegistry.shared.entry(sid),
@@ -3450,45 +3406,29 @@ struct ChatPreviewView: View {
                     onLane: { lane in applyLane(sid, lane: lane) }
                 )
             }
+            Spacer()
             sessionsMenu
-            // Stop moved to ChatInputBar so it sits next to Send / Queue
-            // (where the eye is during a turn). ⌘. shortcut is wired
-            // there too.
-            //
-            // Phase 2f — Clear (⌘⇧N) wipes the list, cancels any
-            // in-flight turn, and resets the bridge state captured
-            // from the last turn.started.
-            Menu {
-                newTabMenuItems
-            } label: {
-                Text("New")
-            } primaryAction: {
-                startNewTab(mode: nil)
-            }
-            .controlSize(.small)
-            .fixedSize()
-            .help("New tab (⌘⇧N). Menu: plain chat on the shared checkout, or an isolated worktree with its own branch.")
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     /// The two shapes a new tab can take, named by what they mean for the
     /// user rather than by the mechanism. Shared first: it is the plain chat.
     @ViewBuilder
     private var newTabMenuItems: some View {
-        Button {
-            startNewTab(mode: .shared)
-        } label: {
-            Label("New Chat — shared checkout", systemImage: "rectangle.split.2x1")
-        }
+        // ADR-0112 — one vocabulary: "own branch" and "shared". No explainer
+        // line: the plus does the default, and Settings sets the default.
         Button {
             startNewTab(mode: .worktree)
         } label: {
-            Label("New Isolated Tab — own branch", systemImage: "arrow.triangle.branch")
+            Label("New Tab on Its Own Branch", systemImage: "arrow.triangle.branch")
         }
-        Divider()
-        let isolatedDefault = UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true
-        Text("Default (⌘⇧N): \(isolatedDefault ? "isolated" : "shared") — change in Settings")
+        Button {
+            startNewTab(mode: .shared)
+        } label: {
+            Label("New Shared Chat", systemImage: "rectangle.split.2x1")
+        }
     }
 
     private func startNewTab(mode: SessionMode?) {

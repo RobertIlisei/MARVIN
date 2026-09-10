@@ -114,6 +114,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0109](./0109-batch-integration-and-metered-ci.md) | Integration is batched, and spending CI minutes asks first | Accepted | 2026-09-10 |
 | [0110](./0110-worktrees-isolate-the-filesystem-not-the-machine.md) | A worktree isolates the filesystem, not the machine | Accepted | 2026-09-10 |
 | [0111](./0111-nothing-survives-a-tab-without-a-commit.md) | Nothing survives a tab unless it holds a commit; integration previews conflicts, the owning session resolves them | Accepted | 2026-09-10 |
+| [0112](./0112-one-place-for-each-thing.md) | One place for each thing: the multi-session chrome | Accepted | 2026-09-10 |
 
 ## Template
 
