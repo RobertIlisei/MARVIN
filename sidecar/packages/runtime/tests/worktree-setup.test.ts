@@ -122,6 +122,22 @@ describe("prepareSessionWorktree", () => {
     expect(existsSync(join(rec.path, "build"))).toBe(false);
   });
 
+  it("a symlinked dir never shows in `git status` — `node_modules/` in .gitignore does not match a symlink", () => {
+    mkdirSync(join(repo, ".marvin"), { recursive: true });
+    writeFileSync(join(repo, ".marvin", "worktree.json"), JSON.stringify({ symlinkDirectories: ["node_modules"] }));
+    const rec = createSessionWorktree(repo, { sessionId: "s2" });
+    prepareSessionWorktree(repo, rec.path, readWorktreeSetupConfig(repo));
+
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd: rec.path, encoding: "utf-8" });
+    expect(status).toBe("");
+    // Written to the clone's exclude file, never to the project's .gitignore.
+    expect(readFileSync(join(repo, ".git", "info", "exclude"), "utf-8")).toContain("/node_modules\n");
+    expect(readFileSync(join(repo, ".gitignore"), "utf-8")).not.toContain("/node_modules\n");
+    // Idempotent: preparing again adds no second line.
+    prepareSessionWorktree(repo, rec.path, readWorktreeSetupConfig(repo));
+    expect(readFileSync(join(repo, ".git", "info", "exclude"), "utf-8").split("/node_modules\n").length).toBe(2);
+  });
+
   it("honours .worktreeinclude and never overwrites", () => {
     writeFileSync(join(repo, ".worktreeinclude"), "# secrets\n.env\nbuild/\n");
     const rec = createSessionWorktree(repo, { sessionId: "s2" });

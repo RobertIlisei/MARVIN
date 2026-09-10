@@ -23,9 +23,10 @@
  * `.gitignore`.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import { toolPolicy } from "@marvin/tools/policy";
 
@@ -123,20 +124,46 @@ function git(workDir: string, args: string[]): string {
   return execFileSync("git", args, { cwd: workDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** Keep the nested checkouts out of `git status` without editing `.gitignore`. */
-function excludeWorktreesDir(workDir: string): void {
+/**
+ * Add patterns to the repository's `info/exclude` — git's per-clone ignore
+ * file, which lives in the COMMON git dir and so applies to every worktree of
+ * the clone at once. Never edits the project's `.gitignore`. Best-effort: a
+ * noisy `git status` is not worth failing the caller.
+ */
+export function excludeFromStatus(workDir: string, patterns: string[]): void {
   try {
     const gitDir = git(workDir, ["rev-parse", "--git-common-dir"]);
     const exclude = join(isAbsolute(gitDir) ? gitDir : join(workDir, gitDir), "info", "exclude");
-    const line = ".marvin/worktrees/";
     const existing = existsSync(exclude) ? readFileSync(exclude, "utf-8") : "";
-    if (!existing.split("\n").includes(line)) {
-      mkdirSync(join(exclude, ".."), { recursive: true });
-      appendFileSync(exclude, `${existing.endsWith("\n") || existing === "" ? "" : "\n"}${line}\n`);
-    }
+    const have = new Set(existing.split("\n"));
+    const missing = patterns.filter((p) => !have.has(p));
+    if (missing.length === 0) return;
+    mkdirSync(join(exclude, ".."), { recursive: true });
+    appendFileSync(exclude, `${existing.endsWith("\n") || existing === "" ? "" : "\n"}${missing.join("\n")}\n`);
   } catch {
-    /* best-effort: a noisy `git status` is not worth failing the dispatch */
+    /* best-effort */
   }
+}
+
+/** Keep the nested checkouts out of `git status` without editing `.gitignore`. */
+function excludeWorktreesDir(workDir: string): void {
+  excludeFromStatus(workDir, [".marvin/worktrees/"]);
+}
+
+/**
+ * The exclude pattern for a directory MARVIN SYMLINKS into a session worktree.
+ *
+ * A project ignores its dependency dirs as `node_modules/` — and the trailing
+ * slash means "directories only", which a symlink is not. So the symlink
+ * `prepareSessionWorktree` creates was untracked in every tab worktree, every
+ * tab read as dirty, a close-with-merge always took the commit-first path,
+ * and `git add -A` staged the symlink itself (observed 2026-09-10, six
+ * worktrees on a real project). Anchored and without the slash, this matches
+ * the symlink; in the main checkout the real directory was already ignored,
+ * so the line changes nothing there.
+ */
+export function symlinkExcludePattern(rel: string): string {
+  return `/${rel.replace(/^\/+|\/+$/g, "")}`;
 }
 
 /**
@@ -610,16 +637,98 @@ export function sweepWorktrees(workDir: string, now = Date.now()): SweepOutcome[
 /**
  * Is there work in the main tree a merge would disturb?
  *
- * `.marvin/` is excluded: the registry file this module itself writes lives
- * there, so a project that does not gitignore `.marvin/` would read as dirty
- * forever and every merge would refuse. MARVIN's own bookkeeping is not the
- * user's uncommitted work.
+ * Two exclusions, and both are about not refusing a merge git itself would
+ * happily perform.
+ *
+ * `.marvin/` — the registry file this module writes lives there, so a project
+ * that does not gitignore `.marvin/` would read as dirty forever and every
+ * merge would refuse. MARVIN's own bookkeeping is not the user's work.
+ *
+ * **Untracked files** — added 2026-09-10 after a user clicked "Merge into my
+ * branch" and nothing happened. The refusal was correct by this function's old
+ * rule and wrong by git's: their tree held three untracked files (`AGENTS.md`
+ * and two spec files) that no merge would have touched. `git merge` does not
+ * refuse because untracked files exist; it refuses only when the merge would
+ * OVERWRITE one, and it says exactly which. `mergeWorktree` already aborts
+ * cleanly and reports that message, so the stricter pre-check bought nothing
+ * and made merge-on-close impossible for anyone with a stray file lying
+ * around — which, on a repository an agent has been working in, is everyone.
+ *
+ * A tracked file that is modified, staged, deleted or in conflict still counts:
+ * that is work a merge can genuinely disturb.
  */
 function workingTreeDirty(workDir: string): boolean {
   return gitOr(workDir, ["status", "--porcelain"], "")
     .split("\n")
     .filter(Boolean)
+    .filter((l) => !l.startsWith("??"))
     .some((l) => !l.slice(3).replace(/^"|"$/g, "").startsWith(".marvin/"));
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Take MARVIN's own symlinks back out of a worktree's index. Before the
+ * exclude line existed, a close-with-merge ran `git add -A` and staged every
+ * `symlinkDirectories` link; the commit then failed, and the links stayed
+ * staged in the tree for the next attempt to find. Harmless when nothing is
+ * staged: `git reset -- <path>` on an absent path exits 0.
+ */
+export function unstageSymlinkedDirs(worktreePath: string, dirs: string[]): void {
+  if (dirs.length === 0) return;
+  gitOk(worktreePath, ["reset", "-q", "--", ...dirs]);
+}
+
+/** Uncommitted or untracked work in a worktree, as `git status` sees it. */
+export function worktreeHasWork(worktreePath: string): boolean {
+  return gitOr(worktreePath, ["status", "--porcelain"], "") !== "";
+}
+
+export interface CommitOutcome {
+  ok: boolean;
+  message: string;
+}
+
+/** Ten minutes: the pre-commit hook this exists for compiles a Java service and runs its fast test band. */
+const COMMIT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Commit everything in a session worktree as one work-in-progress commit, so
+ * the branch can be merged on tab close.
+ *
+ * Asynchronous, deliberately. `git commit` runs the project's hooks, and a
+ * real project's `pre-commit` compiled a service and ran its test band — well
+ * past the 30 s the close route used to allow, which reported
+ * `spawnSync git ETIMEDOUT` (2026-09-10). Worse than the failure was the wait:
+ * that was `execFileSync` in a route handler, so for those 30 s Node's event
+ * loop was held and every other request — the session feed, chat streaming —
+ * queued behind a commit that was going to fail anyway. Hooks are the
+ * project's policy and are honoured, not bypassed; what changes is that they
+ * get the time they need and hold nothing else up while they run.
+ */
+export async function commitWorktreeWorkInProgress(
+  worktreePath: string,
+  slug: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<CommitOutcome> {
+  const timeout = opts.timeoutMs ?? COMMIT_TIMEOUT_MS;
+  const run = (args: string[]) =>
+    execFileAsync("git", args, { cwd: worktreePath, encoding: "utf-8", timeout, maxBuffer: 4 * 1024 * 1024 });
+  try {
+    await run(["add", "-A"]);
+    await run(["commit", "-qm", `chore: work in progress from tab ${slug}`]);
+    return { ok: true, message: `committed the worktree's uncommitted work on ${slug}` };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string; killed?: boolean };
+    if (e.killed || e.code === "ETIMEDOUT") {
+      return {
+        ok: false,
+        message: `git commit did not finish within ${Math.round(timeout / 1000)} s — a commit hook is probably running long. Commit in the worktree yourself, then close the tab again.`,
+      };
+    }
+    const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-6).join("\n");
+    return { ok: false, message: detail ? `git commit failed:\n${detail}` : `git commit failed: ${e.message}` };
+  }
 }
 
 export interface MergeOutcome {

@@ -35,6 +35,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 
+import { excludeFromStatus, symlinkExcludePattern } from "./worktrees";
+
 export interface WorktreeSetupConfig {
   symlinkDirectories: string[];
   copyIgnored: string[];
@@ -378,6 +380,11 @@ export function prepareSessionWorktree(
       report.skipped.push({ path: dir, reason: `symlink failed: ${String((err as Error)?.message ?? err)}` });
     }
   }
+
+  // A symlink is not a directory, so a `node_modules/` ignore rule does not
+  // cover it: exclude every linked path by name, or the worktree is dirty from
+  // birth and a close-with-merge commits the link (see `symlinkExcludePattern`).
+  if (linked.size > 0) excludeFromStatus(root, [...linked].map(symlinkExcludePattern));
 
   // 2. Copies — only files git ignores, matched by the configured patterns.
   const patterns = [...cfg.copyIgnored, ...(cfg.honorWorktreeInclude ? readWorktreeInclude(root) : [])];

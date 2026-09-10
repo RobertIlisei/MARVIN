@@ -1,20 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   bindWorktreeTask,
+  commitWorktreeWorkInProgress,
   createSessionWorktree,
   createWorktree,
-  mergeAllWorktrees,
   listWorktrees,
   markWorktreeFinished,
+  mergeAllWorktrees,
   mergeWorktree,
   reconcileWorktrees,
   removeWorktree,
   sweepWorktrees,
+  unstageSymlinkedDirs,
+  worktreeHasWork,
 } from "../src/worktrees";
 
 // ADR-0103 — an implementer's branch is a deliverable with a lifecycle, and
@@ -162,6 +165,34 @@ describe("worktree lifecycle", () => {
     expect(git("branch", "--list", b.branch).trim()).not.toBe("");
     expect(out.message).toMatch(/Stopped at/);
   }, 30_000);
+
+  it("an untracked file in the main tree does not block a merge", () => {
+    // A user clicked "Merge into my branch" and nothing happened: their tree
+    // held three untracked files no merge would have touched. `git merge`
+    // refuses only when it would OVERWRITE an untracked file, and says which;
+    // this pre-check refused merely because one existed.
+    const a = createWorktree(repo, "ready work");
+    commitIn(a.path, "feature.ts");
+    writeFileSync(join(repo, "NOTES.md"), "a stray file\n");
+
+    const out = mergeWorktree(repo, a.slug);
+
+    expect(out.ok).toBe(true);
+    expect(existsSync(join(repo, "feature.ts"))).toBe(true);
+    // The stray file is untouched — merging is not a reason to lose it.
+    expect(existsSync(join(repo, "NOTES.md"))).toBe(true);
+  });
+
+  it("still refuses when a TRACKED file is modified", () => {
+    const a = createWorktree(repo, "ready work");
+    commitIn(a.path, "feature.ts");
+    writeFileSync(join(repo, "README.md"), "edited, not committed\n");
+
+    const out = mergeWorktree(repo, a.slug);
+
+    expect(out.ok).toBe(false);
+    expect(out.message).toMatch(/uncommitted changes/);
+  });
 
   it("refuses while the main tree is dirty, before merging anything", () => {
     const a = createWorktree(repo, "ready one");
@@ -331,11 +362,78 @@ describe("worktree lifecycle", () => {
   it("refuses to merge into a dirty main tree, and refuses an empty branch", () => {
     const rec = createWorktree(repo, "to merge");
     commitIn(rec.path, "feature.ts");
-    writeFileSync(join(repo, "uncommitted.txt"), "x\n");
+    // A MODIFIED TRACKED file. This used to write an untracked one, which
+    // encoded a rule stricter than git's own and made merge-on-close
+    // impossible for anyone with a stray file in their tree (2026-09-10).
+    writeFileSync(join(repo, "README.md"), "uncommitted edit\n");
     expect(mergeWorktree(repo, rec.slug).message).toContain("uncommitted changes");
 
+    execFileSync("git", ["checkout", "--", "README.md"], { cwd: repo, stdio: "pipe" });
     execFileSync("git", ["clean", "-qfd"], { cwd: repo, stdio: "pipe" });
     const empty = createWorktree(repo, "nothing here");
     expect(mergeWorktree(repo, empty.slug).message).toContain("no commits");
+  });
+
+  // Close-with-merge on a dirty tab worktree (ADR-0107). The commit that folds
+  // the tab's loose work into its branch runs the project's hooks, and on a
+  // real project (2026-09-10) the pre-commit band took longer than the 30 s a
+  // synchronous route call allowed: `spawnSync git ETIMEDOUT`, six tabs that
+  // could not close. These pin the async path, that hooks are honoured rather
+  // than bypassed, and that MARVIN's own symlinks never ride along.
+  const installPreCommitHook = (body: string) => {
+    const dir = join(repo, ".githooks");
+    mkdirSync(dir, { recursive: true });
+    const hook = join(dir, "pre-commit");
+    writeFileSync(hook, `#!/bin/sh\n${body}\n`);
+    chmodSync(hook, 0o755);
+    git("add", ".githooks/pre-commit");
+    git("commit", "-qm", "chore(hooks): add pre-commit");
+    git("config", "core.hooksPath", ".githooks");
+  };
+
+  it("commits work in progress through a slow pre-commit hook — the hook gets its time, not 30 s", async () => {
+    installPreCommitHook("sleep 1; exit 0");
+    const rec = createSessionWorktree(repo, { sessionId: "s-slow" });
+    writeFileSync(join(rec.path, "wip.ts"), "export const x = 1;\n");
+    expect(worktreeHasWork(rec.path)).toBe(true);
+
+    const out = await commitWorktreeWorkInProgress(rec.path, rec.slug);
+
+    expect(out.ok).toBe(true);
+    expect(worktreeHasWork(rec.path)).toBe(false);
+    expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: rec.path, encoding: "utf-8" }).trim()).toBe(
+      `chore: work in progress from tab ${rec.slug}`,
+    );
+  });
+
+  it("a hook that rejects the commit is reported with its own words, and a hook that never returns is cut off and named", async () => {
+    installPreCommitHook('echo "policy: no wip commits" >&2; exit 1');
+    const rec = createSessionWorktree(repo, { sessionId: "s-reject" });
+    writeFileSync(join(rec.path, "wip.ts"), "x\n");
+
+    const rejected = await commitWorktreeWorkInProgress(rec.path, rec.slug);
+    expect(rejected.ok).toBe(false);
+    expect(rejected.message).toContain("policy: no wip commits");
+    expect(worktreeHasWork(rec.path)).toBe(true);
+
+    // A relative `core.hooksPath` resolves inside the tree being committed.
+    writeFileSync(join(rec.path, ".githooks", "pre-commit"), "#!/bin/sh\nsleep 30\n");
+    const stuck = await commitWorktreeWorkInProgress(rec.path, rec.slug, { timeoutMs: 500 });
+    expect(stuck.ok).toBe(false);
+    expect(stuck.message).toMatch(/did not finish within 1 s/);
+    expect(stuck.message).toContain("hook");
+  });
+
+  it("a symlink staged by an earlier failed attempt is unstaged, never committed", async () => {
+    const rec = createSessionWorktree(repo, { sessionId: "s-link" });
+    symlinkSync(repo, join(rec.path, "node_modules"), "dir");
+    execFileSync("git", ["add", "-A"], { cwd: rec.path, stdio: "pipe" });
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: rec.path, encoding: "utf-8" })).toContain("A  node_modules");
+
+    unstageSymlinkedDirs(rec.path, ["node_modules", "apps/web/node_modules"]);
+
+    // Untracked again — and the status line is what the exclude file (written
+    // by `prepareSessionWorktree`) removes; this helper only owns the index.
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: rec.path, encoding: "utf-8" })).toBe("?? node_modules\n");
   });
 });

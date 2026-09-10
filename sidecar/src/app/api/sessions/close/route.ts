@@ -18,16 +18,21 @@
  * Refused while the tab has a live turn.
  */
 
-import { execFileSync } from "node:child_process";
 import { getProject } from "@marvin/runtime/projects";
 import { readSessionMeta, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { getLiveTurn } from "@marvin/runtime/turn-registry";
+import { readWorktreeSetupConfig } from "@marvin/runtime/worktree-setup";
 import {
+  commitWorktreeWorkInProgress,
   discardWorktree,
+  excludeFromStatus,
   findSessionWorktree,
   markSessionWorktreeClosed,
   mergeWorktree,
   reopenSessionWorktree,
+  symlinkExcludePattern,
+  unstageSymlinkedDirs,
+  worktreeHasWork,
 } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -42,10 +47,6 @@ interface CloseBody {
   marvinSessionId?: string;
   worktree?: "merge" | "keep" | "discard";
   commitFirst?: boolean;
-}
-
-function git(cwd: string, args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 }).trim();
 }
 
 export async function POST(req: NextRequest) {
@@ -85,8 +86,13 @@ export async function POST(req: NextRequest) {
   markSessionWorktreeClosed(workDir, sessionId);
   let message = `kept ${rec.branch}`;
   if (action === "merge") {
-    const dirty = git(rec.path, ["status", "--porcelain"]) !== "";
-    if (dirty) {
+    // MARVIN's own symlinks (node_modules and friends) are not the tab's work:
+    // exclude them by name — a worktree created before the exclude line
+    // existed has none — and unstage any a previous attempt's `add -A` caught.
+    const linked = readWorktreeSetupConfig(workDir).symlinkDirectories;
+    excludeFromStatus(workDir, linked.map(symlinkExcludePattern));
+    unstageSymlinkedDirs(rec.path, linked);
+    if (worktreeHasWork(rec.path)) {
       if (!body.commitFirst) {
         reopenSessionWorktree(workDir, sessionId);
         return NextResponse.json(
@@ -94,13 +100,11 @@ export async function POST(req: NextRequest) {
           { status: 409 },
         );
       }
-      try {
-        git(rec.path, ["add", "-A"]);
-        git(rec.path, ["commit", "-qm", `chore: work in progress from tab ${rec.slug}`]);
-      } catch (err) {
+      const committed = await commitWorktreeWorkInProgress(rec.path, rec.slug);
+      if (!committed.ok) {
         reopenSessionWorktree(workDir, sessionId);
         return NextResponse.json(
-          { error: `could not commit the worktree: ${err instanceof Error ? err.message : String(err)}`, code: "commit-failed" },
+          { error: `could not commit the worktree: ${committed.message}`, code: "commit-failed", branch: rec.branch },
           { status: 409 },
         );
       }
