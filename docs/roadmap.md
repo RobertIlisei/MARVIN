@@ -64,11 +64,13 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
-**v0.1.109** — the practice loop gets a window and a reset.
+**v0.1.111** — close-with-merge repaired.
 
-Findings are counted over a window (45 days by default) so old sessions age out of every
-rate and clock without being re-read, and *Reset findings…* clears a project's ledger while
-keeping its rules; the next run re-attaches a ruled fingerprint instead of re-proposing it.
+A tab's worktree was dirty from birth: the `node_modules` symlink MARVIN creates is not
+matched by a `node_modules/` ignore rule, so every merge-on-close took the commit-first
+path and timed out in the project's pre-commit hook. Symlinks are excluded by name now,
+and the work-in-progress commit is asynchronous with hooks honoured. v0.1.110 (per-session
+posture, fast tab switching, batched integration) shipped the day before.
 Details in the [changelog](./history/CHANGELOG.md).
 
 _The v0.1.108 summary follows._

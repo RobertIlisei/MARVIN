@@ -8,6 +8,44 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-10 — v0.1.111: close-with-merge repaired.**
+
+  Trigger: six finished tabs on a real project, none closable with *Merge
+  into my branch* — `could not commit the worktree: spawnSync git ETIMEDOUT`.
+
+  **Diagnosis, measured rather than read.** `git status` in the worktree
+  showed `A  node_modules` and `A  apps/web/node_modules`: the symlinks
+  `prepareSessionWorktree` creates, staged. `git check-ignore` returned
+  nothing for either — the project ignores `node_modules/`, and gitignore's
+  trailing slash matches directories only, never a symlink. So every tab
+  worktree was dirty from birth; the close route's `git status` check
+  always took the commit-first path; `git add -A` staged the links; and
+  `git commit` ran the project's `pre-commit` (a Java compile plus its fast
+  test band) against a 30 s `execFileSync` inside the route handler. That
+  timed out, and held Node's event loop for the entire wait — the "MARVIN
+  froze" that came with it.
+
+  **Fix.** `prepareSessionWorktree` writes each linked path, anchored and
+  without the slash, to the clone's `.git/info/exclude` — shared by every
+  worktree of the clone, never the project's `.gitignore`. The close route
+  unstages any links a previous attempt caught, then commits only if real
+  work remains, through `commitWorktreeWorkInProgress`: asynchronous, a
+  ten-minute budget, hooks honoured rather than `--no-verify`'d (the
+  project's hook carries a secret scan), and the hook's own stderr in the
+  failure message. Existing worktrees on the affected project were repaired
+  in place. Also in this release, from the same session: a refused close now
+  stays on screen as a failure notice naming the tab instead of vanishing on
+  the next hydrate, and four panes stop rendering their own cancelled
+  refresh as an error.
+
+  **Verification.** New tests: a slow pre-commit hook completes, a rejecting
+  hook's words are reported, a stuck hook is cut off and named, a staged
+  symlink is unstaged and never committed, the exclude line is written once.
+  1337 sidecar tests green; typecheck and biome clean; rebuilt and
+  reinstalled locally before tagging.
+
+---
+
 - **2026-09-10 — v0.1.110: several sessions at once, and what that actually costs.**
 
   Six changes, all from running seven chat tabs against one project.

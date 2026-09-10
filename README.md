@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.109**). `main` and `development` are fast-forwarded together at each
+> **v0.1.111**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -362,6 +362,10 @@ docs/
 ---
 
 ## Status
+
+**v0.1.111 — close-with-merge repaired.** Six finished tabs could not close with *Merge into my branch*: the `node_modules` symlink MARVIN places in each tab's worktree is not matched by a `node_modules/` ignore rule (the slash means directories only), so every worktree read as dirty, the close took the commit-first path, and the project's pre-commit hook outran a 30 s synchronous call. Symlinks are now excluded by name in the clone's `info/exclude`, and the work-in-progress commit runs asynchronously with the hooks honoured and their output in the message. A refused close stays on screen and names its tab.
+
+**v0.1.110 — several sessions at once, and what that actually costs.** Autonomy mode, both models, both effort rungs, the voice and the permission gate are **per session** now: a tab switched to Plan no longer switches every other tab, and a tab restored after a relaunch comes back in the posture it was left in. Switching tabs got fast — a tab click fetched the whole transcript (122 MB on a real session), the server parsed all 36,356 lines to return 200, and the message reducer copied the entire list once per event, which is 6.3 s of array copying against 6 ms in place. Integration is batched: **Merge all** folds every finished branch into your branch locally, and opening a merge request now asks first, in auto mode too, because on a metered runner five tabs with five requests is ~240 compute-minutes against ~48. The tab strip gained an open-sessions menu and ⇧⌘[ / ⇧⌘]. The layout-loop breaker was armed 8 times, fired 0, and crashed 5 — it only recognised one of AppKit's two constraint-pass entries, and now recognises both. Documented what a worktree does *not* isolate, with an `env` map for making per-session runs independent.
 
 **v0.1.109 — the practice loop gets a window and a reset.** Findings are counted over a window (45 days by default, a header stepper): a session older than that leaves every count, rate and verification clock at the end of the next run, without being re-read. *Reset findings…* clears a project's findings, watermarks and runs and keeps its rules; on the next run a fingerprint that already has a rule attaches to that rule instead of being proposed again.
 
