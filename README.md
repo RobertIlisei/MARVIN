@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.111**). `main` and `development` are fast-forwarded together at each
+> **v0.1.112**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -282,6 +282,7 @@ Everything below is a real, unedited session on MARVIN's own repository.
 - 🛑 Stop Session & All Work (⇧⌘.) — Stop cancels the turn; this cancels the turn **plus** the background jobs and scheduled wakeups it leaves behind, which otherwise outlive it and can start a new turn on their own. Confirmation names the scope by count, and the whole thing is scoped to one session
 - ⌨️ Embedded terminal (PTY-backed)
 - 🕐 Session history — click any past session in the header to restore it
+- 🗂️ Several sessions at once — every new tab works on its **own branch** in its own worktree (or as a shared tab on your checkout); the tab strip is the only switcher, History keeps closed sessions, and the Sessions pane shows what needs you, what is working, and what is **ready to integrate** — Merge, Merge all, Sync, Prepare MR — answering a hidden tab's confirm inline. Nothing survives a closed tab unless it holds a commit, and the backlog is one live store every tab claims from (ADR-0107 · 0111 · 0112 · 0113 · [guide](./docs/guides/worktrees.md))
 - 🧠 MARVIN brain — live animated state indicator (idle / thinking / tool / writing / error)
 - 📎 Image paste in chat (⌘V, screenshots, dragged images)
 - 🌓 Light / dark theme — respects system preference
@@ -362,6 +363,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.112 — the multi-session release: nothing strands, one place for each thing, the backlog is shared.** Three decisions from three days of running four tabs at once on a real project. *Nothing survives a tab unless it holds a commit* ([ADR-0111](./docs/decisions/0111-nothing-survives-a-tab-without-a-commit.md)): measured first — 17 session worktrees on one project, 16 for closed tabs, 12 already merged, 3 empty, 0 ever swept. Empty and merged trees now go silently on close and at boot; *Keep* commits work in progress; *Merge* names the branch it merges into; a `git merge-tree` dry run reports `clean` / `behind by 2` / `conflicts in a.ts` before anything moves; **Sync** asks the tab that owns a branch to merge yours in and resolve, because it knows what its changes were for; the Sessions pane gained **Ready to integrate** with Merge / Merge all / Prepare MR; branches take their name from their first commit and an integrated tab reopens on a fresh tree. *One place for each thing* ([ADR-0112](./docs/decisions/0112-one-place-for-each-thing.md)): the chrome was counted — four ways to switch a session, two New buttons, three names for the same choice, four stacked bars — and reduced. The tab strip is the only switcher (tabs compress to fit, ‹ › step, an overflow list, ordinals for twins); History holds closed sessions and ⇧⌘[ ⇧⌘]; the header reads project then `own branch · name`; a tool confirm is a card in the tray, answerable inline from the Sessions pane; posture is one pill; ↑↓⏎ walk the pane. *The backlog is the shared task list* ([ADR-0113](./docs/decisions/0113-the-backlog-is-the-shared-task-list.md)): two tabs fixed the same bug byte-for-byte because the store lives in the project root and each worktree carries a snapshot the second tab grepped. Items are **claimed** by the tab working them (`backlog_claim`; the holder appears in every listing, in the panel badge, in the Sessions row, and in the refusal a near-duplicate gets — *"already being worked in tab fix-the-thing"*); the worktree's copy is refused at the gate in every mode; resolving an item notifies the other live tabs whose branch touches its files. Also: the app crashed with four tabs open on ADR-0062's loop through AppKit's *layout-pass* counter, which the breaker had never hooked — it does now ([ADR-0062 addendum 7](./docs/decisions/0062-update-constraints-loop-identified-mitigated.md)), and left-pane notices lost the `.textSelection` that oscillated; the close dialog offered a tab's own branch as its merge target; and **Prepare MR** squashes the day's finished tab branches into one commit on an `mr/` branch, pushes it and opens one merge request ([ADR-0109](./docs/decisions/0109-batch-integration-and-metered-ci.md) amended). Sidecar 1365 tests green; 826 Swift assertions.
 
 **v0.1.111 — close-with-merge repaired.** Six finished tabs could not close with *Merge into my branch*: the `node_modules` symlink MARVIN places in each tab's worktree is not matched by a `node_modules/` ignore rule (the slash means directories only), so every worktree read as dirty, the close took the commit-first path, and the project's pre-commit hook outran a 30 s synchronous call. Symlinks are now excluded by name in the clone's `info/exclude`, and the work-in-progress commit runs asynchronously with the hooks honoured and their output in the message. A refused close stays on screen and names its tab.
 
@@ -520,7 +523,7 @@ bin/marvin logs     # tail .marvin/dev.log
 - [Overview](./docs/getting-started/overview.md) — what MARVIN is, who it's for
 - [Quickstart](./docs/getting-started/quickstart.md) — install → first session
 - [Modes & workflows](./docs/guides/workflows.md) — Ask / Agent / Plan with worked examples, and how MARVIN takes decisions
-- [Isolated tabs & worktrees](./docs/guides/worktrees.md) — what a session worktree is, what a fresh one lacks (`node_modules`, `.env`), and how MARVIN prepares it automatically or from `.marvin/worktree.json`
+- [Isolated tabs & worktrees](./docs/guides/worktrees.md) — what a session worktree is, what a fresh one lacks (`node_modules`, `.env`), and how MARVIN prepares it automatically or from `.marvin/worktree.json`; what closing a tab keeps, how branches are integrated, and how the backlog is shared between tabs
 - [Practice](./docs/guides/practice.md) — how MARVIN learns from its own sessions: findings, rules, tiers, verification, and the pane that manages them
 - [Architecture](./docs/getting-started/architecture.md)
 - [HTTP API reference](./docs/reference/api.md)

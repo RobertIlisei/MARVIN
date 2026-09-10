@@ -78,13 +78,15 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
-**v0.1.111** — close-with-merge repaired.
+**v0.1.112** — the multi-session release.
 
-A tab's worktree was dirty from birth: the `node_modules` symlink MARVIN creates is not
-matched by a `node_modules/` ignore rule, so every merge-on-close took the commit-first
-path and timed out in the project's pre-commit hook. Symlinks are excluded by name now,
-and the work-in-progress commit is asynchronous with hooks honoured. v0.1.110 (per-session
-posture, fast tab switching, batched integration) shipped the day before.
+Three days of running four tabs at once, three decisions: nothing survives a closed tab
+unless it holds a commit, with a dry-run verdict and a Sync before any merge (ADR-0111);
+one place for each thing in the chrome — the tab strip switches, History remembers, a
+confirm is a card in the tray (ADR-0112); the backlog is one live store that tabs claim
+from and are told about (ADR-0113). Plus the layout-loop breaker's second hook (ADR-0062
+addendum 7) and Prepare MR (ADR-0109 amended). v0.1.111 (close-with-merge) shipped the
+day before.
 Details in the [changelog](./history/CHANGELOG.md).
 
 _The v0.1.108 summary follows._

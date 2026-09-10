@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · September 2026 · v0.1.110 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · September 2026 · v0.1.112 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -153,6 +153,28 @@ was already going to have. MARVIN therefore batches integration by default and
 asks before anything opens a request or starts a pipeline, in every permission
 mode. Pushing a branch is left entirely alone; it starts no pipeline, and it is
 how work is kept safe.
+
+**Isolation hides the shared state too.** Two tabs once fixed the same defect on
+the same afternoon, byte-for-byte, one of them shipping a regression test the
+other never saw. Nothing was broken: the backlog lives in the project root, each
+worktree carries a copy frozen at the commit its branch was cut from, and the
+second tab read the copy. The remedy is the one Anthropic's own documentation
+gives for parallel workers — tasks are *claimed*, and "each teammate owns a
+different set of files" — applied to MARVIN's shape: an item is claimed by the
+tab working it, and the claim is visible in every listing and in the refusal a
+duplicate gets; a read of the worktree's copy is turned back at the gate in
+every permission mode; and when a tab resolves an item, the other tabs whose
+branch touches its files are told — as information marked as coming from
+another tab, never as an instruction from the user
+([ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md)).
+
+**Nothing survives a tab unless it holds a commit.** Measured on one project
+after a week of this: seventeen session worktrees, sixteen for closed tabs,
+twelve already merged, three empty, none ever swept. A closed tab now leaves a
+branch only when there is something on it; a dry-run merge reports the first
+conflict before any merge is attempted; and the tab that owns a branch is the
+one asked to resolve it, because it knows what its changes were for
+([ADR-0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md)).
 
 ### Bet 2 — The knowledge graph comes before the file read
 
@@ -723,4 +745,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.110; the repository is the authoritative, current reference.*
+v0.1.112; the repository is the authoritative, current reference.*

@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.110
+code. Written for contributors and deep evaluators. Covers v0.1.112
 (2026-09-07). Where this document and the repository disagree, the
 repository wins.*
 
@@ -35,6 +35,11 @@ repository wins.*
 > progress, seeds `[x]` as completed, and heals an already-absorbed spine on
 > the next reconcile (ADR-0052 / ADR-0068 lineage; 7 new tests, 641
 > assertions).
+> Since 2026-09-10: **nothing survives a tab without a commit** — sweep, dry-run
+> verdicts, Sync (ADR-0111, §3.x), **one place for each thing** in the
+> multi-session chrome (ADR-0112, §8), the **backlog as the shared task list**
+> — claims, live-store-only reads, resolution notices (ADR-0113, §3.x and §4),
+> and the layout-pass hook of the constraint-loop breaker (ADR-0062 addendum 7).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -406,6 +411,35 @@ merge/pull request, merging one, starting a pipeline — are classified by
 classified: on a pipeline-gated project a push to a branch with no open request
 starts nothing ([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md)).
 
+**Tab lifecycle ([ADR-0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md)).**
+The close decision is derived from sidecar state (`SessionWatchWorktree`:
+`commits`, `dirty`, `behind`, `mergedInto`, `target`) rather than from what the
+client remembers. A closed tab with no commits and a clean tree, or a branch
+already contained in another ref, is removed without asking; a dirty tree is
+committed as work in progress on *Keep*; *Merge* names the main checkout's
+branch. `sweepWorktrees` runs at boot and after every close, skipping any tree
+whose session has a live turn. `previewIntegration` runs `git merge-tree
+--write-tree --name-only` against the target — nothing checked out, nothing
+moved — and the Sessions pane's *Ready to integrate* rows carry its verdict.
+**Sync** (`POST /api/sessions/sync`) resumes the owning session with a merge
+prompt so conflicts are resolved by the session that made the changes. A
+branch is renamed from its first commit's subject on the first turn that
+leaves one; an integrated tab that receives a message is recut from HEAD.
+
+**Shared backlog ([ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md)).**
+Items carry `claimedBy` / `claimedBranch` / `claimedAt` while **doing**;
+`backlog_claim` (MCP) and `PATCH /api/backlog {status:"doing", sessionId,
+branch}` take the claim, a second claimant gets the holder back (`409 held`
+over HTTP), `backlog_resolve` releases it. The near-duplicate refusal names the
+holder. `backlogSnapshotTarget` in the session-worktree gate denies `Read` /
+`Grep` / `Glob` / `Bash` aimed at `<worktree>/.marvin/backlog` in every
+permission mode, pointing at `backlog_list`; the root's copy is the live store.
+`notifyTabsOfResolution` composes one notice per resolution and delivers it to
+every other live tab of the project whose branch (`git diff --name-only
+base..branch`) touches a path the item names — injected into a running turn
+(ADR-0076) or queued for the next (ADR-0069), capped at ten, marked as coming
+from another tab.
+
 ## 4. Cross-session persistence
 
 Content class determines the store; each store has an **enforced write
@@ -414,7 +448,7 @@ path** that rejects the wrong class:
 | Class | Store | Write path | ADR |
 |---|---|---|---|
 | Durable facts (invariants, gotchas, constraints) | `.marvin/memory/<slug>.md` + one-line index | `remember` MCP tool (caps, supersede-by-name, rejects activity/status) | [0042](../decisions/0042-memory-as-durable-facts.md) |
-| Deferred actionable work | `.marvin/backlog/<slug>.md` + index | `backlog_add` / `backlog_resolve` (consent-gated; `provisional:true` auto-parks at discovery) | [0044](../decisions/0044-project-backlog.md), [0047](../decisions/0047-backlog-capture-at-discovery.md) |
+| Deferred actionable work | `.marvin/backlog/<slug>.md` + index | `backlog_add` / `backlog_claim` / `backlog_resolve` (consent-gated; `provisional:true` auto-parks at discovery; a claim names the holding tab) | [0044](../decisions/0044-project-backlog.md), [0047](../decisions/0047-backlog-capture-at-discovery.md), [0113](../decisions/0113-the-backlog-is-the-shared-task-list.md) |
 | Material decisions | `<workDir>/docs/adr/NNNN-*.md` (user projects; this repo uses `docs/decisions/`) | Phase 4, enforced template with Scope-of-Done | triggers in §11.4 |
 | Status / activity | git history, changelog | ordinary commits | — |
 | Session notes | `.marvin/session-notes.md` | the native Scope-met chip | 0042 |
@@ -562,6 +596,16 @@ history). Major surfaces:
   two-tier checklist strip, decision sheets, compaction banner
   ([ADR-0022](../decisions/0022-context-pressure-observability-and-session-hygiene.md)), scope-met
   chip strip.
+- **Sessions** ([ADR-0107](../decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md),
+  [0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md),
+  [0112](../decisions/0112-one-place-for-each-thing.md)) — the tab strip is
+  the only switcher (tabs compress to fit, ‹ › steppers, an overflow list,
+  ordinals for duplicate titles), History holds closed sessions with
+  ⇧⌘[ / ⇧⌘], the context header reads project then `own branch · name` with a
+  facts-plus-actions popover, posture is one pill, a tool confirm is a card in
+  the tray, and the Sessions pane has five sections — Needs you, Working,
+  Ready to integrate (Merge / Merge all / Sync / Prepare MR), Idle, Recent —
+  with inline Allow / Deny and ↑↓⏎ navigation.
 - **Editor** — STTextView with tree-sitter highlighting (Swift, TS/TSX,
   JS/JSX, Go, Rust, JSON), diff gutter positioned from real layout
   fragments, ⌘S with mtime compare-and-swap.
@@ -715,7 +759,7 @@ pull / fetch), `graph`, `projects`, `sessions`, `skills` (+ `add`),
 |---|---|---|---|
 | `marvin-graph` | in-process | 6 graph tools | allow (read-only) |
 | `marvin-memory` | in-process | `remember`, `recall` | allow (content-class enforced) |
-| `marvin-backlog` | in-process | `backlog_add/list/resolve` | allow (content-class enforced) |
+| `marvin-backlog` | in-process | `backlog_add/list/claim/resolve` | allow (content-class enforced) |
 | `marvin-control` | in-process | wakeups + background jobs | allow (bounded by rails) |
 | `playwright` | external stdio, **opt-in** | `browser_*` | observation auto · interaction confirm · `browser_run_code_unsafe` **deny**; scouts get observation only ([ADR-0045](../decisions/0045-playwright-mcp-gated.md)) |
 

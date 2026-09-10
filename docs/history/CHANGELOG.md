@@ -8,6 +8,50 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-11 — v0.1.112: the multi-session release — nothing strands, one place for each thing, the backlog is shared.**
+
+  Trigger: three days of running four tabs at once on a real project, and the
+  user's three verdicts — *"we can easily create multiple stray branches"*,
+  *"UI/UX is a mess"*, and a pasted transcript of two tabs fixing the same bug
+  byte-for-byte: *"seems like we have issues"*.
+
+  **Diagnosis, measured rather than read.** Worktrees: 17 on one project, 16
+  for closed tabs, 12 already merged, 3 empty, 0 ever swept — the sweep ran
+  from one button and the close path's "reclaim silently" sent `keep`. Chrome:
+  four ways to switch a session, two New buttons, three places to choose
+  own-branch vs shared under three names, four stacked bars, five posture chips
+  in three styles. Backlog: the item was created in the root store at 17:41:47
+  as *open*; the second tab grepped `.marvin/backlog/` inside its own worktree
+  at 17:42:52 — a snapshot cut with the branch — found nothing, and started
+  fixing; no tool could mark an item *doing*; it went open → done at 17:54
+  with no word to the tab mid-fix on the same file.
+
+  **Decision.** [ADR-0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md):
+  the close decision is derived from sidecar state; empty and merged trees go
+  silently, at close and at boot; *Keep* commits work in progress; *Merge*
+  names its target; `git merge-tree` previews the first conflict; **Sync**
+  resumes the owning tab with a merge prompt; *Ready to integrate* in the
+  Sessions pane; branches named by their first commit; integrated tabs recut.
+  [ADR-0112](../decisions/0112-one-place-for-each-thing.md): the tab strip is
+  the only switcher (compressing tabs, ‹ › steppers, overflow, ordinals),
+  History holds closed sessions with Previous / Next, a context header, one
+  vocabulary, one posture pill, confirms as tray cards answerable from the
+  pane, five pane sections with ↑↓⏎.
+  [ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md): items
+  are claimed (`claimedBy` / `claimedBranch`, `backlog_claim`, holder in
+  listings, badge, Sessions row and the near-duplicate refusal); the
+  worktree's backlog copy is denied at the gate in every mode; resolution
+  notices go to the tabs whose branch touches the item's files.
+  [ADR-0062 addendum 7](../decisions/0062-update-constraints-loop-identified-mitigated.md):
+  the breaker hooks AppKit's *layout-pass* entry (`setNeedsLayout:`) on the
+  same budget after a crash with four tabs open; selectable notices in
+  left-pane scroll views lost `.textSelection`. Also: the close dialog offered
+  a tab's own branch as its merge target — it now names the main checkout's.
+
+  **Verification.** Sidecar 95 files / 1365 tests green, `tsc` clean; Swift 826
+  assertions. Live: tab strip and steppers checked on screen; the two-tab
+  backlog race is not yet checked on the rebuilt app.
+
 - **2026-09-10 — v0.1.111: close-with-merge repaired.**
 
   Trigger: six finished tabs on a real project, none closable with *Merge
