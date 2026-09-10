@@ -16,31 +16,87 @@ struct ChatAgentsFooter: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var modelsDialogOpen = false
 
+    @State private var open = false
+
+    /// ADR-0112 — the four identity chips are one pill; the controls live in
+    /// its popover. ADR-0108 made posture per session, so this is the one
+    /// control that decision implies rather than four with three styles.
     var body: some View {
-        HStack(spacing: 6) {
-            modelPill(
-                role: "executor",
-                value: trim(bridge.executorModel) ?? "default",
-                tint: bridge.executorModel == nil ? .secondary : .accentColor
+        Button {
+            open.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Text(trim(bridge.executorModel) ?? "default")
+                    .foregroundStyle(bridge.executorModel == nil ? Color.secondary : Color.accentColor)
+                dot
+                Text(bridge.advisorModel.flatMap(trim) ?? "no advisor")
+                    .foregroundStyle(bridge.advisorModel == nil ? Color.secondary : Color.accentColor)
+                dot
+                Text(bridge.personality ?? "ultron")
+                    .foregroundStyle(.secondary)
+                dot
+                Circle()
+                    .fill(bridge.permissionStrategy == "auto" ? Color.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(bridge.permissionStrategy == "auto" ? "auto" : "gated")
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 11, design: .monospaced))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
             )
-            Image(systemName: "arrow.right")
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-            modelPill(
-                role: "advisor",
-                value: bridge.advisorModel.flatMap(trim) ?? "—",
-                tint: bridge.advisorModel == nil ? .secondary : .accentColor
-            )
-            Spacer(minLength: 8)
-            personalityPill
-            // Autonomy mode + reasoning-effort pickers moved BELOW the chat
-            // input (ChatModeToolbar) — Cursor-style — to declutter this bar.
-            modeBadge
+        }
+        .buttonStyle(.plain)
+        .help("Posture for this tab: executor · advisor · voice · permissions. Click to change.")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("This tab's posture")
+                    .font(.system(size: 12, weight: .semibold))
+                HStack(spacing: 6) {
+                    modelPill(
+                        role: "executor",
+                        value: trim(bridge.executorModel) ?? "default",
+                        tint: bridge.executorModel == nil ? .secondary : .accentColor
+                    )
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    modelPill(
+                        role: "advisor",
+                        value: bridge.advisorModel.flatMap(trim) ?? "—",
+                        tint: bridge.advisorModel == nil ? .secondary : .accentColor
+                    )
+                }
+                HStack(spacing: 6) {
+                    personalityPill
+                    modeBadge
+                }
+                Text("Mode and effort are below the input. Posture is per tab (ADR-0108).")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .frame(width: 340)
         }
         .sheet(isPresented: $modelsDialogOpen) {
             ModelsDialog()
                 .environment(bridge)
         }
+    }
+
+    private var dot: some View {
+        Text("·").foregroundStyle(.tertiary)
     }
 
     // MARK: - Pills

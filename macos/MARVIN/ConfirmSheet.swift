@@ -198,7 +198,7 @@ struct ConfirmSheet: View {
 /// confirm sheet's needs (e.g. editable Bash command, diff preview
 /// for Edit) outgrow the chat list's needs without breaking either.
 /// Phase 2e keeps it terse; future phases polish.
-private struct ConfirmToolInput: View {
+struct ConfirmToolInput: View {
     let name: String
     let input: ChatJSON
 
@@ -380,4 +380,68 @@ private func prettyJSON(_ value: ChatJSON) -> String {
         return "\(value)"
     }
     return text
+}
+
+
+/// ADR-0112 — a tool confirm is a parallel task, not a modal one: it renders
+/// as a card in the tray above the input, never as a sheet over the
+/// transcript. Same decision, same inputs, no scrim. The question sheet
+/// (ADR-0040) stays a sheet, because it is a form.
+struct ConfirmCard: View {
+    let request: ConfirmRequest
+    let onAllow: () -> Void
+    let onDeny: (String?) -> Void
+    @State private var denyOpen = false
+    @State private var denyMessage: String = ""
+
+    private var isPlanApproval: Bool { request.toolName == "ExitPlanMode" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: isPlanApproval ? "checklist" : "exclamationmark.shield.fill")
+                    .foregroundStyle(isPlanApproval ? .purple : .orange)
+                Text(isPlanApproval ? "MARVIN has a plan — approve to execute" : "MARVIN wants to use a tool")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(request.toolName)
+                    .font(.caption.monospaced())
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.orange.opacity(0.16)))
+                Spacer()
+                Button(isPlanApproval ? "Keep planning" : "Deny") {
+                    if denyOpen || isPlanApproval { onDeny(denyMessage.isEmpty ? nil : denyMessage) } else { denyOpen = true }
+                }
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+                Button(isPlanApproval ? "Approve & execute" : "Allow") { onAllow() }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            if let input = request.input, !isPlanApproval {
+                ConfirmToolInput(name: request.toolName, input: input)
+                    .frame(maxHeight: 120)
+            }
+            if let reason = request.reason, !reason.isEmpty {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if denyOpen {
+                HStack(spacing: 6) {
+                    TextField("Why? Shown back to the model (optional)", text: $denyMessage)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                        .onSubmit { onDeny(denyMessage.isEmpty ? nil : denyMessage) }
+                    Button("Send denial") { onDeny(denyMessage.isEmpty ? nil : denyMessage) }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.06))
+    }
 }

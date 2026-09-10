@@ -84,27 +84,34 @@ struct SessionModePopover: View {
     let mode: SessionMode
     let onSwitch: (SessionMode, TabCloseDecision.Action?) -> Void
     let onLane: ([String]) -> Void
-
-    @State private var laneText: String = ""
     @State private var leaving: TabCloseDecision.Outcome? = nil
-
+    @State private var laneSheetOpen = false
     private var tree: SessionTreeWire? { entry?.tree }
 
+    // ADR-0112 — a popover shows facts and one or two actions. The segmented
+    // control, the lane form and two paragraphs of explanation that used to
+    // live here made it a settings pane; the form is a sheet now, the
+    // explanation is a link.
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Where this tab works")
-                .font(.system(size: 12, weight: .semibold))
-
-            Picker("", selection: Binding(
-                get: { mode },
-                set: { requestSwitch(to: $0) }
-            )) {
-                Text("Own branch").tag(SessionMode.worktree)
-                Text("Shared").tag(SessionMode.shared)
+            HStack(spacing: 6) {
+                Image(systemName: mode == .worktree ? "arrow.triangle.branch" : "rectangle.split.2x1")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(mode == .worktree ? Color.accentColor : Color.secondary)
+                Text(mode == .worktree ? "This tab works on its own branch" : "This tab works in your checkout")
+                    .font(.system(size: 12, weight: .semibold))
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-
+            if mode == .worktree, let tree, tree.mode == .worktree {
+                facts(tree)
+            } else if mode == .worktree {
+                Text(isDraft ? "The branch is cut from \(currentBranchLabel) when you send the first message."
+                             : "Branch details arrive after the first message.")
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                let lane = entry?.tree?.lane ?? []
+                fact("Lane", lane.isEmpty ? "none — edits anywhere" : lane.joined(separator: ", "))
+            }
             if let leaving, case .offer(let actions, let note) = leaving {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(note).font(.system(size: 10.5)).foregroundStyle(.secondary)
@@ -121,36 +128,27 @@ struct SessionModePopover: View {
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.08)))
             } else if leaving == .stopTurnFirst {
-                Text("Stop the running turn before switching trees.")
+                Text("Stop the running turn before switching.")
                     .font(.system(size: 10.5)).foregroundStyle(.orange)
             }
-
-            if mode == .worktree, let tree, tree.mode == .worktree {
-                facts(tree)
-            } else if mode == .worktree {
-                Text(isDraft ? "The worktree is cut from \(currentBranchLabel) when you send the first message."
-                             : "Worktree details arrive after the first message.")
-                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if mode == .shared {
-                laneEditor
-            }
-
-            Text("The editor, terminal and file tree stay on the main checkout; only MARVIN's turns run in the worktree.")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            if mode == .worktree {
-                Text("Dependencies (node_modules, .venv, …) are symlinked from the main checkout and ignored .env files copied, as .marvin/worktree.json says. MARVIN writes that file from the project the first time; edit it to change what a new tab gets. See docs/guides/worktrees.md.")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                if mode == .worktree {
+                    Button("Switch to shared") { requestSwitch(to: .shared) }.controlSize(.small)
+                } else {
+                    Button("Switch to own branch") { requestSwitch(to: .worktree) }.controlSize(.small)
+                    Button("Edit lane…") { laneSheetOpen = true }.controlSize(.small)
+                }
+                Button("Open in Sessions") { MarvinBridge.shared.revealLeftTab("sessions") }.controlSize(.small)
+                Spacer()
+                Link("Learn more", destination: URL(string: "https://github.com/robertilisei/marvin/blob/main/docs/guides/worktrees.md")!)
+                    .font(.system(size: 10))
             }
         }
         .padding(12)
-        .onAppear { laneText = (entry?.tree?.lane ?? []).joined(separator: "\n") }
+        .sheet(isPresented: $laneSheetOpen) {
+            LaneSheet(initial: entry?.tree?.lane ?? []) { lane in onLane(lane) }
+        }
     }
-
     private func requestSwitch(to next: SessionMode) {
         guard next != mode else { return }
         if next == .worktree {
@@ -239,24 +237,4 @@ struct SessionModePopover: View {
         }
     }
 
-    private var laneEditor: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Lane — paths this tab owns (one per line, repo-relative)")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-            TextEditor(text: $laneText)
-                .font(.system(size: 10.5, design: .monospaced))
-                .frame(height: 64)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(MarvinTheme.border, lineWidth: 1))
-            HStack {
-                Text("Edits outside the lane and HEAD-moving git raise a confirm.")
-                    .font(.system(size: 9.5)).foregroundStyle(.tertiary)
-                Spacer()
-                Button("Save lane") {
-                    let lane = laneText.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                    onLane(lane)
-                }
-                .controlSize(.small)
-            }
-        }
-    }
 }

@@ -44,6 +44,31 @@ export interface PendingConfirmSummary {
   toolName: string;
   /** ISO timestamp the confirm was raised. */
   since: string;
+  /** ADR-0112 — one line of what is being asked (the command, the path, the question), for a row that answers inline. */
+  excerpt?: string | undefined;
+  /** ADR-0112 — the gate's reason, when it gave one. */
+  reason?: string | undefined;
+}
+
+/** One line a Needs-you row can show without the full payload. */
+export function confirmExcerpt(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const p = payload as { toolName?: unknown; input?: Record<string, unknown>; title?: unknown; description?: unknown };
+  const input = p.input ?? {};
+  const pick = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const raw =
+    pick(input.command) ??
+    pick(input.file_path) ??
+    pick(input.notebook_path) ??
+    pick(input.path) ??
+    (Array.isArray((input as { questions?: unknown }).questions)
+      ? pick(((input as { questions: Array<{ question?: unknown }> }).questions[0] ?? {}).question)
+      : undefined) ??
+    pick(p.description) ??
+    pick(p.title);
+  if (!raw) return undefined;
+  const oneLine = raw.replace(/\s+/g, " ");
+  return oneLine.length > 160 ? `${oneLine.slice(0, 157)}…` : oneLine;
 }
 
 const registry = new Map<string, Map<string, PendingEntry>>();
@@ -107,12 +132,17 @@ export function listPendingConfirms(turnId: string): PendingConfirmSummary[] {
   const bucket = registry.get(turnId);
   if (!bucket) return [];
   return [...bucket.entries()]
-    .map(([toolUseId, e]) => ({
-      turnId,
-      toolUseId,
-      toolName: e.toolName,
-      since: new Date(e.registeredAt).toISOString(),
-    }))
+    .map(([toolUseId, e]) => {
+      const reason = (e.payload as { reason?: unknown } | undefined)?.reason;
+      return {
+        turnId,
+        toolUseId,
+        toolName: e.toolName,
+        since: new Date(e.registeredAt).toISOString(),
+        ...(e.payload !== undefined ? { excerpt: confirmExcerpt(e.payload) } : {}),
+        ...(typeof reason === "string" && reason ? { reason } : {}),
+      };
+    })
     .sort((a, b) => a.since.localeCompare(b.since));
 }
 

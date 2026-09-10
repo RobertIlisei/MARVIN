@@ -18,6 +18,9 @@ struct SessionsPane: View {
     @Environment(MarvinBridge.self) private var bridge
     private let registry = SessionRegistry.shared
     @State private var expandedIdle = false
+    /// ADR-0112 — keyboard focus in the list: ↑ ↓ move, ⏎ switches.
+    @State private var focusedId: String? = nil
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         content
@@ -35,17 +38,30 @@ struct SessionsPane: View {
                         .foregroundStyle(.secondary)
                         .padding(.top, 4)
                 } else {
-                    section("Needs you", rows(where: { if case .needsYou = $0 { return true } else { return false } }), tint: .orange)
+                    // ADR-0112 — five sections. Interrupted and Failed fold into
+                    // Needs you: both mean a human is required, and each keeps
+                    // its own glyph.
+                    section("Needs you", rows(where: { s in
+                        if case .needsYou = s { return true }
+                        return s == .interrupted || s == .failed
+                    }), tint: .orange)
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
-                    section("Interrupted", rows(where: { $0 == .interrupted }), tint: .orange)
-                    section("Failed", rows(where: { $0 == .failed }), tint: GitDecorationColor.deleted)
-                    idleSection
                     integrateSection
+                    idleSection
                     recentSection
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
+        }
+        .focusable()
+        .focused($listFocused)
+        .onKeyPress(.upArrow) { moveFocus(-1); return .handled }
+        .onKeyPress(.downArrow) { moveFocus(1); return .handled }
+        .onKeyPress(.return) {
+            guard let id = focusedId else { return .ignored }
+            bridge.requestChatTab(.select(id))
+            return .handled
         }
         .task {
             registry.refreshSnapshot()
@@ -75,6 +91,17 @@ struct SessionsPane: View {
 
     private func rows(where match: (SessionRowState) -> Bool) -> [Row] {
         rows.filter { match($0.state) }
+    }
+    /// ADR-0112 — the order the keyboard walks: as displayed.
+    private var keyboardOrder: [String] {
+        rows.sorted { $0.state.sortRank < $1.state.sortRank }.map(\.id)
+    }
+    private func moveFocus(_ delta: Int) {
+        let ids = keyboardOrder
+        guard !ids.isEmpty else { return }
+        let current = focusedId.flatMap { ids.firstIndex(of: $0) } ?? (delta > 0 ? -1 : ids.count)
+        let next = min(max(current + delta, 0), ids.count - 1)
+        focusedId = ids[next]
     }
 
     private var recent: [SessionEntry] {
@@ -178,7 +205,7 @@ struct SessionsPane: View {
         let items = recent
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                sectionHeader("Recent", count: items.count, tint: .secondary)
+                sectionHeader("History", count: items.count, tint: .secondary)
                 ForEach(items) { e in
                     HStack(spacing: 6) {
                         Circle().fill(Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
@@ -368,32 +395,43 @@ struct SessionsPane: View {
     private func sessionRow(_ row: Row) -> some View {
         let e = row.entry
         let selected = row.id == bridge.activeMarvinSessionId
-        return HStack(spacing: 6) {
-            Circle()
-                .fill(ChatPreviewView.tabTint(row.state))
-                .frame(width: 6, height: 6)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title(e))
-                    .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(MarvinTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(subtitle(e, state: row.state))
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        let focused = row.id == focusedId
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                stateGlyph(row.state)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title(e))
+                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(MarvinTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(subtitle(e, state: row.state))
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 4)
+                action(for: row)
             }
-            Spacer(minLength: 4)
-            action(for: row)
+            // ADR-0112 — answer a waiting tab here, without switching to it.
+            // A question (AskUserQuestion) is a form and still opens the tab.
+            if case .needsYou = row.state, let c = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first,
+               c.toolName != "AskUserQuestion" {
+                inlineConfirm(c)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 3)
         .contentShape(Rectangle())
-        .onTapGesture { bridge.requestChatTab(.select(row.id)) }
+        .onTapGesture { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(selected ? Color(nsColor: .textBackgroundColor) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(focused && listFocused ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)
+                )
         )
         .help(help(e))
         .contextMenu {
@@ -415,6 +453,52 @@ struct SessionsPane: View {
                 }
             }
         }
+    }
+
+    /// ADR-0112 — a glyph per state so colour is never the only signal.
+    @ViewBuilder
+    private func stateGlyph(_ state: SessionRowState) -> some View {
+        switch state {
+        case .working:
+            ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+        case .needsYou:
+            Image(systemName: "hand.raised.fill").font(.system(size: 9)).foregroundStyle(.orange).frame(width: 10)
+        case .interrupted:
+            Image(systemName: "arrow.clockwise").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange).frame(width: 10)
+        case .failed:
+            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(GitDecorationColor.deleted).frame(width: 10)
+        case .idle, .draft:
+            Circle().fill(ChatPreviewView.tabTint(state)).frame(width: 6, height: 6).frame(width: 10)
+        }
+    }
+
+    /// The pending tool, its one-line excerpt, and Allow / Deny — the same
+    /// decision the tray card offers, from here.
+    private func inlineConfirm(_ c: PendingConfirmInfo) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(c.toolName)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.16)))
+                Text(c.excerpt ?? "wants to run")
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button("Deny") { Task { await registry.answer(c, allow: false) } }
+                    .buttonStyle(.plain).font(.system(size: 10, weight: .medium)).foregroundStyle(GitDecorationColor.deleted)
+                Button("Allow") { Task { await registry.answer(c, allow: true) } }
+                    .buttonStyle(.plain).font(.system(size: 10, weight: .semibold)).foregroundStyle(GitDecorationColor.added)
+            }
+            if let r = c.reason, !r.isEmpty {
+                Text(r).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 2)
     }
 
     @ViewBuilder

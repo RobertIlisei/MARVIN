@@ -53,12 +53,18 @@ public struct PendingConfirmInfo: Codable, Equatable, Sendable {
     public let toolUseId: String
     public let toolName: String
     public let since: String?
+    /// ADR-0112 — one line of what is asked, so a Needs-you row can answer inline.
+    public let excerpt: String?
+    public let reason: String?
 
-    public init(turnId: String, toolUseId: String, toolName: String, since: String? = nil) {
+    public init(turnId: String, toolUseId: String, toolName: String, since: String? = nil,
+                excerpt: String? = nil, reason: String? = nil) {
         self.turnId = turnId
         self.toolUseId = toolUseId
         self.toolName = toolName
         self.since = since
+        self.excerpt = excerpt
+        self.reason = reason
     }
 }
 

@@ -169,3 +169,7 @@ the first message — and `newTab(mode:)` is the one entry point all of them use
 ## Amendment (2026-09-10, ADR-0111) — the close rules are remade
 
 The rule table in this ADR ("closed, 0 commits → `empty` → sweep if clean") described a sweep that ran from one button and never automatically, and the client's "reclaim silently" sent `keep`. Measured: 17 session worktrees on disk, 16 for closed tabs, 0 ever swept. [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) replaces the close decision (from the sidecar's derived state; empty and merged trees discarded without asking; keep commits work first; Merge names its target), runs the sweep at boot and after every close, previews conflicts before integration, lets the owning session resolve them, names branches by their first commit, and cuts a fresh tree when an integrated tab is reopened.
+
+## Amendment (2026-09-10, ADR-0112) — the chrome is consolidated
+
+This ADR's tab strip, chip and Sessions pane arrived beside an open-sessions menu, a history menu and a header New button that were never retired, and used two vocabularies for one thing. [ADR-0112](./0112-one-place-for-each-thing.md) makes the tab strip the only switcher, the `+` beside it the only New control, the clock menu History (closed sessions only), the chip popover facts plus two actions with the lane editor in a sheet, posture one pill, tool confirms a card in the tray rather than a sheet, and the Sessions pane five sections with inline answers. The words are "own branch" and "shared" everywhere.

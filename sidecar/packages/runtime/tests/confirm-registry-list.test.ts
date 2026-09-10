@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   attachPendingPayload,
   clearTurnConfirms,
+  confirmExcerpt,
   listPendingConfirmPayloads,
   listPendingConfirms,
   registerPendingConfirm,
@@ -45,6 +46,21 @@ describe("listPendingConfirms", () => {
     expect(listPendingConfirmPayloads(turn).map((p) => (p as { toolUseId: string }).toolUseId)).toEqual(["u2"]);
     clearTurnConfirms(turn);
     expect(listPendingConfirmPayloads(turn)).toEqual([]);
+  });
+
+  // ADR-0112 — a Needs-you row answers inline, so the list carries an excerpt.
+  it("carries a one-line excerpt and the reason once the payload is attached", () => {
+    const turn = "cr-excerpt-1";
+    registerPendingConfirm(turn, "u1", () => {}, { command: "rm -rf build" }, 0, { toolName: "Bash" });
+    expect(listPendingConfirms(turn)[0]?.excerpt).toBeUndefined();
+    attachPendingPayload(turn, "u1", { turnId: turn, toolUseId: "u1", toolName: "Bash", input: { command: "rm   -rf\n build" }, reason: "destructive" });
+    expect(listPendingConfirms(turn)[0]).toMatchObject({ excerpt: "rm -rf build", reason: "destructive" });
+    registerPendingConfirm(turn, "u2", () => {}, {}, 0, { toolName: "AskUserQuestion" });
+    attachPendingPayload(turn, "u2", { turnId: turn, toolUseId: "u2", toolName: "AskUserQuestion", input: { questions: [{ question: "Ship it?" }] }, reason: "" });
+    expect(listPendingConfirms(turn).find((p) => p.toolUseId === "u2")).toMatchObject({ excerpt: "Ship it?" });
+    expect(confirmExcerpt({ input: { file_path: "/a/b.ts" } })).toBe("/a/b.ts");
+    expect(confirmExcerpt(null)).toBeUndefined();
+    clearTurnConfirms(turn);
   });
 
   it("an unnamed confirm still lists, as a generic tool", () => {

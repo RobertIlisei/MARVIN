@@ -334,6 +334,22 @@ final class SessionRegistry {
         refreshIntegrationPreview()
     }
 
+    /// ADR-0112 — answer a waiting tab's confirm from the Sessions pane. The
+    /// confirm route resolves it and announces `confirm.resolved`, which the
+    /// feed turns into the row's dot going quiet.
+    func answer(_ c: PendingConfirmInfo, allow: Bool) async {
+        do {
+            try await ChatService.shared.respondToConfirm(
+                turnId: c.turnId, toolUseId: c.toolUseId,
+                decision: allow ? .allow : .deny,
+                denyMessage: allow ? nil : "Denied from the Sessions pane."
+            )
+            ledger.apply(.confirmResolved(sessionId: "", turnId: c.turnId, toolUseId: c.toolUseId))
+        } catch {
+            integrationNotice = "Could not answer: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Actions that need no model
 
     /// Stop a session's turn from outside its tab (the Sessions pane).

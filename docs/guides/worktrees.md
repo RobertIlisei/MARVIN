@@ -1,6 +1,6 @@
-# Isolated tabs — what a session worktree is, and how MARVIN prepares it
+# Tabs on their own branch — what a session worktree is, and how MARVIN prepares it
 
-Every new chat tab runs in its **own git worktree** by default ([ADR-0107](../decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)).
+Every new chat tab works on its **own branch**, in its own git worktree, by default ([ADR-0107](../decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)). The alternative is a **shared** tab, which works in your checkout. The `+` menu beside the tabs offers both; the chip in the header says which one a tab is and switches it later ([ADR-0112](../decisions/0112-one-place-for-each-thing.md)).
 This page explains what that means for your project, what a fresh worktree
 is missing (dependencies, `.env`), and how MARVIN fills that gap — automatically,
 or the way you tell it to.
@@ -22,7 +22,7 @@ For a tab, MARVIN creates:
 | The record | `.marvin/worktrees.json`, `kind: "session"`, state `session` |
 
 The worktree is created when you send the tab's **first message**, not when
-you open the tab. The tab's chip reads `isolated: marvin/tab/<slug>` from then
+you open the tab. The tab's chip reads `own branch · <name>` from then
 on. The editor, terminal and file tree stay on your main checkout; only
 MARVIN's turns run in the worktree. Closing the tab offers **Merge** (a local
 `--no-ff` merge into your current branch, never a push), **Keep** the branch,

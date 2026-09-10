@@ -2154,6 +2154,14 @@ struct ChatPreviewView: View {
                 .frame(minHeight: 140, idealHeight: 140, maxHeight: .infinity)
             if let err = model.lastError {
                 errorBanner(err)
+                    // ADR-0112 — an error with nothing to retry is a toast: it
+                    // says its piece and leaves. One with a Retry stays until
+                    // the user acts or the next turn starts.
+                    .task(id: err) {
+                        guard model.lastSentMessage == nil else { return }
+                        try? await Task.sleep(nanoseconds: 8_000_000_000)
+                        if model.lastError == err { model.lastError = nil }
+                    }
             }
             if let closing = model.closingTabLabel {
                 // A confirmation dialog dismisses the instant a button is
@@ -2953,7 +2961,9 @@ struct ChatPreviewView: View {
 
     private var confirmSheetPresented: Binding<Bool> {
         Binding(
-            get: { !model.pendingConfirms.isEmpty },
+            // ADR-0112 — only the question form is a sheet; tool confirms are
+            // cards in the tray.
+            get: { model.pendingConfirms.first?.toolName == "AskUserQuestion" },
             set: { isPresenting in
                 guard !isPresenting,
                       let head = model.pendingConfirms.first,
@@ -3336,6 +3346,15 @@ struct ChatPreviewView: View {
     /// The active strips, in priority order, as type-erased rows.
     private var trayRows: [AnyView] {
         var rows: [AnyView] = []
+        // ADR-0112 — a tool confirm is a card here, not a sheet over the log.
+        // The question form (AskUserQuestion) keeps its sheet.
+        if let head = model.pendingConfirms.first, head.toolName != "AskUserQuestion" {
+            rows.append(AnyView(ConfirmCard(
+                request: head,
+                onAllow: { model.respond(to: head, decision: .allow) },
+                onDeny: { reason in model.respond(to: head, decision: .deny, denyMessage: reason) }
+            )))
+        }
         // ADR-0107 — a turn a restart cut off, with the way back.
         if let sid = model.loadedSessionId, !model.isSending,
            SessionRegistry.shared.entry(sid)?.interrupted == true {

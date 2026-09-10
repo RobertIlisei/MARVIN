@@ -1,6 +1,6 @@
 # ADR-0112 — One place for each thing: the multi-session chrome
 
-- **Status:** Accepted — in implementation 2026-09-10
+- **Status:** Accepted — implemented 2026-09-10
 - **Date:** 2026-09-10
 - **Related:** [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) (tabs, chip, Sessions pane), [ADR-0108](./0108-per-session-posture.md) (posture per session), [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) (close and integration), [ADR-0040](./0040-interactive-ask-user-question.md) (the question sheet), [ADR-0062](./0062-layout-constraint-loop.md) (layout rules every new view obeys)
 
@@ -128,10 +128,12 @@ keys and Return switch, ⌘W closes.
 
 ## Scope of Done
 
-- [ ] M1 — switching and starting consolidated; History; header; vocabulary; tab glyphs
-- [ ] M2 — chip popover facts + actions; lane sheet; help link
-- [ ] M3 — posture pill
-- [ ] M4 — tray: error auto-dismiss, neutral nudge, one colour per feedback kind
-- [ ] M5 — confirm card in the tray; inline answer in the Sessions pane; watch-row excerpt
-- [ ] M6 — Sessions pane sections, two-line rows, keyboard
-- [ ] Docs: ADR-0107 amendment, worktrees guide vocabulary, roadmap
+- [x] M1 — switching and starting consolidated; History; header; vocabulary; tab glyphs (4998c0e6)
+- [x] M2 — chip popover facts + two actions; `LaneSheet`; Learn more link
+- [x] M3 — posture pill with one popover holding the four controls
+- [x] M4 — an error with nothing to retry dismisses itself after 8 s. **Not done:** re-colouring a gate denial in the transcript — it arrives as the tool's error result, and to the model it *is* an error; a different colour would need the sidecar to mark its own denials, deferred.
+- [x] M5 — `ConfirmCard` in the tray for tool confirms, the sheet kept for the question form; inline Allow / Deny in the Needs-you row; `excerpt` + `reason` on the pending summary
+- [x] M6 — Needs you absorbs Interrupted and Failed with their own glyphs; Working · Ready to integrate · Idle · History; ↑ ↓ ⏎ on the list
+- [x] Docs: ADR-0107 amendment, worktrees guide vocabulary, roadmap
+
+Not in scope and noted for later: the brain caption at the top edge (ADR-0021's surface); ⌘W in the pane, which belongs to the tab-close command; a per-state glyph in the History menu.
