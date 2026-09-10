@@ -104,7 +104,7 @@ describe("buildSessionWatch", () => {
     __resetSessionReconcileMemoForTests();
 
     const open = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["ready-sess"] })[0]!;
-    expect(open.worktree).toMatchObject({ slug: wt.slug, branch: wt.branch, state: "session", commits: 1, dirty: false, behind: 1, closed: false });
+    expect(open.worktree).toMatchObject({ slug: wt.slug, branch: wt.branch, state: "session", commits: 1, dirty: false, behind: 1, closed: false, target: "main" });
 
     // Close the tab: the meta is closed (so the recent-metas universe drops
     // it) but the branch is `ready` — the reconcile puts it back.

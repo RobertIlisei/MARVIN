@@ -214,10 +214,14 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
         public let behind: Int?
         public let closed: Bool?
         public let mergedInto: String?
+        /// The main checkout's current branch — what a merge lands on. Never the tab's own branch.
+        public let target: String?
         public init(slug: String, branch: String, state: String, commits: Int, dirty: Bool,
-                    base: String? = nil, behind: Int? = nil, closed: Bool? = nil, mergedInto: String? = nil) {
+                    base: String? = nil, behind: Int? = nil, closed: Bool? = nil, mergedInto: String? = nil,
+                    target: String? = nil) {
             self.slug = slug; self.branch = branch; self.state = state; self.commits = commits; self.dirty = dirty
             self.base = base; self.behind = behind; self.closed = closed; self.mergedInto = mergedInto
+            self.target = target
         }
     }
 

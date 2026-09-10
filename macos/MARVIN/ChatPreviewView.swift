@@ -2727,7 +2727,10 @@ struct ChatPreviewView: View {
             let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: [sid]) ?? []
             let row = rows.first(where: { $0.marvinSessionId == sid })
             let worktree = row?.worktree ?? entry?.worktree
-            let target = row?.tree?.currentBranch
+            // The MAIN checkout's branch. `tree.currentBranch` is the branch of
+            // the tab's own worktree, which is exactly what a merge must not
+            // name as its target (2026-09-11 dialog: "Merge into <itself>").
+            let target = worktree?.target ?? bridge.branch
             let outcome = TabCloseDecision.decide(
                 isLive: row?.turn != nil,
                 mode: .worktree,
