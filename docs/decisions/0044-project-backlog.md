@@ -265,3 +265,17 @@ failed add.
 - [x] `POST /api/backlog` returns `related`; `BacklogService.add` decodes it
       (optional field — older bundles degrade to no hint); `BacklogPanel` shows
       a dismissible advisory distinct from the error banner.
+
+## Amendment (2026-09-11) — items are claimed, and read only from the live store
+
+[ADR-0113](./0113-the-backlog-is-the-shared-task-list.md) adds three fields to
+an item — `claimedBy`, `claimedBranch`, `claimedAt` — written only while the
+item is **doing**, and a `backlog_claim` tool beside add / list / resolve.
+`setBacklogStatus` clears the claim on any move away from doing; `resolve`
+releases it. The index line and `backlog_list` show `· tab: <branch>` on a
+doing item, and `backlog_add`'s near-duplicate refusal (ADR-0070) names the
+holder when the live item is doing. The `.marvin/backlog/` copy inside a
+session worktree (ADR-0107) is a snapshot cut with the branch; the gate turns
+back reads aimed at it. Nothing in this ADR's file format changes for items
+that were never claimed.
+

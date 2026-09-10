@@ -92,8 +92,29 @@ export interface BacklogItem {
   blockedOn: string;
   /** Session that parked it (best-effort link back); empty for manual UI adds. */
   sessionId: string;
+  /** ADR-0113 — who is working it while `status === "doing"`. Empty otherwise. */
+  claimedBy: string;
+  /** The holder's branch (a worktree tab), for the human-facing "tab: …". */
+  claimedBranch: string;
+  claimedAt: string;
   created: string; // ISO
   updated: string; // ISO
+}
+
+/** ADR-0113 — the holder of a `doing` item, as listings and refusals name it. */
+export interface BacklogClaim {
+  sessionId: string;
+  branch?: string | undefined;
+}
+
+/** "tab: fix-the-thing" or "session 8cb24ed6" — whichever the claim recorded. */
+export function describeClaim(item: Pick<BacklogItem, "claimedBy" | "claimedBranch">): string | null {
+  if (!item.claimedBy) return null;
+  if (item.claimedBranch) {
+    const short = item.claimedBranch.startsWith("marvin/tab/") ? item.claimedBranch.slice("marvin/tab/".length) : item.claimedBranch;
+    return `tab: ${short}`;
+  }
+  return `session ${item.claimedBy.slice(0, 8)}`;
 }
 
 export interface AddBacklogInput {
@@ -132,6 +153,8 @@ export type AddBacklogResult =
       related: BacklogItem[];
       /** Set when the capture was refused as a restatement of this item. */
       duplicateOf?: string;
+      /** ADR-0113 — set when the duplicate is `doing`: "tab: …" / "session …". */
+      duplicateHeldBy?: string;
     }
   | { ok: false; error: string };
 
@@ -146,6 +169,8 @@ export type ResolveResult =
        */
       related?: BacklogItem[];
       duplicateOf?: string;
+      /** ADR-0113 — set when the duplicate is `doing`: "tab: …" / "session …". */
+      duplicateHeldBy?: string;
     }
   | { ok: false; error: string };
 
@@ -504,6 +529,9 @@ function parseItem(slug: string, content: string): BacklogItem {
     // Self-heal files corrupted by the old parser (see repairSwallowedField).
     blockedOn: repairSwallowedField(parseField(content, "blockedOn")),
     sessionId: parseField(content, "sessionId"),
+    claimedBy: parseField(content, "claimedBy"),
+    claimedBranch: parseField(content, "claimedBranch"),
+    claimedAt: parseField(content, "claimedAt"),
     created: parseField(content, "created"),
     updated: parseField(content, "updated"),
   };
@@ -559,6 +587,7 @@ function serialize(item: BacklogItem, linkTrailer = ""): string {
     `blocked: ${item.blocked ? "true" : "false"}\n` +
     `blockedOn: ${item.blockedOn.replace(/\n/g, " ").trim()}\n` +
     `sessionId: ${item.sessionId}\n` +
+    (item.claimedBy ? `claimedBy: ${item.claimedBy}\nclaimedBranch: ${item.claimedBranch}\nclaimedAt: ${item.claimedAt}\n` : "") +
     `created: ${item.created}\n` +
     `updated: ${item.updated}\n` +
     `---\n\n${item.body || item.title}\n${linkTrailer}`
@@ -614,7 +643,7 @@ export async function rewriteBacklogIndex(workDir: string): Promise<number> {
     // (ADR-0065). Without links the vault is N disconnected dots. Reads the
     // same as the old text form everywhere else, including the context
     // injection that quotes this file.
-    (i) => `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title} — [[backlog/${i.id}]]`,
+    (i) => `- ${STATUS_MARK[i.status]} (${i.severity}) ${i.title}${i.status === "doing" && describeClaim(i) ? ` · ${describeClaim(i)}` : ""} — [[backlog/${i.id}]]`,
   );
   const body =
     `${INDEX_HEADER}\n\n` +
@@ -682,6 +711,19 @@ export async function addBacklogItem(
   }
 
   // Status resolution (ADR-0047):
+  // ADR-0113 — the same slug parked again while ANOTHER tab holds it: say who,
+  // change nothing. (Same tab re-parking its own item still updates it.)
+  if (existing && existing.status === "doing" && existing.claimedBy && existing.claimedBy !== (input.sessionId ?? "")) {
+    const all = await readAll(workDir);
+    return {
+      ok: true,
+      item: existing,
+      created: false,
+      related: relatedBacklogItems(existing, all),
+      duplicateOf: existing.id,
+      duplicateHeldBy: describeClaim(existing) ?? "another session",
+    };
+  }
   //  - existing open/doing → keep (a provisional re-add never downgrades it);
   //  - existing provisional → confirm (provisional:false) promotes to open,
   //    else stays provisional;
@@ -708,6 +750,9 @@ export async function addBacklogItem(
     blocked: input.blocked ?? existing?.blocked ?? false,
     blockedOn: (input.blockedOn ?? existing?.blockedOn ?? "").trim().slice(0, 200),
     sessionId: input.sessionId ?? existing?.sessionId ?? "",
+    claimedBy: existing?.claimedBy ?? "",
+    claimedBranch: existing?.claimedBranch ?? "",
+    claimedAt: existing?.claimedAt ?? "",
     created: existing?.created || now,
     updated: now,
   };
@@ -737,7 +782,10 @@ export async function addBacklogItem(
         backlogSimilarity(item, o) >= NEAR_DUPLICATE_SCORE,
     );
     if (dupe) {
-      return { ok: true, item: dupe, created: false, related, duplicateOf: dupe.id };
+      // ADR-0113 — a duplicate of an item someone is WORKING is the sentence
+      // that stops a second fix: name the holder.
+      const heldBy = dupe.status === "doing" ? describeClaim(dupe) : null;
+      return { ok: true, item: dupe, created: false, related, duplicateOf: dupe.id, ...(heldBy ? { duplicateHeldBy: heldBy } : {}) };
     }
   }
 
@@ -810,18 +858,89 @@ export async function updateBacklogItem(
   }
 }
 
-/** Set any status (e.g. `doing` when promoted to a turn). Rewrites the index. */
+/**
+ * ADR-0113 — take an item: open or provisional → doing, with the caller as
+ * holder. A second claimant is refused and told who holds it; the same
+ * session re-claiming (a resumed tab) is a no-op that succeeds.
+ */
+export type ClaimResult =
+  | { ok: true; item: BacklogItem; alreadyHeld: boolean }
+  | { ok: false; error: string; holder?: string; holderSessionId?: string };
+
+export async function claimBacklogItem(
+  workDir: string,
+  id: string,
+  claim: BacklogClaim,
+  now = new Date().toISOString(),
+): Promise<ClaimResult> {
+  const path = join(backlogDir(workDir), `${id}.md`);
+  if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
+  const item = parseItem(id, await readFile(path, "utf-8"));
+  if (item.status === "done" || item.status === "dismissed") {
+    return { ok: false, error: `backlog item "${id}" is ${item.status}; reopen it (backlog_resolve keep) before claiming.` };
+  }
+  if (item.status === "doing" && item.claimedBy && item.claimedBy !== claim.sessionId) {
+    const holder = describeClaim(item) ?? "another session";
+    return { ok: false, error: `backlog item "${id}" is already being worked (${holder}).`, holder, holderSessionId: item.claimedBy };
+  }
+  const alreadyHeld = item.status === "doing" && item.claimedBy === claim.sessionId;
+  item.status = "doing";
+  item.claimedBy = claim.sessionId;
+  item.claimedBranch = claim.branch ?? item.claimedBranch ?? "";
+  if (!alreadyHeld) item.claimedAt = now;
+  item.updated = now;
+  try {
+    await writeItem(workDir, item);
+    await rewriteBacklogIndex(workDir);
+    return { ok: true, item, alreadyHeld };
+  } catch (err) {
+    return { ok: false, error: `failed to claim backlog item: ${(err as Error).message}` };
+  }
+}
+
+/** ADR-0113 — the branch a claim is on became known after the claim (a tab's first message cut it). */
+export async function noteClaimBranch(workDir: string, sessionId: string, branch: string): Promise<number> {
+  let n = 0;
+  for (const item of await readAll(workDir)) {
+    if (item.status === "doing" && item.claimedBy === sessionId && item.claimedBranch !== branch) {
+      item.claimedBranch = branch;
+      try {
+        await writeItem(workDir, item);
+        n += 1;
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  if (n) await rewriteBacklogIndex(workDir);
+  return n;
+}
+
+/** Set any status (e.g. `doing` when promoted to a turn). Rewrites the index.
+ *  ADR-0113 — any status other than `doing` releases the claim; `doing` with
+ *  a `claim` records the holder (the panel's Plan), without one keeps whatever
+ *  holder there was. */
 export async function setBacklogStatus(
   workDir: string,
   id: string,
   status: BacklogStatus,
   note?: string,
+  claim?: BacklogClaim,
 ): Promise<ResolveResult> {
   const path = join(backlogDir(workDir), `${id}.md`);
   if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(path, "utf-8"));
   item.status = status;
   item.updated = new Date().toISOString();
+  if (status !== "doing") {
+    item.claimedBy = "";
+    item.claimedBranch = "";
+    item.claimedAt = "";
+  } else if (claim) {
+    item.claimedBy = claim.sessionId;
+    item.claimedBranch = claim.branch ?? "";
+    item.claimedAt = item.updated;
+  }
   if (note && note.trim()) {
     item.body = `${item.body}\n\n> ${status} — ${note.trim()}`.trim().slice(0, MAX_BODY_CHARS);
   }

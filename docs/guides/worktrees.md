@@ -58,6 +58,15 @@ Branches are named by their first commit, not by the first message: `marvin/tab/
 
 Sending a message to a closed tab whose branch was already integrated starts it on a fresh worktree cut from your current HEAD. A kept, unmerged tab reopens where it was.
 
+## The backlog is shared; the worktree's copy is not
+
+Every tab reads and writes the same backlog: the one under the project root, through `backlog_list`, `backlog_add`, `backlog_claim` and `backlog_resolve` ([ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md)). The `.marvin/backlog/` folder inside a tab's worktree is whatever was committed when the branch was cut. It is never the answer, and MARVIN refuses a `Read`, `Grep`, `Glob` or shell command aimed at it, in every permission mode, pointing the model back to the tools.
+
+- **Claiming.** A tab that starts on an item claims it: the item moves to *doing* with the tab's branch as holder, and every other tab sees `[doing · tab: fix-the-thing]` in its listing. A second `backlog_claim` is refused and told who holds it. Resolving releases the claim.
+- **From the panel.** *Plan* on a backlog item claims it for the tab you plan in. *Plan* on an item another tab holds offers **Switch to that tab** or *Plan here anyway*; the badge reads `in progress · tab: <branch>` and the Sessions pane row shows what its tab is on.
+- **Duplicates name the holder.** Adding a near-duplicate of an item that is being worked answers with the holding tab instead of creating a twin.
+- **When an item is resolved.** Every other live tab whose branch touches a path the item names gets one short notice, injected into a running turn or queued for the next one. It is marked as coming from another tab, so the model treats it as information, not as an instruction from you.
+
 ## What a fresh worktree does not have
 
 A worktree is a clean checkout of **tracked** files. Everything git ignores is

@@ -146,6 +146,35 @@ describe("sessionWorktreePolicy (pure)", () => {
     for (const c of writes) expect(mainTreeRedirect(c, root, wt), c).not.toBeNull();
   });
 
+  // ADR-0113 — the worktree's backlog copy is a snapshot; the live store is the
+  // root's, reached through the backlog tools or its absolute path.
+  it("reads of the worktree's backlog snapshot are denied and pointed at the tools; the live store passes", () => {
+    const snap = path.join(wt, ".marvin", "backlog");
+    const live = path.join(root, ".marvin", "backlog");
+    for (const call of [
+      ["Read", { file_path: path.join(snap, "x.md") }],
+      ["Read", { file_path: ".marvin/backlog/x.md" }],
+      ["Grep", { pattern: "lock", path: snap }],
+      ["Glob", { pattern: "*.md", path: ".marvin/backlog" }],
+      ["Bash", { command: "grep -rln advisory_xact_lock .marvin/backlog/" }],
+      ["Bash", { command: `ls ${snap} | head` }],
+      ["Bash", { command: "cat .marvin/backlog.md" }],
+    ] as const) {
+      const d = sessionWorktreePolicy(call[0], call[1] as Record<string, unknown>, wt, root);
+      expect(d?.decision, JSON.stringify(call)).toBe("deny");
+      expect(d?.reason).toMatch(/backlog_list/);
+    }
+    for (const call of [
+      ["Read", { file_path: path.join(live, "x.md") }],
+      ["Bash", { command: `grep -rn lock ${live}/` }],
+      ["Bash", { command: "npm test" }],
+      ["Read", { file_path: path.join(wt, "src", "a.ts") }],
+    ] as const) {
+      const d = sessionWorktreePolicy(call[0], call[1] as Record<string, unknown>, wt, root);
+      expect(d?.decision ?? "allow", JSON.stringify(call)).not.toBe("deny");
+    }
+  });
+
   it("mainTreeRedirect names the fragment and ignores worktree paths", () => {
     expect(mainTreeRedirect(`rm ${root}/x`, root, wt)).toBe(`${root}/x`);
     expect(mainTreeRedirect(`ls ${wt}/src`, root, wt)).toBeNull();
@@ -220,5 +249,31 @@ describe("session-worktree gate — through makeAutoModeLogger", () => {
     const r = decided(await g("Edit", { file_path: path.join(root, "README.md"), old_string: "a", new_string: "b" }, meta("u8", "agent-1")));
     expect(r.behavior).toBe("deny");
     expect((r as { message?: string }).message ?? "").not.toMatch(/MAIN checkout/);
+  });
+});
+
+describe("mainTreeRedirect — graphify-out is MARVIN's, not the user's checkout", () => {
+  it("lets graphify's incremental-detect snippet run against the root's graphify-out", () => {
+    // The exact shape seen 2026-09-10 in a worktree tab: cd to the root,
+    // then Python reading and writing under graphify-out/.
+    const cmd =
+      `cd ${root} && $(cat graphify-out/.graphify_python) -c "\n` +
+      "import json\nfrom pathlib import Path\n" +
+      "r = json.loads(Path('graphify-out/.graphify_incremental.json').read_text(encoding='utf-8'))\n" +
+      "Path('graphify-out/.graphify_detect.json').write_text(json.dumps(r))\n\"";
+    expect(mainTreeRedirect(cmd, root, wt)).toBeNull();
+    expect(sessionWorktreePolicy("Bash", { command: cmd }, wt, root)).toBeNull();
+  });
+
+  it("still confirms when the same command also writes outside graphify-out", () => {
+    const cmd = `cd ${root} && python3 -c "from pathlib import Path\nPath('graphify-out/x.json').write_text('1')\nPath('src/a.ts').write_text('2')"`;
+    // The matcher names whichever quoted run it meets first; what matters
+    // here is that graphify-out did not make the whole command exempt.
+    expect(mainTreeRedirect(cmd, root, wt)).not.toBeNull();
+  });
+
+  it("an absolute graphify-out path under the root is exempt too", () => {
+    expect(mainTreeRedirect(`rm -rf ${root}/graphify-out/cache`, root, wt)).toBeNull();
+    expect(mainTreeRedirect(`rm -rf ${root}/src`, root, wt)).toBe(`${root}/src`);
   });
 });

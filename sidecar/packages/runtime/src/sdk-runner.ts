@@ -24,19 +24,15 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { type AgentDefinition, type CanUseTool, type McpServerConfig, type Options, type PermissionResult, query, type SDKMessage,
-  type HookJSONOutput,
-  type PostToolUseFailureHookInput,
+import { type AgentDefinition, type CanUseTool, 
+  type HookJSONOutput,type McpServerConfig, type Options, type PermissionResult, 
+  type PostToolUseFailureHookInput,query, type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
-import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
-import { PREORIENT_SUBTYPE } from "./practice-extractors";
-import { makeTurnCloseStopHook } from "./turn-close-hook";
-import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
-import { readWorktreeSetupConfig } from "./worktree-setup";
-import { classifyMeteredCiRisk, describeMeteredCiRisk, meteredCiAlternative } from "@marvin/tools/metered-ci";
-import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { describeLane, laneVerdict } from "@marvin/tools/lanes";
+import { classifyMeteredCiRisk, describeMeteredCiRisk, meteredCiAlternative } from "@marvin/tools/metered-ci";
+import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
 import { buildSubprocessEnv } from "./auth";
 import {
@@ -64,9 +60,10 @@ import {
   type DesignTurnContext,
   logDesignTurnSummary,
   makeDesignHooksPreToolUse,
-  recordAllowedTool,
   noteBashFailure,
+  recordAllowedTool,
 } from "./design-hooks";
+import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
@@ -74,10 +71,12 @@ import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { readPlanState } from "./plan-state";
 import { loadEnabledPlugins } from "./plugin-loader";
+import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
+import { makeTurnCloseStopHook } from "./turn-close-hook";
 import { TurnInputChannel } from "./turn-input";
 import { listLiveTurns, markTurnMutated } from "./turn-registry";
 import { scheduleWakeup } from "./wakeup-scheduler";
@@ -91,9 +90,10 @@ import {
   scopeOfDoneEntirelyUnticked,
   type WorkflowGap,
 } from "./workflow-guard";
+import { readWorktreeSetupConfig } from "./worktree-setup";
 import {
-  bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, sweepWorktrees, type WorktreeState,
-  sessionWorktreePolicy,
+  bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, 
+  sessionWorktreePolicy,sweepWorktrees, type WorktreeState,
 } from "./worktrees";
 
 export type RuntimeMode = "opus" | "advisor";
@@ -1978,7 +1978,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // write path for `.marvin/backlog/`. `backlog_add` rejects fact/status/
   // decision payloads + caps length so the parking lot can't bloat. Scoped to
   // the active project's workDir; carries the session id for the source link.
-  const backlogMcp = createBacklogMcpServer({ cwd: workDir, marvinSessionId: input.marvinSessionId });
+  const backlogMcp = createBacklogMcpServer({
+    cwd: workDir,
+    marvinSessionId: input.marvinSessionId,
+    // ADR-0113 — a claim names the tab by its branch; a resolution is announced
+    // to the project's other tabs.
+    ...(input.sessionTree?.mode === "worktree" ? { branch: input.sessionTree.branch } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+  });
 
   // Obsidian vault integration (ADR-0065). Status is read-only; init writes
   // only `.obsidian/app.json`, `MARVIN.md` and `graphify-out/obsidian/` — never

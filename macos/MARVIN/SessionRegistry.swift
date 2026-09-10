@@ -157,7 +157,21 @@ final class SessionRegistry {
                 NativePrefs.shared.adoptPosture(wire, for: row.marvinSessionId)
             }
         }
+        // ADR-0113 — what each tab holds in the backlog, for the row subtitle.
+        Task { @MainActor in
+            guard let cwd = MarvinBridge.shared.projectWorkDir,
+                  let items = try? await BacklogService.shared.fetch(workDir: cwd, status: "doing"),
+                  self.projectId == pid else { return }
+            var map: [String: [String]] = [:]
+            for i in items {
+                if let by = i.claimedBy, !by.isEmpty { map[by, default: []].append(i.title) }
+            }
+            self.claimsBySession = map
+        }
     }
+
+    /// ADR-0113 — backlog item titles each session holds (`doing`), by session id.
+    private(set) var claimsBySession: [String: [String]] = [:]
 
     private func ensureFeed(projectId pid: String) {
         feedTask?.cancel()

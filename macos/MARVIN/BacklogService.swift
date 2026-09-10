@@ -19,6 +19,18 @@ struct BacklogItem: Codable, Identifiable, Equatable {
     /// Waiting on something outside the repo. Orthogonal to status and kind.
     let blocked: Bool?
     let blockedOn: String?
+    /// ADR-0113 — who holds the item while it is `doing`.
+    let claimedBy: String?
+    let claimedBranch: String?
+
+    /// "tab: fix-the-thing" or "session 8cb24ed6" — nil when unclaimed.
+    var holderLabel: String? {
+        guard let by = claimedBy, !by.isEmpty else { return nil }
+        if let b = claimedBranch, !b.isEmpty {
+            return "tab: " + (b.hasPrefix("marvin/tab/") ? String(b.dropFirst("marvin/tab/".count)) : b)
+        }
+        return "session \(by.prefix(8))"
+    }
 
     /// Never nil at the call site — an absent kind means "unspecified", which
     /// is a real value, not a missing one.
@@ -174,9 +186,14 @@ final class BacklogService {
     }
 
     /// Set an item's status (done / dismissed / doing / open).
-    func setStatus(workDir: String, id: String, status: String, note: String? = nil) async throws {
+    /// ADR-0113 — `doing` with a `sessionId` CLAIMS the item for that tab; a
+    /// tab that already holds it makes the call fail with `Failure.held`.
+    func setStatus(workDir: String, id: String, status: String, note: String? = nil,
+                   sessionId: String? = nil, branch: String? = nil) async throws {
         var payload: [String: String] = ["workDir": workDir, "id": id, "status": status]
         if let note { payload["note"] = note }
+        if let sessionId, !sessionId.isEmpty { payload["sessionId"] = sessionId }
+        if let branch, !branch.isEmpty { payload["branch"] = branch }
         try await mutate(method: "PATCH", path: "api/backlog", payload: payload)
     }
 
@@ -216,6 +233,14 @@ final class BacklogService {
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, resp) = try await session.data(for: req)
+        // ADR-0113 — a claim refused because another tab holds the item is a
+        // decision for the user (switch, or plan anyway), not a failure.
+        if let http = resp as? HTTPURLResponse, http.statusCode == 409 {
+            struct Held: Decodable { let code: String?; let holder: String?; let holderSessionId: String? }
+            if let h = try? JSONDecoder().decode(Held.self, from: data), h.code == "held" {
+                throw BacklogError.held(holder: h.holder ?? "another tab", sessionId: h.holderSessionId ?? "")
+            }
+        }
         try Self.ensure2xx(resp)
         return data
     }
@@ -228,6 +253,13 @@ final class BacklogService {
 
     enum BacklogError: LocalizedError {
         case message(String)
-        var errorDescription: String? { if case let .message(m) = self { return m }; return nil }
+        /// ADR-0113 — the item is `doing` in another tab.
+        case held(holder: String, sessionId: String)
+        var errorDescription: String? {
+            switch self {
+            case let .message(m): return m
+            case let .held(holder, _): return "Already being worked (\(holder))."
+            }
+        }
     }
 }

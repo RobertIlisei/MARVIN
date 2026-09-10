@@ -24,7 +24,9 @@ import {
   BACKLOG_SEVERITIES,
   type BacklogItem,
   type BacklogStatus,
+  claimBacklogItem,
   classifyBacklogText,
+  describeClaim,
   listBacklog,
   MAX_BODY_CHARS,
   MAX_TITLE_CHARS,
@@ -32,11 +34,16 @@ import {
   setBacklogStatus,
 } from "./backlog";
 import { groomBacklog, renderGroomReport } from "./backlog-groom";
+import { notifyTabsOfResolution } from "./backlog-notify";
 
 export interface BacklogToolContext {
   cwd: string;
   /** Best-effort link back to the parking session; absent for non-chat callers. */
   marvinSessionId?: string | undefined;
+  /** ADR-0113 — the tab's branch when it has its own worktree; names the claim. */
+  branch?: string | undefined;
+  /** ADR-0113 §3 — with a project, a resolution is announced to the tabs it touches. */
+  projectId?: string | undefined;
 }
 
 function textResult(text: string) {
@@ -64,7 +71,7 @@ function overlapNote(related: BacklogItem[], lead: string): string {
 }
 
 export function createBacklogMcpServer(ctx: BacklogToolContext) {
-  const { cwd, marvinSessionId } = ctx;
+  const { cwd, marvinSessionId, branch, projectId } = ctx;
 
   const addTool = tool(
     "backlog_add",
@@ -140,6 +147,14 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       });
       if (!res.ok) return errorResult(res.error);
       if (res.duplicateOf) {
+        if (res.duplicateHeldBy) {
+          return textResult(
+            `NOT parked — this is already being worked: \`${res.duplicateOf}\` ` +
+              `("${res.item.title}") is \`doing\`, held by ${res.duplicateHeldBy}. ` +
+              `Do NOT fix it here as well: tell the user another tab holds it, and let them decide whether to ` +
+              `switch to that tab or continue. If it is genuinely different work, call \`backlog_add\` again with \`force: true\`.`,
+          );
+        }
         return textResult(
           `NOT parked — this restates an item already open: \`${res.duplicateOf}\` ` +
             `("${res.item.title}"). Nothing was lost; that item still stands. ` +
@@ -182,10 +197,41 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       if (items.length === 0) {
         return textResult(status ? `No ${status} backlog items.` : "Backlog is empty.");
       }
-      const lines = items.map(
-        (i) => `- [${i.status}] (${i.severity}) ${i.title} — backlog/${i.id}.md`,
+      const lines = items.map((i) => {
+        const held = i.status === "doing" ? describeClaim(i) : null;
+        const mine = i.status === "doing" && marvinSessionId && i.claimedBy === marvinSessionId;
+        return `- [${i.status}${held ? ` · ${mine ? "held by THIS tab" : held}` : ""}] (${i.severity}) ${i.title} — backlog/${i.id}.md`;
+      });
+      return textResult(
+        `Backlog (${items.length}):\n${lines.join("\n")}` +
+          (items.some((i) => i.status === "doing" && i.claimedBy && i.claimedBy !== marvinSessionId)
+            ? `\n\nAn item marked \`doing · tab: …\` is being worked by ANOTHER tab right now — do not start it here; tell the user.`
+            : ""),
       );
-      return textResult(`Backlog (${items.length}):\n${lines.join("\n")}`);
+    },
+  );
+
+  // ADR-0113 — take an item before working it, so sibling tabs see the holder.
+  const claimTool = tool(
+    "backlog_claim",
+    "CLAIM a backlog item before you start working it: marks it `doing` with " +
+      "THIS tab as the holder, so other tabs running at the same time see it is " +
+      "taken (`backlog_list` shows `doing · tab: …`). Refused, naming the holder, " +
+      "when another tab already holds it — then tell the user and do not start it " +
+      "here. Call it as the first step of working any backlog item, including one " +
+      "you just parked yourself.",
+    {
+      id: z.string().min(1).describe("The item slug (from backlog_list)."),
+    },
+    async ({ id }) => {
+      if (!marvinSessionId) return errorResult("claiming needs a session; this caller has none.");
+      const res = await claimBacklogItem(cwd, id, { sessionId: marvinSessionId, ...(branch ? { branch } : {}) });
+      if (!res.ok) return errorResult(res.error);
+      return textResult(
+        res.alreadyHeld
+          ? `Backlog item \`${id}\` is already held by this tab.`
+          : `Claimed backlog item \`${id}\` for this tab${branch ? ` (${branch})` : ""}. It shows as \`doing\` to every other tab; \`backlog_resolve\` releases it.`,
+      );
     },
   );
 
@@ -207,10 +253,21 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
           ? await setBacklogStatus(cwd, id, "open", note)
           : await resolveBacklogItem(cwd, { id, resolution, ...(note ? { note } : {}) });
       if (!res.ok) return errorResult(res.error);
+      // ADR-0113 §3 — tell the tabs this touches, so none of them redoes it.
+      let told = "";
+      if (resolution !== "keep" && projectId && marvinSessionId) {
+        try {
+          const notices = notifyTabsOfResolution({ projectId, workDir: cwd, fromSessionId: marvinSessionId, fromBranch: branch, item: res.item });
+          const n = notices.filter((x) => x.delivered !== "skipped").length;
+          if (n) told = ` ${n} other tab${n === 1 ? " was" : "s were"} notified.`;
+        } catch {
+          /* a notice is best-effort */
+        }
+      }
       return textResult(
         (resolution === "keep"
           ? `Backlog item \`${id}\` kept (now open).`
-          : `Backlog item \`${id}\` marked ${resolution}.`) +
+          : `Backlog item \`${id}\` marked ${resolution}.${told}`) +
           overlapNote(res.related ?? [], "Still open —"),
       );
     },
@@ -266,6 +323,6 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     version: "1.0.0",
     // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch.
     alwaysLoad: true,
-    tools: [addTool, listTool, resolveTool, groomTool],
+    tools: [addTool, listTool, resolveTool, groomTool, claimTool],
   });
 }

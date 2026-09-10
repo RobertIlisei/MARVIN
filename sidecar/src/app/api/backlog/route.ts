@@ -21,6 +21,7 @@ import {
   BACKLOG_SEVERITIES,
   BACKLOG_STATUSES,
   addBacklogItem,
+  claimBacklogItem,
   listBacklog,
   setBacklogStatus,
   updateBacklogItem,
@@ -105,6 +106,10 @@ interface PatchBody {
   id?: string;
   status?: string;
   note?: string;
+  /** ADR-0113 — with `status: "doing"`, the tab taking the item. A second
+   *  claimant gets 409 with the holder, so the panel can offer Switch. */
+  sessionId?: string;
+  branch?: string;
   /** Field edits (backlog detail view) — severity/body REPLACE the
    *  stored value; may be sent with or without a status change. */
   severity?: string;
@@ -177,6 +182,19 @@ export async function PATCH(req: NextRequest) {
     });
     if (!res.ok) return NextResponse.json({ error: res.error }, { status: 404 });
     if (!hasStatus) return NextResponse.json({ ok: true, item: res.item });
+  }
+  if (body.status === "doing" && body.sessionId?.trim()) {
+    const claimed = await claimBacklogItem(v.workDir, body.id, {
+      sessionId: body.sessionId.trim(),
+      ...(body.branch?.trim() ? { branch: body.branch.trim() } : {}),
+    });
+    if (!claimed.ok) {
+      return NextResponse.json(
+        { error: claimed.error, ...(claimed.holder ? { code: "held", holder: claimed.holder, holderSessionId: claimed.holderSessionId } : {}) },
+        { status: claimed.holder ? 409 : 404 },
+      );
+    }
+    return NextResponse.json({ ok: true, item: claimed.item, alreadyHeld: claimed.alreadyHeld });
   }
   const res = await setBacklogStatus(
     v.workDir,

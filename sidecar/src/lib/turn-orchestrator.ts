@@ -140,7 +140,10 @@ export function buildSessionContext(
       `(cut from ${tree.base.slice(0, 7)}). The project checkout at ${workDir} is read-only from this tab; ` +
       `edits belong in the worktree, relative paths already resolve there; the same tracked files exist in both, so ` +
       `name files by their worktree path, not the main checkout's. Reading from the main checkout is allowed; a command that ` +
-      `writes into it raises a confirm. Commit on this branch — the user merges.${prepared}`
+      `writes into it raises a confirm. Commit on this branch — the user merges.${prepared} ` +
+      `The backlog under THIS worktree's .marvin/backlog is a stale snapshot: use backlog_list / backlog_add / backlog_claim, ` +
+      `which read the live store. Other tabs run at the same time — before fixing something you found on your own, ` +
+      `check backlog_list for a matching item marked doing (another tab holds it), and claim the item you take.`
     );
   }
   if (tree.lane && tree.lane.length > 0) {

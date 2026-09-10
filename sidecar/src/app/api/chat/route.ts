@@ -30,6 +30,7 @@ import {
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
+import { noteClaimBranch } from "@marvin/runtime/backlog";
 import { createSessionWorktree, reconcileWorktrees, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -349,6 +350,9 @@ export async function POST(req: NextRequest) {
         setupRecord = { symlinked: setup.symlinked, copied: setup.copied, skipped: setup.skipped.length, detected };
         sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
         cwd = rec.path;
+        // ADR-0113 — a claim made from the panel before this branch existed
+        // now knows which tab holds it.
+        await noteClaimBranch(workDir, marvinSessionId, rec.branch).catch(() => 0);
       } catch (err) {
         // An unborn HEAD, a bare layout, a submodule: fall back to shared and
         // say so in the record rather than failing the user's first message.

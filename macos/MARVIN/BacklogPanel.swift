@@ -554,7 +554,9 @@ struct BacklogPanel: View {
                     Text(item.title).font(.body.weight(.semibold))
                         .strikethrough(resolved, color: .secondary)
                     if item.status == "doing" {
-                        statusBadge("in progress", .orange)
+                        // ADR-0113 — who holds it, so a second tab does not start it.
+                        statusBadge(item.holderLabel.map { "in progress · \($0)" } ?? "in progress", .orange)
+                            .help(item.holderLabel.map { "Being worked by \($0). Promote here asks before taking it over." } ?? "In progress")
                     } else if resolved {
                         statusBadge(item.status, .secondary)
                     }

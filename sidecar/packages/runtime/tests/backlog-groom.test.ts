@@ -20,6 +20,9 @@ function item(over: Partial<BacklogItem> & { id: string }): BacklogItem {
     blockedOn: over.blockedOn ?? "",
     severity: over.severity ?? "med",
     sessionId: "",
+    claimedBy: "",
+    claimedBranch: "",
+    claimedAt: "",
     created: over.created ?? daysAgo(1),
     updated: over.updated ?? daysAgo(1),
   };

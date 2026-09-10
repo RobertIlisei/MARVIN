@@ -2480,11 +2480,32 @@ struct ChatPreviewView: View {
                 cwd: workDir
             )
         }
-        Task {
-            try? await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "doing")
+        Task { @MainActor in
+            // ADR-0113 — the tab that plans an item HOLDS it, so every other tab
+            // sees `doing · tab: …`. If another tab already holds it, ask.
+            let sid = model.loadedSessionId
+            let branch = sid.flatMap { SessionRegistry.shared.entry($0)?.tree?.branch }
+            do {
+                try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "doing", sessionId: sid, branch: branch)
+            } catch BacklogService.BacklogError.held(let holder, let holderSession) {
+                heldItemPrompt = HeldItemPrompt(item: item, holder: holder, holderSessionId: holderSession, workDir: workDir)
+            } catch {
+                NSLog("[backlog] claim failed: \(error)")
+            }
             model.refreshBacklogCount()
         }
     }
+
+    /// ADR-0113 — a Plan on an item another tab holds: switch there, or plan
+    /// here anyway (which takes the claim over).
+    struct HeldItemPrompt: Identifiable {
+        let item: BacklogItem
+        let holder: String
+        let holderSessionId: String
+        let workDir: String
+        var id: String { item.id }
+    }
+    @State private var heldItemPrompt: HeldItemPrompt? = nil
 
     /// Phase 2h — react to a (projectId, sessionId) bridge change.
     /// Three outcomes:
@@ -2698,6 +2719,26 @@ struct ChatPreviewView: View {
                 model.newTab()
             }
             bridge.clearChatTabRequest()
+        }
+        .confirmationDialog(
+            heldItemPrompt.map { "“\($0.item.title)” is already being worked in \($0.holder)" } ?? "",
+            isPresented: Binding(get: { heldItemPrompt != nil }, set: { if !$0 { heldItemPrompt = nil } }),
+            titleVisibility: .visible,
+            presenting: heldItemPrompt
+        ) { p in
+            if !p.holderSessionId.isEmpty, model.openTabSessionIds.contains(p.holderSessionId) {
+                Button("Switch to that tab") { bridge.requestChatTab(.select(p.holderSessionId)) }
+            }
+            Button("Plan here anyway (take it over)") {
+                Task { @MainActor in
+                    // Release the other tab's claim, then claim for this one.
+                    try? await BacklogService.shared.setStatus(workDir: p.workDir, id: p.item.id, status: "open")
+                    try? await BacklogService.shared.setStatus(workDir: p.workDir, id: p.item.id, status: "doing", sessionId: model.loadedSessionId, branch: model.loadedSessionId.flatMap { SessionRegistry.shared.entry($0)?.tree?.branch })
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { p in
+            Text("Two tabs fixing the same item produce two branches with the same change. Switch to the tab that holds it, or take the item over here.")
         }
         .tabCloseDialog(
             choice: $pendingClose,

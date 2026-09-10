@@ -1111,6 +1111,20 @@ export function sessionWorktreePolicy(
   worktree: string,
   workDir: string,
 ): { decision: "allow" | "deny" | "confirm"; reason: string } | null {
+  // ADR-0113 — the backlog copy under a worktree is a checkout of the cut
+  // commit, never the live store (`<root>/.marvin/backlog`, which the
+  // backlog tools read and write). A read of the copy answered "nothing
+  // parked" while a sibling tab had parked the same defect a minute earlier.
+  const backlogSnapshot = backlogSnapshotTarget(name, input, worktree, workDir);
+  if (backlogSnapshot) {
+    return {
+      decision: "deny",
+      reason:
+        `${backlogSnapshot} is this tab's SNAPSHOT of the backlog, checked out when the branch was cut — not the live store. ` +
+        `Use \`backlog_list\` / \`backlog_add\` / \`backlog_claim\` (they read and write the project's live backlog), ` +
+        `or read the root copy by absolute path if you must. An item marked \`doing · tab: …\` is being worked by another tab.`,
+    };
+  }
   if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
     const raw = input.file_path ?? input.notebook_path ?? input.path;
     if (typeof raw !== "string" || raw.length === 0) return null;
@@ -1156,6 +1170,31 @@ function destinationArg(argv: string[]): string | null {
   }
   const positional = argv.filter((a) => a.length > 0 && !a.startsWith("-"));
   return positional.length >= 2 ? (positional[positional.length - 1] ?? null) : null;
+}
+
+/** ADR-0113 — the path a tool call aims at the worktree's backlog copy, or null. */
+function backlogSnapshotTarget(name: string, input: Record<string, unknown>, worktree: string, workDir: string): string | null {
+  const snapshot = join(resolve(worktree), ".marvin", "backlog");
+  const live = join(resolve(workDir), ".marvin", "backlog");
+  const under = (p: string): boolean => {
+    const abs = isAbsolute(p) ? resolve(p) : resolve(worktree, p);
+    return abs === snapshot || abs === `${snapshot}.md` || abs.startsWith(`${snapshot}/`);
+  };
+  if (name === "Read" || name === "Grep" || name === "Glob") {
+    const raw = (input.file_path ?? input.path) as unknown;
+    if (typeof raw === "string" && raw && under(raw)) return raw;
+    return null;
+  }
+  if (name === "Bash") {
+    const cmd = typeof input.command === "string" ? input.command : "";
+    if (!cmd.includes(".marvin/backlog")) return null;
+    // Every mention must be the live store's absolute path to pass; a bare
+    // `.marvin/backlog` in a worktree-cwd command is the snapshot.
+    const mentions = [...cmd.matchAll(/(\S*\.marvin\/backlog[^\s"'|;&)]*)/g)].map((m) => m[1] ?? "");
+    const bad = mentions.find((m) => !m.startsWith(live) && !isInsideWorktree(isAbsolute(m) ? m : resolve(worktree, m), live));
+    return bad ?? null;
+  }
+  return null;
 }
 
 /**

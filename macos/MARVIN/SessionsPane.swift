@@ -550,6 +550,9 @@ struct SessionsPane: View {
         } else {
             parts.append("shared")
         }
+        if let held = registry.claimsBySession[e.id]?.first {
+            parts.append("on: " + (held.count > 34 ? String(held.prefix(32)) + "…" : held))
+        }
         if let d = e.diff, d.files > 0 { parts.append("+\(d.added) −\(d.removed)") }
         if let p = e.plan, p.total > 0 { parts.append("plan \(p.done)/\(p.total)") }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }

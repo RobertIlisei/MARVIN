@@ -9,12 +9,15 @@ import {
   addBacklogItem,
   type BacklogItem,
   backlogSimilarity,
+  claimBacklogItem,
   classifyBacklogText,
+  describeClaim,
   listBacklog,
   MAX_BODY_CHARS,
   MAX_OPEN_ITEMS,
   MAX_TITLE_CHARS,
   NEAR_DUPLICATE_SCORE,
+  noteClaimBranch,
   RELATED_MAX,
   RELATED_MIN_SCORE,
   relatedBacklogItems,
@@ -266,6 +269,9 @@ function item(over: Partial<BacklogItem> & { title: string }): BacklogItem {
     blockedOn: over.blockedOn ?? "",
     severity: over.severity ?? "med",
     sessionId: "",
+    claimedBy: "",
+    claimedBranch: "",
+    claimedAt: "",
     created: "2026-08-06T00:00:00.000Z",
     updated: "2026-08-06T00:00:00.000Z",
   };
@@ -644,5 +650,62 @@ describe("near-duplicate capture gate", () => {
       expect(b.item.id).toBe(a.ok ? a.item.id : "");
     }
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+
+// ADR-0113 — the backlog is the shared task list: claimed, and the holder
+// named wherever a second tab would otherwise start the same work.
+describe("claims (ADR-0113)", () => {
+  it("claims open → doing with a holder; a second claimant is refused and told who holds it; resolve releases", async () => {
+    const added = await addBacklogItem(workDir, { title: "Fix the advisory lock autocommit in the reverify job", severity: "high" });
+    expect(added.ok).toBe(true);
+    const id = added.ok ? added.item.id : "";
+    const first = await claimBacklogItem(workDir, id, { sessionId: "sess-a", branch: "marvin/tab/fix-the-lock" });
+    expect(first).toMatchObject({ ok: true, alreadyHeld: false });
+    const held = (await listBacklog(workDir, { status: "doing" }))[0]!;
+    expect(held).toMatchObject({ id, status: "doing", claimedBy: "sess-a", claimedBranch: "marvin/tab/fix-the-lock" });
+    expect(describeClaim(held)).toBe("tab: fix-the-lock");
+    // The index names the holder.
+    expect(await readFile(indexPath(), "utf-8")).toContain("· tab: fix-the-lock");
+    // Someone else: refused, and told.
+    const second = await claimBacklogItem(workDir, id, { sessionId: "sess-b" });
+    expect(second).toMatchObject({ ok: false, holder: "tab: fix-the-lock" });
+    // The holder again (a resumed tab): fine, no-op.
+    expect(await claimBacklogItem(workDir, id, { sessionId: "sess-a" })).toMatchObject({ ok: true, alreadyHeld: true });
+    // Resolving releases the claim.
+    const done = await resolveBacklogItem(workDir, { id, resolution: "done" });
+    expect(done.ok && done.item.claimedBy === "" && done.item.status === "done").toBe(true);
+    expect(await claimBacklogItem(workDir, id, { sessionId: "sess-b" })).toMatchObject({ ok: false });
+    expect(await readFile(indexPath(), "utf-8")).not.toContain("fix-the-lock");
+  });
+
+  it("a near-duplicate of a held item names the holder; a claim without a branch is named by session and gains the branch later", async () => {
+    const a = await addBacklogItem(workDir, { title: "CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", severity: "high" });
+    const id = a.ok ? a.item.id : "";
+    await claimBacklogItem(workDir, id, { sessionId: "8cb24ed6-2262-4f2a-91a7-c908fbfe8b58" });
+    expect(describeClaim((await listBacklog(workDir))[0]!)).toBe("session 8cb24ed6");
+    expect(await noteClaimBranch(workDir, "8cb24ed6-2262-4f2a-91a7-c908fbfe8b58", "marvin/tab/fix-customdomain")).toBe(1);
+    expect(describeClaim((await listBacklog(workDir))[0]!)).toBe("tab: fix-customdomain");
+    // Same slug, other tab: the holder is named and nothing changes.
+    const same = await addBacklogItem(workDir, { title: "CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", sessionId: "other-tab" });
+    expect(same).toMatchObject({ ok: true, created: false, duplicateOf: id, duplicateHeldBy: "tab: fix-customdomain" });
+    // A near-duplicate wording (different slug), other tab: the same answer.
+    const twin = await addBacklogItem(workDir, { title: "Fix: CustomDomainReverifyJob runScheduled self-invokes transactional run without a transaction", severity: "high", sessionId: "other-tab" });
+    expect(twin).toMatchObject({ ok: true, created: false, duplicateOf: id, duplicateHeldBy: "tab: fix-customdomain" });
+    expect(await listBacklog(workDir)).toHaveLength(1);
+  });
+
+  it("setBacklogStatus doing with a claim records the holder; any other status clears it; a serialized claim round-trips", async () => {
+    const a = await addBacklogItem(workDir, { title: "Sweep every advisory lock call site for the same bug" });
+    const id = a.ok ? a.item.id : "";
+    const doing = await setBacklogStatus(workDir, id, "doing", undefined, { sessionId: "s1", branch: "marvin/tab/sweep" });
+    expect(doing.ok && doing.item.claimedBy === "s1").toBe(true);
+    const raw = await readFile(join(workDir, ".marvin", "backlog", `${id}.md`), "utf-8");
+    expect(raw).toContain("claimedBy: s1\nclaimedBranch: marvin/tab/sweep\nclaimedAt: ");
+    expect((await listBacklog(workDir))[0]).toMatchObject({ claimedBy: "s1", claimedBranch: "marvin/tab/sweep" });
+    const back = await setBacklogStatus(workDir, id, "open");
+    expect(back.ok && back.item.claimedBy === "" && back.item.claimedAt === "").toBe(true);
+    expect(await readFile(join(workDir, ".marvin", "backlog", `${id}.md`), "utf-8")).not.toContain("claimedBy");
   });
 });
