@@ -363,12 +363,15 @@ struct SessionsPane: View {
             .padding(.horizontal, 14)
             .padding(.top, 2)
             if let notice = registry.integrationNotice {
+                // No `.textSelection(.enabled)` here: SwiftUI's selection
+                // overlay is an AppKit view that re-lays out during layout,
+                // and inside this ScrollView it looped the window into the
+                // fatal "more Layout Window passes than views" (2026-09-10).
                 Text(notice)
                     .font(.system(size: 9.5))
                     .foregroundStyle(.tertiary)
                     .lineLimit(3)
                     .padding(.horizontal, 14)
-                    .textSelection(.enabled)
             }
         }
     }

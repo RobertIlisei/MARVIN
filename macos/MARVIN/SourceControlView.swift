@@ -1168,7 +1168,6 @@ struct SourceControlView: View {
                     .lineLimit(4)
                     .padding(.horizontal, 14)
                     .padding(.top, 2)
-                    .textSelection(.enabled)
             }
         }
     }
@@ -1421,7 +1420,6 @@ struct SourceControlView: View {
             Text(message)
                 .font(.system(size: 10).monospaced())
                 .foregroundStyle(.secondary)
-                .textSelection(.enabled)
                 .lineLimit(4)
             Spacer()
             Button { dismiss() } label: { Image(systemName: "xmark") }

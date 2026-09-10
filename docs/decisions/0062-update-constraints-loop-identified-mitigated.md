@@ -393,3 +393,43 @@ is the lazy list, i.e. the chat transcript. That is the same subtree
 `renderWindow` was introduced to bound (2026-09-02). Four attempts to remove the
 oscillator have not converged, which is why this addendum fixes the BREAKER
 rather than adding a fifth.
+
+## Addendum 7 (2026-09-10) — AppKit keeps a second counter, and it raised
+
+Fifth crash. This time the breaker had **tripped**: `exceptions.log` shows
+`constraint-pass breaker tripped: 331 in-pass transitions, 346 views in window`,
+deferring a `SwiftUI.SelectionTextField` under a `HostingScrollView` in the
+left pane, and *"the pass that would have raised did not"*. The process still
+aborted, from a different exception:
+
+    NSGenericException: The window has been marked as needing another Layout
+    Window pass, but it has already had more Layout Window passes than there
+    are views in the window.
+
+    +[NSException exceptionWithName:reason:userInfo:]
+    -[NSWindow _postWindowNeedsLayout]              ← throws
+    -[NSWindow _layoutViewTree]
+    -[NSWindow layoutIfNeeded]
+    NSWindow.marvin_updateConstraintsIfNeeded()     ← inside our pass
+    NSWindow.marvin_layoutIfNeeded()
+
+`_postWindowNeedsLayout`, not `_postWindowNeedsUpdateConstraints`. AppKit
+counts **two** things per window against the view count: transitions to
+"needs an Update Constraints pass" (addenda 5 and 6) and transitions to
+"needs a Layout Window pass", fed by `needsLayout = true`. The breaker
+hooked the first and never saw the second.
+
+**Change:** `-[NSView setNeedsLayout:]` is exchanged for
+`marvin_setNeedsLayout(_:)`, which inside a pass applies the same budget from
+a separate ledger and defers the request to the next run-loop turn. The
+session-start line gains a `layout-pass breaker:` entry; a trip is logged as
+`layout-pass breaker tripped`.
+
+**The oscillator this time** was `.textSelection(.enabled)` on a notice
+`Text` inside a left-pane `ScrollView` (the Sessions pane's integration
+notice, added the same day). SwiftUI's selection overlay is an AppKit
+representable that re-lays out during layout — a measurement view in this
+ADR's terms. The three such notices in left-pane scroll views (Sessions pane,
+Source Control worktrees, Source Control status) lost the modifier. The rule
+for this file gains a line: no `.textSelection(.enabled)` inside a
+ScrollView-rooted pane.

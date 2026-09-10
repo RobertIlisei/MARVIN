@@ -113,6 +113,9 @@ enum ExceptionLog {
         // is a breaker that never fires (ADR-0062 addendum 6).
         let breakerUpdateArmed = swizzleUpdateConstraintsIfNeeded()
         let breakerLayoutArmed = swizzleWindowLayoutIfNeeded()
+        // ADR-0062 addendum 7 — AppKit keeps a SECOND per-window counter, for
+        // "needs another Layout Window pass", and raises from it too.
+        let layoutNeedsArmed = swizzleSetNeedsLayout()
         let breakerArmed = breakerUpdateArmed && breakerLayoutArmed
         let splitArmed: Bool = {
             guard let a = class_getInstanceMethod(NSSplitViewController.self, #selector(NSViewController.loadView)),
@@ -137,6 +140,7 @@ enum ExceptionLog {
                 + "_crashOnException hook: \(fatalArmed ? "ARMED (swizzled) — fatal layout exceptions are LOGGED WITH THE VIEW TREE, then still fatal" : "NOT ARMED — a layout-loop crash will die silently")\n"
                 + "constraint-storm monitor: \(stormArmed ? "ARMED (\(ConstraintStorm.threshold) invalidations / \(ConstraintStorm.windowSeconds)s)" : "NOT ARMED")\n"
                 + "constraint-pass breaker: \(breakerArmed && stormArmed ? "ARMED (defers past \(ConstraintPassBudget.floor)+ in-pass transitions, allowance = views - \(ConstraintPassBudget.margin))" : "NOT ARMED — a non-converging layout pass is still fatal")\n"
+                + "layout-pass breaker: \(layoutNeedsArmed && breakerLayoutArmed ? "ARMED (setNeedsLayout: deferred past the same allowance)" : "NOT ARMED — a needs-layout loop is still fatal")\n"
                 + "  pass entries hooked: updateConstraintsIfNeeded=\(breakerUpdateArmed) layoutIfNeeded=\(breakerLayoutArmed)\n"
                 + "split-view rebuild counter: \(splitArmed ? "ARMED" : "NOT ARMED")\n"
                 + "NSApplicationCrashOnExceptions: \(crashOnException) "
@@ -261,6 +265,26 @@ enum ExceptionLog {
         return true
     }
 
+    /// ADR-0062 addendum 7 — `-[NSView setNeedsLayout:]`. The 2026-09-10 crash
+    /// had the constraint breaker TRIPPED (331 deferred transitions) and still
+    /// died: the exception was "needing another Layout Window pass, but it
+    /// has already had more Layout Window passes than there are views",
+    /// posted by `_postWindowNeedsLayout` from `_layoutViewTree`. That is a
+    /// second counter, fed by `needsLayout = true` transitions, which nothing
+    /// hooked. Same budget, same deferral, separate ledger.
+    @discardableResult
+    private static func swizzleSetNeedsLayout() -> Bool {
+        guard let original = class_getInstanceMethod(
+                  NSView.self, #selector(setter: NSView.needsLayout)
+              ),
+              let replacement = class_getInstanceMethod(
+                  NSView.self, #selector(NSView.marvin_setNeedsLayout(_:))
+              )
+        else { return false }
+        method_exchangeImplementations(original, replacement)
+        return true
+    }
+
     /// Exchange `-[NSWindow updateConstraintsIfNeeded]` so the pass breaker
     /// knows when a window is INSIDE an Update Constraints pass — the only time
     /// a `setNeedsUpdateConstraints:` counts against AppKit's per-view limit.
@@ -362,6 +386,14 @@ extension NSView {
             if ConstraintPassBreaker.deferIfOverBudget(self) { return }
         }
         marvin_setNeedsUpdateConstraints(flag)
+    }
+}
+
+extension NSView {
+    /// ADR-0062 addendum 7 — the layout-pass twin of `marvin_setNeedsUpdateConstraints`.
+    @objc func marvin_setNeedsLayout(_ flag: Bool) {
+        if flag, ConstraintPassBreaker.deferLayoutIfOverBudget(self) { return }
+        marvin_setNeedsLayout(flag)
     }
 }
 
@@ -480,6 +512,45 @@ enum ConstraintPassBreaker {
         return true
     }
 
+    // ADR-0062 addendum 7 — the layout-pass ledger. AppKit counts "needs
+    // another Layout Window pass" separately from "needs another Update
+    // Constraints pass" and raises from either once it exceeds the view count.
+    private static var layoutTransitions: [ObjectIdentifier: Int] = [:]
+    private static var layoutDeferred: Set<ObjectIdentifier> = []
+
+    /// True when the caller must NOT forward this `needsLayout = true`.
+    static func deferLayoutIfOverBudget(_ view: NSView) -> Bool {
+        guard Thread.isMainThread, passDepth > 0,
+              !view.needsLayout,                     // only a TRANSITION posts a pass
+              let window = view.window else { return false }
+        let key = ObjectIdentifier(window)
+        let n = (layoutTransitions[key] ?? 0) + 1
+        layoutTransitions[key] = n
+        scheduleReset()
+        if n <= ConstraintPassBudget.floor { return false }
+        let views: Int
+        if let cached = viewCounts[key] {
+            views = cached
+        } else {
+            views = countViews(in: window)
+            viewCounts[key] = views
+        }
+        guard ConstraintPassBudget.shouldDefer(transitionsInPass: n, viewsInWindow: views) else {
+            return false
+        }
+        let id = ObjectIdentifier(view)
+        if !layoutDeferred.contains(id) {
+            layoutDeferred.insert(id)
+            DispatchQueue.main.async { [weak view] in
+                view?.needsLayout = true
+            }
+        }
+        if n == ConstraintPassBudget.allowance(viewsInWindow: views) + 1 {
+            report(view, transitions: n, views: views, kind: "layout-pass")
+        }
+        return true
+    }
+
     /// Counters live for one run-loop turn. Enqueued BEFORE any deferred
     /// re-request, so by the time those run the slate is clean.
     private static func scheduleReset() {
@@ -487,8 +558,10 @@ enum ConstraintPassBreaker {
         resetScheduled = true
         DispatchQueue.main.async {
             transitions.removeAll(keepingCapacity: true)
+            layoutTransitions.removeAll(keepingCapacity: true)
             viewCounts.removeAll(keepingCapacity: true)
             deferred.removeAll(keepingCapacity: true)
+            layoutDeferred.removeAll(keepingCapacity: true)
             resetScheduled = false
         }
     }
@@ -509,10 +582,10 @@ enum ConstraintPassBreaker {
         return n
     }
 
-    private static func report(_ view: NSView, transitions: Int, views: Int) {
+    private static func report(_ view: NSView, transitions: Int, views: Int, kind: String = "constraint-pass") {
         guard tripsThisLaunch < maxTripReportsPerLaunch else { return }
         tripsThisLaunch += 1
-        var out = "\n----- constraint-pass breaker tripped: \(transitions) in-pass transitions, \(views) views in window -----\n"
+        var out = "\n----- \(kind) breaker tripped: \(transitions) in-pass transitions, \(views) views in window -----\n"
         out += "deferred view: \(objcClassName(view)) frame=\(view.frame)\n"
         out += "ancestry:\n"
         var node: NSView? = view

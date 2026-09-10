@@ -2,7 +2,7 @@
 
 - **Status:** Accepted — implemented 2026-09-10
 - **Date:** 2026-09-10
-- **Related:** [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) (tabs, chip, Sessions pane), [ADR-0108](./0108-per-session-posture.md) (posture per session), [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) (close and integration), [ADR-0040](./0040-interactive-ask-user-question.md) (the question sheet), [ADR-0062](./0062-layout-constraint-loop.md) (layout rules every new view obeys)
+- **Related:** [ADR-0107](./0107-one-worktree-per-tab-and-a-multi-session-watch.md) (tabs, chip, Sessions pane), [ADR-0108](./0108-per-session-posture.md) (posture per session), [ADR-0111](./0111-nothing-survives-a-tab-without-a-commit.md) (close and integration), [ADR-0040](./0040-interactive-ask-user-question.md) (the question sheet), [ADR-0062](./0062-update-constraints-loop-identified-mitigated.md) (layout rules every new view obeys)
 
 ## Context
 
@@ -137,3 +137,11 @@ keys and Return switch, ⌘W closes.
 - [x] Docs: ADR-0107 amendment, worktrees guide vocabulary, roadmap
 
 Not in scope and noted for later: the brain caption at the top edge (ADR-0021's surface); ⌘W in the pane, which belongs to the tab-close command; a per-state glyph in the History menu.
+
+## Amendment (2026-09-10, same evening) — navigation, and a crash
+
+User, with four tabs from the same prompt: *"we miss navigation through sessions … ad marvin just crashed."*
+
+**Navigation.** Removing the open-sessions menu also removed the only visible way to step between tabs. The History menu now carries **Previous Session** and **Next Session** with their shortcuts (⇧⌘[ / ⇧⌘]), and four tabs that read identically until their first commit names them carry an ordinal, `Plan the implementation … ·2`; the tab tooltip adds the branch and when it was last active.
+
+**The crash** was ADR-0062's layout loop through a counter the breaker did not hook, triggered by a selectable notice this ADR added to the Sessions pane. Both are fixed in [ADR-0062 addendum 7](./0062-update-constraints-loop-identified-mitigated.md).

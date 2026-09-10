@@ -2558,6 +2558,13 @@ struct ChatPreviewView: View {
                 }
             }
             Divider()
+            // ADR-0112 — the keyboard way between open tabs, discoverable here
+            // now that the open-sessions menu is gone.
+            Button("Previous Session") { model.stepSession(.previous) }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+            Button("Next Session") { model.stepSession(.next) }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+            Divider()
             Button("Show all in Sessions pane") { bridge.revealLeftTab("sessions") }
         } label: {
             Label("History", systemImage: "clock.arrow.circlepath")
@@ -2568,7 +2575,7 @@ struct ChatPreviewView: View {
         .menuIndicator(.hidden)
         .frame(width: 28)
         .disabled(bridge.activeProjectId == nil)
-        .help("History — closed sessions of this project")
+        .help("History — closed sessions, and Previous / Next (⇧⌘[ / ⇧⌘])")
         .onAppear {
             if let pid = bridge.activeProjectId {
                 model.refreshSessions(projectId: pid)
@@ -2896,7 +2903,17 @@ struct ChatPreviewView: View {
                                 lineWidth: active ? 0.5 : 0)
                 )
         )
-        .help(title)
+        .help(tabHelp(title: title))
+    }
+
+    /// The tooltip says what the title cannot: the branch and when it started.
+    private func tabHelp(title: String) -> String {
+        guard let sid = model.openTabSessionIds.first(where: { tabTitle(forSessionId: $0) == title }),
+              let e = SessionRegistry.shared.entry(sid) else { return title }
+        var lines = [title]
+        if let b = e.tree?.branch { lines.append(b) }
+        if let s = model.sessions.first(where: { $0.sessionId == sid }) { lines.append("last active \(friendlyDate(s.updatedAt))") }
+        return lines.joined(separator: "\n")
     }
 
     /// ADR-0107 — one tint per session state, shared with the Sessions pane.
@@ -2914,7 +2931,16 @@ struct ChatPreviewView: View {
     /// Short tab title for an open session id — its first user message,
     /// or its date, looked up from the loaded session list. Falls back to
     /// the id prefix when the summary isn't loaded yet.
+    /// ADR-0112 — four tabs opened from the same prompt read identically until
+    /// their first commit names them. Until then, duplicates carry an ordinal.
     private func tabTitle(forSessionId sid: String) -> String {
+        let base = baseTabTitle(forSessionId: sid)
+        let twins = model.openTabSessionIds.filter { baseTabTitle(forSessionId: $0) == base }
+        guard twins.count > 1, let index = twins.firstIndex(of: sid), index > 0 else { return base }
+        return "\(base) ·\(index + 1)"
+    }
+
+    private func baseTabTitle(forSessionId sid: String) -> String {
         if SessionRegistry.shared.isDraft(sid) { return "New chat" }
         guard let s = model.sessions.first(where: { $0.sessionId == sid }) else {
             return String(sid.prefix(8))
