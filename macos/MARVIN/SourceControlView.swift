@@ -709,19 +709,12 @@ struct SourceControlView: View {
     // MARK: - Panel header
 
     private var panelHeader: some View {
-        HStack(spacing: 6) {
-            Text("Source Control")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(MarvinTheme.textMuted)
-                .textCase(.uppercase)
-            Spacer()
+        PaneHeader(title: "Source Control", symbol: "arrow.triangle.branch") {
             if model.isLoading || model.runner.isBusy {
-                ProgressView().controlSize(.small).scaleEffect(0.7)
+                ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
             }
             overflowMenu
         }
-        .padding(.horizontal, 12)
-        .frame(height: MarvinTheme.paneHeaderHeight)
     }
 
     /// The `…` menu. This is where every git command that does not
@@ -813,16 +806,28 @@ struct SourceControlView: View {
     @ViewBuilder
     private var changesArea: some View {
         if cwd.isEmpty {
-            placeholder("(no project active)")
+            PaneEmptyView(state: .noProject("changes"))
         } else if let response = model.response {
             if response.enabled == false {
-                placeholder(response.reason == "not-a-git-repo"
-                    ? "(not a git repository)"
-                    : response.reason == "probe-failed"
-                        ? "(git is busy — retrying…)"
-                        : "(git unavailable)")
+                // Three parenthesised lowercase fragments, one of which meant
+                // "still trying" and read like a failure (ADR-0114).
+                if response.reason == "not-a-git-repo" {
+                    PaneEmptyView(state: .notARepo())
+                } else if response.reason == "probe-failed" {
+                    PaneLoadingView(label: "Git is busy — retrying…")
+                } else {
+                    PaneEmptyView(
+                        state: PaneEmptyState(headline: "Git is unavailable here", hint: "MARVIN could not run git in this folder.", symbol: "exclamationmark.triangle"),
+                        actionTitle: "Try again",
+                        action: { model.refresh(cwd: cwd, force: true) }
+                    )
+                }
             } else if let error = response.error, !error.isEmpty {
-                placeholder("git error: \(error)")
+                PaneEmptyView(
+                    state: PaneEmptyState(headline: "Git reported an error", hint: error, symbol: "exclamationmark.triangle"),
+                    actionTitle: "Try again",
+                    action: { model.refresh(cwd: cwd, force: true) }
+                )
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -838,9 +843,9 @@ struct SourceControlView: View {
                 .frame(maxHeight: .infinity)
             }
         } else if model.isLoading {
-            placeholder("Loading…")
+            PaneLoadingView()
         } else {
-            placeholder("(initialising)")
+            PaneLoadingView()
         }
     }
 
@@ -949,14 +954,13 @@ struct SourceControlView: View {
         help: String,
         action: @escaping () -> Void
     ) -> some View {
+        // Every refresh, stage, unstage and discard affordance in the panel
+        // goes through here, and none of them showed a hover or a press
+        // before (ADR-0114).
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 10))
-                .frame(width: 18, height: 18)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .paneIconButton(10)
         .help(help)
     }
 
@@ -1136,25 +1140,13 @@ struct SourceControlView: View {
         Button {
             if isCollapsed { collapsed.remove(id) } else { collapsed.insert(id) }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MarvinTheme.textMuted)
-                Spacer()
+            // The pane's third section-header shape, now the shared one. The
+            // count capsule sits with the title rather than after the actions,
+            // which is where the other six panes put it (ADR-0114).
+            PaneSectionHeader(title: label, count: files.count, tint: MarvinTheme.textMuted, collapsed: isCollapsed) {
                 sectionActions(id: id, files: files)
-                Text("\(files.count)")
-                    .font(.system(size: 9.5, weight: .semibold).monospaced())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(MarvinTheme.elevated))
-                    .foregroundStyle(MarvinTheme.textMuted)
             }
             .contentShape(Rectangle())
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
 
@@ -1639,6 +1631,8 @@ struct SourceControlView: View {
         )
     }
 
+    /// Kept for any remaining in-list placeholder. The pane-level states are
+    /// `PaneEmptyView` / `PaneLoadingView` (ADR-0114).
     private func placeholder(_ text: String) -> some View {
         VStack {
             Spacer()

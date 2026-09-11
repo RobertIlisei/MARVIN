@@ -3886,6 +3886,33 @@ runner.suite("pane-chrome") {
     }
 }
 
+// MARK: - Integration notice kind (ADR-0114 M6)
+
+runner.suite("integration-notice-kind") {
+    // A merge outcome arrives as a sentence, not a status code, and it used
+    // to render as 9.5pt tertiary text either way — so "Merged x into main"
+    // and "could not commit the worktree" looked identical (2026-09-11).
+    func kind(_ s: String) -> PaneNotice.Kind { PaneNotice.kind(forOutcome: s) }
+
+    runner.test("what went wrong reads as an error") {
+        runner.expect(kind("Merge all failed: bad ref"), equals: PaneNotice.Kind.error, "failed")
+        runner.expect(kind("could not commit the worktree"), equals: PaneNotice.Kind.error, "could not")
+        runner.expect(kind("Switch refused — the tree is dirty"), equals: PaneNotice.Kind.error, "refused")
+    }
+
+    runner.test("what half-worked reads as a warning") {
+        runner.expect(kind("marvin/tab/x conflicts with main in Job.java"), equals: PaneNotice.Kind.warning, "conflict")
+        runner.expect(kind("Merged 2. Stopped at marvin/tab/y"), equals: PaneNotice.Kind.warning, "stopped at")
+        runner.expect(kind("Squashed 1 branch. Not pushed — it stopped at x"), equals: PaneNotice.Kind.warning, "not pushed")
+    }
+
+    runner.test("what worked reads as a success") {
+        runner.expect(kind("Merged marvin/tab/x into main (2 commits, 9 files). Not pushed."), equals: PaneNotice.Kind.warning, "'not pushed' is load-bearing and wins")
+        runner.expect(kind("Sync started: marvin/tab/x ← main"), equals: PaneNotice.Kind.success, "sync started")
+        runner.expect(kind("Reclaimed 3 checkouts."), equals: PaneNotice.Kind.success, "reclaimed")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

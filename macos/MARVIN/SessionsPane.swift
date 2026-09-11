@@ -33,10 +33,19 @@ struct SessionsPane: View {
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
                 if rows.isEmpty {
-                    Text(bridge.activeProjectId == nil ? "Open a project to see its sessions." : "No sessions yet — press + in the chat to start one.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 4)
+                    if bridge.activeProjectId == nil {
+                        PaneEmptyView(state: .noProject("sessions"))
+                    } else {
+                        PaneEmptyView(
+                            state: PaneEmptyState(
+                                headline: "No sessions yet",
+                                hint: "Each chat tab is a session. Start one and it appears here with what it is doing.",
+                                symbol: "rectangle.stack"
+                            ),
+                            actionTitle: "New chat tab",
+                            action: { bridge.requestChatTab(.new) }
+                        )
+                    }
                 } else {
                     // ADR-0112 — five sections. Interrupted and Failed fold into
                     // Needs you: both mean a human is required, and each keeps
@@ -122,12 +131,7 @@ struct SessionsPane: View {
     // MARK: - Sections
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "rectangle.stack")
-                .font(.system(size: 12, weight: .semibold))
-            Text("Sessions")
-                .font(.system(size: 13, weight: .semibold))
-            Spacer()
+        PaneHeader(title: "Sessions", symbol: "rectangle.stack") {
             if !registry.feedConnected, bridge.activeProjectId != nil {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 10))
@@ -138,17 +142,15 @@ struct SessionsPane: View {
                 bridge.requestChatTab(.new)
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .paneIconButton()
             .help("New chat tab (⌘⇧N)")
             Button {
                 registry.refreshSnapshot()
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .medium))
             }
-            .buttonStyle(.plain)
+            .paneIconButton(10)
             .help("Refresh")
         }
     }
@@ -343,6 +345,19 @@ struct SessionsPane: View {
         return parts.joined(separator: " · ")
     }
 
+    /// The result of a Merge / Sync / Prepare MR, with its kind. It rendered
+    /// as 9.5pt tertiary text, so a refused merge and a finished one looked
+    /// the same (ADR-0114).
+    @ViewBuilder
+    private var integrationNoticeStrip: some View {
+        if let text = registry.integrationNotice, !text.isEmpty {
+            PaneNoticeStrip(
+                notice: PaneNotice(kind: PaneNotice.kind(forOutcome: text), text: text),
+                onDismiss: { registry.integrationNotice = nil }
+            )
+        }
+    }
+
     @ViewBuilder
     private func integrateFooter(_ items: [SessionEntry]) -> some View {
         let conflicts = items.filter { e in e.worktree.flatMap { registry.integrationPreview[$0.slug] }?.isConflict == true }.count
@@ -367,35 +382,19 @@ struct SessionsPane: View {
             }
             .padding(.horizontal, 14)
             .padding(.top, 2)
-            if let notice = registry.integrationNotice {
-                // No `.textSelection(.enabled)` here: SwiftUI's selection
-                // overlay is an AppKit view that re-lays out during layout,
-                // and inside this ScrollView it looped the window into the
-                // fatal "more Layout Window passes than views" (2026-09-10).
-                Text(notice)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(3)
-                    .padding(.horizontal, 14)
-            }
+            // No `.textSelection(.enabled)` anywhere below: SwiftUI's
+            // selection overlay is an AppKit view that re-lays out during
+            // layout, and inside this ScrollView it looped the window into the
+            // fatal "more Layout Window passes than views" (2026-09-10).
+            // `PaneNoticeStrip` carries that rule in its own file.
+            integrationNoticeStrip
         }
     }
 
+    /// This pane's own shape, now the shared one: it was the most legible of
+    /// the five that existed, so `PaneSectionHeader` is it (ADR-0114).
     private func sectionHeader(_ title: String, count: Int, tint: Color) -> some View {
-        HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .tracking(0.4)
-            Text("\(count)")
-                .font(.system(size: 9, weight: .semibold))
-                .monospacedDigit()
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(tint.opacity(0.18)))
-                .foregroundStyle(tint)
-        }
-        .padding(.top, 4)
+        PaneSectionHeader(title, count: count, tint: tint)
     }
 
     // MARK: - Row

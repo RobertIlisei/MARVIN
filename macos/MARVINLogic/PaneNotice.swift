@@ -62,6 +62,22 @@ public struct PaneNotice: Equatable {
     /// True when the notice must not vanish on its own.
     public var isSticky: Bool { dismissal == .sticky }
 
+    /// The kind of an outcome that arrives as a SENTENCE rather than a status
+    /// code — which is how the git integration routes report (ADR-0114).
+    ///
+    /// `mergeWorktree` and its siblings say "failed", "could not", "refused"
+    /// when nothing went through, and "conflicts", "Stopped at", "Not pushed"
+    /// when something did but not all of it. Reading the words is not elegant,
+    /// but the alternative is threading a kind through six routes that already
+    /// carry a human sentence, and the words are ours — they are asserted
+    /// here and in the sidecar's own tests.
+    public static func kind(forOutcome text: String) -> Kind {
+        let t = text.lowercased()
+        if t.contains("failed") || t.contains("could not") || t.contains("refused") { return .error }
+        if t.contains("conflict") || t.contains("stopped at") || t.contains("not pushed") { return .warning }
+        return .success
+    }
+
     public init(kind: Kind, headline: String, detail: String? = nil) {
         self.kind = kind
         self.headline = headline
