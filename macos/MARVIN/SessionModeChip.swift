@@ -92,6 +92,26 @@ struct SessionModePopover: View {
     // control, the lane form and two paragraphs of explanation that used to
     // live here made it a settings pane; the form is a sheet now, the
     // explanation is a link.
+    //
+    // 2026-09-11 — and then the actions themselves broke. Three equal buttons
+    // plus a link shared one row in a popover with no width, so SwiftUI
+    // shrank them until the labels read "Switch to ow…", "Edit lane…",
+    // "Open in Ses…". A truncated label is a broken control: it names nothing.
+    //
+    // The layout now follows from what each control IS, not from fitting them
+    // in a line:
+    //   - A fixed width. A macOS popover has a stable shape; content adapts
+    //     to it, never the reverse.
+    //   - ONE primary action, full width, because the popover exists to move
+    //     this tab between a branch and the checkout. A full-width button
+    //     cannot truncate.
+    //   - *Edit* sits ON the Lane row it edits. Proximity is the mapping;
+    //     a generic action row made you infer which fact it touched.
+    //   - Leaving-the-branch choices stack vertically. "Keep for integration
+    //     & switch" never fits beside two siblings, and shortening it to make
+    //     it fit would have cost the sentence its meaning.
+    //   - Navigation is not an action: *Open in Sessions* and *Learn more*
+    //     are quiet links in a footer, under a divider.
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
@@ -110,19 +130,30 @@ struct SessionModePopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 let lane = entry?.tree?.lane ?? []
-                fact("Lane", lane.isEmpty ? "none — edits anywhere" : lane.joined(separator: ", "))
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    fact("Lane", lane.isEmpty ? "none — edits anywhere" : lane.joined(separator: ", "))
+                    Spacer(minLength: 4)
+                    Button("Edit") { laneSheetOpen = true }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
+                        .help("The repository paths this tab may edit while it shares your checkout.")
+                }
             }
             if let leaving, case .offer(let actions, let note) = leaving {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(note).font(.system(size: 10.5)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 6) {
+                    VStack(spacing: 4) {
                         ForEach(actions, id: \.rawValue) { action in
                             Button(actionLabel(action)) { onSwitch(.shared, action) }
                                 .controlSize(.small)
+                                .frame(maxWidth: .infinity)
                                 .tint(action == .discard ? .red : nil)
                         }
-                        Button("Cancel") { self.leaving = nil }.controlSize(.small)
+                        Button("Cancel") { self.leaving = nil }
+                            .controlSize(.small)
+                            .buttonStyle(.link)
+                            .font(.system(size: 10))
                     }
                 }
                 .padding(8)
@@ -131,20 +162,35 @@ struct SessionModePopover: View {
                 Text("Stop the running turn before switching.")
                     .font(.system(size: 10.5)).foregroundStyle(.orange)
             }
-            HStack(spacing: 6) {
-                if mode == .worktree {
-                    Button("Switch to shared") { requestSwitch(to: .shared) }.controlSize(.small)
-                } else {
-                    Button("Switch to own branch") { requestSwitch(to: .worktree) }.controlSize(.small)
-                    Button("Edit lane…") { laneSheetOpen = true }.controlSize(.small)
-                }
-                Button("Open in Sessions") { MarvinBridge.shared.revealLeftTab("sessions") }.controlSize(.small)
-                Spacer()
+            Divider().opacity(0.5)
+
+            Button(mode == .worktree ? "Switch to the shared checkout" : "Switch to its own branch") {
+                requestSwitch(to: mode == .worktree ? .shared : .worktree)
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
+            .help(mode == .worktree
+                  ? "Work in your own checkout instead. This tab's branch is decided first."
+                  : "Give this tab its own worktree and branch, cut from your current HEAD.")
+
+            HStack(spacing: 8) {
+                Button("Open in Sessions") { MarvinBridge.shared.revealLeftTab("sessions") }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10))
+                Text("·").font(.system(size: 10)).foregroundStyle(.tertiary)
                 Link("Learn more", destination: URL(string: "https://github.com/robertilisei/marvin/blob/main/docs/guides/worktrees.md")!)
                     .font(.system(size: 10))
+                Spacer(minLength: 0)
             }
         }
         .padding(12)
+        // A stable width is what stops every label in here from being
+        // negotiated away by the longest line of prose above it. 340 is not a
+        // new number: it is what the posture popover beside it already uses,
+        // and two popovers on the same bar that differ by twenty points read
+        // as carelessness.
+        .frame(width: 340, alignment: .leading)
         .sheet(isPresented: $laneSheetOpen) {
             LaneSheet(initial: entry?.tree?.lane ?? []) { lane in onLane(lane) }
         }
@@ -191,20 +237,25 @@ struct SessionModePopover: View {
             if let diff = entry?.diff {
                 fact("Changes", "+\(diff.added) −\(diff.removed) in \(diff.files) file\(diff.files == 1 ? "" : "s")")
             }
-            HStack(spacing: 6) {
+            // Two things you do TO the facts above, kept beside them and
+            // deliberately lighter than the popover's one real action.
+            HStack(spacing: 10) {
                 if let path = tree.path {
                     Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-                        .controlSize(.small)
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
                 }
                 if let branch = tree.branch {
                     Button("Copy branch") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(branch, forType: .string)
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.link)
+                    .font(.system(size: 10))
                 }
+                Spacer(minLength: 0)
             }
-            .padding(.top, 2)
+            .padding(.top, 3)
         }
     }
 

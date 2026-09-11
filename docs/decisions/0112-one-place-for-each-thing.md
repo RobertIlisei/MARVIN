@@ -172,3 +172,18 @@ Both panes had built every action as `Button(…).buttonStyle(.plain)` with a ti
 
 Eleven new assertions for the notice split, five sidecar tests for the conflict naming and the column fix.
 
+## Amendment (2026-09-11, second) — a truncated label is a broken control
+
+The branch chip's popover, photographed by the user: **`Switch to ow…`**, `Edit lane…`, **`Open in Ses…`**. Three equal-weight buttons and a link sharing one row inside a popover that set no width, so SwiftUI negotiated the row down until the labels named nothing. *"Text does not fit the buttons."*
+
+Fitting them was never the problem to solve. The row was wrong because it grouped four controls that are four different kinds of thing, and then asked a layout pass to referee. The popover is rebuilt from what each control is:
+
+- **A fixed width, 340pt.** A macOS popover has a stable shape and content adapts to it. The number is not new: it is what the posture popover on the same bar already uses, and two popovers that differ by twenty points read as carelessness.
+- **One primary action, full width.** The popover exists to move this tab between its own branch and the shared checkout, so that is one prominent button spanning the popover. A full-width button cannot truncate, and the label can afford to be a whole phrase: *Switch to the shared checkout*.
+- **Edit sits on the row it edits.** *Edit lane…* was a generic button three lines below the Lane fact; it is now an `Edit` link on that fact's own row. Proximity is the mapping, and the ellipsis goes with it since the sheet still asks for input.
+- **The leaving-the-branch choices stack.** *Keep for integration & switch* never fits beside two siblings at any width worth having, and shortening it to make it fit would cost the sentence its meaning. Vertical, full width, with Cancel demoted to a link underneath.
+- **Navigation is not an action.** *Open in Sessions* and *Learn more* are links in a footer under a divider. Neither does anything to this tab, and dressing them as buttons is what made the row four wide.
+- **Reveal in Finder and Copy branch** become links too: they act on the facts they sit beneath, and they are not what the popover is for.
+
+The rule this leaves behind, for any future popover: give it a width first, decide its one action second, and let everything else be a link.
+
