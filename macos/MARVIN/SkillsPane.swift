@@ -23,6 +23,7 @@
 // We don't auto-`git clone` or auto-mutate the skills directories.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Wire types (decoded from /api/skills)
@@ -150,9 +151,15 @@ struct SkillsPane: View {
     @State private var isLoading: Bool = false
     @State private var inFlightAction: String?
     @State private var explainSuggestion: SkillsIndexResponse.Suggestion?
-    /// One-line confirmation surface for clipboard-driven actions.
-    /// Auto-clears after a short delay so it doesn't pile up.
-    @State private var pasteboardToast: String?
+    /// The outcome of the last action, with its kind (ADR-0114).
+    ///
+    /// Every outcome used to render in one clipboard-icon strip that cleared
+    /// itself after three or four seconds, so "Installed: x" and "Discovery
+    /// failed: …" were the same pixels and the failure was the one certain to
+    /// vanish unread. `PaneNotice.dismissal` decides by kind now.
+    @State private var notice: PaneNotice?
+    /// Updates found by the last check, kept so the count outlives the notice.
+    @State private var updatesAvailable: Int = 0
     /// Skill content shown in the View sheet. Loaded via /api/skills/content,
     /// which whitelists ~/.claude/skills/ and <workDir>/.marvin/skills/.
     /// Skills live outside the project workDir so the standard sandboxed
@@ -217,23 +224,22 @@ struct SkillsPane: View {
     var body: some View {
         VStack(spacing: 0) {
             if bridge.projectWorkDir == nil {
-                emptyView("Open a project to see its skills.")
+                PaneEmptyView(state: .noProject("skills"))
             } else if let err = loadError, index == nil {
-                emptyView(err)
+                PaneEmptyView(
+                    state: PaneEmptyState(headline: "Could not read the skills index", hint: err, symbol: "exclamationmark.triangle"),
+                    actionTitle: "Retry",
+                    action: { Task { await refresh() } }
+                )
             } else if let idx = index {
                 content(idx)
+            } else if isLoading {
+                PaneLoadingView(label: "Reading the skills index…")
             } else {
-                emptyView(isLoading ? "Loading…" : "No data.")
+                PaneEmptyView(state: PaneEmptyState(headline: "No skills found", hint: "Nothing is installed for this project yet.", symbol: "sparkle"))
             }
-            if let toast = pasteboardToast {
-                HStack {
-                    Image(systemName: "doc.on.clipboard.fill")
-                    Text(toast).font(.caption)
-                    Spacer()
-                }
-                .padding(8)
-                .background(.tint.opacity(0.12))
-                .transition(.opacity)
+            if let notice {
+                PaneNoticeStrip(notice: notice, onDismiss: { withAnimation { self.notice = nil } })
             }
         }
         .task(id: bridge.projectWorkDir) { await refresh() }
@@ -383,7 +389,7 @@ struct SkillsPane: View {
             }
             if let installed = decoded?.installed, !installed.isEmpty {
                 await MainActor.run {
-                    pasteboardToast = "Installed: \(installed.map { $0.name }.joined(separator: ", "))"
+                    flash("Installed: \(installed.map { $0.name }.joined(separator: ", "))")
                     addSheetOpen = false
                     addURL = ""; addCandidates = []; addSelected = []
                     addPlugins = []; addMarketplace = nil
@@ -586,10 +592,9 @@ struct SkillsPane: View {
             await refresh()  // re-read /api/skills which now includes the cached discovery
         } catch {
             await MainActor.run {
-                self.pasteboardToast = "Discovery failed: \(error.localizedDescription)"
+                self.fail("Discovery failed", error.localizedDescription)
             }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await MainActor.run { self.pasteboardToast = nil }
         }
     }
 
@@ -615,22 +620,20 @@ struct SkillsPane: View {
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                     ?? "HTTP \(http.statusCode)"
                 await MainActor.run {
-                    self.pasteboardToast = "Build failed: \(detail)"
+                    self.fail("Could not build the skill", detail)
                 }
             } else {
                 await MainActor.run {
-                    self.pasteboardToast = "Built \(s.name) at .marvin/skills/\(s.name)/"
+                    self.flash("Built \(s.name) at .marvin/skills/\(s.name)/")
                 }
             }
             try? await Task.sleep(nanoseconds: 3_500_000_000)
-            await MainActor.run { self.pasteboardToast = nil }
             await refresh()
         } catch {
             await MainActor.run {
-                self.pasteboardToast = "Build failed: \(error.localizedDescription)"
+                self.fail("Could not build the skill", error.localizedDescription)
             }
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await MainActor.run { self.pasteboardToast = nil }
         }
     }
 
@@ -720,35 +723,52 @@ struct SkillsPane: View {
     /// `.help()` on a `ToolbarItem` button never surfaced a tooltip. A row
     /// inside the pane shows only when the pane does, and `.help()` on a plain
     /// view works everywhere else in this app.
+    /// Something worked; it leaves on its own.
+    @MainActor private func flash(_ text: String) { show(PaneNotice(kind: .success, text: text)) }
+
+    /// Something failed; it stays until dismissed (ADR-0114).
+    @MainActor private func fail(_ headline: String, _ detail: String) {
+        show(PaneNotice(kind: .error, headline: headline, detail: detail))
+    }
+
+    @MainActor private func show(_ n: PaneNotice) {
+        withAnimation { notice = n }
+        guard case .auto(let seconds) = n.dismissal else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            withAnimation { if notice == n { notice = nil } }
+        }
+    }
+
+    /// Three actions, one of which is the reason the pane exists. Adding a
+    /// skill is the creative verb, so it keeps its label as the one primary
+    /// chip; the two maintenance verbs become icons beside it (ADR-0114).
     private var paneActions: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles.rectangle.stack").foregroundStyle(.tint)
-            Text("Skills").font(.headline)
-            Spacer()
-            Button {
+        PaneHeader(title: "Skills", symbol: "sparkles.rectangle.stack") {
+            Button("Add…") {
                 addError = nil; addCandidates = []; addSelected = []
                 addPlugins = []; addMarketplace = nil
                 addSheetOpen = true
-            } label: {
-                Label("Add from GitHub", systemImage: "arrow.down.circle")
             }
+            .rowChip(.primary)
             .help("Add from GitHub — fetch a skill from a Git repo or marketplace URL (ADR-0039)")
+
             Button { Task { await checkAllSkillUpdates() } } label: {
-                Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
+                Image(systemName: "arrow.triangle.2.circlepath")
             }
+            .paneIconButton()
             .help(updatableSkillCount == 0
                   ? "Check for updates — nothing to check: no installed skill has a recorded source yet. Use “Set source” on a row first."
                   : "Check for updates — re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing (ADR-0071).")
             .disabled(checkingUpdates || updatableSkillCount == 0)
+
             Button { Task { await refresh() } } label: {
-                Label("Reload list", systemImage: "arrow.clockwise")
+                Image(systemName: "arrow.clockwise")
             }
+            .paneIconButton()
             .help("Reload the installed list from disk (does not check upstream)")
             .disabled(isLoading)
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .controlSize(.small)
     }
 
     /// Rows that could be updated at all — gates the toolbar button so it
@@ -760,18 +780,17 @@ struct SkillsPane: View {
     }
 
     /// Shared section header: icon · title · count chip.
-    private func sectionHeader(_ icon: String, _ tint: Color, _ title: String, count: Int? = nil) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).foregroundStyle(tint)
-            Text(title).font(.headline)
-            if let count {
-                Text("\(count)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+    /// One section header for the pane, from the shared vocabulary. Four
+    /// other shapes existed across the seven panes (ADR-0114).
+    private func sectionHeader(_ icon: String, _ tint: Color, _ title: String, count: Int? = nil, trailing: String? = nil) -> some View {
+        PaneSectionHeader(title: title, count: count, tint: tint) {
+            if let trailing {
+                Text(trailing)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange.opacity(0.16)))
             }
-            Spacer()
         }
     }
 
@@ -816,7 +835,8 @@ struct SkillsPane: View {
     private func availableSection(_ idx: SkillsIndexResponse) -> some View {
         let inactive = idx.userGlobal.filter { !activeSkillNames.contains($0.name) }
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("tray", .gray, "Installed, off in this project", count: inactive.count)
+            sectionHeader("tray", .gray, "Installed, off in this project", count: inactive.count,
+                          trailing: updatesAvailable > 0 ? "\(updatesAvailable) with updates" : nil)
             Text("In ~/.claude/skills/ but not offered to MARVIN here. Toggle on to enable for this project.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -936,7 +956,7 @@ struct SkillsPane: View {
             let (data, _) = try await URLSession.shared.data(for: req)
             return try? JSONDecoder().decode(SkillUpdateResponse.self, from: data)
         } catch {
-            await MainActor.run { self.pasteboardToast = "Update check failed: \(error.localizedDescription)" }
+            await MainActor.run { self.fail("Update check failed", error.localizedDescription) }
             return nil
         }
     }
@@ -966,17 +986,22 @@ struct SkillsPane: View {
             let available = all.filter { $0.status == "update-available" }.count
             let failed = all.filter { $0.status == "error" }.count
             if all.isEmpty {
-                pasteboardToast = "Nothing to check — no skill here has a recorded source."
+                show(PaneNotice(kind: .info, text: "Nothing to check — no skill here has a recorded source."))
             } else if available == 0 {
-                pasteboardToast = failed == 0
-                    ? "All \(all.count) up to date."
-                    : "All up to date (\(failed) could not be checked)."
+                updatesAvailable = 0
+                if failed == 0 {
+                    flash("All \(all.count) up to date.")
+                } else {
+                    show(PaneNotice(kind: .warning, headline: "All up to date, but \(failed) could not be checked.", detail: "They have no recorded source, or the fetch failed."))
+                }
             } else {
-                pasteboardToast = "\(available) update\(available == 1 ? "" : "s") available."
+                // The count outlives the notice now. It used to vanish with
+                // the toast, so the answer to "did anything need updating?"
+                // was gone four seconds after you asked (ADR-0114).
+                updatesAvailable = available
+                flash("\(available) update\(available == 1 ? "" : "s") available.")
             }
         }
-        try? await Task.sleep(nanoseconds: 4_000_000_000)
-        await MainActor.run { self.pasteboardToast = nil }
     }
 
     /// Fetch and install the latest for one skill. `url` re-binds provenance
@@ -990,7 +1015,7 @@ struct SkillsPane: View {
         if let url, !url.isEmpty { body["url"] = url }
         if scope == "project-local" {
             guard let workDir = bridge.projectWorkDir else {
-                await MainActor.run { self.pasteboardToast = "Open a project to update its local skills." }
+                await MainActor.run { self.show(PaneNotice(kind: .info, text: "Open a project to update its local skills.")) }
                 return
             }
             body["workDir"] = workDir
@@ -998,7 +1023,7 @@ struct SkillsPane: View {
 
         guard let resp = await postSkillUpdate(body: body) else { return }
         guard let outcome = resp.results?.first else {
-            await MainActor.run { self.pasteboardToast = resp.error ?? "Update failed." }
+            await MainActor.run { self.fail("Could not update", resp.error ?? "The update returned nothing.") }
             return
         }
         await MainActor.run {
@@ -1006,14 +1031,13 @@ struct SkillsPane: View {
             // so record the status under the returned name, not the one we sent.
             updateStatus["\(scope):\(outcome.name)"] = outcome.status
             switch outcome.status {
-            case "updated": pasteboardToast = "Updated \(outcome.name)."
-            case "up-to-date": pasteboardToast = "\(outcome.name) is already up to date."
-            default: pasteboardToast = "Update failed: \(outcome.error ?? "unknown error")"
+            case "updated": flash("Updated \(outcome.name).")
+            case "up-to-date": flash("\(outcome.name) is already up to date.")
+            default: fail("Could not update \(outcome.name)", outcome.error ?? "unknown error")
             }
         }
         if outcome.status == "updated" { await refresh() }
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await MainActor.run { self.pasteboardToast = nil }
     }
 
     /// Bind a Git URL to a skill that has none, then immediately update from it.
@@ -1077,11 +1101,10 @@ struct SkillsPane: View {
             updateStatus["\(target.scope):\(outcome.name)"] = outcome.status
             bindSourceFor = nil
             bindURL = ""
-            pasteboardToast = "Source set for \(outcome.name)."
+            flash("Source set for \(outcome.name).")
         }
         await refresh()
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await MainActor.run { self.pasteboardToast = nil }
     }
 
     private func toggleSkill(_ name: String) async {
@@ -1117,15 +1140,16 @@ struct SkillsPane: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 8) {
             if let active, let onToggle {
-                Button(action: onToggle) {
-                    Image(systemName: active ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(active ? Color.green : .secondary)
-                        .font(.system(size: 15))
-                }
-                .buttonStyle(.plain)
-                .help(active
-                      ? "Active for this project — click to disable for this project."
-                      : "Inactive here — click to enable for this project.")
+                // A real switch. This was a `.buttonStyle(.plain)` glyph — no
+                // hover, no press, no focus ring, no accessibility trait — and
+                // it is the pane's central control (ADR-0114).
+                PaneEnableToggle(
+                    isOn: active,
+                    help: active
+                        ? "Active for this project — switch off to stop offering it here."
+                        : "Inactive here — switch on to offer it to MARVIN for this project."
+                ) { _ in onToggle() }
+                .padding(.top, 1)
             }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -1339,10 +1363,8 @@ struct SkillsPane: View {
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(prompt, forType: .string)
-            self.pasteboardToast = "Prompt copied — paste into chat to review and run."
+            self.flash("Prompt copied — paste into chat to review and run.")
         }
-        try? await Task.sleep(nanoseconds: 4_000_000_000)
-        await MainActor.run { self.pasteboardToast = nil }
     }
 
     private func openSkillFile(_ path: String) {
