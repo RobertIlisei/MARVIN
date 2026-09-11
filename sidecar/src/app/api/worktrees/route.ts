@@ -19,6 +19,7 @@
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { previewIntegration } from "@marvin/runtime/integration";
+import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
 import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -119,6 +120,7 @@ export async function POST(req: NextRequest) {
       if (target && !/^[A-Za-z0-9._\/-]{1,120}$/.test(target)) return NextResponse.json({ error: "invalid target" }, { status: 400 });
       const out = await prepareMergeRequest(resolved.cwd, {
         slugs,
+        prepare: (path) => prepareSessionWorktree(resolved.cwd, path, readOrDetectWorktreeSetup(resolved.cwd).config),
         ...(typeof body.name === "string" ? { name: body.name.slice(0, 120) } : {}),
         ...(typeof body.message === "string" ? { message: body.message.slice(0, 8000) } : {}),
         push: body.push === true,

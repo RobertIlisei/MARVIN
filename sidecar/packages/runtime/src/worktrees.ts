@@ -746,12 +746,46 @@ export function sweepWorktrees(
  * A tracked file that is modified, staged, deleted or in conflict still counts:
  * that is work a merge can genuinely disturb.
  */
-function workingTreeDirty(workDir: string): boolean {
-  return gitOr(workDir, ["status", "--porcelain"], "")
+/**
+ * Tracked, modified paths in the main checkout outside `.marvin/` — the only
+ * files a merge could clobber. Untracked files are not in a merge's way, and
+ * `.marvin/*` is MARVIN's own bookkeeping, dirty on every real project.
+ */
+function dirtyTrackedPaths(workDir: string): string[] {
+  return gitOr(workDir, ["status", "--porcelain", "--untracked-files=no"], "")
     .split("\n")
     .filter(Boolean)
-    .filter((l) => !l.startsWith("??"))
-    .some((l) => !l.slice(3).replace(/^"|"$/g, "").startsWith(".marvin/"));
+    .map((l) => l.slice(3).replace(/^"|"$/g, ""))
+    .map((p) => (p.includes(" -> ") ? p.slice(p.lastIndexOf(" -> ") + 4) : p))
+    .filter((p) => !p.startsWith(".marvin/"));
+}
+
+/** Files `branch` changes since it diverged from HEAD (`HEAD...branch`). */
+function branchChangedPaths(workDir: string, branch: string): string[] {
+  return gitOr(workDir, ["diff", "--name-only", `HEAD...${branch}`], "").split("\n").filter(Boolean);
+}
+
+/**
+ * The dirty tracked files a merge of `branch` would overwrite — git's own
+ * refusal rule ("Your local changes to the following files would be
+ * overwritten by merge"), applied BEFORE the merge so nothing is half-done.
+ *
+ * This used to be "any tracked file modified, anywhere": on 2026-09-11 a tab
+ * that touched nine billing files could not close with *Merge* because two
+ * ADRs another tab was writing were unsaved in the main checkout. Git would
+ * have merged that without a word — the two sets of paths were disjoint. An
+ * unrelated edit on main is not a reason to refuse; an overlapping one is.
+ */
+export function mergeBlockingPaths(workDir: string, branch: string): string[] {
+  const dirty = new Set(dirtyTrackedPaths(workDir));
+  if (dirty.size === 0) return [];
+  return branchChangedPaths(workDir, branch).filter((p) => dirty.has(p));
+}
+
+function describeBlockingPaths(paths: string[]): string {
+  const shown = paths.slice(0, 4).join(", ");
+  const more = paths.length > 4 ? ` and ${paths.length - 4} more` : "";
+  return `${shown}${more}`;
 }
 
 const execFileAsync = promisify(execFile);
@@ -888,8 +922,11 @@ export function mergeWorktree(
   }
   if (w.state === "empty") return fail(`${w.branch} has no commits to merge.`);
   if (w.state === "merged") return fail(`${w.branch} is already merged into ${w.mergedInto}.`);
-  if (workingTreeDirty(workDir)) {
-    return fail("The main working tree has uncommitted changes — commit or stash before merging.");
+  const blocking = mergeBlockingPaths(workDir, w.branch);
+  if (blocking.length > 0) {
+    return fail(
+      `Uncommitted changes to ${describeBlockingPaths(blocking)} would be overwritten by ${w.branch} — commit or stash ${blocking.length === 1 ? "that file" : "those files"} before merging.`,
+    );
   }
   const onto = gitOr(workDir, ["rev-parse", "--abbrev-ref", "HEAD"], "HEAD");
   try {
@@ -978,14 +1015,9 @@ export function mergeAllWorktrees(
   if (candidates.length === 0) {
     return { merged, skipped, message: "No finished branches to merge." };
   }
-  if (workingTreeDirty(workDir)) {
-    return {
-      merged,
-      skipped,
-      message: "The main working tree has uncommitted changes — commit or stash before merging.",
-    };
-  }
-
+  // No up-front dirty-tree refusal: each merge checks the files IT would
+  // overwrite (`mergeBlockingPaths`), so an unrelated edit on main stops
+  // nothing and an overlapping one stops exactly the branch it overlaps.
   let stopped: MergeAllOutcome["stopped"];
   for (const w of candidates) {
     const out = mergeWorktree(workDir, w.slug, opts);
@@ -1315,6 +1347,10 @@ export function mainTreeRedirect(cmd: string, workDir: string, worktree: string)
 // ── Prepare a merge request: squash chosen branches into one commit ────────
 
 export interface PrepareMergeRequestInput {
+  /** Lend the temporary worktree the preparation a tab's gets (symlinked
+   *  dependency dirs, copied `.env`), so the project's commit hooks can run.
+   *  Injected by the route to keep this module free of `worktree-setup`. */
+  prepare?: (worktreePath: string) => void;
   /** Worktree slugs to fold in. Only `ready` ones are used; the rest are reported. */
   slugs: string[];
   /** Human name for the branch; slugged and dated. Defaults to the first task. */
@@ -1393,6 +1429,22 @@ export async function prepareMergeRequest(
   workDir: string,
   input: PrepareMergeRequestInput,
 ): Promise<PrepareMergeRequestOutcome> {
+  const started = Date.now();
+  const out = await prepareMergeRequestInner(workDir, input);
+  // The squash commit can outlive the client's patience (hooks that compile
+  // and test). The outcome must survive the client giving up: it goes to the
+  // sidecar log, where "Prepare MR failed: the request timed out" can be
+  // followed to what actually happened.
+  console.warn(
+    `[prepare-mr] ${out.ok ? "ok" : "failed"} after ${Math.round((Date.now() - started) / 1000)} s — ${out.branch || "(no branch)"}: ${out.summary.split("\n")[0]}`,
+  );
+  return out;
+}
+
+async function prepareMergeRequestInner(
+  workDir: string,
+  input: PrepareMergeRequestInput,
+): Promise<PrepareMergeRequestOutcome> {
   const all = reconcileWorktrees(workDir);
   const merged: PrepareMergeRequestOutcome["merged"] = [];
   const skipped: PrepareMergeRequestOutcome["skipped"] = [];
@@ -1427,7 +1479,11 @@ export async function prepareMergeRequest(
   if (rows.length === 0) return fail("", "Nothing to integrate — no finished branch was selected.");
 
   const day = new Date().toISOString().slice(0, 10);
-  const baseName = worktreeSlug(input.name?.trim() || rows[0]?.task || "integration");
+  // The sheet's placeholder reads `mr/<today>-<name>`, and people type the
+  // whole thing: strip a leading `mr/` or `mr-` and a leading date so the
+  // branch is `mr/2026-09-11-billing`, never `mr/2026-09-11-mr-2026-09-11`.
+  const typed = (input.name?.trim() ?? "").replace(/^mr[\/-]/i, "").replace(/^\d{4}-\d{2}-\d{2}-?/, "");
+  const baseName = worktreeSlug(typed || rows[0]?.task || "integration");
   let branch = `${MR_BRANCH_PREFIX}${day}-${baseName}`;
   for (let n = 2; gitOk(workDir, ["rev-parse", "--verify", "--quiet", branch]); n++) {
     branch = `${MR_BRANCH_PREFIX}${day}-${baseName}-${n}`;
@@ -1444,6 +1500,16 @@ export async function prepareMergeRequest(
     gitOk(workDir, ["worktree", "remove", "--force", tmp]);
     gitOk(workDir, ["worktree", "prune"]);
   };
+  // The squash commit runs the project's hooks (that is the point of it —
+  // a reviewer reads this commit), and a fresh checkout has no
+  // `node_modules`, `target`, `.env`. The caller lends the same preparation a
+  // tab's worktree gets; without it a pre-commit band that compiles fails on
+  // a missing dependency and the refusal reads as a hook failure.
+  try {
+    input.prepare?.(tmp);
+  } catch {
+    // Preparation is best-effort: a hook may still pass without it.
+  }
 
   // One temporary commit per branch, so a conflict on the third loses only the
   // third: `reset --hard` there drops the failed squash and keeps the two that

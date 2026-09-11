@@ -158,6 +158,10 @@ struct PrepareMRSheet: View {
                         .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
                 )
             }
+            Text("The squash commit runs the project's commit hooks in a temporary checkout prepared like a tab's — a compile-and-test band can take minutes.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Toggle("Push the branch to the project's remote", isOn: $push)
                 .font(.system(size: 12))
             Toggle("Open a merge request from the push", isOn: $openMergeRequest)

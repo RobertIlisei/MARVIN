@@ -179,6 +179,10 @@ final class SourceControlModel {
                 for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
                 worktreeNotice = lines.joined(separator: "\n")
                 if let url = out.pushed?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+            } catch FilesServiceError.transport(let underlying) where (underlying as? URLError)?.code == .timedOut {
+                // The sidecar keeps going when the client stops waiting; the
+                // outcome is in its log and the branch appears on refresh.
+                worktreeNotice = "Prepare MR is taking longer than the app waited — the project's commit hooks are probably still running in the sidecar. Refresh in a minute: the mr/ branch appears once the squash commit lands, and ~/Library/Logs/MARVIN/sidecar.log has the outcome."
             } catch {
                 worktreeNotice = "Prepare MR failed: \(error)"
             }

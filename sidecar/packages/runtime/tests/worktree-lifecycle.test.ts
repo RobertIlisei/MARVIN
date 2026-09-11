@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -183,26 +183,48 @@ describe("worktree lifecycle", () => {
     expect(existsSync(join(repo, "NOTES.md"))).toBe(true);
   });
 
-  it("still refuses when a TRACKED file is modified", () => {
+  it("merges past a modified tracked file the branch does not touch, and keeps the edit", () => {
+    // 2026-09-11: a nine-file billing branch could not close with Merge
+    // because two ADRs another tab was writing were unsaved on main. Git
+    // merges disjoint paths without a word; so does MARVIN now.
     const a = createWorktree(repo, "ready work");
     commitIn(a.path, "feature.ts");
     writeFileSync(join(repo, "README.md"), "edited, not committed\n");
 
     const out = mergeWorktree(repo, a.slug);
 
-    expect(out.ok).toBe(false);
-    expect(out.message).toMatch(/uncommitted changes/);
+    expect(out.ok).toBe(true);
+    expect(existsSync(join(repo, "feature.ts"))).toBe(true);
+    expect(readFileSync(join(repo, "README.md"), "utf-8")).toBe("edited, not committed\n");
   });
 
-  it("refuses while the main tree is dirty, before merging anything", () => {
+  it("refuses when a modified tracked file is one the branch changes, naming it", () => {
+    const a = createWorktree(repo, "ready work");
+    commitIn(a.path, "README.md", "the branch's README\n");
+    writeFileSync(join(repo, "README.md"), "edited, not committed\n");
+
+    const out = mergeWorktree(repo, a.slug);
+
+    expect(out.ok).toBe(false);
+    expect(out.message).toContain("README.md");
+    expect(out.message).toMatch(/would be overwritten/);
+    // Nothing half-done: the edit is still there and no merge is in progress.
+    expect(readFileSync(join(repo, "README.md"), "utf-8")).toBe("edited, not committed\n");
+    expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+  });
+
+  it("merge-all folds the branches an edit on main does not overlap, and stops at the one it does", () => {
     const a = createWorktree(repo, "ready one");
     commitIn(a.path, "x.ts");
+    const b = createWorktree(repo, "ready two");
+    commitIn(b.path, "README.md", "b's README\n");
     writeFileSync(join(repo, "README.md"), "edited but not committed\n");
 
     const out = mergeAllWorktrees(repo);
 
-    expect(out.merged).toEqual([]);
-    expect(out.message).toMatch(/uncommitted changes/);
+    expect(out.merged.map((m) => m.branch)).toEqual([a.branch]);
+    expect(out.stopped?.branch).toBe(b.branch);
+    expect(out.stopped?.message).toContain("README.md");
   });
 
   it("merges past a Conventional-Commits commit-msg hook", () => {
@@ -362,11 +384,13 @@ describe("worktree lifecycle", () => {
   it("refuses to merge into a dirty main tree, and refuses an empty branch", () => {
     const rec = createWorktree(repo, "to merge");
     commitIn(rec.path, "feature.ts");
-    // A MODIFIED TRACKED file. This used to write an untracked one, which
-    // encoded a rule stricter than git's own and made merge-on-close
-    // impossible for anyone with a stray file in their tree (2026-09-10).
+    // A MODIFIED TRACKED file THE BRANCH ALSO CHANGES. This used to be any
+    // tracked edit anywhere (2026-09-10), then any edit at all (untracked
+    // included) — each stricter than git's own rule, each making
+    // merge-on-close impossible on a real checkout (2026-09-11).
+    commitIn(rec.path, "README.md", "the branch's README\n");
     writeFileSync(join(repo, "README.md"), "uncommitted edit\n");
-    expect(mergeWorktree(repo, rec.slug).message).toContain("uncommitted changes");
+    expect(mergeWorktree(repo, rec.slug).message).toContain("README.md");
 
     execFileSync("git", ["checkout", "--", "README.md"], { cwd: repo, stdio: "pipe" });
     execFileSync("git", ["clean", "-qfd"], { cwd: repo, stdio: "pipe" });

@@ -800,7 +800,10 @@ final class FilesService {
                 "name": name, "message": message,
                 "push": push, "openMergeRequest": openMergeRequest,
             ],
-            as: WorktreePrepareMRResponse.self
+            as: WorktreePrepareMRResponse.self,
+            // The sidecar allows the squash commit 10 min under the project's
+            // hooks and the push 2 min (`COMMIT_TIMEOUT_MS`, `PUSH_TIMEOUT_MS`).
+            timeout: 13 * 60
         )
     }
 
@@ -894,10 +897,16 @@ final class FilesService {
     /// Inlines the body-cap on error to keep error logs from
     /// pulling 4 MB file contents into the surface — anything over
     /// 1 KB gets truncated.
+    /// `timeout` — for the few routes that legitimately run for minutes
+    /// (a squash commit under the project's hooks, then a push). The shared
+    /// session's 30 s would cut them off with the work still running and
+    /// the outcome lost; a dedicated session with a matching timeout is
+    /// built for the call.
     private func postJSON<T: Decodable & Sendable>(
         url: URL,
         body: [String: Any],
-        as: T.Type
+        as: T.Type,
+        timeout: TimeInterval? = nil
     ) async throws -> T {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -905,10 +914,20 @@ final class FilesService {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let timeout { req.timeoutInterval = timeout }
+        let client: URLSession
+        if let timeout {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = timeout
+            config.timeoutIntervalForResource = timeout + 60
+            client = URLSession(configuration: config)
+        } else {
+            client = session
+        }
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: req)
+            (data, response) = try await client.data(for: req)
         } catch {
             throw FilesServiceError.transport(underlying: error)
         }
