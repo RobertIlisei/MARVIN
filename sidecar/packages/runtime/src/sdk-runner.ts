@@ -193,15 +193,49 @@ export async function resolveRuntimeMode(mode: RuntimeMode): Promise<{
  *
  *   - `auto` (default): the `autoModeLogger` callback runs. Hard-deny
  *     patterns still deny (single safety floor); everything else logs
- *     to the auto-audit JSONL and allows. No UI confirm prompts —
- *     MARVIN behaves like Claude Code with `--dangerously-skip-permissions`,
- *     plus an audit trail. Best for experienced users who want
- *     uninterrupted flow. ADR-0015.
+ *     to the auto-audit JSONL and allows. ADR-0015.
+ *
+ *     This used to claim it behaved "like Claude Code with
+ *     `--dangerously-skip-permissions`". That stopped being true: four
+ *     confirm-raising rules were added to this path afterwards — the lane
+ *     gate and worktree containment (ADR-0107), the shared-checkout git gate
+ *     (ADR-0102) and metered CI (ADR-0109) — each after something went wrong
+ *     without it. `auto` is therefore "runs without asking, EXCEPT before it
+ *     leaves its own worktree or spends money"; `full` below is the posture
+ *     the old sentence described (ADR-0115).
  *   - `gated`: the full pre-flight confirm gate is installed. Edit /
  *     Write / non-read-only Bash render a confirm card; reads +
  *     whitelisted commands auto-allow; destructive patterns hard-deny.
  */
-export type PermissionStrategy = "auto" | "gated";
+/**
+ *   - `full` (ADR-0115): what a person means by "skip permissions". `auto`
+ *     had accumulated four confirm-raising rules since ADR-0015 — the lane
+ *     gate, the shared-checkout git gate, worktree containment, and metered
+ *     CI — so its docstring's promise of "like `--dangerously-skip-permissions`"
+ *     stopped being true. `full` suppresses the three CONTAINMENT confirms and
+ *     records each bypass in the same audit ledger.
+ *
+ *     Two things it deliberately does NOT suppress, decided with the user:
+ *     **metered CI**, because it is the only confirm that spends money
+ *     (ADR-0109 measured ~10 pipeline-minutes to open a request and ~48
+ *     compute-minutes to merge it, per branch); and the **hard-deny floor** —
+ *     a subagent may never write (ADR-0030), background execution is refused
+ *     (ADR-0038), and a handful of destructive shapes are blocked outright.
+ *     Those are structural invariants the rest of MARVIN is built on, not
+ *     preferences, and a mode that suspended them would make its own
+ *     guarantees untrue while it was on.
+ *
+ *     `AskUserQuestion` and plan approval also still reach the user: neither
+ *     is a permission. One is the model asking a question — suppressing it
+ *     leaves the model waiting for an answer that never comes — and the other
+ *     is what Plan mode IS.
+ */
+export type PermissionStrategy = "auto" | "gated" | "full";
+
+/** True when the strategy waives the containment confirms (ADR-0115). */
+export function skipsContainmentConfirms(s: PermissionStrategy): boolean {
+  return s === "full";
+}
 
 /**
  * Autonomy mode for a turn (ADR-0036) — orthogonal to {@link PermissionStrategy}.
@@ -1603,10 +1637,15 @@ export function makeAutoModeLogger(args: {
   readOnly?: boolean;
   /** Autonomy mode (ADR-0036) — drives plan-approval routing. */
   mode?: AgentMode;
+  /** ADR-0115 — `full` waives the containment confirms; `auto` keeps them. */
+  permissionStrategy?: PermissionStrategy;
   /** Needed for the plan-approval confirm even in auto strategy. */
   onConfirmRequest?: (request: ConfirmRequestPayload) => void;
 }): CanUseTool {
   const { cwd, turnId, checkpoint, readOnly, mode, onConfirmRequest } = args;
+  // ADR-0115 — `full` waives the three containment confirms below. The money
+  // gate and the hard-deny floor are untouched.
+  const waiveContainment = skipsContainmentConfirms(args.permissionStrategy ?? "auto");
   return async (toolName, toolInput, { toolUseID, agentID }) => {
     const safeInput = normaliseInput(toolInput);
     // Plan approval gate first — even in auto strategy, ExitPlanMode waits
@@ -1621,12 +1660,12 @@ export function makeAutoModeLogger(args: {
     // session's identity; the gate is a no-op without it, and without a second
     // live session — which is every single-session turn.
     // ADR-0107 — a shared tab that declared a lane is confirmed outside it.
-    const laneGate = maybeLaneConfirm({
+    const laneGate = waiveContainment ? null : maybeLaneConfirm({
       toolName, turnId, toolUseID, input: safeInput, agentID,
       sessionTree: args.sessionTree, cwd, onConfirmRequest,
     });
     if (laneGate) return laneGate;
-    const sharedTree = maybeSharedTreeConfirm({
+    const sharedTree = waiveContainment ? null : maybeSharedTreeConfirm({
       toolName, turnId, toolUseID, input: safeInput,
       ...(checkpoint ? { session: checkpoint } : {}),
       sessionTree: args.sessionTree,
@@ -1640,7 +1679,7 @@ export function makeAutoModeLogger(args: {
     if (meteredCi) return meteredCi;
     // ADR-0107 — a tab in its own worktree stays in it (main loop only; a
     // bound implementer has its own containment below).
-    const contained = maybeSessionWorktreeGate({
+    const contained = waiveContainment ? null : maybeSessionWorktreeGate({
       toolName, turnId, toolUseID, input: safeInput, agentID,
       sessionTree: args.sessionTree, workDir: args.workDir ?? cwd, onConfirmRequest,
     });
@@ -1676,7 +1715,9 @@ export function makeAutoModeLogger(args: {
     appendAutoAuditEntry(args.workDir ?? cwd, {
       tool: toolName as AutoAuditEntryKind,
       reason:
-        (cls.decision === "allow" ? cls.reason : `auto-mode bypass: ${cls.reason}`) +
+        (cls.decision === "allow"
+          ? cls.reason
+          : `${waiveContainment ? "full-auto" : "auto"}-mode bypass: ${cls.reason}`) +
         (remapped ? " [remapped → graph-extractor, ADR-0058]" : ""),
       input: finalInput,
       turnId,
@@ -1960,7 +2001,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const mode: AgentMode = input.mode ?? "agent";
   const readOnly = mode === "ask" || mode === "plan";
   const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
-  const autoModeLogger = makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly, mode, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  const autoModeLogger = makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly, mode, permissionStrategy, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always

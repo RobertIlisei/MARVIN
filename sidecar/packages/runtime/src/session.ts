@@ -37,12 +37,12 @@ export type SessionTurn =
       advisorModel: string | null;
       runtimeMode: "opus" | "advisor";
       personality: "marvin" | "neutral" | "ultron";
-      permissionStrategy: "auto" | "gated";
+      permissionStrategy: "auto" | "gated" | "full";
       turnId: string;
       /** ADR-0107 — the checkout this turn ran in (a session worktree or the
        *  project root) and the tree mode. Optional: pre-0107 records have neither. */
       cwd?: string;
-      tree?: { mode: "worktree"; slug: string; path: string; branch: string; base: string }
+      tree?: { mode: "worktree"; slug: string; path: string; branch: string; base: string; baseRef?: string }
         | { mode: "shared"; lane?: string[] };
     }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }

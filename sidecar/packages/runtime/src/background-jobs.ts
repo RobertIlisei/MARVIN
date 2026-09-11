@@ -66,7 +66,7 @@ export interface BackgroundJobContext {
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
-  permissionStrategy: "auto" | "gated";
+  permissionStrategy: "auto" | "gated" | "full";
   thinkingMode: string;
   advisorThinkingMode?: string | undefined;
   /** Depth of the turn starting the job (chain-depth guard). */

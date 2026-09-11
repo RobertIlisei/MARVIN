@@ -17,7 +17,7 @@
 //
 // Wire shape (each setter):
 //   marvin:set-personality         { value: "ultron" | "marvin" | "neutral" }
-//   marvin:set-permission-strategy { value: "auto" | "gated" }
+//   marvin:set-permission-strategy { value: "auto" | "gated" | "full" }
 //   marvin:set-models              { executor: string|null, advisor: string|null }
 //   marvin:toggle-pane             { key: "files"|"graph"|"brain"|"preview"|"terminal" }
 

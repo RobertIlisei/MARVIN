@@ -3913,6 +3913,38 @@ runner.suite("integration-notice-kind") {
     }
 }
 
+// MARK: - Permission strategy cycle (ADR-0115)
+
+runner.suite("permission-strategy-cycle") {
+    runner.test("cycling walks toward autonomy, never landing on full by accident") {
+        // gated → auto → full → gated. Forward is always "more autonomous", so
+        // the dangerous posture is never one stray click away from the safest.
+        runner.expect(PermissionStrategyChoice.gated.next, equals: PermissionStrategyChoice.auto, "gated opens up to auto")
+        runner.expect(PermissionStrategyChoice.auto.next, equals: PermissionStrategyChoice.full, "auto opens up to full")
+        runner.expect(PermissionStrategyChoice.full.next, equals: PermissionStrategyChoice.gated, "full wraps back to the safest")
+    }
+
+    runner.test("an unknown strategy cycles to gated, not to full") {
+        // A stale or hand-edited default must never widen permissions.
+        runner.expect(PermissionStrategyChoice.parse(""), equals: PermissionStrategyChoice.gated, "empty resolves to the safest")
+        runner.expect(PermissionStrategyChoice.parse("bypass"), equals: PermissionStrategyChoice.gated, "unknown resolves to the safest")
+        runner.expect(PermissionStrategyChoice.parse("full"), equals: PermissionStrategyChoice.full, "a known one round-trips")
+    }
+
+    runner.test("only full waives containment") {
+        runner.expect(PermissionStrategyChoice.full.skipsContainmentConfirms, equals: true, "full waives")
+        runner.expect(PermissionStrategyChoice.auto.skipsContainmentConfirms, equals: false, "auto does not")
+        runner.expect(PermissionStrategyChoice.gated.skipsContainmentConfirms, equals: false, "nor gated")
+    }
+
+    runner.test("the help says what full auto stops asking, and what it does not") {
+        let h = PermissionStrategyChoice.full.help
+        runner.expect(h.contains("shared checkout"), "names what it will touch")
+        runner.expect(h.contains("CI minutes"), "names what still asks")
+        runner.expect(PermissionStrategyChoice.full.label, equals: "full auto", "two words, so it cannot be misread as auto")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

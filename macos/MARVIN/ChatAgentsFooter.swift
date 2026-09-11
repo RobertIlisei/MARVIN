@@ -10,6 +10,7 @@
 // personality pill toggles marvin / neutral; the badge toggles
 // auto / gated.
 
+import MARVINLogic
 import SwiftUI
 
 struct ChatAgentsFooter: View {
@@ -36,9 +37,9 @@ struct ChatAgentsFooter: View {
                     .foregroundStyle(.secondary)
                 dot
                 Circle()
-                    .fill(bridge.permissionStrategy == "auto" ? Color.green : Color.orange)
+                    .fill(Self.strategyTint(bridge.permissionStrategy))
                     .frame(width: 6, height: 6)
-                Text(bridge.permissionStrategy == "auto" ? "auto" : "gated")
+                Text(PermissionStrategyChoice.parse(bridge.permissionStrategy).label)
                     .foregroundStyle(.secondary)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8))
@@ -165,20 +166,34 @@ struct ChatAgentsFooter: View {
         .help("Voice — click to cycle ultron / marvin / neutral")
     }
 
-    /// Permission-strategy badge. Auto = green; Gated = amber. Tap
-    /// to flip. Lives here (identity bar) because the per-turn confirm
+    /// The posture's colour. The label, the cycle and the help live in
+    /// `MARVINLogic` where they can be asserted; only the tint needs the
+    /// theme, so only the tint is here (ADR-0114, ADR-0115).
+    static func strategyTint(_ s: String) -> Color {
+        switch PermissionStrategyChoice.parse(s) {
+        case .gated: return .orange
+        case .full: return GitDecorationColor.deleted
+        case .auto: return .green
+        }
+    }
+
+    /// Permission-strategy badge. Gated = amber, auto = green, full = red.
+    /// Tap to cycle. Lives here (identity bar) because the per-turn confirm
     /// shape is one of the most "what mode am I in" things in the chat.
+    ///
+    /// Red for `full` is deliberate and is the only red in this bar: it is the
+    /// one posture where MARVIN edits your shared checkout without asking
+    /// (ADR-0115).
     private var modeBadge: some View {
-        let isAuto = bridge.permissionStrategy == "auto"
+        let strategy = bridge.permissionStrategy
         return Button {
-            let next = isAuto ? "gated" : "auto"
-            NativePrefs.shared.setPermissionStrategy(next)
+            NativePrefs.shared.setPermissionStrategy(PermissionStrategyChoice.parse(strategy).next.rawValue)
         } label: {
             HStack(spacing: 4) {
                 Circle()
-                    .fill(isAuto ? Color.green : Color.orange)
+                    .fill(Self.strategyTint(strategy))
                     .frame(width: 6, height: 6)
-                Text(isAuto ? "auto" : "gated")
+                Text(PermissionStrategyChoice.parse(strategy).label)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -194,9 +209,7 @@ struct ChatAgentsFooter: View {
             )
         }
         .buttonStyle(.plain)
-        .help(isAuto
-              ? "Permissions: auto (full bypass). Click to switch to gated."
-              : "Permissions: gated (tool-call confirms). Click to switch to auto.")
+        .help(PermissionStrategyChoice.parse(strategy).help)
     }
 
     // MARK: - Helpers

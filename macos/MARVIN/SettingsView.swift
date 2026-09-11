@@ -93,13 +93,26 @@ struct SettingsView: View {
             // ADR-0015.
             Section("Permissions") {
                 Picker("Strategy", selection: $permissionStrategy) {
-                    Text("Auto (full bypass)").tag("auto")
-                    Text("Gated (confirm dangerous tools)").tag("gated")
+                    Text("Gated — confirm every edit and unsafe command").tag("gated")
+                    Text("Auto — run, audit each call, ask before leaving the worktree").tag("auto")
+                    Text("Full auto — skip permissions entirely").tag("full")
                 }
                 .pickerStyle(.inline)
-                Text("Gated mode raises a confirm sheet on Edit / Write / unsafe Bash. Auto mode bypasses with an audit log entry per ADR-0015.")
+                Text("Gated raises a confirm on Edit / Write / unsafe Bash. Auto runs them with an audit entry each, and still asks before a tab touches the shared checkout or spends CI minutes (ADR-0015).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if permissionStrategy == "full" {
+                    // ADR-0115. Named plainly rather than softened: this is the
+                    // one posture where an isolated tab edits the checkout you
+                    // are working in, without asking.
+                    Label(
+                        "Full auto stops asking. An isolated tab will edit your shared checkout, switch branches and rebase without a confirm. Two things still ask: a question from MARVIN itself, and anything that spends CI minutes. The structural denials stay — a subagent still cannot write, and background execution is still refused.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Sessions") {

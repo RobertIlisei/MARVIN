@@ -120,7 +120,10 @@ final class NativePrefs {
     }
 
     func setPermissionStrategy(_ v: String) {
-        guard v == "auto" || v == "gated" else { return }
+        // ADR-0115 — `full` is the third: auto, minus the three containment
+        // confirms. An unknown value is ignored rather than defaulted, so a
+        // stale or hand-edited default can never quietly widen permissions.
+        guard v == "auto" || v == "gated" || v == "full" else { return }
         permissionStrategy = v
         UserDefaults.standard.set(v, forKey: "marvin.permissionStrategy")
         update { $0.permissionStrategy = v }
@@ -448,7 +451,7 @@ final class NativePrefs {
         }
         executorModel = d.string(forKey: "marvin.model.executor").flatMap { $0.isEmpty ? nil : $0 }
         advisorModel  = d.string(forKey: "marvin.model.advisor").flatMap  { $0.isEmpty ? nil : $0 }
-        if let perm = d.string(forKey: "marvin.permissionStrategy"), perm == "auto" || perm == "gated" {
+        if let perm = d.string(forKey: "marvin.permissionStrategy"), perm == "auto" || perm == "gated" || perm == "full" {
             permissionStrategy = perm
         }
         playwrightEnabled = d.bool(forKey: "marvin.playwrightEnabled")

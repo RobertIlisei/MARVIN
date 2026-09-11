@@ -56,7 +56,7 @@ export interface SessionPosture {
   model: string;
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
-  permissionStrategy: "auto" | "gated";
+  permissionStrategy: "auto" | "gated" | "full";
   playwrightEnabled?: boolean;
   thinkingMode: string;
   advisorThinkingMode?: string;
