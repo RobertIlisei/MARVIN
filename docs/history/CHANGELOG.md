@@ -48,11 +48,43 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   left-pane scroll views lost `.textSelection`. Also: the close dialog offered
   a tab's own branch as its merge target — it now names the main checkout's.
 
-  **Verification.** Sidecar 95 files / 1365 tests green, `tsc` clean; Swift 826
-  assertions. Live: tab strip and steppers checked on screen; the two-tab
-  backlog race is not yet checked on the rebuilt app.
+  **The first live run, and what it found.** Three bugs in the integration
+  path, all in [ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md)
+  and all amended there. *Merge on close* refused a nine-file billing branch
+  because two ADRs another tab was writing were unsaved on main — files that
+  branch never touches. `workingTreeDirty` asked "is anything modified?", a
+  rule stricter than git's own; `mergeBlockingPaths` now intersects the dirty
+  tracked paths with the branch's diff and names what overlaps, and Merge all
+  checks per fold instead of refusing up front. *Prepare MR* reported "failed:
+  the request timed out" while the sidecar was still running the project's
+  compile-and-test `pre-commit` band: the run is a **job** now, registered and
+  moved through preparing → squashing → committing → pushing, polled by the
+  panel through a git-free route and shown as a live row with elapsed time, so
+  it survives the client giving up, the project being switched, and the app
+  being relaunched. The client also waits 13 minutes, matching the sidecar's
+  own budgets, a typed `mr/<date>-` prefix no longer doubles in the branch
+  name, and the temporary checkout is prepared like a tab's so the hooks can
+  run at all. *And the one that mattered most:* that same run stopped at a
+  conflict on its second branch, then committed and pushed with the message
+  built from the branches **asked for** — merge request !209 on a real project,
+  titled "chore: integrate 6 branches", carrying one branch's six files. A
+  generated message is now built from what actually applied, and a run stopped
+  by a conflict does not push at all: the branch is on disk and the summary
+  names the branch to Sync. All three were invisible for the same reason —
+  nothing reported what the run did.
 
-- **2026-09-10 — v0.1.111: close-with-merge repaired.**
+  **Verification.** Sidecar 96 files / 1377 tests green, `tsc` clean; Swift 837
+  assertions. Live: tab strip and steppers checked on screen; Prepare MR run
+  end to end on a real project (six branches, one conflict, push and merge
+  request observed). The two-tab backlog race is not yet checked on the
+  rebuilt app.
+
+- **2026-09-10 — unreleased: Prepare MR.** Source Control ▸ Worktrees gains a sheet that squashes the finished tab branches into one commit on an `mr/<date>-<name>` branch, pushes it and opens the merge request from the push — the flow MARVIN was doing by hand in a tab and stalling on at the metered-CI confirm. Done in a disposable worktree so the always-dirty main checkout is never entered; open tabs are listed but not foldable; the message is Conventional-Commits shaped and editable. Worktrees sort newest-tip first with `+N −M`. ADR-0109 amended; 5 tests. Also: `graphify-out/` exempt from worktree containment (ADR-0107 Addendum 6).
+- **2026-09-10 — unreleased: branch switch unblocked, Source Control panel no longer sticks on "not a git repository", tab popover names the base branch.**
+  - *Diagnostic.* User screenshots: every branch in the picker answered `HTTP 403 — policy-deny … working tree is dirty`, and on the main tab the panel read "(not a git repository)" while the status bar read `main *`. Measured rather than read: the project's tree had seven modified `.marvin/*` files and nothing else — MARVIN's own bookkeeping — so the ADR-0012 dirty-tree deny fired on every switch on every real project. For the panel, `GET /api/git/status` answered `enabled: true` in 60 ms alone, but raced against `/api/worktrees` (what `SourceControlModel.refresh` does with `async let`) it took 1.2–3.0 s: the worktree reconcile is `execFileSync` per tree, 15 trees, and the status probe's `runGit` timer is 2 s. A late timer was reported as `not-a-git-repo`, and `refresh` treated any non-nil response as settled.
+  - *Decision.* Dirty switch → **confirm warn** (ADR-0012 amendment): git already refuses the overwriting case, carry-over is reversible, and the deny's remedy was a dead end. Probe failure ≠ "no": the route distinguishes `probe-failed` (timeout/spawn) from `not-a-git-repo` (exit 128); `runGit` re-arms once when its timer fires late or the child has already exited; the panel retries `probe-failed` and never caches `enabled: false`. `GitOpRunner.describe` unwraps the JSON envelope to its `reason`/`detail`. Worktree records gain `baseRef` (`symbolic-ref --short HEAD` at the cut), carried through session meta and the watch feed to the popover.
+  - *Verification.* Full sidecar suite 1340 green (3 new `exec.test.ts` cases: a loop blocked past the timer still answers `ok`, a real hang still times out, a non-repo is `non-zero-exit`), sidecar `tsc` clean, `swift build` clean. The event-loop stall itself is not fixed — parked.
+
 
   Trigger: six finished tabs on a real project, none closable with *Merge
   into my branch* — `could not commit the worktree: spawnSync git ETIMEDOUT`.
