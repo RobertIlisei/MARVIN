@@ -1,6 +1,6 @@
 # ADR-0114 — One vocabulary for the left pane
 
-- **Status:** Accepted — in implementation 2026-09-11
+- **Status:** Accepted — implemented 2026-09-11
 - **Date:** 2026-09-11
 - **Related:** [ADR-0025](./0025-skills-pane-ui.md) (the Skills pane), [ADR-0062](./0062-update-constraints-loop-identified-mitigated.md) (the layout-pass loop this must not re-enter), [ADR-0105](./0105-practice-loop.md) (the Practice pane), [ADR-0112](./0112-one-place-for-each-thing.md) (one place for each thing, and its affordance amendments)
 
@@ -83,10 +83,59 @@ Milestone order settles the new components on the small panes before the large o
 ## Scope of Done
 
 - [x] M0 — `PaneChrome` decisions with assertions, the six view components, the radius scale, this ADR
-- [ ] M1 — Practice
-- [ ] M2 — Plugins
-- [ ] M3 — Skills
-- [ ] M4 — Files
-- [ ] M5 — Search
-- [ ] M6 — Source Control + Sessions
-- [ ] M7 — roadmap and changelog
+- [x] M1 — Practice
+- [x] M2 — Plugins
+- [x] M3 — Skills
+- [x] M4 — Files
+- [x] M5 — Search
+- [x] M6 — Source Control + Sessions
+- [x] M7 — roadmap and changelog
+
+## What it found on the way through
+
+Restyling seven panes turned up things the surveys had not, because a control
+only reveals what it does when you try to move it.
+
+**Search opened the file but not the line.** `match.line` was decoded, rendered
+in the gutter two lines below the call, and thrown away; `openFileFromChat`
+already scrolled and had since chat links needed it. One line, and the highest
+single return of the whole pass.
+
+**Replace All was the most destructive control in the sidebar** and had no
+confirm, no preview, no undo, and a tooltip on a 10pt icon for its only error
+report — while writing file by file, so a throw halfway left a part-replaced
+repository with nothing said about it. It asks now, and a partial run names the
+file it stopped on.
+
+**Two panes shipped a toggle that was not a toggle**, and one of them loads MCP
+servers and read-only agents into the model's tool surface when switched on.
+
+**A refused plugin toggle did nothing at all** — a non-2xx that did not throw
+had no `else` branch, so being refused and being a no-op were the same
+experience.
+
+**Dismissing a Practice finding was a one-way door**, so undo was built
+(`undismissFinding`) as the same transition recurrence already made on its own.
+
+**Uninstall was in the plan and was not built.** MARVIN clones a plugin but
+records it in `~/.claude/plugins/installed_plugins.json`, which Claude Code
+owns and both tools read; removing one is a cross-tool destructive edit that
+belongs in Claude Code's own `/plugin` UI. The row's menu says so rather than
+leaving the user to guess, and the plan's item is closed as *declined*, not
+done.
+
+**The action-surface diff earned its place.** Moving Practice's header actions
+into an overflow menu dropped two `.help()` strings, which the diff caught
+immediately; they were restored on the menu items. Every milestone's commit
+message carries its own diff.
+
+## Verification as built
+
+`swift build` and `swift run MARVINTests` green at every commit: **894
+assertions**, 39 of them new — the empty-state copy, the badge clamp, the
+overflow plan, the notice dismissal, and the outcome-kind reader. Sidecar 1382
+tests green for the one runtime change (`undismissFinding`, 2 new tests).
+
+Still owed, and honestly: the narrow-width pass and the Tab-through-the-pane
+pass are manual, and have not been done — they need the rebuilt app in front of
+a person.
