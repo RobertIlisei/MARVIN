@@ -659,6 +659,11 @@ final class MarvinBridge {
     /// path is already in `openFiles` we just refocus; otherwise we
     /// append it. Pass nil to clear (no active tab; openFiles is
     /// untouched so the user can re-pick from the bar).
+    /// One-shot: ⇧⌘F revealed the Search pane, so put the caret in its field.
+    /// The pane stays mounted (`PaneSlot`), so there is no `onAppear` to hang
+    /// this on — it is a request the pane consumes and clears (ADR-0114).
+    var focusSearchField: Bool = false
+
     func setSelectedFile(_ path: String?) {
         guard let path, !path.isEmpty else {
             selectedFilePath = nil

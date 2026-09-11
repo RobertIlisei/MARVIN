@@ -29,6 +29,13 @@ struct FindInFilesView: View {
     @Environment(MarvinBridge.self) private var bridge
 
     @State private var query: String = ""
+    /// ⌘⇧F puts the caret here. The pane had no way to reach its own field
+    /// from the keyboard (ADR-0114).
+    @FocusState private var queryFocused: Bool
+    /// The confirm for Replace All, which had none.
+    @State private var confirmingReplace = false
+    /// The file a part-finished Replace All stopped on.
+    @State private var stoppedOn: String?
     @State private var replace: String = ""
     @State private var includeGlob: String = ""
     @State private var caseSensitive: Bool = false
@@ -71,21 +78,39 @@ struct FindInFilesView: View {
                 .buttonStyle(.plain)
                 .help("Toggle replace")
 
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 12))
-                TextField("Search in files…", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .onSubmit { runSearch() }
-                    .onChange(of: query) { _, _ in scheduleSearch() }
-                if isSearching {
-                    ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
-                } else if !query.isEmpty {
-                    Button { query = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                    }.buttonStyle(.borderless)
+                // A field that looks like one. `.plain` on all three fields
+                // meant the search box read as a label until you clicked it
+                // (ADR-0114).
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11))
+                    TextField("Search in files…", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .focused($queryFocused)
+                        .onSubmit { runSearch() }
+                        .onChange(of: query) { _, _ in scheduleSearch() }
+                    if isSearching {
+                        ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
+                    } else if !query.isEmpty {
+                        Button { query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear the search")
+                    }
                 }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip, style: .continuous)
+                        .fill(MarvinTheme.elevated)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip, style: .continuous)
+                                .strokeBorder(queryFocused ? Color.accentColor.opacity(0.55) : MarvinTheme.border, lineWidth: 1)
+                        )
+                )
             }
             .padding(.horizontal, 8)
             .padding(.top, 8)
@@ -100,21 +125,75 @@ struct FindInFilesView: View {
                     TextField("Replace…", text: $replace)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
-                    if let err = replaceError {
-                        Image(systemName: "exclamationmark.circle")
-                            .foregroundStyle(.orange)
-                            .help(err)
+                    if replaceError != nil {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(GitDecorationColor.deleted)
                     }
                     if isReplacing {
                         ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
                     } else {
-                        Button("All") { runReplaceAll() }
-                            .font(.system(size: 11))
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.mini)
-                            .disabled(query.isEmpty || results.isEmpty || replace.isEmpty)
-                            .help("Replace all matches")
+                        // Was: one click, no confirm, no preview, no undo,
+                        // writing file by file with the only error report a
+                        // tooltip-sized icon. It is the most destructive
+                        // control in the sidebar (ADR-0114).
+                        Button("Replace All…") { confirmingReplace = true }
+                            .rowChip(.tinted(GitDecorationColor.deleted))
+                            .disabled(query.isEmpty || results.isEmpty || replace.isEmpty || regexError != nil)
+                            .help("Rewrite every match in every file listed below. There is no undo.")
+                            .confirmationDialog(
+                                "Replace \(matchTotal) match\(matchTotal == 1 ? "" : "es") in \(results.count) file\(results.count == 1 ? "" : "s")?",
+                                isPresented: $confirmingReplace,
+                                titleVisibility: .visible
+                            ) {
+                                Button("Replace All", role: .destructive) { runReplaceAll() }
+                                Button("Cancel", role: .cancel) {}
+                            } message: {
+                                Text("“\(query)” becomes “\(replace)” on disk. This writes the files directly and cannot be undone from here.")
+                            }
                     }
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+            }
+
+            if let replaceError {
+                // A failure that rewrote half a repository reported itself in
+                // a tooltip on a 10pt icon. It gets a line (ADR-0114).
+                HStack(spacing: 5) {
+                    Image(systemName: PaneNotice.Kind.error.symbol)
+                        .font(.system(size: 9))
+                        .foregroundStyle(PaneNotice.Kind.error.tint)
+                    Text(replaceError)
+                        .font(.system(size: 10))
+                        .foregroundStyle(MarvinTheme.textPrimary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button {
+                        self.replaceError = nil
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .help("Dismiss")
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+            }
+
+            if let regexError {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                    Text(regexError)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 4)
@@ -127,9 +206,8 @@ struct FindInFilesView: View {
                 optionToggle(label: ".*", tooltip: "Use regex", on: $useRegex)
                 Spacer()
                 if !results.isEmpty {
-                    let total = results.reduce(0) { $0 + $1.matches.count }
-                    Text("\(total) result\(total == 1 ? "" : "s") in \(results.count) file\(results.count == 1 ? "" : "s")")
-                        .font(.system(size: 10))
+                    Text("\(matchTotal) result\(matchTotal == 1 ? "" : "s") in \(results.count) file\(results.count == 1 ? "" : "s")")
+                        .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -160,6 +238,32 @@ struct FindInFilesView: View {
         .onChange(of: caseSensitive) { _, _ in scheduleSearch() }
         .onChange(of: wholeWord) { _, _ in scheduleSearch() }
         .onChange(of: useRegex) { _, _ in scheduleSearch() }
+        .onChange(of: bridge.focusSearchField) { _, want in
+            guard want else { return }
+            queryFocused = true
+            bridge.focusSearchField = false
+        }
+    }
+
+    /// `Aa` `\b` `.*` — three toggles that were 22×18pt of tinted text with
+    /// no press state, no focus ring and no name for VoiceOver (ADR-0114).
+    /// A regex the user typed that will not compile. Checked here so the
+    /// answer appears under the field rather than as a generic server error
+    /// in the results area (ADR-0114).
+    /// Every match currently listed. Named once so the count in the options
+    /// row and the count in the replace confirmation cannot disagree.
+    private var matchTotal: Int { results.reduce(0) { $0 + $1.matches.count } }
+
+    private var regexError: String? {
+        guard useRegex else { return nil }
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return nil }
+        do {
+            _ = try NSRegularExpression(pattern: q)
+            return nil
+        } catch {
+            return "Not a valid regular expression: \(error.localizedDescription)"
+        }
     }
 
     private func optionToggle(label: String, tooltip: String, on: Binding<Bool>) -> some View {
@@ -168,15 +272,13 @@ struct FindInFilesView: View {
         } label: {
             Text(label)
                 .font(.system(size: 11, design: .monospaced))
-                .frame(width: 22, height: 18)
-                .background(on.wrappedValue
-                    ? Color.accentColor.opacity(0.2)
-                    : Color(nsColor: .separatorColor).opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .foregroundStyle(on.wrappedValue ? Color.accentColor : Color.secondary)
+                .frame(minWidth: 26, minHeight: 22)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .rowChip(on.wrappedValue ? .primary : .neutral)
         .help(tooltip)
+        .accessibilityLabel(tooltip)
+        .accessibilityAddTraits(on.wrappedValue ? [.isSelected] : [])
     }
 
     // MARK: - Results
@@ -184,22 +286,22 @@ struct FindInFilesView: View {
     @ViewBuilder
     private var resultArea: some View {
         if let err = errorMessage {
-            VStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                Text(err).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PaneEmptyView(
+                state: PaneEmptyState(headline: "The search could not run", hint: err, symbol: "exclamationmark.triangle"),
+                actionTitle: "Try again",
+                action: { runSearch() }
+            )
+            .frame(maxHeight: .infinity)
         } else if query.isEmpty {
-            Text("Type to search across all files")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PaneEmptyView(state: PaneEmptyState(
+                headline: "Search every file in this project",
+                hint: "`Aa` matches case, `\\b` whole words, `.*` treats the query as a regular expression. The filter below narrows it to matching paths.",
+                symbol: "magnifyingglass"
+            ))
+            .frame(maxHeight: .infinity)
         } else if !isSearching && results.isEmpty {
-            Text("No results")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PaneEmptyView(state: .noResults(query: query))
+                .frame(maxHeight: .infinity)
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -218,14 +320,14 @@ struct FindInFilesView: View {
     }
 
     private func fileSection(_ file: FindFileResult) -> some View {
-        let collapsed = collapsedFiles.contains(file.id.uuidString)
+        let collapsed = collapsedFiles.contains(file.relPath)
         return VStack(spacing: 0) {
             // File header row
             Button {
                 if collapsed {
-                    collapsedFiles.remove(file.id.uuidString)
+                    collapsedFiles.remove(file.relPath)
                 } else {
-                    collapsedFiles.insert(file.id.uuidString)
+                    collapsedFiles.insert(file.relPath)
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -272,7 +374,12 @@ struct FindInFilesView: View {
 
     private func matchRow(match: FindMatch, file: FindFileResult) -> some View {
         Button {
-            bridge.setSelectedFile(file.fullPath)
+            // The line was decoded, rendered in the gutter two lines below,
+            // and then thrown away: clicking a result opened the file at the
+            // top and left you to find the match yourself. `openFileFromChat`
+            // already scrolls, and has since the chat links needed it
+            // (2026-09-11).
+            bridge.openFileFromChat(path: file.fullPath, line: match.line)
         } label: {
             HStack(spacing: 0) {
                 // Line number gutter
@@ -282,9 +389,11 @@ struct FindInFilesView: View {
                     .frame(width: 36, alignment: .trailing)
                     .padding(.trailing, 8)
                 // Match text — highlight the query within the line
+                // Truncate the TAIL, not the middle: the middle of a matched
+                // line is exactly the part you searched for.
                 highlightedText(match.text, query: query, caseSensitive: caseSensitive)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                 Spacer()
             }
             .padding(.vertical, 3)
@@ -317,7 +426,10 @@ struct FindInFilesView: View {
         aStr.foregroundColor = NSColor.secondaryLabelColor
 
         var aHit = AttributedString(hit)
-        aHit.font = .system(.body, design: .monospaced).weight(.semibold)
+        // Same size as its neighbours. `.body` here made the one token you
+        // searched for jump larger than the line it sits in, so the match
+        // reflowed the row it was supposed to mark.
+        aHit.font = .system(size: 11, design: .monospaced).weight(.semibold)
         aHit.foregroundColor = NSColor.labelColor
         aStr += aHit
 
@@ -400,7 +512,9 @@ struct FindInFilesView: View {
         Task { @MainActor in
             defer { isReplacing = false }
             do {
+                var done = 0
                 for fileResult in results {
+                    stoppedOn = fileResult.relPath
                     let resp = try await FilesService.shared.fetchContent(
                         cwd: cwd, path: fileResult.relPath
                     )
@@ -423,11 +537,18 @@ struct FindInFilesView: View {
                     _ = try await FilesService.shared.saveFile(
                         cwd: cwd, path: fileResult.relPath, content: newText
                     )
+                    done += 1
                 }
+                stoppedOn = nil
                 results = []
                 await runSearchAsync(q)
             } catch {
-                replaceError = error.localizedDescription
+                // The loop writes file by file, so a throw halfway leaves the
+                // project part-replaced. Saying which file it stopped on is
+                // the difference between "something went wrong" and a way
+                // back (ADR-0114).
+                replaceError = stoppedOn.map { "Stopped at \($0): \(error.localizedDescription). Files before it were already rewritten." }
+                    ?? error.localizedDescription
             }
         }
     }

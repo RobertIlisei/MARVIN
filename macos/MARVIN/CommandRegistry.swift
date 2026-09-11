@@ -91,6 +91,23 @@ enum CommandRegistry {
         ) {
             NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil)
         })
+        // ADR-0107 gave every new tab a worktree by default and left the
+        // other shape behind a header chip. User, 2026-09-10: "a way when
+        // opening a new session to be separate of our multi-session
+        // branches, like a normal chat that marvin had previously". Both
+        // shapes, named, with their own keys; ⇧⌘N stays the Settings default.
+        c.append(AppCommand(
+            id: "file.newSharedChat", title: "New Chat (Shared Checkout)",
+            slot: .file, shortcut: "⌥⌘N", keywords: ["chat", "shared", "plain", "no branch"]
+        ) {
+            NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil, userInfo: ["mode": "shared"])
+        })
+        c.append(AppCommand(
+            id: "file.newIsolatedTab", title: "New Isolated Tab (Own Branch)",
+            slot: .file, shortcut: "^⌘N", keywords: ["worktree", "branch", "isolated"]
+        ) {
+            NotificationCenter.default.post(name: .marvinRequestNewSession, object: nil, userInfo: ["mode": "worktree"])
+        })
         // Navigating the OPEN chat tabs. The strip could only be driven by
         // clicking a tab, and a tab past the right edge could not be reached
         // at all (user, 2026-09-09: "we do not have a nav bar through the
@@ -228,7 +245,12 @@ enum CommandRegistry {
             id: "view.search", title: "Search",
             slot: .view, shortcut: "⇧⌘F", keywords: ["find in files", "grep"],
             isEnabled: { hasProject }
-        ) { MarvinBridge.shared.revealLeftTab("search") })
+        ) {
+            MarvinBridge.shared.revealLeftTab("search")
+            // ...and put the caret in the field. Revealing a search pane
+            // without focusing its field makes you click before you can type.
+            MarvinBridge.shared.focusSearchField = true
+        })
         c.append(AppCommand(
             id: "view.wordWrap",
             title: NativePrefs.shared.wordWrap ? "Turn Word Wrap Off" : "Turn Word Wrap On",
