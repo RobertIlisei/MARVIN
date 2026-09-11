@@ -156,3 +156,6 @@ The ADR closed with two checks marked owed: the narrow-width pass and the keyboa
 
 The lesson worth keeping: **a constraint written into an ADR is not enforced until something enforces it.** The three rules were all stated in the Decision, and all three components honoured them — but nothing checked the panes themselves, and the panes are where the width is actually decided. The narrow-width pass is the check, and it belongs in the loop rather than at the end of it.
 
+**Verified 2026-09-11.** The user re-ran the narrow-width pass on the rebuilt app: the rows no longer reflow, the rail keeps its icons with Search open, and the pane renders its field. Search's data path was checked independently at the same time — a plain query returned 26 files and a regex query with a file glob returned 269, every match carrying its line and column, which is what the jump-to-line fix rides on.
+
+Still owed: the keyboard pass (Tab through each pane, confirm no ring around the pane itself).
