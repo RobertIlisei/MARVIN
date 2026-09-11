@@ -50,6 +50,10 @@ final class FileTreeModel {
     /// Last error surfaced as a banner. Cleared on next refresh.
     private(set) var lastError: String? = nil
 
+    /// Dismiss the fetch error without re-fetching. The notice is the user's
+    /// to close (ADR-0114); the model still owns when it is set.
+    func dismissError() { lastError = nil }
+
     /// The cwd the response in `response` was fetched against —
     /// guards against rendering a stale tree after a project switch
     /// races a slow fetch. The fetch task drops its result if cwd
@@ -173,13 +177,24 @@ struct FileTreeView: View {
             header
             MarvinDivider()
             content
+            // A fetch failure and a truncation warning used to share one
+            // orange, neither dismissible and neither capped, stacked below
+            // the tree — so a failure looked like an advisory (ADR-0114).
             if let err = model.lastError {
                 MarvinDivider()
-                errorBanner(err)
+                PaneNoticeStrip(
+                    notice: PaneNotice(kind: .error, headline: "Could not read the file tree", detail: err),
+                    actionTitle: "Retry",
+                    onAction: { if let cwd = bridge.projectWorkDir { model.refresh(cwd: cwd, force: true) } },
+                    onDismiss: { model.dismissError() }
+                )
             }
             if let err = mutationError {
                 MarvinDivider()
-                errorBanner("Mutation: \(err)")
+                PaneNoticeStrip(
+                    notice: PaneNotice(kind: .error, text: err),
+                    onDismiss: { mutationError = nil }
+                )
             }
         }
         // "New Text File" from the File menu. The naming sheet and the
@@ -355,15 +370,15 @@ struct FileTreeView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
-            Text(bridge.projectName ?? "no project active")
-                .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
+        // Three actions, which `PaneHeaderOverflow` puts at icon-only — so
+        // they stay icons, but they are real buttons now: hover, press and a
+        // focus ring, where before they were bare glyphs (ADR-0114).
+        PaneHeader(title: bridge.projectName ?? "No project open", uppercase: false) {
             if model.isLoading {
                 ProgressView()
                     .controlSize(.small)
+                    .scaleEffect(0.6)
+                    .frame(width: 14, height: 14)
             }
             // Phase 5c — IDE-style "new file" + "new folder" buttons
             // in the tree header. They both create at the project
@@ -379,8 +394,7 @@ struct FileTreeView: View {
             } label: {
                 Image(systemName: "doc.badge.plus")
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .paneIconButton()
             .disabled(bridge.projectWorkDir == nil)
             .help("New file in project root")
             Button {
@@ -393,8 +407,7 @@ struct FileTreeView: View {
             } label: {
                 Image(systemName: "folder.badge.plus")
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .paneIconButton()
             .disabled(bridge.projectWorkDir == nil)
             .help("New folder in project root")
             Button {
@@ -404,22 +417,23 @@ struct FileTreeView: View {
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .paneIconButton()
             .disabled(bridge.projectWorkDir == nil)
-            .help("Re-fetch /api/files/tree for the active project.")
+            .help("Re-fetch the file tree for the active project.")
         }
-        .padding(.horizontal, 12)
-        .frame(height: MarvinTheme.paneHeaderHeight)
     }
 
     @ViewBuilder
     private var content: some View {
         if bridge.projectWorkDir == nil {
-            placeholder("(no project active)")
+            PaneEmptyView(state: .noProject("files"))
         } else if let response = model.response {
             if response.tree.isEmpty {
-                placeholder("(empty tree)")
+                PaneEmptyView(state: PaneEmptyState(
+                    headline: "This project has no files yet",
+                    hint: "Use the New File button above to make the first one.",
+                    symbol: "doc"
+                ))
             } else {
                 // FLAT list — deliberately NOT `List` + `OutlineGroup`.
                 //
@@ -494,15 +508,18 @@ struct FileTreeView: View {
             // No response yet, no fetch in flight, no error — the
             // model hasn't been kicked yet. Hits on the very first
             // .onAppear before the .task fires; transient.
-            placeholder("(initialising)")
+            PaneLoadingView()
         }
     }
 
+    /// Kept for the remaining in-tree placeholders. The pane-level states are
+    /// `PaneEmptyView` — "(empty tree)" in parenthesised monospace read as
+    /// debug output left in by mistake (ADR-0114).
     private func placeholder(_ text: String) -> some View {
         VStack {
             Spacer()
             Text(text)
-                .font(.body.monospaced())
+                .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
         }
@@ -520,17 +537,21 @@ struct FileTreeView: View {
     /// this only appears for a ceiling someone chose — hence the wording change:
     /// it names the variable as THEIRS, not as a limit to discover.
     private func truncatedBanner(count: Int) -> some View {
+        // A warning, and now visibly one: it shared its orange with the fetch
+        // ERROR banner, so "some of your tree is hidden" and "your tree could
+        // not be read" looked identical (ADR-0114).
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.orange)
+            Image(systemName: PaneNotice.Kind.warning.symbol)
+                .foregroundStyle(PaneNotice.Kind.warning.tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Tree truncated")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: 10.5, weight: .semibold))
                 Text("\(count) entries shown — your MARVIN_TREE_MAX_ENTRIES limit. Unset it for the full tree.")
-                    .font(.caption)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(10)
         .background(Color.orange.opacity(0.08))
@@ -579,10 +600,10 @@ struct FileTreeView: View {
                 mutationError = nil
                 model.refresh(cwd: cwd, force: true)
             case .needsConfirm(_, let reason, _):
-                mutationError = "Refused: \(reason). Use the WebView to confirm."
+                mutationError = "That change needs confirming. \(reason)"
             }
         } catch {
-            mutationError = "\(error)"
+            mutationError = "The change did not go through. \(error.localizedDescription)"
         }
     }
 
@@ -617,10 +638,10 @@ struct FileTreeView: View {
                 }
                 model.refresh(cwd: cwd, force: true)
             case .needsConfirm(_, let reason, _):
-                mutationError = "Refused: \(reason)"
+                mutationError = "That change was refused. \(reason)"
             }
         } catch {
-            mutationError = "\(error)"
+            mutationError = "The change did not go through. \(error.localizedDescription)"
         }
     }
 
@@ -645,7 +666,7 @@ struct FileTreeView: View {
                 mutationError = "Refused: \(reason)"
             }
         } catch {
-            mutationError = "\(error)"
+            mutationError = "The change did not go through. \(error.localizedDescription)"
         }
     }
 

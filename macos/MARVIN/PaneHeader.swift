@@ -23,6 +23,10 @@ import SwiftUI
 struct PaneHeader<Trailing: View>: View {
     let title: String
     var symbol: String? = nil
+    /// Section headers shout; a pane showing the PROJECT's name does not.
+    /// Files puts the project name here, and uppercasing someone's folder is
+    /// both wrong and unreadable.
+    var uppercase: Bool = true
     /// Shown after the title, before the actions — a count, a branch, a state.
     var subtitle: String? = nil
     @ViewBuilder var trailing: () -> Trailing
@@ -35,10 +39,10 @@ struct PaneHeader<Trailing: View>: View {
                     .foregroundStyle(MarvinTheme.textMuted)
             }
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .textCase(.uppercase)
-                .tracking(0.4)
-                .foregroundStyle(MarvinTheme.textMuted)
+                .font(.system(size: uppercase ? 11 : 12, weight: .semibold))
+                .textCase(uppercase ? .uppercase : nil)
+                .tracking(uppercase ? 0.4 : 0)
+                .foregroundStyle(uppercase ? MarvinTheme.textMuted : MarvinTheme.textPrimary)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
             if let subtitle {
@@ -60,7 +64,7 @@ struct PaneHeader<Trailing: View>: View {
 }
 
 extension PaneHeader where Trailing == EmptyView {
-    init(title: String, symbol: String? = nil, subtitle: String? = nil) {
-        self.init(title: title, symbol: symbol, subtitle: subtitle, trailing: { EmptyView() })
+    init(title: String, symbol: String? = nil, uppercase: Bool = true, subtitle: String? = nil) {
+        self.init(title: title, symbol: symbol, uppercase: uppercase, subtitle: subtitle, trailing: { EmptyView() })
     }
 }
