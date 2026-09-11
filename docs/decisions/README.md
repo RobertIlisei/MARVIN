@@ -116,6 +116,7 @@ See [ADRs + memory](../concepts/memory-and-adrs.md) for how MARVIN uses ADRs in 
 | [0111](./0111-nothing-survives-a-tab-without-a-commit.md) | Nothing survives a tab unless it holds a commit; integration previews conflicts, the owning session resolves them | Accepted | 2026-09-10 |
 | [0112](./0112-one-place-for-each-thing.md) | One place for each thing: the multi-session chrome | Accepted | 2026-09-10 |
 | [0113](./0113-the-backlog-is-the-shared-task-list.md) | The backlog is the shared task list: claimed, read live, announced when it moves | Accepted | 2026-09-11 |
+| [0114](./0114-one-vocabulary-for-the-left-pane.md) | One vocabulary for the left pane: shared chrome, decided in logic, applied one pane at a time | Accepted | 2026-09-11 |
 
 ## Template
 

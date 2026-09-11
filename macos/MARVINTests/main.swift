@@ -3824,6 +3824,68 @@ runner.suite("session-ledger-stop-and-confirms") {
     }
 }
 
+// MARK: - PaneChrome (ADR-0114 — one vocabulary for seven panes)
+
+runner.suite("pane-chrome") {
+    runner.test("empty-state copy is data, in one register") {
+        // Three registers existed: "(empty tree)", "Open a project to see its
+        // skills.", and "No runs yet." The first reads as debug output left in
+        // by mistake, which is the one thing an empty state must never do.
+        let noProject = PaneEmptyState.noProject("sessions")
+        runner.expect(noProject.headline, equals: "No project open", "headline is a state, not a parenthesis")
+        runner.expect(noProject.hint, equals: "Open a project to see its sessions.", "the hint names the way out")
+        runner.expect(noProject.symbol, equals: "folder", "and carries a glyph")
+
+        runner.expect(PaneEmptyState.noProject("changes").hint, equals: "Open a project to see its changes.", "each pane names its own subject")
+        runner.expect(PaneEmptyState.notARepo().headline, equals: "Not a git repository", "no parentheses")
+        runner.expect(PaneEmptyState.nothingYet("runs").headline, equals: "No runs yet", "nothing-yet is not a failure")
+    }
+
+    runner.test("a no-results state quotes the query back") {
+        runner.expect(PaneEmptyState.noResults(query: "TODO").headline, equals: "No results for “TODO”", "the query is usually the bug")
+        runner.expect(PaneEmptyState.noResults(query: "  spaced  ").headline, equals: "No results for “spaced”", "trimmed")
+        runner.expect(PaneEmptyState.noResults(query: "   ").headline, equals: "No results", "an empty query does not render empty quotes")
+    }
+
+    runner.test("a count badge is a glance, not a readout") {
+        runner.expect(PaneBadge.text(0), equals: "0", "zero renders")
+        runner.expect(PaneBadge.text(7), equals: "7", "small counts exact")
+        runner.expect(PaneBadge.text(999), equals: "999", "the last exact one")
+        runner.expect(PaneBadge.text(1000), equals: "999+", "clamped — a four-digit badge truncates its own section title")
+        runner.expect(PaneBadge.text(41273), equals: "999+", "and stays clamped")
+        runner.expect(PaneBadge.text(-3), equals: "0", "never negative")
+        runner.expect(PaneBadge.shows(0), equals: false, "zero is the empty state's job, not a badge's")
+        runner.expect(PaneBadge.shows(1), equals: true, "one is worth showing")
+    }
+
+    runner.test("header actions collapse by count, predictably") {
+        // Decided by count, never by measuring the container: a GeometryReader
+        // that re-enters layout to decide layout is the ADR-0062 oscillation,
+        // and a rule a person can predict beats one that is pixel-perfect.
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 0), equals: PaneHeaderOverflow.Plan.inline, "nothing to place")
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 1), equals: PaneHeaderOverflow.Plan.inline, "one keeps its label")
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 2), equals: PaneHeaderOverflow.Plan.inline, "two still fit beside a title")
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 3), equals: PaneHeaderOverflow.Plan.iconOnly, "three drop their labels")
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 4), equals: PaneHeaderOverflow.Plan.iconOnly, "four still all visible")
+        // Practice's header: five actions, which is what truncated "Run now"
+        // into "Run no…" on a real narrow sidebar.
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 5), equals: PaneHeaderOverflow.Plan.iconOnlyPlusMenu(visible: 3), "five overflow")
+        runner.expect(PaneHeaderOverflow.plan(actionCount: 9), equals: PaneHeaderOverflow.Plan.iconOnlyPlusMenu(visible: 3), "and nine overflow the same way")
+    }
+
+    runner.test("a failure never dismisses itself") {
+        // The bug: "Installed X" and "Install failed: HTTP 500" shared one
+        // strip, one icon and one 3-second timer, so the message that mattered
+        // was the one guaranteed to vanish unread.
+        runner.expect(PaneNotice(kind: .success, text: "Installed").isSticky, equals: false, "success may leave")
+        runner.expect(PaneNotice(kind: .info, text: "Nothing to reclaim").isSticky, equals: false, "info may leave")
+        runner.expect(PaneNotice(kind: .warning, text: "Stopped at x").isSticky, equals: true, "a warning waits")
+        runner.expect(PaneNotice(kind: .error, text: "Install failed").isSticky, equals: true, "an error waits")
+        runner.expect(PaneNotice(kind: .success, text: "x").dismissal, equals: PaneNotice.Dismissal.auto(3), "success reads for three seconds")
+        runner.expect(PaneNotice(kind: .error, text: "x").dismissal, equals: PaneNotice.Dismissal.sticky, "an error reads until dismissed")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -31,9 +31,36 @@ public struct PaneNotice: Equatable {
 
     }
 
+    /// How long a notice stays on screen.
+    ///
+    /// This is the whole fix for the failure that looked like a success. Three
+    /// panes routed "Installed X" and "Install failed: HTTP 500" through one
+    /// tinted strip with one icon, and auto-dismissed both after three or four
+    /// seconds — so the only message a person actually needed to read was the
+    /// one guaranteed to disappear before they read it.
+    ///
+    /// The kind decides, so no call site can get it wrong: something that went
+    /// right may leave on its own, something that went wrong waits to be
+    /// dismissed.
+    public enum Dismissal: Equatable, Sendable {
+        case auto(TimeInterval)
+        case sticky
+    }
+
     public let kind: Kind
     public let headline: String
     public let detail: String?
+
+    public var dismissal: Dismissal {
+        switch kind {
+        case .success: return .auto(3)
+        case .info: return .auto(4)
+        case .warning, .error: return .sticky
+        }
+    }
+
+    /// True when the notice must not vanish on its own.
+    public var isSticky: Bool { dismissal == .sticky }
 
     public init(kind: Kind, headline: String, detail: String? = nil) {
         self.kind = kind

@@ -56,6 +56,22 @@ enum MarvinTheme {
     /// top bar" (2026-08-29).
     static let paneHeaderHeight: CGFloat = 38
 
+    /// Corner radii, as a scale rather than a habit (ADR-0114).
+    ///
+    /// Four radii were in use across the seven left panes — 3, 4, 5 and 6 —
+    /// with no rule behind which went where, so two badges side by side in
+    /// different panes rounded differently. Three deliberate steps replace
+    /// them: a badge is smaller than a chip is smaller than a card, and the
+    /// step sizes match what the shape actually holds.
+    enum Radius {
+        /// Count capsules, status pills, anything holding one short token.
+        static let badge: CGFloat = 3
+        /// Buttons, chips, rows — anything a pointer targets.
+        static let chip: CGFloat = 5
+        /// Notices, grouped blocks, anything holding a paragraph.
+        static let card: CGFloat = 6
+    }
+
     private static func adaptive(dark: String, light: String) -> Color {
         Color(nsColor: adaptiveNS(dark: dark, light: light))
     }
