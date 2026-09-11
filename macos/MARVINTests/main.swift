@@ -3781,6 +3781,49 @@ runner.suite("pane-notice") {
     }
 }
 
+// MARK: - Stopped turns and answered confirms (2026-09-11 review)
+
+runner.suite("session-ledger-stop-and-confirms") {
+    let t0 = Date()
+
+    runner.test("a stopped turn is neither a failure nor an interruption") {
+        // A user Stop used to be recorded as `error`, so the tab sat in the
+        // pane's Needs-you section under a red cross until you typed in it.
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","lastTurn":{"turnId":"t","outcome":"stopped"}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0)
+        runner.expect(l["s"]?.interrupted, equals: false, "no resume affordance for something you stopped")
+        runner.expect(SessionRowStateDeriver.derive(l["s"]!), equals: SessionRowState.idle, "not in Needs you")
+    }
+
+    runner.test("a real failure still reads as failed, and a restart still offers resume") {
+        var l = SessionLedger()
+        let err = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"e","state":"idle","lastTurn":{"turnId":"t","outcome":"error"}}]}"#.utf8))!
+        l.apply(snapshot: err, now: t0)
+        runner.expect(SessionRowStateDeriver.derive(l["e"]!), equals: SessionRowState.failed, "a real failure is still red")
+
+        let cut = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"i","state":"idle","lastTurn":{"turnId":"t","outcome":"interrupted"}}]}"#.utf8))!
+        l.apply(snapshot: cut, now: t0)
+        runner.expect(l["i"]?.interrupted, equals: true, "a restart is still resumable")
+    }
+
+    runner.test("a snapshot composed before the answer does not put the question back") {
+        var l = SessionLedger()
+        l.apply(.confirmPending(sessionId: "s3", turnId: "t1", toolUseId: "u1", toolName: "Bash"), now: t0)
+        runner.expect(l["s3"]?.needsYou, equals: 1, "asked")
+        l.apply(.confirmResolved(sessionId: "s3", turnId: "t1", toolUseId: "u1"), now: t0.addingTimeInterval(1))
+        runner.expect(l["s3"]?.needsYou, equals: 0, "answered")
+
+        let stale = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s3","state":"needs-you","pending":[{"turnId":"t1","toolUseId":"u1","toolName":"Bash"}]}]}"#.utf8))!
+        l.apply(snapshot: stale, now: t0.addingTimeInterval(2), graceSeconds: 5)
+        runner.expect(l["s3"]?.needsYou, equals: 0, "the dock badge does not re-light")
+
+        // Past the window the same id pending again is a NEW question.
+        l.apply(snapshot: stale, now: t0.addingTimeInterval(600), graceSeconds: 5)
+        runner.expect(l["s3"]?.needsYou, equals: 1, "a later ask is real")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

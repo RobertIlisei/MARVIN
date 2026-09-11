@@ -23,6 +23,9 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var activityTool: String?
     /// Keyed by toolUseId, so a re-announced confirm never double-counts.
     public var pendingConfirms: [String: PendingConfirmInfo] = [:]
+    /// Confirms answered here, and when — so a snapshot composed before the
+    /// answer cannot put them back. Pruned on every snapshot.
+    public var resolvedConfirms: [String: Date] = [:]
     public var lastOutcome: TurnOutcome?
     public var lastTurnAt: Date?
     /// The sidecar marked the last turn as cut off by a restart.
@@ -117,6 +120,11 @@ public struct SessionLedger: Equatable, Sendable {
             if e.liveTurnId == nil { e.liveTurnId = turnId }
         case .confirmResolved(_, _, let toolUseId):
             e.pendingConfirms[toolUseId] = nil
+            // Remember it briefly. A snapshot already in flight still lists
+            // this confirm as pending, and applying it verbatim put the
+            // question back, re-lit the dock badge and offered Allow/Deny for
+            // a decision already made (2026-09-11).
+            e.resolvedConfirms[toolUseId] = now
         case .tree(_, let tree):
             e.tree = tree
             e.mode = tree.mode
@@ -159,10 +167,17 @@ public struct SessionLedger: Equatable, Sendable {
                 e.activityTool = nil
             }
             if let pending = row.pending {
-                e.pendingConfirms = Dictionary(uniqueKeysWithValues: pending.map { ($0.toolUseId, $0) })
+                // Anything answered within the grace window is OURS to know
+                // about: this snapshot was composed before the answer landed.
+                let fresh = pending.filter { p in
+                    guard let at = e.resolvedConfirms[p.toolUseId] else { return true }
+                    return now.timeIntervalSince(at) >= graceSeconds
+                }
+                e.pendingConfirms = Dictionary(uniqueKeysWithValues: fresh.map { ($0.toolUseId, $0) })
             } else if row.turn == nil {
                 e.pendingConfirms.removeAll()
             }
+            e.resolvedConfirms = e.resolvedConfirms.filter { now.timeIntervalSince($0.value) < graceSeconds }
             if let tree = row.tree {
                 e.tree = tree.wire
                 e.mode = tree.mode
@@ -177,6 +192,9 @@ public struct SessionLedger: Equatable, Sendable {
                 case "completed": e.lastOutcome = .completed; e.interrupted = false
                 case "error": e.lastOutcome = .error; e.interrupted = false
                 case "interrupted": e.lastOutcome = .error; e.interrupted = true
+                // The user pressed Stop. Not a failure, so not a red row, and
+                // not resumable, so not an interrupted one either.
+                case "stopped": e.lastOutcome = .cancelled; e.interrupted = false
                 default: break
                 }
                 if let endedAt = last.endedAt, let d = Self.parseISO(endedAt) { e.lastTurnAt = d }

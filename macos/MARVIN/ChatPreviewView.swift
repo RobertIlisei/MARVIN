@@ -1964,11 +1964,17 @@ final class ChatPreviewModel {
             }
         case .turnError(let e):
             if let sid = marvinSessionId {
-                SessionRegistry.shared.noteLocalTurnEnded(id: sid, outcome: .error, costUsd: nil)
+                // A turn the user stopped is `cancelled`, not `error` — the
+                // pane's Needs-you section is for things that need a human,
+                // and a tab you stopped on purpose does not (2026-09-11).
+                SessionRegistry.shared.noteLocalTurnEnded(
+                    id: sid, outcome: e.cancelled == true ? .cancelled : .error, costUsd: nil
+                )
             }
             // ADR-0107 addendum 4 — an interrupted turn is the Resume chip's
             // to report; a second banner in different words only confused.
-            lastError = e.interrupted == true ? nil : e.error
+            // A stopped one has nothing to report at all.
+            lastError = e.endedWithoutFailing ? nil : e.error
             currentActivity = nil
             // ADR-0043 — a server-initiated turn errored; settle the affordance
             // so the chip doesn't linger as a phantom "running" forever.

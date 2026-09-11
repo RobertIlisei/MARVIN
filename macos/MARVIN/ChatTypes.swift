@@ -138,6 +138,13 @@ struct TurnError: Codable {
     /// not by Stop and not by a failure. The Resume chip speaks for it, so
     /// the error banner stays quiet.
     let interrupted: Bool?
+    /// 2026-09-11 — the user pressed Stop. Also not a failure, and unlike
+    /// `interrupted` it is not offered for resume. The banner stays quiet
+    /// either way: nothing went wrong, so there is nothing to report.
+    let cancelled: Bool?
+
+    /// True when the turn ended for a reason that is not a failure.
+    var endedWithoutFailing: Bool { interrupted == true || cancelled == true }
 }
 
 // MARK: - Request bodies
@@ -307,7 +314,8 @@ enum SessionTurn: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case type, at, message, marvinSessionId, turnId, event, payload,
-             toolUseId, decision, durationMs, costUsd, sessionId, error, interrupted
+             toolUseId, decision, durationMs, costUsd, sessionId, error, interrupted,
+             cancelled
     }
 
     init(from decoder: Decoder) throws {
@@ -340,8 +348,9 @@ enum SessionTurn: Codable {
             self = .turnCompleted(at: at ?? "", durationMs: ms, costUsd: cost, sessionId: sid)
         case "turn.error":
             let err = try c.decode(String.self, forKey: .error)
-            let cut = try c.decodeIfPresent(Bool.self, forKey: .interrupted) ?? false
-            self = .turnError(at: at ?? "", error: err, interrupted: cut)
+            let interrupted = try c.decodeIfPresent(Bool.self, forKey: .interrupted) ?? false
+            let cancelled = try c.decodeIfPresent(Bool.self, forKey: .cancelled) ?? false
+            self = .turnError(at: at ?? "", error: err, interrupted: interrupted || cancelled)
         default:
             self = .unknown(type: type, at: at)
         }

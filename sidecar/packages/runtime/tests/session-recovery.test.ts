@@ -14,7 +14,7 @@ import { addProject } from "../src/projects";
 import { readSessionMeta, upsertSessionMeta } from "../src/session-meta";
 import { buildResumeRecord, 
   classifyTurnFailure,findInterruptedSessions, 
-  INTERRUPTED_BY_SHUTDOWN_MESSAGE,markInterruptedAtBoot, scanTail,
+  INTERRUPTED_BY_SHUTDOWN_MESSAGE,markInterruptedAtBoot, scanTail, STOPPED_BY_USER_MESSAGE,
 } from "../src/session-recovery";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
 
@@ -46,12 +46,22 @@ describe("scanTail", () => {
 
 describe("classifyTurnFailure", () => {
   // Addendum 3 — the SDK text is identical for Stop and for an external kill.
-  it("an external SIGTERM is an interruption; a user Stop and other errors stay as they are", () => {
+  it("an external SIGTERM is an interruption; a user Stop is neither a failure nor resumable", () => {
     const sigterm = "Turn cancelled (subprocess received SIGTERM — usually Stop / ⌘.).";
-    expect(classifyTurnFailure(sigterm, false)).toEqual({ error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true });
+    expect(classifyTurnFailure(sigterm, false)).toEqual({ error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true, cancelled: false });
     expect(classifyTurnFailure("claude exited with code 143", false).interrupted).toBe(true);
-    expect(classifyTurnFailure(sigterm, true)).toEqual({ error: sigterm, interrupted: false });
-    expect(classifyTurnFailure("socket hang up", false)).toEqual({ error: "socket hang up", interrupted: false });
+    expect(classifyTurnFailure("socket hang up", false)).toEqual({ error: "socket hang up", interrupted: false, cancelled: false });
+  });
+
+  // 2026-09-11: a Stop was recorded as `error`, so the tab sat in the pane's
+  // Needs-you section under a red cross and replayed "Claude Code process
+  // aborted by user" as an error banner on every switch back into it.
+  it("a stopped turn is cancelled, and is NOT marked interrupted — that flag offers a resume", () => {
+    const out = classifyTurnFailure("Claude Code process aborted by user", true);
+    expect(out).toEqual({ error: STOPPED_BY_USER_MESSAGE, interrupted: false, cancelled: true });
+    // Whatever the SDK called it, a user cancel wins over the SIGTERM text.
+    const sigterm = "Turn cancelled (subprocess received SIGTERM — usually Stop / ⌘.).";
+    expect(classifyTurnFailure(sigterm, true)).toEqual({ error: STOPPED_BY_USER_MESSAGE, interrupted: false, cancelled: true });
   });
 });
 
@@ -96,6 +106,10 @@ describe("recovery on disk", () => {
       expect(text).toContain('"interrupted":true');
       // A meta was created from the transcript's posture, with the outcome.
       expect(readSessionMeta(projectId, "cut")?.lastTurn?.outcome).toBe("interrupted");
+      // ...and CLOSED. A session with no meta was never a tracked tab, and
+      // minting an open one is how 11 untitled "interrupted" records piled up
+      // on a real project, one per restart, never cleaned up (2026-09-11).
+      expect(readSessionMeta(projectId, "cut")?.closedAt).toBeTruthy();
       // Second boot: nothing new to mark, but the session still lists as interrupted.
       expect(markInterruptedAtBoot()).toEqual({ marked: 0 });
       expect(findInterruptedSessions(projectId, { includeMarked: true }).map((s) => s.marvinSessionId)).toEqual(["cut"]);

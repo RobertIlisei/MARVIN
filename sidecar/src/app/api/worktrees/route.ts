@@ -19,6 +19,7 @@
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { getIntegrationJob } from "@marvin/runtime/integration-job";
+import { getLiveTurn } from "@marvin/runtime/turn-registry";
 import { previewIntegration } from "@marvin/runtime/integration";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
 import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
@@ -27,6 +28,12 @@ import { requireMarvinClient } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** A session with a turn in flight — its tree is never swept or merged. */
+const isSessionBusy = (id: string) => {
+  const live = getLiveTurn(id);
+  return !!live && !live.ended;
+};
 
 /** Shared cwd guard — every route in this family runs it before touching git. */
 async function resolveCwd(cwd: string | null) {
@@ -83,7 +90,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(previewIntegration(resolved.cwd, { slugs, includeOpen: true }));
     }
     if (body.action === "sweep") {
-      return NextResponse.json({ swept: sweepWorktrees(resolved.cwd) });
+      // The busy guard exists in `sweepWorktrees`, and this caller never
+      // passed it: a closed tab running a Sync turn (ADR-0111) derives
+      // `empty`/`merged`, so Reclaim deleted its checkout and branch out from
+      // under the live turn (2026-09-11).
+      return NextResponse.json({ swept: sweepWorktrees(resolved.cwd, Date.now(), { isSessionBusy }) });
     }
     // "drop" is the checkout only — the BRANCH survives (ADR-0081). It is how
     // you reclaim disk from a `ready` tree without discarding its work.
@@ -103,13 +114,13 @@ export async function POST(req: NextRequest) {
     }
     if (body.action === "merge") {
       if (!body.slug) return NextResponse.json({ error: "slug required" }, { status: 400 });
-      const out = mergeWorktree(resolved.cwd, body.slug);
+      const out = mergeWorktree(resolved.cwd, body.slug, { isSessionBusy });
       return NextResponse.json(out, { status: out.ok ? 200 : 409 });
     }
     // ADR-0109 — fold every `ready` branch in one pass. Same local-only rule
     // as `merge`; the point is that N branches still cost one pipeline, not N.
     if (body.action === "merge-all") {
-      const out = mergeAllWorktrees(resolved.cwd);
+      const out = mergeAllWorktrees(resolved.cwd, { isSessionBusy });
       return NextResponse.json(out, { status: out.stopped ? 409 : 200 });
     }
     // Squash chosen finished branches into ONE commit on an `mr/…` branch;

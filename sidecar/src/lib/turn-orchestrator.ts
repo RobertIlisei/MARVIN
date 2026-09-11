@@ -392,6 +392,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     const payload = {
       error: failure.error,
       ...(failure.interrupted ? { interrupted: true as const, code: "interrupted" } : {}),
+      ...(failure.cancelled ? { cancelled: true as const, code: "stopped" } : {}),
     };
     appendSessionTurn(projectId, marvinSessionId, {
       type: "turn.error",
@@ -407,9 +408,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.interrupted ? "interrupted" : "error", error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", error: payload.error.slice(0, 200) },
     });
-    maybeAutoContinue({
+    // A turn the user stopped is never retried. `classifyTurnError` would not
+    // call "Stopped." transient, but the intent must not rest on the wording.
+    if (!failure.cancelled) maybeAutoContinue({
       error: payload.error,
       projectId,
       marvinSessionId,

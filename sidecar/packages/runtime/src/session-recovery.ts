@@ -132,11 +132,34 @@ export const INTERRUPTED_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 export const INTERRUPTED_BY_SHUTDOWN_MESSAGE =
   "Turn interrupted — the MARVIN process was stopped (app quit or restart), not by Stop. Resume it from the banner or the Sessions pane.";
 
-export function classifyTurnFailure(error: string, userCancelled: boolean): { error: string; interrupted: boolean } {
-  if (!userCancelled && /subprocess received SIGTERM|exited with code 143\b/.test(error)) {
-    return { error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true };
+export const STOPPED_BY_USER_MESSAGE = "Stopped.";
+
+/**
+ * What ended a turn: a failure, a restart, or the user pressing Stop.
+ *
+ * `cancelled` used to have no representation at all — a Stop produced
+ * `{ interrupted: false }`, which the session meta recorded as `"error"`. The
+ * tab then sat in the Sessions pane's *Needs you* section under a red cross,
+ * and switching back to it replayed "Claude Code process aborted by user" as
+ * an error banner (2026-09-11). Nothing had gone wrong; the user had stopped
+ * it on purpose.
+ *
+ * It is deliberately NOT folded into `interrupted`: that flag means "cut off,
+ * offer to resume", and `GET /api/sessions/interrupted` lists marked turns for
+ * exactly that. Resuming a turn someone stopped by hand is the opposite of
+ * what they asked for.
+ */
+export function classifyTurnFailure(
+  error: string,
+  userCancelled: boolean,
+): { error: string; interrupted: boolean; cancelled: boolean } {
+  if (userCancelled) {
+    return { error: STOPPED_BY_USER_MESSAGE, interrupted: false, cancelled: true };
   }
-  return { error, interrupted: false };
+  if (/subprocess received SIGTERM|exited with code 143\b/.test(error)) {
+    return { error: INTERRUPTED_BY_SHUTDOWN_MESSAGE, interrupted: true, cancelled: false };
+  }
+  return { error, interrupted: false, cancelled: false };
 }
 
 /** Sessions of a project whose last turn was cut off RECENTLY and is not running now. */
@@ -197,7 +220,18 @@ export function markInterruptedAtBoot(now = new Date()): { marked: number } {
       if (meta) {
         updateSessionMeta(project.id, s.marvinSessionId, { lastTurn });
       } else if (s.posture) {
-        upsertSessionMeta(project.id, s.marvinSessionId, { workDir: project.workDir, tree: { mode: "shared" }, posture: s.posture }, { lastTurn });
+        // CLOSED, not open. A session with no meta was never a tab this
+        // sidecar was tracking, and minting an OPEN record for it is how 11
+        // untitled "interrupted" sessions accumulated on a real project — one
+        // per restart, each occupying a row in the watch window with a Resume
+        // affordance nobody wanted, and never cleaned up (2026-09-11). The
+        // chat route clears `closedAt` the moment a real message arrives.
+        upsertSessionMeta(
+          project.id,
+          s.marvinSessionId,
+          { workDir: project.workDir, tree: { mode: "shared" }, posture: s.posture },
+          { lastTurn, closedAt: now.toISOString() },
+        );
       }
       marked += 1;
     }

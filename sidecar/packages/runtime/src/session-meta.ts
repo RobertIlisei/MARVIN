@@ -41,6 +41,8 @@ export type SessionTree =
       branch: string;
       /** Commit the branch was cut from. */
       base: string;
+      /** Branch HEAD was on at the cut — what `base` is a sha of. */
+      baseRef?: string;
     }
   | {
       mode: "shared";
@@ -65,7 +67,8 @@ export interface SessionLastTurn {
   turnId: string;
   startedAt: string;
   endedAt?: string;
-  outcome?: "completed" | "error" | "interrupted";
+  /** `stopped` = the user pressed Stop. Not a failure, and not resumable. */
+  outcome?: "completed" | "error" | "interrupted" | "stopped";
   error?: string;
 }
 

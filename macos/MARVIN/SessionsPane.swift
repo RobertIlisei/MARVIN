@@ -426,7 +426,7 @@ struct SessionsPane: View {
             // A question (AskUserQuestion) is a form and still opens the tab.
             if case .needsYou = row.state, let c = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first,
                c.toolName != "AskUserQuestion" {
-                inlineConfirm(c)
+                inlineConfirm(c, sessionId: row.id)
             }
         }
         .padding(.horizontal, 14)
@@ -482,7 +482,7 @@ struct SessionsPane: View {
 
     /// The pending tool, its one-line excerpt, and Allow / Deny — the same
     /// decision the tray card offers, from here.
-    private func inlineConfirm(_ c: PendingConfirmInfo) -> some View {
+    private func inlineConfirm(_ c: PendingConfirmInfo, sessionId: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(c.toolName)
@@ -496,10 +496,10 @@ struct SessionsPane: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                Button("Deny") { Task { await registry.answer(c, allow: false) } }
+                Button("Deny") { Task { await registry.answer(c, in: sessionId, allow: false) } }
                     .rowChip(.tinted(GitDecorationColor.deleted))
                     .help("Refuse this tool call. The tab is told no and carries on.")
-                Button("Allow") { Task { await registry.answer(c, allow: true) } }
+                Button("Allow") { Task { await registry.answer(c, in: sessionId, allow: true) } }
                     .rowChip(.tinted(GitDecorationColor.added))
                     .help("Let this tool call run, without switching to that tab.")
             }

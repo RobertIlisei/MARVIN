@@ -351,14 +351,20 @@ final class SessionRegistry {
     /// ADR-0112 — answer a waiting tab's confirm from the Sessions pane. The
     /// confirm route resolves it and announces `confirm.resolved`, which the
     /// feed turns into the row's dot going quiet.
-    func answer(_ c: PendingConfirmInfo, allow: Bool) async {
+    ///
+    /// `sessionId` is the row's, and it is required: `PendingConfirmInfo`
+    /// carries a turn and a tool-use id but not a session, so the optimistic
+    /// clear used to be written under an empty key. It landed on a phantom
+    /// entry, the answered row stayed in *Needs you*, and with the feed down
+    /// nothing ever cleared it (2026-09-11).
+    func answer(_ c: PendingConfirmInfo, in sessionId: String, allow: Bool) async {
         do {
             try await ChatService.shared.respondToConfirm(
                 turnId: c.turnId, toolUseId: c.toolUseId,
                 decision: allow ? .allow : .deny,
                 denyMessage: allow ? nil : "Denied from the Sessions pane."
             )
-            ledger.apply(.confirmResolved(sessionId: "", turnId: c.turnId, toolUseId: c.toolUseId))
+            ledger.apply(.confirmResolved(sessionId: sessionId, turnId: c.turnId, toolUseId: c.toolUseId))
         } catch {
             integrationNotice = "Could not answer: \(error.localizedDescription)"
         }

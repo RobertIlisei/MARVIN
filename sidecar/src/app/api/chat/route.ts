@@ -304,7 +304,13 @@ export async function POST(req: NextRequest) {
     sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base, ...(cwdCheck.worktree.baseRef ? { baseRef: cwdCheck.worktree.baseRef } : {}) };
   } else if (existingMeta) {
     const resolved = resolveSessionCwd(existingMeta);
-    if (!resolved.present) {
+    // A CLOSED tab with no checkout is the normal end state of "close with
+    // Merge": the merge removes the tree and the sweep deletes the branch.
+    // Refusing here made that tab permanently dead — 409 `worktree-missing`
+    // forever, with the recut that ADR-0111 promises sitting unreachable a
+    // few lines below (2026-09-11). Only an OPEN tab whose tree vanished
+    // underneath it is an error worth reporting.
+    if (!resolved.present && !existingMeta.closedAt) {
       return new Response(
         JSON.stringify({ error: `this tab's worktree is missing: ${resolved.cwd}`, code: "worktree-missing", tree: existingMeta.tree }),
         { status: 409, headers: { "Content-Type": "application/json" } },
@@ -319,7 +325,9 @@ export async function POST(req: NextRequest) {
         // ADR-0111 — a branch that was already integrated is history, not a
         // place to keep working: cut a fresh tree from the current HEAD.
         const state = reconcileWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === marvinSessionId)?.state;
-        if (state === "merged") {
+        // Integrated, or gone entirely (merged then swept) — either way there
+        // is nothing to return to, so cut a fresh tree from the current HEAD.
+        if (state === "merged" || !resolved.present) {
           try {
             const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: existingMeta.title, replace: true });
             const { config } = readOrDetectWorktreeSetup(workDir);
