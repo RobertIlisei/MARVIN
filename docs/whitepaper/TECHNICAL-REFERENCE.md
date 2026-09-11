@@ -40,6 +40,8 @@ repository wins.*
 > multi-session chrome (ADR-0112, §8), the **backlog as the shared task list**
 > — claims, live-store-only reads, resolution notices (ADR-0113, §3.x and §4),
 > and the layout-pass hook of the constraint-loop breaker (ADR-0062 addendum 7).
+> Since 2026-09-11: **one vocabulary for the left pane** — shared chrome whose
+> decisions live in `MARVINLogic` so they can be asserted (ADR-0114, §8.2).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -619,6 +621,10 @@ history). Major surfaces:
   git channel (§2.5), branch line, remote-error banner with the stderr
   taxonomy.
 - **Review window** — §2.3.
+- **The seven left panes** — Files, Search, Source Control, Sessions, Skills,
+  Plugins, Practice; one control vocabulary across all of them (§8.2), with
+  Search jumping to the matched line, Replace All confirming before it writes,
+  and every outcome carrying its kind.
 - **Backlog panel** — browse / Done / Dismiss / Promote-to-plan (which
   switches to Plan mode and queues if a turn is live — v0.1.53).
 - **Context panel** — the status-bar `ctx` chip opens a live breakdown:
@@ -639,6 +645,52 @@ slow poll from a busy sidecar no longer tears down and rebuilds the IDE
 (`POST /api/chat` → 409 rather than evicting; Stop is authoritative via
 `cancelLiveTurn`); closing the window doesn't kill a running turn
 (resume via `GET /api/chat/resume`).
+
+
+### 8.2 One vocabulary for the seven panes
+
+Measured across Files, Search, Source Control, Sessions, Skills, Plugins and
+Practice before any of them was touched: **five** button styles, **five**
+private section headers, **four** corner radii, **three** registers of empty
+state, and a `PaneNotice` type with kinds and a glyph that exactly one pane
+used. The same concept was drawn a different way in every pane, which is
+Apple's *Familiarity* principle failing at the level of the whole sidebar
+([ADR-0114](../decisions/0114-one-vocabulary-for-the-left-pane.md)).
+
+The split is forced by the test target rather than chosen: `MARVINTests` links
+`MARVINLogic` and nothing else, so a rule inside a SwiftUI view cannot be
+asserted. Every **decision** is therefore a value or a function over values in
+`MARVINLogic/PaneChrome.swift` — `PaneEmptyState` with its factories,
+`PaneBadge.text` (clamped at `999+`), `PaneHeaderOverflow.plan(actionCount:)`,
+`PaneNotice.Dismissal` and `PaneNotice.kind(forOutcome:)` — and `MARVIN/Pane*.swift`
+draws them and holds no rules of its own.
+
+Two of those decisions are load-bearing. **`dismissal` is decided by kind**, so
+success and info may leave on their own while a warning or error waits to be
+dismissed: three panes previously routed every outcome through one tinted strip
+on a four-second timer, which meant the message that mattered was the one
+certain to vanish unread. **Header overflow is decided by action count**, never
+by measuring the container — a `GeometryReader` that re-enters layout in order
+to decide layout is the oscillation [ADR-0062](../decisions/0062-update-constraints-loop-identified-mitigated.md)
+crashes on, and a rule a person can predict beats one that shifts under them as
+they drag the splitter.
+
+Admission to the vocabulary is one rule: **three or more panes need it, and the
+signature carries no pane-specific parameter.** Row *content* fails it — a skill
+row carries a toggle, a version and a contribution list; a git file row carries
+a status letter and a path — so row *shape* ships as a modifier over a
+caller-built `HStack`, never as a container with nine parameters.
+
+Three constraints bind every shared component, each from a measured regression.
+No component declares an intrinsic `minWidth`, and every pane root ends
+`.frame(minWidth: 0, maxWidth: .infinity).clipped()`: the seven panes stay
+mounted in one `ZStack` (`PaneSlot.keptMounted`), so the widest intrinsic
+minimum among them becomes the sidebar's, and the overflow pushes the 44pt
+activity rail off the window. No component is applied to a pane root and none
+makes a container `.focusable()`, which draws macOS's focus ring around an
+entire pane. And only `hovering`, `pressed` and `notice` are animated, never
+layout — a height transition inside a mounted, zero-framed slot re-lays out the
+whole pane.
 
 ---
 

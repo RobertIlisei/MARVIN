@@ -106,7 +106,11 @@ carry their kind, and the Sessions focus ring moved off the pane and onto the ro
 review of a week's real use closed six more — a merged tab that could never be reopened,
 Stop recorded as a failure, confirms that would not clear or would come back, a sweep that
 could delete a branch mid-Sync, and a session record minted on every restart — and the
-branch chip's popover was rebuilt around a fixed width and one full-width action.
+branch chip's popover was rebuilt around a fixed width and one full-width action. Then all
+seven left panes converged on one control vocabulary (ADR-0114), which found a Search result
+that opened the file but not the line, a Replace All with no confirm and no undo, two enable
+controls that were not controls, and — once the user dragged the sidebar narrow — rows that
+wrapped into columns of letters and a pane that pushed the activity rail off the window.
 v0.1.111 (close-with-merge) shipped the day before.
 Details in the [changelog](./history/CHANGELOG.md).
 

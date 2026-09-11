@@ -128,8 +128,69 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   integration & switch* stays a whole sentence, and navigation demoted to links
   under a divider ([ADR-0112](../decisions/0112-one-place-for-each-thing.md)).
 
-  **Verification.** Sidecar 96 files / 1380 tests green, `tsc` clean; Swift 855
-  assertions. Live: tab strip and steppers checked on screen; Prepare MR run
+  **One vocabulary for the left pane** ([ADR-0114](../decisions/0114-one-vocabulary-for-the-left-pane.md)).
+  User: *"use /apple-design … do not remove any functionalities instead add more
+  if possible."* Measured before touching anything, across all seven panes:
+  **five** button styles (`.borderless`, `.bordered`, `.borderedProminent`,
+  `.plain`, `.link`), **five** private section headers, **four** corner radii,
+  **three** registers of empty state — parenthesised debug fragments like
+  `(empty tree)` beside full sentences beside bare `No runs yet.` — and a
+  `PaneNotice` type with kinds and a glyph that exactly one pane used. That is
+  Familiarity failing at the level of the whole sidebar: things that look alike
+  did not behave alike, and things that behaved alike did not look alike.
+
+  The vocabulary is split by a constraint rather than by taste: `MARVINTests`
+  links `MARVINLogic` and nothing else, so every *decision* went there and is
+  asserted — the empty-state copy, the badge clamp, the header-overflow rule,
+  the notice dismissal, the outcome-kind reader — while `MARVIN/Pane*.swift`
+  draws and holds no rules. Admission is one rule: three or more panes need it
+  **and** the signature carries no pane-specific parameter. Row *content* fails
+  that test, so row shape ships as a modifier over a caller-built `HStack`
+  rather than a container with nine parameters. `PaneNotice.dismissal` is
+  decided by kind, which is the whole fix for a failed install looking like a
+  successful one and then vanishing after three seconds; and header overflow is
+  decided by action **count**, never by measuring the container, because a
+  `GeometryReader` that re-enters layout to decide layout is the ADR-0062
+  oscillation.
+
+  Then all seven panes adopted it, one per commit, each carrying an
+  action-surface diff in its message so "do not remove any functionality" stayed
+  provable. The conversion found what the survey had not: **Search opened a
+  result's file but not its line**, though `match.line` was decoded and rendered
+  two lines below the call that discarded it; **Replace All** was the most
+  destructive control in the sidebar with no confirm, no preview, no undo and a
+  tooltip on a 10pt icon for its only error report, while writing file by file;
+  Skills and Plugins both shipped an enable control that was a `.plain` SF
+  Symbol, and switching the Plugins one on loads MCP servers and read-only
+  agents into the model's tool surface; a plugin toggle refused with a non-2xx
+  that did not throw did nothing at all, so refusal and no-op were the same
+  experience; Practice truncated its own header labels and styled *Reset
+  findings…* as a hyperlink; and dismissing a Practice finding was a one-way
+  door, so `undismissFinding` was built as the same transition recurrence
+  already made on its own. Declined with the reason recorded: uninstalling a
+  plugin, which would mutate a registry Claude Code owns and both tools read.
+
+  **And the narrow-width pass, which the user ran.** Dragging the sidebar in
+  broke three things the seven milestones had not: rows wrapped character by
+  character into columns of single letters, because a `Text` squeezed below its
+  own longest word wraps at every character rather than truncating and the
+  capsule around it grows to match; the Search pane pushed the 44pt activity
+  rail off the window, which is the 2026-08-29 regression and exactly what this
+  ADR's own first constraint was written against — stated, obeyed by the
+  components, and never enforced on the *panes*, which is where width is
+  actually decided; and *Generate* was accent text on an accent fill, barely
+  readable. Chips now keep their intrinsic width and let their row clip them,
+  names win the layout priority and truncate in the middle, and every pane root
+  ends `.frame(minWidth: 0, maxWidth: .infinity).clipped()` so a pane absorbs
+  compression instead of negotiating for width. The lesson is in the ADR: a
+  constraint written into a decision record is not enforced until something
+  enforces it, and the narrow-width pass belongs inside the loop.
+
+  **Verification.** Sidecar 96 files / 1382 tests green, `tsc` clean; Swift 894
+  assertions. Live: the narrow-width pass re-run by the user on the rebuilt app,
+  and the search data path checked independently — a plain query returning 26
+  files, a regex query with a file glob returning 269, every match carrying its
+  line and column. Still owed: the keyboard pass. Live: tab strip and steppers checked on screen; Prepare MR run
   end to end on a real project (six branches, one conflict, push and merge
   request observed). The two-tab backlog race is not yet checked on the
   rebuilt app.

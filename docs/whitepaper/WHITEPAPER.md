@@ -168,6 +168,20 @@ branch touches its files are told — as information marked as coming from
 another tab, never as an instruction from the user
 ([ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md)).
 
+**A control has to look like a control.** The same discipline applies to the
+interface itself, and it is measurable there too. Counted across MARVIN's seven
+left panes before any of them was redesigned: five button styles, five private
+section headers, four corner radii, and three different registers for the
+sentence a pane shows when it is empty. No single one is a bug; together they
+mean that a thing which looks the same does not behave the same, which is the
+one property an interface cannot afford to lose. The remedy was the same shape
+as everything else here — decide once, put the decision where it can be
+asserted, and let the drawing hold no rules. What made it worth doing was what
+it exposed on the way: a search result that opened the file but not the line it
+matched, a replace-all with no confirmation and no undo, and two toggles that
+were not controls at all, one of which loads tool servers into the model's
+reach ([ADR-0114](../decisions/0114-one-vocabulary-for-the-left-pane.md)).
+
 **Nothing survives a tab unless it holds a commit.** Measured on one project
 after a week of this: seventeen session worktrees, sixteen for closed tabs,
 twelve already merged, three empty, none ever swept. A closed tab now leaves a
