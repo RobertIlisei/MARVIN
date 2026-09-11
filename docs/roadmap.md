@@ -94,8 +94,10 @@ from and are told about (ADR-0113). Plus the layout-loop breaker's second hook (
 addendum 7) and Prepare MR (ADR-0109 amended). Its first live run found three more, all
 in the integration path: Merge now refuses only the files it would overwrite, a Prepare MR
 is a job the panel watches to its end, and a run stopped by a conflict neither pushes nor
-claims in its commit message to carry branches it dropped. v0.1.111 (close-with-merge)
-shipped the day before.
+claims in its commit message to carry branches it dropped. Then the panes got the
+affordance pass they needed: one chip vocabulary, a hierarchy per section, outcomes that
+carry their kind, and the Sessions focus ring moved off the pane and onto the row.
+v0.1.111 (close-with-merge) shipped the day before.
 Details in the [changelog](./history/CHANGELOG.md).
 
 _The v0.1.108 summary follows._

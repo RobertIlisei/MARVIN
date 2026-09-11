@@ -73,7 +73,27 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   names the branch to Sync. All three were invisible for the same reason —
   nothing reported what the run did.
 
-  **Verification.** Sidecar 96 files / 1377 tests green, `tsc` clean; Swift 837
+  **A control has to look like a control.** Shown the rebuilt panes, the user:
+  *"nobody knows the Prepare MR, Merge All, Reclaim are buttons, they look like
+  normal text"*, then *"clicking anything in Sessions, just selects the whole
+  pane"*. Every action in both panes was `Button(…).buttonStyle(.plain)` with a
+  tinted label — no fill, no border, no press, no hover — sitting among tinted
+  *status* text (`+880 −13`, `clean`, `6 ready`), so nothing distinguished a
+  word you could click. One chip vocabulary now covers both panes, with three
+  roles, a press cue on pointer-down settling without bounce, hover, and
+  reduced-motion respected; the Worktrees header gained a hierarchy and moved
+  *Reclaim* into an overflow menu. The whole-pane focus ring was ADR-0112's own
+  `.focusable()` on the scroll view: it moves to the focused row, and
+  Ready-to-integrate rows became clickable and now lead with their branch,
+  because six of them shared one session title. Outcomes carry a kind with a
+  glyph, splitting the sentence from the machine detail, and a conflicted merge
+  names the clashing files instead of the command MARVIN ran. Found while
+  testing it: `git status --porcelain` was read through a trimming helper,
+  shifting the first line's path one character, so `.marvin/memory.md` read as
+  `marvin/memory.md`, missed the `.marvin/` carve-out and counted as a merge
+  blocker on every real project.
+
+  **Verification.** Sidecar 96 files / 1379 tests green, `tsc` clean; Swift 847
   assertions. Live: tab strip and steppers checked on screen; Prepare MR run
   end to end on a real project (six branches, one conflict, push and merge
   request observed). The two-tab backlog race is not yet checked on the
