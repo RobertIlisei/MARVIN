@@ -13,6 +13,7 @@ import {
   armPracticeSchedule,
   DEFAULT_PRACTICE_CONFIG,
   dismissFinding,
+  undismissFinding,
   resetPracticeLedger,
   effectiveTier,
   escalateFinding,
@@ -574,6 +575,33 @@ describe("the run and the day-two diff (ADR-0105 §2)", () => {
     expect(dismissFinding(projectId, "skill.bypassed:hetzner-ssh", "reads are fine here")).toBe(true);
     expect(readRules()[0]?.status).toBe("retired");
     expect(readLedger(projectId).findings["skill.bypassed:hetzner-ssh"]?.ruleId).toBeUndefined();
+  });
+
+  it("a dismissal can be undone by hand, the same way recurrence undoes it", () => {
+    // Dismissing was a one-way door: one click behind a required reason, and
+    // the only way back was waiting for the finding to recur in twice as many
+    // sessions (2026-09-11). Undo is deliberately that same transition.
+    threeBadSessions();
+    expect(dismissFinding(projectId, "graph.first.skipped", "scouting is fine here")).toBe(true);
+    expect(readLedger(projectId).findings["graph.first.skipped"]?.state).toBe("dismissed");
+
+    expect(undismissFinding(projectId, "graph.first.skipped").ok).toBe(true);
+
+    const f = readLedger(projectId).findings["graph.first.skipped"];
+    expect(f?.state).toBe("observed");
+    expect(f?.dismissedAt).toBeUndefined();
+    expect(f?.dismissReason).toBeUndefined();
+    expect(f?.dismissedAtSessions).toBeUndefined();
+    // And the next run is free to promote it again, exactly as before.
+    runPractice(projectId, { ...seams, now: day(3) + 2 });
+    expect(readLedger(projectId).findings["graph.first.skipped"]?.state).toBe("proposed");
+  });
+
+  it("undo refuses what it cannot undo, and says which", () => {
+    threeBadSessions();
+    expect(undismissFinding(projectId, "graph.first.skipped").ok).toBe(false);
+    expect(undismissFinding(projectId, "graph.first.skipped").reason).toContain("not dismissed");
+    expect(undismissFinding(projectId, "no.such.finding").reason).toBe("no such finding");
   });
 
   it("dismiss suppresses until distinct sessions double, then re-surfaces", () => {

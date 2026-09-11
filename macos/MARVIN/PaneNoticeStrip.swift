@@ -20,7 +20,10 @@ import SwiftUI
 
 struct PaneNoticeStrip: View {
     let notice: PaneNotice
-    var onRetry: (() -> Void)? = nil
+    /// The one thing this outcome offers to do about itself — "Retry" after a
+    /// failure, "Undo" after something reversible. One verb, never a row.
+    var actionTitle: String = "Retry"
+    var onAction: (() -> Void)? = nil
     let onDismiss: () -> Void
 
     var body: some View {
@@ -43,8 +46,8 @@ struct PaneNoticeStrip: View {
                 }
             }
             Spacer(minLength: 0)
-            if let onRetry {
-                Button("Retry", action: onRetry).rowChip(.neutral)
+            if let onAction {
+                Button(actionTitle, action: onAction).rowChip(.neutral)
             }
             Button(action: onDismiss) {
                 Image(systemName: "xmark")

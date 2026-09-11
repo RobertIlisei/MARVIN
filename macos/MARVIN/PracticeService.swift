@@ -203,6 +203,13 @@ final class PracticeService {
         try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "dismiss", "reason": reason])
     }
 
+    /// Undo a dismissal (2026-09-11). The same transition recurrence makes
+    /// on its own — back to `observed` — asked for by a person instead of
+    /// earned by the finding recurring in twice as many sessions.
+    func undismiss(projectId: String, id: String) async throws -> PracticeView {
+        try await mutate("api/practice/findings", ["projectId": projectId, "id": id, "action": "undismiss"])
+    }
+
     /// Clear findings, watermarks and runs; rules stay (2026-09-09).
     func resetFindings(projectId: String) async throws -> PracticeView {
         try await mutate("api/practice/findings", ["projectId": projectId, "action": "reset"])

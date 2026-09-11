@@ -2,6 +2,7 @@
  * POST /api/practice/findings
  *   { projectId, id, action: "approve", tier?, message?, global? }
  *   { projectId, id, action: "dismiss", reason }
+ *   { projectId, id, action: "undismiss" }
  *   { projectId, id, action: "escalate" }
  *   { projectId, id, action: "fixed", reason }   ← "I changed MARVIN's code"; verified like a rule
  *   { projectId, action: "reset" }               ← clear findings, watermarks and runs; rules stay
@@ -16,6 +17,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import {
   approveFinding,
   dismissFinding,
+  undismissFinding,
   escalateFinding,
   markFindingFixed,
   practiceView,
@@ -67,6 +69,11 @@ export async function POST(req: NextRequest) {
       if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 409 });
       return NextResponse.json({ ok: true, rule: res.rule, view: practiceView(projectId) });
     }
+    case "undismiss": {
+      const out = undismissFinding(projectId, id);
+      if (!out.ok) return NextResponse.json({ error: out.reason ?? "could not undo" }, { status: 409 });
+      return NextResponse.json({ ok: true, view: practiceView(projectId), ...(out.ruleStillRetired ? { ruleStillRetired: true } : {}) });
+    }
     case "dismiss": {
       const ok = dismissFinding(projectId, id, body.reason ?? "");
       if (!ok) return NextResponse.json({ ok: false, error: "unknown finding" }, { status: 404 });
@@ -83,6 +90,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, rule: res.rule, view: practiceView(projectId) });
     }
     default:
-      return NextResponse.json({ error: "action must be approve | dismiss | escalate | fixed | reset" }, { status: 400 });
+      return NextResponse.json({ error: "action must be approve | dismiss | undismiss | escalate | fixed | reset" }, { status: 400 });
   }
 }

@@ -12,6 +12,7 @@
 //   Runs      — the log; Run now / Backtest in the header.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 struct PracticePane: View {
@@ -34,7 +35,21 @@ struct PracticePane: View {
     @State private var loadError: String?
     @State private var busy = false
     @State private var section: Section = .findings
-    @State private var toast: String?
+    @State private var scheduleOpen = false
+    /// The outcome of the last action, with its KIND (ADR-0114).
+    ///
+    /// This was a `String?` rendered in one tinted strip with one moon icon
+    /// and a four-second timer, so "Rule created for x" and a decode failure
+    /// were the same pixels — and the failure was the one guaranteed to
+    /// vanish before it was read. A notice now carries its kind, and
+    /// `PaneNotice.dismissal` keeps a warning or an error on screen until it
+    /// is dismissed.
+    @State private var notice: PaneNotice?
+    /// The one thing the current notice offers to do — retry a failure, or
+    /// undo something reversible.
+    @State private var action: (() async -> Void)?
+    /// The finding whose dismissal can still be taken back.
+    @State private var undoable: String?
     @State private var dismissing: PracticeFinding?
     @State private var dismissReason = ""
     @State private var fixing: PracticeFinding?
@@ -59,21 +74,23 @@ struct PracticePane: View {
     var body: some View {
         VStack(spacing: 0) {
             if projectId == nil {
-                emptyView("Open a project to see what its sessions keep repeating.")
+                PaneEmptyView(state: .noProject("repeat failures"))
             } else if let err = loadError, view == nil {
-                emptyView(err)
+                PaneEmptyView(
+                    state: PaneEmptyState(headline: "Could not read this project's practice ledger", hint: err, symbol: "exclamationmark.triangle"),
+                    actionTitle: "Retry",
+                    action: { Task { await refresh() } }
+                )
             } else {
                 content
             }
-            if let toast {
-                HStack {
-                    Image(systemName: "moon.zzz.fill")
-                    Text(toast).font(.caption).lineLimit(2)
-                    Spacer()
-                }
-                .padding(8)
-                .background(.tint.opacity(0.12))
-                .transition(.opacity)
+            if let notice {
+                PaneNoticeStrip(
+                    notice: notice,
+                    actionTitle: undoable == nil ? "Retry" : "Undo",
+                    onAction: action.map { a in { Task { await a() } } },
+                    onDismiss: { withAnimation { self.notice = nil; self.action = nil; self.undoable = nil } }
+                )
             }
         }
         .task(id: bridge.projectWorkDir) { await refresh() }
@@ -140,37 +157,41 @@ struct PracticePane: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "moon.zzz").foregroundStyle(.tint)
-                Text("Practice").font(.headline)
-                Spacer()
-                Button { Task { await runNow(force: false) } } label: {
-                    Label("Run now", systemImage: "play.circle")
-                }
-                .help("Read every session that changed since the last run and update the findings (ADR-0105).")
-                .disabled(busy)
-                Button { Task { await runNow(force: true) } } label: {
-                    Label("Backtest", systemImage: "clock.arrow.circlepath")
-                }
-                .help("Re-read every transcript from scratch. This is how the weights get tuned: rank what actually cost the most.")
-                .disabled(busy)
-                Button { Task { await fitWeights(apply: false) } } label: {
-                    Label("Fit weights", systemImage: "scale.3d")
-                }
-                .help("Fit the five score weights from every ledger's own outcomes (ADR-0105 phase 5). Shows the proposal; nothing changes until you apply.")
-                .disabled(busy)
-                Button { Task { await refresh() } } label: {
-                    Label("Reload", systemImage: "arrow.clockwise")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(busy)
-                Button {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/RobertIlisei/MARVIN/blob/main/docs/guides/practice.md")!)
+            // Five actions, three of them text-labelled, used to share one row
+            // with the title and a bare `Spacer()` — which is how "Run now"
+            // rendered as "Run no…" in a narrow sidebar. `PaneHeaderOverflow`
+            // puts the count at five, past the overflow threshold, so one
+            // primary verb stays and the other four move into the menu
+            // (ADR-0114).
+            PaneHeader(title: "Practice", symbol: "moon.zzz") {
+                Button("Run now") { Task { await runNow(force: false) } }
+                    .rowChip(.primary)
+                    .disabled(busy)
+                    .help("Read every session that changed since the last run and update the findings (ADR-0105).")
+                Menu {
+                    Button("Backtest — re-read every transcript") { Task { await runNow(force: true) } }
+                        .disabled(busy)
+                        .help("Re-read every transcript from scratch. This is how the weights get tuned: rank what actually cost the most.")
+                    Button("Fit weights from outcomes…") { Task { await fitWeights(apply: false) } }
+                        .disabled(busy)
+                        .help("Fit the five score weights from every ledger's own outcomes (ADR-0105 phase 5). Shows the proposal; nothing changes until you apply.")
+                    Divider()
+                    Button("Reload") { Task { await refresh() } }.disabled(busy)
+                    Button("Open the Practice guide") {
+                        NSWorkspace.shared.open(URL(string: "https://github.com/RobertIlisei/MARVIN/blob/main/docs/guides/practice.md")!)
+                    }
+                    .help("What it looks for, the tiers, verification, and a first-session walkthrough.")
                 } label: {
-                    Label("Guide", systemImage: "questionmark.circle")
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 19, height: 19)
+                        .contentShape(Rectangle())
                 }
-                .labelStyle(.iconOnly)
-                .help("Open the Practice guide — what it looks for, the tiers, verification, and a first-session walkthrough.")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 19)
+                .foregroundStyle(MarvinTheme.textMuted)
+                .help("Backtest, fit the score weights, reload, and the guide.")
             }
             Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose — then measured.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -191,6 +212,10 @@ struct PracticePane: View {
                 Text("How this works").font(.caption.bold()).foregroundStyle(.secondary)
             }
             if let view {
+                // Configuration, moved out of the header it used to compete
+                // with. A switch, two steppers and a destructive Reset are not
+                // verbs you reach for while reading findings (ADR-0114).
+                DisclosureGroup(isExpanded: $scheduleOpen) {
                 HStack(spacing: 10) {
                     Toggle(isOn: Binding(
                         get: { view.config.enabled },
@@ -214,13 +239,20 @@ struct PracticePane: View {
                     .help("Sessions older than this age out of every count. Watermarks stay, so nothing is re-read.")
                     Spacer(minLength: 0)
                     Button("Reset findings…") { confirmingReset = true }
-                        .buttonStyle(.link).font(.caption2).disabled(busy)
+                        .rowChip(.tinted(GitDecorationColor.deleted))
+                        .disabled(busy)
                         .help("Clear every finding, watermark and run record for this project. Rules stay; the next run re-reads the window and re-attaches findings to their rules.")
                         .confirmationDialog("Reset this project's findings?", isPresented: $confirmingReset) {
                             Button("Reset findings", role: .destructive) { Task { await resetFindings() } }
                         } message: {
                             Text("Findings, watermarks and run records are cleared. Rules are kept. The next run re-reads every session inside the window.")
                         }
+                }
+                .padding(.top, 4)
+                } label: {
+                    Text("Schedule")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(MarvinTheme.textMuted)
                 }
                 Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
                     .font(.caption2.monospaced()).foregroundStyle(.tertiary)
@@ -316,7 +348,7 @@ struct PracticePane: View {
                     }
                     Spacer(minLength: 0)
                     Button("Adopt") { Task { await adopt(s) } }
-                        .buttonStyle(.link).font(.caption).disabled(busy)
+                        .rowChip(.primary).disabled(busy)
                 }
             }
         }
@@ -348,9 +380,12 @@ struct PracticePane: View {
                 // A success has no template and no pair, so its score is a
                 // constant (0.88 minus decay) — the session count is the fact.
                 if !f.isSuccess {
-                    Text(String(format: "%.2f", f.value))
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
-                        .help("Value: recurrence, cost, rate, reliability, actionability, minus decay (ADR-0105 §3).")
+                    // "0.67" answers nothing on its own — 0.67 of what? The
+                    // denominator is the scale, and it costs four characters.
+                    Text("\(String(format: "%.2f", f.value)) / 1.00")
+                        .font(.system(size: 10.5, design: .monospaced).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help("Value: recurrence, cost, rate, reliability, actionability, minus decay, on a 0–1 scale (ADR-0105 §3).")
                 }
             }
             Text(f.latestDetail.isEmpty ? "—" : f.latestDetail)
@@ -400,18 +435,18 @@ struct PracticePane: View {
                 }
                 if f.template {
                     Button("Draft message") { draftText = ""; draft = nil; draftFor = f }
-                        .buttonStyle(.link).font(.caption).disabled(busy)
+                        .rowChip(.neutral).disabled(busy)
                         .help("Ask a read-only model to write the rule message from this finding's aggregates (ADR-0105 phase 4). One small model call; you accept or discard.")
                 }
                 fixedButton(f)
                 Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .buttonStyle(.link).font(.caption).disabled(busy)
+                    .rowChip(.neutral).disabled(busy)
             case "report":
                 Text("report only — about MARVIN itself, not a behaviour a rule can change")
                     .font(.caption2).foregroundStyle(.tertiary)
                 fixedButton(f)
                 Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .buttonStyle(.link).font(.caption).disabled(busy)
+                    .rowChip(.neutral).disabled(busy)
             case "regressed":
                 if f.ruleId != nil {
                     Button { Task { await escalate(f) } } label: {
@@ -425,7 +460,7 @@ struct PracticePane: View {
                 }
                 fixedButton(f)
                 Button("Dismiss") { dismissReason = ""; dismissing = f }
-                    .buttonStyle(.link).font(.caption).disabled(busy)
+                    .rowChip(.neutral).disabled(busy)
             case "fixed":
                 if let note = f.fixNote, !note.isEmpty {
                     Text("fixed: \(note)").font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
@@ -454,7 +489,7 @@ struct PracticePane: View {
 
     private func fixedButton(_ f: PracticeFinding) -> some View {
         Button("Fixed in MARVIN") { fixNote = ""; fixing = f }
-            .buttonStyle(.link).font(.caption).disabled(busy)
+            .rowChip(.neutral).disabled(busy)
             .help("You changed MARVIN's code for this. Verified like a rule: a recurrence after today is a regression, a quiet window confirms it.")
     }
 
@@ -525,7 +560,7 @@ struct PracticePane: View {
                     Image(systemName: "checkmark.seal").foregroundStyle(.green)
                     Text("Confirmed in \(n) projects").font(.caption2).foregroundStyle(.secondary)
                     Button("Promote to every project") { Task { await setRule(r, global: true) } }
-                        .buttonStyle(.link).font(.caption2).disabled(busy)
+                        .rowChip(.neutral).disabled(busy)
                 }
             }
             HStack(spacing: 8) {
@@ -546,7 +581,7 @@ struct PracticePane: View {
                     .menuStyle(.borderlessButton).fixedSize().disabled(busy)
                 } else {
                     Button(r.isBuiltin ? "Switch on" : "Reactivate") { Task { await setRule(r, status: "active") } }
-                        .buttonStyle(.link).font(.caption).disabled(busy)
+                        .rowChip(.primary).disabled(busy)
                 }
             }
             .font(.caption2.monospaced()).foregroundStyle(.tertiary)
@@ -722,13 +757,16 @@ struct PracticePane: View {
             .foregroundStyle(color)
     }
 
+    /// Kept for the in-section placeholders, which are a sentence rather than
+    /// a whole-pane state. The pane-level ones are `PaneEmptyView` (ADR-0114).
     private func emptyView(_ text: String) -> some View {
-        VStack {
-            Spacer()
-            Text(text).font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center).padding()
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
+        Text(text)
+            .font(.system(size: 10.5))
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static func relative(_ iso: String) -> String {
@@ -765,7 +803,7 @@ struct PracticePane: View {
             if let last = view?.lastRun {
                 flash("\(last.sessionsRead) session\(last.sessionsRead == 1 ? "" : "s") read · \(last.findingsNew) new · \(last.proposed) proposed")
             }
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func approve(_ f: PracticeFinding, tier: String?, global: Bool) async {
@@ -774,14 +812,34 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.approve(projectId: projectId, id: f.id, tier: tier, global: global)
             flash("Rule created for \(f.id)")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
+    }
+
+    /// Take back a dismissal. The same transition recurrence would make on
+    /// its own, asked for by a person — dismissing used to be a one-way door
+    /// behind a required reason (ADR-0114).
+    private func undoDismiss(_ id: String) async {
+        guard let projectId else { return }
+        busy = true; defer { busy = false }
+        do {
+            view = try await PracticeService.shared.undismiss(projectId: projectId, id: id)
+            undoable = nil
+            flash("\(id) is back in the findings")
+        } catch { fail(error) }
     }
 
     private func dismiss(_ f: PracticeFinding, reason: String) async {
         guard let projectId else { return }
         busy = true; defer { busy = false }
-        do { view = try await PracticeService.shared.dismiss(projectId: projectId, id: f.id, reason: reason) }
-        catch { flash(error.localizedDescription) }
+        do {
+            view = try await PracticeService.shared.dismiss(projectId: projectId, id: f.id, reason: reason)
+            // A successful mutation used to flash nothing at all, so a silent
+            // success and a silent failure looked identical — and the
+            // dismissal itself had no reverse anywhere (ADR-0114).
+            undoable = f.id
+            action = { await undoDismiss(f.id) }
+            show(PaneNotice(kind: .success, headline: "Dismissed \(f.id).", detail: "It stays quiet until it recurs in twice as many sessions."))
+        } catch { fail(error) }
     }
 
     private func markFixed(_ f: PracticeFinding, note: String) async {
@@ -790,7 +848,7 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.markFixed(projectId: projectId, id: f.id, note: note)
             flash("Verification clock started for \(f.id)")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func escalate(_ f: PracticeFinding) async {
@@ -799,14 +857,14 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.escalate(projectId: projectId, id: f.id)
             flash("Escalated \(f.id)")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func setRule(_ r: PracticeRule, tier: String? = nil, status: String? = nil, global: Bool? = nil, message: String? = nil) async {
         guard let projectId else { return }
         busy = true; defer { busy = false }
         do { view = try await PracticeService.shared.updateRule(projectId: projectId, id: r.id, tier: tier, status: status, global: global, message: message) }
-        catch { flash(error.localizedDescription) }
+        catch { fail(error) }
     }
 
     private func fitWeights(apply: Bool) async {
@@ -816,7 +874,7 @@ struct PracticePane: View {
             let result = try await PracticeService.shared.fitWeights(apply: apply)
             fit = result
             if apply { flash("Weights applied (\(result.method))"); await refresh() }
-        } catch { flash(error.localizedDescription); showFit = false }
+        } catch { fail(error); showFit = false }
     }
 
     private func requestDraft(findingId: String) async {
@@ -826,7 +884,7 @@ struct PracticePane: View {
             let d = try await PracticeService.shared.draft(projectId: projectId, id: findingId)
             draft = d; draftText = d.message
         } catch {
-            flash(error.localizedDescription)
+            fail(error)
             draftFor = nil; draftForRule = nil
         }
     }
@@ -837,7 +895,7 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.approve(projectId: projectId, id: findingId, tier: nil, global: false, message: message)
             flash("Rule created for \(findingId)")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func adopt(_ s: PracticeStarterRule) async {
@@ -846,14 +904,14 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.adopt(projectId: projectId, ruleId: s.ruleId)
             flash("Adopted \(s.title) — verification starts now")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func setSchedule(enabled: Bool?, hour: Int?, windowDays: Int? = nil) async {
         do {
             _ = try await PracticeService.shared.updateConfig(enabled: enabled, hour: hour, windowDays: windowDays)
             await refresh()
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
     private func resetFindings() async {
@@ -863,14 +921,30 @@ struct PracticePane: View {
         do {
             view = try await PracticeService.shared.resetFindings(projectId: projectId)
             flash("findings cleared — run the pass to re-read the window")
-        } catch { flash(error.localizedDescription) }
+        } catch { fail(error) }
     }
 
+    /// Something worked. Says so, and gets out of the way on its own.
     private func flash(_ text: String) {
-        withAnimation { toast = text }
+        undoable = nil
+        action = nil
+        show(PaneNotice(kind: .success, text: text))
+    }
+
+    /// Something failed. Stays until dismissed, because it is the message
+    /// that mattered — and carries Retry when there is something to retry.
+    private func fail(_ error: Error, retry again: (() async -> Void)? = nil) {
+        undoable = nil
+        action = again
+        show(PaneNotice(kind: .error, text: error.localizedDescription))
+    }
+
+    private func show(_ n: PaneNotice) {
+        withAnimation { notice = n }
+        guard case .auto(let seconds) = n.dismissal else { return }
         Task {
-            try? await Task.sleep(for: .seconds(4))
-            withAnimation { if toast == text { toast = nil } }
+            try? await Task.sleep(for: .seconds(seconds))
+            withAnimation { if notice == n { notice = nil } }
         }
     }
 }

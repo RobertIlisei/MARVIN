@@ -1196,6 +1196,38 @@ export function markFindingFixed(projectId: string, findingId: string, note: str
   return true;
 }
 
+/**
+ * Undo a dismissal (ADR-0114 addition, 2026-09-11).
+ *
+ * Dismissing was a one-way door: one click behind a required reason, with no
+ * reverse anywhere in the pane or the API. The only way back was to wait for
+ * the finding to recur in twice as many sessions, which is the automatic
+ * un-dismissal at `recomputeStates` — and this is deliberately the SAME
+ * transition, asked for by a person instead of earned by recurrence: back to
+ * `observed`, the three dismissal fields cleared, and the next run free to
+ * promote it again if it still crosses the threshold.
+ *
+ * What it does NOT undo is the rule a dismissal retired. Re-creating a rule is
+ * an approval, not an undo, and it is one click away in the same row. The
+ * caller is told so rather than left to assume.
+ */
+export function undismissFinding(
+  projectId: string,
+  findingId: string,
+): { ok: boolean; reason?: string; ruleStillRetired?: boolean } {
+  const ledger = readLedger(projectId);
+  const f = ledger.findings[findingId];
+  if (!f) return { ok: false, reason: "no such finding" };
+  if (f.state !== "dismissed") return { ok: false, reason: `${findingId} is ${f.state}, not dismissed` };
+  const hadRule = !!f.dismissReason && f.ruleId === undefined;
+  f.state = "observed";
+  delete f.dismissedAt;
+  delete f.dismissReason;
+  delete f.dismissedAtSessions;
+  writeLedger(ledger);
+  return { ok: true, ...(hadRule ? { ruleStillRetired: true } : {}) };
+}
+
 export function dismissFinding(projectId: string, findingId: string, reason: string): boolean {
   const ledger = readLedger(projectId);
   const f = ledger.findings[findingId];
