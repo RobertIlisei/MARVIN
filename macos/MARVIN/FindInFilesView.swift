@@ -59,6 +59,15 @@ struct FindInFilesView: View {
             MarvinDivider()
             resultArea
         }
+        // All seven panes stay mounted in one ZStack, so the widest intrinsic
+        // minimum among them is the minimum for the whole sidebar — and when
+        // one pane demands more than the split allows, the HStack overflows
+        // and pushes the 44pt activity rail off the left edge. That is the
+        // "other buttons disappear from the side bar" report of 2026-09-11,
+        // and the same regression as 2026-08-29. A pane absorbs compression
+        // and clips; it never negotiates for width (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Search bar
@@ -209,6 +218,8 @@ struct FindInFilesView: View {
                     Text("\(matchTotal) result\(matchTotal == 1 ? "" : "s") in \(results.count) file\(results.count == 1 ? "" : "s")")
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             .padding(.horizontal, 8)
@@ -272,7 +283,7 @@ struct FindInFilesView: View {
         } label: {
             Text(label)
                 .font(.system(size: 11, design: .monospaced))
-                .frame(minWidth: 26, minHeight: 22)
+                .frame(minHeight: 18)
                 .contentShape(Rectangle())
         }
         .rowChip(on.wrappedValue ? .primary : .neutral)
@@ -295,7 +306,7 @@ struct FindInFilesView: View {
         } else if query.isEmpty {
             PaneEmptyView(state: PaneEmptyState(
                 headline: "Search every file in this project",
-                hint: "`Aa` matches case, `\\b` whole words, `.*` treats the query as a regular expression. The filter below narrows it to matching paths.",
+                hint: "Aa matches case · \\b whole words · .* regex",
                 symbol: "magnifyingglass"
             ))
             .frame(maxHeight: .infinity)

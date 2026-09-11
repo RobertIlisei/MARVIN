@@ -27,6 +27,7 @@ struct PaneEmptyView: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(MarvinTheme.textMuted)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             if let hint = state.hint {
                 Text(hint)
                     .font(.system(size: 10.5))
@@ -40,8 +41,12 @@ struct PaneEmptyView: View {
                     .padding(.top, 2)
             }
         }
+        // A readable column, capped. Prose that is allowed to be as wide as
+        // the pane makes the pane as wide as the prose, and all seven panes
+        // share one minimum width because they stay mounted together.
+        .frame(maxWidth: 260)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 16)
         .padding(.vertical, 24)
     }
 }

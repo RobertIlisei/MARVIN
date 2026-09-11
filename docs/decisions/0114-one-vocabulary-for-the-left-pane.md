@@ -139,3 +139,20 @@ tests green for the one runtime change (`undismissFinding`, 2 new tests).
 Still owed, and honestly: the narrow-width pass and the Tab-through-the-pane
 pass are manual, and have not been done — they need the rebuilt app in front of
 a person.
+
+## Amendment (2026-09-11) — the narrow-width pass, run by the user
+
+The ADR closed with two checks marked owed: the narrow-width pass and the keyboard pass. The user ran the first one with the sidebar dragged in, and it found four failures the seven milestones had not.
+
+**Rows wrapped character by character.** Plugins, Skills and Practice turned into columns of single letters at narrow widths: `Anthropic` became a vertical strip, `claude-plugins-official` another, `regressed` a red one. The mechanism is the same everywhere — a `Text` squeezed below the width of its own longest word wraps at every character rather than truncating, and a `Capsule` around it grows to match. Three rules now hold across the panes:
+
+- **A chip never wraps.** `InlineChipStyle` and every hand-rolled badge take `.lineLimit(1)` plus `.fixedSize(horizontal: true, vertical: false)`: a chip keeps its intrinsic width and its *row* clips it.
+- **A name truncates, a description truncates, and the name wins.** Identity gets `.layoutPriority(1)` and `.truncationMode(.middle)`; provenance and prose give way first, at the tail.
+- **A row clips rather than reflows.** `.frame(minWidth: 0, alignment: .leading)` plus `.clipped()` on the row and on `paneRow`.
+
+**The Search pane pushed the activity rail off the window.** Reported as *"other buttons disappear from the side bar"* — the same regression as 2026-08-29, and exactly the one this ADR's first constraint was written against. The rule was stated and then not enforced: the components obeyed it, the *panes* were never guarded. Every pane root now ends with `.frame(minWidth: 0, maxWidth: .infinity).clipped()`, so a pane absorbs compression and clips instead of negotiating for width, whatever it contains. `PaneEmptyView` was the specific offender to fix as well: its prose was allowed to be as wide as the pane, which made the pane as wide as the prose. It now lays out in a 260pt column, and Search's hint went from a two-sentence paragraph to one line of three terms.
+
+**Generate was accent text on an accent fill**, barely readable, and the only remaining bespoke button in the commit composer. It wears the chip vocabulary now, which gives it a stroke and a deeper fill, and removes one more private shape.
+
+The lesson worth keeping: **a constraint written into an ADR is not enforced until something enforces it.** The three rules were all stated in the Decision, and all three components honoured them — but nothing checked the panes themselves, and the panes are where the width is actually decided. The narrow-width pass is the check, and it belongs in the loop rather than at the end of it.
+

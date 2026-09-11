@@ -145,6 +145,12 @@ struct PluginsPane: View {
         }
         .task(id: bridge.projectWorkDir) { await refresh() }
         .sheet(isPresented: $installSheetOpen) { installSheet }
+        // A pane absorbs compression and clips; it never negotiates for
+        // width. All seven stay mounted in one ZStack, so the widest
+        // intrinsic minimum among them becomes the sidebar's, and the
+        // overflow pushes the 44pt rail off the left edge (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Content
@@ -234,14 +240,26 @@ struct PluginsPane: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(p.name).font(.body.monospaced())
+                    Text(p.name)
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
                     if let v = p.version, !v.isEmpty, v != "unknown" {
-                        Text("v\(v)").font(.caption2).foregroundStyle(.tertiary)
+                        Text("v\(v)")
+                            .font(.system(size: 9.5).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     authorChip(author: p.author, marketplace: p.marketplace)
                 }
                 if let d = p.description, !d.isEmpty {
-                    Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(d)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                 }
                 contributionChips(p)
             }
@@ -249,6 +267,8 @@ struct PluginsPane: View {
             updateControl(p)
         }
         .padding(.vertical, 3)
+        .frame(minWidth: 0, alignment: .leading)
+        .clipped()
         .contextMenu { pluginMenu(p) }
     }
 
@@ -317,6 +337,8 @@ struct PluginsPane: View {
         let tint: Color = caution ? .orange : (loaded ? Color.accentColor : .secondary)
         return Text(text)
             .font(.system(size: 9.5, design: .monospaced))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(tint)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(tint.opacity(caution ? 0.16 : 0.12)))
@@ -327,6 +349,8 @@ struct PluginsPane: View {
     private func statusChip(_ text: String, tint: Color) -> some View {
         Text(text)
             .font(.system(size: 9.5))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(tint)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(tint.opacity(0.14)))
@@ -343,7 +367,10 @@ struct PluginsPane: View {
                     if isAnthropic {
                         Image(systemName: "checkmark.seal.fill").font(.system(size: 8))
                     }
-                    Text(author).font(.caption2)
+                    Text(author)
+                        .font(.system(size: 9.5))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .foregroundStyle(isAnthropic ? Color.accentColor : Color.secondary)
                 .padding(.horizontal, 5).padding(.vertical, 1)
@@ -352,9 +379,20 @@ struct PluginsPane: View {
                 )
             }
             if let marketplace, !marketplace.isEmpty {
-                Text(marketplace).font(.caption2).foregroundStyle(.tertiary)
+                // The one thing here allowed to truncate: it is provenance,
+                // not identity, and it is the longest string on the row.
+                Text(marketplace)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
+        // Never taller than one line, whatever the width: an author chip that
+        // reflows into a column of letters is what narrow panes produced
+        // before (2026-09-11).
+        .frame(minWidth: 0, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Marketplace catalog (browse + one-click install)

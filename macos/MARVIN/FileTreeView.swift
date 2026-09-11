@@ -278,6 +278,12 @@ struct FileTreeView: View {
             )
             return .handled
         }
+        // A pane absorbs compression and clips; it never negotiates for
+        // width. All seven stay mounted in one ZStack, so the widest
+        // intrinsic minimum among them becomes the sidebar's, and the
+        // overflow pushes the 44pt rail off the left edge (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     /// Phase 3c — handle a tap on a row. Files dispatch through the

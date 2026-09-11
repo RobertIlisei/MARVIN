@@ -56,6 +56,12 @@ struct InlineChipStyle: ButtonStyle {
         let pressed = configuration.isPressed
         return configuration.label
             .font(.system(size: compact ? 10 : 10.5, weight: .medium))
+            // Squeezed below its own width, a Text wraps at every character
+            // and a chip becomes a vertical strip of letters — which is what
+            // the panes did at narrow widths (2026-09-11). A chip keeps its
+            // intrinsic width and lets its ROW clip it instead.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(foreground)
             .padding(.horizontal, compact ? 7 : 8)
             .padding(.vertical, compact ? 2.5 : 3)

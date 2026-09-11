@@ -694,6 +694,12 @@ struct SourceControlView: View {
                 model.prepareMergeRequest(slugs: slugs, name: name, message: message, push: push, openMergeRequest: openMR)
             }
         }
+        // A pane absorbs compression and clips; it never negotiates for
+        // width. All seven stay mounted in one ZStack, so the widest
+        // intrinsic minimum among them becomes the sidebar's, and the
+        // overflow pushes the 44pt rail off the left edge (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     private func syncFromBridge() {
@@ -1018,23 +1024,23 @@ struct SourceControlView: View {
         Button {
             model.generateCommitMessage()
         } label: {
+            // Accent text on an accent fill at 0.18 is accent-on-accent, and
+            // the user could barely read it (2026-09-11). The chip vocabulary
+            // solves this with a stroke and a deeper fill, and it is what
+            // every other button in the pane already wears — so this is one
+            // less bespoke shape as well (ADR-0114).
             HStack(spacing: 3) {
                 if model.isGenerating {
                     ProgressView().controlSize(.small).scaleEffect(0.55)
                 } else {
                     Image(systemName: "sparkles").font(.system(size: 9))
                 }
-                Text("Generate").font(.system(size: 10, weight: .medium))
+                Text("Generate")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.accentColor.opacity(model.isGenerating ? 0.10 : 0.18))
-            )
-            .foregroundStyle(Color.accentColor)
         }
-        .buttonStyle(.plain)
+        .rowChip(.primary)
         .disabled(model.isGenerating || model.staged.isEmpty)
         .help(model.staged.isEmpty
             ? "Stage something to draft a message from"

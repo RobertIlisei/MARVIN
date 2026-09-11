@@ -251,6 +251,12 @@ struct SkillsPane: View {
         }
         .sheet(isPresented: $addSheetOpen) { addFromGitSheet }
         .sheet(item: $bindSourceFor) { target in bindSourceSheet(target) }
+        // A pane absorbs compression and clips; it never negotiates for
+        // width. All seven stay mounted in one ZStack, so the widest
+        // intrinsic minimum among them becomes the sidebar's, and the
+        // overflow pushes the 44pt rail off the left edge (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Add from GitHub (ADR-0039)
@@ -1153,10 +1159,16 @@ struct SkillsPane: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(name).font(.body.monospaced())
+                    Text(name)
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
                     if let badge {
                         Text(badge.uppercased())
-                            .font(.caption2)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background((loadIssue?.blocked == true ? Color.red : .orange).opacity(0.18))
@@ -1165,28 +1177,44 @@ struct SkillsPane: View {
                 }
                 if !description.isEmpty {
                     Text(description)
-                        .font(.caption)
+                        .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .truncationMode(.tail)
                 }
                 if let loadIssue {
                     Label(loadIssue.reason,
                           systemImage: loadIssue.blocked
                             ? "exclamationmark.triangle.fill" : "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(loadIssue.blocked ? Color.red : .orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .font(.system(size: 10))
+                        .foregroundStyle(loadIssue.blocked ? GitDecorationColor.deleted : .orange)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                 }
             }
-            Spacer()
+            Spacer(minLength: 4)
             skillUpdateControl(name: name, scope: scope, source: source)
             Button("View") {
                 openSkillFile(path)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .rowChip(.neutral)
+            .help("Open this skill's SKILL.md")
         }
         .padding(.vertical, 2)
+        // Clip rather than reflow: at a narrow width the trailing actions used
+        // to stack into columns of single letters (2026-09-11).
+        .frame(minWidth: 0, alignment: .leading)
+        .clipped()
+    }
+
+    private func skillStatusChip(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9.5))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.14)))
     }
 
     /// Update affordance for one skill (ADR-0071).
@@ -1202,29 +1230,24 @@ struct SkillsPane: View {
         if updatingSkill == key {
             ProgressView().controlSize(.small)
         } else if source?.updatable != true {
-            Button("Set source") {
+            Button("Set source…") {
                 bindURL = ""; bindError = nil
                 bindSourceFor = BindTarget(name: name, scope: scope)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
+            .rowChip(.neutral)
             .help("This skill has no recorded origin, so there's nothing to re-fetch. Give it the Git URL once and Update works from then on.")
         } else {
             HStack(spacing: 6) {
+                // One shape for three statuses, and none of them wraps.
                 if status == "update-available" {
-                    Text("update available")
-                        .font(.caption2)
-                        .foregroundStyle(Color.orange)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                    skillStatusChip("update available", tint: .orange)
                 } else if status == "up-to-date" {
-                    Text("up to date").font(.caption2).foregroundStyle(.tertiary)
+                    skillStatusChip("up to date", tint: MarvinTheme.textMuted)
                 } else if status == "updated" {
-                    Text("updated").font(.caption2).foregroundStyle(.green)
+                    skillStatusChip("updated", tint: GitDecorationColor.added)
                 }
                 Button("Update") { Task { await updateOneSkill(name: name, scope: scope) } }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
+                    .rowChip(.primary)
                     .disabled(updatingSkill != nil || checkingUpdates)
                     .help("Re-fetch from \(source?.url ?? "its recorded source"). Last updated \(source?.lastUpdated ?? "unknown")." )
             }

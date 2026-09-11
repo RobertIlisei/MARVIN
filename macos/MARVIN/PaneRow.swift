@@ -21,7 +21,8 @@ private struct PaneRowModifier: ViewModifier {
         content
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .clipped()
             .background(
                 RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip, style: .continuous)
                     .fill(selected ? MarvinTheme.rowSelected : (hovering ? MarvinTheme.rowHover : .clear))

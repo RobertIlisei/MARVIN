@@ -101,6 +101,12 @@ struct PracticePane: View {
         .sheet(item: $draftFor) { f in draftSheet(findingId: f.id, rule: nil) }
         .sheet(item: $draftForRule) { r in draftSheet(findingId: r.fingerprint, rule: r) }
         .modifier(PaneGeometryProbe(name: "PracticePane"))
+        // A pane absorbs compression and clips; it never negotiates for
+        // width. All seven stay mounted in one ZStack, so the widest
+        // intrinsic minimum among them becomes the sidebar's, and the
+        // overflow pushes the 44pt rail off the left edge (ADR-0114).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     // MARK: - Content
@@ -375,7 +381,11 @@ struct PracticePane: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 stateChip(f.state)
-                Text(f.id).font(.caption.monospaced().bold())
+                Text(f.id)
+                    .font(.system(size: 11, design: .monospaced).bold())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
                 Spacer()
                 // A success has no template and no pair, so its score is a
                 // constant (0.88 minus decay) — the session count is the fact.
@@ -384,6 +394,8 @@ struct PracticePane: View {
                     // denominator is the scale, and it costs four characters.
                     Text("\(String(format: "%.2f", f.value)) / 1.00")
                         .font(.system(size: 10.5, design: .monospaced).monospacedDigit())
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(.secondary)
                         .help("Value: recurrence, cost, rate, reliability, actionability, minus decay, on a 0–1 scale (ADR-0105 §3).")
                 }
@@ -424,14 +436,17 @@ struct PracticePane: View {
 
     @ViewBuilder
     private func findingActions(_ f: PracticeFinding) -> some View {
-        HStack(spacing: 8) {
+        // Clip rather than reflow. At a narrow width this row used to stack
+        // its verbs into columns of single letters (2026-09-11).
+        HStack(spacing: 6) {
             switch f.state {
             case "proposed", "observed":
                 if f.template {
                     approveMenu(f)
                 } else {
                     Text("report only — about MARVIN itself, not a behaviour a rule can change")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .font(.system(size: 9.5)).foregroundStyle(.tertiary)
+                        .lineLimit(2).truncationMode(.tail)
                 }
                 if f.template {
                     Button("Draft message") { draftText = ""; draft = nil; draftFor = f }
@@ -455,7 +470,11 @@ struct PracticePane: View {
                     .help("The rule is not holding. Move it one tier up and restart verification.")
                     .disabled(busy)
                 } else {
-                    Text("the code fix did not hold").font(.caption2).foregroundStyle(.orange)
+                    Text("the code fix did not hold")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     if f.template { approveMenu(f) }
                 }
                 fixedButton(f)
@@ -468,7 +487,10 @@ struct PracticePane: View {
             default:
                 EmptyView()
             }
+            Spacer(minLength: 0)
         }
+        .frame(minWidth: 0, alignment: .leading)
+        .clipped()
     }
 
     private func approveMenu(_ f: PracticeFinding) -> some View {
@@ -739,7 +761,12 @@ struct PracticePane: View {
         case "report": .purple
         default: .secondary
         }
-        return Text(state).font(.caption2.bold())
+        // `regressed` is nine characters in a 5pt-padded capsule; squeezed,
+        // it became a red column of letters (2026-09-11).
+        return Text(state)
+            .font(.system(size: 9, weight: .bold))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(color.opacity(0.18)))
             .foregroundStyle(color)
