@@ -15,6 +15,7 @@
 // change and after a mutation.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Wire types (decoded from /api/plugins)
@@ -95,7 +96,10 @@ struct PluginsPane: View {
     @State private var catalog: [CatalogPlugin] = []
     @State private var loadError: String?
     @State private var isLoading = false
-    @State private var toast: String?
+    /// The outcome of the last action, with its kind (ADR-0114). "Installed
+    /// marvin-graph" and "Install failed: HTTP 500" used to be the same
+    /// pixels behind the same puzzle-piece icon, both gone in three seconds.
+    @State private var notice: PaneNotice?
     /// Catalog search text + the one catalog entry currently installing.
     @State private var catalogSearch = ""
     @State private var installingFromCatalog: String?
@@ -125,21 +129,18 @@ struct PluginsPane: View {
     var body: some View {
         VStack(spacing: 0) {
             if bridge.projectWorkDir == nil {
-                emptyView("Open a project to manage its plugins.")
+                PaneEmptyView(state: .noProject("plugins"))
             } else if let err = loadError, plugins.isEmpty {
-                emptyView(err)
+                PaneEmptyView(
+                    state: PaneEmptyState(headline: "Could not read the installed plugins", hint: err, symbol: "exclamationmark.triangle"),
+                    actionTitle: "Retry",
+                    action: { Task { await refresh() } }
+                )
             } else {
                 content
             }
-            if let toast {
-                HStack {
-                    Image(systemName: "puzzlepiece.extension.fill")
-                    Text(toast).font(.caption)
-                    Spacer()
-                }
-                .padding(8)
-                .background(.tint.opacity(0.12))
-                .transition(.opacity)
+            if let notice {
+                PaneNoticeStrip(notice: notice, onDismiss: { withAnimation { self.notice = nil } })
             }
         }
         .task(id: bridge.projectWorkDir) { await refresh() }
@@ -156,14 +157,7 @@ struct PluginsPane: View {
             // out on the tab switch. `/api/plugins` answers in 3.7 ms — the
             // cost is layout, not data.
             LazyVStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 6) {
-                    Image(systemName: "puzzlepiece.extension").foregroundStyle(.tint)
-                    Text("Project plugins").font(.headline)
-                    Text("\(plugins.count)")
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                    Spacer()
+                PaneSectionHeader(title: "Project plugins", count: plugins.count, tint: Color.accentColor) {
                     paneActions
                 }
                 Text("Installed Claude Code plugins (from ~/.claude/plugins). Toggle one on to load its skills + commands + gated MCP + read-only agents for THIS project (ADR-0053/0054). Hooks are never loaded.")
@@ -227,16 +221,16 @@ struct PluginsPane: View {
     @ViewBuilder
     private func pluginRow(_ p: PluginSummary) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Button {
-                Task { await toggle(p) }
-            } label: {
-                Image(systemName: p.enabled ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(p.enabled ? Color.green : .secondary)
-                    .font(.system(size: 15))
-            }
-            .buttonStyle(.plain)
-            .help(p.enabled ? "Enabled for this project — click to disable."
-                            : "Disabled here — click to enable for this project.")
+            // A real switch. This was a `.buttonStyle(.plain)` SF Symbol with
+            // no hover, no press, no focus ring and no accessibility trait —
+            // and switching it on loads the plugin's MCP servers and agents
+            // into the model's tool surface (ADR-0114).
+            PaneEnableToggle(
+                isOn: p.enabled,
+                help: p.enabled ? "Enabled for this project — switch off to unload it here."
+                                : "Disabled here — switch on to load its skills, commands, gated MCP and read-only agents for this project."
+            ) { _ in Task { await toggle(p) } }
+            .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -255,6 +249,7 @@ struct PluginsPane: View {
             updateControl(p)
         }
         .padding(.vertical, 3)
+        .contextMenu { pluginMenu(p) }
     }
 
     /// Update affordance for one plugin (ADR-0071).
@@ -267,28 +262,29 @@ struct PluginsPane: View {
     private func updateControl(_ p: PluginSummary) -> some View {
         let status = updateStatus[p.key]
         if p.source?.updatable != true {
-            Text("no source")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
+            // A dead grey label sat here where Skills offers a control for the
+            // identical problem. Re-installing through MARVIN records the
+            // source, which is the way out — so it is a button (ADR-0114).
+            Button("Set source…") {
+                installError = nil; marketplacePlugins = []; marketplaceName = nil
+                installURL = p.source?.url ?? ""
+                installSheetOpen = true
+            }
+            .rowChip(.neutral)
+            .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
         } else if updatingKey == p.key {
             ProgressView().controlSize(.small)
         } else {
             HStack(spacing: 6) {
                 if status == "update-available" {
-                    Text("update available")
-                        .font(.caption2)
-                        .foregroundStyle(Color.orange)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.15)))
+                    statusChip("update available", tint: .orange)
                 } else if status == "up-to-date" {
-                    Text("up to date").font(.caption2).foregroundStyle(.tertiary)
+                    statusChip("up to date", tint: MarvinTheme.textMuted)
                 } else if status == "updated" {
-                    Text("updated").font(.caption2).foregroundStyle(.green)
+                    statusChip("updated", tint: GitDecorationColor.added)
                 }
                 Button("Update") { Task { await updateOne(p) } }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
+                    .rowChip(.primary)
                     .disabled(updatingKey != nil || checkingUpdates)
                     .help(sourceHelp(p.source))
             }
@@ -310,18 +306,30 @@ struct PluginsPane: View {
             if !p.commands.isEmpty { chip("\(p.commands.count) cmds", loaded: true) }
             if p.hasMcp { chip("MCP · gated", loaded: true) }
             if !p.agents.isEmpty { chip("\(p.agents.count) agents · read-only", loaded: true) }
-            if p.hasHooks { chip("hooks · off", loaded: false) }
+            // Not a count like the others: it is the one line that says what
+            // MARVIN refuses to load (ADR-0054). It reads as a caution, not as
+            // another tally.
+            if p.hasHooks { chip("hooks · off", loaded: false, caution: true) }
         }
     }
 
-    private func chip(_ text: String, loaded: Bool) -> some View {
-        Text(text)
-            .font(.caption2.monospaced())
-            .foregroundStyle(loaded ? Color.accentColor : .secondary)
+    private func chip(_ text: String, loaded: Bool, caution: Bool = false) -> some View {
+        let tint: Color = caution ? .orange : (loaded ? Color.accentColor : .secondary)
+        return Text(text)
+            .font(.system(size: 9.5, design: .monospaced))
+            .foregroundStyle(tint)
             .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(
-                Capsule().fill((loaded ? Color.accentColor : Color.secondary).opacity(0.12))
-            )
+            .background(Capsule().fill(tint.opacity(caution ? 0.16 : 0.12)))
+    }
+
+    /// One shape for every update status. Three existed: a capsule, grey text
+    /// and green text, for three states of the same thing (ADR-0114).
+    private func statusChip(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9.5))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.14)))
     }
 
     /// Provenance: a sealed "Anthropic" badge for first-party plugins, the
@@ -360,6 +368,15 @@ struct PluginsPane: View {
         let rank: Int
     }
 
+    /// Whether the catalog list is a search result rather than the head of
+    /// the list.
+    private var searching: Bool {
+        !catalogSearch.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// How many entries the current search actually matched, before the cap.
+    private var matchCount: Int { rankedCatalog.count }
+
     private var filteredCatalog: [CatalogPlugin] {
         let available = catalog.filter { !$0.installed }
         let q = catalogSearch.trimmingCharacters(in: .whitespaces).lowercased()
@@ -386,6 +403,21 @@ struct PluginsPane: View {
         return ranked.prefix(50).map { $0.plugin }
     }
 
+    /// The same ranking, uncapped — only its count is used, so the cap above
+    /// can say what it left out.
+    private var rankedCatalog: [CatalogPlugin] {
+        let available = catalog.filter { !$0.installed }
+        let q = catalogSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return available }
+        return available.filter { p in
+            let name = p.name.lowercased()
+            return name.contains(q)
+                || (p.author ?? "").lowercased().contains(q)
+                || (p.description ?? "").lowercased().contains(q)
+                || (p.category ?? "").lowercased().contains(q)
+        }
+    }
+
     @ViewBuilder
     private var catalogSection: some View {
         let availableCount = catalog.filter { !$0.installed }.count
@@ -410,15 +442,55 @@ struct PluginsPane: View {
                     .font(.caption).foregroundStyle(.tertiary)
             } else {
                 ForEach(shown) { c in catalogRow(c) }
-                if catalogSearch.trimmingCharacters(in: .whitespaces).isEmpty && availableCount > shown.count {
+                // Both caps are now named. The unsearched list was capped at
+                // 15 and said so; a SEARCH capped at 50 said nothing, so a
+                // query matching 80 silently showed 50 (ADR-0114).
+                if searching {
+                    if matchCount > shown.count {
+                        Text("Showing the closest \(shown.count) of \(matchCount) matches — narrow the search to see the rest.")
+                            .font(.system(size: 9.5)).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else if availableCount > shown.count {
                     Text("Showing \(shown.count) of \(availableCount) — search to find more.")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .font(.system(size: 9.5)).foregroundStyle(.tertiary)
                 }
             }
         }
     }
 
+    /// What a row offers beyond enable/disable.
+    ///
+    /// Deliberately NOT an uninstall. MARVIN clones a plugin but records it in
+    /// `~/.claude/plugins/installed_plugins.json`, which Claude Code owns and
+    /// both tools read — removing one from there is a cross-tool destructive
+    /// edit, and Claude Code's own `/plugin` UI is where it belongs. What was
+    /// missing here was any way to *get at* the thing, which is this
+    /// (ADR-0114).
     @ViewBuilder
+    private func pluginMenu(_ p: PluginSummary) -> some View {
+        // `/api/plugins` does not send an install path, so this opens the
+        // directory every plugin lives in rather than inventing a field.
+        Button("Reveal the plugins folder") {
+            let root = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/plugins")
+            NSWorkspace.shared.activateFileViewerSelecting([root])
+        }
+        Button("Copy plugin name") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(p.name, forType: .string)
+        }
+        if let url = p.source?.url, !url.isEmpty {
+            Button("Copy source URL") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url, forType: .string)
+            }
+        }
+        Divider()
+        Button("Uninstalling is Claude Code's /plugin UI") {}
+            .disabled(true)
+    }
+
     private func catalogRow(_ c: CatalogPlugin) -> some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -558,16 +630,34 @@ struct PluginsPane: View {
             if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                     ?? "HTTP \(http.statusCode)"
-                await MainActor.run { toast = "Install failed: \(detail)" }
+                await MainActor.run { fail("Could not install \(c.name)", detail) }
             } else {
-                await MainActor.run { toast = "Installed \(c.name) — toggle it on above." }
+                await MainActor.run { flash("Installed \(c.name) — toggle it on above.") }
                 await refresh()
             }
         } catch {
-            await MainActor.run { toast = "Install failed: \(error.localizedDescription)" }
+            await MainActor.run { fail("Could not install \(c.name)", error.localizedDescription) }
         }
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await MainActor.run { toast = nil }
+    }
+
+    /// Something worked; it leaves on its own.
+    @MainActor private func flash(_ text: String) {
+        show(PaneNotice(kind: .success, text: text))
+    }
+
+    /// Something failed; it stays until dismissed. The sentence is ours, the
+    /// machine's words go underneath (ADR-0114).
+    @MainActor private func fail(_ headline: String, _ detail: String) {
+        show(PaneNotice(kind: .error, headline: headline, detail: detail))
+    }
+
+    @MainActor private func show(_ n: PaneNotice) {
+        withAnimation { notice = n }
+        guard case .auto(let seconds) = n.dismissal else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            withAnimation { if notice == n { notice = nil } }
+        }
     }
 
     /// Flip one plugin's enabled state → POST the full enabled set.
@@ -589,14 +679,18 @@ struct PluginsPane: View {
                 let parsed = try? JSONDecoder().decode(PluginsResponse.self, from: data)
                 await MainActor.run {
                     if let parsed { plugins = parsed.plugins }
-                    toast = p.enabled ? "Disabled \(p.name)" : "Enabled \(p.name)"
+                    flash(p.enabled ? "Disabled \(p.name)" : "Enabled \(p.name)")
                 }
+            } else {
+                // A non-2xx that did not throw used to do nothing at all, so a
+                // refused toggle looked exactly like a no-op (ADR-0114).
+                let http = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"] ?? "HTTP \(http)"
+                await MainActor.run { fail("Could not change \(p.name)", detail) }
             }
         } catch {
-            await MainActor.run { toast = "Toggle failed: \(error.localizedDescription)" }
+            await MainActor.run { fail("Could not change \(p.name)", error.localizedDescription) }
         }
-        try? await Task.sleep(nanoseconds: 2_500_000_000)
-        await MainActor.run { toast = nil }
     }
 
     private func install(plugin: String? = nil) async {
@@ -635,13 +729,11 @@ struct PluginsPane: View {
             }
             if let installed = decoded?.installed {
                 await MainActor.run {
-                    toast = "Installed \(installed.name) — enable it below."
+                    flash("Installed \(installed.name) — enable it below.")
                     installSheetOpen = false
                     installURL = ""; marketplacePlugins = []; marketplaceName = nil
                 }
                 await refresh()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await MainActor.run { toast = nil }
                 return
             }
             await MainActor.run { installError = decoded?.error ?? "Nothing was installed." }
@@ -665,7 +757,7 @@ struct PluginsPane: View {
             let (data, _) = try await URLSession.shared.data(for: req)
             return try? JSONDecoder().decode(UpdateResponse.self, from: data)
         } catch {
-            await MainActor.run { toast = "Update check failed: \(error.localizedDescription)" }
+            await MainActor.run { fail("Update check failed", error.localizedDescription) }
             return nil
         }
     }
@@ -683,17 +775,19 @@ struct PluginsPane: View {
             let available = results.filter { $0.status == "update-available" }.count
             let failed = results.filter { $0.status == "error" }.count
             if results.isEmpty {
-                toast = "Nothing to check — no plugin here was installed by MARVIN."
+                show(PaneNotice(kind: .info, text: "Nothing to check — no plugin here was installed by MARVIN."))
             } else if available == 0 {
-                toast = failed == 0
-                    ? "All \(results.count) up to date."
-                    : "All up to date (\(failed) could not be checked)."
+                if failed == 0 {
+                    flash("All \(results.count) up to date.")
+                } else {
+                    // Something could not be checked. That is a warning, and a
+                    // warning waits to be read (ADR-0114).
+                    show(PaneNotice(kind: .warning, headline: "All up to date, but \(failed) could not be checked.", detail: "They have no recorded source, or the fetch failed."))
+                }
             } else {
-                toast = "\(available) update\(available == 1 ? "" : "s") available."
+                flash("\(available) update\(available == 1 ? "" : "s") available.")
             }
         }
-        try? await Task.sleep(nanoseconds: 4_000_000_000)
-        await MainActor.run { toast = nil }
     }
 
     /// Fetch and install the latest for one plugin.
@@ -703,7 +797,7 @@ struct PluginsPane: View {
 
         guard let resp = await postUpdate(body: ["key": p.key]) else { return }
         guard let outcome = resp.results?.first else {
-            await MainActor.run { toast = resp.error ?? "Update failed." }
+            await MainActor.run { fail("Could not update \(p.name)", resp.error ?? "The update returned nothing.") }
             return
         }
         await MainActor.run {
@@ -711,18 +805,18 @@ struct PluginsPane: View {
             switch outcome.status {
             case "updated":
                 let to = outcome.toVersion.map { " → v\($0)" } ?? ""
-                toast = "Updated \(outcome.name)\(to)."
+                flash("Updated \(outcome.name)\(to).")
             case "up-to-date":
-                toast = "\(outcome.name) is already up to date."
+                flash("\(outcome.name) is already up to date.")
             default:
-                toast = "Update failed: \(outcome.error ?? "unknown error")"
+                fail("Could not update \(outcome.name)", outcome.error ?? "unknown error")
             }
         }
         if outcome.status == "updated" { await refresh() }
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await MainActor.run { toast = nil }
     }
 
+    /// Kept for the in-section placeholders, which are a sentence in a list
+    /// rather than a whole-pane state (ADR-0114).
     @ViewBuilder
     private func emptyView(_ message: String) -> some View {
         VStack {
