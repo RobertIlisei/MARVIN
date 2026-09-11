@@ -93,7 +93,42 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   `marvin/memory.md`, missed the `.marvin/` carve-out and counted as a merge
   blocker on every real project.
 
-  **Verification.** Sidecar 96 files / 1379 tests green, `tsc` clean; Swift 847
+  **Six more, from a review of a week's real use.** Asked to look again
+  because *"I still feel like there are broken things"*, on a project holding
+  four open tab worktrees, fourteen unpushed merge commits and thirty-eight
+  session records ([ADR-0107](../decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)
+  Addendum 8). A tab closed with **Merge** was dead forever: `/api/chat`
+  refused a missing checkout before reaching the recut, and a missing checkout
+  is the *normal* end state of close-with-merge. Pressing **Stop** was recorded
+  as a failure, so the tab sat in *Needs you* under a red cross and replayed
+  "Claude Code process aborted by user" as an error banner on every switch back
+  — there is a third outcome now, `stopped`, deliberately not folded into
+  `interrupted`, because that flag is what the resume list offers and resuming
+  a turn someone stopped by hand is the opposite of what they asked for.
+  Answering a confirm from the Sessions pane wrote its optimistic clear under
+  an empty session key, onto a phantom ledger entry, so the row never cleared.
+  A snapshot composed before an answer landed put the question back and re-lit
+  the dock badge. **Reclaim** and **Merge** in the Source Control panel skipped
+  `isSessionBusy` — two of seven call sites passed it — so a closed tab running
+  a **Sync** turn could have its checkout and branch deleted underneath it. And
+  boot recovery minted an *open*, untitled session record on every restart,
+  eleven of which had accumulated with a Resume affordance nobody wanted. Seven
+  further defects are recorded as known and unfixed in the addendum, chief among
+  them that nothing in the merge path knows a branch can be **protected on the
+  remote** — on the measured project `main` accepts pushes from *No one*, so
+  *Merge all* produces commits that can never leave the machine.
+
+  **And the popover that could not say what its buttons did.** The branch
+  chip's popover rendered `Switch to ow…`, `Edit lane…`, `Open in Ses…`: four
+  controls of four different kinds sharing one row in a popover that set no
+  width, so the layout pass negotiated the labels away. Rebuilt from what each
+  control is — a fixed 340pt (the width the posture popover beside it already
+  used), one full-width primary action that cannot truncate, *Edit* moved onto
+  the Lane row it edits, the leaving-the-branch choices stacked so *Keep for
+  integration & switch* stays a whole sentence, and navigation demoted to links
+  under a divider ([ADR-0112](../decisions/0112-one-place-for-each-thing.md)).
+
+  **Verification.** Sidecar 96 files / 1380 tests green, `tsc` clean; Swift 855
   assertions. Live: tab strip and steppers checked on screen; Prepare MR run
   end to end on a real project (six branches, one conflict, push and merge
   request observed). The two-tab backlog race is not yet checked on the

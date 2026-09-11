@@ -100,7 +100,11 @@ in the integration path: Merge now refuses only the files it would overwrite, a 
 is a job the panel watches to its end, and a run stopped by a conflict neither pushes nor
 claims in its commit message to carry branches it dropped. Then the panes got the
 affordance pass they needed: one chip vocabulary, a hierarchy per section, outcomes that
-carry their kind, and the Sessions focus ring moved off the pane and onto the row.
+carry their kind, and the Sessions focus ring moved off the pane and onto the row. A
+review of a week's real use closed six more — a merged tab that could never be reopened,
+Stop recorded as a failure, confirms that would not clear or would come back, a sweep that
+could delete a branch mid-Sync, and a session record minted on every restart — and the
+branch chip's popover was rebuilt around a fixed width and one full-width action.
 v0.1.111 (close-with-merge) shipped the day before.
 Details in the [changelog](./history/CHANGELOG.md).
 
