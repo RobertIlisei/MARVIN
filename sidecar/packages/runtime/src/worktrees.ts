@@ -754,12 +754,31 @@ export function sweepWorktrees(
  * `.marvin/*` is MARVIN's own bookkeeping, dirty on every real project.
  */
 function dirtyTrackedPaths(workDir: string): string[] {
-  return gitOr(workDir, ["status", "--porcelain", "--untracked-files=no"], "")
-    .split("\n")
-    .filter(Boolean)
+  // NOT `gitOr`: that trims the whole output, and `git status --porcelain` is
+  // column-oriented — an unstaged change starts with a SPACE (" M path"), so
+  // trimming eats the first line's first column and shifts its path by one
+  // character. It showed up as a merge refused over "EADME.md", and as
+  // `.marvin/` bookkeeping read as "marvin/…", which does not match the
+  // `.marvin/` carve-out and so counted as a real blocker (2026-09-11).
+  return gitRawLines(workDir, ["status", "--porcelain", "--untracked-files=no"])
     .map((l) => l.slice(3).replace(/^"|"$/g, ""))
     .map((p) => (p.includes(" -> ") ? p.slice(p.lastIndexOf(" -> ") + 4) : p))
     .filter((p) => !p.startsWith(".marvin/"));
+}
+
+/**
+ * Lines of a git command's output, untrimmed. For column-oriented output
+ * (`status --porcelain`), trimming is not cosmetic: it changes what the
+ * columns mean.
+ */
+function gitRawLines(workDir: string, args: string[]): string[] {
+  try {
+    return execFileSync("git", args, { cwd: workDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })
+      .split("\n")
+      .filter((l) => l.length > 0);
+  } catch {
+    return [];
+  }
 }
 
 /** Files `branch` changes since it diverged from HEAD (`HEAD...branch`). */
@@ -898,6 +917,36 @@ function mergeSubject(branch: string): string {
   return `Merge branch '${branch}'`;
 }
 
+/**
+ * The files git named as conflicted, from a failed merge's own output.
+ *
+ * What the panel used to show instead, in full (2026-09-11): *"Merge of
+ * marvin/tab/feat-billing-… into main failed and was aborted: Command failed:
+ * git merge --no-ff -m Merge branch 'marvin/tab/feat-billing…"* — the command
+ * MARVIN ran, which the user did not type and cannot act on, in place of the
+ * one fact that matters: which files clash. An error says what went wrong and
+ * what to do about it.
+ */
+export function conflictedFiles(output: string): string[] {
+  const out: string[] = [];
+  for (const line of output.split("\n")) {
+    const m = /^CONFLICT \(.*?\): Merge conflict in (.+)$/.exec(line.trim())
+      ?? /^CONFLICT \(.*?\): (?:.*? )?(?:in|of) (.+?) (?:deleted|renamed|added) /.exec(line.trim());
+    if (m?.[1]) {
+      const file = m[1].trim();
+      if (file && !out.includes(file)) out.push(file);
+    }
+  }
+  return out;
+}
+
+/** `a.ts, b.ts and 3 more` — a list a person reads, not a wall. */
+export function describeConflicts(files: string[]): string {
+  if (files.length === 0) return "";
+  const shown = files.slice(0, 3).join(", ");
+  return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
+}
+
 export function mergeWorktree(
   workDir: string,
   slug: string,
@@ -935,7 +984,15 @@ export function mergeWorktree(
     git(workDir, ["merge", "--no-ff", "-m", mergeSubject(w.branch), "-m", w.task, w.branch]);
   } catch (err) {
     gitOk(workDir, ["merge", "--abort"]);
-    return fail(`Merge of ${w.branch} into ${onto} failed and was aborted: ${err instanceof Error ? err.message : String(err)}`);
+    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+    const files = conflictedFiles(`${e.stdout ?? ""}\n${e.stderr ?? ""}`);
+    if (files.length > 0) {
+      return fail(
+        `${w.branch} conflicts with ${onto} in ${describeConflicts(files)}. Nothing changed — the merge was aborted. Sync that branch to resolve it in the tab that wrote it, then merge again.`,
+      );
+    }
+    const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-3).join("\n");
+    return fail(`Merge of ${w.branch} into ${onto} failed and was aborted. ${detail || (err instanceof Error ? err.message : String(err))}`);
   }
   return {
     ok: true,

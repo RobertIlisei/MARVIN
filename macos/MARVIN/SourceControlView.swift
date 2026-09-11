@@ -61,8 +61,9 @@ final class SourceControlModel {
     private(set) var stashes: [GitStashEntry] = []
     /// Implementer worktrees (ADR-0103), state derived from git server-side.
     private(set) var worktrees: [WorktreeEntry] = []
-    /// Result of the last merge/sweep, shown inline until the next action.
-    var worktreeNotice: String? = nil
+    /// Result of the last merge/sweep, shown inline until the next action —
+    /// with its kind, so a failure never renders like a success.
+    var worktreeNotice: PaneNotice? = nil
     private(set) var worktreeBusy: Bool = false
 
     /// ADR-0109 amendment — the running integration, polled from the sidecar.
@@ -102,7 +103,10 @@ final class SourceControlModel {
                         announcedJobId = job.id
                         // The outcome, even when the HTTP call that started it
                         // timed out or was never waited on.
-                        worktreeNotice = IntegrationJobStatus.finishedNotice(ok: job.ok ?? false, summary: job.summary ?? "")
+                        worktreeNotice = PaneNotice(
+                            kind: (job.ok ?? false) ? .success : .error,
+                            text: IntegrationJobStatus.finishedNotice(ok: job.ok ?? false, summary: job.summary ?? "")
+                        )
                         refresh(cwd: cwd, force: true)
                     }
                     return
@@ -209,9 +213,12 @@ final class SourceControlModel {
             defer { worktreeBusy = false }
             do {
                 let out = try await FilesService.shared.mergeWorktree(cwd: cwd, slug: slug)
-                worktreeNotice = out.message ?? out.error ?? "Merge finished."
+                worktreeNotice = PaneNotice(
+                    kind: out.ok == true ? .success : .warning,
+                    text: out.message ?? out.error ?? "Merge finished."
+                )
             } catch {
-                worktreeNotice = "Merge failed: \(error)"
+                worktreeNotice = PaneNotice(kind: .error, text: "Merge failed: \(error)")
             }
             refresh(cwd: cwd, force: true)
         }
@@ -236,14 +243,17 @@ final class SourceControlModel {
                 )
                 var lines: [String] = [out.summary ?? out.error ?? "Done."]
                 for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
-                worktreeNotice = lines.joined(separator: "\n")
+                worktreeNotice = PaneNotice(
+                    kind: out.ok != true ? .warning : (out.stopped != nil ? .warning : .success),
+                    text: lines.joined(separator: "\n")
+                )
                 if let url = out.pushed?.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
             } catch FilesServiceError.transport(let underlying) where (underlying as? URLError)?.code == .timedOut {
                 // The sidecar keeps going when the client stops waiting; the
                 // outcome is in its log and the branch appears on refresh.
-                worktreeNotice = "Prepare MR is taking longer than the app waited — the project's commit hooks are probably still running in the sidecar. Refresh in a minute: the mr/ branch appears once the squash commit lands, and ~/Library/Logs/MARVIN/sidecar.log has the outcome."
+                worktreeNotice = PaneNotice(kind: .warning, text: "Prepare MR is taking longer than the app waited — the project's commit hooks are probably still running in the sidecar. Refresh in a minute: the mr/ branch appears once the squash commit lands, and ~/Library/Logs/MARVIN/sidecar.log has the outcome.")
             } catch {
-                worktreeNotice = "Prepare MR failed: \(error)"
+                worktreeNotice = PaneNotice(kind: .error, text: "Prepare MR failed: \(error)")
             }
             refresh(cwd: cwd, force: true)
         }
@@ -270,9 +280,12 @@ final class SourceControlModel {
                 // Name what was passed over. "It did nothing" and "there was
                 // nothing to do" must not read the same.
                 for s in out.skipped ?? [] { lines.append("skipped \(s.branch): \(s.reason)") }
-                worktreeNotice = lines.joined(separator: "\n")
+                worktreeNotice = PaneNotice(
+                    kind: out.stopped != nil ? .warning : .success,
+                    text: lines.joined(separator: "\n")
+                )
             } catch {
-                worktreeNotice = "Merge all failed: \(error)"
+                worktreeNotice = PaneNotice(kind: .error, text: "Merge all failed: \(error)")
             }
             refresh(cwd: cwd, force: true)
         }
@@ -286,9 +299,12 @@ final class SourceControlModel {
             defer { worktreeBusy = false }
             do {
                 let out = try await FilesService.shared.dropWorktree(cwd: cwd, slug: slug)
-                worktreeNotice = out.message ?? out.error ?? "Checkout removed."
+                worktreeNotice = PaneNotice(
+                    kind: out.ok == true ? .success : .warning,
+                    text: out.message ?? out.error ?? "Checkout removed."
+                )
             } catch {
-                worktreeNotice = "Drop failed: \(error)"
+                worktreeNotice = PaneNotice(kind: .error, text: "Drop failed: \(error)")
             }
             refresh(cwd: cwd, force: true)
         }
@@ -305,10 +321,14 @@ final class SourceControlModel {
                 let out = try await FilesService.shared.sweepWorktrees(cwd: cwd)
                 let swept = out.swept ?? []
                 worktreeNotice = swept.isEmpty
-                    ? "Nothing to reclaim."
-                    : swept.map { "\($0.slug): \($0.reason)" }.joined(separator: "\n")
+                    ? PaneNotice(kind: .info, headline: "Nothing to reclaim.")
+                    : PaneNotice(
+                        kind: .success,
+                        headline: "Reclaimed \(swept.count) checkout\(swept.count == 1 ? "" : "s").",
+                        detail: swept.map { "\($0.slug): \($0.reason)" }.joined(separator: "\n")
+                    )
             } catch {
-                worktreeNotice = "Sweep failed: \(error)"
+                worktreeNotice = PaneNotice(kind: .error, text: "Sweep failed: \(error)")
             }
             refresh(cwd: cwd, force: true)
         }
@@ -1195,29 +1215,38 @@ struct SourceControlView: View {
                         .background(Capsule().fill(MarvinTheme.elevated))
                         .foregroundStyle(GitDecorationColor.added)
                 }
-                if ready > 0 {
-                    Button("Prepare MR") { model.refreshIntegrationPreview(); prepareMROpen = true }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                        .disabled(model.integrationRunning)
-                        .help("Squash the finished branches you pick into one commit on a new mr/… branch, then push it and open one merge request. The tab branches stay as they are.")
-                }
+                // Hierarchy: one accent chip for the action this section is
+                // FOR, one neutral chip beside it, and the rare cleanup a
+                // level deeper in a menu — the common path first.
                 if ready > 1 {
                     Button("Merge all") { model.mergeAllWorktrees() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10))
-                        .foregroundStyle(MarvinTheme.textMuted)
+                        .chip(.neutral)
                         .disabled(model.integrationRunning)
                         .help("Fold all \(ready) finished branches into this branch, locally. Never pushes — one push covers all of them, so N branches still cost one pipeline instead of N. Stops at the first conflict.")
                 }
+                if ready > 0 {
+                    // The ellipsis is macOS's promise that a click opens
+                    // something to fill in rather than acting immediately.
+                    Button("Prepare MR…") { model.refreshIntegrationPreview(); prepareMROpen = true }
+                        .chip(.primary)
+                        .disabled(model.integrationRunning)
+                        .help("Squash the finished branches you pick into one commit on a new mr/… branch, then push it and open one merge request. The tab branches stay as they are.")
+                }
                 if model.worktrees.contains(where: \.isSpent) {
-                    Button("Reclaim") { model.sweepWorktrees() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                        .disabled(model.worktreeBusy)
-                        .help("Remove checkouts and delete branches that are empty or already merged. Never touches unmerged or uncommitted work.")
+                    Menu {
+                        Button("Reclaim spent checkouts") { model.sweepWorktrees() }
+                            .disabled(model.integrationRunning)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 10, weight: .semibold))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .frame(width: 18)
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .help("Remove checkouts and delete branches that are empty or already merged. Never touches unmerged or uncommitted work.")
                 }
             }
             .padding(.horizontal, 10)
@@ -1229,14 +1258,57 @@ struct SourceControlView: View {
             ForEach(model.worktrees) { w in worktreeRow(w) }
 
             if let notice = model.worktreeNotice {
-                Text(notice)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(4)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 2)
+                worktreeNoticeRow(notice)
             }
         }
+    }
+
+    /// The outcome of the last integration. It used to render as 10pt grey
+    /// body text, four lines deep, with raw git command output inside the
+    /// sentence — which is how a FAILED merge came to look exactly like a
+    /// successful one (2026-09-11). Feedback has kinds: this one carries its
+    /// own glyph and colour, and the detail sits under the sentence.
+    @ViewBuilder
+    private func worktreeNoticeRow(_ notice: PaneNotice) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: notice.kind.symbol)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(notice.kind.tint)
+                .frame(width: 12)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(notice.headline)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(notice.kind == .error ? MarvinTheme.textPrimary : MarvinTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                model.worktreeNotice = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .semibold))
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(notice.kind.tint.opacity(notice.kind == .info ? 0 : 0.08))
+        )
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
     }
 
     /// What the running integration is doing, refreshed about once a second.
@@ -1285,10 +1357,8 @@ struct SourceControlView: View {
             Spacer(minLength: 4)
             if w.isReady {
                 Button("Merge") { model.mergeWorktree(slug: w.slug) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(GitDecorationColor.added)
-                    .disabled(model.worktreeBusy)
+                    .rowChip(.tinted(GitDecorationColor.added))
+                    .disabled(model.integrationRunning)
                     .help("Merge \(w.branch) into the current branch, locally. Never pushes — the commits ride along in whatever pipeline this branch already runs.")
             }
         }

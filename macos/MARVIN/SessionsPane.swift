@@ -56,6 +56,11 @@ struct SessionsPane: View {
         }
         .focusable()
         .focused($listFocused)
+        // The pane keeps keyboard focus for ↑ ↓ ⏎; it must not draw a ring
+        // around itself for it. The focused ROW carries the ring instead
+        // (`sessionRow`), which is also the only place it answers "where am
+        // I" (2026-09-11).
+        .focusEffectDisabled()
         .onKeyPress(.upArrow) { moveFocus(-1); return .handled }
         .onKeyPress(.downArrow) { moveFocus(1); return .handled }
         .onKeyPress(.return) {
@@ -222,9 +227,7 @@ struct SessionsPane: View {
                         }
                         Spacer(minLength: 4)
                         Button("Reopen") { Task { await registry.reopen(e.id) } }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.accentColor)
+                            .rowChip(.primary)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 3)
@@ -277,11 +280,11 @@ struct SessionsPane: View {
                 .fill(preview?.isConflict == true ? Color.orange : GitDecorationColor.added)
                 .frame(width: 6, height: 6)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title(e))
+                Text(shortBranch(w?.branch) ?? title(e))
                     .font(.system(size: 11))
                     .foregroundStyle(MarvinTheme.textPrimary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .truncationMode(.middle)
                 Text(integrateSubtitle(e, preview: preview))
                     .font(.system(size: 9.5))
                     .foregroundStyle(preview?.isConflict == true ? Color.orange : MarvinTheme.textMuted)
@@ -290,16 +293,21 @@ struct SessionsPane: View {
             }
             Spacer(minLength: 4)
             if needsSync {
-                smallAction("Sync", tint: .orange) { Task { await registry.sync(e.id) } }
+                smallAction("Sync", role: .tinted(.orange)) { Task { await registry.sync(e.id) } }
                     .help("Ask this tab to merge \(registry.integrationTarget ?? "the current branch") into its branch in its own worktree, resolve conflicts, test, and commit. Never pushes.")
             }
-            smallAction("Merge", tint: GitDecorationColor.added) { Task { await registry.mergeKept(e.id) } }
+            smallAction("Merge", role: .tinted(GitDecorationColor.added)) { Task { await registry.mergeKept(e.id) } }
                 .help("Merge \(w?.branch ?? "this branch") into \(registry.integrationTarget ?? "the current branch"), locally. Never pushes.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 3)
         .contentShape(Rectangle())
-        .help([e.id, w?.branch, e.tree?.path].compactMap { $0 }.joined(separator: "\n"))
+        .onTapGesture { focusedId = e.id }
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(focusedId == e.id && listFocused ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)
+        )
+        .help([title(e), w?.branch, e.tree?.path].compactMap { $0 }.joined(separator: "\n"))
         .contextMenu {
             Button("Reopen tab") { Task { await registry.reopen(e.id) } }
             if let branch = w?.branch {
@@ -342,16 +350,13 @@ struct SessionsPane: View {
             HStack(spacing: 10) {
                 if items.count > 1 {
                     Button("Merge all") { Task { await registry.mergeAllKept() } }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(GitDecorationColor.added)
+                        .chip(.neutral)
                         .disabled(registry.integrationBusy)
                         .help("Fold all \(items.count) branches into \(registry.integrationTarget ?? "the current branch"), oldest first, locally. Stops at the first conflict. Never pushes.")
                 }
                 Button("Prepare MR…") { bridge.requestSourceControl(.prepareMR) }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                    .chip(.primary)
+                    .disabled(registry.integrationBusy)
                     .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request (ADR-0109).")
                 Spacer()
                 if conflicts > 0 {
@@ -492,9 +497,11 @@ struct SessionsPane: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
                 Button("Deny") { Task { await registry.answer(c, allow: false) } }
-                    .buttonStyle(.plain).font(.system(size: 10, weight: .medium)).foregroundStyle(GitDecorationColor.deleted)
+                    .rowChip(.tinted(GitDecorationColor.deleted))
+                    .help("Refuse this tool call. The tab is told no and carries on.")
                 Button("Allow") { Task { await registry.answer(c, allow: true) } }
-                    .buttonStyle(.plain).font(.system(size: 10, weight: .semibold)).foregroundStyle(GitDecorationColor.added)
+                    .rowChip(.tinted(GitDecorationColor.added))
+                    .help("Let this tool call run, without switching to that tab.")
             }
             if let r = c.reason, !r.isEmpty {
                 Text(r).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
@@ -508,23 +515,32 @@ struct SessionsPane: View {
     private func action(for row: Row) -> some View {
         switch row.state {
         case .needsYou:
-            smallAction("Answer", tint: .orange) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Answer", role: .tinted(.orange)) { bridge.requestChatTab(.select(row.id)) }
         case .working:
-            smallAction("Stop", tint: GitDecorationColor.deleted) { Task { await registry.stop(row.id) } }
+            smallAction("Stop", role: .tinted(GitDecorationColor.deleted)) { Task { await registry.stop(row.id) } }
         case .interrupted:
-            smallAction("Resume", tint: .orange) { Task { await registry.resume(row.id) } }
+            smallAction("Resume", role: .tinted(.orange)) { Task { await registry.resume(row.id) } }
         case .failed:
-            smallAction("Open", tint: .secondary) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Open", role: .neutral) { bridge.requestChatTab(.select(row.id)) }
         case .idle, .draft:
             EmptyView()
         }
     }
 
-    private func smallAction(_ label: String, tint: Color, _ action: @escaping () -> Void) -> some View {
-        Button(label, action: action)
-            .buttonStyle(.plain)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(tint)
+    /// A row action. A chip, not tinted text: this pane is full of tinted
+    /// STATUS text (`+880 −13`, `clean`, counts), so a tinted word carried no
+    /// information about whether it could be clicked (2026-09-11).
+    /// `marvin/tab/fix-flags-thread-p-source` → `fix-flags-thread-p-source`.
+    /// The prefix is the same on every row, so it is noise where identity is
+    /// the job.
+    private func shortBranch(_ branch: String?) -> String? {
+        guard let branch, !branch.isEmpty else { return nil }
+        guard branch.hasPrefix("marvin/tab/") else { return branch }
+        return String(branch.dropFirst("marvin/tab/".count))
+    }
+
+    private func smallAction(_ label: String, role: ChipRole, _ action: @escaping () -> Void) -> some View {
+        Button(label, action: action).rowChip(role)
     }
 
     // MARK: - Text

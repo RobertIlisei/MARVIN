@@ -183,6 +183,27 @@ describe("worktree lifecycle", () => {
     expect(existsSync(join(repo, "NOTES.md"))).toBe(true);
   });
 
+  it("names the conflicting files instead of the command MARVIN ran", () => {
+    // The panel showed "failed and was aborted: Command failed: git merge
+    // --no-ff -m Merge branch 'marvin/tab/feat-billing…" — the command, not
+    // the conflict (2026-09-11).
+    const a = createWorktree(repo, "theirs");
+    commitIn(a.path, "same.ts", "from the branch\n");
+    writeFileSync(join(repo, "same.ts"), "from main\n");
+    git("add", "same.ts");
+    git("commit", "-qm", "main's version");
+
+    const out = mergeWorktree(repo, a.slug);
+
+    expect(out.ok).toBe(false);
+    expect(out.message).toContain("same.ts");
+    expect(out.message).not.toContain("Command failed");
+    expect(out.message).toContain("Nothing changed");
+    // Aborted, not left half-merged.
+    expect(existsSync(join(repo, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(readFileSync(join(repo, "same.ts"), "utf-8")).toBe("from main\n");
+  });
+
   it("merges past a modified tracked file the branch does not touch, and keeps the edit", () => {
     // 2026-09-11: a nine-file billing branch could not close with Merge
     // because two ADRs another tab was writing were unsaved on main. Git
@@ -196,6 +217,27 @@ describe("worktree lifecycle", () => {
     expect(out.ok).toBe(true);
     expect(existsSync(join(repo, "feature.ts"))).toBe(true);
     expect(readFileSync(join(repo, "README.md"), "utf-8")).toBe("edited, not committed\n");
+  });
+
+  it("reads the status columns correctly when the first dirty file is MARVIN's own", () => {
+    // `git status --porcelain` is column-oriented and an unstaged change
+    // starts with a space. Trimming the output shifted the first line's path
+    // by one character, so `.marvin/memory.md` read as `marvin/memory.md`,
+    // missed the `.marvin/` carve-out, and counted as a blocker on every real
+    // project — every one of which has dirty `.marvin/` files (2026-09-11).
+    mkdirSync(join(repo, ".marvin"), { recursive: true });
+    writeFileSync(join(repo, ".marvin", "memory.md"), "tracked\n");
+    git("add", ".marvin/memory.md");
+    git("commit", "-qm", "track marvin bookkeeping");
+    const a = createWorktree(repo, "ready work");
+    commitIn(a.path, "feature.ts");
+    // Dirty, and FIRST in porcelain's alphabetical order.
+    writeFileSync(join(repo, ".marvin", "memory.md"), "edited by MARVIN\n");
+
+    const out = mergeWorktree(repo, a.slug);
+
+    expect(out.ok).toBe(true);
+    expect(existsSync(join(repo, "feature.ts"))).toBe(true);
   });
 
   it("refuses when a modified tracked file is one the branch changes, naming it", () => {

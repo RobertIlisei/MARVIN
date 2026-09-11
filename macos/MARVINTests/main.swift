@@ -3741,6 +3741,46 @@ runner.suite("integration-job-status") {
     }
 }
 
+// MARK: - PaneNotice (2026-09-11 — a failed merge that looked like a success)
+
+runner.suite("pane-notice") {
+    runner.test("the command MARVIN ran becomes detail, not the sentence") {
+        let n = PaneNotice(
+            kind: .error,
+            text: "Merge of marvin/tab/feat-billing into main failed and was aborted: Command failed: git merge --no-ff -m Merge branch 'marvin/tab/feat-billing'"
+        )
+        runner.expect(
+            n.headline,
+            equals: "Merge of marvin/tab/feat-billing into main failed and was aborted.",
+            "the sentence stops where the machine output starts"
+        )
+        runner.expect(n.detail?.hasPrefix("Command failed: git merge") == true, "the command is kept, below")
+    }
+
+    runner.test("a multi-line outcome keeps its first line as the sentence") {
+        let n = PaneNotice(kind: .warning, text: "Merged 2 branch(es) into main.\nskipped marvin/tab/x: has no commits\nskipped marvin/tab/y: already merged")
+        runner.expect(n.headline, equals: "Merged 2 branch(es) into main.", "first line")
+        runner.expect(n.detail?.contains("skipped marvin/tab/y") == true, "the rest is detail")
+    }
+
+    runner.test("a one-line outcome has no detail and is punctuated") {
+        let n = PaneNotice(kind: .success, text: "  Checkout removed  ")
+        runner.expect(n.headline, equals: "Checkout removed.", "trimmed and closed")
+        runner.expect(n.detail == nil, equals: true, "nothing below")
+    }
+
+    runner.test("an empty outcome still says something") {
+        runner.expect(PaneNotice(kind: .error, text: "   ").headline, equals: "It failed.", "error")
+        runner.expect(PaneNotice(kind: .success, text: "").headline, equals: "Done.", "success")
+    }
+
+    runner.test("an explicit headline and detail are kept as given") {
+        let n = PaneNotice(kind: .success, headline: "Reclaimed 3 checkouts.", detail: "tab-a: merged")
+        runner.expect(n.headline, equals: "Reclaimed 3 checkouts.", "headline")
+        runner.expect(n.detail, equals: "tab-a: merged", "detail")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
