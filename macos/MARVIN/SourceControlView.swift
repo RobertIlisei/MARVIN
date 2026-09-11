@@ -65,6 +65,53 @@ final class SourceControlModel {
     var worktreeNotice: String? = nil
     private(set) var worktreeBusy: Bool = false
 
+    /// ADR-0109 amendment — the running integration, polled from the sidecar.
+    /// It is the sidecar's record, not this app's: a Prepare MR outlives the
+    /// HTTP request that started it, the app that fired it, and the project
+    /// being switched away from.
+    private(set) var integrationJob: IntegrationJobEntry? = nil
+    private var jobPollTask: Task<Void, Never>?
+    /// The last run this model has already announced, so a finished job is
+    /// reported once rather than on every poll.
+    private var announcedJobId: String?
+
+    /// True while anything is integrating — the local call, or a run this app
+    /// merely found. Both must disable the buttons: two merges into one
+    /// checkout is the failure the sidecar refuses, and offering it is worse
+    /// than not.
+    var integrationRunning: Bool { worktreeBusy || (integrationJob?.running == true) }
+
+    /// Watch a run to its end. Started when this app fires one, and when a
+    /// refresh discovers one already going.
+    private func watchIntegrationJob(cwd: String) {
+        jobPollTask?.cancel()
+        jobPollTask = Task { @MainActor in
+            while !Task.isCancelled {
+                guard let res = try? await FilesService.shared.fetchIntegrationJob(cwd: cwd) else {
+                    // A failed poll is not an answer — the sidecar may be
+                    // busy holding the event loop with the very git this is
+                    // reporting on. Keep watching.
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    continue
+                }
+                guard !Task.isCancelled, loadedCwd == cwd else { return }
+                integrationJob = res.job
+                guard let job = res.job else { return }
+                if !job.running {
+                    if announcedJobId != job.id {
+                        announcedJobId = job.id
+                        // The outcome, even when the HTTP call that started it
+                        // timed out or was never waited on.
+                        worktreeNotice = IntegrationJobStatus.finishedNotice(ok: job.ok ?? false, summary: job.summary ?? "")
+                        refresh(cwd: cwd, force: true)
+                    }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+        }
+    }
+
     private var fetchTask: Task<Void, Never>?
     private var probeRetryTask: Task<Void, Never>?
 
@@ -120,8 +167,16 @@ final class SourceControlModel {
                 stashes = (try? await stashList)?.entries ?? []
                 // Newest tip first: the section answers "what did I work on
                 // lately across these tabs" before it offers to integrate it.
-                worktrees = ((try? await worktreeList)?.worktrees ?? [])
+                let list = try? await worktreeList
+                worktrees = (list?.worktrees ?? [])
                     .sorted { ($0.lastCommitAt ?? "") > ($1.lastCommitAt ?? "") }
+                // An integration started before this refresh — by a previous
+                // launch of this app, or by the run whose HTTP call timed out
+                // — is found here and watched from here.
+                if let job = list?.job {
+                    integrationJob = job
+                    if job.running { watchIntegrationJob(cwd: cwd) } else { announcedJobId = job.id }
+                }
             } catch is CancellationError {
                 /* racing a project switch — quiet */
             } catch {
@@ -166,8 +221,12 @@ final class SourceControlModel {
     /// branch, and push / open the merge request when the sheet said so.
     /// The tab branches are untouched; the user's checkout is never entered.
     func prepareMergeRequest(slugs: [String], name: String, message: String, push: Bool, openMergeRequest: Bool) {
-        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        guard let cwd = loadedCwd, !integrationRunning else { return }
         worktreeBusy = true
+        worktreeNotice = nil
+        // The watch, not the reply, is what reports this run: the squash
+        // commit runs the project's hooks and can outlive the request.
+        watchIntegrationJob(cwd: cwd)
         Task { @MainActor in
             defer { worktreeBusy = false }
             do {
@@ -199,8 +258,10 @@ final class SourceControlModel {
     /// branch, against an allowance already exceeded. Batched, five branches
     /// still cost one pipeline.
     func mergeAllWorktrees() {
-        guard let cwd = loadedCwd, !worktreeBusy else { return }
+        guard let cwd = loadedCwd, !integrationRunning else { return }
         worktreeBusy = true
+        worktreeNotice = nil
+        watchIntegrationJob(cwd: cwd)
         Task { @MainActor in
             defer { worktreeBusy = false }
             do {
@@ -1139,7 +1200,7 @@ struct SourceControlView: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 10))
                         .foregroundStyle(MarvinTheme.textMuted)
-                        .disabled(model.worktreeBusy)
+                        .disabled(model.integrationRunning)
                         .help("Squash the finished branches you pick into one commit on a new mr/… branch, then push it and open one merge request. The tab branches stay as they are.")
                 }
                 if ready > 1 {
@@ -1147,7 +1208,7 @@ struct SourceControlView: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 10))
                         .foregroundStyle(MarvinTheme.textMuted)
-                        .disabled(model.worktreeBusy)
+                        .disabled(model.integrationRunning)
                         .help("Fold all \(ready) finished branches into this branch, locally. Never pushes — one push covers all of them, so N branches still cost one pipeline instead of N. Stops at the first conflict.")
                 }
                 if model.worktrees.contains(where: \.isSpent) {
@@ -1163,6 +1224,8 @@ struct SourceControlView: View {
             .padding(.top, 8)
             .padding(.bottom, 3)
 
+            if let job = model.integrationJob, job.running { integrationProgressRow(job) }
+
             ForEach(model.worktrees) { w in worktreeRow(w) }
 
             if let notice = model.worktreeNotice {
@@ -1174,6 +1237,33 @@ struct SourceControlView: View {
                     .padding(.top, 2)
             }
         }
+    }
+
+    /// What the running integration is doing, refreshed about once a second.
+    /// The elapsed time is the load-bearing part: it is what separates
+    /// "working" from "wedged" for an operation that legitimately takes
+    /// minutes (ADR-0109 amendment, 2026-09-11).
+    private func integrationProgressRow(_ job: IntegrationJobEntry) -> some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.55)
+                .frame(width: 12, height: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(job.kind == "merge-all" ? "Merge all" : "Prepare MR")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                Text(job.progressLine)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .help("This runs in the sidecar, not in the app: it keeps going if you switch project or close the window, and the result appears here when it lands.")
     }
 
     private func worktreeRow(_ w: WorktreeEntry) -> some View {

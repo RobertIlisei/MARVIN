@@ -739,6 +739,17 @@ final class FilesService {
     /// GET /api/worktrees?cwd=… — implementer worktrees with their state
     /// derived from git, so a branch merged in a terminal or another
     /// session reads as `merged` here (ADR-0103).
+    /// GET /api/worktrees/job — the running integration, if any. Reads an
+    /// in-memory record in the sidecar and touches no git, so it is safe to
+    /// poll every second while `fetchWorktrees` (which reconciles every tree
+    /// with synchronous git) is not.
+    func fetchIntegrationJob(cwd: String) async throws -> IntegrationJobResponse {
+        try await getJSON(
+            url: gitURL("api/worktrees/job", query: ["cwd": cwd]),
+            as: IntegrationJobResponse.self
+        )
+    }
+
     func fetchWorktrees(cwd: String) async throws -> WorktreeListResponse {
         try await getJSON(
             url: gitURL("api/worktrees", query: ["cwd": cwd]),

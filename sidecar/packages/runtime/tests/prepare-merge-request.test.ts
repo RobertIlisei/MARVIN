@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { __resetIntegrationJobsForTests, getIntegrationJob, startIntegrationJob } from "../src/integration-job";
 import { createSessionWorktree, createWorktree, detectMergeTarget, prepareMergeRequest, reconcileWorktrees } from "../src/worktrees";
 
 // A day of chat tabs is one piece of work to a reviewer. These pin the shape
@@ -103,6 +104,84 @@ describe("prepareMergeRequest", () => {
     // The temporary tree is gone once the commit exists.
     expect(existsSync(prepared[0]!)).toBe(false);
   });
+
+  it("registers a run the panel can follow, and leaves its outcome readable afterwards", async () => {
+    __resetIntegrationJobsForTests();
+    const a = createWorktree(repo, "billing replay");
+    commitIn(a.path, "a.ts");
+
+    const out = await prepareMergeRequest(repo, { slugs: [a.slug], push: false, openMergeRequest: false });
+
+    expect(out.ok).toBe(true);
+    // The client may have stopped waiting long before this point; the record
+    // is what it comes back to.
+    const job = getIntegrationJob(repo);
+    expect(job).toMatchObject({ kind: "prepare-mr", running: false, ok: true, branch: out.branch });
+    expect(job?.summary).toBe(out.summary);
+  });
+
+  it("refuses to start while another integration is running on the same checkout", async () => {
+    __resetIntegrationJobsForTests();
+    const a = createWorktree(repo, "billing replay");
+    commitIn(a.path, "a.ts");
+    startIntegrationJob(repo, "merge-all", 1);
+
+    const out = await prepareMergeRequest(repo, { slugs: [a.slug], push: false, openMergeRequest: false });
+
+    expect(out.ok).toBe(false);
+    expect(out.summary).toContain("already running");
+    // Nothing was cut: the refusal happens before any git.
+    expect(out.branch).toBe("");
+    __resetIntegrationJobsForTests();
+  });
+
+  it("a run stopped by a conflict counts only what applied, and does not push a partial integration", async () => {
+    // 2026-09-11, on a real project: six branches ticked, the second
+    // conflicted, and MARVIN pushed a commit titled "integrate 6 branches"
+    // carrying one branch's six files — then opened a merge request for it.
+    const bare = mkdtempSync(join(tmpdir(), "marvin-mr-partial-"));
+    execFileSync("git", ["init", "-q", "--bare", bare]);
+    git("remote", "add", "gitlab", bare);
+    git("push", "-q", "-u", "gitlab", "main");
+    const a = createWorktree(repo, "first task");
+    commitIn(a.path, "same.ts", "from a\n");
+    const c = createWorktree(repo, "clashing task");
+    commitIn(c.path, "same.ts", "from c\n");
+
+    const out = await prepareMergeRequest(repo, {
+      slugs: [a.slug, c.slug],
+      push: true,
+      openMergeRequest: true,
+    });
+
+    expect(out.merged.map((m) => m.slug)).toEqual([a.slug]);
+    expect(out.stopped?.slug).toBe(c.slug);
+    // The subject counts ONE, and names it — never the number asked for.
+    expect(out.message.split("\n")[0]).toBe("chore: integrate first task");
+    expect(git("log", "-1", "--format=%s", out.branch)).toBe("chore: integrate first task");
+    // Nothing was pushed and no request was opened.
+    expect(out.pushed).toBeUndefined();
+    expect(execFileSync("git", ["branch", "--list", "mr/*"], { cwd: bare, encoding: "utf-8" })).toBe("");
+    expect(out.summary).toContain("Not pushed");
+    expect(out.summary).toContain(c.branch);
+  }, 30_000);
+
+  it("keeps the user's own commit message even when a branch is dropped", async () => {
+    const a = createWorktree(repo, "first task");
+    commitIn(a.path, "same.ts", "from a\n");
+    const c = createWorktree(repo, "clashing task");
+    commitIn(c.path, "same.ts", "from c\n");
+
+    const out = await prepareMergeRequest(repo, {
+      slugs: [a.slug, c.slug],
+      message: "feat(billing): the wording I typed",
+      push: false,
+      openMergeRequest: false,
+    });
+
+    expect(out.message).toBe("feat(billing): the wording I typed");
+    expect(git("log", "-1", "--format=%s", out.branch)).toBe("feat(billing): the wording I typed");
+  }, 30_000);
 
   it("integrates nothing and leaves no branch when nothing was finished", async () => {
     const s = createSessionWorktree(repo, { sessionId: "s1", title: "open tab" });

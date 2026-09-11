@@ -18,6 +18,7 @@
  */
 
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
+import { getIntegrationJob } from "@marvin/runtime/integration-job";
 import { previewIntegration } from "@marvin/runtime/integration";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
 import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
@@ -44,7 +45,9 @@ export async function GET(req: NextRequest) {
   if (resolved.error) return resolved.error;
   try {
     const worktrees = reconcileWorktrees(resolved.cwd);
-    return NextResponse.json({ worktrees });
+    // The panel's own refresh is how a running integration is FOUND after a
+    // relaunch or a project switch — the poll only keeps it up to date.
+    return NextResponse.json({ worktrees, job: getIntegrationJob(resolved.cwd) });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }

@@ -30,6 +30,8 @@ import { promisify } from "node:util";
 
 import { toolPolicy } from "@marvin/tools/policy";
 
+import { finishIntegrationJob, getIntegrationJob, noteIntegrationProgress, startIntegrationJob } from "./integration-job";
+
 /**
  * Lifecycle of one worktree. Everything except `running` is DERIVED from git
  * on read, never trusted from the registry — the user merges in a terminal,
@@ -1015,29 +1017,49 @@ export function mergeAllWorktrees(
   if (candidates.length === 0) {
     return { merged, skipped, message: "No finished branches to merge." };
   }
+  // A run is registered so the panel can show what this is on — N merges of a
+  // real branch is seconds each, but the surface must not go silent for them
+  // either (ADR-0109 amendment, 2026-09-11).
+  const job = startIntegrationJob(workDir, "merge-all", candidates.length);
+  if (!job) {
+    const running = getIntegrationJob(workDir);
+    return {
+      merged,
+      skipped,
+      message: `An integration is already running on this project (${running?.kind === "prepare-mr" ? "Prepare MR" : "Merge all"}). Wait for it to finish.`,
+    };
+  }
   // No up-front dirty-tree refusal: each merge checks the files IT would
   // overwrite (`mergeBlockingPaths`), so an unrelated edit on main stops
   // nothing and an overlapping one stops exactly the branch it overlaps.
   let stopped: MergeAllOutcome["stopped"];
-  for (const w of candidates) {
-    const out = mergeWorktree(workDir, w.slug, opts);
-    if (out.ok) {
-      merged.push({ slug: out.slug, branch: out.branch, message: out.message });
-      continue;
+  try {
+    for (const w of candidates) {
+      noteIntegrationProgress(workDir, { phase: "merging", current: w.branch, done: merged.length });
+      const out = mergeWorktree(workDir, w.slug, opts);
+      if (out.ok) {
+        merged.push({ slug: out.slug, branch: out.branch, message: out.message });
+        continue;
+      }
+      stopped = { slug: out.slug, branch: out.branch || w.branch, message: out.message };
+      break;
     }
-    stopped = { slug: out.slug, branch: out.branch || w.branch, message: out.message };
-    break;
+  } catch (err) {
+    finishIntegrationJob(workDir, { ok: false, summary: `Merge all failed: ${err instanceof Error ? err.message : String(err)}` });
+    throw err;
   }
 
   const onto = gitOr(workDir, ["rev-parse", "--abbrev-ref", "HEAD"], "HEAD");
   const head = merged.length === 0
     ? "Nothing merged."
     : `Merged ${merged.length} branch(es) into ${onto}. Not pushed — one push covers all of them.`;
+  const message = stopped ? `${head} Stopped at ${stopped.branch}: ${stopped.message}` : head;
+  finishIntegrationJob(workDir, { ok: !stopped, summary: message });
   return {
     merged,
     skipped,
     ...(stopped ? { stopped } : {}),
-    message: stopped ? `${head} Stopped at ${stopped.branch}: ${stopped.message}` : head,
+    message,
   };
 }
 
@@ -1430,7 +1452,25 @@ export async function prepareMergeRequest(
   input: PrepareMergeRequestInput,
 ): Promise<PrepareMergeRequestOutcome> {
   const started = Date.now();
-  const out = await prepareMergeRequestInner(workDir, input);
+  const job = startIntegrationJob(workDir, "prepare-mr", input.slugs.length);
+  if (!job) {
+    const running = getIntegrationJob(workDir);
+    return {
+      ok: false, branch: "", message: input.message ?? "", merged: [], skipped: [],
+      summary: `An integration is already running on this project (${running?.kind === "merge-all" ? "Merge all" : "Prepare MR"}, started ${running?.startedAt ?? "just now"}). Wait for it to finish.`,
+    };
+  }
+  let out: PrepareMergeRequestOutcome;
+  try {
+    out = await prepareMergeRequestInner(workDir, input);
+  } catch (err) {
+    // A throw here would leave the job running forever and lock the project
+    // out of its own integration surface.
+    const detail = err instanceof Error ? err.message : String(err);
+    finishIntegrationJob(workDir, { ok: false, summary: `Prepare MR failed: ${detail}` });
+    throw err;
+  }
+  finishIntegrationJob(workDir, { ok: out.ok, summary: out.summary, ...(out.branch ? { branch: out.branch } : {}) });
   // The squash commit can outlive the client's patience (hooks that compile
   // and test). The outcome must survive the client giving up: it goes to the
   // sidecar log, where "Prepare MR failed: the request timed out" can be
@@ -1472,7 +1512,11 @@ async function prepareMergeRequestInner(
   }
   rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  const message = input.message?.trim() ? input.message : mergeRequestMessage(rows);
+  // Provisional until the loop below says what actually applied. A reviewer
+  // reads this subject: on 2026-09-11 a run that stopped at a conflict after
+  // ONE branch pushed a commit titled "chore: integrate 6 branches" holding
+  // one branch's six files, and opened a merge request for it.
+  let message = input.message?.trim() ? input.message : mergeRequestMessage(rows);
   const fail = (branch: string, summary: string): PrepareMergeRequestOutcome => ({
     ok: false, branch, message, merged, skipped, summary,
   });
@@ -1488,6 +1532,7 @@ async function prepareMergeRequestInner(
   for (let n = 2; gitOk(workDir, ["rev-parse", "--verify", "--quiet", branch]); n++) {
     branch = `${MR_BRANCH_PREFIX}${day}-${baseName}-${n}`;
   }
+  noteIntegrationProgress(workDir, { phase: "preparing", branch, total: rows.length });
   const tmp = join(worktreesDir(workDir), `mr-${day}-${baseName}-${process.pid}`);
   mkdirSync(worktreesDir(workDir), { recursive: true });
   try {
@@ -1516,6 +1561,7 @@ async function prepareMergeRequestInner(
   // applied. The temporaries collapse into one commit below.
   let stopped: PrepareMergeRequestOutcome["stopped"];
   for (const w of rows) {
+    noteIntegrationProgress(workDir, { phase: "squashing", current: w.branch, done: merged.length });
     try {
       git(tmp, ["merge", "--squash", "-q", w.branch]);
       git(tmp, ["commit", "-q", "--no-verify", "-m", `squash ${w.branch}`]);
@@ -1532,10 +1578,16 @@ async function prepareMergeRequestInner(
     gitOk(workDir, ["branch", "-D", branch]);
     return { ...fail(branch, `Nothing integrated. ${stopped ? `${stopped.branch} ${stopped.message}` : ""}`.trim()), ...(stopped ? { stopped } : {}) };
   }
+  // The commit names what is IN it. The user's own wording is theirs and is
+  // never rewritten; a generated one counts the branches that applied.
+  if (!input.message?.trim()) {
+    message = mergeRequestMessage(rows.filter((r) => merged.some((m) => m.slug === r.slug)));
+  }
 
   // Collapse to the one commit, hooks honoured — this is the commit a
   // reviewer will read, so it must pass what the project enforces.
   let commit: string;
+  noteIntegrationProgress(workDir, { phase: "committing", current: undefined, done: merged.length });
   try {
     git(tmp, ["reset", "--soft", base]);
     await execFileAsync("git", ["commit", "-q", "-m", message], {
@@ -1560,11 +1612,25 @@ async function prepareMergeRequestInner(
     };
   }
 
+  // A partial integration is not what the push was asked for. Ticking six
+  // branches and "open a merge request" means one request for six; pushing
+  // one of them opens a request that misrepresents the day's work to a
+  // reviewer and spends a pipeline on something that has to be redone once
+  // the conflict is resolved (ADR-0109 — CI minutes are the scarce thing).
+  // The branch is on disk either way, so nothing is lost by waiting.
+  if (stopped) {
+    return {
+      ok: true, branch, commit, message, merged, skipped, stopped,
+      summary: `${folded} Not pushed — it stopped at ${stopped.branch}: ${stopped.message}. Sync that branch and run Prepare MR again, or push ${branch} yourself if a partial integration is what you want.`,
+    };
+  }
+
   const aim = detectMergeTarget(workDir);
   if (!aim) {
-    return { ok: true, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}), summary: `${folded} Not pushed: this repository has no remote.` };
+    return { ok: true, branch, commit, message, merged, skipped, summary: `${folded} Not pushed: this repository has no remote.` };
   }
   const target = input.target?.trim() || aim.target;
+  noteIntegrationProgress(workDir, { phase: "pushing", current: aim.remote, done: merged.length });
   const args = ["push", "-u", aim.remote, `${branch}:${branch}`];
   if (input.openMergeRequest) {
     const title = message.split("\n")[0] ?? branch;
@@ -1578,15 +1644,17 @@ async function prepareMergeRequestInner(
     const output = `${out.stdout ?? ""}${out.stderr ?? ""}`.trim();
     const url = /https?:\/\/\S+\/merge_requests\/\d+/.exec(output)?.[0];
     return {
-      ok: true, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}),
+      // Nothing is pushed after a conflict (above), so a push that happened
+      // integrated every branch that was asked for.
+      ok: true, branch, commit, message, merged, skipped,
       pushed: { remote: aim.remote, target, mergeRequest: !!input.openMergeRequest, ...(url ? { url } : {}), output },
-      summary: `${folded} Pushed to ${aim.remote}.${input.openMergeRequest ? (url ? ` Merge request: ${url}` : " Merge request requested — see the push output.") : ""}${stopped ? ` Stopped at ${stopped.branch}: ${stopped.message}` : ""}`,
+      summary: `${folded} Pushed to ${aim.remote}.${input.openMergeRequest ? (url ? ` Merge request: ${url}` : " Merge request requested — see the push output.") : ""}`,
     };
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string; killed?: boolean };
     const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-6).join("\n");
     return {
-      ok: false, branch, commit, message, merged, skipped, ...(stopped ? { stopped } : {}),
+      ok: false, branch, commit, message, merged, skipped,
       summary: `${folded} Push to ${aim.remote} failed${e.killed ? " (timed out)" : ""}${detail ? `:\n${detail}` : `: ${e.message}`}. The branch is on disk; push it yourself when the remote is reachable.`,
     };
   }

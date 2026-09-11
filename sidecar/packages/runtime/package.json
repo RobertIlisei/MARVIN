@@ -20,6 +20,10 @@
     "./session-recovery": "./src/session-recovery.ts",
     "./session-activity": "./src/session-activity.ts",
     "./telemetry": "./src/telemetry.ts",
+    "./integration-job": {
+      "types": "./src/integration-job.ts",
+      "default": "./src/integration-job.ts"
+    },
     "./integration": "./src/integration.ts",
     "./backlog-notify": "./src/backlog-notify.ts",
     "./personality": "./src/personality.ts",

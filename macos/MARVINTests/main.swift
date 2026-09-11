@@ -3676,6 +3676,71 @@ runner.suite("session-tab-navigation") {
     }
 }
 
+// MARK: - IntegrationJobStatus (ADR-0109 amendment — "how do I know it's working?")
+
+runner.suite("integration-job-status") {
+    func line(_ phase: String, current: String? = nil, done: Int = 0, total: Int = 0, ms: Int = 0, kind: String = "prepare-mr") -> String {
+        IntegrationJobStatus.line(kind: kind, phase: phase, current: current, done: done, total: total, elapsedMs: ms)
+    }
+
+    runner.test("counts the branch being worked, not the ones already done") {
+        // "3 of 6" while the third is in flight — a user reading "2 of 6"
+        // during the third one's squash is being told the wrong thing.
+        runner.expect(
+            line("squashing", current: "marvin/tab/fix-flags", done: 2, total: 6, ms: 72_000),
+            equals: "Squashing 3 of 6 · marvin/tab/fix-flags · 1m 12s",
+            "squash names the branch and the position"
+        )
+        runner.expect(
+            line("merging", current: "marvin/tab/a", done: 0, total: 2, ms: 8_000, kind: "merge-all"),
+            equals: "Merging 1 of 2 · marvin/tab/a · 8s",
+            "merge all reads the same way"
+        )
+        runner.expect(
+            line("squashing", current: "marvin/tab/z", done: 5, total: 6, ms: 1_000),
+            equals: "Squashing 6 of 6 · marvin/tab/z · 1s",
+            "the last one does not overrun the total"
+        )
+    }
+
+    runner.test("the slow phase says why it is slow") {
+        // The commit runs the project's hooks. Without that sentence, minutes
+        // of compile-and-test read as a hang — which is exactly what happened.
+        runner.expect(
+            line("committing", done: 6, total: 6, ms: 123_000),
+            equals: "Committing — running the project's commit hooks · 2m 3s",
+            "names the hooks"
+        )
+        runner.expect(
+            line("pushing", current: "gitlab", ms: 14_000),
+            equals: "Pushing to gitlab · 14s",
+            "the push names its remote"
+        )
+        runner.expect(
+            line("preparing", ms: 2_000),
+            equals: "Cutting the integration branch · 2s",
+            "the first phase is named too"
+        )
+    }
+
+    runner.test("an unknown phase still carries elapsed time") {
+        // An older client against a newer sidecar must degrade to a line that
+        // still answers "is it moving", never to an empty row.
+        runner.expect(line("teleporting", ms: 5_000), equals: "Working · 5s", "unknown phase")
+        runner.expect(line("squashing", done: 0, total: 0, ms: 3_000), equals: "Squashing · 3s", "no total to count")
+    }
+
+    runner.test("a finished run reports its own summary, and never an empty line") {
+        runner.expect(
+            IntegrationJobStatus.finishedNotice(ok: true, summary: "  Squashed 6 branch(es) into one commit on mr/x. Pushed to gitlab.  "),
+            equals: "Squashed 6 branch(es) into one commit on mr/x. Pushed to gitlab.",
+            "trimmed summary"
+        )
+        runner.expect(IntegrationJobStatus.finishedNotice(ok: false, summary: ""), equals: "Integration failed.", "empty failure")
+        runner.expect(IntegrationJobStatus.finishedNotice(ok: true, summary: "   "), equals: "Integration finished.", "empty success")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

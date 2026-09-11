@@ -417,6 +417,53 @@ struct WorktreeEntry: Codable, Equatable, Identifiable {
 
 struct WorktreeListResponse: Codable, Equatable {
     let worktrees: [WorktreeEntry]?
+    /// ADR-0109 amendment — a running (or just-finished) integration, so a
+    /// refresh FINDS one started before this app launch. The poll keeps it
+    /// current; this is how it is discovered.
+    let job: IntegrationJobEntry?
+    let error: String?
+}
+
+/// ADR-0109 amendment (2026-09-11) — what Prepare MR / Merge all is doing now.
+/// The operation outlives the HTTP request that started it, so progress is a
+/// poll of the sidecar's own record rather than anything this app remembers.
+struct IntegrationJobEntry: Codable, Equatable, Identifiable {
+    let id: String
+    /// "prepare-mr" | "merge-all"
+    let kind: String
+    /// "preparing" | "squashing" | "committing" | "pushing" | "merging"
+    let phase: String
+    let current: String?
+    let done: Int
+    let total: Int
+    let branch: String?
+    let startedAt: String
+    let updatedAt: String
+    let finishedAt: String?
+    let ok: Bool?
+    let summary: String?
+    let running: Bool
+
+    /// Milliseconds since it started, against the clock the caller passes.
+    func elapsedMs(now: Date = Date()) -> Int {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let started = fmt.date(from: startedAt) ?? ISO8601DateFormatter().date(from: startedAt)
+        guard let started else { return 0 }
+        let end = finishedAt.flatMap { fmt.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) } ?? now
+        return max(0, Int(end.timeIntervalSince(started) * 1000))
+    }
+
+    var progressLine: String {
+        IntegrationJobStatus.line(
+            kind: kind, phase: phase, current: current,
+            done: done, total: total, elapsedMs: elapsedMs()
+        )
+    }
+}
+
+struct IntegrationJobResponse: Codable, Equatable {
+    let job: IntegrationJobEntry?
     let error: String?
 }
 
