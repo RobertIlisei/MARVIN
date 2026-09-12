@@ -84,14 +84,15 @@ describe("gitWritePolicy — branch create / switch / delete", () => {
     ).toBe("deny");
   });
 
-  it("deny on branch-switch when tree is dirty", () => {
-    expect(
-      gitWritePolicy({
-        kind: "branch-switch",
-        name: "main",
-        workingTreeClean: false,
-      }).class,
-    ).toBe("deny");
+  it("confirm warn on branch-switch when tree is dirty — changes carry over, git guards the overwrite", () => {
+    const d = gitWritePolicy({
+      kind: "branch-switch",
+      name: "main",
+      workingTreeClean: false,
+    });
+    expect(d.class).toBe("confirm");
+    expect(d.severity).toBe("warn");
+    expect(d.reason).toContain("carry over");
   });
 
   it("auto on clean branch-switch", () => {
@@ -253,15 +254,15 @@ describe("gitWritePolicy — detached checkout", () => {
     ).toBe("auto");
   });
 
-  it("dirty tree denies before detach is even considered", () => {
-    expect(
-      gitWritePolicy({
-        kind: "branch-switch",
-        name: "v1.2.0",
-        workingTreeClean: false,
-        detach: true,
-      }).class,
-    ).toBe("deny");
+  it("dirty tree confirms, and the detach warning rides in the same message", () => {
+    const d = gitWritePolicy({
+      kind: "branch-switch",
+      name: "v1.2.0",
+      workingTreeClean: false,
+      detach: true,
+    });
+    expect(d.class).toBe("confirm");
+    expect(d.reason).toContain("detached");
   });
 });
 

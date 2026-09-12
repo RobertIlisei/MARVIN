@@ -271,13 +271,30 @@ final class GitOpRunner {
         }
         switch e {
         case .httpStatus(let code, let body):
-            let detail = (body ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = Self.humanDetail(body ?? "")
             return detail.isEmpty ? "HTTP \(code)" : "HTTP \(code) — \(detail)"
         case .decode:
             return "unexpected response shape"
         case .transport(let underlying):
             return underlying.localizedDescription
         }
+    }
+}
+
+extension GitOpRunner {
+    /// Every `/api/git/*` route answers JSON with a human `reason` or
+    /// `detail` beside its op echo. The user should read that sentence,
+    /// not `{"error":"policy-deny","reason":…,"op":{"kind":…` — which is
+    /// what the branch picker's footer showed until 2026-09-10.
+    static func humanDetail(_ body: String) -> String {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return trimmed }
+        for key in ["reason", "detail", "error"] {
+            if let s = obj[key] as? String, !s.isEmpty { return s }
+        }
+        return trimmed
     }
 }
 

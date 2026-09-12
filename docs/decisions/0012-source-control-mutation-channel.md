@@ -47,7 +47,7 @@ The cwd anchor is the **one shared primitive** — [`checkFsPath`](../../package
 - `push --force` (plain) — hard-deny at the policy layer. Always. Users who need this go to the terminal where they have full context, reflog, and `@{u}`. The UI is not that context.
 - `push --force-with-lease` — confirm danger. Acceptable but worth a deliberate click.
 - `push` regular when `upstreamAhead > 0` — confirm warn. Git would reject it anyway (non-fast-forward); we return a cleaner message.
-- `branch-switch` when working tree is dirty — deny in v1. v2 may offer stash-on-switch; stash is its own surface with its own failure modes, so punting is cheaper than half-shipping.
+- `branch-switch` when working tree is dirty — deny in v1. v2 may offer stash-on-switch; stash is its own surface with its own failure modes, so punting is cheaper than half-shipping. **Superseded 2026-09-10 — confirm warn; see the amendment at the end.**
 - `branch-delete` of the current branch — deny (git refuses too, but our message is clearer).
 - `branch-delete` of an unmerged branch (`-D`) — confirm danger.
 - `commit --amend` when HEAD has been pushed (detected via `rev-list @{u}..HEAD`) — confirm danger; it rewrites shared history.
@@ -267,3 +267,42 @@ merging arbitrary user branches. Those are still chat's job.
 
 Same precedent as the 2026-08-31 amendment, which moved stash and the graph view
 off this list once each had a bounded shape.
+
+## Amendment — 2026-09-10: a dirty-tree switch is a confirm, not a deny
+
+**What changes.** `branch-switch` with `workingTreeClean: false` classifies as
+**confirm warn** — "uncommitted changes will carry over to `<name>`; git refuses
+the switch itself if any would be overwritten" — where the rules-of-note above
+said *deny in v1*. The clean-tree path is unchanged (`auto`), detach still warns.
+
+**Why the deny had to go.** It was never a gate on a rare state. MARVIN writes
+`.marvin/memory.md`, the backlog and the advisor-caveats file from the first turn
+of every session, so on a real project the tree is dirty essentially always —
+measured on `agri-saas-platform` on 2026-09-10: seven modified `.marvin/*` files,
+nothing else, and every branch in the picker answered `HTTP 403 policy-deny`.
+"Commit, stash or discard changes first" named a remedy the panel could not
+sensibly take: committing MARVIN's bookkeeping to switch branches, or stashing
+and popping it on every switch. The 2026-08-31 amendment shipped stash *because*
+this deny pointed at it; that made the deny survivable, not right.
+
+**Why a confirm is enough.** The data-loss case the deny was written for is
+git's own refusal: a switch that would overwrite an uncommitted change exits
+non-zero with *"Your local changes to the following files would be
+overwritten"* and moves nothing. The route now maps that stderr to
+`409 local-changes-would-be-overwritten` with stash named as the remedy. Every
+other dirty switch carries the changes across, which is exactly what `git
+switch` does in a terminal and is reversed by switching back. The warn confirm
+keeps one deliberate click and tells the user the changes are coming along —
+the thing people are actually surprised by.
+
+**Not changed.** `mergeWorktree` still refuses on a dirty main tree; a merge
+writes into those files, a switch does not.
+
+## Scope of Done
+
+- A dirty tree in the branch picker raises the warn confirm sheet, and confirming
+  switches. Verified against the policy tests (33 green) and by hand.
+- git's own overwrite refusal reaches the picker footer as a sentence naming
+  stash, not as a JSON envelope.
+- The rules-of-note line above is superseded by this section; the smoke tests
+  that pinned `deny` now pin `confirm warn`.

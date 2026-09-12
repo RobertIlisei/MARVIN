@@ -24,6 +24,8 @@ import { containsForbiddenFlag } from "./argv-guards";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+/** A timer this much overdue fired after a blocked event loop, not after git. */
+const LOOP_LAG_GRACE_MS = 250;
 
 export interface RunGitOptions {
   /** Total timeout in ms. Default 10 s, capped at 60 s. */
@@ -143,7 +145,28 @@ export async function runGit(
       stderrChunks.push(chunk);
     });
 
-    const timer = setTimeout(() => {
+    // A blocked event loop fires this timer late, and a late timer was
+    // not measuring git. Measured 2026-09-10: `/api/worktrees` reconciles
+    // every tree with execFileSync and stalls the loop ~1.5 s; the status
+    // probe's 2 s timer then reported a 60 ms `rev-parse` as a timeout and
+    // the panel rendered "(not a git repository)" on a healthy repo. Two
+    // tells, either is enough: the child has already exited (its `close`
+    // is queued), or the timer is `LOOP_LAG_GRACE_MS` overdue (libuv drains
+    // timers before it polls, so the exit may not be observed yet). Re-arm
+    // ONCE for a genuine window; a second fire is a hang.
+    let rearmed = false;
+    let armedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout>;
+    const onTimeout = () => {
+      const exited = child.exitCode !== null || child.signalCode !== null;
+      const lateBy = Date.now() - armedAt - timeoutMs;
+      if (!rearmed && (exited || lateBy > LOOP_LAG_GRACE_MS)) {
+        rearmed = true;
+        armedAt = Date.now();
+        timer = setTimeout(onTimeout, timeoutMs);
+        if (typeof timer.unref === "function") timer.unref();
+        return;
+      }
       child.kill("SIGKILL");
       finish({
         ok: false,
@@ -152,7 +175,8 @@ export async function runGit(
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
       });
-    }, timeoutMs);
+    };
+    timer = setTimeout(onTimeout, timeoutMs);
     // Don't keep the event loop alive on the timer alone.
     if (typeof timer.unref === "function") timer.unref();
 

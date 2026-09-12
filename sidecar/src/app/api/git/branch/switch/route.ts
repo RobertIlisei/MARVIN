@@ -6,8 +6,10 @@
  * is also how a TAG or a remote-tracking ref gets checked out (git
  * refuses a plain `switch` to either).
  *
- * Denied when the working tree is dirty
- * (see ADR-0012 rules-of-note); stash-on-switch is a v2 feature.
+ * A dirty working tree asks a warn confirm (ADR-0012, amended
+ * 2026-09-10 — it was a deny): the changes carry over, and git refuses
+ * the switch itself when one would be overwritten, which comes back as
+ * `local-changes-would-be-overwritten` naming stash as the remedy.
  *
  * Cleanness is probed via `git status --porcelain` (short form —
  * we only need to know if ANY output exists, not to parse it).
@@ -105,6 +107,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "branch-not-found", name },
         { status: 404 },
+      );
+    }
+    if (/would be overwritten|commit your changes or stash them/i.test(stderr)) {
+      return NextResponse.json(
+        {
+          error: "local-changes-would-be-overwritten",
+          detail: `git refused: uncommitted changes touch files that differ on \`${name}\`. Stash them (Source Control ▸ ⋯ ▸ Stash), switch, then pop.`,
+          stderr,
+        },
+        { status: 409 },
       );
     }
     return NextResponse.json(

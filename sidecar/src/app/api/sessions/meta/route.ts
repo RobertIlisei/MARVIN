@@ -114,7 +114,7 @@ export async function PUT(req: NextRequest) {
       const kept = findSessionWorktree(workDir, sessionId);
       const rec = kept ? (reopenSessionWorktree(workDir, sessionId) ?? kept) : createSessionWorktree(workDir, { sessionId, title: meta.title });
       if (!kept) prepareSessionWorktree(workDir, rec.path, readOrDetectWorktreeSetup(workDir).config);
-      tree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base };
+      tree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
     }
     patch.tree = tree;
   } else if (body.lane !== undefined && tree.mode === "shared") {

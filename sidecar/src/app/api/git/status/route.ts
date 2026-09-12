@@ -54,6 +54,19 @@ export async function GET(req: NextRequest) {
     ["rev-parse", "--is-inside-work-tree"],
     { timeoutMs: 2000 },
   );
+  // A non-repo answers exit 128 (`non-zero-exit`). A timeout or spawn
+  // failure is the probe FAILING, not the probe saying "no" — conflating
+  // the two rendered "(not a git repository)" on a healthy repo whenever
+  // the sidecar's event loop was busy, and the panel kept that answer
+  // (2026-09-10). The panel retries `probe-failed`; it never retries
+  // `not-a-git-repo`.
+  if (!probe.ok && probe.error !== "non-zero-exit") {
+    return NextResponse.json({
+      enabled: false,
+      reason: "probe-failed",
+      error: probe.error,
+    });
+  }
   if (!probe.ok || probe.stdout.trim() !== "true") {
     return NextResponse.json({ enabled: false, reason: "not-a-git-repo" });
   }

@@ -164,10 +164,16 @@ export function gitWritePolicy(op: GitOp): GitWriteDecision {
         return deny(`branch-switch: invalid branch name \`${op.name}\``);
       }
       if (!op.workingTreeClean) {
-        // Still a hard-deny, but the panel now has a stash op to offer
-        // as the remedy instead of leaving the user at a dead end.
-        return deny(
-          "branch-switch: working tree is dirty; commit, stash or discard changes first",
+        // ADR-0012 amendment (2026-09-10): a confirm, no longer a deny.
+        // Uncommitted changes ride along on a switch — git carries them,
+        // and refuses on its own when one would be overwritten, which the
+        // route surfaces with stash as the remedy. The deny blocked EVERY
+        // switch on a real project: MARVIN's own `.marvin/` bookkeeping
+        // dirties the tree from the first turn, so "commit, stash or
+        // discard first" was a dead end, not a remedy.
+        return confirm(
+          `uncommitted changes will carry over to \`${op.name}\`; git refuses the switch itself if any would be overwritten${op.detach ? " — and a detached checkout leaves HEAD off any branch" : ""}`,
+          "warn",
         );
       }
       if (op.detach) {
