@@ -195,46 +195,14 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   request observed). The two-tab backlog race is not yet checked on the
   rebuilt app.
 
-- **2026-09-10 — unreleased: Prepare MR.** Source Control ▸ Worktrees gains a sheet that squashes the finished tab branches into one commit on an `mr/<date>-<name>` branch, pushes it and opens the merge request from the push — the flow MARVIN was doing by hand in a tab and stalling on at the metered-CI confirm. Done in a disposable worktree so the always-dirty main checkout is never entered; open tabs are listed but not foldable; the message is Conventional-Commits shaped and editable. Worktrees sort newest-tip first with `+N −M`. ADR-0109 amended; 5 tests. Also: `graphify-out/` exempt from worktree containment (ADR-0107 Addendum 6).
-- **2026-09-10 — unreleased: branch switch unblocked, Source Control panel no longer sticks on "not a git repository", tab popover names the base branch.**
-  - *Diagnostic.* User screenshots: every branch in the picker answered `HTTP 403 — policy-deny … working tree is dirty`, and on the main tab the panel read "(not a git repository)" while the status bar read `main *`. Measured rather than read: the project's tree had seven modified `.marvin/*` files and nothing else — MARVIN's own bookkeeping — so the ADR-0012 dirty-tree deny fired on every switch on every real project. For the panel, `GET /api/git/status` answered `enabled: true` in 60 ms alone, but raced against `/api/worktrees` (what `SourceControlModel.refresh` does with `async let`) it took 1.2–3.0 s: the worktree reconcile is `execFileSync` per tree, 15 trees, and the status probe's `runGit` timer is 2 s. A late timer was reported as `not-a-git-repo`, and `refresh` treated any non-nil response as settled.
-  - *Decision.* Dirty switch → **confirm warn** (ADR-0012 amendment): git already refuses the overwriting case, carry-over is reversible, and the deny's remedy was a dead end. Probe failure ≠ "no": the route distinguishes `probe-failed` (timeout/spawn) from `not-a-git-repo` (exit 128); `runGit` re-arms once when its timer fires late or the child has already exited; the panel retries `probe-failed` and never caches `enabled: false`. `GitOpRunner.describe` unwraps the JSON envelope to its `reason`/`detail`. Worktree records gain `baseRef` (`symbolic-ref --short HEAD` at the cut), carried through session meta and the watch feed to the popover.
-  - *Verification.* Full sidecar suite 1340 green (3 new `exec.test.ts` cases: a loop blocked past the timer still answers `ok`, a real hang still times out, a non-repo is `non-zero-exit`), sidecar `tsc` clean, `swift build` clean. The event-loop stall itself is not fixed — parked.
-
-
-  Trigger: six finished tabs on a real project, none closable with *Merge
-  into my branch* — `could not commit the worktree: spawnSync git ETIMEDOUT`.
-
-  **Diagnosis, measured rather than read.** `git status` in the worktree
-  showed `A  node_modules` and `A  apps/web/node_modules`: the symlinks
-  `prepareSessionWorktree` creates, staged. `git check-ignore` returned
-  nothing for either — the project ignores `node_modules/`, and gitignore's
-  trailing slash matches directories only, never a symlink. So every tab
-  worktree was dirty from birth; the close route's `git status` check
-  always took the commit-first path; `git add -A` staged the links; and
-  `git commit` ran the project's `pre-commit` (a Java compile plus its fast
-  test band) against a 30 s `execFileSync` inside the route handler. That
-  timed out, and held Node's event loop for the entire wait — the "MARVIN
-  froze" that came with it.
-
-  **Fix.** `prepareSessionWorktree` writes each linked path, anchored and
-  without the slash, to the clone's `.git/info/exclude` — shared by every
-  worktree of the clone, never the project's `.gitignore`. The close route
-  unstages any links a previous attempt caught, then commits only if real
-  work remains, through `commitWorktreeWorkInProgress`: asynchronous, a
-  ten-minute budget, hooks honoured rather than `--no-verify`'d (the
-  project's hook carries a secret scan), and the hook's own stderr in the
-  failure message. Existing worktrees on the affected project were repaired
-  in place. Also in this release, from the same session: a refused close now
-  stays on screen as a failure notice naming the tab instead of vanishing on
-  the next hydrate, and four panes stop rendering their own cancelled
-  refresh as an error.
-
-  **Verification.** New tests: a slow pre-commit hook completes, a rejecting
-  hook's words are reported, a stuck hook is cut off and named, a staged
-  symlink is unstaged and never committed, the exclude line is written once.
-  1337 sidecar tests green; typecheck and biome clean; rebuilt and
-  reinstalled locally before tagging.
+- **2026-09-12 — v0.1.113: tab branches stay local, the plain chat is one click, a dirty tree can switch branches, and full auto is a posture.**
+  - *Tab branches are never published by MARVIN* ([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md) second amendment). Two tabs each pushed their `marvin/tab/…` branch and opened a merge request (!215, !216) — the metered-CI confirm asked and was allowed twice, one pipeline each, for work Prepare MR folds into one. In a worktree tab the answer is always the same, so `localOnlyIntegrationPolicy` now **denies** any `git push` and any `glab mr` / `gh pr` create or merge ahead of the confirm, naming Merge all / Prepare MR; a shared tab is denied only when a `marvin/` ref is what gets published. The prompt says so in the implementer protocol, extended to the tab's own branch. 4 gate tests.
+  - *Full auto, the third posture* ([ADR-0115](../decisions/0115-full-auto-is-the-third-posture.md)). `auto` had accreted four confirm-raising rules since ADR-0015 promised it behaved like `--dangerously-skip-permissions`. `full` waives the three containment confirms (worktree, lane, shared-checkout git) and nothing else: metered CI still asks, the hard-deny floor stays, AskUserQuestion and plan approval still reach the user.
+  - *A plain chat is one click again* ([ADR-0107](../decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md) Addendum 7). The `+` and **New** controls are split buttons — click for the Settings default, menu for **New Chat — shared checkout** / **New Isolated Tab — own branch** — and File carries the same two on ⌥⌘N / ^⌘N. On an empty draft the choice re-shapes that draft instead of stacking another; New is no longer greyed on a blank tab.
+  - *A dirty tree can switch branches* ([ADR-0012](../decisions/0012-source-control-mutation-channel.md) amended). The dirty-tree `deny` was tripping on MARVIN's own `.marvin/*` bookkeeping — seven modified files, nothing else — so no branch was ever reachable from the picker. Now a **warn confirm** ("uncommitted changes will carry over"); git's own overwrite refusal is mapped to `409 local-changes-would-be-overwritten` naming stash; the picker footer shows the route's sentence instead of the JSON envelope.
+  - *The Source Control panel no longer sticks on "(not a git repository)".* `/api/worktrees` reconciles every tree with `execFileSync` (~1.5 s on 15 trees) and the panel fires it beside status, so the status probe's 2 s `runGit` timer fired late and its failure was reported as `not-a-git-repo`, which the panel then kept. `runGit` re-arms once when its timer fires late or the child already exited (3 tests: a loop blocked past the timer still answers ok, a real hang still times out); the route answers `probe-failed` for a timeout and `not-a-git-repo` only for exit 128; the panel retries a probe failure and never treats `enabled: false` as final. The reconcile itself is still synchronous git on the event loop — parked.
+  - *Also.* `graphify-out/` is exempt from worktree containment (ADR-0107 Addendum 6): graphify's own detect pass writes there, and every graph query from a tab was raising the containment confirm in auto mode.
+  - *Verification.* 1417 sidecar tests, `tsc` clean, `swift build` clean, bundle installed and used for a day before the cut.
 
 ---
 
