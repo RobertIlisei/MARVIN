@@ -93,6 +93,7 @@ import {
 import { readWorktreeSetupConfig } from "./worktree-setup";
 import {
   bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, 
+  localOnlyIntegrationPolicy,
   sessionWorktreePolicy,sweepWorktrees, type WorktreeState,
 } from "./worktrees";
 
@@ -1672,6 +1673,10 @@ export function makeAutoModeLogger(args: {
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0109 (2nd amendment) — a tab branch is never pushed or turned into
+    // a request by MARVIN; a deny that names Prepare MR, ahead of the confirm.
+    const localOnly = agentID ? null : localOnlyIntegrationPolicy(toolName, safeInput, args.sessionTree);
+    if (localOnly) return { behavior: "deny", message: localOnly.reason, interrupt: false } as PermissionResult;
     // ADR-0109 — spending CI minutes reaches the user in every mode.
     const meteredCi = maybeMeteredCiConfirm({
       toolName, turnId, toolUseID, input: safeInput, onConfirmRequest,
@@ -1775,6 +1780,10 @@ export function makeGatedCanUseTool(args: {
       onConfirmRequest,
     });
     if (sharedTree) return sharedTree;
+    // ADR-0109 (2nd amendment) — a tab branch is never pushed or turned into
+    // a request by MARVIN; a deny that names Prepare MR, ahead of the confirm.
+    const localOnly = agentID ? null : localOnlyIntegrationPolicy(toolName, safeInput, args.sessionTree);
+    if (localOnly) return { behavior: "deny", message: localOnly.reason, interrupt: false } as PermissionResult;
     // ADR-0109 — spending CI minutes reaches the user in every mode.
     const meteredCi = maybeMeteredCiConfirm({
       toolName, turnId, toolUseID, input: safeInput, onConfirmRequest,

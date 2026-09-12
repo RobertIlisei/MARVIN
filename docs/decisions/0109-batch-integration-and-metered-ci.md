@@ -206,3 +206,39 @@ The shape was wrong, not the rendering. The run was a single HTTP request, so ev
 
 Both were invisible for the same reason: nothing reported what the run did. Fourteen tests — six on the job record, two on the honest message and the withheld push, the rest as before.
 
+
+## Amendment — 2026-09-12: a tab branch is never published by MARVIN
+
+**What happened.** Two tabs, each on its own `marvin/tab/…` branch, each
+pushed that branch and ran `glab mr create`. The metered-CI confirm fired both
+times and was allowed both times; GitLab has !215 and !216, one pipeline each,
+for work that Prepare MR (the 2026-09-10 amendment) folds into one. User:
+*"we need to make sure our multi session merge only locally."*
+
+**Why a confirm was the wrong tool.** The confirm exists for a decision the
+user might make either way — opening a request on their own branch. In a
+worktree tab there is no either way: the branch is MARVIN's integration
+artefact, and publishing it alone is always the expensive path. A question the
+answer to which is always "no" is a deny with a better message.
+
+**What changes.** `localOnlyIntegrationPolicy`, ahead of the metered-CI
+confirm on both permission ladders, main loop only:
+
+- **worktree tab** — any `git push`, and any `glab mr` / `gh pr` create or
+  merge (including `-o merge_request.create`) → **deny**, naming the tab's
+  branch and the two local paths (Merge on close, Merge all / Prepare MR).
+- **shared tab** — a push or request that names a `marvin/…` branch → deny.
+  The user's own branch keeps the normal ladder; `glab mr create` on it still
+  reaches the metered-CI confirm, which is theirs to answer.
+- **subagents** — untouched; an implementer has ADR-0081's own containment.
+
+The prompt says the same in the implementer protocol, extended to the tab's
+own branch. `git push` of the user's own work stays ungated, as the 2026-09-10
+decision above argues.
+
+### Scope of Done
+
+- Four tests in `session-worktree-gate`: every push and request form denied
+  in a worktree tab with Prepare MR named; reads and local merges untouched;
+  a shared tab denied only when a `marvin/` ref is the thing published; the
+  gate denies without opening a confirm card. Full suite green.

@@ -1716,3 +1716,49 @@ async function prepareMergeRequestInner(
     };
   }
 }
+
+// ── Tab and implementer branches are integrated locally, never published alone ──
+
+const PUBLISH_CMD = /\bgit\s+push\b/;
+const OPEN_OR_MERGE_REQUEST = /\b(?:glab\s+mr\s+(?:create|new|merge)|gh\s+pr\s+(?:create|merge))\b|merge_request\.create/;
+/** A `marvin/…` ref anywhere in the command: a tab or implementer branch by name. */
+const MARVIN_REF = new RegExp(`(?:^|[\\s:'"=,])${BRANCH_PREFIX}[\\w./-]+`);
+
+/**
+ * ADR-0109, second amendment (2026-09-12) — MARVIN never publishes a tab or
+ * implementer branch on its own. Two tabs each pushed their branch and asked
+ * to open a merge request; both confirms were allowed and the project paid two
+ * pipelines for work that Prepare MR folds into one. In a worktree tab the
+ * right answer to "push this?" or "open an MR?" is always the same, so it is
+ * a deny that names the local path, not a question.
+ *
+ *   - worktree tab: any `git push`, and any MR/PR create or merge → deny.
+ *   - shared tab: a push or MR that names a `marvin/…` branch → deny. Pushing
+ *     the user's own branch stays on the normal ladder (and MR creation on
+ *     the metered-CI confirm).
+ *   - subagents: not this rule's business — an implementer has ADR-0081.
+ */
+export function localOnlyIntegrationPolicy(
+  name: string,
+  input: Record<string, unknown>,
+  sessionTree: { mode: "worktree"; branch: string } | { mode: "shared" } | undefined,
+): { decision: "deny"; reason: string } | null {
+  if (name !== "Bash") return null;
+  const cmd = typeof input.command === "string" ? input.command : "";
+  if (!cmd) return null;
+  const publishes = PUBLISH_CMD.test(cmd);
+  const requests = OPEN_OR_MERGE_REQUEST.test(cmd);
+  if (!publishes && !requests) return null;
+  const remedy =
+    "Tab branches are integrated locally, never published one by one (ADR-0109): each branch pushed as its own " +
+    "merge request costs a full pipeline. Close the tab with Merge, or use Source Control ▸ Worktrees ▸ Merge all / " +
+    "Prepare MR — the user squashes the finished tabs into one commit and opens one request from there.";
+  if (sessionTree?.mode === "worktree") {
+    const act = requests ? "opening or merging a request from" : "pushing";
+    return { decision: "deny", reason: `This tab runs on its own branch (${sessionTree.branch}); ${act} it is not MARVIN's to do. ${remedy}` };
+  }
+  if (MARVIN_REF.test(cmd)) {
+    return { decision: "deny", reason: `This command publishes a MARVIN tab or implementer branch. ${remedy}` };
+  }
+  return null;
+}

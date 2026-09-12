@@ -29,11 +29,13 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-function gate(strategy: "auto" | "full") {
+function gate(strategy: "auto" | "full", tree: "worktree" | "shared" = "worktree") {
   return makeAutoModeLogger({
-    cwd: wt,
+    cwd: tree === "worktree" ? wt : root,
     workDir: root,
-    sessionTree: { mode: "worktree", slug: "x", path: wt, branch: "marvin/tab/x", base: "abc" },
+    sessionTree: tree === "worktree"
+      ? { mode: "worktree", slug: "x", path: wt, branch: "marvin/tab/x", base: "abc" }
+      : { mode: "shared" },
     turnId: "turn-F",
     permissionStrategy: strategy,
     checkpoint: { projectId: "p", marvinSessionId: "session-F" },
@@ -91,11 +93,19 @@ describe("permission strategy: full", () => {
 
   it("full still asks before spending CI minutes", async () => {
     // ADR-0109, decided with the user 2026-09-11: the one confirm that costs
-    // money keeps its confirm in every mode, including this one.
-    void gate("full")("Bash", { command: "glab mr create --fill" }, meta("t5"));
+    // money keeps its confirm in every mode, including this one. On a SHARED
+    // tab — a worktree tab's branch is never published by MARVIN at all
+    // (2026-09-12 amendment), which is a deny, tested below.
+    void gate("full", "shared")("Bash", { command: "glab mr create --fill" }, meta("t5"));
     await new Promise((r) => setTimeout(r, 20));
     expect(opened.map((o) => o.toolName)).toEqual(["Bash"]);
     expect(opened[0]?.reason.toLowerCase()).toMatch(/pipeline|ci|merge request/);
+  });
+
+  it("full denies a request from a worktree tab outright — no card, the local path named", async () => {
+    const res = await gate("full")("Bash", { command: "glab mr create --fill" }, meta("t5b"));
+    expect(res?.behavior).toBe("deny");
+    expect(opened).toEqual([]);
   });
 
   it("full still lets the model ask its own question", async () => {

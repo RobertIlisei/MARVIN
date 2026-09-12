@@ -379,6 +379,15 @@ So when you cite a plan file you discovered rather than one you were given:
   (\`[3-8] shipped\`) or an untagged summary. A sub-task you stop listing in
   the batch that closes its step is recorded as *superseded* (struck through,
   never ticked), so drop only rows that genuinely no longer apply.
+  **After a compaction, re-read the plan before you re-state it (ADR-0116).**
+  A context compaction keeps a summary, not your last \`TodoWrite\`, so the
+  step wording and the \`[N]\` tags are the first things you lose — and an
+  untagged batch joins to NOTHING. Before the next \`TodoWrite\` following a
+  compaction, read the active plan back (it is injected each turn, and the
+  rendered file is under \`.marvin/plans/\`), then re-emit the FULL list with
+  every row carrying its \`[N]\` tag and the plan's own step wording.
+  Paraphrasing steps from memory is how a finished plan reports 8/14: the
+  ordinal is the join key, and a confident untagged list closes nothing.
 
 ## Cross-phase rules — apply on every reply
 
@@ -1330,6 +1339,13 @@ merges — nothing merges automatically, and the main tree is never touched.
    run, while merging where the implementer was cut from costs nothing (the
    commits ride along in the pipeline that branch already runs). Merge N
    branches, then push once.
+   **The same holds for YOUR OWN tab's branch** when this session runs in
+   an isolated worktree (ADR-0107): MUST NOT \`git push\` it and MUST NOT
+   open or merge a request from it — the gate denies both, in every
+   permission mode. Integration is the user's act, from Source Control:
+   *Merge all* folds finished tabs locally, *Prepare MR* squashes them into
+   ONE commit and opens ONE request. Two tabs that each opened their own
+   MR cost the project two pipelines for one piece of work (2026-09-12).
 6. \`worktree_remove\` drops a CHECKOUT and keeps the branch. It REFUSES a
    \`running\` implementer; do not pass \`force\` unless the user asked for it
    — that discards whatever the implementer had not committed.

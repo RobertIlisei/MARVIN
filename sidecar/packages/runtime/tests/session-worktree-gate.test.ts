@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeAutoModeLogger } from "../src/sdk-runner";
 import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
-import { mainTreeRedirect, sessionWorktreePolicy } from "../src/worktrees";
+import { localOnlyIntegrationPolicy, mainTreeRedirect, sessionWorktreePolicy } from "../src/worktrees";
 
 let root: string;
 let wt: string;
@@ -275,5 +275,49 @@ describe("mainTreeRedirect — graphify-out is MARVIN's, not the user's checkout
   it("an absolute graphify-out path under the root is exempt too", () => {
     expect(mainTreeRedirect(`rm -rf ${root}/graphify-out/cache`, root, wt)).toBeNull();
     expect(mainTreeRedirect(`rm -rf ${root}/src`, root, wt)).toBe(`${root}/src`);
+  });
+});
+
+describe("localOnlyIntegrationPolicy — a tab branch is never published by MARVIN (ADR-0109, 2nd amendment)", () => {
+  const tab = { mode: "worktree" as const, branch: "marvin/tab/fix-anaf" };
+  const shared = { mode: "shared" as const };
+
+  it("denies every push and every request from a worktree tab, naming Prepare MR", () => {
+    for (const cmd of [
+      "git push -u gitlab marvin/tab/fix-anaf",
+      "git push",
+      "git push gitlab HEAD:marvin/tab/fix-anaf -o merge_request.create",
+      "glab mr create --source-branch marvin/tab/fix-anaf --target-branch main --title x",
+      "gh pr create --fill",
+      "glab mr merge 215",
+    ]) {
+      const d = localOnlyIntegrationPolicy("Bash", { command: cmd }, tab);
+      expect(d?.decision, cmd).toBe("deny");
+      expect(d?.reason, cmd).toMatch(/Prepare MR/);
+    }
+  });
+
+  it("leaves reads and local git alone in a worktree tab", () => {
+    for (const cmd of ["git fetch gitlab", "git status", "glab mr list", "git merge --no-ff marvin/tab/other", "git log --oneline -5"]) {
+      expect(localOnlyIntegrationPolicy("Bash", { command: cmd }, tab), cmd).toBeNull();
+    }
+    expect(localOnlyIntegrationPolicy("Edit", { file_path: "a.ts" }, tab)).toBeNull();
+  });
+
+  it("in a shared tab, denies only when a marvin/ branch is what gets published", () => {
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git push gitlab marvin/tab/fix-anaf" }, shared)?.decision).toBe("deny");
+    expect(localOnlyIntegrationPolicy("Bash", { command: "glab mr create --source-branch marvin/tab/x --target-branch main" }, shared)?.decision).toBe("deny");
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git push gitlab main" }, shared)).toBeNull();
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git push -u gitlab mr/2026-09-12-rls" }, shared)).toBeNull();
+    // Falls through to the metered-CI confirm, which is the user's call.
+    expect(localOnlyIntegrationPolicy("Bash", { command: "glab mr create --source-branch feature/x" }, shared)).toBeNull();
+    expect(localOnlyIntegrationPolicy("Bash", { command: "git push gitlab main" }, undefined)).toBeNull();
+  });
+
+  it("through the gate: a worktree tab's `glab mr create` is denied without opening a confirm", async () => {
+    const decide = gate("worktree");
+    const out = decided(await decide("Bash", { command: "glab mr create --source-branch marvin/tab/x --target-branch main --title t" }, meta("tu-mr")));
+    expect(out.behavior).toBe("deny");
+    expect(opened).toEqual([]);
   });
 });
