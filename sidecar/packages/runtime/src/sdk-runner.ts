@@ -69,7 +69,8 @@ import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
-import { readPlanState } from "./plan-state";
+import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
+import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
@@ -85,6 +86,7 @@ import {
   buildReconcilePrompt,
   hasScopeMet,
   hasWorkflowGap,
+  mergeOpenItems,
   openPlanSteps,
   openTodos,
   scopeOfDoneEntirelyUnticked,
@@ -2723,6 +2725,57 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
   }
 
+  // ── Plan-spine projection (ADR-0116) ───────────────────────────────────
+  // The spine used to have exactly one writer — the macOS client, off the live
+  // event stream. A turn nobody is watching (a wakeup, a background-job
+  // completion, any turn that runs while another tab is on screen) advanced the
+  // work and could not advance the plan: one real session shipped all fourteen
+  // steps and three commits while the plan sat at 8/14. The server sees every
+  // `TodoWrite` whether or not a client is attached, so it records progress
+  // here, by the deterministic `[N]` tag join only.
+  //
+  // Runs on EVERY turn that emitted a `TodoWrite`, not just a closing one —
+  // the point is that unattended progress is durable, not that it is checked.
+  let spineUntaggedClose = false;
+  if (lastTodoPayload !== undefined && input.projectId && input.marvinSessionId) {
+    try {
+      const before = readPlanState(input.projectId, input.marvinSessionId);
+      if (before.ok && before.state) {
+        const applied = applyTodosToSpine(before.state, lastTodoPayload, new Date().toISOString());
+        // A batch that addressed a live plan and closed nothing by tag is the
+        // post-compaction shape: reworded rows, ordinals gone. Remembered for
+        // the guard so the corrective prompt can say why the claim didn't land.
+        spineUntaggedClose =
+          applied.totalRows > 0 &&
+          applied.taggedRows === 0 &&
+          openPlanSteps(before.state).length > 0;
+        // Persist on `joined`, not on `changed`: a batch that restated the
+        // same statuses still advances the watermark, and the watermark is how
+        // a hydrating client knows the server has already seen this far.
+        if (applied.joined) {
+          writePlanState(input.projectId, input.marvinSessionId, applied.state);
+        }
+        console.info(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "plan.spine.project",
+              turnId,
+              joined: applied.joined,
+              changed: applied.changed,
+              distrusted: applied.distrusted,
+              taggedRows: applied.taggedRows,
+              totalRows: applied.totalRows,
+              closed: stepsClosedByBatch(lastTodoPayload).length,
+              at: new Date().toISOString(),
+            }),
+        );
+      }
+    } catch {
+      // The spine is the client's model and its file is best-effort state.
+      // Never let a projection failure take down a turn that already succeeded.
+    }
+  }
+
   // ── Workflow-completion guard (ADR-0057) ───────────────────────────────
   // If a successful turn emitted the scope-met marker but left plan items open
   // or an ADR's Scope of Done entirely unmarked, fire a corrective turn that
@@ -2736,18 +2789,18 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         /* unreadable (deleted / moved) — skip */
       }
     }
-    // Plan-item signal: trust THIS turn's TodoWrite when present (no lag). Only
-    // when the turn emitted no TodoWrite — so the plan didn't advance and the
-    // debounced-PUT plan-state can't be racily stale — fall back to the
-    // persisted spine (ADR-0057, closing the terminal-turn gap). readPlanState
-    // returns null on a mismatched key, so the fallback degrades to no-op.
-    let openPlanItems: string[];
-    if (lastTodoPayload !== undefined) {
-      openPlanItems = openTodos(lastTodoPayload);
-    } else {
-      const ps = readPlanState(wakeupCtx.projectId, wakeupCtx.marvinSessionId);
-      openPlanItems = ps.ok ? openPlanSteps(ps.state) : [];
-    }
+    // Plan-item signal (ADR-0116 — was: trust THIS turn's TodoWrite when
+    // present). Asking the batch alone meant asking the claim to check itself:
+    // a closing list that said "14 of 14 completed" cleared the guard while the
+    // spine still held six open steps. Both are read, and either saying "open"
+    // makes it open — the spine catches a claim that never joined to the plan,
+    // the batch catches tier-1 items that were never plan steps. The spine was
+    // projected above, so it is this turn's truth and not a stale PUT.
+    const ps = readPlanState(wakeupCtx.projectId, wakeupCtx.marvinSessionId);
+    const openPlanItems = mergeOpenItems(
+      ps.ok ? openPlanSteps(ps.state) : [],
+      lastTodoPayload !== undefined ? openTodos(lastTodoPayload) : [],
+    );
     // ADR-0100 — advisor conditions are part of the close, not a backlog
     // deposit made 20 minutes earlier. They rode the turn on the design
     // context; here is where the executor is asked for an outcome on each.
@@ -2756,6 +2809,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       openTodos: openPlanItems,
       untickedAdrs,
       openConditions,
+      untaggedClose: spineUntaggedClose,
     };
     if (hasWorkflowGap(gap)) {
       const { reason, prompt } = buildReconcilePrompt(gap);
@@ -2775,6 +2829,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               armed: res.ok,
               openTodos: gap.openTodos.length,
               untickedAdrs: gap.untickedAdrs.length,
+              untaggedClose: spineUntaggedClose,
               ...(res.ok ? { wakeupId: res.record.id } : { skipped: res.error }),
               at: new Date().toISOString(),
             }),

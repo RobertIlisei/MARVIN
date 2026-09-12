@@ -116,6 +116,29 @@ export function scopeOfDoneEntirelyUnticked(md: string): boolean {
   return unticked > 0 && ticked === 0;
 }
 
+/**
+ * Merge the two independent statements about what is still open, de-duplicated
+ * and order-preserving (ADR-0116).
+ *
+ * The persisted spine and the turn's own `TodoWrite` are not redundant: the
+ * spine carries steps the executor may have forgotten it had, and the batch
+ * carries tier-1 items that were never plan steps. Either saying "open" makes
+ * it open. Taking the batch alone is what let a plan close at 8/14 while the
+ * model reported 14/14 — the claim was checked against itself.
+ */
+export function mergeOpenItems(spineSteps: string[], batchTodos: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const label of [...spineSteps, ...batchTodos]) {
+    const key = label.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
 export interface WorkflowGap {
   openTodos: string[];
   /** ADR basenames whose Scope of Done is entirely unticked. */
@@ -130,6 +153,16 @@ export interface WorkflowGap {
    * no stated outcome.
    */
   openConditions?: string[];
+  /**
+   * ADR-0116 — the closing `TodoWrite` carried no usable `[N]` tag against an
+   * active multi-step plan, so nothing it claimed could be joined to a step.
+   *
+   * Seen after an auto-compaction: the batch came back untagged and reworded
+   * from the summary, every ordinal was gone, and a list that said "14 of 14
+   * completed" could not close a single one. The executor needs telling WHY
+   * its claim did not land, or it re-states the same untagged list.
+   */
+  untaggedClose?: boolean;
 }
 
 /** True when there's anything to reconcile. */
@@ -170,6 +203,17 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
   // park the ones that did not". Folding it into the ADR/todo sentence would
   // have made it advisory-sounding, which is exactly what ADR-0100 is moving
   // away from.
+  // ADR-0116 — when the batch was untagged, the open items above are not a
+  // disagreement about the work, they are the join failing. Say which, or the
+  // executor reads the list as "MARVIN thinks I did nothing" and argues.
+  const untaggedInstruction = gap.untaggedClose
+    ? `\n\nYour closing \`TodoWrite\` carried no \`[N]\` step tags, so none of ` +
+      `it could be joined to the plan — the ordinal IS the join key (ADR-0049), ` +
+      `and text alone does not close a step. Re-read the active plan file, ` +
+      `re-emit the FULL list with each row prefixed by its \`[N]\` tag, and use ` +
+      `the plan's own step wording. If a compaction lost the plan, read it back ` +
+      `from \`.marvin/plans/\` before you re-state it.`
+    : "";
   const conditionInstruction =
     conditions.length > 0
       ? `\n\nFor each advisor condition, state \`met\`, \`not met\`, or ` +
@@ -193,6 +237,7 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
       `happened. For anything NOT actually done, leave it open, say so plainly, ` +
       `and do NOT claim scope met. Do NOT mark or tick anything merely to clear ` +
       `this check — a false "done" is a worse failure than an unmarked box.` +
+      untaggedInstruction +
       conditionInstruction,
   };
 }

@@ -4,6 +4,7 @@ import {
   buildReconcilePrompt,
   hasScopeMet,
   hasWorkflowGap,
+  mergeOpenItems,
   openPlanSteps,
   openTodos,
   SCOPE_MET_SENTINEL,
@@ -182,5 +183,52 @@ describe("advisor conditions at the close (ADR-0100)", () => {
     });
     expect(reason).not.toContain("ADR-0100");
     expect(prompt).not.toContain("backlog_add");
+  });
+});
+
+// ADR-0116 — the claim no longer checks itself. The spine and the batch are
+// read together, and the corrective prompt names an untagged close for what
+// it is: a join failure, not a disagreement about the work.
+
+describe("mergeOpenItems (ADR-0116)", () => {
+  it("unions both statements, spine first, de-duplicated case-insensitively", () => {
+    expect(
+      mergeOpenItems(["Operator endpoints", "Verify M2"], ["verify m2", "Park the backlog items"]),
+    ).toEqual(["Operator endpoints", "Verify M2", "Park the backlog items"]);
+  });
+
+  it("keeps the spine's open steps when the batch claims everything done", () => {
+    expect(mergeOpenItems(["Test-connection endpoint"], [])).toEqual(["Test-connection endpoint"]);
+  });
+
+  it("keeps the batch's open items when the spine is clear", () => {
+    expect(mergeOpenItems([], ["A tier-1 item that was never a plan step"])).toEqual([
+      "A tier-1 item that was never a plan step",
+    ]);
+  });
+
+  it("drops blanks and caps the list", () => {
+    expect(mergeOpenItems(["", "   "], [])).toEqual([]);
+    expect(mergeOpenItems(Array.from({ length: 30 }, (_, i) => `s${i}`), []).length).toBe(20);
+  });
+});
+
+describe("untagged close (ADR-0116)", () => {
+  it("tells the executor the ordinal is the join key and how to recover", () => {
+    const { prompt } = buildReconcilePrompt({
+      openTodos: ["Test-connection endpoint on both planes"],
+      untickedAdrs: [],
+      untaggedClose: true,
+    });
+    expect(prompt).toContain("no `[N]` step tags");
+    expect(prompt).toContain(".marvin/plans/");
+  });
+
+  it("says nothing about tags when the batch was tagged", () => {
+    const { prompt } = buildReconcilePrompt({
+      openTodos: ["Still open"],
+      untickedAdrs: [],
+    });
+    expect(prompt).not.toContain("no `[N]` step tags");
   });
 });

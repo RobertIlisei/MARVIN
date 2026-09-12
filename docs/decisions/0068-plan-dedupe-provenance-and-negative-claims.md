@@ -349,3 +349,76 @@ of deriving step identity by counting markdown markers. Agent SDK 0.3 replaced
 exactly the stable join key `[N]` tags were invented to synthesise. ADR-0073
 takes the SDK upgrade; migrating the spine to Task ids is the step after, and
 is what retires this class of bug rather than patching its next instance.
+
+## Addendum 5 (2026-09-12) — a plan that says where its steps are is answering the question
+
+**User.** Two screenshots of a plan strip reading `0/11` under a reply that
+said the plan was *"fully complete and committed"*, naming two commits:
+*"now it's even worse with the plan."*
+
+**Measured, not read.** Running the parser's own two patterns over the real
+file reproduced the stored spine exactly — eleven rows, in order, none of them
+work:
+
+| Tracked as a step | Actually |
+|---|---|
+| 3 bullets under `## Scope` | an index into the steps, `— steps 1–6` |
+| 8 numbered lines under `## Definition of Done` | verification statements |
+| the 9 vertical slices under `## Steps` | never parsed at all |
+
+Three independent causes, all in `PlanParser`.
+
+**A blank line ended the criteria block.** `criteriaLineIndexes` walked forward
+from the heading and stopped at the first line that was not a bullet. Markdown
+puts a blank line between a heading and its list, so the block ended before its
+first item and the ONLY line ever excluded was the heading. Addendum 4's
+criteria rule had been working by accident on plans that omit that blank line.
+The fix distinguishes by position: a blank line *before* the block's first item
+is the markdown gap and is passed over; *after* one it separates the criteria
+from the list that follows, which is usually the steps, and ends the block. The
+second reading is load-bearing — without it the parser swallowed a fixture's
+three real steps and left the plan with none.
+
+**The criteria scanner and the step matcher disagreed about what a list item
+is.** The scanner accepted `-`, `*`, `•`; the matcher beside it also accepted
+`1.` and `1)`. So a NUMBERED Definition of Done ended its own block immediately.
+Nine of one project's 397 plan files carry one. `isListItemLine` is now the
+single definition both use.
+
+**A bold ordinal was invisible.** The steps were written `**1. Tracer slice —
+…**`. The marker is matched on the RAW line and emphasis is stripped only
+afterwards, so neither alternative fired. Both patterns now allow a leading
+`**` / `__` in front of a real marker, and `render`'s `markerRE` carries the
+emphasis in its indent group so the checkbox still lands after the ordinal —
+a matcher here that could not see the line would have silently stopped writing
+that plan's checkboxes, which is precisely the parse/render drift this pair
+exists to prevent.
+
+**And the section that names itself is the answer.** With the three repairs a
+plan still tracked its Scope index alongside its steps, the same work under two
+wordings. When a plan carries a `## Steps` or `## Implementation` heading, the
+steps come from that section and nowhere else; it ends at the next heading of
+the same or a higher level, so a `### Part one` subheading does not cut it
+short. `Milestone` is deliberately excluded from the heading vocabulary:
+`### Milestone A` / `### Milestone B` are siblings, and treating the first as
+the step section cut a real 16-step plan down to four. A plan that groups its
+steps has no single step section, and the whole-document parse is already right
+for it. When the named section yields nothing, the whole document is used, so a
+heading followed by prose can never empty a plan.
+
+**Blast radius, measured over all 397 plan files of a real project:** 372 parse
+identically, 25 change, every change a reduction, none reduced below two steps.
+The largest are plans whose criteria bullets had been consuming the 20-step cap
+— one 16-step plan tracked as 20, another 6-step plan as 13.
+
+**What this does not do.** `redriveSteps` bails when the fresh and stored step
+counts match, which they do here at eleven, so an already-corrupted spine does
+not heal itself on hydrate. Relaxing that guard was considered and rejected:
+stored entries with no fresh match are demoted under the preceding step or
+dropped, and with none of the eleven matching there is no preceding step, so
+every recorded sub-task of completed work would be discarded. A corrupt spine
+is repaired deliberately, with the evidence in front of you; the parser fix
+governs plans from ingest onward.
+
+**Why the parser is still the wrong layer** remains true, and this addendum is
+its fourth instance. Server-assigned task ids retire the class.

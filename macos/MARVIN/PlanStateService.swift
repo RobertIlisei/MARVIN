@@ -22,6 +22,13 @@ import MARVINLogic
 struct PlanStateWire: Codable {
     var plans: [Plan]
     var activePlanId: String?
+    /// ADR-0116 — the turn-end stamp of the last `TodoWrite` the SIDECAR could
+    /// join into this spine. The server is now a writer too (a turn nobody is
+    /// watching still has to advance the plan), and this is how a hydrating
+    /// client tells "the server has seen this far" from "the transcript knows
+    /// something the spine does not". Round-tripped untouched by the client;
+    /// absent on any spine the server has not projected.
+    var lastTodoAt: String?
 }
 
 enum PlanStateService {

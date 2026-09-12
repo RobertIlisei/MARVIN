@@ -195,7 +195,13 @@ public enum PlanParser {
     /// Matches a numbered (`1.` / `1)`) or bulleted (`-` / `*` / `•`) step line,
     /// at ANY indentation. Used for the checkbox overlay in `PlanFile.render`,
     /// which legitimately marks nested lines too.
-    private static let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+    /// The leading `**` / `__` is ADR-0068 addendum 5: a plan wrote its steps
+    /// as `**1. Tracer slice — …**`, and since the marker is matched on the RAW
+    /// line and emphasis is stripped only afterwards, neither alternative fired
+    /// — the eleven real steps were invisible while eleven non-steps from the
+    /// sections above took their place. The emphasis must still be followed by
+    /// a real marker, so a bare `**bold sentence**` is prose, as before.
+    private static let stepRE = try? NSRegularExpression(pattern: #"^\s*(?:\*\*|__)?(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
 
     /// TOP-LEVEL markers only — no leading indentation (ADR-0068 addendum 3).
     ///
@@ -205,7 +211,7 @@ public enum PlanParser {
     /// UI showed "1/12 · Paused" while MARVIN — reading the file — reported
     /// "Plan complete: all 6 top-level steps verified done". Both were right
     /// about different things, which is worse than either being wrong.
-    private static let topLevelStepRE = try? NSRegularExpression(pattern: #"^(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
+    private static let topLevelStepRE = try? NSRegularExpression(pattern: #"^(?:\*\*|__)?(?:\d+[.)]|[-*•])\s+(.+\S)\s*$"#)
 
     /// A leading `[ ]` / `[x]` checkbox on a step's CONTENT (marker already
     /// stripped). Stripped from parsed content so a step's id is identical
@@ -265,6 +271,31 @@ public enum PlanParser {
         pattern: #"^(?:\[[ xX]\]\s*)?\[[^\]]+\]\([^)]+\)\s*$"#
     )
 
+    /// A markdown heading that opens the plan's STEP list — `## Steps`,
+    /// `### Implementation`. Must be a real `#` heading: a bold pseudo-heading
+    /// is indistinguishable from a bold step line (`**1. Tracer slice …**`),
+    /// and guessing wrong there empties the plan.
+    ///
+    /// `Milestone` is deliberately NOT here, though it names step groups in
+    /// many plans. Measured across 397 real plan files: `### Milestone A …` /
+    /// `### Milestone B …` are SIBLING headings, so treating the first as the
+    /// step section cut a 16-step plan down to the four steps of milestone A.
+    /// A plan that groups its steps has no single step section, and the
+    /// whole-document parse is already right for it.
+    private static let stepsHeadingRE = try? NSRegularExpression(
+        pattern: #"^\s*#{1,6}\s*(?:\*\*)?\s*(?:steps?|implementation)\b"#,
+        options: [.caseInsensitive]
+    )
+
+    /// The `#` depth of a markdown heading line, or nil when it isn't one.
+    private static func headingLevel(of line: String) -> Int? {
+        let t = line.drop { $0 == " " || $0 == "\t" }
+        let hashes = t.prefix { $0 == "#" }.count
+        guard hashes >= 1, hashes <= 6 else { return nil }
+        let after = t.dropFirst(hashes).first
+        return after == " " || after == "\t" ? hashes : nil
+    }
+
     /// A heading that opens an acceptance-criteria block: `**Definition of
     /// Done**`, `## Scope of Done`, `Acceptance criteria:`. The bullets under
     /// it are verification statements, not work — the Golden Rule 8 template
@@ -285,23 +316,51 @@ public enum PlanParser {
         return re.firstMatch(in: line, range: range) != nil
     }
 
+    /// True when a line is a list item by the SAME definition the step matcher
+    /// uses — numbered or bulleted, at any indentation, emphasis allowed.
+    ///
+    /// ADR-0068 addendum 5. This test used to be written out by hand inside
+    /// `criteriaLineIndexes` as "starts with `-`, `*` or `•`", while the step
+    /// matcher beside it also accepted `1.` and `1)`. So a NUMBERED Definition
+    /// of Done ended its own block on its first line and every criterion was
+    /// promoted to a step. Nine of one project's 397 plan files carry a
+    /// numbered criteria block. One definition, shared, is the fix — the two
+    /// can no longer disagree about what a list item is.
+    public static func isListItemLine(_ line: String) -> Bool {
+        stepItem(of: line, using: stepRE) != nil
+    }
+
     /// Indexes of the lines inside an acceptance-criteria block: the heading
-    /// plus the bullet lines directly under it, ending at the first blank or
-    /// non-bullet line. Indexes are into the array as passed, which matches
+    /// plus the list items directly under it, ending at the first blank or
+    /// non-list line. Indexes are into the array as passed, which matches
     /// `stepRegion`'s slice indices.
     public static func criteriaLineIndexes(of lines: [String]) -> Set<Int> {
         var out: Set<Int> = []
         var inBlock = false
+        var sawItem = false
         for (i, line) in lines.enumerated() {
             if isCriteriaHeading(line) {
                 inBlock = true
+                sawItem = false
                 out.insert(i)
                 continue
             }
             guard inBlock else { continue }
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty, t.first == "-" || t.first == "*" || t.first == "•" {
+            // A blank line means one of two things, and WHERE it sits says
+            // which. Before the block's first item it is the ordinary markdown
+            // gap under a heading — ending there excluded the heading and
+            // nothing else, so every criterion was promoted to a step (a real
+            // plan tracked eleven steps, none of them work). After at least one
+            // item it separates the criteria from whatever list comes next,
+            // which is usually the steps — swallowing those would leave the
+            // plan with no steps at all.
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if sawItem { inBlock = false }
+                continue
+            }
+            if isListItemLine(line) {
                 out.insert(i)
+                sawItem = true
             } else {
                 inBlock = false
             }
@@ -332,6 +391,42 @@ public enum PlanParser {
         return lines[...]
     }
 
+    private static func matches(_ re: NSRegularExpression?, _ line: String) -> Bool {
+        guard let re else { return false }
+        let range = NSRange(line.startIndex..<line.endIndex, in: line)
+        return re.firstMatch(in: line, range: range) != nil
+    }
+
+    /// True for a heading that opens the plan's step list. Exported so a caller
+    /// can tell "this plan says where its steps are" from "this plan doesn't".
+    public static func isStepsHeading(_ line: String) -> Bool { matches(stepsHeadingRE, line) }
+
+    /// Line indexes belonging to the plan's explicit step section — the lines
+    /// after a `## Steps` / `## Implementation` / `## Milestones` heading, up to
+    /// the next heading of any level. `nil` when the plan names no such section.
+    ///
+    /// ADR-0068 addendum 5. A plan that says where its steps are is answering
+    /// the question directly, and every other section is then something else by
+    /// construction: a `## Scope` list of backlog items is an INDEX into the
+    /// steps, not the steps, and promoting it alongside them tracked the same
+    /// work twice under two wordings. Callers fall back to the whole document
+    /// when the section yields nothing, so a heading followed by prose can
+    /// never empty a plan.
+    public static func stepsSectionIndexes(of lines: [String]) -> Set<Int>? {
+        guard let start = lines.firstIndex(where: isStepsHeading) else { return nil }
+        // Ends at the next heading of the SAME or a HIGHER level. A deeper
+        // subheading is part of this section — `## Steps` may well group its
+        // steps under `### Milestone A`, and cutting at the first subheading
+        // would keep only the steps before it.
+        let level = headingLevel(of: lines[start]) ?? 6
+        var out: Set<Int> = []
+        for i in (start + 1)..<lines.count {
+            if let l = headingLevel(of: lines[i]), l <= level { break }
+            out.insert(i)
+        }
+        return out
+    }
+
     public static func todos(from plan: String) -> [TodoItem] {
         let allLines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         // ADR-0068 addendum 4 — a plan's `Sources:` block is a reading list. Its
@@ -344,14 +439,26 @@ public enum PlanParser {
         // column-0 bullets would otherwise be promoted to steps exactly like
         // the `Sources:` bullets of addendum 4.
         let criteria = criteriaLineIndexes(of: allLines)
-        let lines = stepRegion(of: allLines).indices
-            .filter { !criteria.contains($0) }
-            .map { allLines[$0] }
+        let eligible = stepRegion(of: allLines).indices.filter { !criteria.contains($0) }
         // Top-level markers define the STEPS. Nested bullets are sub-tasks and
         // are nested by tag (ADR-0049), never promoted here.
-        var items: [(text: String, checked: Bool?)] = lines
-            .compactMap { stepItem(of: $0, using: topLevelStepRE) }
-            .filter { !isLinkOnly($0.text) }
+        func topLevel(_ idx: [Int]) -> [(text: String, checked: Bool?)] {
+            idx.map { allLines[$0] }
+                .compactMap { stepItem(of: $0, using: topLevelStepRE) }
+                .filter { !isLinkOnly($0.text) }
+        }
+        // ADR-0068 addendum 5 — when the plan NAMES its step section, that is
+        // where the steps are and nowhere else. Falling back on an empty result
+        // keeps a heading followed by prose from emptying the plan, and leaves
+        // every plan that names no section parsed exactly as before.
+        var items: [(text: String, checked: Bool?)]
+        if let section = stepsSectionIndexes(of: allLines) {
+            let inSection = topLevel(eligible.filter { section.contains($0) })
+            items = inSection.isEmpty ? topLevel(eligible) : inSection
+        } else {
+            items = topLevel(eligible)
+        }
+        let lines = eligible.map { allLines[$0] }
         if items.isEmpty {
             // A plan that indents everything would otherwise parse to zero
             // steps — worse than over-counting. Fall back to the lenient match.
@@ -789,8 +896,13 @@ public enum PlanFile {
         for s in plan.steps { byId[s.id] = s }
         var emitted = Set<String>()
 
-        // indent · marker (1. / - / •) · gap · rest-of-line
-        let markerRE = try? NSRegularExpression(pattern: #"^(\s*)(\d+[.)]|[-*•])(\s+)(.*)$"#)
+        // indent (+ any opening emphasis) · marker (1. / - / •) · gap · rest.
+        // The emphasis rides in group 1 so it is written back out unchanged:
+        // a step written `**1. Tracer slice …**` is a step the parser now sees
+        // (ADR-0068 addendum 5), and a matcher here that could not see it would
+        // silently stop writing that plan's checkboxes — parse and render
+        // disagreeing about one line is the drift this pair exists to prevent.
+        let markerRE = try? NSRegularExpression(pattern: #"^(\s*(?:\*\*|__)?)(\d+[.)]|[-*•])(\s+)(.*)$"#)
         // a leading checkbox already on the content (defensive idempotency)
         let boxRE = try? NSRegularExpression(pattern: #"^\[[ xX]\]\s*"#)
 

@@ -205,6 +205,7 @@ final class ChatPreviewModel {
     func clearPlans() {
         plans = []
         activePlanId = nil
+        planSpineLastTodoAt = nil
     }
 
     // ADR-0052 — durable plan spine. Debounced PUT of {plans, activePlanId}
@@ -213,9 +214,16 @@ final class ChatPreviewModel {
     // long-running plans — the 2026-07-02 degradation).
     private var planStateSaveTask: Task<Void, Never>? = nil
 
+    /// ADR-0116 — the sidecar's watermark on the stored spine, carried through
+    /// every client save so a server projection is never silently erased by the
+    /// next debounced PUT. Read on hydrate to order the spine against the
+    /// replayed transcript tail; nil until the server has joined a batch.
+    var planSpineLastTodoAt: String? = nil
+
     func schedulePlanStateSave() {
         guard let pid = loadedProjectId, let sid = loadedSessionId else { return }
-        let snapshot = PlanStateWire(plans: plans, activePlanId: activePlanId)
+        let snapshot = PlanStateWire(
+            plans: plans, activePlanId: activePlanId, lastTodoAt: planSpineLastTodoAt)
         planStateSaveTask?.cancel()
         planStateSaveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -1354,6 +1362,19 @@ final class ChatPreviewModel {
                         return p
                     }
                     activePlanId = stored.activePlanId ?? stored.plans.last?.id
+                    planSpineLastTodoAt = stored.lastTodoAt
+                    // ADR-0116 — the assignment above restores STRUCTURE, and
+                    // used to take progress with it unconditionally. When the
+                    // replayed tail holds a `TodoWrite` the sidecar has not
+                    // joined (its watermark is older), that batch is the later
+                    // statement and is layered back on top. Nothing happens on
+                    // a spine with no watermark: no evidence, no change, and
+                    // ADR-0052's guarantee holds for every legacy session.
+                    if let todos = lastReplayTodos,
+                       PlanSpineWatermark.replayIsNewer(
+                           replayAt: lastReplayTodosAt, spineAt: stored.lastTodoAt) {
+                        applyTodoWrite(todos)
+                    }
                     // Refresh the plan file to the stored truth + set `path`
                     // so "Open plan" works. Idempotent write; no focus steal.
                     persistAndOpenPlan(open: false)
@@ -1413,6 +1434,9 @@ final class ChatPreviewModel {
         // ADR-0047 — the latest TodoWrite in the transcript carries the plan's
         // step statuses; captured here to restore progress after replay.
         var replayTodos: [TodoItem]? = nil
+        // ADR-0116 — and WHEN it was written, so hydrate can order it against
+        // the spine's watermark instead of always losing to it.
+        var replayTodosAt: String? = nil
         // The graph/reads and subagent chips accumulate from the LIVE event
         // stream, so re-opening a session — or just restarting the app — left
         // them at zero while the session obviously had history (user,
@@ -1431,14 +1455,17 @@ final class ChatPreviewModel {
                 // user-side row exists for replay. Reuse the same
                 // factory `send` uses for visual parity.
                 rebuilt.append(.userText(message))
-            case let .cliEvent(_, event):
+            case let .cliEvent(at, event):
                 // Re-encode the inner event to Data and feed the
                 // reducer the same bytes a live cli.event would
                 // carry — single source of truth for the rendering
                 // pipeline.
                 if let data = try? encoder.encode(event) {
                     ChatStreamReducer.apply(to: &rebuilt, cliEventData: data)
-                    if let todos = TodoExtractor.todos(from: data) { replayTodos = todos }
+                    if let todos = TodoExtractor.todos(from: data) {
+                        replayTodos = todos
+                        replayTodosAt = at
+                    }
                     let d = ToolUseCounter.deltaForCliEvent(data)
                     replayCounts.graphCalls += d.graphCalls
                     replayCounts.fileReadCalls += d.fileReadCalls
@@ -1498,7 +1525,19 @@ final class ChatPreviewModel {
             ingestPlan(Self.messageText(planMsg), announce: false, openFile: false)
         }
         if let replayTodos { applyTodoWrite(replayTodos) }
+        // ADR-0116 — kept so hydrate can re-apply this batch AFTER the stored
+        // spine lands, on proof that the server has not already seen it. The
+        // apply above is what `loadMoreHistory` wants (no spine fetch follows
+        // it); hydrate's assignment would otherwise discard it unconditionally.
+        lastReplayTodos = replayTodos
+        lastReplayTodosAt = replayTodosAt
     }
+
+    /// The last `TodoWrite` found in the replayed window, and its transcript
+    /// timestamp (ADR-0116). Only hydrate reads them, immediately after the
+    /// stored spine is assigned.
+    private var lastReplayTodos: [TodoItem]? = nil
+    private var lastReplayTodosAt: String? = nil
 
     /// Phase 2h — attach to a live turn's event bus via
     /// /api/chat/resume. 204 collapses to a clean finish; otherwise

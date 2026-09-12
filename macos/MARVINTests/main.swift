@@ -3945,6 +3945,196 @@ runner.suite("permission-strategy-cycle") {
     }
 }
 
+// MARK: - PlanParser sectioning (ADR-0068 addendum 5 — what is NOT a step)
+
+runner.suite("plan-parser-sections") {
+    // Reduced from the plan that surfaced this (2026-09-12): a Scope list that
+    // indexes the work, a NUMBERED Definition of Done separated from its
+    // heading by a blank line, and the real steps under `## Steps`, written
+    // with bold ordinals. It parsed to eleven steps, none of them work.
+    let plan = """
+    # Plan — Migrate the writer
+
+    ## Scope
+
+    Three open backlog items:
+    - [ ] `migrate-the-service-onto-the-writer` (med, chore) — steps 1–3
+      - [x] Add writer.rotateToken(...)
+      - [ ] pr-review + commit
+    - [ ] `pace-the-retry-endpoint` (med, bug) — step 4
+
+    ## Definition of Done
+
+    1. [ ] `RotateTokenEncryptor.java` no longer exists.
+    2. [ ] Operator provision writes `rotation_count=1`.
+    3. [ ] `make fast` green.
+
+    ## Steps (vertical slices — each verifiable alone)
+
+    **1. Tracer slice — rotate-confirm on the writer.** TDD.
+       - Writer: add `rotateToken(...)`.
+
+    **2. Provision on the writer.** TDD.
+
+    **3. Delete `RotateTokenEncryptor` and close the seam.**
+
+    **4. Retry-failed pacing.** TDD.
+
+    ## Advisor caveats — disposition
+
+    - Caveat 1 folded in.
+    """
+
+    runner.test("steps come from the named section, not from Scope or the DoD") {
+        let steps = PlanParser.steps(from: plan)
+        runner.expect(steps.count, equals: 4, "four real steps, not eleven non-steps")
+        runner.expect(steps.first?.content.hasPrefix("Tracer slice") == true,
+                      "the first step is the first vertical slice, marker and emphasis stripped")
+        runner.expect(!steps.contains { $0.content.contains("no longer exists") },
+                      "a Definition-of-Done criterion is never a step")
+        runner.expect(!steps.contains { $0.content.contains("backlog items") },
+                      "a Scope line that indexes the steps is never a step")
+        runner.expect(!steps.contains { $0.content.contains("Caveat 1") },
+                      "a section after the steps is not swept in")
+    }
+
+    runner.test("a blank line does not end a criteria block") {
+        let lines = plan.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let criteria = PlanParser.criteriaLineIndexes(of: lines)
+        let text = criteria.map { lines[$0] }
+        runner.expect(text.contains { $0.contains("no longer exists") },
+                      "the numbered criteria under the heading are excluded")
+        runner.expect(text.contains { $0.contains("make fast") }, "including the last one")
+    }
+
+    runner.test("a numbered criteria block is excluded exactly like a bulleted one") {
+        let bulleted = """
+        # Plan — X
+
+        ## Definition of Done
+        - [ ] the gate denies the write
+        - [ ] tests green
+
+        ## Steps
+        1. Do the work
+        2. Verify it
+        """
+        runner.expect(PlanParser.steps(from: bulleted).count, equals: 2,
+                      "two steps, criteria excluded as before")
+    }
+
+    runner.test("a bold ordinal is a step; bold prose is not") {
+        runner.expect(PlanParser.stepText(of: "**1. Tracer slice.** TDD.") != nil,
+                      "emphasis before a real marker still reads as a step")
+        runner.expect(PlanParser.stepText(of: "**A bold sentence about the plan.**") == nil,
+                      "emphasis with no marker behind it stays prose")
+        runner.expect(PlanParser.stepText(of: "*italic* text") == nil,
+                      "a single star with no gap is not a bullet")
+    }
+
+    runner.test("a plan that names no step section parses exactly as before") {
+        let plain = """
+        # Plan — Y
+
+        1. First thing
+        2. Second thing
+        3. Third thing
+        """
+        runner.expect(PlanParser.steps(from: plain).count, equals: 3, "unchanged")
+    }
+
+    runner.test("a step heading followed by prose falls back to the whole plan") {
+        let prose = """
+        # Plan — Z
+
+        1. First thing
+        2. Second thing
+
+        ## Steps
+
+        Described above; nothing itemised here.
+        """
+        runner.expect(PlanParser.steps(from: prose).count, equals: 2,
+                      "the fallback keeps a named-but-empty section from emptying the plan")
+    }
+
+    runner.test("Milestone headings are step groups, not the step section") {
+        let grouped = """
+        # Plan — W
+
+        ### Milestone A — first
+        1. Do A one
+        2. Do A two
+
+        ### Milestone B — second
+        3. Do B one
+        4. Do B two
+        """
+        runner.expect(PlanParser.steps(from: grouped).count, equals: 4,
+                      "all four steps, not just milestone A's two")
+    }
+
+    runner.test("a subheading inside the step section does not cut it short") {
+        let nested = """
+        # Plan — V
+
+        ## Steps
+
+        ### Part one
+        1. Do one
+
+        ### Part two
+        2. Do two
+        """
+        runner.expect(PlanParser.steps(from: nested).count, equals: 2,
+                      "the section ends at the next same-or-higher heading")
+    }
+
+    runner.test("the renderer writes a checkbox onto a bold-ordinal step") {
+        var p = Plan(id: "v", title: "V", text: "## Steps\n\n**1. Do the thing.** TDD.", path: nil,
+                     steps: [])
+        p.steps = PlanParser.steps(from: p.text)
+        p.steps[0].status = "completed"
+        let rendered = PlanFile.render(p)
+        runner.expect(rendered.contains("**1. [x] Do the thing.** TDD."),
+                      "emphasis preserved, checkbox inserted after the marker")
+    }
+}
+
+// MARK: - PlanSpineWatermark (ADR-0116 — the spine and the tail can be ordered)
+
+runner.suite("plan-spine-watermark") {
+    runner.test("a replayed batch newer than the server's watermark wins") {
+        runner.expect(
+            PlanSpineWatermark.replayIsNewer(
+                replayAt: "2026-09-11T17:46:37.881Z", spineAt: "2026-09-11T16:44:44.000Z"),
+            "the transcript holds progress the sidecar never joined")
+    }
+
+    runner.test("a batch the server has already seen does not re-apply") {
+        runner.expect(
+            !PlanSpineWatermark.replayIsNewer(
+                replayAt: "2026-09-11T17:46:37.881Z", spineAt: "2026-09-11T17:46:42.540Z"),
+            "turn-end stamp is at or after every event in the turn")
+        runner.expect(
+            !PlanSpineWatermark.replayIsNewer(
+                replayAt: "2026-09-11T17:46:42.540Z", spineAt: "2026-09-11T17:46:42.540Z"),
+            "equal is not newer")
+    }
+
+    runner.test("an unprojected spine keeps ADR-0052's guarantee") {
+        runner.expect(
+            !PlanSpineWatermark.replayIsNewer(replayAt: "2026-09-11T17:46:37.881Z", spineAt: nil),
+            "no watermark is no evidence — the stored spine stands")
+        runner.expect(
+            !PlanSpineWatermark.replayIsNewer(replayAt: "2026-09-11T17:46:37.881Z", spineAt: ""),
+            "an empty stamp is treated as absent, not as the epoch")
+        runner.expect(
+            !PlanSpineWatermark.replayIsNewer(replayAt: nil, spineAt: "2026-09-11T16:44:44.000Z"),
+            "a tail with no TodoWrite has nothing to layer")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
