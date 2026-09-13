@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.113**). `main` and `development` are fast-forwarded together at each
+> **v0.1.114**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -364,6 +364,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.114 — a layout loop the breaker cannot see gets a probe.** A ten-minute main-thread spin with no constraint pass and no MARVIN frame in the sample; `LayoutOscillationProbe` labels the transcript rows and the Sessions list with `onGeometryChange` so the next occurrence names its row ([ADR-0062](./docs/decisions/0062-update-constraints-loop-identified-mitigated.md) Addendum 8).
 
 **v0.1.113 — tab branches stay local, and the plain chat is one click again.** Two tabs each opened their own merge request after the metered-CI confirm was allowed twice; MARVIN now **denies** pushing or requesting a tab branch in every mode, naming Merge all / Prepare MR ([ADR-0109](./docs/decisions/0109-batch-integration-and-metered-ci.md) second amendment). **Full auto** is a third posture that waives the three containment confirms and nothing else ([ADR-0115](./docs/decisions/0115-full-auto-is-the-third-posture.md)). The `+` and **New** controls are split buttons offering a shared-checkout chat or an isolated tab, with ⌥⌘N / ^⌘N in the File menu ([ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md) Addendum 7). A dirty tree can switch branches again — the deny was tripping on MARVIN's own `.marvin/*` files — and the Source Control panel no longer sticks on "(not a git repository)" when the sidecar's event loop is busy ([ADR-0012](./docs/decisions/0012-source-control-mutation-channel.md) amended; `runGit` no longer calls a late timer a hang).
 
