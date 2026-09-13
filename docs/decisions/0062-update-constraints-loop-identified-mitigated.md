@@ -433,3 +433,26 @@ ADR's terms. The three such notices in left-pane scroll views (Sessions pane,
 Source Control worktrees, Source Control status) lost the modifier. The rule
 for this file gains a line: no `.textSelection(.enabled)` inside a
 ScrollView-rooted pane.
+
+## Addendum 8 (2026-09-12) — a SwiftUI lazy-layout loop the breaker cannot see, and the probe for it
+
+MARVIN spun at 100 % on the main thread for ten minutes and was force-quit.
+`sample` gave the shape: SwiftUI's lazy layout re-placing children —
+`LazyLayoutViewCache.updatePrefetchPhases` ↔ `LazySubviewPlacements.updateValue`
+— with `_FlexFrameLayout` text measurement underneath, and **not one MARVIN
+frame** in the hot path. No constraint pass was involved, so the breaker this
+ADR installed never fired; the window in the loop held a `LazyVStack` and a
+`LazyHStack`, which narrows it to the transcript with the tab strip above it,
+and no further. The transcript in front (`d32d9773…`, 3.5 MB, 1281 records)
+hydrates cleanly on a fresh launch at 5 % CPU, so the trigger was an
+interaction, not a load. Reading source produced candidates — a row whose
+flexible frame disagrees with its text measurement, a `scrollTo` re-armed by
+a one-pixel height change — and no cause.
+
+The rule at the top of `CLAUDE.md` applies: instrument. **`LayoutOscillationProbe`**
+attaches `onGeometryChange` — geometry without a view, the lesson of
+Addendum 7 — to the transcript stack, every transcript row (labelled by
+message id and role), and the Sessions pane list. A label whose size changes
+40 times inside one second is written to the exceptions log with its last
+eight sizes, then muted for ten seconds. Streaming rows change a handful of
+times a second; a loop changes hundreds. The next spin names its row.

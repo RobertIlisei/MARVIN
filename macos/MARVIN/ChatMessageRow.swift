@@ -79,6 +79,7 @@ struct ChatMessageRow: View, Equatable {
             .padding(.vertical, 6)
         }
         }
+        .layoutOscillationProbe("transcript-row \(message.id.prefix(8)) \(message.role)")
         .contextMenu {
             Button("Copy Message") {
                 NSPasteboard.general.clearContents()

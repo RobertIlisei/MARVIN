@@ -3697,6 +3697,7 @@ struct ChatPreviewView: View {
                 }
             }
             .padding(.vertical, 8)
+            .layoutOscillationProbe("transcript-stack")
         }
         // Bottom-anchored scroll. macOS 14+ semantics:
         //   - First render lands at the bottom (latest message visible).

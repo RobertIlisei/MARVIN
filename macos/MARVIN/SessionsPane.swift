@@ -66,6 +66,7 @@ struct SessionsPane: View {
                     recentSection
                 }
             }
+            .layoutOscillationProbe("sessions-stack")
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
