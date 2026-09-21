@@ -523,19 +523,16 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 8217 nodes · 16329 edges · 470 communities (2026-09-01
-  rebuild on graphify 0.9.51; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  files. 10119 nodes · 21655 edges · 575 communities (2026-09-21
+  rebuild on graphify 0.9.65; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
   graph anyway. (`graphify update .` is the incremental path and needs no
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1742 nodes · 2283 edges · 160 communities
-  (built 2026-09-01). **Community labels are stale** — both counts moved on
-  this rebuild, so graphify has renamed every community after its hub node;
-  re-run `graphify label . --backend=claude-cli` (an LLM pass) to restore
-  concept names.
+  `.marvin/memory.md`. 1988 nodes · 2681 edges · 173 communities
+  (built and labelled 2026-09-21).
 
 **Community names.** Both graphs were 100 % `Community N` placeholders until
 2026-08-15, which made `graph_summary`'s community section unreadable. They
@@ -581,8 +578,12 @@ code graph as before. Two further tools landed with
   deleting anything. **`graph_neighbors` is not a blast-radius tool** — the
   built graph is undirected (`directed: false`), so its `→`/`←` arrows are
   networkx adjacency-iteration order, not call direction. `graph_affected`
-  reads the AST call cache (`graphify-out/cache/*.json`, `raw_calls`) instead,
-  which is genuinely directed. Code scope only.
+  reads the `calls` edges of `graph.json`, oriented by each edge's call-site
+  file (graphify ≥ 0.9.5x: the source was the caller in 4,633 of 4,633 edges),
+  falling back to the AST cache's `raw_calls` for older graphs. The cache
+  alone no longer works for TypeScript: 0.9.65 does not cache JS/TS at all,
+  and `graph_affected` had been answering from entries frozen on 2026-08-13.
+  Code scope only.
 - **`graph_reflect({scope?})`** — aggregates the outcomes recorded by
   `graph_save_result` into `graphify-out/reflections/LESSONS.md`.
   Deterministic, no LLM.
@@ -670,9 +671,9 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-09-01 rebuild: `requireMarvinClient()` (98 edges), `cn()`
-(97), `checkFsPath()` (84), `ChatPreviewModel` (76), `MarvinDivider` (68),
-`MarvinBridge` (64), `ChatPreviewView` (55), `runAgent()` (55) are the real
+After the 2026-09-21 rebuild: `requireMarvinClient()` (123 edges), `cn()`
+(97), `ChatPreviewModel` (94), `checkFsPath()` (89), `MarvinBridge` (87),
+`runAgent()` (75) are the real
 architectural anchors — the shared client guard and the fs-path check are
 the widest coupling points in the repo, and `MarvinBridge` entering the top
 ten is worth noticing: it is the app-global state store, so a field on it is

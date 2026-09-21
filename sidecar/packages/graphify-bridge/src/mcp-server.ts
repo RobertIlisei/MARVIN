@@ -573,7 +573,7 @@ export function createGraphMcpServer(workDir: string) {
       const index = buildCallIndex(workDir);
       if (index.files === 0) {
         return errorResult(
-          "No graphify extraction cache at graphify-out/cache/ — blast radius needs it. " +
+          "No call data — neither `calls` edges in graphify-out/graph.json nor an extraction cache. Blast radius needs one. " +
             "Build the code graph first: `graphify . --code-only` (AST-only, no LLM cost).",
         );
       }
@@ -815,7 +815,7 @@ export function createGraphMcpServer(workDir: string) {
       const index = buildCallIndex(workDir);
       if (index.files === 0) {
         return errorResult(
-          "No graphify extraction cache at graphify-out/cache/ — change impact needs it. " +
+          "No call data — neither `calls` edges in graphify-out/graph.json nor an extraction cache. Change impact needs one. " +
             "Build the code graph first: `graphify . --code-only`.",
         );
       }

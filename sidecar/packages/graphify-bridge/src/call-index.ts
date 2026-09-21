@@ -23,8 +23,9 @@
  *     blast-radius label. `--directed` is not a build flag in 0.9.43 — it
  *     exists only on `diagnose multigraph`, as a post-build simulation toggle.
  *
- * What IS directed and durable is `graphify-out/cache/<hash>.json`, which the
- * AST pass writes per source file. Each holds `raw_calls`, an explicit
+ * What IS directed and durable is the per-file AST cache the extraction pass
+ * writes — `graphify-out/cache/ast/<version>/<hash>.json` on graphify ≥ 0.9.5x,
+ * flat `graphify-out/cache/<hash>.json` before that. Each holds `raw_calls`, an explicit
  * `caller_nid → callee` list with file and line. 28,930 call edges across 1,302
  * cache files on this repo, indexed in ~0.2 s. That is the honest substrate.
  *
@@ -40,7 +41,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /** One AST-observed call site. The caller side is exact. */
 export interface CallSite {
@@ -117,7 +118,9 @@ let memo: (MemoEntry & { workDir: string }) | null = null;
  * read a file that isn't there.
  */
 export function buildCallIndex(workDir: string): CallIndex {
-  const dir = cacheDirFor(workDir);
+  const fromGraph = indexFromGraph(workDir);
+  if (fromGraph) return fromGraph;
+  const dir = astCacheDir(cacheDirFor(workDir));
   let names: string[];
   try {
     names = readdirSync(dir).filter((n) => n.endsWith(".json"));
@@ -173,7 +176,9 @@ export function buildCallIndex(workDir: string): CallIndex {
       const rc = rawEntry as Record<string, unknown>;
       const callee = typeof rc.callee === "string" ? rc.callee : "";
       const callerNid = typeof rc.caller_nid === "string" ? rc.caller_nid : "";
-      const sourceFile = typeof rc.source_file === "string" ? rc.source_file : "";
+      const rawFile = typeof rc.source_file === "string" ? rc.source_file : "";
+      // graphify ≥ 0.9.5x writes paths relative to the scan root.
+      const sourceFile = rawFile && !isAbsolute(rawFile) ? join(workDir, rawFile) : rawFile;
       if (!callee || !callerNid || !sourceFile) continue;
 
       // Existence is checked once per distinct file, not once per call site —
@@ -202,6 +207,111 @@ export function buildCallIndex(workDir: string): CallIndex {
 
   memo = { ...entry, workDir };
   return index;
+}
+
+/** The graph.json-derived index for one project, keyed on the file's identity. */
+let graphMemo: { workDir: string; stamp: string; index: CallIndex } | null = null;
+
+/**
+ * The call index from graph.json's `calls` edges, or null when the graph
+ * carries none with a call site (graphify before 0.9.5x) — the caller then
+ * falls back to the AST cache.
+ *
+ * graphify ≥ 0.9.5x no longer caches JS/TS extraction, so for a TypeScript
+ * project the cache holds no call data at all. The graph's edges fill that
+ * gap and are better on two counts: the callee is a RESOLVED node rather than
+ * a bare name, and each edge names its call site. Orientation is taken from
+ * that call site — the caller is the endpoint defined in the call-site file —
+ * with the edge's `source` as the tie-break, which on 0.9.65 was the caller in
+ * 4,633 of 4,633 edges on this repo.
+ */
+function indexFromGraph(workDir: string): CallIndex | null {
+  const file = join(workDir, "graphify-out", "graph.json");
+  let stamp: string;
+  try {
+    const st = statSync(file);
+    stamp = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+  if (graphMemo && graphMemo.workDir === workDir && graphMemo.stamp === stamp) return graphMemo.index;
+
+  let graph: { nodes?: unknown; links?: unknown };
+  try {
+    graph = JSON.parse(readFileSync(file, "utf-8")) as { nodes?: unknown; links?: unknown };
+  } catch {
+    return null;
+  }
+  const nodes = new Map<string, { label: string; file: string }>();
+  for (const raw of Array.isArray(graph.nodes) ? graph.nodes : []) {
+    const node = raw as Record<string, unknown>;
+    if (typeof node.id !== "string") continue;
+    nodes.set(node.id, {
+      label: typeof node.label === "string" ? node.label : node.id,
+      file: typeof node.source_file === "string" ? node.source_file : "",
+    });
+  }
+
+  const index: CallIndex = { byCallee: new Map(), edges: 0, stale: 0, files: 1 };
+  const paths = new Map<string, string>();
+  const alive = new Map<string, boolean>();
+  for (const raw of Array.isArray(graph.links) ? graph.links : []) {
+    const link = raw as Record<string, unknown>;
+    if (link.relation !== "calls" || typeof link.source_file !== "string" || !link.source_file) continue;
+    if (typeof link.source !== "string" || typeof link.target !== "string") continue;
+    const siteFile = link.source_file;
+    const reversed =
+      nodes.get(link.source)?.file !== siteFile && nodes.get(link.target)?.file === siteFile;
+    const callerNid = reversed ? link.target : link.source;
+    const callee = nodes.get(reversed ? link.source : link.target);
+    if (!callee) continue;
+
+    const abs = isAbsolute(siteFile) ? siteFile : join(workDir, siteFile);
+    let ok = alive.get(abs);
+    if (ok === undefined) {
+      ok = existsSync(abs);
+      alive.set(abs, ok);
+    }
+    if (!ok) {
+      index.stale += 1;
+      continue;
+    }
+    const site: CallSite = {
+      callerNid,
+      sourceFile: intern(paths, abs),
+      sourceLocation: typeof link.source_location === "string" ? link.source_location : "",
+    };
+    const key = symbolOf(callee.label);
+    const list = index.byCallee.get(key);
+    if (list) list.push(site);
+    else index.byCallee.set(key, [site]);
+    index.edges += 1;
+  }
+  if (index.edges === 0 && index.stale === 0) return null;
+  graphMemo = { workDir, stamp, index };
+  return index;
+}
+
+/**
+ * Where the per-file AST entries live. graphify ≥ 0.9.5x writes them under
+ * `cache/ast/<version>/` (e.g. `v0.9.65-s4`) and stops writing the flat top
+ * level, so any flat entries left there are frozen at the upgrade. Read the
+ * newest version directory when one exists; fall back to the flat layout for
+ * projects still on an older graphify.
+ */
+function astCacheDir(cacheDir: string): string {
+  const astRoot = join(cacheDir, "ast");
+  let versions: string[];
+  try {
+    versions = readdirSync(astRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return cacheDir;
+  }
+  if (versions.length === 0) return cacheDir;
+  versions.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return join(astRoot, versions[versions.length - 1] as string);
 }
 
 function freshEntry(_workDir: string): MemoEntry {

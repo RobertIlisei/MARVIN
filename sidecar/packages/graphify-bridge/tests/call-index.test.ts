@@ -269,3 +269,119 @@ describe("callersOf", () => {
     expect(r.callers.map((c) => c.callerNid).sort()).toEqual(["fn_a", "fn_b"]);
   });
 });
+
+// graphify ≥ 0.9.5x moved its AST cache into `cache/ast/<version>/` and writes
+// `source_file` relative to the scan root. Reading only the flat top level left
+// `graph_affected` on entries last written 2026-08-13 on this repo, and a clean
+// cache would have produced an empty index with no error.
+describe("buildCallIndex — versioned cache layout", () => {
+  async function versionedEntry(
+    version: string,
+    name: string,
+    rawCalls: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const dir = join(cacheDir, "ast", version);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, name), JSON.stringify({ nodes: [], edges: [], raw_calls: rawCalls }), "utf-8");
+  }
+
+  it("reads the versioned directory and ignores leftover flat entries", async () => {
+    const f = await realFile("a.ts");
+    await cacheEntry("legacy.json", [call("old_caller", "target", f, "L1")]);
+    await versionedEntry("v0.9.65-s4", "x.json", [call("new_caller", "target", f, "L2")]);
+    const sites = buildCallIndex(workDir).byCallee.get("target");
+    expect(sites?.map((s) => s.callerNid)).toEqual(["new_caller"]);
+  });
+
+  it("reads only the newest version when several are present", async () => {
+    const f = await realFile("a.ts");
+    await versionedEntry("v0.9.9-s4", "x.json", [call("older", "target", f, "L1")]);
+    await versionedEntry("v0.9.65-s4", "y.json", [call("newest", "target", f, "L2")]);
+    expect(buildCallIndex(workDir).byCallee.get("target")?.map((s) => s.callerNid)).toEqual(["newest"]);
+  });
+
+  it("resolves a relative source_file against the project root", async () => {
+    await realFile("rel.ts");
+    await versionedEntry("v0.9.65-s4", "x.json", [
+      call("c", "target", "src/rel.ts", "L3"),
+      call("ghost", "target", "src/deleted.ts", "L4"),
+    ]);
+    const idx = buildCallIndex(workDir);
+    expect(idx.edges).toBe(1);
+    expect(idx.stale).toBe(1);
+    expect(idx.byCallee.get("target")?.[0]?.sourceFile).toBe(join(workDir, "src", "rel.ts"));
+  });
+});
+
+// graphify 0.9.65 stopped caching JS/TS in the AST cache at all
+// (`_JS_CACHE_BYPASS_SUFFIXES`), so for a TypeScript project the cache holds
+// no call data. graph.json's `calls` edges now carry the call site
+// (`source_file`/`source_location`) and a RESOLVED callee node — measured on
+// this repo 2026-09-21: in 4,633 of 4,633 edges the `source` node lives in the
+// call-site file, including all 1,743 cross-file calls.
+describe("buildCallIndex — from graph.json calls edges", () => {
+  async function graph(
+    nodes: Array<{ id: string; label: string; source_file: string }>,
+    links: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      join(workDir, "graphify-out", "graph.json"),
+      JSON.stringify({ directed: false, nodes, links }),
+      "utf-8",
+    );
+  }
+  const n = (id: string, label: string, file: string) => ({ id, label, source_file: file });
+  const edge = (source: string, target: string, file: string, loc: string) => ({
+    source, target, relation: "calls", source_file: file, source_location: loc,
+  });
+
+  it("indexes callers by callee label, with the caller as the edge source", async () => {
+    await realFile("route.ts");
+    await realFile("orch.ts");
+    await graph(
+      [n("post", "POST()", "src/route.ts"), n("build", "buildTurnSystemPrompt()", "src/orch.ts")],
+      [edge("post", "build", "src/route.ts", "L287"), { source: "post", target: "build", relation: "imports" }],
+    );
+    const sites = buildCallIndex(workDir).byCallee.get("buildTurnSystemPrompt");
+    expect(sites).toEqual([
+      { callerNid: "post", sourceFile: join(workDir, "src", "route.ts"), sourceLocation: "L287" },
+    ]);
+  });
+
+  it("orients by the call-site file when an edge arrives reversed", async () => {
+    await realFile("a.ts");
+    await realFile("b.ts");
+    await graph(
+      [n("caller", "caller()", "src/a.ts"), n("callee", "callee()", "src/b.ts")],
+      [edge("callee", "caller", "src/a.ts", "L5")],
+    );
+    expect(buildCallIndex(workDir).byCallee.get("callee")?.[0]?.callerNid).toBe("caller");
+  });
+
+  it("ignores the AST cache when the graph carries located calls", async () => {
+    const f = await realFile("a.ts");
+    await cacheEntry("legacy.json", [call("old_caller", "callee", f, "L1")]);
+    await graph(
+      [n("caller", "caller()", "src/a.ts"), n("callee", "callee()", "src/a.ts")],
+      [edge("caller", "callee", "src/a.ts", "L9")],
+    );
+    expect(buildCallIndex(workDir).byCallee.get("callee")?.map((s) => s.callerNid)).toEqual(["caller"]);
+  });
+
+  it("falls back to the AST cache when the graph has no located calls", async () => {
+    const f = await realFile("a.ts");
+    await cacheEntry("a.json", [call("cache_caller", "target", f, "L1")]);
+    await graph([n("x", "x()", "src/a.ts")], [{ source: "x", target: "x", relation: "calls" }]);
+    expect(buildCallIndex(workDir).byCallee.get("target")?.[0]?.callerNid).toBe("cache_caller");
+  });
+
+  it("rebuilds when graph.json changes", async () => {
+    await realFile("a.ts");
+    const nodes = [n("c1", "c1()", "src/a.ts"), n("c2", "c2()", "src/a.ts"), n("t", "t()", "src/a.ts")];
+    await graph(nodes, [edge("c1", "t", "src/a.ts", "L1")]);
+    expect(buildCallIndex(workDir).byCallee.get("t")).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 15));
+    await graph(nodes, [edge("c1", "t", "src/a.ts", "L1"), edge("c2", "t", "src/a.ts", "L2")]);
+    expect(buildCallIndex(workDir).byCallee.get("t")).toHaveLength(2);
+  });
+});
