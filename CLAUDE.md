@@ -116,6 +116,11 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    is cut off; it is fetched when needed (amended 2026-09-21,
    [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md):
    the full indexes cost 20K tokens of every agri-saas-platform session).
+   A project's *instruction files* are read the way other agents write them
+   ([ADR-0119](./docs/decisions/0119-instruction-files-claude-md-agents-md-imports-nested.md)):
+   `CLAUDE.md` and/or `AGENTS.md` with `@path` imports expanded inside the
+   project, near-copies skipped and reported, and a subdirectory's files
+   surfaced when work reaches it.
 6. **No hardcoded project knowledge.** MARVIN must not ship assumptions
    about any specific project (service names, realm ids, stack choices,
    workflow). Every such assumption goes into the user's project repository,
@@ -398,7 +403,8 @@ one-line trigger. If you add a skill MARVIN should reach for, add its line
 there.
 
 **MARVIN's own skills** (`marvin:adr`, `marvin:graph-tools`, `marvin:browser`,
-`marvin:skill-audit`, `marvin:workflow-audit`, `marvin:greenfield`) are not
+`marvin:skill-audit`, `marvin:workflow-audit`, `marvin:greenfield`,
+`marvin:instruction-files`) are not
 installed by this script and are not in `.claude/skills/`: their text lives in
 `sidecar/packages/runtime/src/core-skills.ts`, and every turn writes them to
 `<MARVIN_DATA_DIR>/core-skills/` as a local plugin named `marvin`

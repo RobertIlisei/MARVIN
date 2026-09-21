@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./infra-probes": "./src/infra-probes.ts"
+    "./infra-probes": "./src/infra-probes.ts",
+    "./instruction-files": "./src/instruction-files.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

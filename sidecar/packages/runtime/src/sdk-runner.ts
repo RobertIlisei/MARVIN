@@ -75,6 +75,7 @@ import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { coreSkillsPluginConfig } from "./core-skills";
+import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
@@ -2068,6 +2069,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // was already counted in PreToolUse; this is the half that looks at the
   // ANSWER, so a `reject` stops discharging the gate like a `go` and the
   // caveats outlive the context window.
+  // ADR-0119 — a subdirectory's CLAUDE.md / AGENTS.md, surfaced once per
+  // session when work reaches it (the SDK's project source used to do this).
+  const nestedInstructionsKey = input.marvinSessionId ?? turnId;
+  const nestedInstructionsHook = makeNestedInstructionsPostToolUse({ sessionKey: nestedInstructionsKey, cwd });
   const advisorVerdictHook = makeAdvisorVerdictPostToolUse({
     workDir,
     marvinSessionId: input.marvinSessionId ?? "unscoped",
@@ -2229,7 +2234,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
-      PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook] }],
+      PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook, nestedInstructionsHook] }],
       // Command-retry memory (2026-09-03): a failed Bash is remembered for
       // the turn so an identical re-run gets the advisory nudge.
       PostToolUseFailure: [
@@ -2480,6 +2485,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         });
       }
       onEvent(ev);
+      // ADR-0119 — a compaction drops the nested instructions surfaced so far.
+      if (ev.type === "system" && (ev as { subtype?: string }).subtype === "compact_boundary") {
+        resetNestedInstructions(nestedInstructionsKey);
+      }
       // ADR-0080 — level signal, REPLACE semantics (see background-tasks.ts).
       const bgTasks = backgroundTasksPayload(ev);
       if (bgTasks) bgLedger.replace(bgTasks);

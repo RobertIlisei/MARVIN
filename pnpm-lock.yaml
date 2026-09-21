@@ -158,6 +158,9 @@ importers:
       '@marvin/graphify-bridge':
         specifier: workspace:*
         version: link:../graphify-bridge
+      '@marvin/project-context':
+        specifier: workspace:*
+        version: link:../project-context
       '@marvin/tools':
         specifier: workspace:*
         version: link:../tools
