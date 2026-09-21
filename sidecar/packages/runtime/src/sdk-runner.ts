@@ -1147,6 +1147,20 @@ export function classifyToolCall(
   return { decision: "confirm", reason: policyReason };
 }
 
+/**
+ * The turn's `systemPrompt` option. ADR-0073 addendum (0.3.278): the SDK now
+ * RECORDS the system prompt on a session's first request and replays it
+ * verbatim on every later request and resume until compaction
+ * (`snapshot` defaults on, rolling out per account). MARVIN rebuilds `append`
+ * every turn — mode guidance, per-session posture (ADR-0108), accepted
+ * practice rules (ADR-0105) — so a recorded prompt would silently freeze all
+ * of them mid-session. Pinned off; remove only with a plan for how those
+ * per-turn signals reach the model instead.
+ */
+export function turnSystemPrompt(append: string) {
+  return { type: "preset", preset: "claude_code", append, snapshot: false } as const;
+}
+
 /** Mode-specific system-prompt stanza (ADR-0036). Empty for `agent` so
  *  the default posture is unchanged. The gate / permissionMode do the
  *  actual enforcement; this just sets expectations so the model behaves
@@ -2159,11 +2173,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // blocked ONCE with the reason and the model continues in-request.
       Stop: [{ hooks: [turnCloseStopHook] }],
     },
-    systemPrompt: {
-      type: "preset",
-      preset: "claude_code",
-      append: appendSystemPrompt + modeGuidance(mode),
-    },
+    systemPrompt: turnSystemPrompt(appendSystemPrompt + modeGuidance(mode)),
     mcpServers: {
       "marvin-graph": graphMcp,
       "marvin-memory": memoryMcp,

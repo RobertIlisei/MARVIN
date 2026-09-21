@@ -253,7 +253,7 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 | Path | Responsibility |
 |---|---|
 | `sidecar/` | Next.js 16 API-only backend for the native macOS app ([ADR-0075](./docs/decisions/0075-sidecar-drops-browser-ui.md)) — no browser UI. |
-| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.245**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.278**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
 | `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
 | `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
 | `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
@@ -428,10 +428,10 @@ without the `settingSources` blast radius:
   `confirm`** — closing the prior blanket-allow of unknown MCP tools. Plugin MCP
   tools are therefore confirm-gated, and the subagent read-only invariant applies.
 
-## Agent SDK contract — two pins that keep the plan spine alive (ADR-0073)
+## Agent SDK contract — the pins that keep MARVIN's behaviour stable (ADR-0073)
 
-MARVIN is on Agent SDK **0.3.245**. Two 0.3 defaults would silently change
-what MARVIN does, and both are pinned back in `sdk-runner.ts` with the reason
+MARVIN is on Agent SDK **0.3.278**. Three SDK defaults would silently change
+what MARVIN does, and each is pinned back in `sdk-runner.ts` with the reason
 at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
 
 - **`CLAUDE_CODE_ENABLE_TODO_TOOLS=1` + `CLAUDE_CODE_ENABLE_TASKS=0`** in
@@ -446,6 +446,13 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   Read/Grep/Glob until a `graph_*` call has happened, so a turn-1 prompt with
   no graph tools would deadlock. `alwaysLoad` also blocks startup until the
   server is connected, which closes the 0.2.142 background-connect race.
+- **`systemPrompt.snapshot: false`** (`turnSystemPrompt`, 0.3.278). The default
+  records turn 1's system prompt and replays it until compaction; MARVIN's
+  append changes per turn, so mode switches would be silently ignored (probe:
+  turn 2 answered with turn 1's codeword). **Transitional** — ADR-0118 makes
+  the append stable per session and removes this pin, because rewriting the
+  system prompt mid-session breaks the prompt cache and, on Fable 5.1,
+  invalidates earlier thinking blocks.
 
 Verified live: a 0.3.245 `system/init` on `claude-sonnet-5` with the flags
 reports the todo family as **`TodoWrite`** only.

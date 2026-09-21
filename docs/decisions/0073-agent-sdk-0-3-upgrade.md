@@ -113,3 +113,49 @@ Two things worth recording from the same run:
   [ADR-0087](./0087-newest-claude-cli-and-reported-context-window.md), not the
   SDK bump, but this run is where it was confirmed end to end.
 
+
+## Addendum — 0.3.251 → 0.3.278 (2026-09-21)
+
+Patch bump (peer `@anthropic-ai/sdk` 0.122 → 0.127) in all three workspace
+packages, one resolved copy. The type diff is additive, and **one default
+moved**: `systemPrompt.snapshot`. With it on — the default, rolling out per
+account — the CLI records the system prompt on a session's first request and
+replays it verbatim on every later request and resume until compaction.
+
+Measured live, not read off the `.d.ts`: two turns of one session, append
+`CODEWORD: ALPHA` then `CODEWORD: BRAVO` on resume.
+
+```
+snapshot: false   T1 ALPHA   T2 BRAVO    ← per-turn append reaches the model
+default           T1 ALPHA   T2 ALPHA    ← turn 2's append silently ignored
+```
+
+The default is already live on this account. MARVIN's append is not stable
+across turns — turn 1 carries the full project context, later turns a short
+"ongoing" block, and `modeGuidance(mode)` changes with the mode — so the
+default would freeze turn 1's prompt, mode switches included, until the next
+compaction. **Pin 3: `snapshot: false`** (`turnSystemPrompt` in
+`sdk-runner.ts`, test `system-prompt-snapshot.test.ts`).
+
+**The pin is transitional.** Rewriting the system prompt mid-session is itself
+what Anthropic's Fable 5.1 guidance says to stop doing: it restarts the prompt
+cache and, for accounts created on or after 2026-08-31, invalidates earlier
+thinking blocks. The same probe showed what the old behaviour costs: a resumed
+turn's append *replaces* turn 1's, so from turn 2 the model has had no ADR
+titles, memory or backlog in context at all. ADR-0118 makes the append stable
+for the whole session and moves per-turn deltas into the turn's
+`<system-reminder>` suffix; that change removes this pin and lets the SDK
+record the prompt.
+
+Also measured on the same run: `canUseTool` now receives
+`mcpServer: { name: "marvin-graph", source: "sdk" }` for MARVIN's in-process
+tools — adopted by [ADR-0117](./0117-mcp-trust-by-provenance.md).
+
+Deliberately **not** adopted, checked against the code rather than the release
+notes: `omitClaudeMd` (MARVIN sets no `settingSources`, so no CLAUDE.md is
+loaded to omit), `reloadPlugins({ holdOnCacheImpact })` (MARVIN passes plugins
+fresh on every `query()` and never calls it), the new
+`SDKAssistantMessageError` codes (nothing switches on that enum), and
+`thinkingTokens` (already inside `outputTokens`, so no cost change).
+`getContextUsage({ detail: "summary" })` has no caller today; ADR-0118's
+baseline guard is where it earns one.
