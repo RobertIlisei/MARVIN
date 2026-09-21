@@ -303,6 +303,45 @@ Classify each decision as \`reversible\`, \`expensive-to-reverse\` or \`one-way-
 
 Present it as a checklist, let the user call out anything missed, and only then propose the architecture.
 `,
+  "instruction-files": `---
+name: instruction-files
+description: How a project's agent instruction files (CLAUDE.md, AGENTS.md, nested per-directory files, @imports) work across Claude Code, Codex, Cursor and other agents, and how to make duplicated ones into one file. Use when the project context reports that AGENTS.md is a near-copy of CLAUDE.md, when the user asks about CLAUDE.md or AGENTS.md, or when they want one set of instructions for every agent they use.
+---
+
+# Instruction files
+
+## Who reads what
+
+- **Claude Code** reads \`CLAUDE.md\` (or \`.claude/CLAUDE.md\`). It reads \`AGENTS.md\` only when a directory has no \`CLAUDE.md\`, unless the user changed its "Project instructions" setting.
+- **Codex, Cursor and most other coding agents** read \`AGENTS.md\`.
+- **MARVIN** reads \`CLAUDE.md\` and/or \`AGENTS.md\`, expands \`@path\` imports, skips an \`AGENTS.md\` that is a near-copy of \`CLAUDE.md\`, and surfaces a subdirectory's files when work reaches that directory.
+- Nobody reads \`CLAUDE.local.md\` or \`AGENTS.local.md\` except the one person's tool they were written for; \`.agents/\` is not an instruction file.
+
+When a project keeps both files by hand, each agent follows a different copy, and the copies drift — one gets the new rule, the other keeps the old one.
+
+## The one-file pattern
+
+1. **\`AGENTS.md\` is canonical and tool-neutral**: build, test and lint commands; architecture invariants; conventions that differ from defaults; repository etiquette (branches, commits, reviews); domain facts the code does not show.
+2. **\`CLAUDE.md\` imports it and adds only what is Claude-specific** — skill names, MCP tools, hooks, slash commands:
+
+   \`\`\`markdown
+   @AGENTS.md
+
+   ## Claude-specific
+   - …
+   \`\`\`
+
+3. **The same per subdirectory**: \`apps/api/AGENTS.md\` canonical, \`apps/api/CLAUDE.md\` = \`@AGENTS.md\` plus anything Claude-only. Put rules that apply to one part of the codebase there rather than in the root file.
+4. **Keep each file short** — under about 200 lines. For every line, ask whether removing it would cause an agent to make a mistake; cut what the code already shows, history (that belongs in ADRs or the changelog), and anything that changes often.
+
+## How to consolidate — only with the user's go-ahead
+
+These are the user's files; never edit them as a side effect of other work.
+
+1. Compare the two files and list the differences: lines only in \`CLAUDE.md\`, lines only in \`AGENTS.md\`, and lines that disagree. Ask the user which version is right for each disagreement — that is a decision, not a merge.
+2. Propose the new \`AGENTS.md\` (the union, tool-neutral) and the new \`CLAUDE.md\` (the import plus Claude-only lines) as a diff.
+3. Apply only after the user approves, then read both back through a fresh session to confirm nothing was lost.
+`,
 };
 
 /**

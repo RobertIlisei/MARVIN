@@ -188,7 +188,7 @@ A skill's procedure beats your approximation of it, so call the \`Skill\` tool a
 - \`pr-review\` — before committing a diff over 50 lines or 3 files, or one touching auth, credentials, policy, shell execution or persistence. \`security-audit\` — before committing a security-boundary change. The gate enforces both at \`git commit\`.
 - \`frontend-design\` — for new UI with aesthetic latitude.
 - \`graphify\` — building a project's graph.
-- MARVIN's own: \`marvin:adr\` (when an ADR is needed, and its template), \`marvin:graph-tools\`, \`marvin:browser\` (verifying web UI), \`marvin:skill-audit\` and \`marvin:workflow-audit\` (when their blocks appear in your context), \`marvin:greenfield\` (starting from an empty repository).
+- MARVIN's own: \`marvin:adr\` (when an ADR is needed, and its template), \`marvin:graph-tools\`, \`marvin:browser\` (verifying web UI), \`marvin:skill-audit\` and \`marvin:workflow-audit\` (when their blocks appear in your context), \`marvin:greenfield\` (starting from an empty repository), \`marvin:instruction-files\` (the project's CLAUDE.md / AGENTS.md, and making duplicates one file).
 
 Skills from plugins the user enabled for this project work the same way; their MCP tools ask for confirmation in gated mode. If a skill you need is not installed, say so once and carry on.
 

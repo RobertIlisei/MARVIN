@@ -14,10 +14,11 @@
 
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { graphPathForScope, summarizeGraph } from "@marvin/graphify-bridge";
 
 import type { InfraProbe } from "./infra-probes";
+import { resolveInstructionFiles } from "./instruction-files";
 import { formatProbeBlock, runProbes } from "./infra-probes";
 import {
   checkWorkflowHealth,
@@ -69,6 +70,9 @@ export interface ProjectContextOptions {
 // `CLAUDE.local.md` is deliberately NOT here. It is the personal, never-
 // committed override, and reading it is a separate decision about whose
 // machine's preferences steer a session — not a default.
+// Since ADR-0119 the "CLAUDE.md" entry means the project's instruction files
+// as a whole — CLAUDE.md and/or AGENTS.md, imports expanded, near-copies
+// skipped (`resolveInstructionFiles`).
 const DEFAULT_FILES = [
   "CLAUDE.md",
   "PROJECT_STATUS.md",
@@ -294,6 +298,33 @@ export async function buildProjectContext(
   let memoryTokens = 0;
   let backlogTokens = 0;
   for (const rel of files) {
+    // ADR-0119 — "CLAUDE.md" stands for the project's instruction files:
+    // CLAUDE.md and/or AGENTS.md, `@path` imports expanded, near-copies skipped.
+    if (rel === "CLAUDE.md") {
+      const resolved = resolveInstructionFiles(options.workDir, options.workDir);
+      const relOf = (p: string) => relative(options.workDir, p);
+      for (const s of resolved.sections) {
+        const imports = resolved.files
+          .filter((f) => f.role === "imported")
+          .map((f) => relOf(f.path));
+        const heading = imports.length > 0 && s === resolved.sections[0]
+          ? `${relOf(s.path)} (imports ${imports.join(", ")})`
+          : relOf(s.path);
+        const block = `## ${heading}\n\n${s.text.trim()}`;
+        sections.push(block);
+        docTokens += approxTokens(block);
+      }
+      const duplicate = resolved.files.find((f) => f.role === "duplicate");
+      if (duplicate) {
+        const note =
+          `_\`${relOf(duplicate.path)}\` here is a near-copy of \`CLAUDE.md\`, so it was not loaded twice. ` +
+          "Other agents (Codex, Cursor) read it, so the two will drift; the " +
+          "`marvin:instruction-files` skill explains how to make them one file — only with the user's go-ahead._";
+        sections.push(note);
+        docTokens += approxTokens(note);
+      }
+      continue;
+    }
     const full = join(options.workDir, rel);
     try {
       const content = (await readFile(full, "utf-8")).trim();

@@ -83,3 +83,34 @@ describe("buildProjectContext — indexes load as a recent slice", () => {
     expect(approxTokens(block)).toBeLessThan(1600);
   });
 });
+
+// ADR-0119 — the root instruction files go through the resolver.
+describe("buildProjectContext — instruction files", () => {
+  it("injects AGENTS.md when the project has no CLAUDE.md", async () => {
+    const wd = fixtureDir();
+    writeFileSync(join(wd, "AGENTS.md"), "# Agents\nRun make check before committing.\n");
+    const { text } = await buildProjectContext({ workDir: wd, firstMessage: true });
+    expect(text).toContain("## AGENTS.md");
+    expect(text).toContain("Run make check before committing.");
+  });
+
+  it("expands CLAUDE.md's @AGENTS.md import and names what loaded", async () => {
+    const wd = fixtureDir();
+    writeFileSync(join(wd, "CLAUDE.md"), "@AGENTS.md\n\nClaude-only line.\n");
+    writeFileSync(join(wd, "AGENTS.md"), "Shared rule.\n");
+    const { text } = await buildProjectContext({ workDir: wd, firstMessage: true });
+    expect(text).toContain("## CLAUDE.md (imports AGENTS.md)");
+    expect(text).toContain("Shared rule.");
+    expect(text).not.toMatch(/^@AGENTS\.md$/m);
+  });
+
+  it("points at marvin:instruction-files when AGENTS.md is a near-copy", async () => {
+    const wd = fixtureDir();
+    const rules = Array.from({ length: 12 }, (_, i) => `- rule ${i}`).join("\n");
+    writeFileSync(join(wd, "CLAUDE.md"), rules);
+    writeFileSync(join(wd, "AGENTS.md"), `${rules}\n- one more`);
+    const { text } = await buildProjectContext({ workDir: wd, firstMessage: true });
+    expect(text).toContain("`marvin:instruction-files`");
+    expect(text.match(/- rule 11/g)).toHaveLength(1);
+  });
+});
