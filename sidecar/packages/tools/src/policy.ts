@@ -564,6 +564,20 @@ const TRUSTED_MCP_CONFIRM_EXCEPTIONS: ReadonlySet<string> = new Set([
   "mcp__marvin-obsidian__obsidian_init",
 ]);
 
+/** Where the SDK says an `mcp__*` tool's server came from — the `mcpServer`
+ *  field of `canUseTool`'s options (Agent SDK ≥ 0.3.278). `source` is an open
+ *  set; only `"sdk"` means an in-process server this host registered. */
+export interface McpProvenance {
+  name: string;
+  source: string;
+}
+
+/** True when `name` sits under one of MARVIN's in-process server prefixes.
+ *  Says nothing about trust on its own — see `mcpToolPolicy` (ADR-0117). */
+export function isTrustedMcpName(name: string): boolean {
+  return TRUSTED_INPROCESS_MCP_PREFIXES.some((p) => name.startsWith(p));
+}
+
 /** The mcpServers key MARVIN registers Playwright under → tools arrive as
  *  `mcp__playwright__browser_*`. Shared with sdk-runner's registration. */
 export const PLAYWRIGHT_SERVER_KEY = "playwright";
@@ -587,7 +601,8 @@ const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]
  * Classify an MCP tool name.
  *
  * - Returns `null` for MARVIN's trusted in-process servers (graph/memory/
- *   backlog/control) — the caller keeps the blanket-allow. Also `null` for a
+ *   backlog/control/obsidian) unless `provenance.source` names a source other
+ *   than `"sdk"` — then they confirm (ADR-0117). Also `null` for a
  *   non-MCP name (not our concern).
  * - Playwright: the auto/deny/confirm ladder (ADR-0045).
  * - Every OTHER `mcp__*` tool — i.e. a plugin-contributed MCP server
@@ -595,10 +610,16 @@ const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]
  *   egress. The subagent read-only invariant then hard-denies it for any
  *   `agentID` call (confirm ≠ allow).
  */
-export function mcpToolPolicy(name: string): ToolPolicyClass | null {
+export function mcpToolPolicy(name: string, provenance?: McpProvenance): ToolPolicyClass | null {
   if (!name.startsWith("mcp__")) return null;
-  // MARVIN's own in-process servers stay blanket-allowed.
-  if (TRUSTED_INPROCESS_MCP_PREFIXES.some((p) => name.startsWith(p))) {
+  // MARVIN's own in-process servers stay blanket-allowed — unless the SDK says
+  // the call reached a server from somewhere else (ADR-0117). The name is a
+  // convention; `source: "sdk"` is a fact only the host can make true.
+  // ABSENT provenance keeps the name-based allow: subagent calls (382 real
+  // graph calls through the gate) were not shown to carry the field, and
+  // failing closed there would hard-deny every scout's graph tools.
+  if (isTrustedMcpName(name)) {
+    if (provenance && provenance.source !== "sdk") return "confirm";
     // A trusted server can still hold one tool that needs consent.
     return TRUSTED_MCP_CONFIRM_EXCEPTIONS.has(name) ? "confirm" : null;
   }

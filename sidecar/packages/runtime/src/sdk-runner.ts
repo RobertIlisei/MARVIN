@@ -31,7 +31,7 @@ import { type AgentDefinition, type CanUseTool,
 import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
 import { describeLane, laneVerdict } from "@marvin/tools/lanes";
 import { classifyMeteredCiRisk, describeMeteredCiRisk, meteredCiAlternative } from "@marvin/tools/metered-ci";
-import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
+import { isSubagentDispatch, isTrustedMcpName, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, type McpProvenance, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
 import { buildSubprocessEnv } from "./auth";
@@ -969,6 +969,8 @@ export function classifyToolCall(
     worktree?: string;
     /** The project root, for resolving relative targets in the worktree check. */
     workDir?: string;
+    /** ADR-0117 — the SDK's `mcpServer` provenance for an `mcp__*` call. */
+    mcpServer?: McpProvenance;
   },
 ): { decision: "allow" | "confirm" | "deny"; reason: string; updatedInput?: Record<string, unknown> } {
   // Resolve a base decision + reason from EITHER the named-tool policy OR an
@@ -1005,13 +1007,50 @@ export function classifyToolCall(
     // sandboxed or delegate back to tools we already gate. EXCEPTION (ADR-0045):
     // a classified external MCP server (Playwright) goes through the ladder so
     // its code-exec/egress tools are gated and the subagent invariant applies.
-    const mcpClass = mcpToolPolicy(name);
+    const mcpClass = mcpToolPolicy(name, opts?.mcpServer);
+    // ADR-0117 — a MARVIN tool with NO provenance keeps its name-based allow;
+    // record it, so the log answers whether the SDK ever omits the field
+    // (subagent calls were not shown to carry it).
+    if (isTrustedMcpName(name) && !opts?.mcpServer) {
+      try {
+        console.info(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "gate.mcp_provenance_missing",
+              tool: name,
+              agentID: opts?.agentID ?? null,
+              at: new Date().toISOString(),
+            }),
+        );
+      } catch {
+        /* never break a turn on telemetry */
+      }
+    }
     if (mcpClass === null) {
       return { decision: "allow", reason: `${name} is not in the gated set.` };
     }
     baseDecision = mcpClass === "auto" ? "allow" : mcpClass === "deny" ? "deny" : "confirm";
-    policyReason =
-      mcpClass === "deny"
+    const untrustedTwin = isTrustedMcpName(name) && opts?.mcpServer !== undefined && opts.mcpServer.source !== "sdk";
+    if (untrustedTwin) {
+      try {
+        console.warn(
+          "[marvin.telemetry] " +
+            JSON.stringify({
+              kind: "gate.mcp_provenance",
+              tool: name,
+              mcpServer: opts?.mcpServer ?? null,
+              note: "MARVIN server name from a non-sdk source — confirm (ADR-0117)",
+              at: new Date().toISOString(),
+            }),
+        );
+      } catch {
+        /* never break a turn on telemetry */
+      }
+    }
+    policyReason = untrustedTwin
+      ? `${name} carries a MARVIN server name but the SDK reports source ` +
+        `"${opts?.mcpServer?.source}", not an in-process server — confirm (ADR-0117).`
+      : mcpClass === "deny"
         ? `${name} executes arbitrary code — denied (ADR-0045).`
         : mcpClass === "confirm"
           ? `${name} changes browser state or reaches the network — confirm (ADR-0045).`
@@ -1663,7 +1702,7 @@ export function makeAutoModeLogger(args: {
   // ADR-0115 — `full` waives the three containment confirms below. The money
   // gate and the hard-deny floor are untouched.
   const waiveContainment = skipsContainmentConfirms(args.permissionStrategy ?? "auto");
-  return async (toolName, toolInput, { toolUseID, agentID }) => {
+  return async (toolName, toolInput, { toolUseID, agentID, mcpServer }) => {
     const safeInput = normaliseInput(toolInput);
     // Plan approval gate first — even in auto strategy, ExitPlanMode waits
     // for the user (ADR-0036).
@@ -1709,6 +1748,7 @@ export function makeAutoModeLogger(args: {
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
       readOnly,
+      mcpServer,
       ...(binding?.worktree ? { worktree: binding.worktree, workDir: cwd } : {}),
     });
     if (agentID) logSubagentGate({ turnId, agentID, binding, toolName, decision: cls.decision, reason: cls.reason });
@@ -1772,7 +1812,7 @@ export function makeGatedCanUseTool(args: {
   mode?: AgentMode;
 }): CanUseTool {
   const { cwd, turnId, onConfirmRequest, checkpoint, readOnly, mode } = args;
-  return async (toolName, toolInput, { toolUseID, title, description, displayName, agentID }) => {
+  return async (toolName, toolInput, { toolUseID, title, description, displayName, agentID, mcpServer }) => {
     const safeInput = normaliseInput(toolInput);
     // Plan approval gate first (ADR-0036).
     const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
@@ -1815,6 +1855,7 @@ export function makeGatedCanUseTool(args: {
     const cls = classifyToolCall(toolName, toolInput as Record<string, unknown>, {
       agentID,
       readOnly,
+      mcpServer,
       ...(binding?.worktree ? { worktree: binding.worktree, workDir: cwd } : {}),
     });
     if (agentID) logSubagentGate({ turnId, agentID, binding, toolName, decision: cls.decision, reason: cls.reason });

@@ -19,6 +19,10 @@ import { describe, expect, it } from "vitest";
 
 import { isSubagentDispatch, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, mcpToolPolicy, toolPolicy } from "../src/policy";
 
+// What the SDK reports for a call that reached an in-process server MARVIN
+// registered (verified live on 0.3.278, ADR-0117).
+const SDK = { name: "marvin-graph", source: "sdk" };
+
 describe("toolPolicy — Bash hard-deny coverage", () => {
   // Audit finding #2: `\brm\s+-rf\s+\/` only matched a literal `/` after
   // `-rf`, so the variants below all auto-classed as `confirm` and ran
@@ -259,10 +263,10 @@ describe("mcpToolPolicy — Playwright MCP classification (ADR-0045)", () => {
   const pw = (t: string) => `mcp__playwright__${t}`;
 
   it("returns null for MARVIN's trusted in-process servers + non-MCP names (blanket-allowed)", () => {
-    expect(mcpToolPolicy("mcp__marvin-graph__graph_search")).toBeNull();
-    expect(mcpToolPolicy("mcp__marvin-memory__remember")).toBeNull();
-    expect(mcpToolPolicy("mcp__marvin-backlog__backlog_add")).toBeNull();
-    expect(mcpToolPolicy("mcp__marvin-control__schedule_wakeup")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-graph__graph_search", SDK)).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-memory__remember", SDK)).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-backlog__backlog_add", SDK)).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-control__schedule_wakeup", SDK)).toBeNull();
     expect(mcpToolPolicy("Read")).toBeNull();
   });
 
@@ -293,7 +297,7 @@ describe("mcpToolPolicy — plugin MCP servers gated by default (ADR-0053)", () 
   });
 
   it("still blanket-allows MARVIN's own servers and ignores non-MCP names", () => {
-    expect(mcpToolPolicy("mcp__marvin-graph__graph_neighbors")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-graph__graph_neighbors", SDK)).toBeNull();
     expect(mcpToolPolicy("Bash")).toBeNull();
     expect(mcpToolPolicy("TodoWrite")).toBeNull();
   });
@@ -495,11 +499,11 @@ describe("looksLikeSubagentDispatch — missing input", () => {
 // user's own repository.
 describe("marvin-obsidian trust (ADR-0089)", () => {
   it("obsidian_status is read-only and takes the fast path", () => {
-    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_status")).toBeNull();
+    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_status", SDK)).toBeNull();
   });
 
   it("obsidian_init still confirms — it writes .obsidian/ into the user's repo", () => {
-    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_init")).toBe("confirm");
+    expect(mcpToolPolicy("mcp__marvin-obsidian__obsidian_init", SDK)).toBe("confirm");
   });
 
   it("the other in-process servers are unchanged", () => {
@@ -509,7 +513,7 @@ describe("marvin-obsidian trust (ADR-0089)", () => {
       "mcp__marvin-backlog__backlog_add",
       "mcp__marvin-control__schedule_wakeup",
     ]) {
-      expect(mcpToolPolicy(t), t).toBeNull();
+      expect(mcpToolPolicy(t, SDK), t).toBeNull();
     }
   });
 
@@ -594,5 +598,27 @@ describe("toolPolicy — hard-deny reason names the matched fragment", () => {
   it("a plain docker ps is not destructive", () => {
     const res = toolPolicy("Bash", { command: 'docker ps -a --filter "name=x" --format "{{.Names}}" 2>/dev/null' });
     expect(res.class).not.toBe("deny");
+  });
+});
+
+// ADR-0117 — a MARVIN server name is trusted only with the SDK's word for it.
+describe("mcpToolPolicy — trust by provenance (ADR-0117)", () => {
+  it("blanket-allows a MARVIN server only when the source is sdk", () => {
+    expect(mcpToolPolicy("mcp__marvin-graph__graph_search", SDK)).toBeNull();
+  });
+
+  it("confirms the same name from any configured source", () => {
+    for (const source of ["plugin", "project", "user", "local", "dynamic", "managed", "something-new"]) {
+      expect(mcpToolPolicy("mcp__marvin-graph__graph_search", { name: "marvin-graph", source }), source).toBe("confirm");
+    }
+  });
+
+  it("keeps the name-based allow when provenance is missing", () => {
+    expect(mcpToolPolicy("mcp__marvin-backlog__backlog_add")).toBeNull();
+  });
+
+  it("leaves Playwright and plugin servers on their existing ladders", () => {
+    expect(mcpToolPolicy("mcp__playwright__browser_snapshot", { name: "playwright", source: "dynamic" })).toBe("auto");
+    expect(mcpToolPolicy("mcp__some_plugin__x", { name: "some_plugin", source: "plugin" })).toBe("confirm");
   });
 });

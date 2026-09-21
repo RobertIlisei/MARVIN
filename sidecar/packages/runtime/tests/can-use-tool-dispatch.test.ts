@@ -24,6 +24,10 @@ import {
   writesUnderGraphOut,
 } from "../src/sdk-runner";
 
+// What the SDK passes `canUseTool` for a call that reached an in-process
+// server MARVIN registered (verified live on 0.3.278, ADR-0117).
+const SDK_MCP = { mcpServer: { name: "marvin-graph", source: "sdk" } };
+
 // These tests pin the dispatch contract that ADR-0015 §1 codifies:
 //
 //   1. `auto` mode and `gated` mode both run the SAME classifier
@@ -116,8 +120,32 @@ describe("classifyToolCall", () => {
   });
 
   it("allows MARVIN's own in-process MCP servers (graph/memory/backlog/control)", () => {
-    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}, SDK_MCP).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-memory__recall", {}, SDK_MCP).decision).toBe("allow");
+  });
+
+  // ADR-0117 — trust is the SDK's provenance, not the name.
+  it("confirms a MARVIN server name that did not come from an in-process server", () => {
+    const r = classifyToolCall("mcp__marvin-graph__graph_search", {}, {
+      mcpServer: { name: "marvin-graph", source: "project" },
+    });
+    expect(r.decision).toBe("confirm");
+    expect(r.reason).toContain("ADR-0117");
+  });
+
+  it("keeps the name-based allow when provenance is missing — including from a subagent", () => {
+    // Subagent calls were not shown to carry `mcpServer`; failing closed would
+    // turn every scout graph call into a hard deny (ADR-0117).
     expect(classifyToolCall("mcp__marvin-memory__recall", {}).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}, { agentID: "scout-1" }).decision).toBe("allow");
+  });
+
+  it("hard-denies an untrusted MARVIN-named tool from a sub-agent", () => {
+    const r = classifyToolCall("mcp__marvin-graph__graph_search", {}, {
+      agentID: "scout-1",
+      mcpServer: { name: "marvin-graph", source: "plugin" },
+    });
+    expect(r.decision).toBe("deny");
   });
 
   it("confirms an unknown/plugin MCP server — no longer blanket-allowed (ADR-0053)", () => {
@@ -422,7 +450,7 @@ describe("classifyToolCall — memory ownership (ADR-0042 addendum)", () => {
     const r = classifyToolCall("mcp__marvin-memory__remember", {
       name: "build-gotcha",
       hook: "swift build needs xcodegen first",
-    });
+    }, SDK_MCP);
     expect(r.decision).toBe("allow");
   });
 
@@ -503,8 +531,8 @@ describe("classifyToolCall — Playwright MCP gating (ADR-0045)", () => {
   });
 
   it("leaves trusted in-process MCP servers blanket-allowed", () => {
-    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}).decision).toBe("allow");
-    expect(classifyToolCall("mcp__marvin-backlog__backlog_add", {}).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-graph__graph_search", {}, SDK_MCP).decision).toBe("allow");
+    expect(classifyToolCall("mcp__marvin-backlog__backlog_add", {}, SDK_MCP).decision).toBe("allow");
   });
 
   it("collapses to read-only for a sub-agent (scout gets snapshot, not click/code)", () => {
