@@ -450,12 +450,14 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   id-based `TaskCreate`/`TaskUpdate`. The entire plan spine (ADR-0046 / 0049 /
   0052 / 0068 / 0106) reconciles `TodoWrite` snapshots by `[N]`/`[N.M]` tag. Remove
   either flag and every plan freezes at `pending` with no error.
-- **`alwaysLoad: true` on all five in-process MCP servers** (`marvin-graph`,
-  `-memory`, `-backlog`, `-obsidian`, `-control`). 0.3 defers MCP tools behind
-  `ToolSearch` by default; the graphify-first design hooks hard-deny
-  Read/Grep/Glob until a `graph_*` call has happened, so a turn-1 prompt with
-  no graph tools would deadlock. `alwaysLoad` also blocks startup until the
-  server is connected, which closes the 0.2.142 background-connect race.
+- **`alwaysLoad: true` on `marvin-graph` and `marvin-control` only.** 0.3
+  defers MCP tools behind `ToolSearch` by default; the graphify-first design
+  hooks hard-deny Read/Grep/Glob until a `graph_*` call has happened, so a
+  turn-1 prompt with no graph tools would deadlock, and the ADR-0055 checkback
+  guard needs `schedule_wakeup` without a discovery step. `alwaysLoad` also
+  blocks startup until the server is connected (the 0.2.142 background-connect
+  race). `-memory`, `-backlog` and `-obsidian` are deferred since ADR-0118
+  (3.3K tokens); verified live: `ToolSearch → recall` works.
 - **One system prompt per session** (`turnSystemPrompt`, `snapshot: true`,
   [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)).
   0.3.278 records turn 1's system prompt and replays it until compaction, so

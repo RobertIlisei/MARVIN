@@ -263,8 +263,10 @@ export function createMemoryMcpServer(workDir: string) {
   return createSdkMcpServer({
     name: "marvin-memory",
     version: "1.0.0",
-    // ADR-0073 — in the turn-1 prompt, never deferred behind ToolSearch.
-    alwaysLoad: true,
+    // ADR-0118 — deferred behind ToolSearch (the SDK default). ADR-0073 loaded
+    // every MARVIN server up front; only `marvin-graph` (graphify-first would
+    // deadlock without it) and `marvin-control` (the checkback guard needs
+    // `schedule_wakeup` without a discovery step) still need that.
     tools: [rememberTool, recallTool],
   });
 }

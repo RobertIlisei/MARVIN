@@ -4135,6 +4135,35 @@ runner.suite("plan-spine-watermark") {
     }
 }
 
+// MARK: - context-baseline-notice (ADR-0118)
+//
+// A fresh agri-saas-platform tab started at 71 % of its 200K window and died
+// thrashing with nothing on screen to say why. The sidecar now measures every
+// turn's fixed load; above half the window the chat shows one quiet row
+// naming what fills it. Below that, nothing — the row is a warning, not a meter.
+
+runner.suite("context-baseline-notice") {
+    runner.test("no row at or below half the window") {
+        let json = #"{"type":"system","subtype":"marvin.context.baseline","totalTokens":100000,"maxTokens":200000,"share":0.5,"used":[{"name":"System prompt","tokens":90000}]}"#
+        runner.expect(ContextBaselineNotice.text(cliEventData: Data(json.utf8)) == nil, "50 % is not a warning")
+    }
+
+    runner.test("above half: names the load and the two largest parts") {
+        let json = #"{"type":"system","subtype":"marvin.context.baseline","totalTokens":142596,"maxTokens":200000,"share":0.71298,"used":[{"name":"System prompt","tokens":93295},{"name":"Messages","tokens":26238},{"name":"Skills","tokens":9934}]}"#
+        let text = ContextBaselineNotice.text(cliEventData: Data(json.utf8)) ?? ""
+        runner.expect(text.contains("71 %"), "share shown: \(text)")
+        runner.expect(text.contains("143K of 200K"), "tokens shown: \(text)")
+        runner.expect(text.contains("System prompt 93K"), "largest part named: \(text)")
+        runner.expect(text.contains("Messages 26K"), "second part named: \(text)")
+        runner.expect(!text.contains("Skills"), "only the two largest: \(text)")
+    }
+
+    runner.test("other system events and malformed payloads give no row") {
+        runner.expect(ContextBaselineNotice.text(cliEventData: Data(#"{"type":"system","subtype":"init"}"#.utf8)) == nil, "init")
+        runner.expect(ContextBaselineNotice.text(cliEventData: Data("not json".utf8)) == nil, "garbage")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -108,4 +108,8 @@ token window (compaction at 967K). The thrashing session ran on 0.3.251 with
       2.5K, backlog tail 1K, each naming its fetch tool; project docs whole.
       Agri fresh tab: 139,761 → 111,245 tokens
 - [ ] Milestone 3 — base prompt ≤ 8K tokens
-- [ ] Milestone 4 — defer non-graph MCP servers; baseline-over-50 % warning
+- [x] Milestone 4 — `marvin-memory`/`-backlog`/`-obsidian` deferred behind
+      ToolSearch (`-graph` and `-control` stay loaded for the graphify-first
+      and checkback guards); live `ToolSearch → recall`; agri 111,245 →
+      107,901. The app shows one quiet row when a turn's fixed load is above
+      half the window (`ContextBaselineNotice`, 8 Swift assertions)

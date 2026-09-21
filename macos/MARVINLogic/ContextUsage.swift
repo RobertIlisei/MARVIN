@@ -164,3 +164,39 @@ public enum ContextUsageReader {
         return (resident, billable)
     }
 }
+
+/// ADR-0118 — the one visible trace of a turn's fixed context load. The
+/// sidecar emits a `marvin.context.baseline` system event per turn; above half
+/// the window this returns a quiet chat row naming what fills it. Below that it
+/// returns nil: the status bar already shows the running total, and a row on
+/// every turn would be noise.
+public enum ContextBaselineNotice {
+    private struct Payload: Decodable {
+        let type: String?
+        let subtype: String?
+        let totalTokens: Int?
+        let maxTokens: Int?
+        let share: Double?
+        let used: [Part]?
+        struct Part: Decodable {
+            let name: String
+            let tokens: Int
+        }
+    }
+
+    public static let threshold = 0.5
+
+    public static func text(cliEventData data: Data) -> String? {
+        guard let p = try? JSONDecoder().decode(Payload.self, from: data),
+              p.type == "system", p.subtype == "marvin.context.baseline",
+              let share = p.share, share > threshold,
+              let total = p.totalTokens, let max = p.maxTokens, max > 0
+        else { return nil }
+        let k = { (n: Int) in "\(Int((Double(n) / 1000).rounded()))K" }
+        let parts = (p.used ?? []).sorted { $0.tokens > $1.tokens }.prefix(2)
+            .map { "\($0.name) \(k($0.tokens))" }
+        var s = "context: \(k(total)) of \(k(max)) (\(Int((share * 100).rounded())) %) in use before any work"
+        if !parts.isEmpty { s += " · largest: " + parts.joined(separator: ", ") }
+        return s
+    }
+}

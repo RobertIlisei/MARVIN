@@ -448,6 +448,18 @@ enum ChatStreamReducer {
         // information the user couldn't infer from their own message
         // bubble. rate_limit_event and other system subtypes were
         // already skipped; this drops the last one.
+        //
+        // One exception (ADR-0118): a turn whose fixed context load is
+        // above half the window gets a quiet row saying so — a fresh tab
+        // at 71 % died thrashing with nothing on screen to explain it.
+        guard let text = ContextBaselineNotice.text(cliEventData: data) else { return }
+        out.append(ChatMessage(
+            id: "context-\(UUID().uuidString)",
+            role: .result,
+            blocks: [.text(id: UUID().uuidString, text: text)],
+            isStreaming: false,
+            createdAt: Date()
+        ))
     }
 
     private static func reduceResult(_ out: inout [ChatMessage], data: Data) {
