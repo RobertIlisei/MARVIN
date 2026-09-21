@@ -4164,6 +4164,39 @@ runner.suite("context-baseline-notice") {
     }
 }
 
+// MARK: - sidebar-collapse-latch (2026-09-22)
+//
+// User: "left side pane … is not visible anymore. I can't see any details." —
+// rail drawn, every tab blank. The collapse decision is written one run-loop
+// turn after the measurement (ADR-0062 addendum 5), and the deferred write
+// reused the width captured AT MEASUREMENT. At launch the pane measured 45 pt
+// (rail only) and then 471 pt before the write landed: the 471 measurement
+// scheduled nothing (state had not changed yet), the stale 45 then collapsed
+// the pane, and a width that never changes again never un-collapses it.
+
+runner.suite("sidebar-collapse-latch") {
+    runner.test("a full-width measurement arriving before the deferred write wins") {
+        let latch = SidebarCollapseLatch()
+        runner.expect(latch.record(45, collapsed: false), "narrow schedules a decision")
+        runner.expect(!latch.record(471, collapsed: false), "full width needs no change of its own")
+        runner.expect(!latch.resolve(collapsed: false), "the deferred write uses 471, so it does not collapse")
+    }
+
+    runner.test("a genuine narrow drag still collapses, and widening expands again") {
+        let latch = SidebarCollapseLatch()
+        runner.expect(latch.record(100, collapsed: false), "drag narrow")
+        runner.expect(latch.resolve(collapsed: false), "collapses")
+        runner.expect(latch.record(400, collapsed: true), "drag wide")
+        runner.expect(!latch.resolve(collapsed: true), "expands")
+    }
+
+    runner.test("an unmeasured layout gets no vote") {
+        let latch = SidebarCollapseLatch()
+        runner.expect(!latch.record(0, collapsed: false), "zero width schedules nothing")
+        runner.expect(!latch.resolve(collapsed: false), "and resolves to the current state")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

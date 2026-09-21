@@ -137,6 +137,8 @@ struct LeftPane: View {
     /// inline, so the pane re-renders when the collapse decision *changes* —
     /// not on every width the divider passes through.
     @State private var collapsed = false
+    /// Latest measured width for the deferred collapse decision (see `SidebarCollapseLatch`).
+    @State private var collapseLatch = SidebarCollapseLatch()
 
     var body: some View {
         // Width measurement, and why it is `onGeometryChange` rather than a
@@ -220,8 +222,7 @@ struct LeftPane: View {
         // PreferenceKey's -1 sentinel and this guard both exist because the
         // obvious version latched `collapsed = true` from a default of 0
         // before any real layout, and rendered rail-only at full width.
-        guard paneWidth > 0 else { return }
-        guard SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed) != collapsed else { return }
+        guard collapseLatch.record(paneWidth, collapsed: collapsed) else { return }
         // ADR-0062 addendum 5 — decide here, WRITE on the next run-loop turn.
         // The geometry callback runs inside the window's Update Constraints
         // pass; a synchronous state write there re-roots this hosting view
@@ -230,10 +231,12 @@ struct LeftPane: View {
         // (fatal, 2026-09-08, dragging the divider with the Practice pane
         // open). One turn later the pass counter has reset, the pane is drawn
         // at the measured width for a single frame, and the deadband still
-        // decides. Re-evaluated at write time so a width that crossed back
-        // in between does not land a stale decision.
+        // decides. Re-evaluated at write time against the LATEST width, not
+        // the one that scheduled this write: a 45 pt launch measurement
+        // followed by 471 pt used to land the stale 45 and leave every tab
+        // blank behind the rail (2026-09-22).
         DispatchQueue.main.async {
-            let next = SidebarCollapse.next(paneWidth: paneWidth, collapsed: collapsed)
+            let next = collapseLatch.resolve(collapsed: collapsed)
             if next != collapsed { collapsed = next }
         }
     }

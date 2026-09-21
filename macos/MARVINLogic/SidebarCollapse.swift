@@ -43,3 +43,31 @@ public enum SidebarCollapse {
         return content < collapseBelow
     }
 }
+
+/// The decision latch around `SidebarCollapse.next`, for a caller that
+/// measures during layout and writes on a later run-loop turn.
+///
+/// The deferred write must use the LATEST measurement, not the one that
+/// scheduled it. Observed 2026-09-22: at launch the pane measured 45 pt (rail
+/// only), then 471 pt before the write landed; the 471 measurement scheduled
+/// nothing because the state had not changed yet, the stale 45 then collapsed
+/// the pane, and — the width never changing again — it stayed collapsed, every
+/// tab blank. A reference type so recording a width is not a state write (a
+/// state write per layout is the loop the deferral exists to break).
+public final class SidebarCollapseLatch {
+    public private(set) var latestWidth: CGFloat = 0
+
+    public init() {}
+
+    /// Record a measurement. True when a decision should be scheduled.
+    public func record(_ width: CGFloat, collapsed: Bool) -> Bool {
+        guard width > 0 else { return false }
+        latestWidth = width
+        return SidebarCollapse.next(paneWidth: width, collapsed: collapsed) != collapsed
+    }
+
+    /// The state to apply now, decided from the latest measurement.
+    public func resolve(collapsed: Bool) -> Bool {
+        SidebarCollapse.next(paneWidth: latestWidth, collapsed: collapsed)
+    }
+}
