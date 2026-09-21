@@ -84,3 +84,63 @@ export function taskNotificationPayload(ev: unknown): { task_id: string } | null
   if (o.type !== "system" || o.subtype !== "task_notification") return null;
   return typeof o.task_id === "string" ? { task_id: o.task_id } : null;
 }
+
+/**
+ * ADR-0080 drain bound — measures SILENCE after a deferred result, not time
+ * since the result.
+ *
+ * 2026-09-13: a 15-minute absolute timer armed when a `result` was deferred
+ * behind a live advisor, and was neither restarted by the model's continued
+ * work nor cleared when the advisor settled. Twice in one session the model
+ * was mid-edit, fifteen minutes and two seconds after the deferred result,
+ * when the timer aborted the subprocess; the abort surfaced as "Claude Code
+ * process aborted by user", the auto-continue rail refused (attempt 9 > cap
+ * 3), and the tab went to STATE error with 87 files changed. Nothing was
+ * hung; the bound was measuring the wrong thing.
+ *
+ * `touch()` on every event while armed restarts the clock; `clear()` when
+ * the ledger has no live task. Only a subprocess that goes silent for the
+ * whole bound while a task is still live is force-aborted — and that abort
+ * ends a turn whose result was already captured, so the runner treats it as
+ * the deferred result's end, not a failure.
+ */
+export class BackgroundDrainBound {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private onFire: (() => void) | null = null;
+
+  constructor(private readonly maxSilenceMs: number) {}
+
+  get armed(): boolean {
+    return this.timer !== null;
+  }
+
+  /** Arm once; a second `arm` while armed keeps the running clock. */
+  arm(onFire: () => void): void {
+    if (this.timer) return;
+    this.onFire = onFire;
+    this.start();
+  }
+
+  /** The subprocess produced an event: it is alive, restart the clock. */
+  touch(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.start();
+  }
+
+  clear(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.onFire = null;
+  }
+
+  private start(): void {
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      const fire = this.onFire;
+      this.onFire = null;
+      fire?.();
+    }, this.maxSilenceMs);
+    if (typeof this.timer.unref === "function") this.timer.unref();
+  }
+}

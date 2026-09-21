@@ -39,7 +39,7 @@ import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
 } from "./auto-audit";
-import { BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload } from "./background-tasks";
+import { BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload, BackgroundDrainBound } from "./background-tasks";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { recordPreImage } from "./change-checkpoints";
 import {
@@ -2286,14 +2286,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // channel + arming the 5 s watchdog at the FIRST result would kill the scout
   // it was waiting for. The ledger is fed by `background_tasks_changed`.
   const bgLedger = new BackgroundTaskLedger();
-  let bgDrainTimer: NodeJS.Timeout | null = null;
-  // Upper bound on how long a deferred result may wait for its background
-  // tasks. Scouts are `maxTurns: 40`; nothing legitimate needs this long.
+  // Upper bound on how long a deferred result may sit with NO event from the
+  // subprocess while a background task is still live. Silence, not elapsed
+  // time: the 2026-09-13 aborts hit a model that was mid-edit fifteen
+  // minutes after its deferred result (see BackgroundDrainBound).
   const BG_DRAIN_MAX_MS = (() => {
     const raw = process.env.MARVIN_BACKGROUND_DRAIN_MAX_MS;
     const n = raw ? Number(raw) : Number.NaN;
     return Number.isFinite(n) && n > 0 ? n : 15 * 60_000;
   })();
+  const bgDrain = new BackgroundDrainBound(BG_DRAIN_MAX_MS);
+  let bgDrainFired = false;
   // Watchdog window. Tunable via env in case a future SDK version
   // needs longer post-`result` cleanup; the default is generous
   // enough that any honest cleanup completes naturally.
@@ -2384,6 +2387,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // ADR-0080 — level signal, REPLACE semantics (see background-tasks.ts).
       const bgTasks = backgroundTasksPayload(ev);
       if (bgTasks) bgLedger.replace(bgTasks);
+      // A deferred result is waiting on live tasks: every event proves the
+      // subprocess is alive (restart the silence clock); a drained ledger
+      // means there is nothing left to wait for (drop the bound).
+      if (bgDrain.armed) {
+        if (bgLedger.hasLive) bgDrain.touch();
+        else bgDrain.clear();
+      }
       // ADR-0082 — Claude plan usage. The SDK reports the 5-hour / weekly
       // window state on every turn; for a subscription this IS the spend.
       const rl = rateLimitPayload(ev);
@@ -2596,15 +2606,28 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           } catch {
             /* never break on serialisation */
           }
-          if (!bgDrainTimer) {
-            bgDrainTimer = setTimeout(() => {
-              try {
-                abortController.abort();
-              } catch {
-                /* subprocess is wedged */
-              }
-            }, BG_DRAIN_MAX_MS);
-          }
+          bgDrain.arm(() => {
+            bgDrainFired = true;
+            try {
+              console.info(
+                "[marvin.telemetry] " +
+                  JSON.stringify({
+                    kind: "runagent.bgdrain",
+                    turnId,
+                    note: `no event for ${Math.round(BG_DRAIN_MAX_MS / 1000)} s after a deferred result with a task still live; force-aborted`,
+                    tasks: bgLedger.describe(),
+                    at: new Date().toISOString(),
+                  }),
+              );
+            } catch {
+              /* never break on serialisation */
+            }
+            try {
+              abortController.abort();
+            } catch {
+              /* subprocess is wedged */
+            }
+          });
         } else {
           // Successful result. Arm the watchdog: if the iterator
           // doesn't terminate naturally within WATCHDOG_MS, force-
@@ -2612,10 +2635,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           // throw, but the catch block treats the abort as benign
           // (we already captured the result + token usage above).
           seenSuccessfulResult = true;
-          if (bgDrainTimer) {
-            clearTimeout(bgDrainTimer);
-            bgDrainTimer = null;
-          }
+          bgDrain.clear();
           // ADR-0076 — nothing pending: end the input stream so the SDK
           // terminates the query the way single-message mode did.
           channel?.close();
@@ -2636,22 +2656,27 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // benign case we built the watchdog FOR — the turn already
     // succeeded; we just couldn't get the subprocess to close
     // cleanly. Swallow it so the caller sees ok:true.
-    if (seenSuccessfulResult) {
+    // The drain bound is the same shape: a `result` was already captured
+    // (deferred behind a task that then went silent), so its abort ends the
+    // turn on that result rather than reporting "aborted by user".
+    if (seenSuccessfulResult || bgDrainFired) {
       // Optional: leave a breadcrumb so this is visible in logs
       // when it does kick in. No telemetry library here yet — the
       // structured `[marvin.telemetry]` line keeps with the rest.
-      try {
-        console.info(
-          "[marvin.telemetry] " +
-            JSON.stringify({
-              kind: "runagent.watchdog",
-              turnId,
-              note: "subprocess did not exit within WATCHDOG_MS of result; force-aborted",
-              at: new Date().toISOString(),
-            }),
-        );
-      } catch {
-        /* never break the turn on serialisation */
+      if (seenSuccessfulResult) {
+        try {
+          console.info(
+            "[marvin.telemetry] " +
+              JSON.stringify({
+                kind: "runagent.watchdog",
+                turnId,
+                note: "subprocess did not exit within WATCHDOG_MS of result; force-aborted",
+                at: new Date().toISOString(),
+              }),
+          );
+        } catch {
+          /* never break the turn on serialisation */
+        }
       }
     } else {
       resultError = err instanceof Error ? err.message : String(err);
@@ -2664,10 +2689,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       clearTimeout(watchdogTimer);
       watchdogTimer = null;
     }
-    if (bgDrainTimer) {
-      clearTimeout(bgDrainTimer);
-      bgDrainTimer = null;
-    }
+    bgDrain.clear();
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
     clearSubagentsForTurn(turnId);

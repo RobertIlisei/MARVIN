@@ -57,3 +57,52 @@ describe("backgroundTasksPayload", () => {
     ).toEqual([task("ok")]);
   });
 });
+
+import { afterEach, beforeEach, vi } from "vitest";
+import { BackgroundDrainBound } from "../src/background-tasks";
+
+describe("BackgroundDrainBound — silence, not elapsed time", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("fires only after a full bound of silence; every event restarts the clock", () => {
+    // 2026-09-13: two turns aborted fifteen minutes after a deferred result
+    // while the model was mid-edit. The bound must not fire while events
+    // keep arriving.
+    const fired = vi.fn();
+    const b = new BackgroundDrainBound(1000);
+    b.arm(fired);
+    for (let i = 0; i < 20; i++) {
+      vi.advanceTimersByTime(900);
+      b.touch();
+    }
+    expect(fired).not.toHaveBeenCalled();
+    expect(b.armed).toBe(true);
+    vi.advanceTimersByTime(1000);
+    expect(fired).toHaveBeenCalledTimes(1);
+    expect(b.armed).toBe(false);
+  });
+
+  it("clears when the ledger drains, and a second arm while armed keeps the running clock", () => {
+    const fired = vi.fn();
+    const b = new BackgroundDrainBound(1000);
+    b.arm(fired);
+    vi.advanceTimersByTime(600);
+    b.arm(fired); // a second deferred result: same wait, not a fresh one
+    vi.advanceTimersByTime(600);
+    expect(fired).toHaveBeenCalledTimes(1);
+    const c = new BackgroundDrainBound(1000);
+    c.arm(fired);
+    c.clear(); // advisor settled — nothing left to wait for
+    vi.advanceTimersByTime(5000);
+    expect(fired).toHaveBeenCalledTimes(1);
+    expect(c.armed).toBe(false);
+  });
+
+  it("touch and clear are no-ops when not armed", () => {
+    const b = new BackgroundDrainBound(1000);
+    b.touch();
+    b.clear();
+    expect(b.armed).toBe(false);
+  });
+});

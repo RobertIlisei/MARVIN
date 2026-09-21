@@ -109,3 +109,43 @@ while you continue working".
 - [x] Scout protocol in `personality.ts` states the background semantics
 - [x] Ledger, policy and personality changes are test-pinned
 - [ ] Not in scope: worktree-isolated implementation subagents (needs ADR-0081)
+
+## Amendment — 2026-09-13: the drain bound measures silence, not time since the result
+
+User, with a tab at **STATE error** and 87 files changed: *"check what is
+causing marvin to have errors because it stops working."* The transcript had
+two `turn.error: "Claude Code process aborted by user"` records, at 14:30:05
+and 16:39:47 UTC, and the sidecar's `turn.autocontinue` line beside each:
+`no-retry — attempt 6 > cap 3`, then `attempt 9 > cap 3`. Nobody had clicked
+Stop. Both aborts landed **fifteen minutes and two seconds** after a
+`runagent.result.deferred` — a `result` held back because an advisor
+(`local_agent:advisor: …`) was still live — and half a second after a tool
+result, with the model mid-edit.
+
+**What the bound was doing.** Decision 2 above arms `BG_DRAIN_MAX_MS` when a
+result is deferred, to catch "a subagent that never settles". It was an
+absolute timer: nothing restarted it when the model kept producing events,
+nothing cleared it when the advisor settled and the ledger drained, and its
+abort took the ordinary error path, so a healthy turn ended as a failure the
+auto-continue rail then refused to resume. The bound was measuring elapsed
+time; the failure it guards against is silence.
+
+**What changes.** `BackgroundDrainBound` (in `background-tasks.ts`, fake-timer
+tested) replaces the raw timer. Every event from the subprocess while it is
+armed restarts the clock; a ledger with no live task clears it; a second
+deferred result while armed keeps the running clock. When it does fire — a
+task still live and no event for the whole bound — the turn ends on the
+result it already captured, with `runagent.bgdrain` telemetry, not as
+"aborted by user". The default stays 15 minutes, now of silence.
+
+**Not changed.** "Arming the watchdog when the ledger empties" remains not
+taken, for the reason given above: the next `result` is the terminal signal.
+
+### Scope of Done
+
+- Three `BackgroundDrainBound` tests: twenty touches at 90 % of the bound
+  never fire and a full bound of silence does; `clear` on a drained ledger
+  disarms and a second `arm` keeps the clock; `touch`/`clear` are no-ops
+  unarmed. Full suite green, `tsc` clean.
+- The two aborts' shape — deferred result, activity, abort at exactly the
+  bound — can no longer occur: activity restarts the bound.
