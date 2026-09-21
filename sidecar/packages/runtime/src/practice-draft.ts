@@ -122,7 +122,10 @@ async function defaultDispatch(prompt: string, cwd: string, model?: string): Pro
     prompt,
     options: {
       cwd,
-      env: buildSubprocessEnv(),
+      env: { ...buildSubprocessEnv(), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+      // ADR-0118 — a one-shot side query needs no Claude Code settings; omitting
+      // `settingSources` loads every source, the user's plugins and hooks included.
+      settingSources: [],
       ...(finalModel ? { model: finalModel } : {}),
       disallowedTools: [...DRAFT_DISALLOWED_TOOLS],
       mcpServers: {},

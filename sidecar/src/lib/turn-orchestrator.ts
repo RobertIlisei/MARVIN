@@ -86,14 +86,17 @@ export async function buildTurnSystemPrompt(args: {
    *  project shares one identical append string (the cache prefix). */
   workDir: string;
   personality: PersonalityMode;
-  firstMessage: boolean;
   skipProjectContext?: boolean | undefined;
 }): Promise<string> {
   const systemPrompt = buildSystemPrompt(args.personality);
   const projectContext = args.skipProjectContext
     ? ""
     : (
-        await buildProjectContext({ workDir: args.workDir, firstMessage: args.firstMessage }).catch(
+        // ADR-0118 — the FULL context on every turn, so the append is identical
+        // for the whole session: the SDK records it on the first request and
+        // replays it. The old turn-1-only split made turn 2's prompt differ
+        // and, on resume, replace turn 1's — dropping the project context.
+        await buildProjectContext({ workDir: args.workDir, firstMessage: true }).catch(
           () => ({ text: "", breakdown: [] }),
         )
       ).text;
@@ -646,7 +649,6 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const appendSystemPrompt = await buildTurnSystemPrompt({
     workDir,
     personality: record.personality,
-    firstMessage: false,
   });
 
   const sdkResumeId = lastSdkSessionId(projectId, marvinSessionId) ?? undefined;

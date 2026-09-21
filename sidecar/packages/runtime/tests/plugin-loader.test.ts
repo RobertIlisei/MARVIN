@@ -173,3 +173,26 @@ describe("listInstalledPlugins (read model)", () => {
     }
   });
 });
+
+// ADR-0118 — MARVIN loads the `user` settings source (for ~/.claude/skills),
+// which would also load every plugin the user enabled in Claude Code: 10
+// plugin agents and their hooks were observed in real MARVIN turns. Each is
+// turned off in the flag layer; MARVIN's own per-project plugins arrive as
+// staged local copies and are unaffected (verified live).
+describe("userPluginsOff", () => {
+  it("maps every plugin enabled in the user's Claude Code settings to false", async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { userPluginsOff } = await import("../src/plugin-loader");
+    const dir = mkdtempSync(join(tmpdir(), "marvin-userplugins-"));
+    const file = join(dir, "settings.json");
+    writeFileSync(file, JSON.stringify({ enabledPlugins: { "honeycomb@honeycomb-plugins": true, "old@x": false } }));
+    expect(userPluginsOff(file)).toEqual({ "honeycomb@honeycomb-plugins": false, "old@x": false });
+  });
+
+  it("returns an empty map when the file is missing or unreadable", async () => {
+    const { userPluginsOff } = await import("../src/plugin-loader");
+    expect(userPluginsOff("/nonexistent/settings.json")).toEqual({});
+  });
+});

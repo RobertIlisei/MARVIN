@@ -173,3 +173,15 @@ marketplaces" searchable section with one-click install. `buildCatalog` is
 unit-tested (installed-marking by bare name, ordering).
 
 **Deferred:** the plugin **hooks/agents** follow-up ADR (still stripped in v1).
+
+## Addendum — 2026-09-21: the isolation this ADR assumed was not in place
+
+This ADR assumed MARVIN ran the SDK "without `settingSources`" and therefore
+loaded no Claude Code settings. Omitting `settingSources` loads **every**
+source — the SDK's documented default. Real MARVIN turns carried the user's
+Claude Code plugins (10 plugin agents observed; three enabled plugins ship
+hooks) alongside the staged copies this ADR controls. Fixed by
+[ADR-0118](./0118-one-prompt-per-session-and-settings-isolation.md):
+`settingSources: ["user"]` plus every user-enabled Claude Code plugin set to
+`false` in the flag layer. The staged-copy mechanism here is unchanged and was
+verified to survive the override.

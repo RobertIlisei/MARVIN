@@ -114,3 +114,15 @@ Honeycomb code at all.
 - [x] `personality.ts` + `CLAUDE.md` updated; roadmap Honeycomb item marked
       superseded.
 - [x] Full suite + typecheck green; app rebuilt.
+
+## Addendum — 2026-09-21: the isolation this ADR assumed was not in place
+
+This ADR assumed MARVIN ran the SDK "without `settingSources`" and therefore
+loaded no Claude Code settings. Omitting `settingSources` loads **every**
+source — the SDK's documented default. Real MARVIN turns carried the user's
+Claude Code plugins (10 plugin agents observed; three enabled plugins ship
+hooks) alongside the staged copies this ADR controls. Fixed by
+[ADR-0118](./0118-one-prompt-per-session-and-settings-isolation.md):
+`settingSources: ["user"]` plus every user-enabled Claude Code plugin set to
+`false` in the flag layer. The staged-copy mechanism here is unchanged and was
+verified to survive the override.

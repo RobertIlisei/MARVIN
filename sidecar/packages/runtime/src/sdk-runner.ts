@@ -72,7 +72,7 @@ import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
-import { loadEnabledPlugins } from "./plugin-loader";
+import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { SessionTree } from "./session-meta";
@@ -1188,21 +1188,39 @@ export function classifyToolCall(
 }
 
 /**
- * The turn's `systemPrompt` option. ADR-0073 addendum (0.3.278): the SDK now
- * RECORDS the system prompt on a session's first request and replays it
- * verbatim on every later request and resume until compaction
- * (`snapshot` defaults on, rolling out per account). MARVIN rebuilds `append`
- * every turn — mode guidance, per-session posture (ADR-0108), accepted
- * practice rules (ADR-0105) — so a recorded prompt would silently freeze all
- * of them mid-session. Pinned off; remove only with a plan for how those
- * per-turn signals reach the model instead.
+ * The turn's `systemPrompt` option (ADR-0118). The append is built once per
+ * session and the SDK records it on the first request, replaying it verbatim
+ * on every later request and resume until compaction. Everything that changes
+ * per turn — the mode, orientation, the session tree, the active plan — rides
+ * the turn's `<system-reminder>` suffix instead (`turnReminders`). Rewriting
+ * `system` mid-session breaks the prompt cache and, on Fable 5.1, invalidates
+ * earlier thinking blocks; and a resumed turn's append used to REPLACE turn
+ * 1's, so from turn 2 the model had no project context at all.
  */
 export function turnSystemPrompt(append: string) {
-  return { type: "preset", preset: "claude_code", append, snapshot: false } as const;
+  return { type: "preset", preset: "claude_code", append, snapshot: true } as const;
 }
 
-/** Mode-specific system-prompt stanza (ADR-0036). Empty for `agent` so
- *  the default posture is unchanged. The gate / permissionMode do the
+/**
+ * The per-turn reminders appended to the user message, in order (ADR-0118).
+ * The mode is stated on EVERY turn, Agent included: it no longer lives in the
+ * system prompt, and an Agent turn after a Plan turn would otherwise see only
+ * the stale `Mode: PLAN` reminder in history.
+ */
+export function turnReminders(args: {
+  orientation?: string | null | undefined;
+  mode: AgentMode;
+  sessionContext?: string | undefined;
+  planContext?: string | undefined;
+}): string[] {
+  const mode =
+    modeGuidance(args.mode).trim() ||
+    "## Mode: AGENT\nEdits are allowed this turn; any earlier mode reminder no longer applies.";
+  return [args.orientation, mode, args.sessionContext, args.planContext].filter((x): x is string => Boolean(x));
+}
+
+/** Mode-specific stanza (ADR-0036), sent in the turn's reminder suffix since
+ *  ADR-0118. Empty for `agent`; `turnReminders` supplies that line. The gate / permissionMode do the
  *  actual enforcement; this just sets expectations so the model behaves
  *  coherently (e.g. proposes edits as suggestions in Ask instead of trying
  *  them and getting denied). */
@@ -1977,6 +1995,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Migrating the spine to Task ids is its own change (ADR-0073 §next).
     CLAUDE_CODE_ENABLE_TODO_TOOLS: "1",
     CLAUDE_CODE_ENABLE_TASKS: "0",
+    // ADR-0118 — Claude Code's own per-project auto memory
+    // (`~/.claude/projects/<cwd>/memory/MEMORY.md`, 5,256 tokens on
+    // agri-saas-platform) was loading into every MARVIN turn. MARVIN's
+    // memory is `.marvin/memory.md` (ADR-0042); the CLI's is not ours to read.
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     // Enrich PATH so the SDK + every subprocess it spawns (notably the
     // Playwright MCP stdio server's bare `npx`) can find Homebrew node even
     // when MARVIN was launched from Finder with the minimal launchd PATH.
@@ -2157,6 +2180,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // for this turn only. The SDK passes this straight to the
     // spawned Claude CLI.
     env: turnEnv,
+    // ADR-0118 — settings isolation. Omitting `settingSources` loads EVERY
+    // source (the SDK's documented default): real turns carried the project's
+    // CLAUDE.md (already injected by buildProjectContext), 121 skills and the
+    // user's Claude Code plugins with their agents and hooks — the opposite of
+    // what ADR-0053/0054 assumed. `user` alone keeps ~/.claude/skills loading
+    // under bare names; the flag layer turns each user-enabled Claude Code
+    // plugin off. MARVIN's per-project plugins arrive through `plugins` below.
+    settingSources: ["user"],
+    settings: { enabledPlugins: userPluginsOff() },
     // ADR-0036 (revised): all modes use `default`. Plan + Ask read-only
     // enforcement lives in the gate (`readOnly`) below — Plan is no longer
     // the SDK's coupled plan permissionMode.
@@ -2215,7 +2247,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       // blocked ONCE with the reason and the model continues in-request.
       Stop: [{ hooks: [turnCloseStopHook] }],
     },
-    systemPrompt: turnSystemPrompt(appendSystemPrompt + modeGuidance(mode)),
+    systemPrompt: turnSystemPrompt(appendSystemPrompt),
     mcpServers: {
       "marvin-graph": graphMcp,
       "marvin-memory": memoryMcp,
@@ -2403,7 +2435,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         }
       }
     }
-    const reminders = [orientation, input.sessionContext, input.planContext].filter((x): x is string => Boolean(x));
+    const reminders = turnReminders({
+      orientation,
+      mode,
+      sessionContext: input.sessionContext,
+      planContext: input.planContext,
+    });
     const turnPrompt =
       reminders.length > 0
         ? `${message}\n\n${reminders.map((r) => `<system-reminder>\n${r}\n</system-reminder>`).join("\n\n")}`

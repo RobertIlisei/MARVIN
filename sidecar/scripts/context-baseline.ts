@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   const personality = posture.personality ?? "marvin";
   process.env.MARVIN_CONTEXT_DETAIL = "full";
 
-  const appendSystemPrompt = await buildTurnSystemPrompt({ workDir, personality, firstMessage: true });
+  const appendSystemPrompt = await buildTurnSystemPrompt({ workDir, personality });
   const abort = new AbortController();
   let baseline: (ContextBaseline & { at: string }) | null = null;
 

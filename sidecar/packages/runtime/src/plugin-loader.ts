@@ -1,12 +1,14 @@
 /**
  * Claude Code plugins in MARVIN — opt-in local-plugin loader (ADR-0053).
  *
- * MARVIN runs the Agent SDK in isolation mode (no `settingSources`), so plugins
- * installed via the Claude Code `/plugin` UI — whose *enablement* lives in the
- * settings family — don't load. The SDK's `plugins: [{ type:'local', path }]`
- * option loads a plugin's contributions WITHOUT `settingSources` (and thus
- * without the settings/hook/CLAUDE.md bleed we deliberately avoid). This module
- * turns installed + per-project-enabled plugins into that array.
+ * Plugins installed via the Claude Code `/plugin` UI must not load into MARVIN
+ * turns by themselves. This module long claimed that was guaranteed by running
+ * without `settingSources`; it was not — omitting it loads EVERY source, and
+ * real turns carried the user's Claude Code plugins (ADR-0118). Since ADR-0118
+ * MARVIN loads only the `user` source and turns each user-enabled plugin off
+ * (`userPluginsOff`). The SDK's `plugins: [{ type:'local', path }]` option
+ * loads a plugin's contributions independently of that; this module turns
+ * installed + per-project-enabled plugins into that array.
  *
  * Discovery source is `~/.claude/plugins/` — the SAME registry the Claude Code
  * UI writes — so a plugin installed there is immediately *available* to MARVIN
@@ -421,4 +423,28 @@ function filterServerConfigs(map: unknown): Record<string, PluginMcpServerConfig
     if (looksLikeServerConfig(v)) out[k] = v;
   }
   return out;
+}
+
+/**
+ * ADR-0118 — the plugins the user enabled in Claude Code, each mapped to
+ * `false`, for the SDK's flag-settings layer.
+ *
+ * MARVIN loads the `user` settings source so `~/.claude/skills/` keeps loading
+ * under bare names. That source also carries `enabledPlugins`, which loaded
+ * every Claude Code plugin — agents, skills and hooks — into MARVIN turns,
+ * against this module's own contract. Flag settings sit above user settings,
+ * so this map turns each one off; MARVIN's per-project plugins arrive as staged
+ * local copies through `loadEnabledPlugins` and are unaffected.
+ */
+export function userPluginsOff(
+  settingsPath: string = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "settings.json"),
+): Record<string, false> {
+  let enabled: unknown;
+  try {
+    enabled = (JSON.parse(readFileSync(settingsPath, "utf-8")) as { enabledPlugins?: unknown }).enabledPlugins;
+  } catch {
+    return {};
+  }
+  if (!enabled || typeof enabled !== "object") return {};
+  return Object.fromEntries(Object.keys(enabled).map((k) => [k, false as const]));
 }

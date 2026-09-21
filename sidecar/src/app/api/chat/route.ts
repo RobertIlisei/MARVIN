@@ -287,7 +287,6 @@ export async function POST(req: NextRequest) {
   const appendSystemPrompt = await buildTurnSystemPrompt({
     workDir,
     personality,
-    firstMessage,
     skipProjectContext: body.skipProjectContext,
   });
 

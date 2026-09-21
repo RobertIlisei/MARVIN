@@ -387,11 +387,16 @@ MARVIN knows the trigger conditions.
 
 ## Claude Code plugins — opt-in per project (ADR-0053)
 
-MARVIN runs the Agent SDK in **isolation mode** (no `settingSources`), so
-plugins installed through the Claude Code `/plugin` UI don't load automatically —
-their *enablement* lives in the settings family MARVIN deliberately doesn't read.
-[ADR-0053](./docs/decisions/0053-plugins-as-local-plugin-loader.md) bridges that
-without the `settingSources` blast radius:
+Plugins installed through the Claude Code `/plugin` UI must not load into
+MARVIN turns by themselves. Until 2026-09-21 this section said MARVIN ran "in
+isolation mode (no `settingSources`)"; omitting `settingSources` loads **every**
+source, and real turns carried the user's Claude Code plugins, the project's
+`CLAUDE.md` and Claude Code's auto memory. Since
+[ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)
+MARVIN loads `settingSources: ["user"]` (for `~/.claude/skills/`), turns every
+user-enabled Claude Code plugin off in the flag layer, and disables auto memory.
+[ADR-0053](./docs/decisions/0053-plugins-as-local-plugin-loader.md) is the only
+way a plugin reaches a turn:
 
 - **Discovery** is from `~/.claude/plugins/` — the same registry the Claude Code
   UI writes — so a plugin installed there is immediately *available* to MARVIN.
@@ -430,7 +435,7 @@ without the `settingSources` blast radius:
 
 ## Agent SDK contract — the pins that keep MARVIN's behaviour stable (ADR-0073)
 
-MARVIN is on Agent SDK **0.3.278**. Three SDK defaults would silently change
+MARVIN is on Agent SDK **0.3.278**. These SDK defaults would silently change
 what MARVIN does, and each is pinned back in `sdk-runner.ts` with the reason
 at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
 
@@ -446,13 +451,18 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   Read/Grep/Glob until a `graph_*` call has happened, so a turn-1 prompt with
   no graph tools would deadlock. `alwaysLoad` also blocks startup until the
   server is connected, which closes the 0.2.142 background-connect race.
-- **`systemPrompt.snapshot: false`** (`turnSystemPrompt`, 0.3.278). The default
-  records turn 1's system prompt and replays it until compaction; MARVIN's
-  append changes per turn, so mode switches would be silently ignored (probe:
-  turn 2 answered with turn 1's codeword). **Transitional** — ADR-0118 makes
-  the append stable per session and removes this pin, because rewriting the
-  system prompt mid-session breaks the prompt cache and, on Fable 5.1,
+- **One system prompt per session** (`turnSystemPrompt`, `snapshot: true`,
+  [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)).
+  0.3.278 records turn 1's system prompt and replays it until compaction, so
+  the append must be identical every turn — `buildTurnSystemPrompt` always
+  builds the full context, and everything per-turn (mode, orientation, session
+  tree, plan) rides the `<system-reminder>` suffix (`turnReminders`). Putting
+  a per-turn value back into the append freezes it at turn 1's value, and
+  rewriting `system` mid-session breaks the prompt cache and, on Fable 5.1,
   invalidates earlier thinking blocks.
+- **`settingSources: ["user"]` + user plugins off + `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`**
+  (ADR-0118). Omitting `settingSources` loads every source. Measure any change
+  here with `cd sidecar && npx tsx scripts/context-baseline.ts <workDir>`.
 
 Verified live: a 0.3.245 `system/init` on `claude-sonnet-5` with the flags
 reports the todo family as **`TodoWrite`** only.
