@@ -138,7 +138,8 @@ describe("personality — pointers resolve", () => {
 
   it("every third-party skill the prompt names is installable", () => {
     const install = readFileSync(path.join(REPO_ROOT, "scripts/install-skills.sh"), "utf8");
-    const claudeMd = readFileSync(path.join(REPO_ROOT, "CLAUDE.md"), "utf8");
+    // The repo's instruction files: AGENTS.md is canonical, CLAUDE.md imports it (ADR-0119).
+    const claudeMd = ["AGENTS.md", "CLAUDE.md"].map((f) => readFileSync(path.join(REPO_ROOT, f), "utf8")).join("\n");
     for (const skill of ["test-driven-development", "systematic-debugging", "pr-review", "security-audit", "frontend-design", "graphify"]) {
       expect(prompt, `${skill} missing from the prompt`).toContain(`\`${skill}\``);
       expect(install.includes(skill) || claudeMd.includes(skill), `${skill} is not installable`).toBe(true);

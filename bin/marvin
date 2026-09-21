@@ -1023,7 +1023,7 @@ cmd_uninstall_macos_app() {
 # shifted enough to be worth rebuilding. The code graph stays
 # auto-rebuilt by the watchdog on commit; this one doesn't.
 #
-# Inputs default to: CLAUDE.md, README.md, docs/, .marvin/memory.md.
+# Inputs default to: CLAUDE.md, AGENTS.md, README.md, docs/, .marvin/memory.md.
 # Override with --inputs:
 #   bin/marvin knowledge-graph . --inputs CLAUDE.md docs/ ARCHITECTURE.md
 # ADR-0085 — keep a project's graph fresh outside MARVIN, and stop

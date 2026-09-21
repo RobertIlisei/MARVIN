@@ -24,7 +24,7 @@ Usage:
   python3 build-knowledge-graph.py <workDir> [--inputs <relpath> ...]
 
 Defaults inputs to:
-  CLAUDE.md  README.md  docs/
+  CLAUDE.md  AGENTS.md  README.md  docs/
   .marvin/memory.md  .marvin/memory/  .marvin/backlog/  .marvin/plans/
 """
 
@@ -269,7 +269,11 @@ def main():
     # These are the assistant's own notes about the project; excluding them
     # meant "what's parked near this subsystem?" fell back to grep.
     inputs_rel = args.inputs or [
+        # The project's instruction files — Claude Code's and every other
+        # agent's (ADR-0119). A CLAUDE.md that only says `@AGENTS.md` would
+        # otherwise leave the real rules out of the graph.
         "CLAUDE.md",
+        "AGENTS.md",
         "README.md",
         "docs",
         ".marvin/memory.md",
