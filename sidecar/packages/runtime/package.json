@@ -31,6 +31,7 @@
     "./transient-errors": "./src/transient-errors.ts",
     "./confirm-registry": "./src/confirm-registry.ts",
     "./projects": "./src/projects.ts",
+    "./context-baseline": "./src/context-baseline.ts",
     "./cost-tracker": "./src/cost-tracker.ts",
     "./turn-registry": "./src/turn-registry.ts",
     "./pending-input": "./src/pending-input.ts",

@@ -39,6 +39,7 @@ import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
 } from "./auto-audit";
+import { CONTEXT_BASELINE_SUBTYPE, contextBaseline } from "./context-baseline";
 import { BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload, BackgroundDrainBound } from "./background-tasks";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { recordPreImage } from "./change-checkpoints";
@@ -2425,6 +2426,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // that needs the subprocess session initialised, so calling it straight
     // after `query()` races the handshake and silently fails.
     let capturedCommands = false;
+    let measuredBaseline = false;
     for await (const ev of q) {
       if (ev.type === "result") {
         // Enrich BEFORE onEvent forwards + persists it, so the wire event
@@ -2573,6 +2575,26 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         // LOGGED rather than swallowed: an unobservable capture is
         // indistinguishable from "no commands", which is exactly the
         // debugging dead-end the ADR-0060 telemetry work was about.
+        // ADR-0118 — measure the fixed load this turn starts with. Once per
+        // turn, after init (a control request before the handshake fails).
+        // `summary` answers from local estimates without token-count calls;
+        // MARVIN_CONTEXT_DETAIL=full is for the baseline script.
+        if (!measuredBaseline) {
+          measuredBaseline = true;
+          void (async () => {
+            try {
+              const detail = process.env.MARVIN_CONTEXT_DETAIL === "full" ? "full" : "summary";
+              const baseline = contextBaseline(await q.getContextUsage({ detail }));
+              const at = new Date().toISOString();
+              console.info(
+                "[marvin.telemetry] " + JSON.stringify({ kind: "runagent.context_baseline", turnId, detail, ...baseline, at }),
+              );
+              onEvent({ type: "system", subtype: CONTEXT_BASELINE_SUBTYPE, turnId, ...baseline, at } as unknown as SDKMessage);
+            } catch {
+              /* a measurement never breaks a turn */
+            }
+          })();
+        }
         if (!capturedCommands && input.projectId) {
           capturedCommands = true;
           const pid = input.projectId;

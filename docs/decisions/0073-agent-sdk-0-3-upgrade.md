@@ -152,10 +152,19 @@ Also measured on the same run: `canUseTool` now receives
 tools — adopted by [ADR-0117](./0117-mcp-trust-by-provenance.md).
 
 Deliberately **not** adopted, checked against the code rather than the release
-notes: `omitClaudeMd` (MARVIN sets no `settingSources`, so no CLAUDE.md is
-loaded to omit), `reloadPlugins({ holdOnCacheImpact })` (MARVIN passes plugins
+notes: `reloadPlugins({ holdOnCacheImpact })` (MARVIN passes plugins
 fresh on every `query()` and never calls it), the new
 `SDKAssistantMessageError` codes (nothing switches on that enum), and
 `thinkingTokens` (already inside `outputTokens`, so no cost change).
 `getContextUsage({ detail: "summary" })` has no caller today; ADR-0118's
 baseline guard is where it earns one.
+
+**Correction (same day).** An earlier version of this addendum dismissed
+`omitClaudeMd` because "MARVIN sets no `settingSources`, so no CLAUDE.md is
+loaded". That reads the option backwards: **omitted means all sources load**
+(the SDK's own doc, unchanged since 0.3.251); only `[]` is isolation. The
+baseline probe (`sidecar/scripts/context-baseline.ts`) on agri-saas-platform
+shows the project `CLAUDE.md` (4,569 tokens), Claude Code's per-project auto
+memory `MEMORY.md` (5,256) and `~/.claude/CLAUDE.md` in every MARVIN turn, 121
+listed skills, and 10 agents from the user's Claude Code plugins. What MARVIN
+should load is a decision for its own ADR, not a line in this addendum.
