@@ -103,6 +103,9 @@ token window (compaction at 967K). The thrashing session ran on 0.3.251 with
 - [x] Per-turn baseline telemetry + `sidecar/scripts/context-baseline.ts`
 - [x] Live: two-turn probe (mode switch + project context on resume);
       baseline 151,927 → 139,761 on agri-saas-platform
-- [ ] Milestone 2 — project context by index (needs the Golden Rule 5 decision)
+- [x] Milestone 2 — indexes as a recent slice (Golden Rule 5 amended with the
+      user's approval): 20 most recently changed ADR titles of N, memory tail
+      2.5K, backlog tail 1K, each naming its fetch tool; project docs whole.
+      Agri fresh tab: 139,761 → 111,245 tokens
 - [ ] Milestone 3 — base prompt ≤ 8K tokens
 - [ ] Milestone 4 — defer non-graph MCP servers; baseline-over-50 % warning

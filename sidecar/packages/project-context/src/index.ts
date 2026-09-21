@@ -78,10 +78,18 @@ const DEFAULT_FILES = [
 const DEFAULT_ADR_DIRS = ["docs/adr", "docs/adrs", "docs/decisions"];
 const DEFAULT_MEMORY_FILE = ".marvin/memory.md";
 
-/** How much of a long memory.md to inject (recent tail). ADR-0041. */
-const MEMORY_TAIL_TOKENS = 8000;
-/** How much of the backlog index to inject (open items are small). ADR-0044. */
-const BACKLOG_TAIL_TOKENS = 4000;
+/**
+ * Golden Rule 5 as amended 2026-09-21 (ADR-0118 Milestone 2): project DOCS load
+ * whole; the three INDEXES load as their most recent slice plus the exact tool
+ * that fetches the rest. Measured on agri-saas-platform, the full indexes cost
+ * 8.5K (ADR titles) + 8.1K (memory) + 3.4K (backlog) tokens every session.
+ */
+/** How much of a long memory.md index to inject (recent tail). ADR-0041. */
+const MEMORY_TAIL_TOKENS = 2500;
+/** How much of the backlog index to inject (recent tail). ADR-0044. */
+const BACKLOG_TAIL_TOKENS = 1000;
+/** How many ADR titles to list — the most recently changed. */
+const ADR_RECENT = 20;
 const DEFAULT_BACKLOG_FILE = ".marvin/backlog.md";
 
 /** ADR-0085 — graphify's own lessons file, produced by `graph_reflect` from
@@ -311,11 +319,16 @@ export async function buildProjectContext(
     // where 7.7K carries the same information (measured 2026-08-29). The
     // file is derivable: `<dir>/<number>-*.md`, and the knowledge graph
     // resolves the number too.
-    const index = adrTitles.map(({ rel, title }) => `- ${adrRef(rel)} ${title}`).join("\n");
+    const recent = adrTitles.slice(-ADR_RECENT);
+    const index = recent.map(({ rel, title }) => `- ${adrRef(rel)} ${title}`).join("\n");
+    const listed =
+      recent.length < adrTitles.length
+        ? `the ${recent.length} most recently changed of ${adrTitles.length}`
+        : `all ${adrTitles.length}`;
     const adrBlock =
-      `## Architecture Decision Records (${adrTitles.length} — titles only)\n\n` +
-      `These decisions bind current work. Only \`<number> <title>\` is listed to ` +
-      `keep context lean; the file is \`<dir>/<number>-<slug>.md\` under ` +
+      `## Architecture Decision Records (${adrTitles.length} — ${listed}, titles only)\n\n` +
+      `These decisions bind current work, listed or not: before changing an ` +
+      `area, search for its ADRs. Only \`<number> <title>\` is shown; the file is \`<dir>/<number>-<slug>.md\` under ` +
       `${adrDirs.map((d) => `\`${d}\``).join(" / ")}. To use one:\n` +
       `1. Find the relevant ADR(s) — query the knowledge graph ` +
       `(\`graph_search\` / \`graph_neighbors\`, \`scope:"knowledge"\`) by topic, ` +
@@ -339,8 +352,8 @@ export async function buildProjectContext(
       const { text, clipped } = tailByTokens(memContent, MEMORY_TAIL_TOKENS);
       const note = clipped
         ? `\n\n_Showing the most recent ~${MEMORY_TAIL_TOKENS / 1000}k tokens of a ` +
-          `larger log. Older entries are in \`${memoryFile}\` and indexed in the ` +
-          `knowledge graph (\`scope:"knowledge"\`) — query or Read the file for them._\n`
+          `larger index. Older facts are in \`${memoryFile}\`: call \`recall\` with the ` +
+          `area you are about to touch before relying on what is shown here._\n`
         : "";
       const memBlock =
         `## Project memory (\`${memoryFile}\`)${clipped ? " — recent tail" : ""}\n\n` +
@@ -397,7 +410,9 @@ export async function buildProjectContext(
         `to defer, not a to-do list to drain. You may PROPOSE resuming one when ` +
         `relevant; never act on it unprompted (it is a parking lot, not a queue — ` +
         `ADR-0044). Add via \`backlog_add\` (with the user's go-ahead), resolve via ` +
-        `\`backlog_resolve\`.\n\n${text}`;
+        `\`backlog_resolve\`.` +
+        (clipped ? ` Newest items only — \`backlog_list\` returns them all.` : "") +
+        `\n\n${text}`;
       sections.push(backlogBlock);
       backlogTokens = approxTokens(backlogBlock);
     }

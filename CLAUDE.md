@@ -107,10 +107,15 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    start. MARVIN holds no persistent knowledge of past projects between
    sessions — starting a new project means starting from zero. Never cross-
    contaminate one project's context with another.
-5. **No truncation of project context.** If the project includes context
-   documents (`PROJECT_STATUS.md`, `BUSINESS_OVERVIEW.md`, `README.md`, etc.),
-   they are injected whole. No hardcoded 6 KB cap — that was a lesson
-   learned the hard way.
+5. **No truncation of project documents; indexes load on demand.** Context
+   documents (`CLAUDE.md`, `PROJECT_STATUS.md`, `BUSINESS_OVERVIEW.md`,
+   `README.md`) are injected whole — no hardcoded 6 KB cap, a lesson learned
+   the hard way. The three *indexes* — ADR titles, the memory index, the
+   backlog — load as their most recent slice plus the tool that fetches the
+   rest (`graph_search scope:"knowledge"`, `recall`, `backlog_list`). Nothing
+   is cut off; it is fetched when needed (amended 2026-09-21,
+   [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md):
+   the full indexes cost 20K tokens of every agri-saas-platform session).
 6. **No hardcoded project knowledge.** MARVIN must not ship assumptions
    about any specific project (service names, realm ids, stack choices,
    workflow). Every such assumption goes into the user's project repository,
