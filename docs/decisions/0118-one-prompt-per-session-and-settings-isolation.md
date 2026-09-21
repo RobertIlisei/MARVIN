@@ -92,6 +92,50 @@ token window (compaction at 967K). The thrashing session ran on 0.3.251 with
 - The SDK's `skills` allowlist was measured and **not** adopted: listing 5 of
   51 skills cut the listing by 1.8K but loaded 6.6K more tool schemas.
 
+## Milestone 3 — the base prompt, 29.4K → ~4.4K tokens (2026-09-21)
+
+The user approved the section-by-section disposition before any cut. The old
+prompt was 61 sections, 91 MUST, 43 MUST NOT and 54 ADR citations: enumerated
+triggers written against May-2026 audits of earlier models, a shape Anthropic's
+current guidance says now over-fires, and whose load-bearing parts are enforced
+by gates anyway.
+
+- **Kept, as short plain rules:** four ground-truth rules; an eight-step
+  workflow outline (understand → discover → impact → decide → plan → implement
+  → verify → ship); scope-boundary gating and the handoff; questions; the plan
+  and task-list formats the app parses, verbatim; honesty (negative claims,
+  follow-through, the auditor); writing code; subagents; memory, backlog and
+  vault; one line per skill. Phase labels (`**[Phase N · …]**`) are gone —
+  nothing parsed them.
+- **Moved to on-demand skills** shipped with MARVIN (`core-skills.ts`, a local
+  plugin named `marvin` written under the data dir every turn, so it always
+  matches the running version): `marvin:adr`, `marvin:graph-tools`,
+  `marvin:browser`, `marvin:skill-audit`, `marvin:workflow-audit`,
+  `marvin:greenfield`. The workflow-health and skill-audit blocks now point at
+  them; three gate deny messages stopped quoting sections that no longer exist.
+- **Left to the tool descriptions** that already enforce them: memory and
+  backlog content rules.
+- **`personality-surfaces.test.ts` reshaped:** parsed formats present
+  verbatim, every moved rule has a home, every `marvin:` pointer resolves and
+  every core skill is pointed at, an 8K-token budget, persona byte-identical.
+
+**Checked against the old prompt on a disposable clone of agri-saas-platform**
+(`claude-sonnet-5`, the project's own posture), three tasks:
+
+| Task | Old prompt | New prompt |
+|---|---|---|
+| "How does the report state machine enforce transitions?" (Ask) | `graph_query` first · 26 s · $0.53 | `graph_query` first 3/3 · ~22 s · ~$0.22 |
+| "Plan a `notes` field from DB to UI" (Plan) | plan ✓ · no advisor · 140 s · $0.71 | plan ✓ · advisor consulted (a schema change — both prompts require it; only the new one did it) · 422 s · $2.33 |
+| "`judete.test.ts` fails — fix it" (Agent, planted bug) | `systematic-debugging` ✓ · fixed ✓ · scope-met ✓ · 40 s · $0.54 | `systematic-debugging` 2/2 ✓ · fixed ✓ · scope-met ✓ · ~34 s · ~$0.28 |
+
+The first draft slipped exactly where the May audits predicted: it skipped
+`systematic-debugging` and answered the Ask task with `graph_search` + reads.
+Both were fixed by stating the *moment* directly ("a failing test … →
+`systematic-debugging`, before you look for the cause"; "your first call is
+`graph_query({question})`") — not by restoring MUST blocks — and re-verified.
+Samples are small (1–3 runs per cell); the practice loop measures the real
+distribution from here on.
+
 ## Scope of Done
 
 - [x] `buildTurnSystemPrompt` builds the full context every turn; both callers updated
@@ -107,7 +151,8 @@ token window (compaction at 967K). The thrashing session ran on 0.3.251 with
       user's approval): 20 most recently changed ADR titles of N, memory tail
       2.5K, backlog tail 1K, each naming its fetch tool; project docs whole.
       Agri fresh tab: 139,761 → 111,245 tokens
-- [ ] Milestone 3 — base prompt ≤ 8K tokens
+- [x] Milestone 3 — base prompt 29.4K → 4.3–5.0K tokens by persona; six
+      `marvin:*` skills; old-vs-new check on three tasks; agri fresh tab 72,284
 - [x] Milestone 4 — `marvin-memory`/`-backlog`/`-obsidian` deferred behind
       ToolSearch (`-graph` and `-control` stay loaded for the graphify-first
       and checkback guards); live `ToolSearch → recall`; agri 111,245 →

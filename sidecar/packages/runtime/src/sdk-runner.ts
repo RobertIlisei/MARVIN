@@ -74,6 +74,7 @@ import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
+import { coreSkillsPluginConfig } from "./core-skills";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
@@ -2154,6 +2155,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // from this session. No skills committed → `null` returned, the
   // option is omitted, the SDK runs with user-global skills only.
   const projectSkillsPlugin = projectSkillsPluginConfig(workDir);
+  const coreSkillsPlugin = coreSkillsPluginConfig();
 
   // Installed Claude Code plugins, opt-in per project (ADR-0053). Discovered
   // from `~/.claude/plugins/`, activated only when listed in
@@ -2284,10 +2286,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // Project-local skill names SHADOW user-global ones on conflict —
     // mirrors the per-project MCP override precedence rule.
     // …plus any opt-in installed plugins (ADR-0053), loaded from their
-    // sanitised staged copies. Both sources share the one `plugins:` array.
-    ...((projectSkillsPlugin || enabledPlugins.plugins.length > 0)
-      ? { plugins: [...(projectSkillsPlugin ? [projectSkillsPlugin] : []), ...enabledPlugins.plugins] }
-      : {}),
+    // sanitised staged copies — plus MARVIN's own on-demand skills
+    // (`marvin:*`, ADR-0118), which the prompt points at by name. All three
+    // share the one `plugins:` array.
+    plugins: [
+      ...(coreSkillsPlugin ? [coreSkillsPlugin] : []),
+      ...(projectSkillsPlugin ? [projectSkillsPlugin] : []),
+      ...enabledPlugins.plugins,
+    ],
     // ADR-0014: register the read-only `scout` subagent so MARVIN can
     // dispatch parallel research (graph-first, read-only, synthesis-
     // returning) via `Task` with `subagent_type: "scout"`.

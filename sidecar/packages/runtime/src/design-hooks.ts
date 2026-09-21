@@ -1278,7 +1278,7 @@ export type ShipReviewSkill = "pr-review" | "security-audit";
  *  bypass logged (ADR-0104's brake, applied to every gate since 2026-09-09). */
 export const BUILTIN_GATE_MAX_DENIES = 2;
 export const SHIP_REVIEW_MAX_DENIES = BUILTIN_GATE_MAX_DENIES;
-/** Personality §Skill triggers: pr-review MUST run above either threshold. */
+/** pr-review must run above either threshold (ADR-0104). */
 export const SHIP_REVIEW_PR_LINES = 50;
 export const SHIP_REVIEW_PR_FILES = 3;
 
@@ -1471,7 +1471,7 @@ const DOC_ONLY_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
 const LOCKFILE =
   /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock|Package\.resolved|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/;
 
-/** Personality §Skill triggers ▸ security-audit, as paths: auth / credential
+/** security-audit trigger paths (ADR-0104): auth / credential
  *  handling, tool policy, shell-execution paths, sandbox. The ADR-trigger
  *  list already covers auth, credentials, migrations, CI workflows, policy;
  *  this adds what a *commit* of ops work touches that an *edit* rule never
@@ -1607,8 +1607,8 @@ export function checkShipReview(
     message:
       `ship-review gate (ADR-0104): this commit seals ${diff.files.length} file` +
       `${diff.files.length === 1 ? "" : "s"} / ${diff.changedLines} changed lines, and ${names} ` +
-      "has not run for this tree since the last commit. Personality §Skill triggers makes " +
-      "that a MUST, not a suggestion. Run it now:\n\n" +
+      "has not run for this tree since the last commit. The review is required before " +
+      "this commit, not a suggestion. Run it now:\n\n" +
       `${calls}\n\n` +
       "then act on its findings and re-run the commit. A review this turn covers every " +
       "commit this turn; one from an earlier turn holds until the next commit. Docs-only " +
@@ -1681,8 +1681,8 @@ function checkGraphifyFirst(
       "FIRST — it is already loaded, call it directly, do NOT ToolSearch for it " +
       `(try \`graph_search({ query: "${truncate(basename(triggered.target).replace(/\.[^.]+$/, ""), 40)}" })\`) — ` +
       "then come back with the file the graph points at. The " +
-      "personality's Graphify protocol is non-negotiable for any " +
-      "structural exploration: graph before Read / Grep / Glob. " +
+      "graph-first rule is non-negotiable for any structural " +
+      "exploration: graph before Read / Grep / Glob. " +
       "If the graph genuinely doesn't cover what you need, run " +
       "`graph_search` with a near-miss query so the rule is satisfied, " +
       "then fall back to grep / glob. (Set MARVIN_DESIGN_HOOKS=measure " +
@@ -1789,7 +1789,7 @@ function checkAdvisorOnAdrTrigger(
       "returns Risks / Alternatives / Pushback / Verdict " +
       "(go|go-with-caveats|reject).\n\n" +
       "Then cite the advisor's substantive input in your reply and apply " +
-      "the edit. Personality §Advisor protocol requires this for ADR-trigger " +
+      "the edit. The advisor rule requires this for ADR-trigger " +
       "paths. (Bypass with MARVIN_DESIGN_HOOKS=measure if the user has " +
       "explicitly approved an exception.)",
     interrupt: false,

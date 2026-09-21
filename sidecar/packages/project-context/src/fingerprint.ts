@@ -537,7 +537,8 @@ export function formatSkillAuditBlock(fp: ProjectFingerprint): string {
       "`<workDir>/.marvin/skills.md` recording a skill audit decision. " +
       "Per ADR-0024 you owe the user **one** chip-strip recommendation " +
       "this session, then STOP — do not re-recommend until the file " +
-      "either lands or the user explicitly asks again.",
+      "either lands or the user explicitly asks again. The `marvin:skill-audit` " +
+      "skill has the full procedure.",
     "",
     "Recommendation shape — produce two verbs:",
     "",

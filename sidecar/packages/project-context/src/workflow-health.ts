@@ -237,9 +237,8 @@ export function formatWorkflowHealthBlock(h: WorkflowHealth): string {
     "",
     "This block is a standing reminder — it re-injects every turn until " +
       "the gaps close on disk. It is **not** a command to re-audit on " +
-      "every turn. Consult the \"Workflow audit — catching up an in-flight " +
-      "project\" section of your instructions for the Mode-A / Mode-B / " +
-      "Mode-C logic:",
+      "every turn. Invoke the `marvin:workflow-audit` skill for the " +
+      "Mode-A / Mode-B / Mode-C logic:",
     "",
     "- **Mode A** (first audit of this conversation): propose ADRs + " +
       "graphify + memory entries, STOP and wait.",
@@ -247,8 +246,8 @@ export function formatWorkflowHealthBlock(h: WorkflowHealth): string {
       "AND the user is continuing, approving, or asking for next steps): " +
       "EXECUTE — write the ADR files, create `.marvin/memory.md`, run " +
       "`/graphify .`. Do NOT re-audit.",
-    "- **Mode C** (user explicitly defers): label `**[Phase · Fast-path]**` " +
-      "and move on to their ask.",
+    "- **Mode C** (user explicitly defers): say in one line that the audit " +
+      "is deferred and move on to their ask.",
     "",
     "The gaps above close on disk. When they do, this block disappears.",
   ].join("\n");
