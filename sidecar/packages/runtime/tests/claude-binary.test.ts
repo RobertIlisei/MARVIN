@@ -1,5 +1,5 @@
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -78,6 +78,12 @@ describe("enrichedToolPath (ADR-0093)", () => {
     vi.resetModules();
     const { enrichedToolPath } = await import("../src/sdk-runner");
     expect(enrichedToolPath("/usr/bin:/bin").split(":")[0]).toBe(dir);
+  });
+
+  it("includes ~/.local/bin, where uv tools and pipx install (graphify, 2026-09-23)", async () => {
+    vi.resetModules();
+    const { enrichedToolPath } = await import("../src/sdk-runner");
+    expect(enrichedToolPath("/usr/bin:/bin").split(":")).toContain(join(homedir(), ".local", "bin"));
   });
 
   it("degrades to the static prepends when no CLI can be resolved", async () => {

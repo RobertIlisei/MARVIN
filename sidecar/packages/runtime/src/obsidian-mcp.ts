@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { graphifyMissingHint, resolveGraphifyBin } from "@marvin/graphify-bridge/graphify-bin";
 import { z } from "zod";
 import { relinkBacklogNotes, rewriteBacklogIndex } from "./backlog";
 import { rewriteMemoryIndex } from "./memory-mcp";
@@ -68,7 +69,7 @@ export async function exportGraphCanvas(cwd: string): Promise<{ ok: boolean; det
   const stage = await mkdtemp(join(tmpdir(), "marvin-canvas-"));
   const destDir = join(cwd, "graphify-out", "obsidian");
   try {
-    await run("graphify", ["export", "obsidian", "--dir", stage], {
+    await run(resolveGraphifyBin(), ["export", "obsidian", "--dir", stage], {
       cwd,
       timeout: 300_000,
       maxBuffer: 16 * 1024 * 1024,
@@ -81,7 +82,10 @@ export async function exportGraphCanvas(cwd: string): Promise<{ ok: boolean; det
     await copyFile(canvas, join(destDir, "graph.canvas"));
     return { ok: true, detail: "code graph canvas at graphify-out/obsidian/graph.canvas" };
   } catch (err) {
-    return { ok: false, detail: `graph canvas export skipped (${(err as Error).message.split("\n")[0]})` };
+    return {
+      ok: false,
+      detail: `graph canvas export skipped (${graphifyMissingHint(err) ?? (err as Error).message.split("\n")[0]})`,
+    };
   } finally {
     // Never leave the staged notes behind, whatever happened above.
     await rm(stage, { recursive: true, force: true }).catch(() => {});

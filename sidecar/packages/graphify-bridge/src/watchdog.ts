@@ -13,6 +13,8 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+
 const pExecFile = promisify(execFile);
 
 const REFRESH_MIN_INTERVAL_MS =
@@ -46,9 +48,8 @@ async function gitHead(workDir: string): Promise<string | null> {
   }
 }
 
-function findGraphifyBin(): string {
-  return process.env.GRAPHIFY_BIN || "graphify";
-}
+// A missing binary fails every turn; say so once per process, not per turn.
+let warnedMissing = false;
 
 export interface GraphifyRefreshResult {
   triggered: boolean;
@@ -93,7 +94,7 @@ export async function maybeRefreshGraphify(
   state.running = true;
 
   try {
-    const child = spawn(findGraphifyBin(), ["update", workDir], {
+    const child = spawn(resolveGraphifyBin(), ["update", workDir], {
       cwd: workDir,
       detached: true,
       stdio: "ignore",
@@ -102,8 +103,13 @@ export async function maybeRefreshGraphify(
     child.on("close", () => {
       state.running = false;
     });
-    child.on("error", () => {
+    child.on("error", (err) => {
       state.running = false;
+      const hint = graphifyMissingHint(err);
+      if (hint && !warnedMissing) {
+        warnedMissing = true;
+        console.warn(`[graphify-watchdog] ${hint}`);
+      }
     });
     child.unref();
   } catch {

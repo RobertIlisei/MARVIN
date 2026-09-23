@@ -23,6 +23,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type AgentDefinition, type CanUseTool, 
   type HookJSONOutput,type McpServerConfig, type Options, type PermissionResult, 
@@ -136,7 +137,15 @@ export function enrichedToolPath(base: string = process.env.PATH ?? ""): string 
   } catch {
     claudeDir = [];
   }
-  const prepend = [...claudeDir, dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin"];
+  // `~/.local/bin` is where uv tools, pipx and Claude's native installer put
+  // their binaries (graphify among them); launchd's PATH never has it.
+  const prepend = [
+    ...claudeDir,
+    dirname(process.execPath),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    join(homedir(), ".local", "bin"),
+  ];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of [...prepend, ...base.split(":")]) {

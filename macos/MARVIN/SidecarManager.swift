@@ -136,7 +136,10 @@ final class SidecarManager {
         // PATH for SDK-spawned subprocesses (belt-and-braces).
         let currentPath = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         var mergedPath: [String] = []
-        for p in ["/opt/homebrew/bin", "/usr/local/bin"] + currentPath.split(separator: ":").map(String.init) {
+        // ~/.local/bin is where uv tools and pipx install (graphify's
+        // recommended install among them); launchd's PATH never has it.
+        let userBin = NSHomeDirectory() + "/.local/bin"
+        for p in ["/opt/homebrew/bin", "/usr/local/bin", userBin] + currentPath.split(separator: ":").map(String.init) {
             if !p.isEmpty && !mergedPath.contains(p) { mergedPath.append(p) }
         }
         env["PATH"] = mergedPath.joined(separator: ":")

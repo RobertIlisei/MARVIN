@@ -8,6 +8,11 @@ export {
   callersOf,
   symbolOf,
 } from "./call-index";
+export {
+  GRAPHIFY_MISSING_HINT,
+  graphifyMissingHint,
+  resolveGraphifyBin,
+} from "./graphify-bin";
 export { createGraphMcpServer } from "./mcp-server";
 export { areasOfTitle, discoverAreas, type ProjectArea, type ProjectAreas, tokensOf } from "./plan-areas";
 export {

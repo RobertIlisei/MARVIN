@@ -1,0 +1,94 @@
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  GRAPHIFY_MISSING_HINT,
+  graphifyCandidates,
+  graphifyMissingHint,
+  graphifyVersion,
+  resolveGraphifyBin,
+} from "../src/graphify-bin";
+
+/**
+ * 2026-09-23: MARVIN spawned a bare `graphify` from a launchd PATH with no
+ * `~/.local/bin`, so it ran a stale Homebrew-pip 0.9.53 while the user's
+ * shell (uv tool) ran 0.9.65. The property under test: the resolver finds
+ * the uv / pipx install without PATH's help, and between two installs picks
+ * the newer one.
+ *
+ * Fake versions are 9.9.x so they beat any real graphify on the host
+ * (the resolver also searches /opt/homebrew/bin and /usr/local/bin).
+ */
+
+const LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+function fakeGraphify(dir: string, output: string, exitCode = 0): string {
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, "graphify");
+  writeFileSync(p, `#!/bin/sh\necho '${output}'\nexit ${exitCode}\n`);
+  chmodSync(p, 0o755);
+  return p;
+}
+
+const tempHome = () => mkdtempSync(join(tmpdir(), "gbin-home-"));
+
+describe("resolveGraphifyBin", () => {
+  it("finds a uv / pipx install in ~/.local/bin when PATH does not include it", () => {
+    const home = tempHome();
+    const uv = fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.65");
+    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH } })).toBe(uv);
+  });
+
+  it("picks the newest install, not the first one found (0.9.65 beats 0.9.53)", () => {
+    const home = tempHome();
+    fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.53");
+    const onPath = fakeGraphify(join(home, "elsewhere"), "graphify 9.9.65");
+    const env = { PATH: `${join(home, "elsewhere")}:${LAUNCHD_PATH}` };
+    expect(resolveGraphifyBin({ home, env })).toBe(onPath);
+  });
+
+  it("finds a `pip install --user` copy under ~/Library/Python/<ver>/bin", () => {
+    const home = tempHome();
+    const pipUser = fakeGraphify(join(home, "Library", "Python", "3.14", "bin"), "graphify 9.9.70");
+    expect(graphifyCandidates({ home, env: { PATH: "" } })).toContain(pipUser);
+    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH } })).toBe(pipUser);
+  });
+
+  it("lets GRAPHIFY_BIN win outright", () => {
+    const home = tempHome();
+    fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.99");
+    const pinned = join(home, "pinned", "graphify");
+    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH, GRAPHIFY_BIN: pinned } })).toBe(pinned);
+  });
+
+  it.skipIf(existsSync("/opt/homebrew/bin/graphify") || existsSync("/usr/local/bin/graphify"))(
+    "falls back to bare `graphify` when nothing is installed",
+    () => {
+      expect(resolveGraphifyBin({ home: tempHome(), env: { PATH: LAUNCHD_PATH } })).toBe("graphify");
+    },
+  );
+});
+
+describe("graphifyVersion", () => {
+  it("parses `graphify 0.9.65` and returns null for a broken binary", () => {
+    const d = mkdtempSync(join(tmpdir(), "gbin-"));
+    expect(graphifyVersion(fakeGraphify(join(d, "a"), "graphify 0.9.65"))).toEqual([0, 9, 65]);
+    expect(graphifyVersion(fakeGraphify(join(d, "b"), "boom", 1))).toBeNull();
+    expect(graphifyVersion(join(d, "missing"))).toBeNull();
+  });
+});
+
+describe("graphifyMissingHint", () => {
+  it("turns a real ENOENT spawn failure into the install hint, and nothing else", async () => {
+    const err = await promisify(execFile)(join(tmpdir(), "no-such-graphify-binary"), ["--version"]).catch(
+      (e: unknown) => e,
+    );
+    expect(graphifyMissingHint(err)).toBe(GRAPHIFY_MISSING_HINT);
+    expect(graphifyMissingHint(new Error("exit 1"))).toBeNull();
+  });
+});

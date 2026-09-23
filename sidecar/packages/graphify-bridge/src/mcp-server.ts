@@ -63,6 +63,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { buildCallIndex, callersOf } from "./call-index";
 import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
+import { graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
 import {
   type GraphScope,
   getNeighbors,
@@ -79,7 +80,14 @@ import {
 const pExecFile = promisify(execFile);
 
 function graphifyBin(): string {
-  return process.env.GRAPHIFY_BIN || "graphify";
+  return resolveGraphifyBin();
+}
+
+/** A failed graphify call's message, with the install hint when no binary was found. */
+function graphifyErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const hint = graphifyMissingHint(err);
+  return hint ? `${message}\n\n${hint}` : message;
 }
 
 function textResult(text: string) {
@@ -108,7 +116,7 @@ function errorResult(message: string) {
  * reinterpret — but the guidance comes with it.
  */
 function execFileErrorText(label: string, err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = graphifyErrorMessage(err);
   const stdout = (err as { stdout?: unknown } | null)?.stdout;
   const said = typeof stdout === "string" ? stdout.trim() : "";
   return said ? `${label} failed: ${message}\n\n${said}` : `${label} failed: ${message}`;
@@ -445,7 +453,7 @@ export function createGraphMcpServer(workDir: string) {
           }
           sections.push(`[${sc}]\n${out}`);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = graphifyErrorMessage(err);
           sections.push(`[${sc}] graphify query failed: ${message}`);
         }
       }
@@ -532,7 +540,7 @@ export function createGraphMcpServer(workDir: string) {
         const out = (stdout.trim() || stderr.trim() || "saved").trim();
         return textResult(`[${sc}] ${out}`);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = graphifyErrorMessage(err);
         return errorResult(`[${sc}] graphify save-result failed: ${message}`);
       }
     },
@@ -732,7 +740,7 @@ export function createGraphMcpServer(workDir: string) {
           `[${sc}] lessons written to ${reflectionsPathForScope(sc)}\n\n${truncLabel(lessons, 6000)}`,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = graphifyErrorMessage(err);
         return errorResult(`[${sc}] graphify reflect failed: ${message}`);
       }
     },
@@ -865,7 +873,7 @@ export function createGraphMcpServer(workDir: string) {
         return { content: [{ type: "text", text: stdout.trim() || "No god nodes reported." }] };
       } catch (err) {
         return {
-          content: [{ type: "text", text: `graph_god_nodes failed: ${(err instanceof Error ? err.message : String(err))}` }],
+          content: [{ type: "text", text: `graph_god_nodes failed: ${graphifyErrorMessage(err)}` }],
           isError: true,
         };
       }
@@ -895,7 +903,7 @@ export function createGraphMcpServer(workDir: string) {
         return { content: [{ type: "text", text: stdout.trim() || "No collapse risk reported." }] };
       } catch (err) {
         return {
-          content: [{ type: "text", text: `graph_diagnose failed: ${(err instanceof Error ? err.message : String(err))}` }],
+          content: [{ type: "text", text: `graph_diagnose failed: ${graphifyErrorMessage(err)}` }],
           isError: true,
         };
       }
@@ -949,7 +957,7 @@ export function createGraphMcpServer(workDir: string) {
           ],
         };
       } catch (err) {
-        const raw = err instanceof Error ? err.message : String(err);
+        const raw = graphifyErrorMessage(err);
         return {
           content: [
             { type: "text", text: `graph_index_schema failed: ${raw.split(dsn).join(`$${dsnEnv}`)}` },
@@ -998,7 +1006,7 @@ export function createGraphMcpServer(workDir: string) {
         return { content: [{ type: "text", text: stdout.trim() || "No benchmark output." }] };
       } catch (err) {
         return {
-          content: [{ type: "text", text: `graph_benchmark failed: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [{ type: "text", text: `graph_benchmark failed: ${graphifyErrorMessage(err)}` }],
           isError: true,
         };
       }
@@ -1019,7 +1027,7 @@ export function createGraphMcpServer(workDir: string) {
         return { content: [{ type: "text", text: stdout.trim() || "Call-flow HTML written under graphify-out/." }] };
       } catch (err) {
         return {
-          content: [{ type: "text", text: `graph_export_callflow failed: ${err instanceof Error ? err.message : String(err)}` }],
+          content: [{ type: "text", text: `graph_export_callflow failed: ${graphifyErrorMessage(err)}` }],
           isError: true,
         };
       }
