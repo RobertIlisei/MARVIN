@@ -27,6 +27,8 @@
 
 import { EventEmitter } from "node:events";
 
+import { noteTurnEnded, noteTurnStarted } from "./keep-awake";
+
 export interface LiveTurnEvent {
   /** SSE event name — e.g. `cli.event`, `confirm.request`, `turn.completed`. */
   event: string;
@@ -182,6 +184,7 @@ export function registerLiveTurn(input: {
   const existing = live.get(input.marvinSessionId);
   if (existing && !existing.ended) {
     existing.ended = true;
+    noteTurnEnded();
     existing.abortController.abort();
     existing.bus.emit("event", {
       event: "turn.error",
@@ -205,6 +208,8 @@ export function registerLiveTurn(input: {
     mutated: false,
   };
   live.set(input.marvinSessionId, turn);
+  // ADR-0120 — the machine must not idle-sleep while a turn is in flight.
+  noteTurnStarted();
   // Announce AFTER the turn is in the map, so any listener that reacts by
   // calling getLiveTurn / resume finds it. ADR-0043.
   const announcement: TurnAnnouncement = {
@@ -268,6 +273,7 @@ export function endLiveTurn(
 ): void {
   if (turn.ended) return;
   turn.ended = true;
+  noteTurnEnded();
   turn.bus.emit("event", { event: terminal.event, data: terminal.data });
   // ADR-0107 — tell project-wide watchers the turn is over. The terminal
   // payload's shape is the orchestrator's; read the two fields the watch

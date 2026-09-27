@@ -16,8 +16,11 @@ import {
   cancelWakeup,
   deferIfSessionBusy,
   fireNow,
+  isJobDoneWakeup,
   listWakeups,
   MAX_CHAIN_DEPTH,
+  MAX_FIRE_DEFERRALS,
+  MAX_JOB_DONE_DEFERRALS,
   MAX_PENDING_PER_SESSION,
   scheduleWakeup,
   setWakeupFireHandler,
@@ -317,5 +320,53 @@ describe("registration-point re-check (the eviction race, 2026-08-28)", () => {
     expect(getLiveTurn(RACE)).toBe(human);
     expect(human.ended).toBe(false);
     endLiveTurn(human, { event: "turn.completed", data: {} });
+  });
+});
+
+describe("a background-job completion is never dropped on the 20-minute rule (ADR-0120)", () => {
+  // Measured 2026-09-27: turns ran 100 minutes while commit hooks and Maven
+  // suites finished underneath, and six job-done wakeups were dropped in one
+  // day. The model then learned whether its own commits had landed by polling
+  // `git log`. A self-scheduled check-in may still give up after 60 yields.
+
+  const BUSY = "sess-busy-jobdone";
+
+  it("classifies by the reason prefix background-jobs.ts writes", () => {
+    expect(isJobDoneWakeup({ reason: "background job done: RED run" })).toBe(true);
+    expect(isJobDoneWakeup({ reason: "check build" })).toBe(false);
+    expect(MAX_JOB_DONE_DEFERRALS).toBeGreaterThan(MAX_FIRE_DEFERRALS * 10);
+  });
+
+  it("keeps yielding past 60 deferrals for a job-done wakeup; a plain check-in is still dropped there", async () => {
+    const live = registerLiveTurn({ turnId: "t-live-jd", marvinSessionId: BUSY, projectId: PROJECT });
+    const fired: WakeupRecord[] = [];
+    setWakeupFireHandler((r) => void fired.push(r));
+
+    await fireNow(
+      record({ id: "w-plain", marvinSessionId: BUSY, reason: "check build", deferrals: MAX_FIRE_DEFERRALS }),
+    );
+    expect(listWakeups({ marvinSessionId: BUSY }).map((w) => w.id)).not.toContain("w-plain");
+
+    await fireNow(
+      record({
+        id: "w-job",
+        marvinSessionId: BUSY,
+        reason: "background job done: commit through the pre-commit hook",
+        deferrals: MAX_FIRE_DEFERRALS,
+      }),
+    );
+    const pending = listWakeups({ marvinSessionId: BUSY });
+    expect(pending.map((w) => w.id)).toEqual(["w-job"]);
+    expect(pending[0]?.deferrals).toBe(MAX_FIRE_DEFERRALS + 1);
+    expect(fired).toHaveLength(0);
+    expect(live.ended).toBe(false);
+
+    // Only the six-hour bound drops it.
+    await fireNow(
+      record({ id: "w-job-old", marvinSessionId: BUSY, reason: "background job done: x", deferrals: MAX_JOB_DONE_DEFERRALS }),
+    );
+    expect(listWakeups({ marvinSessionId: BUSY }).map((w) => w.id)).not.toContain("w-job-old");
+
+    endLiveTurn(live, { event: "turn.completed", data: {} });
   });
 });

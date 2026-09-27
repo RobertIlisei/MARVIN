@@ -182,6 +182,8 @@ export interface DesignTurnContext {
   failedBashCommands: Map<string, number>;
   /** Commands already nudged about this turn. */
   retryNudged: Set<string>;
+  /** ADR-0120 — `rg`/`grep` calls with no path refused this turn (ADR-0104 brake: two, then allow + log). */
+  searchStdinDenies: number;
 }
 
 /** ADR-0094 — the registered advisor agent's `subagent_type` (ADR-0033).
@@ -304,6 +306,7 @@ export function createTurnDesignContext(
     mutationCount: 0,
     failedBashCommands: new Map(),
     retryNudged: new Set(),
+    searchStdinDenies: 0,
     saveResultCallCount: 0,
     saveResultNudgeFired: false,
     editedFilesThisTurn: new Set<string>(),
@@ -807,6 +810,243 @@ export function checkCommandRetry(
 }
 
 /**
+ * Search-without-path gate (ADR-0120, 2026-09-27).
+ *
+ * `rg PATTERN` / `grep PATTERN` with no path operand read standard input, and
+ * a Bash tool call's stdin is the SDK's message pipe, which never closes: the
+ * command waits for EOF forever. Claude Code moves it to the background at the
+ * ten-minute mark, the model carries on, and the sidecar then holds the turn
+ * open for that "live" task — one such `rg -l "\bFoo\b" --type java` inside a
+ * `$(...)` held a turn for 4 h 36 min and starved the wakeup queue (the model
+ * had already learned the fix mid-session: `< /dev/null`). Deterministic and
+ * cheap, so it is a gate, not a prompt line. Fails open on anything it cannot
+ * parse; a pipe or a `<` redirect into the search means stdin is real.
+ *
+ * `-r` with no path is refused too: BSD grep (macOS) reads stdin in that
+ * shape, and adding `.` costs nothing.
+ */
+const SEARCH_COMMANDS = new Set(["rg", "grep", "egrep", "fgrep"]);
+/** Flags whose pattern comes from the flag, so every positional is a path. */
+const SEARCH_PATTERN_FLAGS = new Set(["-e", "--regexp", "-f", "--file"]);
+/** Flags that never read stdin — listing modes and help. */
+const SEARCH_NO_INPUT_FLAGS = new Set([
+  "--files",
+  "--type-list",
+  "-h",
+  "--help",
+  "-V",
+  "--version",
+  "--pcre2-version",
+  "--generate",
+]);
+/** Flags that take the NEXT token as their value (per tool: `-r` is a value for rg, recursive for grep). */
+const RG_VALUE_FLAGS = new Set([
+  "-e", "--regexp", "-f", "--file", "-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not",
+  "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context",
+  "-M", "--max-columns", "-E", "--encoding", "-r", "--replace", "-j", "--threads", "-d", "--max-depth",
+  "--color", "--colors", "--sort", "--sortr", "--engine", "--pre", "--pre-glob", "--max-filesize",
+  "--path-separator", "--type-add", "--type-clear", "--dfa-size-limit", "--regex-size-limit",
+  "--context-separator", "--field-context-separator", "--field-match-separator", "--ignore-file",
+]);
+const GREP_VALUE_FLAGS = new Set([
+  "-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context", "-B", "--before-context",
+  "-C", "--context", "-d", "--directories", "-D", "--devices", "--include", "--exclude", "--exclude-dir",
+  "--include-dir", "--color", "--colour", "--binary-files", "--label", "--group-separator",
+]);
+
+interface ShellWord {
+  text: string;
+  /** True for an unquoted control operator: `|`, `||`, `&&`, `;`, `&`, newline, `(`, `)`, backtick. */
+  op: boolean;
+}
+
+/** Length of the `$( … )` substitution starting at `start` (index of `$`), quotes and nesting honoured. */
+function substitutionEnd(cmd: string, start: number): number {
+  let depth = 0;
+  let q: "'" | '"' | null = null;
+  for (let i = start + 1; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (q) {
+      if (ch === "\\" && q === '"') i++;
+      else if (ch === q) q = null;
+      continue;
+    }
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') q = ch;
+    else if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) return i;
+  }
+  return cmd.length - 1;
+}
+
+/**
+ * Split a shell command into words and control operators, honouring quotes.
+ * A `$( … )` inside double quotes is a command of its own — the real hang was
+ * `echo "== $A <- $(rg -l "\b$A\b" --type java)"` — so it is returned
+ * separately in `nested` for a recursive check. Not a full parser.
+ */
+function shellWords(cmd: string): { words: ShellWord[]; nested: string[] } {
+  const out: ShellWord[] = [];
+  const nested: string[] = [];
+  let cur = "";
+  let quote: "'" | '"' | null = null;
+  let has = false;
+  const flush = () => {
+    if (has) out.push({ text: cur, op: false });
+    cur = "";
+    has = false;
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === "\\" && quote === '"' && i + 1 < cmd.length) cur += cmd[++i];
+      else if (ch === "$" && quote === '"' && cmd[i + 1] === "(") {
+        const end = substitutionEnd(cmd, i);
+        nested.push(cmd.slice(i + 2, end));
+        cur += "$(…)";
+        i = end;
+      } else cur += ch;
+      has = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      has = true;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < cmd.length) {
+      cur += cmd[++i];
+      has = true;
+      continue;
+    }
+    if (ch === "$" && cmd[i + 1] === "(") {
+      flush();
+      out.push({ text: "(", op: true });
+      i++;
+      continue;
+    }
+    if (ch === "|" || ch === "&" || ch === ";" || ch === "\n" || ch === "(" || ch === ")" || ch === "`") {
+      flush();
+      const two = cmd.slice(i, i + 2);
+      if (two === "||" || two === "&&") {
+        out.push({ text: two, op: true });
+        i++;
+      } else {
+        out.push({ text: ch, op: true });
+      }
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      flush();
+      continue;
+    }
+    cur += ch;
+    has = true;
+  }
+  flush();
+  return { words: out, nested };
+}
+
+/** The searches in `cmd` that would block on stdin, as their leading word (empty when none). */
+export function searchesWithoutPath(cmd: string, depth = 0): string[] {
+  const { words, nested } = shellWords(cmd);
+  const found: string[] = [];
+  if (depth < 4) for (const inner of nested) found.push(...searchesWithoutPath(inner, depth + 1));
+  let seg: string[] = [];
+  let fedByPipe = false;
+  const check = () => {
+    if (seg.length === 0) return;
+    let i = 0;
+    while (i < seg.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(seg[i]!)) i++;
+    const name = seg[i]?.replace(/^.*\//, "") ?? "";
+    if (!SEARCH_COMMANDS.has(name) || fedByPipe) return;
+    const isRg = name === "rg";
+    const valueFlags = isRg ? RG_VALUE_FLAGS : GREP_VALUE_FLAGS;
+    let patternFromFlag = false;
+    let positionals = 0;
+    let afterDashDash = false;
+    for (let k = i + 1; k < seg.length; k++) {
+      const w = seg[k]!;
+      if (afterDashDash) {
+        positionals++;
+        continue;
+      }
+      if (w.startsWith("<")) return; // stdin is real: `< file`, `<<EOF`, `<(cmd)`
+      if (w === "--") {
+        afterDashDash = true;
+        continue;
+      }
+      if (w.startsWith("--")) {
+        const eq = w.indexOf("=");
+        const flag = eq === -1 ? w : w.slice(0, eq);
+        if (SEARCH_NO_INPUT_FLAGS.has(flag)) return;
+        if (SEARCH_PATTERN_FLAGS.has(flag)) patternFromFlag = true;
+        if (eq === -1 && valueFlags.has(flag)) k++;
+        continue;
+      }
+      if (w.startsWith("-") && w.length > 1) {
+        // Short cluster: `-rn`, `-A3`, `-e`, `-tjava`.
+        for (let c = 1; c < w.length; c++) {
+          const flag = `-${w[c]}`;
+          if (SEARCH_NO_INPUT_FLAGS.has(flag)) return;
+          if (SEARCH_PATTERN_FLAGS.has(flag)) patternFromFlag = true;
+          if (valueFlags.has(flag)) {
+            if (c === w.length - 1) k++; // value is the next word
+            break; // otherwise the rest of the cluster is the value
+          }
+        }
+        continue;
+      }
+      positionals++;
+    }
+    const paths = patternFromFlag ? positionals : positionals - 1;
+    if (paths <= 0) found.push(name);
+  };
+  for (const w of words) {
+    if (!w.op) {
+      seg.push(w.text);
+      continue;
+    }
+    check();
+    seg = [];
+    fedByPipe = w.text === "|";
+  }
+  check();
+  return found;
+}
+
+export function checkSearchWithoutPath(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (toolName !== "Bash") return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  if (!cmd) return null;
+  let hits: string[];
+  try {
+    hits = searchesWithoutPath(cmd);
+  } catch {
+    return null; // a parser slip must never block a command
+  }
+  if (hits.length === 0) return null;
+  const tool = [...new Set(hits)].join("/");
+  return {
+    behavior: "deny",
+    message:
+      `search-stdin gate (ADR-0120): \`${tool}\` here has a pattern but no path, so it reads standard input — ` +
+      "and this shell's stdin never closes, so the command hangs until the turn is force-ended " +
+      "(one such call held a turn open for 4 h 36 min on 2026-09-27). Give it a path (`.`, a directory " +
+      "or a file), or feed stdin explicitly (`… | rg PATTERN`, `rg PATTERN < file`). If you meant " +
+      "a file list, use `rg --files`.",
+  };
+}
+
+/**
  * Build a PreToolUse hook callback for the SDK's `Options.hooks` config.
  *
  * Why a PreToolUse hook instead of `canUseTool`: with `permissionMode:
@@ -1051,6 +1291,22 @@ export function runDesignHooks(args: {
 }): DesignHookDeny | null {
   const { ctx, toolName, toolInput, mode } = args;
   if (mode === "off") return null;
+
+  // ADR-0120 — a search that would block on stdin. Checked first: it is
+  // deterministic, costs nothing, and the alternative is a turn held open
+  // for hours. Two refusals carry the instruction; the third call is allowed
+  // and the bypass logged (ADR-0104's brake).
+  const stdinDeny = checkSearchWithoutPath(ctx, toolName, toolInput);
+  if (stdinDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "search.stdin.measured", turnId: ctx.turnId, command: String(toolInput.command).slice(0, 200) });
+    } else if (ctx.searchStdinDenies >= BUILTIN_GATE_MAX_DENIES) {
+      logDesignHookEvent({ kind: "search.stdin.bypass", turnId: ctx.turnId, denies: ctx.searchStdinDenies });
+    } else {
+      ctx.searchStdinDenies += 1;
+      return stdinDeny;
+    }
+  }
 
   // Phase 3 (ADR-0105): the four hand-written gates read their ROW. The
   // logic below is unchanged; the row decides whether it denies, nudges,

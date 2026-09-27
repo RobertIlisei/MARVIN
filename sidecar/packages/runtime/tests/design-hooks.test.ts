@@ -39,7 +39,7 @@ import {
   type ShipDiff,
   shipReviewSkillOf,
 } from "../src/design-hooks";
-import { checkCommandRetry, denyReasonWithRetry, noteBashFailure, rewriteProjectSkillName } from "../src/design-hooks";
+import { checkCommandRetry, checkSearchWithoutPath, denyReasonWithRetry, noteBashFailure, rewriteProjectSkillName, searchesWithoutPath } from "../src/design-hooks";
 import {
   __resetBuiltinCacheForTests,
   BUILTIN_RULE_IDS,
@@ -1492,5 +1492,60 @@ describe("command-retry nudge", () => {
     // Only Bash is remembered; a Read deny is the graphify-first gate's business.
     expect(denyReasonWithRetry(ctx, "Read", { file_path: "/x.ts" }, "graphify-first")).toBe("graphify-first");
     expect(ctx.failedBashCommands.size).toBe(1);
+  });
+});
+
+describe("search-stdin gate (ADR-0120)", () => {
+  // `rg PATTERN` with no path reads stdin, and a tool call's stdin never
+  // closes. One such call inside `$(...)` held a turn open for 4 h 36 min on
+  // 2026-09-27 and starved the wakeup queue.
+  const denied = (cmd: string) => searchesWithoutPath(cmd);
+
+  it("refuses rg/grep with a pattern and no path, including inside $(...) and loops", () => {
+    expect(denied('rg -l "\\bTenantComplianceProfileRepository\\b" --type java')).toEqual(["rg"]);
+    expect(denied("for A in X Y; do echo \"== $A <- $(rg -l \"\\b$A\\b\" --type java | rg -v \"/$A\\.java\")\"; done")).toEqual(["rg"]);
+    expect(denied("rg foo | head -5")).toEqual(["rg"]);
+    expect(denied("grep -rn TODO")).toEqual(["grep"]);
+    expect(denied("rg -n -i 'transfer' -g '*.ts'")).toEqual(["rg"]);
+    expect(denied("rg -tjava -e Foo")).toEqual(["rg"]);
+    expect(denied("cd /repo && rg -c foo")).toEqual(["rg"]);
+    expect(denied("JAVA_HOME=/x rg foo")).toEqual(["rg"]);
+    expect(denied("/opt/homebrew/bin/rg foo")).toEqual(["rg"]);
+  });
+
+  it("allows a path, a pipe or a redirect into the search, `--`, and listing modes", () => {
+    expect(denied("rg foo .")).toEqual([]);
+    expect(denied("rg -l foo src/ apps/api")).toEqual([]);
+    expect(denied("rg -n -e Foo -g '*.ts' dir")).toEqual([]);
+    expect(denied("rg -tjava -e Foo .")).toEqual([]);
+    expect(denied("rg -A3 foo file.ts")).toEqual([]);
+    expect(denied("rg --type java Foo -- .")).toEqual([]);
+    expect(denied("echo x | rg foo")).toEqual([]);
+    expect(denied("cat f | grep -c x")).toEqual([]);
+    expect(denied("rg foo < file")).toEqual([]);
+    expect(denied("rg foo </dev/null")).toEqual([]);
+    expect(denied("rg foo <<'EOF'\nline\nEOF")).toEqual([]);
+    expect(denied("rg --files | head")).toEqual([]);
+    expect(denied("rg --version")).toEqual([]);
+    expect(denied("git grep foo")).toEqual([]);
+    expect(denied("find . -name '*.ts' | xargs grep -l foo")).toEqual([]);
+    expect(denied("rg 'a|b' .")).toEqual([]); // a pipe inside quotes is part of the pattern
+    expect(denied("grep -e foo -e bar file")).toEqual([]);
+    expect(denied("ls")).toEqual([]);
+  });
+
+  it("denies twice per turn with the instruction, then allows and counts the bypass", () => {
+    const ctx = createTurnDesignContext("t-stdin", "/proj");
+    const input = { command: "rg -l Foo --type java" };
+    expect(checkSearchWithoutPath(ctx, "Bash", input)?.message).toContain("search-stdin gate");
+    expect(checkSearchWithoutPath(ctx, "Read", { file_path: "/x" })).toBeNull();
+    const run = () => runDesignHooks({ ctx, toolName: "Bash", toolInput: input, mode: "enforce" });
+    expect(run()?.message).toContain("reads standard input");
+    expect(run()?.message).toContain("search-stdin gate");
+    expect(ctx.searchStdinDenies).toBe(BUILTIN_GATE_MAX_DENIES);
+    // Third call: the brake — the rule steps aside rather than wedging the turn.
+    const third = run();
+    expect(third === null || !third.message?.includes("search-stdin gate")).toBe(true);
+    expect(ctx.searchStdinDenies).toBe(BUILTIN_GATE_MAX_DENIES);
   });
 });

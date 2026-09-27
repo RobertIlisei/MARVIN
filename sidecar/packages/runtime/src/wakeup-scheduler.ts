@@ -48,6 +48,23 @@ export const FIRE_DEFER_BACKOFF_MS = 20_000;
  * wakeup is the lesser evil versus barging in and killing the live turn.
  */
 export const MAX_FIRE_DEFERRALS = 60;
+/**
+ * A background-job completion (ADR-0038) is not a self-scheduled check-in: it
+ * carries the result of work the model asked for, and dropping it loses that
+ * result. The 20-minute premise above was wrong for these — measured on a
+ * real session (2026-09-27), turns ran 100 minutes while a commit hook or a
+ * Maven suite finished underneath, and SIX job-done wakeups were dropped in
+ * one day (`stayed busy through 60 deferrals`), so the model learned whether
+ * its own commits had landed by polling `git log`. A job-done wakeup keeps
+ * yielding for six hours (ADR-0120). It still never evicts a live turn.
+ */
+export const MAX_JOB_DONE_DEFERRALS = (6 * 60 * 60 * 1000) / FIRE_DEFER_BACKOFF_MS;
+/** The prefix `background-jobs.ts` writes; the record has no other kind marker. */
+export const JOB_DONE_REASON_PREFIX = "background job done:";
+
+export function isJobDoneWakeup(record: Pick<WakeupRecord, "reason">): boolean {
+  return record.reason.startsWith(JOB_DONE_REASON_PREFIX);
+}
 /** A wakeup more than this far past its fire time at boot is stale, dropped. */
 const STALE_AFTER_MS = MAX_DELAY_SECONDS * 1000;
 
@@ -407,11 +424,12 @@ export function deferIfSessionBusy(record: WakeupRecord): boolean {
   // re-arm on the same backoff instead of stacking self-initiated turns.
   if ((!live || live.ended) && !tooSoon) return false;
   const deferrals = (record.deferrals ?? 0) + 1;
-  if (deferrals > MAX_FIRE_DEFERRALS) {
+  const maxDeferrals = isJobDoneWakeup(record) ? MAX_JOB_DONE_DEFERRALS : MAX_FIRE_DEFERRALS;
+  if (deferrals > maxDeferrals) {
     unpersist(record.projectId, record.id);
     // eslint-disable-next-line no-console
     console.warn(
-      `[wakeup-scheduler] dropping wakeup ${record.id} (${record.reason}) — session ${record.marvinSessionId} stayed busy through ${MAX_FIRE_DEFERRALS} deferrals.`,
+      `[wakeup-scheduler] dropping wakeup ${record.id} (${record.reason}) — session ${record.marvinSessionId} stayed busy through ${maxDeferrals} deferrals.`,
     );
     return true;
   }

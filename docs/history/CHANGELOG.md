@@ -8,6 +8,32 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-09-27 — the stall release: the Mac stays awake during a turn, a stdin-reading search is refused, a job's result is never dropped ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)).**
+
+  Trigger: a 20-hour agri-saas session that looked stuck every fifteen
+  minutes — `api_retry` with no HTTP status, an advisor consult of 2 h 43 min,
+  and a turn that ended mid-plan and stayed open with nothing running.
+
+  **Diagnosis, measured.** `pmset -g log` against the transcript: 51 of 51
+  gaps began within seconds of a `Sleep` and ended within a second of a
+  `DarkWake` (AC profile `sleep 1`; Power Nap woke the machine for ~45 s every
+  quarter hour). The held turn: `runagent.result.deferred` on a `local_bash`
+  task — `rg -l "\b$A\b" --type java` in a `$( … )` with no path, reading the
+  SDK's never-closing stdin since 08:07, auto-backgrounded by Claude Code at
+  ten minutes. The wakeup queue: the RED test run's completion at 46 of 60
+  deferrals, and six job-done wakeups dropped earlier in the same session.
+
+  **Change.** `keep-awake.ts` (one reference-counted `caffeinate -i -w
+  <sidecar pid>` across live turns, darwin only, `MARVIN_KEEP_AWAKE=0`);
+  `checkSearchWithoutPath` first in `runDesignHooks` (quotes, `--`, per-tool
+  value flags, `$( … )` inside double quotes, fail-open parser, ADR-0104
+  brake); `MAX_JOB_DONE_DEFERRALS` = six hours for `background job done:`
+  wakeups. The ADR-0080 drain bound is unchanged on purpose.
+
+  **Verification.** 8 new tests across three suites; full sidecar suite green;
+  runtime typecheck clean; app rebuilt and restarted with the fix, the
+  stalled session resumed on it.
+
 - **2026-09-11 — v0.1.112: the multi-session release — nothing strands, one place for each thing, the backlog is shared.**
 
   Trigger: three days of running four tabs at once on a real project, and the
