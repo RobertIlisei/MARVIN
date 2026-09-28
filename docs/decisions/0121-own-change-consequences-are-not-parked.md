@@ -1,6 +1,6 @@
 # ADR-0121 — A break your own change caused is part of the change: cross-layer impact, a commit gate, and a scope-met check
 
-- **Status:** Accepted — implemented 2026-09-28 (not yet in the installed app; rebuild pending)
+- **Status:** Accepted — implemented 2026-09-28
 - **Date:** 2026-09-28
 - **Related:** [ADR-0057](./0057-workflow-completion-guard.md) (scope-met reconcile guard), [ADR-0084](./0084-blast-radius-and-pre-ship-impact-nudges.md) (`graph_change_impact`, the advisory pre-ship nudge), [ADR-0100](./0100-advisor-caveats-are-conditions-not-backlog.md) (conditions belong to the close), [ADR-0104](./0104-ship-review-gate.md) (the commit gate and its two-denies brake), [ADR-0044](./0044-project-backlog.md) (the backlog is a parking lot), Golden Rules 6 and 8 in `AGENTS.md`
 
@@ -49,4 +49,4 @@ Not done, deliberately: a separate built-in practice row for the impact gate (on
 - [x] `ownChangeConsequences` / `ownChangeTokens` in the reconcile gap and prompt; `sessionOwnChanges` in `worktrees.ts`; wired in `sdk-runner`; 5 guard tests using the real item texts plus 1 worktree test (own and dirty files, not merged-in ones)
 - [x] `personality.ts` Phase 7 and backlog wording; the edited-ADR matcher covers `docs/adr/`
 - [x] Runtime and graphify-bridge suites green, typecheck clean
-- [ ] App rebuilt and restarted with the change (waiting for the user: sessions are live)
+- [x] App rebuilt and restarted with the change (`0.1.114+964ad3aa`)
