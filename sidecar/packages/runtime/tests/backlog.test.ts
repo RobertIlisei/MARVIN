@@ -121,15 +121,43 @@ describe("backlog store — add / list / resolve", () => {
     const index = await readFile(indexPath(), "utf-8");
     expect(index).toContain("(high)"); // index rewritten with new severity
 
+    // An over-cap body is REFUSED, never silently cut — nothing is written.
     const both = await updateBacklogItem(workDir, add.item.id, {
       severity: "med",
       body: `${"x".repeat(MAX_BODY_CHARS + 100)}`,
     });
-    expect(both.ok).toBe(true);
-    if (both.ok) expect(both.item.body.length).toBeLessThanOrEqual(MAX_BODY_CHARS); // cap holds
+    expect(both.ok).toBe(false);
+    if (!both.ok) expect(both.error).toContain(String(MAX_BODY_CHARS));
+    const still = (await listBacklog(workDir)).find((i) => i.id === add.item.id)!;
+    expect(still.body).toBe("rewritten body");
+    expect(still.severity).toBe("high");
 
     const missing = await updateBacklogItem(workDir, "no-such-id", { severity: "low" });
     expect(missing.ok).toBe(false);
+  });
+
+  // 2026-09-28 — a note on an item near the cap was cut mid-word (and at the
+  // cap, the note vanished). A note that would overflow is refused, and
+  // nothing — status, body, note — is written.
+  it("a note that would push the body past the cap is refused and nothing is lost", async () => {
+    const body = `${"b".repeat(MAX_BODY_CHARS - 20)}END`;
+    const add = await addBacklogItem(workDir, { title: "near the cap", body });
+    expect(add.ok).toBe(true);
+    if (!add.ok) return;
+
+    const r = await resolveBacklogItem(workDir, { id: add.item.id, resolution: "done", note: "landed in abc123 with FooTest 3/3" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain(String(MAX_BODY_CHARS));
+    const after = (await listBacklog(workDir)).find((i) => i.id === add.item.id)!;
+    expect(after.status).toBe("open");
+    expect(after.body).toBe(body);
+
+    // A note that fits is appended whole.
+    const small = await addBacklogItem(workDir, { title: "roomy", body: "short" });
+    if (!small.ok) return;
+    const ok = await setBacklogStatus(workDir, small.item.id, "open", "progress: M1 landed");
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.item.body.endsWith("> open — progress: M1 landed")).toBe(true);
   });
 
   it("setBacklogStatus → doing marks it in-progress in the index", async () => {

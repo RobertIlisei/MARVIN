@@ -836,8 +836,13 @@ export async function updateBacklogItem(
   const path = join(backlogDir(workDir), `${id}.md`);
   if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(path, "utf-8"));
+  // Refuse, never truncate: a silent `.slice` cut real item text mid-word
+  // (2026-09-28). The caller condenses and retries; nothing is written.
+  if (fields.body !== undefined && fields.body.trim().length > MAX_BODY_CHARS) {
+    return { ok: false, error: `body is ${fields.body.trim().length} chars (max ${MAX_BODY_CHARS}); condense it and retry — nothing was written.` };
+  }
   if (fields.severity !== undefined) item.severity = fields.severity;
-  if (fields.body !== undefined) item.body = fields.body.trim().slice(0, MAX_BODY_CHARS);
+  if (fields.body !== undefined) item.body = fields.body.trim();
   if (fields.kind !== undefined) item.kind = fields.kind;
   if (fields.blocked !== undefined) item.blocked = fields.blocked;
   if (fields.blockedOn !== undefined) item.blockedOn = fields.blockedOn.trim().slice(0, 200);
@@ -930,6 +935,18 @@ export async function setBacklogStatus(
   const path = join(backlogDir(workDir), `${id}.md`);
   if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(path, "utf-8"));
+  // Refuse, never truncate: appending a note used to `.slice` the whole body
+  // to the cap, so on an item near it the note vanished or the tail was cut
+  // (2026-09-28, the Dxx stage items). Checked before anything is changed.
+  const withNote = note && note.trim() ? `${item.body}\n\n> ${status} — ${note.trim()}`.trim() : null;
+  if (withNote !== null && withNote.length > MAX_BODY_CHARS) {
+    return {
+      ok: false,
+      error:
+        `adding this note would make the body ${withNote.length} chars (max ${MAX_BODY_CHARS}); ` +
+        `shorten the note, or condense the body with backlog_update first — nothing was written.`,
+    };
+  }
   item.status = status;
   item.updated = new Date().toISOString();
   if (status !== "doing") {
@@ -941,9 +958,7 @@ export async function setBacklogStatus(
     item.claimedBranch = claim.branch ?? "";
     item.claimedAt = item.updated;
   }
-  if (note && note.trim()) {
-    item.body = `${item.body}\n\n> ${status} — ${note.trim()}`.trim().slice(0, MAX_BODY_CHARS);
-  }
+  if (withNote !== null) item.body = withNote;
   try {
     await writeItem(workDir, item);
     await rewriteBacklogIndex(workDir);
