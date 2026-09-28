@@ -133,6 +133,28 @@ describe("session worktrees", () => {
     expect(nameSessionBranchFromCommit(repo, "other-sess")?.to).toBe(`${SESSION_BRANCH_PREFIX}add-a-ts-2`);
   });
 
+  // ADR-0111 — the name comes from the tab's OWN first commit. A catch-up merge
+  // of the base branch brings other sessions' commits into `base..branch`; on
+  // 2026-09-28 three tabs were renamed after a sibling's commit that way, and
+  // two ended up carrying the same (just-freed) branch name.
+  it("names the branch from the tab's own commit, never from commits a catch-up merge brought in", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "own-sess", title: "own work" });
+    commitIn(rec.path, "mine.ts", "mine\n"); // subject: "add mine.ts"
+    commitIn(repo, "theirs.ts", "theirs\n"); // another session lands on main
+    execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "merge", "-q", "--no-edit", "main"], { cwd: rec.path, stdio: "pipe" });
+    expect(nameSessionBranchFromCommit(repo, "own-sess")?.to).toBe(`${SESSION_BRANCH_PREFIX}add-mine-ts`);
+  });
+
+  it("does not name a branch whose only new commits came from a catch-up merge", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "merge-only", title: "merge only" });
+    commitIn(repo, "theirs.ts", "theirs\n");
+    execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "merge", "-q", "--no-edit", "main"], { cwd: rec.path, stdio: "pipe" });
+    expect(nameSessionBranchFromCommit(repo, "merge-only")).toBeNull();
+    expect(findSessionWorktree(repo, "merge-only")?.named).toBeFalsy(); // still waiting for its own first commit
+    commitIn(rec.path, "mine.ts", "mine\n");
+    expect(nameSessionBranchFromCommit(repo, "merge-only")?.to).toBe(`${SESSION_BRANCH_PREFIX}add-mine-ts`);
+  });
+
   // ADR-0111 — reopening an integrated tab cuts a fresh tree; the old one is swept.
   it("replace cuts a fresh worktree for the same session and detaches the merged one", () => {
     const rec = createSessionWorktree(repo, { sessionId: "recut-sess", title: "first go" });

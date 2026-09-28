@@ -268,9 +268,18 @@ export function nameSessionBranchFromCommit(workDir: string, sessionId: string):
   if (idx < 0) return null;
   const rec = all[idx] as WorktreeRecord;
   if (rec.named) return null;
-  const commits = Number(gitOr(workDir, ["rev-list", "--count", `${rec.base}..${rec.branch}`], "0")) || 0;
-  if (commits === 0) return null;
-  const subject = gitOr(workDir, ["log", "--reverse", "--format=%s", `${rec.base}..${rec.branch}`], "").split("\n")[0]?.trim() ?? "";
+  // Only the tab's OWN commits: `--first-parent` skips what a catch-up merge
+  // of the base branch brought in (other sessions' work), `--no-merges` skips
+  // the merge commit itself, and excluding the base branch's current tip
+  // covers a catch-up that fast-forwarded (no merge commit to steer by).
+  // Without this a tab was named after a sibling's commit (2026-09-28).
+  const baseTip = rec.baseRef && gitOk(workDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${rec.baseRef}`]) ? [`^refs/heads/${rec.baseRef}`] : [];
+  const own = gitOr(workDir, ["log", "--reverse", "--first-parent", "--no-merges", "--format=%s", rec.branch, `^${rec.base}`, ...baseTip], "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (own.length === 0) return null;
+  const subject = own[0] ?? "";
   const mark = (branch: string) => {
     all[idx] = { ...rec, branch, named: true };
     saveWorktrees(workDir, all);
