@@ -32,6 +32,7 @@ import {
   MAX_TITLE_CHARS,
   resolveBacklogItem,
   setBacklogStatus,
+  updateBacklogItem,
 } from "./backlog";
 import { groomBacklog, renderGroomReport } from "./backlog-groom";
 import { notifyTabsOfResolution } from "./backlog-notify";
@@ -273,6 +274,50 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     },
   );
 
+  // The model's field-edit path — the same `updateBacklogItem` the backlog
+  // panel uses. Without it, re-blocking or condensing an item meant editing
+  // `.marvin/backlog/*.md` by hand, which the tool boundary exists to prevent.
+  const updateTool = tool(
+    "backlog_update",
+    "EDIT an existing backlog item's fields by id: `severity`, `kind`, " +
+      "`blocked`/`blockedOn`, or REPLACE its `body`. The title and id never " +
+      "change (a rename is a new item). A body over " +
+      `${MAX_BODY_CHARS} chars is REFUSED and nothing is written — condense it and ` +
+      "retry. Replacing a body must keep every outcome, exit-gate, blocker and " +
+      "build-order line: move history to a pointer (ADR, doc), never drop it. " +
+      "Only change what the user approved; never re-prioritise or rewrite " +
+      "items on the strength of `backlog_groom` alone (ADR-0063).",
+    {
+      id: z.string().min(1).describe("The item slug (from backlog_list)."),
+      severity: z.enum(BACKLOG_SEVERITIES).optional(),
+      kind: z.enum(BACKLOG_KINDS).optional(),
+      blocked: z.boolean().optional(),
+      blockedOn: z.string().max(200).optional().describe("Who or what it waits on; an item id where the blocker is another item. Empty string clears it."),
+      body: z.string().min(1).optional().describe(`The full replacement body (≤ ${MAX_BODY_CHARS} chars).`),
+    },
+    async ({ id, severity, kind, blocked, blockedOn, body }) => {
+      if (severity === undefined && kind === undefined && blocked === undefined && blockedOn === undefined && body === undefined) {
+        return errorResult("nothing to change — pass at least one of severity, kind, blocked, blockedOn, body.");
+      }
+      const res = await updateBacklogItem(cwd, id, {
+        ...(severity !== undefined ? { severity } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+        ...(blocked !== undefined ? { blocked } : {}),
+        ...(blockedOn !== undefined ? { blockedOn } : {}),
+        ...(body !== undefined ? { body } : {}),
+      });
+      if (!res.ok) return errorResult(res.error);
+      const changed = [
+        severity !== undefined && `severity=${severity}`,
+        kind !== undefined && `kind=${kind}`,
+        blocked !== undefined && `blocked=${blocked}`,
+        blockedOn !== undefined && `blockedOn=${blockedOn ? `"${blockedOn}"` : "(cleared)"}`,
+        body !== undefined && `body (${res.item.body.length} chars)`,
+      ].filter(Boolean);
+      return textResult(`Backlog item \`${id}\` updated: ${changed.join(", ")}.`);
+    },
+  );
+
   const groomTool = tool(
     "backlog_groom",
     "REVIEW the backlog and report what looks wrong — near-duplicates, " +
@@ -325,6 +370,6 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     // every MARVIN server up front; only `marvin-graph` (graphify-first would
     // deadlock without it) and `marvin-control` (the checkback guard needs
     // `schedule_wakeup` without a discovery step) still need that.
-    tools: [addTool, listTool, resolveTool, groomTool, claimTool],
+    tools: [addTool, listTool, resolveTool, updateTool, groomTool, claimTool],
   });
 }
