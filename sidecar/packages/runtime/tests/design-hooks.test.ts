@@ -16,6 +16,7 @@ import {
   checkGraphDriftDeny,
   checkSaveResult,
   checkShipImpact,
+  checkShipImpactRequired,
   checkShipReview,
   classifyShipDiff,
   clearTurnDesignContext,
@@ -1340,6 +1341,37 @@ describe("ship-review gate (ADR-0104)", () => {
 
     recordAllowedTool(ctx, "Skill", { skill: "pr-review" });
     expect(checkShipReview(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
+  });
+
+  // ADR-0121 — the impact report is a precondition of a reviewable commit.
+  it("refuses a reviewable commit until graph_change_impact has run this turn", () => {
+    const ctx = createTurnDesignContext("t-0121-a", cwd);
+    ctx.hasGraph = true;
+    const collect = diffOf(["a.ts", "b.ts", "c.ts", "d.ts"], 80);
+    const first = checkShipImpactRequired(ctx, "Bash", { command: "git commit -m x" }, collect);
+    expect(first?.behavior).toBe("deny");
+    expect(first?.message).toContain("graph_change_impact");
+    expect(first?.message).toContain("cross-layer reference");
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_change_impact", {});
+    expect(checkShipImpactRequired(ctx, "Bash", { command: "git commit -m x" }, collect)).toBeNull();
+  });
+
+  it("the impact gate exempts small, docs-only and graphless commits, and stops after two refusals", () => {
+    const small = createTurnDesignContext("t-0121-b", cwd);
+    small.hasGraph = true;
+    expect(checkShipImpactRequired(small, "Bash", { command: "git commit -m x" }, diffOf(["src/a.ts"], 5))).toBeNull();
+    expect(checkShipImpactRequired(small, "Bash", { command: "git commit -m x" }, diffOf(["docs/a.md", "docs/b.md", "docs/c.md", "docs/d.md"], 400))).toBeNull();
+
+    const noGraph = createTurnDesignContext("t-0121-c", cwd);
+    noGraph.hasGraph = false;
+    expect(checkShipImpactRequired(noGraph, "Bash", { command: "git commit -m x" }, diffOf([".gitlab-ci.yml"], 3))).toBeNull();
+
+    const capped = createTurnDesignContext("t-0121-d", cwd);
+    capped.hasGraph = true;
+    const collect = diffOf([".gitlab-ci.yml"], 3);
+    expect(checkShipImpactRequired(capped, "Bash", { command: "git commit -m 1" }, collect)?.behavior).toBe("deny");
+    expect(checkShipImpactRequired(capped, "Bash", { command: "git commit -m 2" }, collect)?.behavior).toBe("deny");
+    expect(checkShipImpactRequired(capped, "Bash", { command: "git commit -m 3" }, collect)).toBeNull();
   });
 
   it("a review this turn covers every commit this turn; an earlier one holds until the next commit", () => {

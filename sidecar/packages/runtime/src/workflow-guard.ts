@@ -163,6 +163,86 @@ export interface WorkflowGap {
    * its claim did not land, or it re-states the same untagged list.
    */
   untaggedClose?: boolean;
+  /**
+   * ADR-0121 — provisional backlog items this session parked that name
+   * something this session's own changes touched: a file, an ADR it edited,
+   * its branch. On 2026-09-28 three tabs each found the breakage their own
+   * commit caused, described it precisely in a backlog item, and declared the
+   * scope met — so the break shipped with the branch. A consequence of your
+   * own change is part of the change; it is resolved before the close.
+   */
+  ownConsequences?: OwnConsequence[];
+}
+
+export interface OwnConsequence {
+  id: string;
+  title: string;
+  /** The token that tied it to this session's changes. */
+  because: string;
+}
+
+export interface ParkedItem {
+  id: string;
+  title: string;
+  body: string;
+}
+
+/** Basenames so common that naming one says nothing about which file. */
+const GENERIC_BASENAMES = new Set([
+  "index.ts", "index.tsx", "index.js", "route.ts", "page.tsx", "layout.tsx", "types.ts", "utils.ts",
+  "README.md", "package.json", "tsconfig.json", "pom.xml", "build.gradle", "Makefile", "INDEX.md",
+  "CHANGELOG.md", "settings.json", "config.ts", "main.ts", "App.tsx", "app.ts",
+]);
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The tokens that tie text to a set of changed files: each file's path, a
+ * distinctive basename, a class-like stem, and an ADR number for an ADR file.
+ * Pure; exported for tests.
+ */
+export function ownChangeTokens(files: string[], branch?: string): string[] {
+  const out = new Set<string>();
+  for (const f of files) {
+    const rel = f.replace(/^\.\//, "");
+    const adr = /(?:^|\/)docs\/(?:adr|decisions)\/(\d{4})-/.exec(rel);
+    if (adr?.[1]) {
+      out.add(`ADR-${adr[1]}`);
+      continue;
+    }
+    if (/(^|\/)\.marvin\//.test(rel)) continue;
+    out.add(rel);
+    const base = rel.split("/").pop() ?? rel;
+    if (base.length >= 8 && !GENERIC_BASENAMES.has(base)) out.add(base);
+    const stem = base.replace(/\.[^.]+$/, "");
+    if (stem.length >= 10 && /[A-Z]/.test(stem)) out.add(stem);
+  }
+  if (branch && branch.length >= 12) out.add(branch);
+  return [...out];
+}
+
+/**
+ * ADR-0121 — which parked items are about this session's own changes.
+ * Matching is literal with word boundaries (ADR numbers case-insensitive).
+ * A false positive costs one honest sentence in the corrective turn; a miss
+ * ships a known break, so the matcher leans towards flagging.
+ */
+export function ownChangeConsequences(items: ParkedItem[], files: string[], branch?: string): OwnConsequence[] {
+  const tokens = ownChangeTokens(files, branch);
+  if (tokens.length === 0) return [];
+  const out: OwnConsequence[] = [];
+  for (const item of items) {
+    const text = `${item.title}\n${item.body}`;
+    const hit = tokens.find((t) => {
+      const flags = t.startsWith("ADR-") ? "i" : "";
+      return new RegExp(`(^|[^A-Za-z0-9_])${escapeRe(t)}($|[^A-Za-z0-9_])`, flags).test(text);
+    });
+    if (hit) out.push({ id: item.id, title: item.title.slice(0, 100), because: hit });
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 
 /** True when there's anything to reconcile. */
@@ -170,7 +250,8 @@ export function hasWorkflowGap(gap: WorkflowGap): boolean {
   return (
     gap.openTodos.length > 0 ||
     gap.untickedAdrs.length > 0 ||
-    (gap.openConditions?.length ?? 0) > 0
+    (gap.openConditions?.length ?? 0) > 0 ||
+    (gap.ownConsequences?.length ?? 0) > 0
   );
 }
 
@@ -196,6 +277,13 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
     lines.push(
       `- Advisor condition(s) with no stated outcome: ` +
         conditions.map((c) => `"${c}"`).join(", "),
+    );
+  }
+  const own = gap.ownConsequences ?? [];
+  if (own.length > 0) {
+    lines.push(
+      `- Backlog item(s) you parked about your OWN changes: ` +
+        own.map((o) => `\`${o.id}\` (names ${o.because})`).join(", "),
     );
   }
   // The conditions half needs its own instruction: reconciling a checkbox is
@@ -224,9 +312,28 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
         `10 dismissed, 2 kept). Do NOT claim a condition met to clear this ` +
         `check; an honest "not met" is the useful answer.`
       : "";
+  // ADR-0121 — the parked-consequence half. "Park what you notice" is right
+  // for an old problem found in passing and wrong for a break you just made;
+  // this is where the two are told apart, by the executor, honestly.
+  const ownInstruction =
+    own.length > 0
+      ? `\n\nEach of those items names a file, ADR or branch your own changes ` +
+        `touched. For each, decide honestly:\n` +
+        `  (a) your change CAUSED it (a broken caller, a contract a consumer no ` +
+        `longer matches, an incomplete change): fix it now, in this tab, whatever ` +
+        `the write set said, then \`backlog_resolve … done\` with the commit and test;\n` +
+        `  (b) it is PRE-EXISTING or independent of your change: \`backlog_resolve … keep\` ` +
+        `with a one-line note saying why your change did not cause it;\n` +
+        `  (c) you caused it but cannot fix it here: leave it provisional, say so ` +
+        `plainly, and do NOT claim scope met — the user decides.\n` +
+        `Do not call a break pre-existing to clear this check; a known break ` +
+        `shipped as "done" is the failure this exists to stop.`
+      : "";
   return {
     reason:
-      conditions.length > 0
+      own.length > 0
+        ? "auto: own-change consequences parked at scope-met (ADR-0121)"
+        : conditions.length > 0
         ? "auto: reconcile plan/ADR/advisor conditions before scope-met (ADR-0057, ADR-0100)"
         : "auto: reconcile plan/ADR before scope-met (ADR-0057)",
     prompt:
@@ -238,6 +345,7 @@ export function buildReconcilePrompt(gap: WorkflowGap): { reason: string; prompt
       `and do NOT claim scope met. Do NOT mark or tick anything merely to clear ` +
       `this check — a false "done" is a worse failure than an unmarked box.` +
       untaggedInstruction +
-      conditionInstruction,
+      conditionInstruction +
+      ownInstruction,
   };
 }

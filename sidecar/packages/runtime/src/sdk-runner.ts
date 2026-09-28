@@ -93,6 +93,7 @@ import {
   mergeOpenItems,
   openPlanSteps,
   openTodos,
+  ownChangeConsequences,
   scopeOfDoneEntirelyUnticked,
   type WorkflowGap,
 } from "./workflow-guard";
@@ -100,8 +101,9 @@ import { readWorktreeSetupConfig } from "./worktree-setup";
 import {
   bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, 
   localOnlyIntegrationPolicy,
-  sessionWorktreePolicy,sweepWorktrees, type WorktreeState,
+  sessionOwnChanges, sessionWorktreePolicy,sweepWorktrees, type WorktreeState,
 } from "./worktrees";
+import { listBacklog } from "./backlog";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -2383,6 +2385,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // marker to catch a premature "done".
   let lastTodoPayload: unknown ;
   const editedAdrPaths = new Set<string>();
+  // ADR-0121 — every file this turn wrote, for the own-consequence check in a
+  // shared tree (a worktree tab reads its own commits from git instead).
+  const editedPaths = new Set<string>();
   let watchdogTimer: NodeJS.Timeout | null = null;
   // ADR-0080 — background subagents outlive the main turn's `result`. While
   // the SDK reports any as live, a `result` is intermediate: the CLI will
@@ -2617,7 +2622,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
                 input
               ) {
                 const fp = input.file_path ?? input.notebook_path;
-                if (typeof fp === "string" && /docs\/decisions\/.*\.md$/.test(fp)) {
+                if (typeof fp === "string") editedPaths.add(isAbsolute(fp) ? fp : resolve(cwd, fp));
+                // Both ADR conventions MARVIN meets (note-links.ts ADR_DIRS).
+                // Matching only docs/decisions/ meant the unticked-Scope-of-Done
+                // check never fired on a project that keeps docs/adr/.
+                if (typeof fp === "string" && /docs\/(?:adr|decisions)\/.*\.md$/.test(fp)) {
                   editedAdrPaths.add(isAbsolute(fp) ? fp : resolve(cwd, fp));
                 }
               }
@@ -2961,11 +2970,34 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // deposit made 20 minutes earlier. They rode the turn on the design
     // context; here is where the executor is asked for an outcome on each.
     const openConditions = advisorConditionsAtClose;
+    // ADR-0121 — provisional items this session parked about its OWN changes.
+    // Best-effort: a git or backlog read failure never blocks the close.
+    let ownConsequences: WorkflowGap["ownConsequences"] = [];
+    try {
+      const parked = (await listBacklog(workDir)).filter(
+        (i) => i.status === "provisional" && !!input.marvinSessionId && i.sessionId === input.marvinSessionId,
+      );
+      if (parked.length > 0) {
+        const tree = input.sessionTree;
+        const own =
+          tree?.mode === "worktree"
+            ? sessionOwnChanges(tree)
+            : { files: [...editedPaths].map((p) => (p.startsWith(`${cwd}/`) ? p.slice(cwd.length + 1) : p)), branch: "" };
+        ownConsequences = ownChangeConsequences(
+          parked.map((i) => ({ id: i.id, title: i.title, body: i.body })),
+          own.files,
+          own.branch || undefined,
+        );
+      }
+    } catch {
+      /* the check is a backstop, never a reason to fail a finished turn */
+    }
     const gap: WorkflowGap = {
       openTodos: openPlanItems,
       untickedAdrs,
       openConditions,
       untaggedClose: spineUntaggedClose,
+      ownConsequences,
     };
     if (hasWorkflowGap(gap)) {
       const { reason, prompt } = buildReconcilePrompt(gap);
@@ -2985,6 +3017,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               armed: res.ok,
               openTodos: gap.openTodos.length,
               untickedAdrs: gap.untickedAdrs.length,
+              ownConsequences: gap.ownConsequences?.length ?? 0,
               untaggedClose: spineUntaggedClose,
               ...(res.ok ? { wakeupId: res.record.id } : { skipped: res.error }),
               at: new Date().toISOString(),

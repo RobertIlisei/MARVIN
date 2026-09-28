@@ -63,6 +63,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { buildCallIndex, callersOf } from "./call-index";
 import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
+import { crossLayerReferences, renderCrossLayer } from "./cross-layer-refs";
 import { graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
 import {
   type GraphScope,
@@ -829,11 +830,15 @@ export function createGraphMcpServer(workDir: string) {
       }
       let changed = files ?? [];
       let resolvedBase: string | undefined;
+      // ADR-0121 — the commit the text diff is taken against: the merge base
+      // for a branch, the working tree's HEAD for an explicit file set.
+      let diffBase = "HEAD";
       if (!files) {
         try {
           const r = await changedFilesOnBranch(workDir, base);
           changed = r.files;
           resolvedBase = r.base;
+          diffBase = r.mergeBase;
         } catch (err) {
           return errorResult(`git diff failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -847,7 +852,16 @@ export function createGraphMcpServer(workDir: string) {
         index,
         files: changed,
       });
-      return textResult(renderChangeImpact(report, { base: resolvedBase, limit: limit ?? 40 }));
+      // ADR-0121 — the call graph sees callers; this sees consumers that
+      // reach the change through text (a spec enum, a route string, a file a
+      // script mounts). Best-effort: a failure here never hides the report.
+      let crossLayer = "";
+      try {
+        crossLayer = renderCrossLayer(await crossLayerReferences(workDir, diffBase, changed));
+      } catch (err) {
+        crossLayer = `\n\nCross-layer references: not computed (${err instanceof Error ? err.message : String(err)}).`;
+      }
+      return textResult(renderChangeImpact(report, { base: resolvedBase, limit: limit ?? 40 }) + crossLayer);
     },
   );
 

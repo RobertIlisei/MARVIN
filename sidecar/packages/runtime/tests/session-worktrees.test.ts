@@ -25,6 +25,7 @@ import {
   removeWorktree,
   reopenSessionWorktree,
   SESSION_BRANCH_PREFIX,
+  sessionOwnChanges,
   sweepWorktrees,
 } from "../src/worktrees";
 
@@ -153,6 +154,19 @@ describe("session worktrees", () => {
     expect(findSessionWorktree(repo, "merge-only")?.named).toBeFalsy(); // still waiting for its own first commit
     commitIn(rec.path, "mine.ts", "mine\n");
     expect(nameSessionBranchFromCommit(repo, "merge-only")?.to).toBe(`${SESSION_BRANCH_PREFIX}add-mine-ts`);
+  });
+
+  // ADR-0121 — "own changes" for the scope-met consequence check: the tab's
+  // commits and dirty files, never what a catch-up merge brought in.
+  it("sessionOwnChanges lists the tab's own and uncommitted files, not merged-in ones", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "own-files", title: "own files" });
+    commitIn(rec.path, "mine.ts", "mine\n");
+    commitIn(repo, "theirs.ts", "theirs\n");
+    execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "merge", "-q", "--no-edit", "main"], { cwd: rec.path, stdio: "pipe" });
+    writeFileSync(join(rec.path, "wip.ts"), "wip\n");
+    const own = sessionOwnChanges({ path: rec.path, base: rec.base, baseRef: "main" });
+    expect(own.files).toEqual(["mine.ts", "wip.ts"]);
+    expect(own.branch).toBe(rec.branch);
   });
 
   // ADR-0111 — reopening an integrated tab cuts a fresh tree; the old one is swept.

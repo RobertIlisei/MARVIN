@@ -238,7 +238,7 @@ function realName(raw: string | undefined): string | null {
 export async function changedFilesOnBranch(
   workDir: string,
   base?: string,
-): Promise<{ base: string; files: string[] }> {
+): Promise<{ base: string; mergeBase: string; files: string[] }> {
   const git = async (args: string[]) =>
     (await pExecFile("git", args, { cwd: workDir, timeout: 15_000 })).stdout.trim();
 
@@ -273,7 +273,7 @@ export async function changedFilesOnBranch(
     const f = line.trim();
     if (f) files.add(f);
   }
-  return { base: resolvedBase, files: [...files].sort() };
+  return { base: resolvedBase, mergeBase, files: [...files].sort() };
 }
 
 /** Text the tool returns — one block, reviewer's reading order. */

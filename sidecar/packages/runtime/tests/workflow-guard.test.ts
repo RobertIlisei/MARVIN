@@ -9,6 +9,8 @@ import {
   openTodos,
   SCOPE_MET_SENTINEL,
   scopeOfDoneEntirelyUnticked,
+  ownChangeConsequences,
+  ownChangeTokens,
 } from "../src/workflow-guard";
 
 // ADR-0057 — mechanical backstop: a scope-met close with an unreconciled plan
@@ -230,5 +232,65 @@ describe("untagged close (ADR-0116)", () => {
       untickedAdrs: [],
     });
     expect(prompt).not.toContain("no `[N]` step tags");
+  });
+});
+
+// ADR-0121 — the three items agri-saas tabs parked on 2026-09-28 about breaks
+// their own commits caused, and the one that was genuinely pre-existing.
+describe("own-change consequences at scope-met", () => {
+  const docsTab = {
+    files: [
+      "apps/api/src/main/java/ro/agricore/platform/document/DocumentType.java",
+      "apps/api/src/main/java/ro/agricore/platform/document/DocumentService.java",
+      "docs/adr/0427-document-access-and-retention.md",
+    ],
+  };
+  const openapiItem = {
+    id: "teach-the-document-openapi-enum-spa-labels-dovada-depunere-a",
+    title: "Teach the document OpenAPI enum + SPA labels DOVADA_DEPUNERE_AUTORITATE",
+    body: "ADR-0427 D3/D4 added DocumentType DOVADA_DEPUNERE_AUTORITATE. Outside that tab's write set: add it to document.openapi.yaml…",
+  };
+  const unrelated = {
+    id: "upgrade-maplibre-gl-from-4-7-1-to-5-x",
+    title: "Upgrade maplibre-gl from 4.7.1 to 5.x",
+    body: "Plain dependency upgrade; the jsdom isolation test found 5.24 clean.",
+  };
+
+  it("flags an item that names an ADR or a class the session changed, and not an unrelated one", () => {
+    const hits = ownChangeConsequences([openapiItem, unrelated], docsTab.files);
+    expect(hits.map((h) => h.id)).toEqual([openapiItem.id]);
+    expect(["ADR-0427", "DocumentType"]).toContain(hits[0]?.because);
+    // The ADR alone is enough to tie it to the session.
+    expect(ownChangeConsequences([openapiItem], ["docs/adr/0427-document-access-and-retention.md"])[0]?.because).toBe("ADR-0427");
+  });
+
+  it("flags the restore-script item by its branch and by the changed config file", () => {
+    const item = {
+      id: "dr-restore-test-pass-garage-rpc-secret-to-the-scratch-garage",
+      title: "DR restore test: pass the Garage RPC secret to the scratch Garage",
+      body: "Since 2026-09-28 (branch marvin/tab/docs-and-infrastructure-one-tab-1-from-e) garage.toml reads rpc_secret_file…",
+    };
+    expect(ownChangeConsequences([item], ["infrastructure/garage/garage.toml"])[0]?.because).toBe("garage.toml");
+    expect(ownChangeConsequences([item], ["docs/runbooks/x.md"], "marvin/tab/docs-and-infrastructure-one-tab-1-from-e")[0]?.because).toBe(
+      "marvin/tab/docs-and-infrastructure-one-tab-1-from-e",
+    );
+  });
+
+  it("does not match a class name inside a longer identifier, nor generic basenames", () => {
+    const item = { id: "x", title: "x", body: "DocumentServiceFactory and index.ts are unrelated." };
+    expect(ownChangeConsequences([item], ["src/DocumentService.java", "web/index.ts"])).toEqual([]);
+    expect(ownChangeTokens(["web/index.ts"])).toEqual(["web/index.ts"]);
+    expect(ownChangeTokens([".marvin/backlog/a.md"])).toEqual([]);
+  });
+
+  it("makes the close a gap and tells the executor to fix, keep with a reason, or not claim scope met", () => {
+    const gap = { openTodos: [], untickedAdrs: [], ownConsequences: ownChangeConsequences([openapiItem], docsTab.files) };
+    expect(hasWorkflowGap(gap)).toBe(true);
+    const { reason, prompt } = buildReconcilePrompt(gap);
+    expect(reason).toContain("ADR-0121");
+    expect(prompt).toContain(openapiItem.id);
+    expect(prompt).toContain("fix it now");
+    expect(prompt).toContain("backlog_resolve … keep");
+    expect(prompt).toContain("do NOT claim scope met");
   });
 });

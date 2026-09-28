@@ -167,6 +167,9 @@ export interface DesignTurnContext {
    *  would only stall a turn whose skill call is failing for some other
    *  reason, so the commit is then allowed and the bypass logged. */
   shipReviewDenies: Partial<Record<ShipReviewSkill, number>>;
+  /** ADR-0121 — commits refused this turn for want of `graph_change_impact`
+   *  (capped like the review skills). */
+  shipImpactDenies: number;
   /** ADR-0105 — practice-rule denies issued this turn, per rule id (capped). */
   practiceDenies: Map<string, number>;
   /** ADR-0105 — practice-rule nudges issued this turn (once per rule). */
@@ -301,6 +304,7 @@ export function createTurnDesignContext(
     changeImpactCallCount: 0,
     shipImpactNudgeFired: false,
     shipReviewDenies: {},
+    shipImpactDenies: 0,
     practiceDenies: new Map(),
     practiceNudges: new Set(),
     mutationCount: 0,
@@ -1425,7 +1429,13 @@ export function runDesignHooks(args: {
   // diff a `git commit` is about to seal and refuses it until the skill the
   // prompt already demands has actually run.
   const shipGate = gateOf("builtin:ship-review");
-  const shipDeny = shipGate.off ? null : checkShipReview(ctx, toolName, toolInput);
+  // ADR-0121 — the same gate also requires the diff's blast radius, calls AND
+  // cross-layer references, before a reviewable commit. Both refusals ride one
+  // deny so the model fixes them in one pass.
+  const shipDeny = shipGate.off ? null : mergeDenies(
+    checkShipReview(ctx, toolName, toolInput),
+    checkShipImpactRequired(ctx, toolName, toolInput),
+  );
   if (shipDeny) {
     if (mode === "measure") {
       logDesignHookEvent({ kind: "ship.review.deny.measured", turnId: ctx.turnId, tool: toolName });
@@ -1871,6 +1881,74 @@ export function checkShipReview(
       "and lockfile-only commits are exempt. (MARVIN_DESIGN_HOOKS=measure logs instead of " +
       `denying; after ${SHIP_REVIEW_MAX_DENIES} refusals in one turn the commit is allowed and ` +
       "the bypass is logged.)",
+    interrupt: false,
+  };
+}
+
+/** Two refusals of one call as one deny — messages joined, first shape kept. */
+function mergeDenies(a: DesignHookDeny | null, b: DesignHookDeny | null): DesignHookDeny | null {
+  if (!a) return b;
+  if (!b) return a;
+  return { ...a, message: `${a.message}\n\n${b.message}` };
+}
+
+/**
+ * ADR-0121 — refuse a reviewable `git commit` until `graph_change_impact` has
+ * run this turn.
+ *
+ * ADR-0084 shipped this as a once-per-turn advisory nudge. On 2026-09-28 three
+ * parallel agri-saas tabs committed changes whose consumers sat in another
+ * layer — an OpenAPI enum, a web page calling a route, a restore script
+ * mounting a config file — and found them only after declaring the branch
+ * done. The impact report now lists those text references beside the callers,
+ * and reading it is a precondition of the commit, not a suggestion.
+ *
+ * Same thresholds as the review skills (`classifyShipDiff`: boundary paths,
+ * or more than a small diff), same brakes: after `SHIP_REVIEW_MAX_DENIES`
+ * refusals in one turn the commit is allowed and the bypass logged. Needs a
+ * graph; without one there is nothing to run. Exported for tests.
+ */
+export function checkShipImpactRequired(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  collect: (cwd: string, parsed: CommitCommand) => ShipDiff | null = collectCommitDiff,
+): DesignHookDeny | null {
+  if (!ctx.hasGraph) return null;
+  if (toolName !== "Bash") return null;
+  if (ctx.changeImpactCallCount > 0) return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  const parsed = parseCommitCommand(cmd);
+  if (!parsed) return null;
+  const diff = collect(ctx.cwd, parsed);
+  if (!diff) return null;
+  if (classifyShipDiff(diff).length === 0) return null;
+  if (ctx.shipImpactDenies >= SHIP_REVIEW_MAX_DENIES) {
+    logDesignHookEvent({
+      kind: "ship.impact.bypass",
+      turnId: ctx.turnId,
+      tool: toolName,
+      files: diff.files.length,
+      changedLines: diff.changedLines,
+    });
+    notePracticeRuleFired("builtin:ship-review", "bypass");
+    return null;
+  }
+  ctx.shipImpactDenies += 1;
+  return {
+    behavior: "deny",
+    message:
+      `ship-impact gate (ADR-0121): this commit seals ${diff.files.length} file` +
+      `${diff.files.length === 1 ? "" : "s"} / ${diff.changedLines} changed lines, and ` +
+      "`graph_change_impact` has not run this turn. Run it now:\n\n" +
+      "    tool_use mcp__marvin-graph__graph_change_impact: {}\n\n" +
+      "Then act on BOTH lists before committing: every external caller, and every " +
+      "cross-layer reference (a spec enum, a route string, a file a script mounts). " +
+      "A consumer your change breaks is part of this change — update it here, whatever " +
+      "your write set says, or name it in the commit message as knowingly left and why. " +
+      "One run covers every commit this turn. (MARVIN_DESIGN_HOOKS=measure logs instead " +
+      `of denying; after ${SHIP_REVIEW_MAX_DENIES} refusals in one turn the commit is ` +
+      "allowed and the bypass is logged.)",
     interrupt: false,
   };
 }

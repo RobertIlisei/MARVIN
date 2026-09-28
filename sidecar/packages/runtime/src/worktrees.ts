@@ -300,6 +300,34 @@ export function nameSessionBranchFromCommit(workDir: string, sessionId: string):
   return { from: rec.branch, to };
 }
 
+/**
+ * ADR-0121 — what a session tree's OWN work touched: files in its own commits
+ * (first-parent, no merges, not already on the base branch — the same "own"
+ * as `nameSessionBranchFromCommit`) plus uncommitted changes, and the branch
+ * it is on now. Best-effort: any git failure yields what it could read.
+ */
+export function sessionOwnChanges(tree: { path: string; base: string; baseRef?: string }): { files: string[]; branch: string } {
+  const baseTip =
+    tree.baseRef && gitOk(tree.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.baseRef}`])
+      ? [`^refs/heads/${tree.baseRef}`]
+      : [];
+  const files = new Set<string>();
+  const committed = gitOr(
+    tree.path,
+    ["log", "--first-parent", "--no-merges", "--name-only", "--format=", "HEAD", `^${tree.base}`, ...baseTip],
+    "",
+  );
+  for (const l of committed.split("\n")) if (l.trim()) files.add(l.trim());
+  const dirty = gitOr(tree.path, ["status", "--porcelain", "--untracked-files=all"], "");
+  for (const l of dirty.split("\n")) {
+    // `git()` trims the whole output, so the FIRST line may have lost its
+    // leading status space — strip the XY column by shape, not by width.
+    const f = l.replace(/^[ MADRCUT?!]{1,2}\s/, "").trim().split(" -> ").pop();
+    if (f) files.add(f);
+  }
+  return { files: [...files].sort(), branch: gitOr(tree.path, ["rev-parse", "--abbrev-ref", "HEAD"], "") };
+}
+
 export function markSessionWorktreeClosed(workDir: string, sessionId: string, now = Date.now()): WorktreeRecord | null {
   const all = listWorktrees(workDir);
   const idx = all.findIndex((w) => w.kind === "session" && w.sessionId === sessionId);
