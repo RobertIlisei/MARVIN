@@ -77,7 +77,15 @@ struct RichText: NSViewRepresentable {
         nsView: LinkTextView,
         context: Context
     ) -> CGSize? {
-        var width = proposal.width.map { $0.isFinite && $0 > 0 ? $0 : 400 } ?? 400
+        // Consistent answers to SwiftUI's probes (TextSizingPolicy): ideal and
+        // maximum = the natural single-line width, minimum = 0, a real width is
+        // filled. This used to answer every zero / non-finite probe with a
+        // made-up 400 pt, which made a one-line reply claim a minimum wider than
+        // its real placement and a maximum narrower than it — and the lazy
+        // transcript stack never converged (2026-09-28 freeze).
+        let natural = TextMeasurer.naturalWidth(of: attributed)
+        let reported = TextSizingPolicy.width(proposal: proposal.width, naturalWidth: natural)
+        var measureAt = TextSizingPolicy.measuringWidth(reported: reported, naturalWidth: natural)
         // During a live window / split-view resize every frame proposes a
         // new width, and every new width is a cache miss that re-typesets
         // EVERY visible message — the "resizing is sluggish, nothing is
@@ -86,9 +94,9 @@ struct RichText: NSViewRepresentable {
         // row, invisible mid-drag); the final layout after the drag ends
         // measures exactly as before.
         if nsView.window?.inLiveResize == true || nsView.inLiveResize {
-            width = max(32, (width / 32).rounded(.down) * 32)
+            measureAt = max(32, (measureAt / 32).rounded(.down) * 32)
         }
-        return CGSize(width: width, height: TextMeasurer.height(of: attributed, width: width))
+        return CGSize(width: reported, height: TextMeasurer.height(of: attributed, width: measureAt))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -133,6 +141,14 @@ enum TextMeasurer {
         let text: Int
         let length: Int
         let width: CGFloat
+        /// The first run's font size. The same string in two fonts (a table
+        /// cell and a paragraph) must not share one measurement.
+        let fontSize: CGFloat
+    }
+
+    private static func fontSize(_ attributed: NSAttributedString) -> CGFloat {
+        guard attributed.length > 0 else { return 0 }
+        return (attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 0
     }
 
     private static var cache: [Key: CGFloat] = [:]
@@ -153,10 +169,27 @@ enum TextMeasurer {
         return s
     }()
 
+    private static var naturalCache: [Key: CGFloat] = [:]
+
+    /// The text's natural single-line width: laid out with no wrapping limit.
+    /// Memoised like `height`; the width part of the key is unused (0).
+    static func naturalWidth(of attributed: NSAttributedString) -> CGFloat {
+        let key = Key(text: attributed.string.hashValue, length: attributed.length, width: 0, fontSize: fontSize(attributed))
+        if let hit = naturalCache[key] { return hit }
+        storage.setAttributedString(attributed)
+        container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        guard let lm = storage.layoutManagers.first else { return 0 }
+        lm.ensureLayout(for: container)
+        let width = ceil(lm.usedRect(for: container).width)
+        if naturalCache.count >= cap { naturalCache.removeAll(keepingCapacity: true) }
+        naturalCache[key] = width
+        return width
+    }
+
     static func height(of attributed: NSAttributedString, width: CGFloat) -> CGFloat {
         // Round the width so sub-pixel probe jitter doesn't miss the cache.
         let w = (width * 2).rounded() / 2
-        let key = Key(text: attributed.string.hashValue, length: attributed.length, width: w)
+        let key = Key(text: attributed.string.hashValue, length: attributed.length, width: w, fontSize: fontSize(attributed))
         if let hit = cache[key] { return hit }
 
         storage.setAttributedString(attributed)

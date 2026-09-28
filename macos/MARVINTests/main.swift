@@ -4197,6 +4197,31 @@ runner.suite("sidebar-collapse-latch") {
     }
 }
 
+// 2026-09-28 — the transcript froze because a prose view answered SwiftUI's
+// minimum and maximum width probes with a made-up 400 pt (see TextSizingPolicy).
+runner.suite("text-sizing-policy") {
+    runner.test("ideal and maximum probes report the natural single-line width") {
+        runner.expect(TextSizingPolicy.width(proposal: nil, naturalWidth: 620), equals: 620, "ideal = natural")
+        runner.expect(TextSizingPolicy.width(proposal: .infinity, naturalWidth: 620), equals: 620, "max = natural, not 400")
+    }
+
+    runner.test("the minimum probe is zero, never wider than a real placement") {
+        runner.expect(TextSizingPolicy.width(proposal: 0, naturalWidth: 620), equals: 0, "min = 0, not 400")
+        runner.expect(TextSizingPolicy.width(proposal: 0, naturalWidth: 620) <= TextSizingPolicy.width(proposal: 300, naturalWidth: 620),
+                      "min never exceeds a real narrow width")
+        runner.expect(TextSizingPolicy.measuringWidth(reported: 0, naturalWidth: 620), equals: 620,
+                      "a min probe is measured as one line, not typeset at zero width")
+    }
+
+    runner.test("a real width is filled, and every answer is consistent across probes") {
+        runner.expect(TextSizingPolicy.width(proposal: 1190, naturalWidth: 620), equals: 1190, "fills a real width")
+        runner.expect(TextSizingPolicy.width(proposal: 300, naturalWidth: 620), equals: 300, "wraps at a narrow real width")
+        let minW = TextSizingPolicy.width(proposal: 0, naturalWidth: 620)
+        let maxW = TextSizingPolicy.width(proposal: .infinity, naturalWidth: 620)
+        runner.expect(minW <= maxW, "min <= max, so the stack sees a well-formed flexibility range")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
