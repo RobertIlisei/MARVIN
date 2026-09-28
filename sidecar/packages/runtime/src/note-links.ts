@@ -46,7 +46,19 @@ const ADR_DIRS = ["docs/adr", "docs/decisions"];
  */
 export function stripLinkTrailer(body: string): string {
   const at = body.indexOf(LINK_MARKER);
-  return at === -1 ? body : body.slice(0, at).trimEnd();
+  if (at === -1) return body;
+  const before = body.slice(0, at).trimEnd();
+  // Only the generated block is derived: the marker line and at most one
+  // `**Related:**` line. Anything after it was written by someone and must
+  // survive — it used to be dropped on the next rewrite (2026-09-28, seven
+  // stage items lost their Progress sections). Recurse in case the stranded
+  // text itself carries an older trailer.
+  const rest = body
+    .slice(at + LINK_MARKER.length)
+    .replace(/^[^\S\n]*\n?/, "")
+    .replace(/^\*\*Related:\*\*[^\n]*\n?/, "");
+  const stranded = stripLinkTrailer(rest).trim();
+  return stranded ? `${before}\n\n${stranded}` : before;
 }
 
 /** Map `0211` → `docs/adr/0211-sentinel-group.md`, built once per pass. */

@@ -88,6 +88,19 @@ describe("the trailer is derived, delimited and regenerated", () => {
   it("leaves a body with no trailer untouched", () => {
     expect(stripLinkTrailer("just a body")).toBe("just a body");
   });
+
+  // 2026-09-28 — progress notes appended BELOW the trailer (by hand or an
+  // older writer) were dropped on the next rewrite of seven agri-saas stage
+  // items. Only the generated block (marker + one Related line) is derived;
+  // anything after it is the author's and moves back into the body.
+  it("keeps text written after the generated trailer instead of dropping it", () => {
+    const body = "Outcome: X.";
+    const doc = `${body}${renderLinkTrailer(["[[a]]"])}\n## Progress 2026-09-25\nM1 landed in abc123.\n`;
+    expect(stripLinkTrailer(doc)).toBe(`${body}\n\n## Progress 2026-09-25\nM1 landed in abc123.`);
+    // A stranded section that itself carries an old trailer is still unwrapped.
+    const twice = `${doc}${renderLinkTrailer(["[[b]]"])}Deferred 2026-09-26.`;
+    expect(stripLinkTrailer(twice)).toBe(`${body}\n\n## Progress 2026-09-25\nM1 landed in abc123.\n\nDeferred 2026-09-26.`);
+  });
 });
 
 describe("dedup normalises across link forms (found on the first real pass)", () => {
