@@ -119,3 +119,31 @@ race-free proxy for "killed, not finished".
 tool) fires no completion turn, while the existing exit-code-0 / exit-code-3
 tests confirm genuine completions still fire. Existing transcript noise is left
 as-is (the user's session history); the fix only stops new occurrences.
+
+## Addendum — completions that never arrived (2026-09-29)
+
+An overnight run of eight parallel agri-saas tabs lost job completions three
+ways; each left a tab idle until a human noticed.
+
+1. **The sidecar restarted or crashed while a job ran.** The running-jobs map
+   lived only in memory, so the finished job had no listener. Jobs now go into
+   an on-disk ledger (`<data>/background-jobs.json`) while they run.
+   `recoverInterruptedJobs` runs at boot and gives each leftover job's session a
+   turn saying its result is unknown: check the artefacts and re-run. Jobs
+   older than six hours are dropped rather than reported, so a dev server left
+   running doesn't resurface forever.
+2. **A job was killed from outside while MARVIN kept running.** Memory
+   pressure kills JVMs with `SIGKILL`, and the `STOP_SIGNALS` guard above read
+   that as "the app quit". A stop signal now waits five seconds. If the sidecar
+   is still alive, the kill came from outside and a "stopped, not finished"
+   turn fires. If it isn't, the ledger entry is reported at the next boot. The
+   app-quit case above still fires nothing immediately.
+3. **An empty preamble `result` ended the turn early.** A leftover
+   `task_notification` makes the SDK emit a `num_turns: 0` result before the
+   model sees the prompt (8 of 625 turns over four days). The runner took it
+   as the end, closed the channel, and the model's first tool call got the
+   SDK's generic "the user doesn't want to take this action". It is now
+   treated as a preamble (`result-preamble.ts`), with a 60-second bound so a
+   genuinely empty turn still closes.
+
+Jobs also get the worktree `env` map now (ADR-0110 addendum).

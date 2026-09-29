@@ -70,6 +70,8 @@ export const marvinPaths = {
   activeProject: () => join(getMarvinDataDir(), "active-project.json"),
   /** Directory of per-project pending-wakeup files (ADR-0031). */
   wakeupsDir: () => join(getMarvinDataDir(), "wakeups"),
+  /** Ledger of running background jobs, reconciled at boot (ADR-0038). */
+  backgroundJobsFile: () => join(getMarvinDataDir(), "background-jobs.json"),
   /** Per-project pending self-scheduled wakeups (ADR-0031). */
   wakeupsFile: (projectId: string) =>
     join(getMarvinDataDir(), "wakeups", `${projectId}.json`),

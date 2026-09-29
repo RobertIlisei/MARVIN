@@ -29,6 +29,7 @@ import {
   describeClaim,
   listBacklog,
   MAX_BODY_CHARS,
+  MAX_NOTES_CHARS,
   MAX_TITLE_CHARS,
   resolveBacklogItem,
   setBacklogStatus,
@@ -281,9 +282,11 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
     "backlog_update",
     "EDIT an existing backlog item's fields by id: `severity`, `kind`, " +
       "`blocked`/`blockedOn`, or REPLACE its `body`. The title and id never " +
-      "change (a rename is a new item). A body over " +
-      `${MAX_BODY_CHARS} chars is REFUSED and nothing is written — condense it and ` +
-      "retry. Replacing a body must keep every outcome, exit-gate, blocker and " +
+      "change (a rename is a new item). The description (every line that is " +
+      `not a \`> \` note) is capped at ${MAX_BODY_CHARS} chars and the \`> \` notes at ` +
+      `${MAX_NOTES_CHARS}; an overflow of either is REFUSED and nothing is written — condense and ` +
+      "retry. To add a dated progress note without changing status or claim, pass " +
+      "`note` (it is appended; the body is untouched). Replacing a body must keep every outcome, exit-gate, blocker and " +
       "build-order line: move history to a pointer (ADR, doc), never drop it. " +
       "Only change what the user approved; never re-prioritise or rewrite " +
       "items on the strength of `backlog_groom` alone (ADR-0063).",
@@ -293,11 +296,12 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
       kind: z.enum(BACKLOG_KINDS).optional(),
       blocked: z.boolean().optional(),
       blockedOn: z.string().max(200).optional().describe("Who or what it waits on; an item id where the blocker is another item. Empty string clears it."),
-      body: z.string().min(1).optional().describe(`The full replacement body (≤ ${MAX_BODY_CHARS} chars).`),
+      note: z.string().min(1).optional().describe("A progress note appended as a dated `> note` line; status and claim unchanged."),
+      body: z.string().min(1).optional().describe(`The full replacement body (description ≤ ${MAX_BODY_CHARS} chars, \`> \` notes ≤ ${MAX_NOTES_CHARS}).`),
     },
-    async ({ id, severity, kind, blocked, blockedOn, body }) => {
-      if (severity === undefined && kind === undefined && blocked === undefined && blockedOn === undefined && body === undefined) {
-        return errorResult("nothing to change — pass at least one of severity, kind, blocked, blockedOn, body.");
+    async ({ id, severity, kind, blocked, blockedOn, body, note }) => {
+      if (severity === undefined && kind === undefined && blocked === undefined && blockedOn === undefined && body === undefined && note === undefined) {
+        return errorResult("nothing to change — pass at least one of severity, kind, blocked, blockedOn, body, note.");
       }
       const res = await updateBacklogItem(cwd, id, {
         ...(severity !== undefined ? { severity } : {}),
@@ -305,6 +309,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         ...(blocked !== undefined ? { blocked } : {}),
         ...(blockedOn !== undefined ? { blockedOn } : {}),
         ...(body !== undefined ? { body } : {}),
+        ...(note !== undefined ? { note } : {}),
       });
       if (!res.ok) return errorResult(res.error);
       const changed = [
@@ -313,6 +318,7 @@ export function createBacklogMcpServer(ctx: BacklogToolContext) {
         blocked !== undefined && `blocked=${blocked}`,
         blockedOn !== undefined && `blockedOn=${blockedOn ? `"${blockedOn}"` : "(cleared)"}`,
         body !== undefined && `body (${res.item.body.length} chars)`,
+        note !== undefined && "note appended",
       ].filter(Boolean);
       return textResult(`Backlog item \`${id}\` updated: ${changed.join(", ")}.`);
     },

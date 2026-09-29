@@ -1,6 +1,7 @@
 import { areasOfTitle, type ProjectAreas } from "@marvin/graphify-bridge";
 
 import { bashSearchTarget, isInsideCwd, isSourceFile } from "./bash-search";
+import { hasScopeMet, statesScopeNotMet } from "./workflow-guard";
 
 /**
  * Practice-loop extractors (ADR-0105).
@@ -173,10 +174,6 @@ export function kindOf(fingerprint: string): FingerprintKind | null {
 // Parsing
 // ---------------------------------------------------------------------------
 
-const SCOPE_MET_SENTINEL = "<!-- marvin:scope-met -->";
-/** A stated scope-NOT-met handoff: a bold lead ("**Not done yet**", "**Not
- *  scope met**", "**Scope not met:**") or the phrase anywhere in the text. */
-const SCOPE_NOT_MET = /\*\*\s*(?:scope (?:is )?not(?: yet)? met|not scope met|not done(?: yet)?)\b|\bscope (?:is )?not(?: yet)? met\b/i;
 
 /** The synthetic `system` cli.event sdk-runner emits when pre-orientation ran. */
 export const PREORIENT_SUBTYPE = "marvin.graph.preorient";
@@ -383,11 +380,13 @@ export function classifyTurnEnding(
 ): "background" | "blocked-on-human" | "asked" | "scope-met" | "scope-not-met" | "stopped" | "empty" {
   const e = lastText.toLowerCase();
   if (!lastText.trim()) return "empty";
-  if (lastText.includes(SCOPE_MET_SENTINEL) || /\*\*scope met:\*\*/i.test(lastText)) return "scope-met";
+  // Not-met first: a turn that says "scope is not met" and then appends the
+  // sentinel anyway (2026-09-29) handed off unfinished work, not a close.
   // The Stop hook's own instruction: "If the scope is NOT met, say exactly
   // what remains instead — never claim it to clear this." A turn that did
   // that handed off; the 2026-09-04 ledger read two of them as missing.
-  if (SCOPE_NOT_MET.test(lastText)) return "scope-not-met";
+  if (statesScopeNotMet(lastText)) return "scope-not-met";
+  if (hasScopeMet(lastText) || /\*\*scope met:\*\*/i.test(lastText)) return "scope-met";
   if (/wakeup|background job|pick back up automatically|polling|watching (for|the|it)/.test(e)) return "background";
   if (
     /waiting on you|waiting for you|let me know when|once (that|it)'?s (pushed|merged|approved|done)|needs? your (go-ahead|review|approval|read|sign-off|audit)|your call|before i touch|i('| wi)ll wait for your|when you('|')?ve|after you (push|merge|approve|review)|blocked on you|i'll check with you before|wait for your go-ahead/.test(

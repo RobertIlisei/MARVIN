@@ -35,6 +35,19 @@ public enum ScopeMetDetector {
     /// impossible (HTML comments inside regular chat output are
     /// already rare; the `marvin:` prefix removes the rest).
     public static func isPresent(in text: String) -> Bool {
-        return text.contains(sentinel)
+        return text.contains(sentinel) && !statesNotMet(text)
+    }
+
+    /// Same rule as the sidecar's `statesScopeNotMet` (workflow-guard.ts):
+    /// a turn that says the scope is not met handed off unfinished work even
+    /// if it appended the sentinel (observed 2026-09-29).
+    private static let notMet = try! NSRegularExpression(
+        pattern: #"\*\*\s*(?:scope (?:is )?not(?: yet)? met|not scope met|not done(?: yet)?)\b|\bscope (?:is |has )?(?:not|n[o']t)(?: yet)? (?:been )?met\b|\bscope isn['’]t(?: yet)? met\b"#,
+        options: [.caseInsensitive]
+    )
+
+    public static func statesNotMet(_ text: String) -> Bool {
+        let range = NSRange(text.startIndex..., in: text)
+        return notMet.firstMatch(in: text, options: [], range: range) != nil
     }
 }

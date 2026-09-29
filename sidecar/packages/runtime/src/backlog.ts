@@ -26,6 +26,27 @@ import { type AdrIndex, buildAdrIndex, linkTrailerFor, stripLinkTrailer } from "
 export const INDEX_HEADER = "# Project Backlog";
 export const MAX_TITLE_CHARS = 120;
 export const MAX_BODY_CHARS = 2000;
+/** Dated notes (`> ` lines) have their own budget, separate from the
+ *  description's. 2026-09-29: counting notes against the description cap left
+ *  three long-running stage items at 2000 chars unable to take any progress
+ *  note — the one thing a long-running item accumulates. */
+export const MAX_NOTES_CHARS = 4000;
+
+/** Why a body can't be stored, or null. Description = every line that isn't a
+ *  `> ` note; notes = the `> ` lines. Each has its own cap; both refuse, never
+ *  truncate. */
+export function bodyLimitError(body: string): string | null {
+  const lines = body.split("\n");
+  const notes = lines.filter((l) => l.startsWith(">")).join("\n");
+  const description = lines.filter((l) => !l.startsWith(">")).join("\n").trim();
+  if (description.length > MAX_BODY_CHARS) {
+    return `the description is ${description.length} chars (max ${MAX_BODY_CHARS}); a backlog item is a pointer, not a doc — condense it and retry. Nothing was written.`;
+  }
+  if (notes.length > MAX_NOTES_CHARS) {
+    return `the notes are ${notes.length} chars (max ${MAX_NOTES_CHARS}); condense older notes with backlog_update (move history to the item's source doc) and retry. Nothing was written.`;
+  }
+  return null;
+}
 /** Open+doing rail — a guard against a runaway queue, not a workload
  *  target. Raised 50 → 200 (2026-07-08): a real project hit 50 through
  *  ordinary capture-at-discovery use; the rail exists to stop a model
@@ -681,9 +702,8 @@ export async function addBacklogItem(
     return { ok: false, error: `title is ${title.length} chars (max ${MAX_TITLE_CHARS}) — keep it to one actionable line.` };
   }
   const body = (input.body ?? "").trim();
-  if (body.length > MAX_BODY_CHARS) {
-    return { ok: false, error: `body is ${body.length} chars (max ${MAX_BODY_CHARS}); a backlog item is a pointer, not a doc.` };
-  }
+  const addLimit = bodyLimitError(body);
+  if (addLimit) return { ok: false, error: addLimit };
   const severity: BacklogSeverity = input.severity ?? "med";
   const slug = slugify(title);
   const dir = backlogDir(workDir);
@@ -831,16 +851,22 @@ export async function updateBacklogItem(
     kind?: BacklogKind;
     blocked?: boolean;
     blockedOn?: string;
+    /** Append a dated `> note` line without changing status or claim. */
+    note?: string;
   },
+  now: Date = new Date(),
 ): Promise<ResolveResult> {
   const path = join(backlogDir(workDir), `${id}.md`);
   if (!existsSync(path)) return { ok: false, error: `no backlog item "${id}".` };
   const item = parseItem(id, await readFile(path, "utf-8"));
+  if (fields.note !== undefined && fields.note.trim()) {
+    const base = fields.body !== undefined ? fields.body.trim() : item.body;
+    fields = { ...fields, body: `${base}\n\n> note ${now.toISOString().slice(0, 10)} — ${fields.note.trim()}`.trim() };
+  }
   // Refuse, never truncate: a silent `.slice` cut real item text mid-word
   // (2026-09-28). The caller condenses and retries; nothing is written.
-  if (fields.body !== undefined && fields.body.trim().length > MAX_BODY_CHARS) {
-    return { ok: false, error: `body is ${fields.body.trim().length} chars (max ${MAX_BODY_CHARS}); condense it and retry — nothing was written.` };
-  }
+  const updateLimit = fields.body !== undefined ? bodyLimitError(fields.body.trim()) : null;
+  if (updateLimit) return { ok: false, error: updateLimit };
   if (fields.severity !== undefined) item.severity = fields.severity;
   if (fields.body !== undefined) item.body = fields.body.trim();
   if (fields.kind !== undefined) item.kind = fields.kind;
@@ -939,14 +965,8 @@ export async function setBacklogStatus(
   // to the cap, so on an item near it the note vanished or the tail was cut
   // (2026-09-28, the Dxx stage items). Checked before anything is changed.
   const withNote = note && note.trim() ? `${item.body}\n\n> ${status} — ${note.trim()}`.trim() : null;
-  if (withNote !== null && withNote.length > MAX_BODY_CHARS) {
-    return {
-      ok: false,
-      error:
-        `adding this note would make the body ${withNote.length} chars (max ${MAX_BODY_CHARS}); ` +
-        `shorten the note, or condense the body with backlog_update first — nothing was written.`,
-    };
-  }
+  const noteLimit = withNote !== null ? bodyLimitError(withNote) : null;
+  if (noteLimit) return { ok: false, error: `adding this note: ${noteLimit}` };
   item.status = status;
   item.updated = new Date().toISOString();
   if (status !== "doing") {

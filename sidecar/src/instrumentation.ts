@@ -70,4 +70,17 @@ export async function register(): Promise<void> {
       `[wakeup-scheduler] re-armed ${stats.armed}, fired ${stats.firedImmediately} past-due, dropped ${stats.dropped} stale`,
     );
   }
+  // ADR-0038 addendum (2026-09-29): jobs that were running when the sidecar
+  // went away get a completion turn saying their result is unknown.
+  try {
+    const { recoverInterruptedJobs } = await import("@marvin/runtime/background-jobs");
+    const jobs = recoverInterruptedJobs();
+    if (jobs.reported || jobs.dropped) {
+      // eslint-disable-next-line no-console
+      console.log(`[background-jobs] reported ${jobs.reported} interrupted job(s), dropped ${jobs.dropped} stale`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[background-jobs] boot recovery failed:", err);
+  }
 }

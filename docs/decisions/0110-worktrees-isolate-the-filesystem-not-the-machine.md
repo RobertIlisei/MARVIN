@@ -103,3 +103,14 @@ every other `.marvin/` reader: a typo must never cost the user their worktree.
 - [x] The worktrees guide names what isolation does not cover, with this
       incident and a table of usual offenders.
 - [x] Tests cover the map, coercion, rejection, caps, defaults and detection.
+
+## Addendum — background jobs got the sidecar's environment (2026-09-29)
+
+The `env` map reached a worktree tab's own commands, but not its background
+jobs. `startBackgroundJob` spawned with `process.env`, and heavy test runs
+(`make fast`, smoke ITs) are nearly always started as jobs. So
+`TESTCONTAINERS_REUSE_ENABLE=false` never reached them, and two tabs cycled one
+reused Postgres container mid-run. This is the incident this ADR exists for,
+back by a side door. Jobs in a session worktree now get the same validated map
+(`jobEnv` in `background-jobs.ts`). Jobs in the shared checkout still don't,
+the same rule as the turn.

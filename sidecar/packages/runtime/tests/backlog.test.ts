@@ -14,6 +14,7 @@ import {
   describeClaim,
   listBacklog,
   MAX_BODY_CHARS,
+  MAX_NOTES_CHARS,
   MAX_OPEN_ITEMS,
   MAX_TITLE_CHARS,
   NEAR_DUPLICATE_SCORE,
@@ -137,21 +138,51 @@ describe("backlog store — add / list / resolve", () => {
   });
 
   // 2026-09-28 — a note on an item near the cap was cut mid-word (and at the
-  // cap, the note vanished). A note that would overflow is refused, and
-  // nothing — status, body, note — is written.
-  it("a note that would push the body past the cap is refused and nothing is lost", async () => {
+  // cap, the note vanished); refusing fixed the loss. 2026-09-29 — but notes
+  // counted against the DESCRIPTION's cap, so three long-running stage items
+  // at 2000 chars could take no progress note at all. Notes (`> ` lines) now
+  // have their own budget; an overflow of either is refused, nothing written.
+  it("a note on an item whose description is at the cap is appended — notes have their own budget", async () => {
     const body = `${"b".repeat(MAX_BODY_CHARS - 20)}END`;
     const add = await addBacklogItem(workDir, { title: "near the cap", body });
     expect(add.ok).toBe(true);
     if (!add.ok) return;
+    const r = await setBacklogStatus(workDir, add.item.id, "open", "wave 3: M4 landed in abc123 (FooIT 3/3)");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.item.body.endsWith("> open — wave 3: M4 landed in abc123 (FooIT 3/3)")).toBe(true);
+  });
 
-    const r = await resolveBacklogItem(workDir, { id: add.item.id, resolution: "done", note: "landed in abc123 with FooTest 3/3" });
+  it("a note that would overflow the notes budget is refused and nothing is lost", async () => {
+    const add = await addBacklogItem(workDir, { title: "many notes", body: "short" });
+    if (!add.ok) return;
+    const big = "n".repeat(MAX_NOTES_CHARS - 50);
+    const first = await setBacklogStatus(workDir, add.item.id, "open", big);
+    expect(first.ok).toBe(true);
+    const r = await resolveBacklogItem(workDir, { id: add.item.id, resolution: "done", note: "x".repeat(200) });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain(String(MAX_BODY_CHARS));
+    if (!r.ok) expect(r.error).toContain(String(MAX_NOTES_CHARS));
     const after = (await listBacklog(workDir)).find((i) => i.id === add.item.id)!;
     expect(after.status).toBe("open");
-    expect(after.body).toBe(body);
+  });
 
+  it("the description cap still refuses an over-long body even when notes are short", async () => {
+    const r = await addBacklogItem(workDir, { title: "long desc", body: `${"d".repeat(MAX_BODY_CHARS + 5)}\n\n> open — a note` });
+    expect(r.ok).toBe(false);
+  });
+
+  it("backlog_update's note appends a dated line and leaves status and claim alone", async () => {
+    const add = await addBacklogItem(workDir, { title: "claimed item", body: "outcome" });
+    if (!add.ok) return;
+    await setBacklogStatus(workDir, add.item.id, "doing", undefined, { sessionId: "tab-1", branch: "b" });
+    const r = await updateBacklogItem(workDir, add.item.id, { note: "wave 3 landed in abc123" }, new Date("2026-09-29T10:00:00Z"));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.item.body).toBe("outcome\n\n> note 2026-09-29 — wave 3 landed in abc123");
+    expect(r.item.status).toBe("doing");
+    expect(r.item.claimedBy).toBe("tab-1");
+  });
+
+  it("appends a note that fits", async () => {
     // A note that fits is appended whole.
     const small = await addBacklogItem(workDir, { title: "roomy", body: "short" });
     if (!small.ok) return;

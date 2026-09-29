@@ -19,9 +19,12 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { stepDownEffort } from "./effort";
-
-import { fireNow, MAX_CHAIN_DEPTH, type WakeupRecord } from "./wakeup-scheduler";
+import { marvinPaths } from "./paths";
+import { enqueueWakeup, fireNow, MAX_CHAIN_DEPTH, type WakeupRecord } from "./wakeup-scheduler";
+import { readWorktreeSetupConfig } from "./worktree-setup";
 
 /** Max concurrent background jobs per session — a rail, not a workload. */
 export const MAX_JOBS_PER_SESSION = 3;
@@ -53,6 +56,77 @@ const STOP_SIGNALS = new Set<NodeJS.Signals>([
   "SIGHUP",
   "SIGKILL",
 ]);
+
+/**
+ * A stop signal is only "the app quit" if the sidecar is gone shortly after.
+ * 2026-09-29: under memory pressure macOS killed test JVMs while MARVIN kept
+ * running, and a tab waited for a completion that the STOP_SIGNALS guard had
+ * swallowed. So a stopped job stays in the on-disk ledger, and if the sidecar
+ * is still alive after this grace the kill came from outside: tell the tab.
+ * If the sidecar died, the next boot finds the ledger entry instead.
+ */
+export const STOPPED_JOB_GRACE_MS = 5_000;
+let stoppedGraceMs = STOPPED_JOB_GRACE_MS;
+const stopTimers = new Set<ReturnType<typeof setTimeout>>();
+/** Test-only: shorten the grace. */
+export function __setStoppedGraceForTests(ms: number | null): void {
+  stoppedGraceMs = ms ?? STOPPED_JOB_GRACE_MS;
+}
+
+/** Interrupted jobs older than this are not reported at boot (a dev server
+ *  left running for a day is not news). Matches the job-done deferral window. */
+export const INTERRUPTED_JOB_REPORT_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+// ── On-disk ledger of running jobs ─────────────────────────────────────
+// The in-memory map dies with the sidecar. Before this ledger, a restart or
+// crash while a job ran meant the job's completion was never reported and the
+// tab sat idle until a human noticed (measured 2026-09-29: jobs whose output
+// was complete, with no completion turn, after sidecar restarts; and every
+// running job at the 09:50 machine crash).
+interface PersistedJob {
+  id: string;
+  command: string;
+  reason: string;
+  pid: number;
+  startedAt: string;
+  ctx: BackgroundJobContext;
+}
+let jobsFileOverride: string | null = null;
+/** Test-only: point the ledger at a temp file. */
+export function __setJobsFileForTests(path: string | null): void {
+  jobsFileOverride = path;
+}
+function jobsFile(): string {
+  return jobsFileOverride ?? marvinPaths.backgroundJobsFile();
+}
+function readLedger(): PersistedJob[] {
+  const path = jobsFile();
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as { jobs?: PersistedJob[] };
+    return Array.isArray(parsed.jobs) ? parsed.jobs : [];
+  } catch {
+    return [];
+  }
+}
+function writeLedger(jobs: PersistedJob[]): void {
+  try {
+    const path = jobsFile();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ jobs }, null, 2), "utf-8");
+  } catch {
+    /* the ledger is a recovery aid; never fail a job on it */
+  }
+}
+function ledgerAdd(rec: JobRecord): void {
+  const { id, command, reason, pid, startedAt, ctx } = rec;
+  writeLedger([...readLedger().filter((j) => j.id !== id), { id, command, reason, pid, startedAt, ctx }]);
+}
+function ledgerRemove(id: string): void {
+  const jobs = readLedger();
+  const next = jobs.filter((j) => j.id !== id);
+  if (next.length !== jobs.length) writeLedger(next);
+}
 
 /** Per-turn identity + config the completion turn inherits — same shape
  *  as the wakeup tool context (no capability elevation). */
@@ -134,7 +208,7 @@ export function startBackgroundJob(input: {
   try {
     child = spawn("/bin/bash", ["-lc", command], {
       cwd: ctx.cwd,
-      env: process.env,
+      env: jobEnv(ctx),
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (err) {
@@ -170,7 +244,26 @@ export function startBackgroundJob(input: {
   child.on("exit", (code, signal) => onExit(rec, code, signal));
 
   state.jobs.set(rec.id, rec);
+  ledgerAdd(rec);
   return { ok: true, id: rec.id, pid: rec.pid };
+}
+
+/**
+ * ADR-0110 — the project's worktree `env` map, for a job in a session worktree
+ * (never the shared checkout: same rule as the turn in sdk-runner). Before
+ * 2026-09-29 jobs got only the sidecar's environment, so test runs started as
+ * jobs kept Testcontainers reuse ON and tabs cycled each other's containers.
+ * `readWorktreeSetupConfig` validates the map at the read boundary (it refuses
+ * names that select code or carry MARVIN's credentials).
+ */
+function jobEnv(ctx: BackgroundJobContext): NodeJS.ProcessEnv {
+  const inWorktree = !!ctx.workDir && resolve(ctx.cwd) !== resolve(ctx.workDir);
+  if (!inWorktree || !ctx.workDir) return process.env;
+  try {
+    return { ...process.env, ...readWorktreeSetupConfig(ctx.workDir).env };
+  } catch {
+    return process.env;
+  }
 }
 
 /**
@@ -203,14 +296,27 @@ function outputExcerpt(rec: JobRecord): string {
 function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | null): void {
   state.jobs.delete(rec.id);
   // A user-cancelled job doesn't earn a "diagnose the failure" turn.
-  if (rec.cancelled) return;
-  // Neither does a job that was STOPPED by a shutdown/stop signal rather than
-  // finishing — overwhelmingly the sidecar being SIGTERM'd on app quit, which
-  // kills its child jobs. Without this, every app quit fires a spurious
-  // "killed by signal SIGTERM — it did NOT succeed" turn that resurfaces in the
-  // chat on the next launch (ADR-0038 follow-up). A real exit code, or a crash
-  // signal, still fires below.
-  if (signal != null && STOP_SIGNALS.has(signal)) return;
+  if (rec.cancelled) {
+    ledgerRemove(rec.id);
+    return;
+  }
+  // Nor, immediately, does a job STOPPED by a shutdown-shaped signal — usually
+  // the sidecar being SIGTERM'd on app quit, which kills its child jobs; firing
+  // then resurfaced a spurious "did NOT succeed" turn on every relaunch
+  // (ADR-0038 follow-up). But the ledger entry stays: if the sidecar is still
+  // running after the grace, the kill came from outside and the tab is told;
+  // if it isn't, the next boot reports the job as interrupted.
+  if (signal != null && STOP_SIGNALS.has(signal)) {
+    const t = setTimeout(() => {
+      stopTimers.delete(t);
+      ledgerRemove(rec.id);
+      void fireNow(stoppedJobRecord(rec, signal));
+    }, stoppedGraceMs);
+    t.unref?.();
+    stopTimers.add(t);
+    return;
+  }
+  ledgerRemove(rec.id);
 
   const failed = signal != null || (code ?? 1) !== 0;
   const status = signal ? `killed by signal ${signal}` : `exit code ${code ?? "unknown"}`;
@@ -249,6 +355,70 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
     depth: rec.ctx.depth + 1,
   };
   void fireNow(record);
+}
+
+function wakeupFor(job: Pick<JobRecord, "id" | "ctx" | "startedAt">, prompt: string, reason: string): WakeupRecord {
+  return {
+    id: job.id,
+    marvinSessionId: job.ctx.marvinSessionId,
+    projectId: job.ctx.projectId,
+    cwd: job.ctx.cwd,
+    ...(job.ctx.workDir ? { workDir: job.ctx.workDir } : {}),
+    model: job.ctx.model,
+    advisorModel: job.ctx.advisorModel,
+    personality: job.ctx.personality,
+    permissionStrategy: job.ctx.permissionStrategy,
+    thinkingMode: job.ctx.thinkingMode,
+    ...(job.ctx.advisorThinkingMode ? { advisorThinkingMode: job.ctx.advisorThinkingMode } : {}),
+    prompt,
+    reason,
+    createdAt: job.startedAt,
+    fireAt: Date.now(),
+    depth: job.ctx.depth + 1,
+  };
+}
+
+function stoppedJobRecord(rec: JobRecord, signal: NodeJS.Signals): WakeupRecord {
+  const tail = outputExcerpt(rec).trim() || "(no output captured)";
+  const prompt =
+    "A background job you started earlier was stopped before it finished.\n\n" +
+    `Command: \`${rec.command}\`\n` +
+    `Result: killed by signal ${signal} — not by you and not by a MARVIN shutdown (MARVIN kept running). ` +
+    "The usual cause is the machine running out of memory, or another process killing it.\n\n" +
+    "Last output:\n```\n" +
+    tail +
+    "\n```\n\n" +
+    "It did NOT finish. Re-run it (in the foreground if it is short, or when fewer heavy jobs are running), then continue your plan.";
+  return wakeupFor(rec, prompt, `background job stopped: ${rec.reason || rec.command.slice(0, 40)}`);
+}
+
+/**
+ * On boot: every job still in the ledger was running when the sidecar went
+ * away (a restart, an app quit, a crash). Its result is unknown — tell its
+ * session so the tab doesn't wait forever. Returns what was reported.
+ */
+export function recoverInterruptedJobs(now: number = Date.now()): { reported: number; dropped: number } {
+  const jobs = readLedger().filter((j) => !state.jobs.has(j.id));
+  let reported = 0;
+  let dropped = 0;
+  for (const j of jobs) {
+    const age = now - Date.parse(j.startedAt);
+    if (!Number.isFinite(age) || age > INTERRUPTED_JOB_REPORT_WINDOW_MS) {
+      dropped += 1;
+      continue;
+    }
+    const prompt =
+      "A background job you started earlier was cut off when MARVIN restarted, so its completion was never reported.\n\n" +
+      `Command: \`${j.command}\`\n` +
+      `Started: ${j.startedAt}\n\n` +
+      "Its result is unknown: it may have finished, failed, or been killed (it may even still be running as an orphan). " +
+      "Check what it was meant to produce (git log, test reports, build output), re-run it if the result isn't there, " +
+      "then continue your plan.";
+    enqueueWakeup({ ...wakeupFor(j, prompt, `background job interrupted: ${j.reason || j.command.slice(0, 40)}`), fireAt: now + 15_000 });
+    reported += 1;
+  }
+  writeLedger(readLedger().filter((j) => state.jobs.has(j.id)));
+  return { reported, dropped };
 }
 
 export interface BackgroundJobSummary {
@@ -304,4 +474,6 @@ export function __resetBackgroundJobsForTests(): void {
     }
   }
   state.jobs.clear();
+  for (const t of stopTimers) clearTimeout(t);
+  stopTimers.clear();
 }

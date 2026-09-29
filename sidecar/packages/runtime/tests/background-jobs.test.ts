@@ -1,13 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   __resetBackgroundJobsForTests,
+  __setJobsFileForTests,
+  __setStoppedGraceForTests,
   cancelBackgroundJob,
+  INTERRUPTED_JOB_REPORT_WINDOW_MS,
   listBackgroundJobs,
+  recoverInterruptedJobs,
   startBackgroundJob,
 } from "../src/background-jobs";
 import {
   __resetSchedulerForTests,
+  cancelWakeup,
+  listWakeups,
   setWakeupFireHandler,
   type WakeupRecord,
 } from "../src/wakeup-scheduler";
@@ -29,10 +38,23 @@ const ctx = {
   depth: 0,
 };
 
+let ledgerPath = "";
+beforeEach(() => {
+  ledgerPath = join(mkdtempSync(join(tmpdir(), "marvin-jobs-")), "background-jobs.json");
+  __setJobsFileForTests(ledgerPath);
+});
+
 afterEach(() => {
   __resetBackgroundJobsForTests();
   __resetSchedulerForTests();
+  __setJobsFileForTests(null);
+  __setStoppedGraceForTests(null);
 });
+
+function ledgerIds(): string[] {
+  if (!existsSync(ledgerPath)) return [];
+  return (JSON.parse(readFileSync(ledgerPath, "utf-8")).jobs as { id: string }[]).map((j) => j.id);
+}
 
 function onNextFire(): Promise<WakeupRecord> {
   return new Promise((resolve) => {
@@ -147,5 +169,92 @@ describe("background-job completion wakeup", () => {
     expect(ok.every((r) => r.ok)).toBe(true);
     const overflow = startBackgroundJob({ command: "sleep 5", reason: "4", ctx });
     expect(overflow.ok).toBe(false);
+  });
+});
+
+// ADR-0038 addendum (2026-09-29): the running-jobs map died with the sidecar,
+// so a restart or crash while a job ran lost its completion and the tab waited
+// for a human. The ledger on disk survives; boot reports what it finds.
+describe("background-job ledger and recovery", () => {
+  it("a running job is in the ledger and leaves it when it finishes", async () => {
+    const fired = onNextFire();
+    const res = startBackgroundJob({ command: "sleep 0.2; echo done", reason: "ledger", ctx });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(ledgerIds()).toEqual([res.id]);
+    await fired;
+    expect(ledgerIds()).toEqual([]);
+  });
+
+  it("at boot, a job left in the ledger gets a turn saying its result is unknown", () => {
+    const prevDataDir = process.env.MARVIN_DATA_DIR;
+    process.env.MARVIN_DATA_DIR = mkdtempSync(join(tmpdir(), "marvin-data-"));
+    const startedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    writeFileSync(
+      ledgerPath,
+      JSON.stringify({ jobs: [{ id: "lost-1", command: "make fast", reason: "fast band", pid: 999999, startedAt, ctx }] }),
+    );
+    const out = recoverInterruptedJobs();
+    expect(out).toEqual({ reported: 1, dropped: 0 });
+    const queued = listWakeups({ marvinSessionId: "sess" }).find((w) => w.id === "lost-1");
+    expect(queued?.prompt).toContain("cut off when MARVIN restarted");
+    expect(queued?.prompt).toContain("make fast");
+    expect(queued?.permissionStrategy).toBe("auto"); // posture inherited
+    expect(ledgerIds()).toEqual([]);
+    cancelWakeup("lost-1", "proj");
+    if (prevDataDir === undefined) delete process.env.MARVIN_DATA_DIR;
+    else process.env.MARVIN_DATA_DIR = prevDataDir;
+  });
+
+  it("a job older than the report window is dropped, not reported", () => {
+    const startedAt = new Date(Date.now() - INTERRUPTED_JOB_REPORT_WINDOW_MS - 60_000).toISOString();
+    writeFileSync(
+      ledgerPath,
+      JSON.stringify({ jobs: [{ id: "old-1", command: "pnpm dev", reason: "dev server", pid: 999999, startedAt, ctx }] }),
+    );
+    expect(recoverInterruptedJobs()).toEqual({ reported: 0, dropped: 1 });
+    expect(ledgerIds()).toEqual([]);
+  });
+
+  it("a job SIGKILLed from outside while MARVIN keeps running fires a 'stopped' turn after the grace", async () => {
+    __setStoppedGraceForTests(100);
+    const fired = onNextFire();
+    const res = startBackgroundJob({ command: "sleep 5", reason: "jvm", ctx });
+    expect(res.ok).toBe(true);
+    if (res.ok) process.kill(res.pid, "SIGKILL");
+    const rec = await fired;
+    expect(rec.prompt).toContain("killed by signal SIGKILL");
+    expect(rec.prompt).toMatch(/out of memory/);
+    expect(ledgerIds()).toEqual([]);
+  });
+});
+
+// ADR-0110 addendum (2026-09-29): the worktree `env` map reached a tab's own
+// commands but not its background jobs, which were spawned with the sidecar's
+// environment — so `make fast` / smoke runs, nearly always started as jobs,
+// kept Testcontainers reuse ON and two tabs cycled one Postgres container.
+describe("background jobs honour the worktree env map", () => {
+  function projectWithEnv(env: Record<string, string>): { workDir: string; tree: string } {
+    const workDir = mkdtempSync(join(tmpdir(), "marvin-proj-"));
+    mkdirSync(join(workDir, ".marvin"), { recursive: true });
+    writeFileSync(join(workDir, ".marvin", "worktree.json"), JSON.stringify({ env }));
+    const tree = join(workDir, ".marvin", "worktrees", "tab-x");
+    mkdirSync(tree, { recursive: true });
+    return { workDir, tree };
+  }
+
+  it("a job in a session worktree gets the project's env map", async () => {
+    const { workDir, tree } = projectWithEnv({ TESTCONTAINERS_REUSE_ENABLE: "false" });
+    const fired = onNextFire();
+    startBackgroundJob({ command: "echo reuse=$TESTCONTAINERS_REUSE_ENABLE", reason: "env", ctx: { ...ctx, cwd: tree, workDir } });
+    const rec = await fired;
+    expect(rec.prompt).toContain("reuse=false");
+  });
+
+  it("a job in the shared checkout does not (same rule as the turn)", async () => {
+    const { workDir } = projectWithEnv({ TESTCONTAINERS_REUSE_ENABLE: "false" });
+    const fired = onNextFire();
+    startBackgroundJob({ command: "echo reuse=${TESTCONTAINERS_REUSE_ENABLE:-unset}", reason: "env", ctx: { ...ctx, cwd: workDir, workDir } });
+    const rec = await fired;
+    expect(rec.prompt).toContain("reuse=unset");
   });
 });

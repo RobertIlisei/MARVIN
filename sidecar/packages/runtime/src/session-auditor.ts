@@ -41,6 +41,7 @@ import { type CiStatus, collectCiStatus, renderCiStatus } from "./ci-status";
 import { ensureProviderModelId, latestForTier } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
+import { hasScopeMet } from "./workflow-guard";
 
 /** Caps — the packet is bounded so an audit can't blow up cost or context. */
 export const AUDIT_CAPS = {
@@ -110,7 +111,6 @@ export interface AuditPacket {
 }
 
 /** The Phase-7 close marker — same literal as workflow-guard / ScopeMetDetector. */
-const SCOPE_MET_SENTINEL = "<!-- marvin:scope-met -->";
 
 function clip(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n)}…[+${s.length - n} chars]`;
@@ -258,7 +258,7 @@ export function buildAuditPacket(args: {
     auditLog: safe(() => readAutoAuditTail(cwd, AUDIT_CAPS.auditEntries), []),
     changedFiles,
     touchedDocs: touchedDocsFrom(changedFiles),
-    claimedScopeMet: messages.some((m) => m.text.includes(SCOPE_MET_SENTINEL)),
+    claimedScopeMet: messages.some((m) => hasScopeMet(m.text)),
     graph: computeGraphFreshness(graphMtime(cwd), changedFiles),
     ci: safe(() => collectCiStatus(cwd), { state: "unknown" as const, reason: "collector failed" }),
   };

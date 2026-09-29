@@ -298,6 +298,17 @@ export function scheduleWakeup(input: ScheduleWakeupInput): ScheduleResult {
   return { ok: true, record };
 }
 
+/**
+ * Persist and arm a ready-made record, bypassing the per-session caps — the
+ * runtime's own recovery path (interrupted background jobs at boot), never a
+ * model's request. Goes through the normal timed fire, so it still yields to a
+ * live turn.
+ */
+export function enqueueWakeup(record: WakeupRecord): void {
+  persist(record);
+  arm(record);
+}
+
 export function cancelWakeup(id: string, projectId?: string): boolean {
   const existing = state.timers.get(id);
   if (existing) {

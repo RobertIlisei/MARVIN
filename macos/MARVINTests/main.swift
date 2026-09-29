@@ -334,6 +334,17 @@ runner.suite("scope-met") {
         runner.expect(ScopeMetDetector.isPresent(in: text), "whitespace-tolerant")
     }
 
+    runner.test("a sentinel under a stated scope-not-met does NOT match") {
+        // 2026-09-29: a tab ended "Scope is not met. Bullets 1 and 3 haven't
+        // happened." and appended the sentinel anyway.
+        let text = "Scope is not met. Bullets 1 and 3 haven't happened.\n\n<!-- marvin:scope-met -->"
+        runner.expect(!ScopeMetDetector.isPresent(in: text), "not-met wins over the sentinel")
+        let bold = "**Scope not met:** the IT never ran.\n<!-- marvin:scope-met -->"
+        runner.expect(!ScopeMetDetector.isPresent(in: bold), "bold not-met lead")
+        let isnt = "The scope isn't met yet: web screens remain.\n<!-- marvin:scope-met -->"
+        runner.expect(!ScopeMetDetector.isPresent(in: isnt), "isn't met")
+    }
+
     runner.test("summary extracts bullets joined with semicolons") {
         let text = """
         **Scope met:**

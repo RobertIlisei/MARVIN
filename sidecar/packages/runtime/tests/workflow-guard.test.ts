@@ -7,10 +7,11 @@ import {
   mergeOpenItems,
   openPlanSteps,
   openTodos,
-  SCOPE_MET_SENTINEL,
-  scopeOfDoneEntirelyUnticked,
   ownChangeConsequences,
   ownChangeTokens,
+  SCOPE_MET_SENTINEL,
+  scopeOfDoneEntirelyUnticked,
+  statesScopeNotMet,
 } from "../src/workflow-guard";
 
 // ADR-0057 — mechanical backstop: a scope-met close with an unreconciled plan
@@ -20,6 +21,28 @@ describe("hasScopeMet", () => {
   it("detects the sentinel; ignores ordinary prose", () => {
     expect(hasScopeMet(`**Scope met:** did the thing.\n${SCOPE_MET_SENTINEL}`)).toBe(true);
     expect(hasScopeMet("I think we're basically done here.")).toBe(false);
+  });
+
+  // 2026-09-29: an agri-saas tab ended two turns with "Scope is not met. Bullets
+  // 1 and 3 to 5 haven't happened yet" followed by the sentinel. The supervisor
+  // watcher, the app's chip and the auditor all read that as a finished scope.
+  it("rejects a sentinel whose own text says the scope is not met", () => {
+    expect(hasScopeMet(`Next is the nextStep fix.\n\nScope is not met. Bullets 1 and 3 haven't happened.\n\n${SCOPE_MET_SENTINEL}`)).toBe(false);
+    expect(hasScopeMet(`**Scope not met:** the IT never ran.\n${SCOPE_MET_SENTINEL}`)).toBe(false);
+    expect(hasScopeMet(`The scope isn't met yet: web screens remain.\n${SCOPE_MET_SENTINEL}`)).toBe(false);
+  });
+
+  it("still accepts a genuine handoff that mentions earlier unmet work", () => {
+    expect(hasScopeMet(`**Scope met:** the lock and its test landed.\n${SCOPE_MET_SENTINEL}`)).toBe(true);
+  });
+});
+
+describe("statesScopeNotMet", () => {
+  it("matches the phrasings tabs actually used", () => {
+    expect(statesScopeNotMet("Scope is not met yet.")).toBe(true);
+    expect(statesScopeNotMet("The scope isn't met yet: the web screens remain.")).toBe(true);
+    expect(statesScopeNotMet("**Not done yet** — two bullets remain")).toBe(true);
+    expect(statesScopeNotMet("**Scope met:** all five bullets happened.")).toBe(false);
   });
 });
 

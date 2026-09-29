@@ -238,7 +238,7 @@ export const RULE_TEMPLATES: Record<FingerprintKind, RuleTemplate | null> = {
     tier: "prompt",
     trigger: null,
     message:
-      "A turn that edited files must end with `**Scope met:** …` and the `<!-- marvin:scope-met -->` sentinel. " +
+      "A turn that edited files ends with a handoff: when every Definition of Done bullet happened, `**Scope met:** …` and the `<!-- marvin:scope-met -->` sentinel; when not, say exactly what remains and leave the sentinel out. " +
       "Measured across this project's sessions: real-work turns kept ending without the handoff.",
   },
   "cache.recreated": null,

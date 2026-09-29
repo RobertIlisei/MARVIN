@@ -23,8 +23,25 @@
  *  Swift `ScopeMetDetector.sentinel`. */
 export const SCOPE_MET_SENTINEL = "<!-- marvin:scope-met -->";
 
+/** A stated scope-NOT-met handoff: a bold lead ("**Not done yet**", "**Scope
+ *  not met:**") or the phrase anywhere ("scope is not met", "scope isn't met
+ *  yet"). The one definition every sentinel reader shares. */
+export const SCOPE_NOT_MET =
+  /\*\*\s*(?:scope (?:is )?not(?: yet)? met|not scope met|not done(?: yet)?)\b|\bscope (?:is |has )?(?:not|n[o']t)(?: yet)? (?:been )?met\b|\bscope isn['’]t(?: yet)? met\b/i;
+
+export function statesScopeNotMet(text: string): boolean {
+  return SCOPE_NOT_MET.test(text);
+}
+
+/**
+ * The sentinel counts only when the text doesn't say the opposite. 2026-09-29:
+ * a tab ended two turns "Scope is not met … <sentinel>" — the practice rule's
+ * prompt said a turn that edited files "must end with" the sentinel, and the
+ * model obeyed it literally. Every reader (watch feed, auditor, reconcile
+ * guard, the app's chip) goes through here, so a slip can't read as done.
+ */
 export function hasScopeMet(text: string): boolean {
-  return text.includes(SCOPE_MET_SENTINEL);
+  return text.includes(SCOPE_MET_SENTINEL) && !statesScopeNotMet(text);
 }
 
 interface TodoItem {

@@ -40,8 +40,8 @@ import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
 } from "./auto-audit";
-import { CONTEXT_BASELINE_SUBTYPE, contextBaseline } from "./context-baseline";
-import { BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload, BackgroundDrainBound } from "./background-tasks";
+import { BackgroundDrainBound, BackgroundTaskLedger, backgroundTasksPayload, taskNotificationPayload } from "./background-tasks";
+import { listBacklog } from "./backlog";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { recordPreImage } from "./change-checkpoints";
 import {
@@ -54,6 +54,8 @@ import {
   clearTurnConfirms,
   registerPendingConfirm,
 } from "./confirm-registry";
+import { CONTEXT_BASELINE_SUBTYPE, contextBaseline } from "./context-baseline";
+import { coreSkillsPluginConfig } from "./core-skills";
 import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
 import {
   ADVISOR_SUBAGENT_TYPE,
@@ -69,14 +71,13 @@ import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
 import { ensureProviderModelId, latestForTier } from "./models";
+import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
 import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
-import { coreSkillsPluginConfig } from "./core-skills";
-import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
 import type { SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
@@ -99,11 +100,10 @@ import {
 } from "./workflow-guard";
 import { readWorktreeSetupConfig } from "./worktree-setup";
 import {
-  bindWorktreeTask, implementerWorktreePolicy, listWorktrees, markWorktreeFinished, 
-  localOnlyIntegrationPolicy,
+  bindWorktreeTask, implementerWorktreePolicy, listWorktrees, 
+  localOnlyIntegrationPolicy,markWorktreeFinished, 
   sessionOwnChanges, sessionWorktreePolicy,sweepWorktrees, type WorktreeState,
 } from "./worktrees";
-import { listBacklog } from "./backlog";
 
 export type RuntimeMode = "opus" | "advisor";
 
@@ -305,6 +305,7 @@ export {
 } from "./effort";
 
 import { type ReasoningEffort, resolveEffort } from "./effort";
+import { isPreambleResult, PREAMBLE_RESULT_GRACE_MS } from "./result-preamble";
 
 /**
  * @deprecated Use {@link resolveEffort}. Kept as a thin alias so any
@@ -2489,7 +2490,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // after `query()` races the handshake and silently fails.
     let capturedCommands = false;
     let measuredBaseline = false;
+    // See result-preamble.ts: an empty `result` answering a leftover
+    // task_notification, before the model has seen this prompt, is not the end.
+    let sawAssistant = false;
+    let sawTaskNotification = false;
+    let preambleTimer: ReturnType<typeof setTimeout> | null = null;
     for await (const ev of q) {
+      if (preambleTimer) {
+        clearTimeout(preambleTimer);
+        preambleTimer = null;
+      }
+      if (ev.type === "assistant") sawAssistant = true;
+      if (ev.type === "system" && (ev as { subtype?: string }).subtype === "task_notification" && !sawAssistant) {
+        sawTaskNotification = true;
+      }
       if (ev.type === "result") {
         // Enrich BEFORE onEvent forwards + persists it, so the wire event
         // and the on-disk cli.event both carry the timestamps.
@@ -2727,6 +2741,36 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
               : ev.subtype;
           resultError = detail;
         } else if (channel && channel.pending > 0) {
+        } else if (
+          isPreambleResult({
+            numTurns: (ev as { num_turns?: number }).num_turns,
+            sawAssistant,
+            sawTaskNotification,
+          })
+        ) {
+          try {
+            console.info(
+              "[marvin.telemetry] " +
+                JSON.stringify({ kind: "runagent.result.preamble", turnId, at: new Date().toISOString() }),
+            );
+          } catch {
+            /* never break on serialisation */
+          }
+          // Keep the channel open and keep servicing permission requests. If the
+          // real prompt never starts, close the turn the normal way.
+          preambleTimer = setTimeout(() => {
+            preambleTimer = null;
+            seenSuccessfulResult = true;
+            channel?.close();
+            if (watchdogTimer) clearTimeout(watchdogTimer);
+            watchdogTimer = setTimeout(() => {
+              try {
+                abortController.abort();
+              } catch {
+                /* subprocess is wedged */
+              }
+            }, WATCHDOG_MS);
+          }, PREAMBLE_RESULT_GRACE_MS);
         } else if (bgLedger.hasLive) {
           // ADR-0080 — a background subagent (scout / graph-extractor) is
           // still running. Same shape as the injected-message case: this
@@ -2793,6 +2837,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         }
       }
     }
+    if (preambleTimer) clearTimeout(preambleTimer);
   } catch (err) {
     // If the watchdog fired after a successful `result`, the SDK
     // throws an AbortError as the iterator unwinds. That's the
