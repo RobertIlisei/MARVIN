@@ -24,7 +24,8 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -984,6 +985,100 @@ export function describeConflicts(files: string[]): string {
   return files.length > 3 ? `${shown} and ${files.length - 3} more` : shown;
 }
 
+
+/**
+ * MARVIN's own bookkeeping under `.marvin/`: the runtime writes these to the
+ * project root for every tab (ADR-0107), and they are tracked in git, so each
+ * tab's branch also carries a copy it updates (a caveat marked met, a backlog
+ * note). All of them are append-mostly Markdown. 2026-09-29: three merges in
+ * one evening failed on them — twice on git's "local changes would be
+ * overwritten" (the runtime's uncommitted append in the main checkout), once
+ * on a textual conflict in the caveats log after that append was committed.
+ */
+const BOOKKEEPING_FILES = [".marvin/advisor-caveats.md", ".marvin/backlog.md", ".marvin/memory.md", ".marvin/session-notes.md"];
+const BOOKKEEPING_DIRS = [".marvin/backlog/", ".marvin/memory/", ".marvin/security/"];
+
+export function isMarvinBookkeeping(path: string): boolean {
+  return BOOKKEEPING_FILES.includes(path) || BOOKKEEPING_DIRS.some((d) => path.startsWith(d));
+}
+
+/** A per-invocation attributes file that merges bookkeeping with git's union
+ *  driver: both sides' lines are kept, so these files never conflict. The
+ *  repository's own `.gitattributes` still wins where it says otherwise. */
+function bookkeepingAttributesFile(): string {
+  const path = join(tmpdir(), "marvin-bookkeeping.gitattributes");
+  const body = [...BOOKKEEPING_FILES.map((f) => `/${f} merge=union`), ...BOOKKEEPING_DIRS.map((d) => `/${d}** merge=union`)].join("\n") + "\n";
+  try {
+    if (!existsSync(path) || readFileSync(path, "utf-8") !== body) writeFileSync(path, body);
+  } catch {
+    /* merging without it only brings back the old refusal */
+  }
+  return path;
+}
+
+interface SetAside {
+  path: string;
+  saved: string;
+  base: string;
+}
+
+/** Uncommitted bookkeeping the merge would overwrite: remember it, restore the
+ *  committed version so git can merge, and put it back afterwards. */
+function setAsideBookkeeping(workDir: string, branch: string): SetAside[] {
+  const dirty = new Set(
+    gitRawLines(workDir, ["status", "--porcelain", "--untracked-files=no"])
+      .map((l) => l.slice(3).replace(/^"|"$/g, ""))
+      .filter(isMarvinBookkeeping),
+  );
+  if (dirty.size === 0) return [];
+  const out: SetAside[] = [];
+  for (const p of branchChangedPaths(workDir, branch).filter((x) => dirty.has(x))) {
+    try {
+      const saved = readFileSync(join(workDir, p), "utf-8");
+      const base = gitOr(workDir, ["show", `HEAD:${p}`], "");
+      git(workDir, ["checkout", "--", p]);
+      out.push({ path: p, saved, base: base ? `${base}\n` : "" });
+    } catch {
+      /* leave it; git's own refusal will name it */
+    }
+  }
+  return out;
+}
+
+/** Put set-aside bookkeeping back. After a merge, union it with what the
+ *  merge produced; after a failed merge, restore it exactly. */
+function restoreBookkeeping(workDir: string, items: SetAside[], merged: boolean): void {
+  for (const it of items) {
+    const target = join(workDir, it.path);
+    try {
+      if (!merged) {
+        writeFileSync(target, it.saved);
+        continue;
+      }
+      const dir = join(tmpdir(), `marvin-bk-${process.pid}-${Date.now()}`);
+      mkdirSync(dir, { recursive: true });
+      const ours = join(dir, "ours");
+      const base = join(dir, "base");
+      const theirs = join(dir, "theirs");
+      writeFileSync(ours, existsSync(target) ? readFileSync(target, "utf-8") : "");
+      writeFileSync(base, it.base);
+      writeFileSync(theirs, it.saved);
+      const unioned = execFileSync("git", ["merge-file", "--union", "-p", ours, base, theirs], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      writeFileSync(target, unioned);
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      try {
+        writeFileSync(target, it.saved);
+      } catch {
+        /* nothing more to do */
+      }
+    }
+  }
+}
+
 export function mergeWorktree(
   workDir: string,
   slug: string,
@@ -1017,10 +1112,23 @@ export function mergeWorktree(
     );
   }
   const onto = gitOr(workDir, ["rev-parse", "--abbrev-ref", "HEAD"], "HEAD");
+  const setAside = setAsideBookkeeping(workDir, w.branch);
   try {
-    git(workDir, ["merge", "--no-ff", "-m", mergeSubject(w.branch), "-m", w.task, w.branch]);
+    git(workDir, [
+      "-c",
+      `core.attributesFile=${bookkeepingAttributesFile()}`,
+      "merge",
+      "--no-ff",
+      "-m",
+      mergeSubject(w.branch),
+      "-m",
+      w.task,
+      w.branch,
+    ]);
+    restoreBookkeeping(workDir, setAside, true);
   } catch (err) {
     gitOk(workDir, ["merge", "--abort"]);
+    restoreBookkeeping(workDir, setAside, false);
     const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
     const files = conflictedFiles(`${e.stdout ?? ""}\n${e.stderr ?? ""}`);
     if (files.length > 0) {

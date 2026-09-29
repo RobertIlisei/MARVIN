@@ -6,7 +6,7 @@
 // reconciles as it did.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -196,6 +196,74 @@ describe("session worktrees", () => {
     expect(out.ok).toBe(true);
     expect(existsSync(join(repo, "c.txt"))).toBe(true);
     expect(reconcileWorktrees(repo).find((w) => w.slug === rec.slug)?.state).toBe("merged");
+  });
+
+  // 2026-09-29 — MARVIN's runtime writes its bookkeeping (advisor caveats,
+  // backlog, security notes) to the project root for every tab, and the same
+  // files are tracked in git, so tab branches carry their own copies. Three
+  // merges in one evening failed: twice on git's "local changes would be
+  // overwritten" (the runtime's uncommitted append), once on a textual
+  // conflict in the append-only caveats log after that append was committed.
+  describe("MARVIN bookkeeping never blocks a merge", () => {
+    const LOG = ".marvin/advisor-caveats.md";
+    const seedLog = () => {
+      mkdirSync(join(repo, ".marvin"), { recursive: true });
+      writeFileSync(join(repo, LOG), "# caveats\n- base entry\n");
+      git("add", ".");
+      git("commit", "-qm", "seed log");
+    };
+
+    it("an uncommitted runtime append to a file the branch also changed is set aside, merged, and kept", () => {
+      seedLog();
+      const rec = createSessionWorktree(repo, { sessionId: "s-bk1" });
+      writeFileSync(join(rec.path, LOG), "# caveats\n- base entry\n- branch entry\n");
+      commitIn(rec.path, "f.txt");
+      execFileSync("git", ["add", LOG], { cwd: rec.path });
+      execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "log"], { cwd: rec.path });
+      markSessionWorktreeClosed(repo, "s-bk1");
+      // The runtime appends in the main checkout and does not commit.
+      writeFileSync(join(repo, LOG), "# caveats\n- base entry\n- runtime entry\n");
+      const out = mergeWorktree(repo, rec.slug);
+      expect(out.ok).toBe(true);
+      const log = readFileSync(join(repo, LOG), "utf-8");
+      expect(log).toContain("- branch entry");
+      expect(log).toContain("- runtime entry");
+      expect(existsSync(join(repo, "f.txt"))).toBe(true);
+    });
+
+    it("a textual conflict confined to bookkeeping files resolves by keeping both sides", () => {
+      seedLog();
+      const rec = createSessionWorktree(repo, { sessionId: "s-bk2" });
+      writeFileSync(join(rec.path, LOG), "# caveats\n- base entry\n- branch entry\n");
+      execFileSync("git", ["add", LOG], { cwd: rec.path });
+      execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "log"], { cwd: rec.path });
+      markSessionWorktreeClosed(repo, "s-bk2");
+      writeFileSync(join(repo, LOG), "# caveats\n- base entry\n- main entry\n");
+      git("commit", "-qam", "main log");
+      const out = mergeWorktree(repo, rec.slug);
+      expect(out.ok).toBe(true);
+      const log = readFileSync(join(repo, LOG), "utf-8");
+      expect(log).toContain("- branch entry");
+      expect(log).toContain("- main entry");
+      expect(log).not.toContain("<<<<<<<");
+      expect(git("status", "--porcelain", "--untracked-files=no")).toBe("");
+    });
+
+    it("a conflict in real code still stops the merge, with nothing half-done", () => {
+      writeFileSync(join(repo, "code.ts"), "a\n");
+      git("add", ".");
+      git("commit", "-qm", "code");
+      const rec = createSessionWorktree(repo, { sessionId: "s-bk3" });
+      commitIn(rec.path, "code.ts", "branch\n");
+      markSessionWorktreeClosed(repo, "s-bk3");
+      writeFileSync(join(repo, "code.ts"), "main\n");
+      git("commit", "-qam", "main code");
+      const head = git("rev-parse", "HEAD");
+      const out = mergeWorktree(repo, rec.slug);
+      expect(out.ok).toBe(false);
+      expect(git("rev-parse", "HEAD")).toBe(head);
+      expect(git("status", "--porcelain", "--untracked-files=no")).toBe("");
+    });
   });
 
   it("merge of an OPEN tab is refused only while that tab has a turn in flight", () => {
