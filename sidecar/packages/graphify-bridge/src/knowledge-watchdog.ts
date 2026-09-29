@@ -32,6 +32,7 @@ interface WatchdogState {
 }
 
 const stateByWorkDir = new Map<string, WatchdogState>();
+let warnedMissingScript = false;
 
 function getState(workDir: string): WatchdogState {
   let s = stateByWorkDir.get(workDir);
@@ -97,6 +98,16 @@ export async function maybeRefreshKnowledgeGraph(
 
   const script = findBuilderScript();
   if (!script) {
+    // Warn once per process: 2026-09-29 the bundled .app shipped without the
+    // script and the knowledge graph silently went 15 hours stale while ~20
+    // ADRs landed. A silent no-op is how that went unnoticed.
+    if (!warnedMissingScript) {
+      warnedMissingScript = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[knowledge-watchdog] build-knowledge-graph.py not found (MARVIN_KNOWLEDGE_GRAPH_SCRIPT unset and no scripts/ above cwd) — knowledge graphs will NOT auto-refresh.",
+      );
+    }
     return { triggered: false, reason: "builder script not found", workDir };
   }
 

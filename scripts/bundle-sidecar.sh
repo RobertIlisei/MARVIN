@@ -172,6 +172,14 @@ if [ -d "$PNPM_DIR" ]; then
   done
 fi
 
+# ── Ship the knowledge-graph builder (ADR-0041) ──────────────────────
+# The sidecar's knowledge watchdog looks for scripts/build-knowledge-graph.py
+# by walking up from its cwd (Resources/sidecar/sidecar) — so it must sit at
+# Resources/scripts/. Before 2026-09-29 the bundle omitted it and every
+# project's knowledge graph silently stopped refreshing in the installed app.
+mkdir -p "$TARGET/scripts"
+cp "$REPO_ROOT/scripts/build-knowledge-graph.py" "$TARGET/scripts/build-knowledge-graph.py"
+
 # ── Copy the bundled Node binary ──────────────────────────────────────
 echo "bundle-sidecar: copying node → $TARGET/node"
 cp "$NODE_BIN_SRC" "$TARGET/node"
