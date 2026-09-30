@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { maybeRefreshWorktreeGraph } from "@marvin/graphify-bridge";
 import { buildProjectContext } from "@marvin/project-context";
 import { readAuthConfig } from "@marvin/runtime/auth-config";
 import { attachPendingPayload } from "@marvin/runtime/confirm-registry";
@@ -321,6 +322,16 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   const activityIds = { projectId, marvinSessionId, turnId };
   setActivity(activityIds, "thinking");
 
+  // ADR-0124 B — a tab in its own worktree gets its own code graph: seeded
+  // from the project's on the first turn, updated incrementally (AST-only,
+  // debounced, one refresh per project at a time) before and after each turn,
+  // so what the tab wrote is what its graph answers next. No-op in the shared
+  // checkout. Fire-and-forget; the turn never waits on it.
+  const refreshTabGraph = (source: string) => {
+    if (workDir && cwd !== workDir) void maybeRefreshWorktreeGraph(workDir, cwd, { source }).catch(() => {});
+  };
+  refreshTabGraph("turn-start");
+
   const result = await runAgent({
     message,
     inputChannel,
@@ -383,6 +394,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     },
     signal: liveTurn.abortController.signal,
   });
+  refreshTabGraph("turn-end");
 
   // ADR-0076 — the turn is over; stop accepting input, and hand anything
   // that was accepted but never reached the SDK to the durable queue so

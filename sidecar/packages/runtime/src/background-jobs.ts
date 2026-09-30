@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { stepDownEffort } from "./effort";
 import { marvinPaths } from "./paths";
+import { autoTickSpine } from "./plan-seed";
 import { enqueueWakeup, fireNow, MAX_CHAIN_DEPTH, type WakeupRecord } from "./wakeup-scheduler";
 import { readWorktreeSetupConfig } from "./worktree-setup";
 
@@ -320,6 +321,18 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
 
   const failed = signal != null || (code ?? 1) !== 0;
   const status = signal ? `killed by signal ${signal}` : `exit code ${code ?? "unknown"}`;
+  // ADR-0124 D — a green run of tests / the fast band / Playwright closes the
+  // ONE seeded step that names it; ambiguity closes nothing (ADR-0116).
+  let ticked = "";
+  if (!failed) {
+    try {
+      const t = autoTickSpine(rec.ctx.projectId, rec.ctx.marvinSessionId, { kind: "job", command: rec.command });
+      if (t.ticked !== null) ticked = `\n\nMARVIN marked plan step [${t.ticked}] done (${t.reason} run exited 0).`;
+      console.info("[marvin.telemetry] " + JSON.stringify({ kind: "plan.spine.autotick", jobId: rec.id, ticked: t.ticked, reason: t.reason, at: new Date().toISOString() }));
+    } catch {
+      /* the spine is bookkeeping; the completion turn still fires */
+    }
+  }
   const tail = outputExcerpt(rec).trim() || "(no output captured)";
   const prompt =
     "A background job you started earlier has finished.\n\n" +
@@ -330,7 +343,7 @@ function onExit(rec: JobRecord, code: number | null, signal: NodeJS.Signals | nu
     "\n```\n\n" +
     (failed
       ? "It did NOT succeed — read the output, diagnose the cause, and fix it or report clearly to the user."
-      : "It succeeded — continue the work that depended on it, or report completion to the user.");
+      : `It succeeded — continue the work that depended on it, or report completion to the user.${ticked}`);
 
   const record: WakeupRecord = {
     id: rec.id,

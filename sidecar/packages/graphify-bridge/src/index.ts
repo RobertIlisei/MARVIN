@@ -32,6 +32,15 @@ export {
 export { type RefreshDocsResult, refreshDocs } from "./refresh-docs";
 export { type GraphifyRefreshResult, maybeRefreshGraphify } from "./watchdog";
 export {
+  type GraphRoot,
+  maybeRefreshWorktreeGraph,
+  resolveGraphRoot,
+  seedWorktreeGraph,
+  WORKTREE_GRAPH_FALLBACK_NOTE,
+  type WorktreeGraphRefreshResult,
+  worktreeOf,
+} from "./worktree-graph";
+export {
   type KnowledgeGraphRefreshResult,
   maybeRefreshKnowledgeGraph,
 } from "./knowledge-watchdog";

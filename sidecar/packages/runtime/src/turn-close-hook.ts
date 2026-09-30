@@ -22,7 +22,8 @@
  */
 
 import type { HookCallback, HookJSONOutput, StopHookInput } from "@anthropic-ai/claude-agent-sdk";
-import { readDesignHooksMode } from "./design-hooks";
+import { BUILTIN_GATE_MAX_DENIES, readDesignHooksMode } from "./design-hooks";
+import { builtinGate, notePracticeRuleFired } from "./practice";
 import { classifyTurnEnding } from "./practice-extractors";
 import { hasScopeMet, openTodos } from "./workflow-guard";
 
@@ -39,11 +40,36 @@ export interface TurnCloseFacts {
   planOpenSteps?: string[];
   /** Did this turn write TodoWrite at all? */
   todoWrittenThisTurn?: boolean;
+  /** ADR-0124 D — open `[N]` steps of a plan MARVIN seeded, this turn's
+   *  TodoWrite already applied. */
+  seededOpenSteps?: string[];
 }
 
 export interface TurnCloseDecision {
-  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale";
+  kind: "scope-met-missing" | "plan-steps-open" | "plan-stale" | "seeded-steps-open";
   reason: string;
+}
+
+/**
+ * ADR-0124 D — a scope-met close while a seeded step is still open is a claim
+ * the plan contradicts. Unlike the advisories below this is a gate: it fires
+ * on machine turns too, and its brake is ADR-0104's (two blocks, then the
+ * close is let through and the bypass logged), not once per turn. Exported
+ * for tests.
+ */
+export function decideSeededClose(lastText: string, seededOpen: string[] | undefined): TurnCloseDecision | null {
+  if (!seededOpen || seededOpen.length === 0) return null;
+  if (!hasScopeMet(lastText)) return null;
+  const shown = seededOpen.slice(0, 4).join("; ");
+  return {
+    kind: "seeded-steps-open",
+    reason:
+      `plan-spine gate (ADR-0124): this turn claims scope met, but ${seededOpen.length} step${seededOpen.length === 1 ? "" : "s"} ` +
+      `of the plan seeded from the brief ${seededOpen.length === 1 ? "is" : "are"} still open (${shown}${seededOpen.length > 4 ? "; …" : ""}). ` +
+      "Either finish them, or reconcile the plan honestly: TodoWrite with each `[N]` marked completed (only if it " +
+      "is), or superseded with the reason — then close. If the scope is NOT met, say what remains instead of the " +
+      `scope-met line. (After ${BUILTIN_GATE_MAX_DENIES} refusals the close is allowed and the bypass logged.)`,
+  };
 }
 
 /** The decision, or null to let the turn end. Exported for tests. */
@@ -102,13 +128,42 @@ export function makeTurnCloseStopHook(args: {
   onFired: (decision: TurnCloseDecision) => void;
 }): HookCallback {
   let fired = false;
+  let seededBlocks = 0;
   return async (input) => {
     if (input.hook_event_name !== "Stop") return {} as HookJSONOutput;
     const evt = input as StopHookInput;
-    if (evt.stop_hook_active) return {} as HookJSONOutput;
     const mode = readDesignHooksMode();
     if (mode === "off") return {} as HookJSONOutput;
-    const decision = decideTurnClose(evt.last_assistant_message ?? "", { ...args.facts(), alreadyFired: fired });
+    // ADR-0124 D — checked before the SDK's loop guard: a continuation the
+    // first block caused can still end on the same false claim.
+    const gate = builtinGate("builtin:plan-spine");
+    const facts = args.facts();
+    const seeded = gate.off ? null : decideSeededClose(evt.last_assistant_message ?? "", facts.seededOpenSteps);
+    if (seeded) {
+      const tel = (kind: string) => {
+        try {
+          console.info("[marvin.telemetry] " + JSON.stringify({ kind, turnId: args.turnId, open: facts.seededOpenSteps?.length ?? 0, at: new Date().toISOString() }));
+        } catch {
+          /* never break a turn on telemetry */
+        }
+      };
+      if (mode === "measure") {
+        tel("plan.spine.close.measured");
+      } else if (gate.tier !== "deny") {
+        tel("plan.spine.close.nudge");
+      } else if (seededBlocks >= BUILTIN_GATE_MAX_DENIES) {
+        tel("plan.spine.close.bypass");
+        notePracticeRuleFired("builtin:plan-spine", "bypass");
+      } else {
+        seededBlocks += 1;
+        tel("plan.spine.close.block");
+        notePracticeRuleFired("builtin:plan-spine", "fired");
+        args.onFired(seeded);
+        return { decision: "block", reason: gate.message ?? seeded.reason } as HookJSONOutput;
+      }
+    }
+    if (evt.stop_hook_active) return {} as HookJSONOutput;
+    const decision = decideTurnClose(evt.last_assistant_message ?? "", { ...facts, alreadyFired: fired });
     if (!decision) return {} as HookJSONOutput;
     fired = true;
     args.onFired(decision);

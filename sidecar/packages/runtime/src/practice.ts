@@ -320,8 +320,17 @@ export const BUILTIN_RULE_IDS = [
   "builtin:graph-drift-deny",
   "builtin:advisor-on-adr",
   "builtin:ship-review",
+  "builtin:graph-pointer",
+  "builtin:plan-spine",
 ] as const;
 export type BuiltinRuleId = (typeof BUILTIN_RULE_IDS)[number];
+
+/** The tier a built-in gate runs at when no row says otherwise. ADR-0124's
+ *  graph-pointer rule ships measure-first: logged and said once (`nudge`)
+ *  until the user promotes it; every older gate was born `deny`. */
+const BUILTIN_NATIVE_TIER: Partial<Record<BuiltinRuleId, RuleTier>> = {
+  "builtin:graph-pointer": "nudge",
+};
 
 const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string; message: string }> = {
   "builtin:graphify-first": {
@@ -351,6 +360,20 @@ const BUILTIN_SEEDS: Record<BuiltinRuleId, { title: string; fingerprint: string;
       "A git commit whose diff touches a security boundary is refused until pr-review and security-audit have run " +
       "for the tree; a large diff needs pr-review (ADR-0104). Native message names the files and the Skill calls.",
   },
+  "builtin:graph-pointer": {
+    title: "Narrow reads after the graph",
+    fingerprint: "graph.pointer.wide",
+    message:
+      "After a graph call, a whole-file Bash read of a source file over 200 lines, or a search over the repository " +
+      "or a directory the graph did not point into, is refused (ADR-0124). Ships at nudge; promote to deny here.",
+  },
+  "builtin:plan-spine": {
+    title: "Keep a seeded plan current",
+    fingerprint: "plan.spine.stale",
+    message:
+      "In a tab whose plan MARVIN seeded from the brief, a second git commit with no TodoWrite since the first, or " +
+      "a scope-met close with seeded steps still pending, is refused (ADR-0124).",
+  },
 };
 
 /** Seed the four built-in rows when missing. Called from the pane's read
@@ -368,7 +391,7 @@ export function ensureBuiltinRules(): PracticeRule[] {
       builtin: true,
       fingerprint: seed.fingerprint,
       title: seed.title,
-      tier: "deny",
+      tier: BUILTIN_NATIVE_TIER[id] ?? "deny",
       trigger: null,
       message: seed.message,
       status: "active",
@@ -403,7 +426,7 @@ export function builtinGate(id: BuiltinRuleId): BuiltinGate {
   try {
     mtime = statSync(path).mtimeMs;
   } catch {
-    return NATIVE_GATE;
+    return nativeGate(id);
   }
   if (!builtinCache || builtinCache.mtime !== mtime) {
     const gates = new Map<string, BuiltinGate>();
@@ -415,7 +438,12 @@ export function builtinGate(id: BuiltinRuleId): BuiltinGate {
     }
     builtinCache = { mtime, gates };
   }
-  return builtinCache.gates.get(id) ?? NATIVE_GATE;
+  return builtinCache.gates.get(id) ?? nativeGate(id);
+}
+
+function nativeGate(id: BuiltinRuleId): BuiltinGate {
+  const tier = BUILTIN_NATIVE_TIER[id];
+  return tier ? { ...NATIVE_GATE, tier } : NATIVE_GATE;
 }
 
 export function __resetBuiltinCacheForTests(): void {

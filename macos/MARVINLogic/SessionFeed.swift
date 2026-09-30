@@ -85,7 +85,40 @@ public struct SessionDiffSummary: Codable, Equatable, Sendable {
 public struct SessionPlanProgress: Codable, Equatable, Sendable {
     public let done: Int
     public let total: Int
-    public init(done: Int, total: Int) { self.done = done; self.total = total }
+    /// ADR-0124 — steps neither done nor superseded. nil from an older sidecar.
+    public let open: Int?
+    /// ADR-0116 watermark: the last `TodoWrite` the sidecar joined into the spine.
+    public let lastTodoAt: String?
+    /// ADR-0124 — the sidecar seeded this plan from the tab's brief.
+    public let seeded: Bool?
+    public init(done: Int, total: Int, open: Int? = nil, lastTodoAt: String? = nil, seeded: Bool? = nil) {
+        self.done = done; self.total = total; self.open = open; self.lastTodoAt = lastTodoAt; self.seeded = seeded
+    }
+
+    /// Minutes after which an open plan whose list has not moved reads as stale.
+    public static let staleAfterSeconds: TimeInterval = 30 * 60
+
+    /// True when steps are open, the list last moved `staleAfterSeconds` ago or
+    /// more, and the session has worked since (`lastActivity` after the
+    /// watermark) — an idle tab with an old list is resting, not stale.
+    public func isStale(now: Date, lastActivity: Date?) -> Bool {
+        guard (open ?? (total - done)) > 0, let at = lastTodoAt, let d = SessionLedger.parseISO(at),
+              let active = lastActivity, active > d else { return false }
+        return now.timeIntervalSince(d) >= Self.staleAfterSeconds
+    }
+
+}
+
+/// ADR-0124 — graph calls vs source reads for one session (`graphUsage` on a watch row).
+public struct SessionGraphUsage: Codable, Equatable, Sendable {
+    public let graphCalls: Int
+    public let fileReads: Int
+    public let bashReads: Int
+    /// (fileReads + bashReads) per graph call; nil before the first graph call.
+    public let ratio: Double?
+    public init(graphCalls: Int, fileReads: Int, bashReads: Int, ratio: Double?) {
+        self.graphCalls = graphCalls; self.fileReads = fileReads; self.bashReads = bashReads; self.ratio = ratio
+    }
 }
 
 /// What a session's live turn is doing now (ADR-0107 addendum). The same
@@ -234,6 +267,8 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     public let tree: Tree?
     public let diff: SessionDiffSummary?
     public let plan: SessionPlanProgress?
+    /// ADR-0124 — nil from an older sidecar or a session that never read anything.
+    public let graphUsage: SessionGraphUsage?
     public let lastTurn: LastTurn?
     public let cost: Cost?
     public let title: String?

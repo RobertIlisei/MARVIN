@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { clearTurnConfirms, registerPendingConfirm } from "../src/confirm-registry";
 import { recordTurnCost } from "../src/cost-tracker";
+import { createTurnDesignContext, recordAllowedTool } from "../src/design-hooks";
+import { __resetLiveGraphUsageForTests, foldTurnGraphUsage, registerLiveGraphUsage } from "../src/graph-usage";
 import { writePlanState } from "../src/plan-state";
 import { __resetActivityForTests, setActivity } from "../src/session-activity";
 import { updateSessionMeta, upsertSessionMeta } from "../src/session-meta";
@@ -139,6 +141,41 @@ describe("buildSessionWatch", () => {
     expect(fresh.worktree?.commits).toBe(1);
   });
 
+
+  // ADR-0124 C — every row carries its own graph-vs-file ratio, Bash reads included.
+  it("a row carries graphUsage — graph calls, Read and Bash source reads, live then folded", async () => {
+    __resetLiveGraphUsageForTests();
+    writeFileSync(join(repo, "a.ts"), "export const a = 1;\n");
+    upsertSessionMeta(projectId, "usage-sess", { workDir: repo, tree: { mode: "shared" }, posture });
+    const ctx = createTurnDesignContext("t-usage", repo);
+    registerLiveGraphUsage(projectId, "usage-sess", () => ({ graphCalls: ctx.graphCallCount, fileReads: ctx.fileReads, bashReads: ctx.bashReads }));
+    recordAllowedTool(ctx, "mcp__marvin-graph__graph_search", { query: "a" });
+    recordAllowedTool(ctx, "Bash", { command: "sed -n 1,20p a.ts" });
+    recordAllowedTool(ctx, "Bash", { command: `cat ${join(repo, "a.ts")} && grep -rn a .` });
+    recordAllowedTool(ctx, "Bash", { command: "pnpm test | tail" });
+    recordAllowedTool(ctx, "Read", { file_path: join(repo, "a.ts") });
+
+    const liveRow = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["usage-sess"] }))[0]!;
+    expect(liveRow.graphUsage).toEqual({ graphCalls: 1, fileReads: 1, bashReads: 2, ratio: 3 });
+
+    foldTurnGraphUsage(projectId, "usage-sess", { graphCalls: ctx.graphCallCount, fileReads: ctx.fileReads, bashReads: ctx.bashReads });
+    foldTurnGraphUsage(projectId, "usage-sess", { graphCalls: 1, fileReads: 0, bashReads: 0 });
+    const folded = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["usage-sess"] }))[0]!;
+    expect(folded.graphUsage).toEqual({ graphCalls: 2, fileReads: 1, bashReads: 2, ratio: 1.5 });
+    expect((await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["never-used"] }))[0]!.graphUsage).toBeNull();
+  });
+
+  it("a row's plan carries open steps, the lastTodoAt watermark and whether MARVIN seeded it", async () => {
+    upsertSessionMeta(projectId, "plan-sess", { workDir: repo, tree: { mode: "shared" }, posture });
+    writePlanState(projectId, "plan-sess", {
+      activePlanId: "p",
+      lastTodoAt: "2026-09-30T08:00:00.000Z",
+      plans: [{ id: "p", seeded: true, steps: [{ status: "completed" }, { status: "superseded" }, { status: "pending" }, { status: "in_progress" }] }],
+    });
+    const row = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["plan-sess"] }))[0]!;
+    expect(row.plan).toEqual({ done: 1, total: 4, open: 2, lastTodoAt: "2026-09-30T08:00:00.000Z", seeded: true });
+  });
+
   it("a worktree session's badge is measured against its base, a shared one against HEAD", async () => {
     const wt = createWorktree(repo, "watch tab");
     upsertSessionMeta(projectId, "wt-sess", {
@@ -184,7 +221,7 @@ describe("buildSessionWatch", () => {
       expect(row.state).toBe("awaiting-you");
       expect(row.turn).toMatchObject({ turnId: "watch-t1", kind: "human", mutated: false });
       expect(row.pending.map((p) => p.toolName)).toEqual(["Bash"]);
-      expect(row.plan).toEqual({ done: 2, total: 3 });
+      expect(row.plan).toMatchObject({ done: 2, total: 3, open: 1 });
       expect(row.cost).toEqual({ turns: 1, costUsd: 0.5 });
     } finally {
       clearTurnConfirms("watch-t1");

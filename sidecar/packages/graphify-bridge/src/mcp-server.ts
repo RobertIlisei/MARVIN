@@ -65,6 +65,7 @@ import { buildCallIndex, callersOf } from "./call-index";
 import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
 import { crossLayerReferences, renderCrossLayer } from "./cross-layer-refs";
 import { graphifyEnv, graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+import { resolveGraphRoot } from "./worktree-graph";
 import {
   type GraphScope,
   getNeighbors,
@@ -166,8 +167,35 @@ function truncLabel(s: string, max = 100): string {
 /**
  * Build a fresh MCP server bound to a single workDir. Creating one per turn
  * is cheap — the server only holds tool handler closures.
+ *
+ * ADR-0124 — `opts.cwd` is the checkout the session runs in. For a tab in its
+ * own worktree, code-scope tools answer from `<worktree>/graphify-out/` when
+ * that graph exists, else from the project graph with a note saying so. Git
+ * questions (`graph_change_impact`) always read the session's tree. The
+ * knowledge graph and graph work-memory stay project-scoped.
  */
-export function createGraphMcpServer(workDir: string) {
+export function createGraphMcpServer(workDir: string, opts: { cwd?: string | undefined } = {}) {
+  return createSdkMcpServer({
+    name: "marvin-graph",
+    version: "0.0.4",
+    // ADR-0073 — Agent SDK 0.3 DEFERS MCP tools behind ToolSearch by default.
+    // These are the graphify-first tools (Golden Rule 7): the design hooks
+    // hard-deny Read/Grep/Glob until a graph call has happened, so if the
+    // graph tools are not in the turn-1 prompt the rule deadlocks the turn.
+    // alwaysLoad also blocks startup until this server is connected.
+    alwaysLoad: true,
+    tools: graphMcpTools(workDir, opts),
+  });
+}
+
+/** The tool definitions behind `createGraphMcpServer` — exported so tests can
+ *  call a handler directly. */
+export function graphMcpTools(workDir: string, opts: { cwd?: string | undefined } = {}) {
+  /** Resolved per call: a worktree's own graph can appear mid-session. */
+  const codeRoot = () => resolveGraphRoot(workDir, opts.cwd);
+  const pathFor = (sc: GraphScope): string =>
+    sc === "code" ? graphPathForScope(codeRoot().root, "code") : graphPathForScope(workDir, sc);
+  const gitRoot = opts.cwd ?? workDir;
   // ── Tool: graph_summary ───────────────────────────────────────────────
   // Returns up to top-10 god nodes and top-10 communities per graph queried.
   // Truncates sample labels at 100 chars so one massive ADR-title sample
@@ -180,7 +208,7 @@ export function createGraphMcpServer(workDir: string) {
       const scopes = expandScope(scope);
       const sections: string[] = [];
       for (const sc of scopes) {
-        const path = graphPathForScope(workDir, sc);
+        const path = pathFor(sc);
         const summary = summarizeGraph(path);
         if (!summary.ok) {
           sections.push(
@@ -251,7 +279,7 @@ export function createGraphMcpServer(workDir: string) {
       const per = limit ?? 10;
       const sections: string[] = [];
       for (const sc of scopes) {
-        const path = graphPathForScope(workDir, sc);
+        const path = pathFor(sc);
         const hits = searchGraph(path, query, per);
         if (hits.length === 0) {
           sections.push(`[${sc}] no hits for "${query}"`);
@@ -296,7 +324,7 @@ export function createGraphMcpServer(workDir: string) {
       const sections: string[] = [];
       let foundAny = false;
       for (const sc of scopes) {
-        const path = graphPathForScope(workDir, sc);
+        const path = pathFor(sc);
         const result = getNeighbors(path, node, cap);
         if (!result) {
           sections.push(`[${sc}] no node matching '${node}'`);
@@ -348,7 +376,7 @@ export function createGraphMcpServer(workDir: string) {
       const sections: string[] = [];
       let foundAny = false;
       for (const sc of scopes) {
-        const path = graphPathForScope(workDir, sc);
+        const path = pathFor(sc);
         const fromNode = resolveNode(path, from);
         const toNode = resolveNode(path, to);
         if (!fromNode || !toNode) {
@@ -428,7 +456,7 @@ export function createGraphMcpServer(workDir: string) {
       const scopes = expandScope(scope);
       const sections: string[] = [];
       for (const sc of scopes) {
-        const path = graphPathForScope(workDir, sc);
+        const path = pathFor(sc);
         const args = [
           "query",
           question,
@@ -579,7 +607,8 @@ export function createGraphMcpServer(workDir: string) {
         .describe("Max callers to list. Default 30."),
     },
     async ({ symbol, depth, limit }) => {
-      const index = buildCallIndex(workDir);
+      const root = codeRoot().root;
+      const index = buildCallIndex(root);
       if (index.files === 0) {
         return errorResult(
           "No call data — neither `calls` edges in graphify-out/graph.json nor an extraction cache. Blast radius needs one. " +
@@ -589,7 +618,7 @@ export function createGraphMcpServer(workDir: string) {
       // Suffix-tolerant: the cache's caller ids and graph.json's node ids use
       // different prefixes (see nodeLabelResolver) — exact lookup hit 0.0 %
       // of callers on a real repo and printed raw ids for two months.
-      const resolveLabel = nodeLabelResolver(graphPathForScope(workDir, "code"));
+      const resolveLabel = nodeLabelResolver(pathFor("code"));
       const result = callersOf(index, symbol, depth ?? 1, resolveLabel);
 
       if (result.callers.length === 0) {
@@ -610,8 +639,8 @@ export function createGraphMcpServer(workDir: string) {
         { label: string; file: string; lines: string[]; depth: number }
       >();
       for (const c of result.callers) {
-        const rel = c.sourceFile.startsWith(workDir)
-          ? c.sourceFile.slice(workDir.length + 1)
+        const rel = c.sourceFile.startsWith(root)
+          ? c.sourceFile.slice(root.length + 1)
           : c.sourceFile;
         const label = resolveLabel(c.callerNid) ?? c.callerNid;
         const key = `${label}|${rel}`;
@@ -707,7 +736,7 @@ export function createGraphMcpServer(workDir: string) {
         "--out",
         reflectionsPathForScope(sc),
         "--graph",
-        graphPathForScope(workDir, sc),
+        pathFor(sc),
       ];
       if (halfLifeDays) args.push("--half-life-days", String(halfLifeDays));
       if (minCorroboration) {
@@ -766,7 +795,7 @@ export function createGraphMcpServer(workDir: string) {
       const cap = limit ?? 60;
       const sections: string[] = [];
       for (const sc of scopes) {
-        const nodes = loadGraphNodes(graphPathForScope(workDir, sc));
+        const nodes = loadGraphNodes(pathFor(sc));
         if (nodes.length === 0) {
           sections.push(`[${sc}] graph absent or empty`);
           continue;
@@ -789,7 +818,7 @@ export function createGraphMcpServer(workDir: string) {
         const name = members.map((n) => n.community_name).find((v) => v && !/^community\s+\d+$/i.test(v)) ?? null;
         const lines = [`[${sc}] community ${id}${name ? ` — ${name}` : ""}: ${members.length} member(s)`];
         for (const n of members.slice(0, cap)) {
-          const file = n.source_file ? n.source_file.replace(`${workDir}/`, "") : "";
+          const file = n.source_file ? n.source_file.replace(`${codeRoot().root}/`, "").replace(`${workDir}/`, "") : "";
           lines.push(`  - ${truncLabel(n.label ?? n.id)}${file ? `  (${file})` : ""}`);
         }
         if (members.length > cap) lines.push(`  … ${members.length - cap} more (raise \`limit\`)`);
@@ -821,7 +850,8 @@ export function createGraphMcpServer(workDir: string) {
       limit: z.number().int().min(1).max(200).optional().describe("Max external callers to list. Default 40."),
     },
     async ({ files, base, limit }) => {
-      const index = buildCallIndex(workDir);
+      const root = codeRoot().root;
+      const index = buildCallIndex(root);
       if (index.files === 0) {
         return errorResult(
           "No call data — neither `calls` edges in graphify-out/graph.json nor an extraction cache. Change impact needs one. " +
@@ -835,7 +865,7 @@ export function createGraphMcpServer(workDir: string) {
       let diffBase = "HEAD";
       if (!files) {
         try {
-          const r = await changedFilesOnBranch(workDir, base);
+          const r = await changedFilesOnBranch(gitRoot, base);
           changed = r.files;
           resolvedBase = r.base;
           diffBase = r.mergeBase;
@@ -847,8 +877,8 @@ export function createGraphMcpServer(workDir: string) {
         return textResult(resolvedBase ? `No changes on this branch relative to ${resolvedBase}.` : "No files given.");
       }
       const report = changeImpact({
-        workDir,
-        graphPath: graphPathForScope(workDir, "code"),
+        workDir: root,
+        graphPath: pathFor("code"),
         index,
         files: changed,
       });
@@ -857,7 +887,7 @@ export function createGraphMcpServer(workDir: string) {
       // script mounts). Best-effort: a failure here never hides the report.
       let crossLayer = "";
       try {
-        crossLayer = renderCrossLayer(await crossLayerReferences(workDir, diffBase, changed));
+        crossLayer = renderCrossLayer(await crossLayerReferences(gitRoot, diffBase, changed));
       } catch (err) {
         crossLayer = `\n\nCross-layer references: not computed (${err instanceof Error ? err.message : String(err)}).`;
       }
@@ -881,8 +911,8 @@ export function createGraphMcpServer(workDir: string) {
       try {
         const { stdout } = await pExecFile(
           graphifyBin(),
-          ["god-nodes", "--top", String(top), "--graph", graphPathForScope(workDir, "code"), "--json"],
-          { cwd: workDir, env: graphifyEnv(), timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+          ["god-nodes", "--top", String(top), "--graph", pathFor("code"), "--json"],
+          { cwd: codeRoot().root, env: graphifyEnv(), timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No god nodes reported." }] };
       } catch (err) {
@@ -908,11 +938,11 @@ export function createGraphMcpServer(workDir: string) {
             "diagnose",
             "multigraph",
             "--graph",
-            graphPathForScope(workDir, "code"),
+            pathFor("code"),
             "--max-examples",
             String(maxExamples),
           ],
-          { cwd: workDir, env: graphifyEnv(), timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
+          { cwd: codeRoot().root, env: graphifyEnv(), timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No collapse risk reported." }] };
       } catch (err) {
@@ -996,8 +1026,8 @@ export function createGraphMcpServer(workDir: string) {
       try {
         const { stdout } = await pExecFile(
           graphifyBin(),
-          ["explain", node, "--graph", graphPathForScope(workDir, "code")],
-          { cwd: workDir, env: graphifyEnv(), timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+          ["explain", node, "--graph", pathFor("code")],
+          { cwd: codeRoot().root, env: graphifyEnv(), timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || `No node matching "${node}".` }] };
       } catch (err) {
@@ -1014,8 +1044,8 @@ export function createGraphMcpServer(workDir: string) {
       try {
         const { stdout } = await pExecFile(
           graphifyBin(),
-          ["benchmark", graphPathForScope(workDir, "code")],
-          { cwd: workDir, env: graphifyEnv(), timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+          ["benchmark", pathFor("code")],
+          { cwd: codeRoot().root, env: graphifyEnv(), timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No benchmark output." }] };
       } catch (err) {
@@ -1048,16 +1078,7 @@ export function createGraphMcpServer(workDir: string) {
     },
   );
 
-  return createSdkMcpServer({
-    name: "marvin-graph",
-    version: "0.0.4",
-    // ADR-0073 — Agent SDK 0.3 DEFERS MCP tools behind ToolSearch by default.
-    // These are the graphify-first tools (Golden Rule 7): the design hooks
-    // hard-deny Read/Grep/Glob until a graph call has happened, so if the
-    // graph tools are not in the turn-1 prompt the rule deadlocks the turn.
-    // alwaysLoad also blocks startup until this server is connected.
-    alwaysLoad: true,
-    tools: [
+  return withWorktreeNote([
       summaryTool,
       searchTool,
       neighborsTool,
@@ -1074,6 +1095,21 @@ export function createGraphMcpServer(workDir: string) {
       explainTool,
       benchmarkTool,
       callflowTool,
-    ],
-  });
+  ]);
+
+  /** ADR-0124 — say so when a worktree session is answered from the project
+   *  graph, on every code-scope answer, so a missing caller is read as "not
+   *  indexed yet" rather than "there are none". */
+  function withWorktreeNote<T extends { handler: (args: never, extra: unknown) => Promise<unknown> }>(tools: T[]): T[] {
+    return tools.map((t) => ({
+      ...t,
+      handler: async (args: never, extra: unknown) => {
+        const result = (await t.handler(args, extra)) as { content?: Array<{ type: string; text?: string }> };
+        const scope = (args as { scope?: unknown } | undefined)?.scope;
+        const note = codeRoot().note;
+        if (!note || scope === "knowledge" || !Array.isArray(result?.content)) return result;
+        return { ...result, content: [...result.content, { type: "text" as const, text: note }] };
+      },
+    }));
+  }
 }

@@ -3250,6 +3250,21 @@ runner.suite("session-ledger") {
         l.apply(.registered(sessionId: "b", turnId: "t10", kind: nil, startedAt: 0), now: t0)
         runner.expect(l["b"]?.activity == nil && l["b"]?.brainState == "thinking", "a new turn starts over")
     }
+    runner.test("ADR-0124 — a snapshot carries graphUsage and the plan watermark; a stale list is flagged") {
+        var l = SessionLedger()
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"idle","graphUsage":{"graphCalls":4,"fileReads":2,"bashReads":10,"ratio":3},"plan":{"done":2,"total":5,"open":3,"lastTodoAt":"2026-09-30T08:00:00.000Z","seeded":true}}]}"#.utf8))!
+        l.apply(snapshot: rows, now: t0, graceSeconds: 5)
+        let e = l["s"]!
+        runner.expect(e.graphUsage, equals: SessionGraphUsage(graphCalls: 4, fileReads: 2, bashReads: 10, ratio: 3), "graphUsage lands")
+        runner.expect(e.plan?.open == 3 && e.plan?.seeded == true, "open + seeded land")
+        let todo = SessionLedger.parseISO("2026-09-30T08:00:00.000Z")!
+        let p = e.plan!
+        runner.expect(p.isStale(now: todo.addingTimeInterval(3600), lastActivity: todo.addingTimeInterval(3000)), "worked for 50 min since the list moved → stale")
+        runner.expect(!p.isStale(now: todo.addingTimeInterval(3600), lastActivity: todo.addingTimeInterval(-60)), "no work since → resting, not stale")
+        runner.expect(!p.isStale(now: todo.addingTimeInterval(600), lastActivity: todo.addingTimeInterval(500)), "10 min is not stale")
+        l.setPlan("s", done: 3, total: 5)
+        runner.expect(l["s"]?.plan?.lastTodoAt == "2026-09-30T08:00:00.000Z" && l["s"]?.plan?.open == 2, "a local tick keeps the watermark")
+    }
     runner.test("a snapshot carries activity for the live turn") {
         var l = SessionLedger()
         let rows = SessionWatchRowWire.decodeSnapshot(Data(#"{"rows":[{"marvinSessionId":"s","state":"working","turn":{"turnId":"t"},"activity":{"state":"tool","tool":"Read","turnId":"t"}}]}"#.utf8))!

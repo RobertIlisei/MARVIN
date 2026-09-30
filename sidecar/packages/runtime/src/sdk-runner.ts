@@ -27,7 +27,10 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type AgentDefinition, type CanUseTool, 
   type HookJSONOutput,type McpServerConfig, type Options, type PermissionResult, 
-  type PostToolUseFailureHookInput,query, type SDKMessage,
+  type PostToolUseFailureHookInput,
+  type PostToolUseHookInput,
+  query,
+  type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createGraphMcpServer, searchGraph } from "@marvin/graphify-bridge";
 import { describeLane, laneVerdict } from "@marvin/tools/lanes";
@@ -64,6 +67,7 @@ import {
   type DesignTurnContext,
   logDesignTurnSummary,
   makeDesignHooksPreToolUse,
+  noteGraphResult,
   noteBashFailure,
   recordAllowedTool,
 } from "./design-hooks";
@@ -74,12 +78,14 @@ import { ensureProviderModelId, latestForTier } from "./models";
 import { makeNestedInstructionsPostToolUse, resetNestedInstructions } from "./nested-instructions";
 import { createObsidianMcpServer } from "./obsidian-mcp";
 import { makeOutputGovernorPostToolUse } from "./output-governor";
+import { foldTurnGraphUsage, registerLiveGraphUsage } from "./graph-usage";
+import { seededOpenSteps, seededSpineReminder, seedTurnSpine } from "./plan-seed";
 import { applyTodosToSpine, stepsClosedByBatch } from "./plan-spine";
 import { readPlanState, writePlanState } from "./plan-state";
 import { loadEnabledPlugins, userPluginsOff } from "./plugin-loader";
 import { PREORIENT_SUBTYPE } from "./practice-extractors";
 import { projectSkillsPluginConfig } from "./project-skills-plugin";
-import type { SessionTree } from "./session-meta";
+import { readSessionMeta, type SessionTree } from "./session-meta";
 import { saveSlashCommands } from "./slash-commands";
 import { clearSubagentsForTurn, IMPLEMENTER_TYPE, lookupSubagent, registerSubagent, type SubagentBinding, taskStartedPayload } from "./subagent-registry";
 import { makeTurnCloseStopHook } from "./turn-close-hook";
@@ -1226,11 +1232,12 @@ export function turnReminders(args: {
   mode: AgentMode;
   sessionContext?: string | undefined;
   planContext?: string | undefined;
+  spineContext?: string | null | undefined;
 }): string[] {
   const mode =
     modeGuidance(args.mode).trim() ||
     "## Mode: AGENT\nEdits are allowed this turn; any earlier mode reminder no longer applies.";
-  return [args.orientation, mode, args.sessionContext, args.planContext].filter((x): x is string => Boolean(x));
+  return [args.orientation, mode, args.sessionContext, args.planContext, args.spineContext].filter((x): x is string => Boolean(x));
 }
 
 /** Mode-specific stanza (ADR-0036), sent in the turn's reminder suffix since
@@ -2044,7 +2051,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // Per-turn design context — drives the graphify-first and
   // advisor-on-ADR-trigger hooks (PreToolUse). Cleared in the `finally`
   // block alongside `clearTurnConfirms`.
-  const designCtx = createTurnDesignContext(turnId, workDir);
+  // ADR-0124 D — a brief that carries a checklist gets its plan spine from the
+  // sidecar, before the model's first tool call. A wakeup is never a brief.
+  const spineSeededNow =
+    input.projectId && input.marvinSessionId
+      ? seedTurnSpine({ projectId: input.projectId, sessionId: input.marvinSessionId, message, turnId }).seeded
+      : false;
+  const spineSession =
+    input.projectId && input.marvinSessionId ? { projectId: input.projectId, sessionId: input.marvinSessionId } : undefined;
+  const designCtx = createTurnDesignContext(turnId, workDir, { sessionCwd: cwd, spineSession });
+  // ADR-0124 C — the watch feed reads this turn's graph/file counts live.
+  if (input.projectId && input.marvinSessionId) {
+    registerLiveGraphUsage(input.projectId, input.marvinSessionId, () => ({
+      graphCalls: designCtx.graphCallCount,
+      fileReads: designCtx.fileReads,
+      bashReads: designCtx.bashReads,
+    }));
+  }
   const designPreToolUseHook = makeDesignHooksPreToolUse({
     cwd: workDir,
     turnId,
@@ -2066,6 +2089,17 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             })()
           : [],
       todoWrittenThisTurn: lastTodoPayload !== undefined,
+      // ADR-0124 D — the seeded plan's open steps with THIS turn's TodoWrite
+      // applied in memory (the durable projection only runs after the turn).
+      seededOpenSteps: spineSession
+        ? (() => {
+            const ps = readPlanState(spineSession.projectId, spineSession.sessionId);
+            if (!ps.ok || !ps.state) return [];
+            const state =
+              lastTodoPayload !== undefined ? applyTodosToSpine(ps.state, lastTodoPayload, new Date().toISOString()).state : ps.state;
+            return seededOpenSteps(state);
+          })()
+        : [],
     }),
     onFired: () => {
       /* telemetry lives in the hook; nothing else to record per turn */
@@ -2115,7 +2149,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // per-turn so the server is scoped to the current workDir. Safe to always
   // include: if the project has no `graphify-out/`, the tools politely report
   // that instead of failing the turn.
-  const graphMcp = createGraphMcpServer(workDir);
+  // ADR-0124 — a tab in its own worktree queries that worktree's graph.
+  const graphMcp = createGraphMcpServer(workDir, { cwd });
 
   // In-process MCP server for the curated durable-facts memory (ADR-0042).
   // The enforced write path for `.marvin/memory.md` — `remember` caps + rejects
@@ -2246,7 +2281,23 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
       PreToolUse: [{ hooks: [designPreToolUseHook] }],
-      PostToolUse: [{ hooks: [outputGovernorHook, advisorVerdictHook, nestedInstructionsHook] }],
+      PostToolUse: [
+        {
+          hooks: [
+            outputGovernorHook,
+            advisorVerdictHook,
+            nestedInstructionsHook,
+            // ADR-0124 — remember which files a graph answer pointed at, so a
+            // narrowed read of one passes the graph-pointer rule.
+            async (hookInput) => {
+              if (hookInput.hook_event_name !== "PostToolUse") return {} as HookJSONOutput;
+              const h = hookInput as PostToolUseHookInput;
+              if (h.tool_name.startsWith("mcp__marvin-graph__")) noteGraphResult(designCtx, h.tool_name, h.tool_response);
+              return {} as HookJSONOutput;
+            },
+          ],
+        },
+      ],
       // Command-retry memory (2026-09-03): a failed Bash is remembered for
       // the turn so an identical re-run gets the advisory nudge.
       PostToolUseFailure: [
@@ -2461,11 +2512,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         }
       }
     }
+    // ADR-0124 D — the seeded plan's `[N]` ordinals, so the model's TodoWrite
+    // joins it. Present while the seeded plan has open steps.
+    let spineContext: string | null = null;
+    if (spineSession) {
+      const ps = readPlanState(spineSession.projectId, spineSession.sessionId);
+      if (ps.ok) spineContext = seededSpineReminder(ps.state, spineSeededNow);
+    }
     const reminders = turnReminders({
       orientation,
       mode,
       sessionContext: input.sessionContext,
       planContext: input.planContext,
+      spineContext,
     });
     const turnPrompt =
       reminders.length > 0
@@ -2894,6 +2953,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // the context, so the ratio is readable from the sidecar log instead of
     // reconstructed from session transcripts.
     logDesignTurnSummary(designCtx);
+    if (input.projectId && input.marvinSessionId) {
+      foldTurnGraphUsage(input.projectId, input.marvinSessionId, {
+        graphCalls: designCtx.graphCallCount,
+        fileReads: designCtx.fileReads,
+        bashReads: designCtx.bashReads,
+      });
+    }
     // ADR-0100 — read the advisor conditions off the context BEFORE the
     // teardown drops it. `clearTurnDesignContext` only deletes the registry
     // entry, so the local `designCtx` reference would survive it — but the
@@ -3020,6 +3086,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ps.ok ? openPlanSteps(ps.state) : [],
       lastTodoPayload !== undefined ? openTodos(lastTodoPayload) : [],
     );
+    // ADR-0124 D — a tab whose brief carried a checklist and now has no spine
+    // did not finish a chore; it lost its plan. That is open scope, said why.
+    const checklist = readSessionMeta(wakeupCtx.projectId, wakeupCtx.marvinSessionId)?.checklist;
+    const planStates = ps.ok && ps.state && typeof ps.state === "object" ? (ps.state as { plans?: unknown }).plans : null;
+    if (checklist && (!Array.isArray(planStates) || planStates.length === 0)) {
+      openPlanItems.push(
+        `(no plan spine) this tab's brief carried a ${checklist.steps}-step checklist, seeded as ${checklist.planId}, and the spine is gone — re-state the plan with TodoWrite ([1]…[${checklist.steps}]) and reconcile each step before claiming scope met`,
+      );
+    }
     // ADR-0100 — advisor conditions are part of the close, not a backlog
     // deposit made 20 minutes earlier. They rode the turn on the design
     // context; here is where the executor is asked for an outcome on each.

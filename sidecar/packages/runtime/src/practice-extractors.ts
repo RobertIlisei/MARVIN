@@ -1,6 +1,6 @@
 import { areasOfTitle, type ProjectAreas } from "@marvin/graphify-bridge";
 
-import { bashSearchTarget, isInsideCwd, isSourceFile } from "./bash-search";
+import { bashSearchTarget, classifyBashSourceAccess, isInsideCwd, isSourceFile } from "./bash-search";
 import { hasScopeMet, statesScopeNotMet } from "./workflow-guard";
 
 /**
@@ -359,7 +359,12 @@ function isSourceRead(call: ParsedToolCall, cwd: string | null): boolean {
     const p = typeof call.input.file_path === "string" ? call.input.file_path : "";
     return isSourceFile(p) && (cwd === null || isInsideCwd(cwd, p));
   }
-  if (call.name === "Bash") return cwd !== null && bashSearchTarget(call.input, cwd) !== null;
+  if (call.name === "Bash") {
+    if (cwd === null) return false;
+    const command = typeof call.input.command === "string" ? call.input.command : "";
+    // ADR-0124 — reads (`cat`, `sed -n`, …) as well as searches, same as the gate.
+    return bashSearchTarget(call.input, cwd) !== null || classifyBashSourceAccess(command, cwd, cwd).length > 0;
+  }
   return false;
 }
 

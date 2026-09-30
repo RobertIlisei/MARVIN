@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./graphify-bin": "./src/graphify-bin.ts",
     "./watchdog": "./src/watchdog.ts",
+    "./worktree-graph": "./src/worktree-graph.ts",
     "./refresh-docs": "./src/refresh-docs.ts",
     "./mcp-server": "./src/mcp-server.ts",
     "./read-graph": "./src/read-graph.ts"

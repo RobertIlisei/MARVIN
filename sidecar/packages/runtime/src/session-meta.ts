@@ -88,6 +88,10 @@ export interface SessionMeta {
   closedAt?: string;
   /** What `prepareSessionWorktree` did for this tab's worktree (ADR-0107 addendum). */
   setup?: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean; sparseExclude?: string[] };
+  /** ADR-0124 — the tab's brief carried a checklist and MARVIN seeded a plan
+   *  from it. Outlives the spine file, so "no spine at all" in a checklist tab
+   *  is known to be a gap, not a chore. */
+  checklist?: { planId: string; steps: number; seededAt: string };
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

@@ -21,6 +21,7 @@ import { promisify } from "node:util";
 
 import { listPendingConfirms, type PendingConfirmSummary } from "./confirm-registry";
 import { sessionCostTotals } from "./cost-tracker";
+import { type SessionGraphUsage, sessionGraphUsage } from "./graph-usage";
 import { readPlanState } from "./plan-state";
 import { listSessionSummaries } from "./session";
 import { getActivity, type SessionActivity } from "./session-activity";
@@ -82,7 +83,12 @@ export interface SessionWatchRow {
   /** `currentBranch` is what git reports for the checkout now; a worktree's own `branch` is the one it was cut on. */
   tree: SessionTree & { cwd: string; currentBranch: string | null; present: boolean };
   diff: SessionWatchDiff | null;
-  plan: { done: number; total: number } | null;
+  /** ADR-0124 — `open` excludes superseded steps; `lastTodoAt` is the ADR-0116
+   *  watermark (the last TodoWrite the sidecar joined), `seeded` marks a plan
+   *  MARVIN seeded from the brief. */
+  plan: SessionPlanProgress | null;
+  /** ADR-0124 — graph calls vs source reads (Read/Grep/Glob and Bash), whole session. */
+  graphUsage: SessionGraphUsage | null;
   lastTurn: SessionLastTurn | null;
   cost: { turns: number; costUsd: number };
   title: string | null;
@@ -274,18 +280,29 @@ export function __resetSessionDiffMemoForTests(): void {
 
 // ── plan progress from the persisted spine ───────────────────────────────
 
-function planProgress(projectId: string, sessionId: string): { done: number; total: number } | null {
+export interface SessionPlanProgress {
+  done: number;
+  total: number;
+  open: number;
+  lastTodoAt: string | null;
+  seeded: boolean;
+}
+
+export function planProgress(projectId: string, sessionId: string): SessionPlanProgress | null {
   const res = readPlanState(projectId, sessionId);
   if (!res.ok || !res.state || typeof res.state !== "object") return null;
   const st = res.state as { plans?: unknown; activePlanId?: unknown };
   if (!Array.isArray(st.plans)) return null;
   const activeId = typeof st.activePlanId === "string" ? st.activePlanId : null;
-  const plan = (st.plans as Array<{ id?: unknown; steps?: unknown }>).find((p) => p && p.id === activeId)
-    ?? (st.plans as Array<{ id?: unknown; steps?: unknown }>)[0];
+  const plans = st.plans as Array<{ id?: unknown; steps?: unknown; seeded?: unknown }>;
+  const plan = plans.find((p) => p && p.id === activeId) ?? plans[0];
   if (!plan || !Array.isArray(plan.steps)) return null;
   const steps = plan.steps as Array<{ status?: unknown }>;
   if (steps.length === 0) return null;
-  return { done: steps.filter((s) => s && s.status === "completed").length, total: steps.length };
+  const done = steps.filter((s) => s && s.status === "completed").length;
+  const superseded = steps.filter((s) => s && s.status === "superseded").length;
+  const lastTodoAt = typeof (st as { lastTodoAt?: unknown }).lastTodoAt === "string" ? (st as { lastTodoAt: string }).lastTodoAt : null;
+  return { done, total: steps.length, open: steps.length - done - superseded, lastTodoAt, seeded: !!plan.seeded };
 }
 
 // ── the snapshot ──────────────────────────────────────────────────────────
@@ -376,6 +393,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       },
       diff: cwdInfo.present ? await sessionDiff(cwdInfo.cwd, base, now) : null,
       plan: planProgress(projectId, id),
+      graphUsage: sessionGraphUsage(projectId, id),
       lastTurn: meta?.lastTurn ?? null,
       cost,
       title: meta?.title ?? summary?.firstUserMessage ?? null,

@@ -32,6 +32,8 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var interrupted: Bool = false
     public var diff: SessionDiffSummary?
     public var plan: SessionPlanProgress?
+    /// ADR-0124 — graph calls vs source reads, from the last snapshot.
+    public var graphUsage: SessionGraphUsage?
     public var costUsd: Double?
     /// Minted in this process, no turn yet.
     public var isDraft: Bool = false
@@ -185,6 +187,7 @@ public struct SessionLedger: Equatable, Sendable {
             e.worktree = row.worktree
             if let diff = row.diff { e.diff = diff }
             if let plan = row.plan { e.plan = plan }
+            if let usage = row.graphUsage { e.graphUsage = usage }
             if let cost = row.cost { e.costUsd = cost.costUsd }
             if let title = row.title, !title.isEmpty { e.title = title }
             if let last = row.lastTurn {
@@ -233,7 +236,12 @@ public struct SessionLedger: Equatable, Sendable {
 
     public mutating func setPlan(_ id: String, done: Int, total: Int) {
         var e = ensure(id)
-        e.plan = total > 0 ? SessionPlanProgress(done: done, total: total) : nil
+        // Keep what only the sidecar knows (watermark, seeded) across a local tick.
+        let prior = e.plan
+        e.plan = total > 0
+            ? SessionPlanProgress(done: done, total: total, open: prior?.open.map { _ in max(0, total - done) },
+                                  lastTodoAt: prior?.lastTodoAt, seeded: prior?.seeded)
+            : nil
         entries[id] = e
     }
 

@@ -1439,11 +1439,12 @@ describe("built-in gate rows (ADR-0105 phase 3)", () => {
     expect(deny?.message).toContain("graphify-first");
   });
 
-  it("ensureBuiltinRules seeds four global deny rows once", () => {
+  it("ensureBuiltinRules seeds one global row per built-in gate once — deny, except graph-pointer (measure-first nudge, ADR-0124)", () => {
     const rules = ensureBuiltinRules();
     expect(rules.filter((r) => r.builtin).map((r) => r.id).sort()).toEqual([...BUILTIN_RULE_IDS].sort());
-    expect(rules.every((r) => r.tier === "deny" && r.scope.projectId === null)).toBe(true);
-    expect(ensureBuiltinRules()).toHaveLength(4);
+    expect(rules.every((r) => r.scope.projectId === null)).toBe(true);
+    expect(rules.filter((r) => r.tier !== "deny").map((r) => [r.id, r.tier])).toEqual([["builtin:graph-pointer", "nudge"]]);
+    expect(ensureBuiltinRules()).toHaveLength(BUILTIN_RULE_IDS.length);
   });
 
   it("a row at nudge tier turns the deny into an advisory and still counts a fire", () => {

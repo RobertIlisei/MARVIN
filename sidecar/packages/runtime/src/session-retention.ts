@@ -176,6 +176,8 @@ function archiveOne(
         /* the transcript is safe; a stranded plan file is not worth failing on */
       }
     }
+    // ADR-0124 — the graph-usage counter is a live-watch figure, not history.
+    rmSync(c.path.replace(/\.jsonl$/, ".graph-usage.json"), { force: true });
     return { archivedBytes: packed.length };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };

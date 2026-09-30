@@ -32,6 +32,8 @@ import { promisify } from "node:util";
 import { toolPolicy } from "@marvin/tools/policy";
 
 import { finishIntegrationJob, getIntegrationJob, noteIntegrationProgress, startIntegrationJob } from "./integration-job";
+import { autoTickSpine } from "./plan-seed";
+import { slugifyWorkDir } from "./projects";
 
 /**
  * Lifecycle of one worktree. Everything except `running` is DERIVED from git
@@ -1489,6 +1491,15 @@ export function mergeWorktree(
     }
     const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim().split("\n").filter(Boolean).slice(-3).join("\n");
     return fail(`Merge of ${w.branch} into ${onto} failed and was aborted. ${detail || (err instanceof Error ? err.message : String(err))}`);
+  }
+  // ADR-0124 D — the tab's branch landed: its seeded "merge" step, if it has
+  // exactly one open, is provably done. Best-effort; never fails the merge.
+  if (w.sessionId) {
+    try {
+      autoTickSpine(slugifyWorkDir(workDir), w.sessionId, { kind: "merge" });
+    } catch {
+      /* the spine is bookkeeping */
+    }
   }
   return {
     ok: true,

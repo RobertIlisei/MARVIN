@@ -140,6 +140,47 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   load average of ~45 and pass alone; the new async-reconcile test got an
   explicit 30 s timeout), 957 Swift assertions, `swift build` clean.
 
+- **2026-09-30 — shell reads go through the graph gate, each tab queries its own graph, and the sidecar holds the plan spine ([ADR-0124](../decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md)).**
+
+  Trigger: four agri-saas-platform tabs working in parallel, measured from
+  their transcripts (tool_use blocks de-duplicated by id). Plan B: ~300 graph
+  calls against 286 Read/Grep, 504 shell `cat`/`sed`/`head`/`tail` and 390
+  shell `grep`/`rg`; its context was summarised mid-task. A tab reported "graph
+  is stale for platform.guidance; graph_affected found no callers" for code it
+  had written. Plan B updated its task list ~5 times across 57 commits.
+
+  **Diagnosis.** `bashSearchTarget` (ADR-0098) saw a search binary leading a
+  segment and nothing else, so a `cat` or `sed -n 1,400p` of a source file was
+  invisible to the gate, the drift budget and the ratio. Every graph tool read
+  `<workDir>/graphify-out/`, built from the main checkout — never the tab's
+  worktree. The AppStatusBar ratio covered one session and no shell reads.
+  The spine had two writers (ADR-0116) and neither created it: a tab that never
+  wrote a tagged TodoWrite never had one to keep current.
+
+  **Change.** `classifyBashSourceAccess` (quote-aware stages, heredoc bodies
+  stripped, `cd`/`for`/`xargs`, `sed -n`/`head`/`tail`/`awk` ranges measured,
+  build output / logs / `/tmp` / filters excluded) feeds graphify-first, the
+  drift tallies and the practice extractor; `builtin:graph-pointer` refuses
+  whole-file reads of >200-line files and repo-wide searches after a graph call,
+  with paths lifted from graph results by a PostToolUse hook — native `nudge`,
+  promotable to `deny`. `worktree-graph.ts` gives each tab
+  `<worktree>/graphify-out/` (seeded from the project graph + cache, AST
+  update at turn start and end, 60 s debounce, one process per project,
+  `info/exclude`d), and `createGraphMcpServer(workDir, { cwd })` answers from
+  it or says it fell back. `graph-usage.ts` puts `graphUsage` on every watch
+  row and the Sessions pane. `plan-seed.ts` seeds a `[1]…[N]` spine from a
+  checklist brief before the SDK query, `builtin:plan-spine` refuses a second
+  commit with no TodoWrite, the Stop hook refuses a scope-met close with a
+  seeded step pending, green test/fast-band/Playwright jobs and tab merges tick
+  the one step they prove, and client saves can no longer erase a seeded plan.
+
+  **Verification.** 23 classifier tests on transcript command shapes; 14
+  gate tests; 6 worktree-graph tests including a real `graphify update` in a
+  temp repo + worktree; 17 spine tests (seed before query, commit gate and
+  brake, scope-met block, auto-tick refusal, client merge); watch-row and Swift
+  ledger tests. Full vitest suite green (1,589 passed); Swift build and
+  `MARVINTests` green.
+
 - **2026-09-27 — the stall release: the Mac stays awake during a turn, a stdin-reading search is refused, a job's result is never dropped ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)).**
 
   Trigger: a 20-hour agri-saas session that looked stuck every fifteen

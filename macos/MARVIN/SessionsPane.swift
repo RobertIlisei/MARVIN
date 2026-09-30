@@ -578,7 +578,8 @@ struct SessionsPane: View {
             parts.append("on: " + (held.count > 34 ? String(held.prefix(32)) + "…" : held))
         }
         if let d = e.diff, d.files > 0 { parts.append("+\(d.added) −\(d.removed)") }
-        if let p = e.plan, p.total > 0 { parts.append("plan \(p.done)/\(p.total)") }
+        if let p = e.plan, p.total > 0 { parts.append(planLabel(p, e)) }
+        if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(first.toolName)")
@@ -592,9 +593,33 @@ struct SessionsPane: View {
         return parts.joined(separator: " · ")
     }
 
+    /// ADR-0124 — "3/8 steps · updated 12m ago", with a ⚠︎ when the list has
+    /// stopped moving while the tab kept working.
+    private func planLabel(_ p: SessionPlanProgress, _ e: SessionEntry) -> String {
+        var label = "\(p.done)/\(p.total) steps"
+        if let at = p.lastTodoAt, let d = SessionLedger.parseISO(at) {
+            label += " · updated \(elapsed(d)) ago"
+            let activity = e.isLive ? registry.now : e.lastTurnAt
+            if p.isStale(now: registry.now, lastActivity: activity) { label = "⚠︎ " + label }
+        }
+        return label
+    }
+
+    /// ADR-0124 — "graph 12 · reads 30 (2.5×)". Reads are Read/Grep and shell
+    /// reads together; the ratio is reads per graph call.
+    private func graphUsageLabel(_ u: SessionGraphUsage) -> String {
+        let reads = u.fileReads + u.bashReads
+        guard let r = u.ratio else { return "graph 0 · reads \(reads)" }
+        return "graph \(u.graphCalls) · reads \(reads) (\(String(format: "%.1f", r))×)"
+    }
+
     private func help(_ e: SessionEntry) -> String {
         var lines = [e.id]
         if let path = e.tree?.path { lines.append(path) }
+        if let u = e.graphUsage {
+            lines.append("graph calls \(u.graphCalls) · Read/Grep \(u.fileReads) · shell reads \(u.bashReads)")
+        }
+        if let p = e.plan, p.seeded == true { lines.append("plan seeded by MARVIN from the brief") }
         return lines.joined(separator: "\n")
     }
 

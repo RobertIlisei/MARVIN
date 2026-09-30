@@ -40,7 +40,15 @@ import { discoverAreas } from "@marvin/graphify-bridge";
 import { isSubagentDispatch } from "@marvin/tools/policy";
 import type { AdvisorVerdict } from "./advisor-verdict";
 import { type AutoAuditEntryKind, appendAutoAuditEntry } from "./auto-audit";
-import { bashSearchTarget, isInsideCwd, isSourceFile, truncate } from "./bash-search";
+import {
+  type BashSourceAccess,
+  bashSearchTarget,
+  classifyBashSourceAccess,
+  isInsideCwd,
+  isSourceFile,
+  NARROW_READ_MAX_LINES,
+  truncate,
+} from "./bash-search";
 import {
   type BuiltinGate,
   type BuiltinRuleId,
@@ -50,6 +58,8 @@ import {
   type RuleEvalResult,
 } from "./practice";
 import { collectNumberedElsewhere, findCollisions } from "./numbered-file-collision";
+import { hasSeededPlan, seededOpenSteps } from "./plan-seed";
+import { readPlanState } from "./plan-state";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { slugifyWorkDir } from "./projects";
 
@@ -191,6 +201,26 @@ export interface DesignTurnContext {
   retryNudged: Set<string>;
   /** ADR-0120 — `rg`/`grep` calls with no path refused this turn (ADR-0104 brake: two, then allow + log). */
   searchStdinDenies: number;
+  /** ADR-0124 — the checkout the turn runs in (a tab's worktree, or `cwd`).
+   *  Relative paths in a Bash command start here; `cwd` stays the project
+   *  root every `.marvin/`-scoped rule keys on (ADR-0107). */
+  sessionCwd: string;
+  /** ADR-0124 — repo-relative source paths the graph has returned this turn.
+   *  A narrowed read or search of one of these is what the gate asks for. */
+  graphPointers: Set<string>;
+  /** ADR-0124 — absolute paths this turn created with Write. Reading your own
+   *  new file back is never exploration. */
+  createdFiles: Set<string>;
+  /** ADR-0124 — Read / Grep / Glob calls on source this turn (usage ratio). */
+  fileReads: number;
+  /** ADR-0124 — Bash commands that read or searched source this turn. */
+  bashReads: number;
+  /** ADR-0124 — graph-pointer denies issued this turn (ADR-0104 brake). */
+  graphPointerDenies: number;
+  /** ADR-0124 D — the session whose seeded spine the plan-spine gate reads. */
+  spineSession?: { projectId: string; sessionId: string } | undefined;
+  /** ADR-0124 D — plan-spine commit denies issued this turn (ADR-0104 brake). */
+  planSpineDenies: number;
 }
 
 /** ADR-0094 — the registered advisor agent's `subagent_type` (ADR-0033).
@@ -288,11 +318,23 @@ const turnContexts = new Map<string, DesignTurnContext>();
 export function createTurnDesignContext(
   turnId: string,
   cwd: string,
+  opts: {
+    sessionCwd?: string | undefined;
+    spineSession?: { projectId: string; sessionId: string } | undefined;
+  } = {},
 ): DesignTurnContext {
   const graphPath = join(cwd, "graphify-out", "graph.json");
   const ctx: DesignTurnContext = {
     turnId,
     cwd,
+    sessionCwd: opts.sessionCwd ?? cwd,
+    graphPointers: new Set<string>(),
+    createdFiles: new Set<string>(),
+    fileReads: 0,
+    bashReads: 0,
+    graphPointerDenies: 0,
+    spineSession: opts.spineSession,
+    planSpineDenies: 0,
     hasGraph: existsSync(graphPath),
     graphCallCount: 0,
     seenSourceFiles: new Set<string>(),
@@ -360,10 +402,21 @@ export function recordAllowedTool(
     shipReviewTreeState(ctx.cwd).reviews[reviewSkill] = { seq: nextShipSeq(), turnId: ctx.turnId };
     return;
   }
+  // ADR-0124 D — the two events the plan-spine gate orders: a list update and
+  // a commit. Per SESSION (a tab's plan is its own), across turns.
+  if (toolName === "TodoWrite" && ctx.spineSession) {
+    spineCommitState(ctx.spineSession).todoSinceCommit = true;
+    return;
+  }
   if (toolName === "Bash") {
     const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
     if (parseCommitCommand(cmd)) {
       shipReviewTreeState(ctx.cwd).lastCommit = { seq: nextShipSeq(), turnId: ctx.turnId };
+      if (ctx.spineSession) {
+        const st = spineCommitState(ctx.spineSession);
+        st.commits += 1;
+        st.todoSinceCommit = false;
+      }
     }
     // Fall through — a commit command is still a Bash call for the tallies below.
   }
@@ -404,6 +457,7 @@ export function recordAllowedTool(
   if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit") {
     ctx.mutationCount += 1;
     const target = pickPath(toolInput, ["file_path", "notebook_path", "path"]);
+    if (toolName === "Write" && target) ctx.createdFiles.add(isAbsolute(target) ? target : join(ctx.sessionCwd, target));
     if (target && ctx.chargedFiles.has(target)) {
       ctx.chargedFiles.delete(target);
       ctx.novelFilesSinceGraph = Math.max(0, ctx.novelFilesSinceGraph - 1);
@@ -454,6 +508,7 @@ export function recordAllowedTool(
     const target = pickPath(toolInput, ["file_path", "path"]);
     if (target && isSourceFile(target) && isInsideCwd(ctx.cwd, target)) {
       ctx.sourceFilesRead += 1;
+      ctx.fileReads += 1;
       // ADR-0060 — only a file we have NOT seen this turn counts as drift.
       // Re-reading a file already in play is implementation work; charging it
       // to the drift budget would nag during exactly the phase where reading
@@ -473,16 +528,23 @@ export function recordAllowedTool(
   // here so the tally survives the tool surface changing under it
   // (`bashSearchTarget` explains the measurement).
   if (toolName === "Bash") {
-    const target = bashSearchTarget(toolInput, ctx.cwd);
-    if (target) {
+    // ADR-0124 — reads (`cat`, `sed -n`, `head`, …) as well as searches.
+    const accesses = bashSourceAccesses(ctx, toolInput);
+    if (accesses.length > 0) {
       ctx.sourceFilesRead += 1;
-      const key = `Bash:${target}`;
-      if (!ctx.seenSourceFiles.has(key)) {
-        ctx.seenSourceFiles.add(key);
-        ctx.novelFilesSinceGraph += 1;
-        ctx.driftCharges += 1;
-        // Not refundable, same reasoning as Grep below: a search has no file
-        // to edit, so it can never resolve into implementation.
+      ctx.bashReads += 1;
+      for (const a of accesses) {
+        // A file read charges per file (refundable on an Edit, like Read); a
+        // search charges per root and never refunds — it has no file to edit.
+        const keys = a.kind === "read" ? a.files : a.dirs.length > 0 ? a.dirs.map((d) => `${a.tool}:${d}`) : a.files.map((f) => `${a.tool}:${f}`);
+        for (const key of keys) {
+          const seenKey = a.kind === "read" ? key : `Bash:${key}`;
+          if (ctx.seenSourceFiles.has(seenKey)) continue;
+          ctx.seenSourceFiles.add(seenKey);
+          ctx.novelFilesSinceGraph += 1;
+          ctx.driftCharges += 1;
+          if (a.kind === "read") ctx.chargedFiles.add(key);
+        }
       }
     }
     return;
@@ -496,6 +558,7 @@ export function recordAllowedTool(
       ctx.cwd;
     if (isInsideCwd(ctx.cwd, path)) {
       ctx.sourceFilesRead += 1;
+      ctx.fileReads += 1;
       // A project-tree Grep/Glob IS unguided exploration — the "grep and pray"
       // the rule targets — so it always charges the drift budget. Keyed by
       // pattern so repeating the same search doesn't double-charge.
@@ -526,7 +589,7 @@ function isStructuralSearch(
   toolInput: Record<string, unknown>,
 ): boolean {
   if (toolName === "Grep" || toolName === "Glob") return true;
-  if (toolName === "Bash") return bashSearchTarget(toolInput, ctx.cwd) !== null;
+  if (toolName === "Bash") return bashSourceAccesses(ctx, toolInput).length > 0;
   if (toolName === "Read") {
     const target = pickPath(toolInput, ["file_path", "path"]);
     // A file already in play is work, not exploration — don't nudge on it.
@@ -534,6 +597,151 @@ function isStructuralSearch(
       && !ctx.seenSourceFiles.has(target);
   }
   return false;
+}
+
+/** ADR-0124 — source reads/searches in a Bash command, minus files this turn
+ *  wrote itself. Relative paths start at the tab's checkout; containment is
+ *  the project. */
+function bashSourceAccesses(ctx: DesignTurnContext, toolInput: Record<string, unknown>): BashSourceAccess[] {
+  const command = typeof toolInput.command === "string" ? toolInput.command : "";
+  if (!command.trim()) return [];
+  return classifyBashSourceAccess(command, ctx.sessionCwd, ctx.cwd)
+    .map((a) => ({ ...a, files: a.files.filter((f) => !ctx.createdFiles.has(f)) }))
+    .filter((a) => a.files.length > 0 || a.dirs.length > 0);
+}
+
+/** A path as the graph names it: relative to the checkout it came from. A tab
+ *  worktree (`.marvin/worktrees/<slug>/…`) and the project root map to the
+ *  same key, so a pointer from either graph matches a read in either tree. */
+export function repoRelativePath(workDir: string, p: string): string {
+  let rel = isAbsolute(p) ? relative(workDir, p) : p;
+  rel = rel.split(sep).join("/").replace(/^\.\//, "");
+  const wt = /^\.marvin\/worktrees\/[^/]+\/(.*)$/.exec(rel);
+  return wt ? (wt[1] as string) : rel;
+}
+
+const GRAPH_POINTER_RE =
+  /(?:^|[\s(·:,\[`'"=])((?:\/|\.{0,2}\/)?(?:[\w@.+-]+\/)*[\w@.+-]+\.(?:tsx?|jsx?|mjs|cjs|swift|py|go|rs|java|kt|kts|rb|exs?|cs|cc|cpp|cxx|c|h|hh|hpp|hxx|m|mm))(?=$|[\s):,\]`'"#]|:\d)/g;
+
+/**
+ * ADR-0124 — remember the source files a graph answer pointed at. Called from
+ * a PostToolUse hook with the tool's response; everything is text to us, so
+ * the paths are lifted by pattern from whatever the tool printed. Exported for
+ * tests.
+ */
+export function noteGraphResult(ctx: DesignTurnContext, toolName: string, response: unknown): void {
+  if (!toolName.startsWith("mcp__marvin-graph__")) return;
+  const texts: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6 || texts.length > 200) return;
+    if (typeof v === "string") texts.push(v);
+    else if (Array.isArray(v)) for (const x of v) walk(x, depth + 1);
+    else if (v && typeof v === "object") for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(response, 0);
+  for (const text of texts) {
+    for (const m of text.matchAll(GRAPH_POINTER_RE)) {
+      const raw = m[1] as string;
+      if (raw.includes("node_modules/")) continue;
+      ctx.graphPointers.add(repoRelativePath(ctx.cwd, raw));
+      if (ctx.graphPointers.size > 2000) return;
+    }
+  }
+}
+
+function pointedAt(ctx: DesignTurnContext, rel: string): boolean {
+  if (ctx.graphPointers.has(rel)) return true;
+  for (const p of ctx.graphPointers) {
+    if (rel.endsWith(`/${p}`) || p.endsWith(`/${rel}`)) return true;
+  }
+  return false;
+}
+
+function dirHoldsPointer(ctx: DesignTurnContext, relDir: string): boolean {
+  if (!relDir || relDir === ".") return false; // the whole repository is never "narrowed"
+  for (const p of ctx.graphPointers) {
+    if (p.startsWith(`${relDir}/`) || p.includes(`/${relDir}/`)) return true;
+  }
+  return false;
+}
+
+/** Lines in a file, or null when it cannot be read cheaply. */
+function lineCount(abs: string): number | null {
+  try {
+    const text = readFileSync(abs, "utf8");
+    if (text.length > 4 * 1024 * 1024) return Number.POSITIVE_INFINITY;
+    let n = 1;
+    for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ADR-0124 — the graph-pointer rule: once the graph has been asked, read what
+ * it points at, narrowly.
+ *
+ * `checkGraphifyFirst` gets ONE graph call out of a turn and then disarms; the
+ * 2026-09-30 transcripts show what follows — `cat` of 700-line files and
+ * `grep -rn … src` over the whole tree, ~3 of them per graph call. This rule
+ * refuses the two wide shapes and nothing else:
+ *
+ *   - a whole-file read (`cat`, `sed` without a range, `head -n 5000`) of a
+ *     source file longer than `NARROW_READ_MAX_LINES`;
+ *   - a search whose root is the repository, or a directory holding nothing
+ *     the graph returned this turn.
+ *
+ * Always allowed: a line range of at most 200 lines of any file, a search
+ * targeted at named files, a search under a directory the graph pointed into,
+ * files this turn created, and everything that is not a source read (tests,
+ * builds, git, logs, `wc`, `ls`). Needs a graph and at least one graph call —
+ * before that, `checkGraphifyFirst` owns the turn. Pure; exported for tests.
+ */
+export function checkGraphPointer(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (!ctx.hasGraph || ctx.graphCallCount === 0 || toolName !== "Bash") return null;
+  const problems: string[] = [];
+  for (const a of bashSourceAccesses(ctx, toolInput)) {
+    if (a.kind === "read") {
+      if (a.narrow) continue;
+      for (const f of a.files) {
+        const n = lineCount(f);
+        if (n === null || n <= NARROW_READ_MAX_LINES) continue;
+        const rel = repoRelativePath(ctx.cwd, f);
+        problems.push(
+          `whole-file ${a.tool} of ${rel} (${Number.isFinite(n) ? `${n} lines` : "very large"})` +
+            (pointedAt(ctx, rel) ? " — the graph did point here; read the lines it named" : ""),
+        );
+      }
+      continue;
+    }
+    if (a.dirs.length === 0) continue; // a search of named files is already narrow
+    const wide = a.dirs.filter((d) => !dirHoldsPointer(ctx, repoRelativePath(ctx.cwd, d)));
+    if (wide.length === 0) continue;
+    const shown = wide.map((d) => repoRelativePath(ctx.cwd, d) || ".").join(", ");
+    problems.push(`${a.tool} over ${shown === "" ? "." : shown} — no graph result this turn points into it`);
+  }
+  if (problems.length === 0) return null;
+  const example = [...ctx.graphPointers][0];
+  return {
+    behavior: "deny",
+    message:
+      `graph-pointer (ADR-0124): ${problems.slice(0, 3).join("; ")}${problems.length > 3 ? `; and ${problems.length - 3} more` : ""}. ` +
+      "You have queried the graph this turn — now read what it points at, narrowly. " +
+      `Read a line range instead: \`sed -n 'X,Yp' <file>\` (≤ ${NARROW_READ_MAX_LINES} lines) at the ` +
+      "source_location the graph returned, or the Read tool with offset/limit. To find something the " +
+      "graph has not shown you yet, ask it: `graph_search` to locate, `graph_affected` for callers, " +
+      "`graph_query` for a question — then search only the file or directory it names" +
+      (example ? ` (e.g. \`rg -n <pattern> ${example}\`)` : "") +
+      ". Tests, builds, git, logs and files you created this turn are never refused. " +
+      `(Tier set in the Practice pane; MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} ` +
+      "refusals in one turn the call is allowed and the bypass logged.)",
+    interrupt: false,
+  };
 }
 
 /**
@@ -1380,6 +1588,34 @@ export function runDesignHooks(args: {
     }
   }
 
+  // Hook 1b — ADR-0124: after the graph has been asked, read narrowly. Ships
+  // at `nudge` natively (measure first): every violation is logged and the
+  // model told once; the Practice pane promotes it to `deny`, which then gets
+  // ADR-0104's brake like every other gate.
+  const pointerGate = gateOf("builtin:graph-pointer");
+  const pointerDeny = pointerGate.off || graphifyDeny ? null : checkGraphPointer(ctx, toolName, toolInput);
+  if (pointerDeny) {
+    logDesignHookEvent({
+      kind: mode === "measure" ? "graph.pointer.measured" : `graph.pointer.${pointerGate.tier}`,
+      turnId: ctx.turnId,
+      tool: toolName,
+      graphCallCount: ctx.graphCallCount,
+      command: String(toolInput.command ?? "").slice(0, 200),
+    });
+    if (mode !== "measure") {
+      if (pointerGate.tier === "deny" && ctx.graphPointerDenies >= BUILTIN_GATE_MAX_DENIES) {
+        logDesignHookEvent({ kind: "graph.pointer.bypass", turnId: ctx.turnId, denies: ctx.graphPointerDenies });
+        notePracticeRuleFired("builtin:graph-pointer", "bypass");
+      } else if (pointerGate.tier !== "nudge" || !ctx.practiceNudges.has("builtin:graph-pointer")) {
+        const out = applyGate("builtin:graph-pointer", pointerGate, pointerDeny, () => {
+          if (pointerGate.tier === "deny") ctx.graphPointerDenies += 1;
+          else ctx.practiceNudges.add("builtin:graph-pointer");
+        });
+        if (out) return out;
+      }
+    }
+  }
+
   // Hook 2a — ADR-0095 amendment: a SECOND consult once a verdict is in.
   // One consult, one answer. Re-rolling the dice until the advisor agrees is
   // the failure mode a second opinion exists to prevent.
@@ -1455,6 +1691,26 @@ export function runDesignHooks(args: {
   // the same directory. Generic: no project convention is assumed.
   const numbered = checkNumberedCollision(ctx, toolName, toolInput);
   if (numbered) return numbered;
+
+  // Hook 3c — ADR-0124 D: a tab whose plan MARVIN seeded keeps it current.
+  // Native `deny` with ADR-0104's brake; it only ever fires in a tab whose
+  // brief carried a checklist, and costs one TodoWrite to discharge.
+  const spineGate = gateOf("builtin:plan-spine");
+  const spineDeny = spineGate.off ? null : checkPlanSpine(ctx, toolName, toolInput);
+  if (spineDeny) {
+    if (mode === "measure") {
+      logDesignHookEvent({ kind: "plan.spine.deny.measured", turnId: ctx.turnId, tool: toolName });
+    } else if (spineGate.tier === "deny" && ctx.planSpineDenies >= BUILTIN_GATE_MAX_DENIES) {
+      logDesignHookEvent({ kind: "plan.spine.bypass", turnId: ctx.turnId, denies: ctx.planSpineDenies });
+      notePracticeRuleFired("builtin:plan-spine", "bypass");
+    } else {
+      logDesignHookEvent({ kind: "plan.spine.deny", turnId: ctx.turnId, tool: toolName });
+      const out = applyGate("builtin:plan-spine", spineGate, spineDeny, () => {
+        if (spineGate.tier === "deny") ctx.planSpineDenies += 1;
+      });
+      if (out) return out;
+    }
+  }
 
   // Hook 4 — ADR-0105: rules the user accepted from the practice loop. Data,
   // not code: a rule is a trigger + tier + message in `practice/rules.json`.
@@ -1896,6 +2152,64 @@ export function checkShipReview(
   };
 }
 
+// ---------------------------------------------------------------------------
+// ADR-0124 D — plan-spine gate
+// ---------------------------------------------------------------------------
+
+interface SpineCommitState {
+  commits: number;
+  todoSinceCommit: boolean;
+}
+/** Per session, process-local. A sidecar restart forgets the last commit,
+ *  which only ever lets ONE commit through unchecked — the safe direction. */
+const spineCommits = new Map<string, SpineCommitState>();
+function spineCommitState(s: { projectId: string; sessionId: string }): SpineCommitState {
+  const key = `${s.projectId}/${s.sessionId}`;
+  let st = spineCommits.get(key);
+  if (!st) {
+    st = { commits: 0, todoSinceCommit: false };
+    spineCommits.set(key, st);
+  }
+  return st;
+}
+/** Test isolation. */
+export function resetPlanSpineGateState(): void {
+  spineCommits.clear();
+}
+
+/**
+ * ADR-0124 D — refuse a `git commit` in a tab with a seeded plan when the
+ * list has not been touched since the tab's previous commit. The first commit
+ * always passes; so does every commit once the seeded plan has no open step.
+ * Reads the spine from disk on a commit only. Exported for tests.
+ */
+export function checkPlanSpine(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): DesignHookDeny | null {
+  if (toolName !== "Bash" || !ctx.spineSession) return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  if (!parseCommitCommand(cmd)) return null;
+  const st = spineCommitState(ctx.spineSession);
+  if (st.commits === 0 || st.todoSinceCommit) return null;
+  const ps = readPlanState(ctx.spineSession.projectId, ctx.spineSession.sessionId);
+  if (!ps.ok || !hasSeededPlan(ps.state)) return null;
+  const open = seededOpenSteps(ps.state);
+  if (open.length === 0) return null;
+  return {
+    behavior: "deny",
+    message:
+      `plan-spine gate (ADR-0124): this tab has committed since its plan last moved — ${open.length} seeded ` +
+      `step${open.length === 1 ? "" : "s"} still open (${open.slice(0, 3).join("; ")}${open.length > 3 ? "; …" : ""}). ` +
+      "Update the plan: TodoWrite with every step's `[N]` tag — mark what this work completed, add `[N.M]` sub-steps " +
+      "for what you found, mark a step superseded if it no longer applies — then retry the commit. " +
+      `(MARVIN_DESIGN_HOOKS=measure logs instead of denying; after ${BUILTIN_GATE_MAX_DENIES} refusals in one turn ` +
+      "the commit is allowed and the bypass logged.)",
+    interrupt: false,
+  };
+}
+
 /** Two refusals of one call as one deny — messages joined, first shape kept. */
 function mergeDenies(a: DesignHookDeny | null, b: DesignHookDeny | null): DesignHookDeny | null {
   if (!a) return b;
@@ -1981,7 +2295,7 @@ function checkGraphifyFirst(
   if (ctx.graphCallCount > 0) return null;
   if (ctx.sourceFilesRead > 0) return null;
 
-  let triggered: { kind: "Read" | "Grep" | "Glob" | "Bash search"; target: string } | null = null;
+  let triggered: { kind: "Read" | "Grep" | "Glob" | "Bash search" | "Bash read"; target: string } | null = null;
   if (toolName === "Read") {
     const target = pickPath(toolInput, ["file_path", "path"]);
     if (target && isInsideCwd(ctx.cwd, target) && isSourceFile(target)) {
@@ -1999,9 +2313,15 @@ function checkGraphifyFirst(
       triggered = { kind: "Grep", target: path };
     }
   } else if (toolName === "Bash") {
-    // The only search route left on CLI 2.1.251. Same rule, same deny.
-    const target = bashSearchTarget(toolInput, ctx.cwd);
-    if (target) triggered = { kind: "Bash search", target };
+    // The only search route left on CLI 2.1.251, and — ADR-0124 — the route
+    // tabs read whole files through. Same rule, same deny.
+    const first = bashSourceAccesses(ctx, toolInput)[0];
+    if (first) {
+      triggered = {
+        kind: first.kind === "read" ? "Bash read" : "Bash search",
+        target: first.files[0] ?? first.dirs[0] ?? first.segment,
+      };
+    }
   } else if (toolName === "Glob") {
     // Glob input: { pattern, path? }. The pattern is often a path glob
     // ("**/*.ts"). When the path is omitted, the search root defaults

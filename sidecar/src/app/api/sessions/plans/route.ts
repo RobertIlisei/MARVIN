@@ -1,3 +1,4 @@
+import { mergeClientPlanState } from "@marvin/runtime/plan-seed";
 import { readPlanState, writePlanState } from "@marvin/runtime/plan-state";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -44,7 +45,11 @@ export async function PUT(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
   }
-  const result = writePlanState(q.projectId, q.sessionId, body);
+  // ADR-0124 — keep what only the server knows (a plan it seeded, its
+  // `seeded` flag) across a client save that never saw it.
+  const before = readPlanState(q.projectId, q.sessionId);
+  const merged = before.ok && before.state ? mergeClientPlanState(before.state, body) : body;
+  const result = writePlanState(q.projectId, q.sessionId, merged);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true });
 }
