@@ -848,10 +848,16 @@ struct SourceControlView: View {
                 }
                 .frame(maxHeight: .infinity)
             }
-        } else if model.isLoading {
-            PaneLoadingView()
+        } else if model.lastError != nil && !model.isLoading {
+            // The fetch failed and nothing is retrying — the error banner says
+            // why. A pulsing skeleton here would claim it is still loading.
+            EmptyView()
         } else {
-            PaneLoadingView()
+            // First status fetch in flight: the shape of the file list, not a
+            // spinner on an empty pane.
+            SkeletonRows(count: 5, detailLines: 0)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
         }
     }
 

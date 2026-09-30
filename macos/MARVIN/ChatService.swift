@@ -66,6 +66,12 @@ final class ChatService {
 
     private let baseURL = ServerConfig.baseURL
     private let session: URLSession
+    /// Long-lived SSE streams (turn, resume, announce, live feed) get their
+    /// own pool. URLSession allows 6 connections per host; when streams and
+    /// request/response calls shared one pool, six open streams left a
+    /// transcript fetch queued forever with no error (2026-09-30). Streams can
+    /// no longer starve the short calls, whatever the stream count.
+    private let streamSession: URLSession
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -79,6 +85,9 @@ final class ChatService {
         // ATS exception in Info.plist is what makes this allowed at
         // all; a non-loopback baseURL would need additional plumbing.
         self.session = URLSession(configuration: config)
+        let streamConfig = config.copy() as! URLSessionConfiguration
+        streamConfig.httpMaximumConnectionsPerHost = 16
+        self.streamSession = URLSession(configuration: streamConfig)
     }
 
     /// POST /api/chat/cancel — abort an in-flight turn on the
@@ -349,7 +358,7 @@ final class ChatService {
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
 
-        let (bytes, response) = try await session.bytes(for: req)
+        let (bytes, response) = try await streamSession.bytes(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw ChatServiceError.transport(
                 underlying: URLError(.badServerResponse)
@@ -453,7 +462,7 @@ final class ChatService {
         req.httpMethod = "GET"
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
-        let (bytes, response) = try await session.bytes(for: req)
+        let (bytes, response) = try await streamSession.bytes(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ChatServiceError.transport(underlying: URLError(.badServerResponse))
         }
@@ -467,13 +476,17 @@ final class ChatService {
 
     /// GET /api/sessions/watch — the cold-start rows for every session of a
     /// project (ADR-0107). nil on any failure; the feed carries on regardless.
-    func fetchSessionWatch(projectId: String, ids: [String]) async -> [SessionWatchRowWire]? {
+    /// `fresh`: the sidecar serves git facts stale-while-revalidate; a caller
+    /// about to act on a worktree's state (the tab close, which may discard an
+    /// "empty" tree) asks for them derived now.
+    func fetchSessionWatch(projectId: String, ids: [String], fresh: Bool = false) async -> [SessionWatchRowWire]? {
         let url = baseURL.appendingPathComponent("api/sessions/watch")
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         comps.queryItems = [
             URLQueryItem(name: "projectId", value: projectId),
             URLQueryItem(name: "ids", value: ids.joined(separator: ",")),
         ]
+        if fresh { comps.queryItems?.append(URLQueryItem(name: "fresh", value: "1")) }
         guard let composed = comps.url else { return nil }
         var req = URLRequest(url: composed)
         req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -498,7 +511,7 @@ final class ChatService {
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
 
-        let (bytes, response) = try await session.bytes(for: req)
+        let (bytes, response) = try await streamSession.bytes(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw ChatServiceError.transport(
                 underlying: URLError(.badServerResponse)
@@ -583,7 +596,7 @@ final class ChatService {
         req.setValue("1", forHTTPHeaderField: "x-marvin-client")
         req.httpBody = try JSONEncoder().encode(request)
 
-        let (bytes, response) = try await session.bytes(for: req)
+        let (bytes, response) = try await streamSession.bytes(for: req)
         guard let http = response as? HTTPURLResponse else {
             throw ChatServiceError.transport(
                 underlying: URLError(.badServerResponse)

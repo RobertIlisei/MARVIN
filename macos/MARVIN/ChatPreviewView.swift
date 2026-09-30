@@ -39,6 +39,14 @@ enum NativePermissionStrategy: String, CaseIterable, Identifiable {
 @MainActor
 @Observable
 final class ChatPreviewModel {
+    /// The one chat model. It used to be `@State` on `ChatPreviewView`, and a
+    /// split-view rebuild (ADR-0062 addendum 4) re-creates that view with fresh
+    /// state: 2026-09-30 `heap` counted 68 live models after 64 rebuilds, each
+    /// orphan still holding its announce stream open. Six of those filled
+    /// URLSession's per-host pool, so a tab switch's transcript GET queued
+    /// forever and the pane sat on "(no messages yet)".
+    static let shared = ChatPreviewModel()
+
     /// Editor text. Bound to ChatInputBar.
     var draft: String = ""
 
@@ -2064,7 +2072,7 @@ final class ChatPreviewModel {
 struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.openWindow) private var openWindow
-    @State private var model = ChatPreviewModel()
+    private let model = ChatPreviewModel.shared
     /// ADR-0107 — a tab close awaiting a worktree decision.
     @State private var pendingClose: TabCloseChoice? = nil
     /// Pending "stop this session" confirmation, captured at confirm time so
@@ -2810,7 +2818,8 @@ struct ChatPreviewView: View {
             return
         }
         Task { @MainActor in
-            let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: [sid]) ?? []
+            // Fresh: this decision can discard a tree it believes empty.
+            let rows = await ChatService.shared.fetchSessionWatch(projectId: pid, ids: [sid], fresh: true) ?? []
             let row = rows.first(where: { $0.marvinSessionId == sid })
             let worktree = row?.worktree ?? entry?.worktree
             // The MAIN checkout's branch. `tree.currentBranch` is the branch of
@@ -3672,7 +3681,11 @@ struct ChatPreviewView: View {
     private var messagesPane: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if model.messages.isEmpty {
+                if model.messages.isEmpty && model.isHydrating {
+                    // A transcript is loading — the skeleton is an overlay on
+                    // the ScrollView (below), never a row of this lazy stack.
+                    EmptyView()
+                } else if model.messages.isEmpty {
                     emptyState
                 } else {
                     // ADR-0048 — incremental history paging. When older lines
@@ -3710,6 +3723,15 @@ struct ChatPreviewView: View {
         // jumps with streaming-mutated row heights; this modifier
         // handles the dynamic-content case natively.
         .defaultScrollAnchor(.bottom)
+        // Outside the LazyVStack on purpose. As a row of the bottom-anchored
+        // lazy stack it froze the app at 100 % CPU (2026-10-01, `sample`:
+        // every frame in LazyLayoutViewCache.updatePrefetchPhases /
+        // LazyStack.measureEstimates, the pane stuck on the skeleton).
+        .overlay(alignment: .topLeading) {
+            if model.messages.isEmpty && model.isHydrating {
+                SkeletonRows(count: 4, detailLines: 2).padding(12).allowsHitTesting(false)
+            }
+        }
         .background(MarvinTheme.background)
     }
 

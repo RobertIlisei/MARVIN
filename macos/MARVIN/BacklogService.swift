@@ -10,7 +10,7 @@ struct BacklogItem: Codable, Identifiable, Equatable {
     let id: String
     let title: String
     let body: String
-    let status: String     // provisional | open | doing | done | dismissed
+    var status: String     // provisional | open | doing | done | dismissed — `var` so a row updates in place
     let severity: String   // low | med | high
     let created: String
     /// ADR-0064 — what sort of work this is. Optional in the wire shape so the

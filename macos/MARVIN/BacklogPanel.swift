@@ -44,6 +44,9 @@ struct BacklogPanel: View {
 
     @State private var items: [BacklogItem] = []
     @State private var isLoading = false
+    /// The first fetch has finished (successfully or not) — until then the
+    /// list shows a skeleton, never the empty state.
+    @State private var hasLoaded = false
     @State private var error: String?
     /// Possible-duplicate notice after a manual add (ADR-0044 addendum).
     /// Separate from `error` because the add SUCCEEDED — conflating the two
@@ -100,7 +103,11 @@ struct BacklogPanel: View {
     /// The active list after status-scope + severity filter + sort. Provisional
     /// items are handled in their own review band and never appear here.
     private var visible: [BacklogItem] {
-        items
+        // Hoisted: each of these re-read defaults / rebuilt a set per ITEM.
+        let flagged = flaggedIds
+        let hidden = hiddenKinds
+        let (high, med, low) = (showHigh, showMed, showLow)
+        return items
             .filter { item in
                 switch item.status {
                 case "open", "doing":     return true
@@ -108,14 +115,16 @@ struct BacklogPanel: View {
                 default:                  return false
                 }
             }
-            .filter { severityAllowed($0.severity) }
+            .filter { item in
+                switch item.severity { case "high": return high; case "low": return low; default: return med }
+            }
             // Review focus (ADR-0063 addendum). Findings land on stale and
             // duplicated items, which are OLD by definition — under the default
             // "Newest" sort every one of them sinks below the fold. A count with
             // no way to reach it reads as "22 findings and I can't see any".
-            .filter { !onlyFlagged || flaggedIds.contains($0.id) }
+            .filter { !onlyFlagged || flagged.contains($0.id) }
             .filter { !hideBlocked || !$0.isBlocked }
-            .filter { !hiddenKinds.contains($0.kindOrUnspecified) }
+            .filter { !hidden.contains($0.kindOrUnspecified) }
             .sorted(by: sortComparator)
     }
 
@@ -372,7 +381,15 @@ struct BacklogPanel: View {
     }
 
     @ViewBuilder private var content: some View {
-        if visible.isEmpty && provisional.isEmpty {
+        if items.isEmpty && (isLoading || !hasLoaded) {
+            // First load in flight. The empty state below used to show here,
+            // telling the user "No open backlog items" for the 10–15 s it took
+            // to load 1,076 of them (2026-09-30).
+            ScrollView {
+                SkeletonRows(count: 7, detailLines: 2, card: true).padding(12)
+            }
+            .scrollDisabled(true)
+        } else if visible.isEmpty && provisional.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
                 if hasControllable {
@@ -388,14 +405,17 @@ struct BacklogPanel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // Lazy: only rows on screen are built. The eager VStack built every
+            // row — each with five buttons and selectable text — on every pass.
+            let byId = Dictionary(grouping: findings, by: \.id)
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    if !provisional.isEmpty { provisionalSection }
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if !provisional.isEmpty { provisionalSection(byId) }
                     ForEach(groupedSections, id: \.title) { section in
                         if !section.title.isEmpty {
                             groupHeader(section.title, count: section.items.count)
                         }
-                        ForEach(section.items) { item in row(item) }
+                        ForEach(section.items) { item in row(item, findings: byId[item.id] ?? []) }
                     }
                 }
                 .padding(12)
@@ -418,7 +438,7 @@ struct BacklogPanel: View {
 
     /// ADR-0047 — items auto-captured this/last session, surfaced for a quick
     /// keep/dismiss pass so the parking lot doesn't accrete unreviewed noise.
-    private var provisionalSection: some View {
+    private func provisionalSection(_ byId: [String: [BacklogFinding]]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "questionmark.circle").foregroundStyle(.purple)
@@ -440,7 +460,7 @@ struct BacklogPanel: View {
                 Button("Dismiss all") { bulkAction = .dismiss }
                     .controlSize(.small)
             }
-            ForEach(provisional) { item in provisionalRow(item) }
+            ForEach(provisional) { item in provisionalRow(item, findings: byId[item.id] ?? []) }
             MarvinDivider().padding(.vertical, 2)
         }
         .confirmationDialog(
@@ -489,8 +509,8 @@ struct BacklogPanel: View {
     /// row's own buttons stay the only way to act. Shared by both row builders
     /// so a finding can't be counted in the summary yet render nowhere.
     @ViewBuilder
-    private func findingAnnotations(for item: BacklogItem) -> some View {
-        ForEach(findings.filter { $0.id == item.id }, id: \.findingId) { f in
+    private func findingAnnotations(_ itemFindings: [BacklogFinding]) -> some View {
+        ForEach(itemFindings, id: \.findingId) { f in
             HStack(alignment: .top, spacing: 6) {
                 Text(f.badge)
                     .font(.system(size: 10, weight: .semibold))
@@ -506,7 +526,7 @@ struct BacklogPanel: View {
         }
     }
 
-    private func provisionalRow(_ item: BacklogItem) -> some View {
+    private func provisionalRow(_ item: BacklogItem, findings itemFindings: [BacklogFinding]) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: severityIcon(item.severity))
                 .foregroundStyle(severityColor(item.severity))
@@ -528,11 +548,11 @@ struct BacklogPanel: View {
                 // Provisional rows carry findings too — `unreviewed` targets
                 // them specifically, so without this the one finding kind aimed
                 // at this section would be counted and never shown.
-                findingAnnotations(for: item)
+                findingAnnotations(itemFindings)
                 HStack(spacing: 8) {
-                    Button("Keep") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "open") } } }
+                    Button("Keep") { Task { await setStatus(item, "open") } }
                         .controlSize(.small)
-                    Button("Dismiss") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "dismissed") } } }
+                    Button("Dismiss") { Task { await setStatus(item, "dismissed") } }
                         .controlSize(.small)
                 }
                 .padding(.top, 2)
@@ -543,7 +563,7 @@ struct BacklogPanel: View {
         .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 
-    private func row(_ item: BacklogItem) -> some View {
+    private func row(_ item: BacklogItem, findings itemFindings: [BacklogFinding]) -> some View {
         let resolved = item.status == "done" || item.status == "dismissed"
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: severityIcon(item.severity))
@@ -581,19 +601,19 @@ struct BacklogPanel: View {
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(3).textSelection(.enabled)
                 }
-                findingAnnotations(for: item)
+                findingAnnotations(itemFindings)
                 HStack(spacing: 8) {
                     Button("Details") { detailItem = item }
                         .controlSize(.small)
                     if resolved {
-                        Button("Reopen") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "open") } } }
+                        Button("Reopen") { Task { await setStatus(item, "open") } }
                             .controlSize(.small)
                     } else {
                         Button("Promote to plan") { onPromote(item); onClose() }
                             .controlSize(.small)
-                        Button("Done") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "done") } } }
+                        Button("Done") { Task { await setStatus(item, "done") } }
                             .controlSize(.small)
-                        Button("Dismiss") { Task { await mutate { try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: "dismissed") } } }
+                        Button("Dismiss") { Task { await setStatus(item, "dismissed") } }
                             .controlSize(.small)
                         Button("Export to issue") { Task { await exportIssue(item) } }
                             .controlSize(.small)
@@ -631,7 +651,7 @@ struct BacklogPanel: View {
     // MARK: - Actions
 
     private func refresh() async {
-        isLoading = true; defer { isLoading = false }
+        isLoading = true; defer { isLoading = false; hasLoaded = true }
         do { items = try await BacklogService.shared.fetch(workDir: workDir) }
         catch { self.error = "Failed to load backlog: \(error.localizedDescription)" }
     }
@@ -639,6 +659,23 @@ struct BacklogPanel: View {
     private func mutate(_ op: @escaping () async throws -> Void) async {
         do { try await op(); await refresh(); onChanged() }
         catch { self.error = error.localizedDescription }
+    }
+
+    /// Done / Dismiss / Keep / Reopen: change the row where it is, then tell the
+    /// server. These went through `mutate`, which refetched all 1,076 items
+    /// (1.6 MB) and rebuilt the list after every click — the panel "barely
+    /// moved" (2026-09-30). On failure the row is put back and the error shown.
+    private func setStatus(_ item: BacklogItem, _ status: String) async {
+        guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
+        let previous = items[idx].status
+        items[idx].status = status
+        do {
+            try await BacklogService.shared.setStatus(workDir: workDir, id: item.id, status: status)
+            onChanged()
+        } catch {
+            if let i = items.firstIndex(where: { $0.id == item.id }) { items[i].status = previous }
+            self.error = error.localizedDescription
+        }
     }
 
     /// Review the backlog (ADR-0063). Annotates rows; changes nothing.
