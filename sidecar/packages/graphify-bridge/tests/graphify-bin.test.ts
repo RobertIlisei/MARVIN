@@ -42,35 +42,35 @@ describe("resolveGraphifyBin", () => {
   it("finds a uv / pipx install in ~/.local/bin when PATH does not include it", () => {
     const home = tempHome();
     const uv = fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.65");
-    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH } })).toBe(uv);
+    expect(resolveGraphifyBin({ home, env: { NODE_ENV: "test", PATH: LAUNCHD_PATH } })).toBe(uv);
   });
 
   it("picks the newest install, not the first one found (0.9.65 beats 0.9.53)", () => {
     const home = tempHome();
     fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.53");
     const onPath = fakeGraphify(join(home, "elsewhere"), "graphify 9.9.65");
-    const env = { PATH: `${join(home, "elsewhere")}:${LAUNCHD_PATH}` };
+    const env: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: `${join(home, "elsewhere")}:${LAUNCHD_PATH}` };
     expect(resolveGraphifyBin({ home, env })).toBe(onPath);
   });
 
   it("finds a `pip install --user` copy under ~/Library/Python/<ver>/bin", () => {
     const home = tempHome();
     const pipUser = fakeGraphify(join(home, "Library", "Python", "3.14", "bin"), "graphify 9.9.70");
-    expect(graphifyCandidates({ home, env: { PATH: "" } })).toContain(pipUser);
-    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH } })).toBe(pipUser);
+    expect(graphifyCandidates({ home, env: { NODE_ENV: "test", PATH: "" } })).toContain(pipUser);
+    expect(resolveGraphifyBin({ home, env: { NODE_ENV: "test", PATH: LAUNCHD_PATH } })).toBe(pipUser);
   });
 
   it("lets GRAPHIFY_BIN win outright", () => {
     const home = tempHome();
     fakeGraphify(join(home, ".local", "bin"), "graphify 9.9.99");
     const pinned = join(home, "pinned", "graphify");
-    expect(resolveGraphifyBin({ home, env: { PATH: LAUNCHD_PATH, GRAPHIFY_BIN: pinned } })).toBe(pinned);
+    expect(resolveGraphifyBin({ home, env: { NODE_ENV: "test", PATH: LAUNCHD_PATH, GRAPHIFY_BIN: pinned } })).toBe(pinned);
   });
 
   it.skipIf(existsSync("/opt/homebrew/bin/graphify") || existsSync("/usr/local/bin/graphify"))(
     "falls back to bare `graphify` when nothing is installed",
     () => {
-      expect(resolveGraphifyBin({ home: tempHome(), env: { PATH: LAUNCHD_PATH } })).toBe("graphify");
+      expect(resolveGraphifyBin({ home: tempHome(), env: { NODE_ENV: "test", PATH: LAUNCHD_PATH } })).toBe("graphify");
     },
   );
 });

@@ -32,7 +32,7 @@ afterEach(() => __setKeepAwakeDepsForTests(null));
 describe("keep-awake (ADR-0120)", () => {
   it("raises caffeinate -i -w <sidecar pid> on the first live turn and releases it after the last", () => {
     const f = fakeSpawn();
-    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: f.spawn, ownPid: 4242, env: {} });
+    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: f.spawn, ownPid: 4242, env: { NODE_ENV: "test" } });
 
     noteTurnStarted();
     expect(f.calls).toHaveBeenCalledTimes(1);
@@ -60,14 +60,14 @@ describe("keep-awake (ADR-0120)", () => {
 
   it("does nothing off darwin or when MARVIN_KEEP_AWAKE=0", () => {
     const linux = fakeSpawn();
-    __setKeepAwakeDepsForTests({ platform: "linux", spawn: linux.spawn, env: {} });
+    __setKeepAwakeDepsForTests({ platform: "linux", spawn: linux.spawn, env: { NODE_ENV: "test" } });
     noteTurnStarted();
     expect(linux.calls).not.toHaveBeenCalled();
     expect(__keepAwakeStateForTests()).toEqual({ liveTurns: 1, holding: false });
     noteTurnEnded();
 
     const off = fakeSpawn();
-    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: off.spawn, env: { MARVIN_KEEP_AWAKE: "0" } });
+    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: off.spawn, env: { NODE_ENV: "test", MARVIN_KEEP_AWAKE: "0" } });
     noteTurnStarted();
     expect(off.calls).not.toHaveBeenCalled();
     noteTurnEnded();
@@ -75,7 +75,7 @@ describe("keep-awake (ADR-0120)", () => {
 
   it("a caffeinate that dies on its own is forgotten, and a spawn failure never throws", () => {
     const f = fakeSpawn();
-    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: f.spawn, env: {} });
+    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: f.spawn, env: { NODE_ENV: "test" } });
     noteTurnStarted();
     f.children[0]?.emit("exit", 0, null);
     expect(__keepAwakeStateForTests().holding).toBe(false);
@@ -84,7 +84,7 @@ describe("keep-awake (ADR-0120)", () => {
     const throwing = vi.fn(() => {
       throw new Error("ENOENT");
     }) as unknown as typeof import("node:child_process").spawn;
-    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: throwing, env: {} });
+    __setKeepAwakeDepsForTests({ platform: "darwin", spawn: throwing, env: { NODE_ENV: "test" } });
     expect(() => noteTurnStarted()).not.toThrow();
     expect(__keepAwakeStateForTests()).toEqual({ liveTurns: 1, holding: false });
     noteTurnEnded();
