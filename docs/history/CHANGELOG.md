@@ -8,6 +8,60 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-01 — v0.1.115: a context that fits, sessions that don't stall, and a sidecar that never waits on git.**
+
+  Roll-up of everything since v0.1.114 (29 commits). The entries below dated
+  2026-09-13 to 2026-09-27 marked *unreleased* ship here: ADR-0117 trust by
+  provenance, ADR-0118 (all four milestones), ADR-0119, ADR-0120, the drain
+  bound, SDK 0.3.278, graphify 0.9.65 and `graph_affected`. Also in it:
+
+  - **ADR-0121 — a break your own change caused is part of the change.** Three
+    parallel tabs each found the breakage their own commit caused, parked it in
+    the backlog and declared scope met. `graph_change_impact` now adds
+    cross-layer references (a changed config file, a removed constant or key,
+    a path segment named outside the branch; parity gaps in specs), and the
+    ship-review gate holds a reviewable commit until they are addressed.
+  - **Agent SDK 0.3.280, forced** ([ADR-0073 addendum](../decisions/0073-agent-sdk-0-3-upgrade.md)).
+    `Claude Code 2.1.278 does not support this model` on every request —
+    auto-compaction included, so a 206 % session could not shrink itself.
+  - **Worktree git off the request thread.** The reconcile ran ~150–200
+    synchronous git spawns; a CPU profile put 4.9 s of every 25 s in
+    `/api/sessions/watch`, and the whole sidecar queued behind it. One
+    generator-based derivation now drives a sync runner (mutations, tests) and
+    an async one (every read path); the session watch serves git facts
+    stale-while-revalidate, and the tab close asks `fresh=1` because it may
+    discard a tree it believes empty; close and boot sweeps run in the
+    background. A squash / rebase merge is detected by content (`merge-tree`
+    yields the target's own tree — 2.2 GB on agri-saas-platform had read
+    `ready` forever) and a checkout under `.marvin/worktrees/` on a branch
+    MARVIN did not name is adopted (481 MB). `.marvin` bookkeeping merges with
+    git's union driver instead of failing the merge.
+  - **Graphify.** One resolver picks the newest graphify, `~/.local/bin`
+    included; the knowledge builder runs under the interpreter in graphify's
+    shebang (the system `python3` could not import a uv install and exited 2
+    every turn, silently), warns once with stderr on failure, is niced, and
+    the bundle finally ships it — the installed app's knowledge graphs had
+    not refreshed at all. The code-graph debounce scales to 10× the last run.
+  - **Runtime.** Job completions go to an on-disk ledger boot reconciles; a job
+    killed from outside reports "stopped, not finished"; an empty preamble
+    result no longer ends a turn; worktree env reaches background jobs. A
+    tab's branch is named from its own first commit, not a sibling's.
+  - **macOS.** The transcript freeze: `RichText.sizeThatFits` answered zero
+    widths with 400 pt, so the lazy stack never converged. One shared
+    `ChatPreviewModel` (68 leaked after 64 split-view rebuilds, each holding an
+    announce stream) and a separate URLSession pool for SSE, so a tab switch's
+    transcript GET is never queued behind six streams. Backlog: lazy rows,
+    status changes in place, skeleton while loading (it said "No open backlog
+    items" for the 10–15 s 1,076 items took). The transcript skeleton is an
+    overlay — as a row of the bottom-anchored lazy stack it spun at 100 %. The
+    left pane no longer latches collapsed.
+  - **Backlog / notes.** `backlog_update` edits an item by id; an over-cap body
+    or note is refused, never cut; text below the link trailer is kept.
+
+  **Verification.** Sidecar 1,536 tests green (three timed out only under a
+  load average of ~45 and pass alone; the new async-reconcile test got an
+  explicit 30 s timeout), 957 Swift assertions, `swift build` clean.
+
 - **2026-09-27 — the stall release: the Mac stays awake during a turn, a stdin-reading search is refused, a job's result is never dropped ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)).**
 
   Trigger: a 20-hour agri-saas session that looked stuck every fifteen

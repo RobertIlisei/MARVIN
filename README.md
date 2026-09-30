@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.114**). `main` and `development` are fast-forwarded together at each
+> **v0.1.115**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -225,6 +225,19 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
   transcript; nothing changes without your click (ADR-0105). The measurement
   behind it is also why code review and security audit are now enforced at
   `git commit` instead of requested in the prompt (ADR-0104).
+- **A small, stable context, and your instruction files read the way you
+  wrote them.** One system prompt per session, recorded once; a ~4K-token base
+  prompt with its procedures as on-demand `marvin:*` skills; indexes loaded as
+  their newest slice plus the tool that fetches the rest; and real isolation
+  from your Claude Code plugins and auto memory. A fresh tab on a real project
+  went from 142,596 tokens on its first request to 72,284 (ADR-0118).
+  `CLAUDE.md` and/or `AGENTS.md` load with `@imports` expanded, and a
+  subdirectory's files reach the model when the work does (ADR-0119).
+- **A break your own change caused is part of the change.** Before a
+  reviewable commit, `graph_change_impact` lists the consumers the call graph
+  cannot see — a spec enum, a route called by URL string, a config file a
+  script mounts — and the ship-review gate holds the commit until they are
+  dealt with, not parked (ADR-0121).
 
 ---
 
@@ -305,6 +318,7 @@ Everything below is a real, unedited session on MARVIN's own repository.
 - 🚢 Ship-review gate — `pr-review` / `security-audit` enforced at `git commit` from the diff the commit seals: boundary paths (auth · creds · CI · sudoers · `.env` · shell scripts · migrations) need both, >3 files or >50 lines needs `pr-review`, docs-only and lockfiles pass; two denies per skill per turn, then allow and log (ADR-0104)
 - 📏 Practice rules — rules you accepted enforce at `prompt` / `nudge` / `deny` from a data table in the design hooks, a deny only where a machine-checkable discharge exists; two recurring sessions at half the old rate after acceptance is `regressed`, five sessions below that `confirmed`, and every built-in gate carries the same two-denies-then-log brake (ADR-0105)
 - ⏰ Self-scheduled wakeups — MARVIN's "I'll check back in 10 minutes" is real: the `schedule_wakeup` tool arms a bounded server-side timer that starts an actual follow-up turn (ADR-0031); background-and-forget Bash is gate-denied so a build can't finish unreported (ADR-0032)
+- ☕ Turns survive the Mac — a live turn holds one reference-counted `caffeinate -i -w <sidecar>` so idle sleep no longer stalls it every fifteen minutes; a search with no path that would read the SDK's stdin forever is refused; a background job's result is never dropped (ADR-0120), and a job killed from outside reports "stopped, not finished" instead of silence
 - 💸 Cost tracker — daily/weekly/lifetime spend per project
 - 🔀 Monaco diff viewer — see exactly what MARVIN is about to do before allowing
 - 🧰 Model picker — executor + advisor slots, live model list from Anthropic
@@ -364,6 +378,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.115 — a context that fits, sessions that don't stall, and a sidecar that never waits on git.** The roll-up of two weeks on a real multi-tab project. *Context* ([ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)): a fresh tab sent 142,596 tokens on its first request and died on "Autocompact is thrashing"; measured every turn now, it sends 72,284 — one recorded system prompt per session (from turn 2 the model had been losing the project context entirely), settings isolation that is real (`settingSources: ["user"]`, the user's Claude Code plugins and auto memory off), indexes as a recent slice (Golden Rule 5 amended), three MCP servers deferred, and a base prompt cut from 29.4K to ~4.4K tokens with its procedures as `marvin:*` skills. *Instruction files* ([ADR-0119](./docs/decisions/0119-instruction-files-claude-md-agents-md-imports-nested.md)): `CLAUDE.md` and/or `AGENTS.md`, `@imports` expanded inside the project, near-copies skipped and reported, nested files surfaced when work reaches them. *Stalls* ([ADR-0120](./docs/decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)): 51 of 51 fifteen-minute gaps were the Mac asleep — a live turn now holds `caffeinate`; a pathless `rg` reading stdin forever is refused; job completions go to an on-disk ledger boot reconciles. *Own-change consequences* ([ADR-0121](./docs/decisions/0121-own-change-consequences-are-not-parked.md)): `graph_change_impact` reports cross-layer references the call graph misses, and the ship-review gate holds the commit on them. *Trust by provenance* ([ADR-0117](./docs/decisions/0117-mcp-trust-by-provenance.md)): a MARVIN-named MCP tool from a non-`sdk` source confirms. *Performance*: every worktree git read left the request thread (one generator-based derivation, a sync and an async runner; the session watch serves git facts stale-while-revalidate — a CPU profile had put 4.9 s of every 25 s there), squash-merged and orphaned tab trees are finally reclaimed (2.7 GB on one project), and MARVIN's own `.marvin` bookkeeping merges with git's union driver instead of blocking a tab merge. *Graphs*: `graph_affected` reads `graph.json`'s directed `calls` edges (it had been answering from a cache frozen on 2026-08-13); one resolver finds the newest graphify, `~/.local/bin` included; knowledge graphs build under graphify's own Python, niced, and the installed app finally ships the builder. *Agent SDK 0.3.280*, forced: CLI 2.1.278 was rejected for the session's model, compaction included ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md) addendum). *macOS*: the transcript freeze was `RichText` answering zero-width size probes with a made-up 400 pt; a tab switch no longer sits on "(no messages yet)" (68 leaked chat models had filled URLSession's per-host pool — streams have their own now); the backlog renders lazily, changes a row's status in place instead of refetching 1.6 MB, and every slow pane shows a skeleton rather than an empty state; the left pane no longer latches collapsed from a stale launch width. *Backlog*: `backlog_update`, and an over-cap body or note is refused instead of silently cut.
 
 **v0.1.114 — a layout loop the breaker cannot see gets a probe.** A ten-minute main-thread spin with no constraint pass and no MARVIN frame in the sample; `LayoutOscillationProbe` labels the transcript rows and the Sessions list with `onGeometryChange` so the next occurrence names its row ([ADR-0062](./docs/decisions/0062-update-constraints-loop-identified-mitigated.md) Addendum 8).
 

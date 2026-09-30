@@ -112,6 +112,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.115** — a context that fits (ADR-0118/0119), no stalls (ADR-0120), own-change consequences (ADR-0121), worktree git off the request thread, SDK 0.3.280.
+
 **v0.1.114** — a layout-oscillation probe for the spin the breaker cannot see.
 
 **v0.1.113** — tab branches stay local; full auto; the plain chat is one click; a dirty tree can switch.

@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · September 2026 · v0.1.112 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · October 2026 · v0.1.115 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -26,8 +26,10 @@ default, and credentials stored nowhere but your own machine. This paper
 describes the design, the reasoning, the enforcement mechanisms, and the
 results — each labeled measured, estimated, or design property — including
 first-message context cut from ~566K tokens (an amount that no longer fit
-the model's window) to ~13.4K on the same mature project, and multi-day
-plans that survive session boundaries. MARVIN is open source and installs
+the model's window) to ~13.4K on the same mature project, a fresh tab's
+entire first request halved from 142,596 to 72,284 tokens once the fixed
+load was measured instead of assumed, and multi-day plans that survive
+session boundaries. MARVIN is open source and installs
 via Homebrew.
 
 ---
@@ -151,8 +153,13 @@ Because a tab's branch is cut from the checkout's current HEAD, folding all
 five in locally costs none — the commits ride along in whatever run that branch
 was already going to have. MARVIN therefore batches integration by default and
 asks before anything opens a request or starts a pipeline, in every permission
-mode. Pushing a branch is left entirely alone; it starts no pipeline, and it is
-how work is kept safe.
+mode. Asking turned out not to be enough: two tabs each opened their own merge
+request after the confirm was allowed twice in a row, so since v0.1.113 a tab's
+own branch is never pushed or requested at all — the refusal names *Merge all*
+and *Prepare MR*, which fold the day's finished branches into one local commit
+and one request
+([ADR-0109](../decisions/0109-batch-integration-and-metered-ci.md), second
+amendment).
 
 **Isolation hides the shared state too.** Two tabs once fixed the same defect on
 the same afternoon, byte-for-byte, one of them shipping a regression test the
@@ -189,6 +196,26 @@ branch only when there is something on it; a dry-run merge reports the first
 conflict before any merge is attempted; and the tab that owns a branch is the
 one asked to resolve it, because it knows what its changes were for
 ([ADR-0111](../decisions/0111-nothing-survives-a-tab-without-a-commit.md)).
+"Merged" is itself derived, not recorded, and v0.1.115 widened what counts: a
+branch integrated by squash or rebase shares no commits with its target, so
+ancestry never saw it and 2.2 GB of such trees sat on one project marked
+*ready*. A branch now also counts as merged when merging it would change
+nothing — `git merge-tree` yields the target's own tree — and a checkout under
+MARVIN's worktree directory on a branch MARVIN did not name is adopted rather
+than left invisible to every sweep.
+
+**Many loops still share one machine, and one sidecar.** A dozen tabs made
+MARVIN itself the bottleneck before the model was: a CPU profile put 4.9 s of
+every 25 s inside one status route, which ran ~150–200 synchronous `git`
+calls to derive every worktree's state, and every other request queued behind
+it. The derivation is now written once and driven two ways — synchronously
+for the rare mutation paths, asynchronously for every read — with status
+served stale-while-revalidate, and a decision that could discard a tree asks
+for it fresh. The same week the app leaked one chat model per split-view
+rebuild (68 alive after 64 rebuilds, each holding a stream open) until six
+streams exhausted the per-host connection pool and a transcript fetch queued
+forever. Both were found by measuring — a profile, a heap count — after
+reading the code had produced plausible, wrong explanations.
 
 ### Bet 2 — The knowledge graph comes before the file read
 
@@ -198,6 +225,14 @@ reading source files. Two graphs, actually: an AST-derived code graph
 (functions, types, calls, imports) and a knowledge graph of the project's
 documentation, architecture decisions, and memory. Both are rebuilt as you
 work — per turn, debounced, while the project is open — at zero LLM cost.⁵
+"Rebuilt automatically" is a claim that must be checked, and twice it was
+false without anyone noticing: the installed app never shipped the
+knowledge-graph builder, then ran it under a Python that could not import the
+graph library — one project's knowledge graph went fifteen hours stale while
+twenty decision records landed. MARVIN now finds the newest graph tool on the
+machine, runs the builder under that tool's own interpreter at low priority,
+spaces rebuilds at ten times the last run's duration, and says once, with the
+error, when a build fails.
 
 The economics are the point. A graph query answering "what depends on this
 service" costs a fraction of the tokens of opening a dozen candidate files
@@ -210,19 +245,38 @@ this exists to eliminate.
 
 ### Bet 3 — Deterministic contracts, not "use judgement"
 
-Everywhere MARVIN's behavior matters, a soft rule has been replaced with an
+Everywhere MARVIN's behavior matters, a soft rule was first replaced with an
 enumerated contract: a MUST-trigger list, a MUST-NOT list, and a narrow
 judgement test only for cases the lists don't cover. When to consult the
 graph. When a decision requires a written architecture record. When to
 spawn the advisor. When a skill fires. What may be written to memory. Each
 of these is a **firm surface** — auditable and testable.⁶
 
+That form did its job and then became the problem. By September 2026 the
+prompt had grown to 29.4K tokens — 91 MUSTs, 43 MUST NOTs — and current models
+*over*-fire on emphatic trigger lists while following a short plain rule as
+well as a long one. Since v0.1.115 the shape is: **one plain rule in the
+prompt, the procedure in a skill loaded when it is needed, and a gate wherever
+the rule must hold regardless of what the model does.** The base prompt is
+~4.4K tokens; the procedures ship as MARVIN's own skills (`marvin:adr`,
+`marvin:graph-tools`, …) that always match the running version; a test holds
+the parsed formats verbatim and the whole prompt under an 8K budget. Checked
+against the old prompt on the same three tasks, outcomes matched.¹⁷
+
 The novel step is pushing contracts below the prompt entirely, into the
 runtime. MARVIN's tool gate can **deny a blind source-file read** when the
 graph should have been consulted first, **deny an edit in
 security-sensitive paths** until an advisor consult has happened, and —
 since v0.1.102 — **refuse a `git commit`** whose diff touches a security
-boundary until the review skills have actually run.¹⁴ The prompt asks; the
+boundary until the review skills have actually run.¹⁴ Since v0.1.115 the same
+gate also requires the change-impact report, which now looks past the call
+graph: three parallel tabs had each found the break their own commit caused —
+an enum the API spec never learned, a page calling a route by URL string, a
+restore script mounting a renamed config file — described it in a backlog item,
+and declared scope met. None had a call edge to see. The report now lists files
+outside the branch that *name* what the branch changed, and the scope-met check
+sends a parked item back when it touches the session's own changes: a break
+your change caused is part of the change.¹⁸ The prompt asks; the
 gate *enforces*. This "design hooks" layer exists because measurement
 showed prompt-only rules decay with prompt length — so the most
 load-bearing rules stopped being prompt rules.
@@ -311,7 +365,10 @@ production transcripts, anonymized.¹¹
 **Modes set autonomy; the gate confirms edits.** Two orthogonal dials:
 *mode* (what MARVIN may attempt — read-only **Ask**, autonomous **Agent**,
 approval-gated **Plan**) and *permission strategy* (how each edit is
-confirmed — **auto** or per-diff **gated**). The out-of-the-box defaults
+confirmed — **auto**, per-diff **gated**, or **full auto**, which also waives
+the containment confirms a worktree tab raises when it reaches outside its own
+checkout, and nothing else: metered CI still asks, and the deny floor is
+untouched).¹⁹ The out-of-the-box defaults
 are **Agent + auto** — near-full bypass, stated plainly because a
 security-minded reader should know it — with the hard-deny floor
 (destructive shell patterns, force-pushes to main, credential-file writes)
@@ -347,6 +404,25 @@ user touches to the persistence symbol it reaches is the milestone's
 touchpoint list. MARVIN ships no notion of what a layer is; the practice
 loop (§4) reads a project's layers off its own graph — its directories and
 file names — and measures whether plans cross them.¹⁶
+
+**Every turn sees the same prompt, and a small one.** A fresh tab on a mature
+project once sent 142,596 tokens on its first request and died compacting six
+times in eleven minutes — compaction frees messages, and the problem was
+everything else. Measuring it with the SDK's own context accounting found
+three faults size alone did not explain: the system prompt differed between
+turn 1 and turn 2, and a resumed turn's prompt *replaces* the first, so from
+turn 2 the model had no project context from MARVIN at all; "isolation mode"
+had never been on, so every turn also carried the user's Claude Code plugins,
+the project's instruction file a second time and another tool's memory; and the
+indexes (decision titles, memory, backlog) loaded whole. Now one prompt is
+recorded per session and everything per-turn — mode, plan, session tree —
+rides a reminder on the turn itself; only the user's skills load from Claude
+Code's settings; indexes load as their newest slice plus the tool that fetches
+the rest; three of MARVIN's own tool servers load on demand. The same first
+request is **72,284 tokens**.¹⁷ Instruction files are read the way other agents
+write them: `CLAUDE.md` and/or `AGENTS.md`, `@path` imports expanded inside the
+project, a near-copy of one in the other skipped and reported, and a
+subdirectory's file surfaced when work first reaches it.¹⁷
 
 ```mermaid
 sequenceDiagram
@@ -415,7 +491,14 @@ next session's context at ~13K tokens instead of 566K.*
 **Work that outlives a turn is honest about it.** Background jobs fire a
 real follow-up turn on process exit; scheduled wakeups re-invoke the
 assistant at a chosen time; and the prompt contract flatly forbids
-narrating a watcher that was never armed. Every real-work turn ends the
+narrating a watcher that was never armed. The mechanism has to survive the
+machine, too: a twenty-hour session that looked stuck every fifteen minutes
+turned out, measured against the power log, to be the Mac asleep — 51 of 51
+gaps began within seconds of a sleep — so a live turn now holds a power
+assertion; a search that silently read the SDK's never-closing stdin is refused
+at the gate with the fix; a job's completion is never dropped for waiting
+behind a long turn; and running jobs are kept in a ledger that a restart
+reconciles, so a crash reports "result unknown" instead of silence.¹⁹ Every real-work turn ends the
 same way: the Definition of Done restated as past-tense facts, then an
 explicit stop — *"Anything else, or should I stop?"*
 
@@ -440,6 +523,15 @@ serving details on demand — brought the same project to **~13.4K
 tokens**.¹³ Fixing a self-inflicted failure, yes; the claim is that the
 *fix is architectural* — an index-plus-graph design whose context stays
 budgeted as a project grows, instead of one that degrades back.
+
+**A fixed load that is measured every turn (measured).** The ~13.4K
+figure above was the *project context*; the whole first request also carries
+the base prompt, the SDK's own preset, tool definitions and skills. On the same
+production project a fresh tab's first request went from **142,596 tokens to
+72,284** — a stable per-session prompt (+ real settings isolation), indexes as
+a recent slice, deferred tool servers, and the base prompt cut from 29.4K to
+~4.4K. Every turn now logs its baseline, and a turn that starts over half its
+window says so.¹⁷
 
 **Structural questions at graph prices (estimated).** The graph-first rule
 replaces open-ended file exploration with one ranked query plus targeted
@@ -520,7 +612,7 @@ vertical-slice rule (§3) now refuses.¹⁶
 written at decision time are re-read at the start of every future session
 and cross-checked
 during impact analysis. Month-eight work is confronted with month-two
-constraints mechanically, not by luck. A hundred and five ADRs govern MARVIN's own
+constraints mechanically, not by luck. A hundred and twenty ADRs govern MARVIN's own
 development — the tool is built under its own discipline, and several of
 its subsystems (the memory redesign, the context budget, the verify-then-
 remediate contract) exist because that discipline surfaced a real failure
@@ -556,6 +648,12 @@ the security architecture is the evaluation. MARVIN's, in one place:
 - **Subagents cannot write.** Any tool call from a spawned agent that
   would mutate the workspace is hard-denied at the gate. This is the
   invariant that makes read-only research fan-outs safe.⁴
+- **Only what MARVIN chose loads.** Turns load the user's skills and nothing
+  else from Claude Code's settings: plugins the user enabled there are off,
+  and another tool's memory is disabled. MARVIN's own in-process tool servers
+  are trusted by the SDK's report of where a server came from, not by its
+  name, so a configured server that borrowed a MARVIN name would confirm
+  rather than run.²⁰
 - **Review is enforced at commit, not requested.** A `git commit` whose
   diff touches auth, credentials, CI, sudoers, `.env`, shell scripts or
   migrations is refused until both review skills have run this session;
@@ -594,7 +692,7 @@ flowchart TD
   HD -->|"no"| CL{"classification"}
   CL -->|"read / whitelisted command"| A["allow"]
   CL -->|"mutating"| M{"strategy?"}
-  M -->|"auto"| A2["allow + audit-log entry"]
+  M -->|"auto / full auto"| A2["allow + audit-log entry"]
   M -->|"gated"| K["confirm card with the exact diff —<br/>you allow or deny with a note"]
 ```
 
@@ -639,7 +737,7 @@ Honest positioning, category by category:
   your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
-  105 ADRs are public; so are the audits that found real flaws — including
+  120 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -755,8 +853,30 @@ Anthropic Console key, or an OpenRouter key.
     Pocock's AI Engineer Europe talk on why agents fail on horizontal
     plans. The 931 / 318 / 201 figures are a dry run over one project's
     399 transcripts before the rule shipped.
+17. Context budget, second pass:
+    [ADR-0118](../decisions/0118-one-prompt-per-session-and-settings-isolation.md)
+    (one prompt per session, settings isolation, indexes as a recent slice,
+    deferred servers, the ~4.4K base prompt and `core-skills.ts`); measured
+    with the SDK's `getContextUsage` via `sidecar/scripts/context-baseline.ts`
+    on one production project, 2026-09-21. Instruction files:
+    [ADR-0119](../decisions/0119-instruction-files-claude-md-agents-md-imports-nested.md)
+    (a near-copy is ≥ 50 % of its lines in the other file; real copies measured
+    85–88 %, a distinct file 9 %).
+18. Own-change consequences:
+    [ADR-0121](../decisions/0121-own-change-consequences-are-not-parked.md)
+    (`cross-layer-refs.ts`, `checkShipImpactRequired`,
+    `ownChangeConsequences`). The textual pass is labelled a heuristic: it
+    matches token shapes, never a stack, and was tuned on three live branches.
+19. Full auto: [ADR-0115](../decisions/0115-full-auto-is-the-third-posture.md).
+    Stalls: [ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)
+    (`keep-awake.ts`, `checkSearchWithoutPath`, `MAX_JOB_DONE_DEFERRALS`); the
+    51-of-51 figure is `pmset -g log` against one 20-hour transcript.
+20. MCP trust by provenance:
+    [ADR-0117](../decisions/0117-mcp-trust-by-provenance.md). Defence in depth
+    — no reachable spoof existed; missing provenance keeps the name-based allow
+    and is logged.
 
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.112; the repository is the authoritative, current reference.*
+v0.1.115; the repository is the authoritative, current reference.*

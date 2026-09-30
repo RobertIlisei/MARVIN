@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.112
-(2026-09-07). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v0.1.115
+(2026-10-01). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -42,6 +42,19 @@ repository wins.*
 > and the layout-pass hook of the constraint-loop breaker (ADR-0062 addendum 7).
 > Since 2026-09-11: **one vocabulary for the left pane** — shared chrome whose
 > decisions live in `MARVINLogic` so they can be asserted (ADR-0114, §8.2).
+> v0.1.113–0.1.114: tab branches are never pushed or requested (ADR-0109
+> second amendment, §3.x), **full auto** as a third permission strategy
+> (ADR-0115, §2.1), and a layout-oscillation probe (ADR-0062 addendum 8, §8.1).
+> v0.1.115 (2026-10-01): **MCP trust by provenance** (ADR-0117, §3.3);
+> **the context budget, second pass** — one system prompt per session, real
+> settings isolation, indexes as a recent slice, a ~4.4K base prompt with
+> MARVIN's own skills (ADR-0118, §3.4, §6, §11); **instruction files** read
+> the way other agents write them (ADR-0119, §3.4); **stalls** — keep-awake,
+> the stdin search deny, job completions never dropped (ADR-0120, §2.7, §9);
+> **own-change consequences** — cross-layer impact, a commit gate, a scope-met
+> check (ADR-0121, §2.7, §3.3); worktree state derived off the request thread,
+> squash merges and orphaned checkouts reclaimed (§3.x); Agent SDK 0.3.280
+> (§10); and the transcript freeze and connection-pool starvation fixed (§8.1).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -169,9 +182,16 @@ execution. Both permission strategies flow through the same classifier,
 - **gated** — three-way classification: auto-allow (reads, whitelisted
   commands), confirm (Edit/Write/unlisted Bash → a confirm card with the
   exact diff), hard-deny.
+- **full** ([ADR-0115](../decisions/0115-full-auto-is-the-third-posture.md))
+  — auto, minus the three *containment* confirms (lane, shared-tree HEAD
+  move, a worktree tab reaching the main checkout), each allowed call logged
+  as `full-auto-mode bypass`. Metered CI, `AskUserQuestion` and plan approval
+  still reach the user. The pill cycles gated → auto → full auto, `full` is
+  the only red control in the bar, and an unknown stored value parses to
+  **gated**, never to the most permissive.
 - **Hard-deny floor** — destructive shell patterns (`rm -rf /`,
-  force-push to main, credential-file writes) short-circuit in **both**
-  strategies.
+  force-push to main, credential-file writes) short-circuit in **every**
+  strategy.
 
 ### 2.2 The subagent read-only invariant
 
@@ -257,7 +277,25 @@ sudoers / `.env` / `*.sh` / migrations) requires both `pr-review` and
 `security-audit`, more than three files or fifty lines requires
 `pr-review`, docs-only and lockfile-only pass; a review this turn covers
 the turn, an earlier one holds until the next commit; two denies per skill
-per turn, then allow and log; fails open on git errors.
+per turn, then allow and log; fails open on git errors. Since v0.1.115
+the same `builtin:ship-review` row also covers `checkShipImpactRequired`
+([ADR-0121](../decisions/0121-own-change-consequences-are-not-parked.md)): a
+reviewable commit is refused until `graph_change_impact` has run this turn,
+and the refusal says to act on callers *and* cross-layer references. At a
+scope-met close, `ownChangeConsequences` (`workflow-guard.ts`) matches the
+provisional backlog items this session parked against the session's own
+changes — first-parent, non-merge commits plus uncommitted files in a
+worktree tab, files written in a shared one — and sends a match back as part
+of the change. The ADR-0057 guard now also recognises ADRs under `docs/adr/`.
+
+**Stdin searches** ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)).
+`checkSearchWithoutPath` runs first in `runDesignHooks`: `rg` / `grep` /
+`egrep` / `fgrep` with a pattern and no path operand, not fed by a pipe and
+with no `<` redirect, would read the SDK's never-closing stdin, and is denied
+with the fix in the message. The parser handles quotes, `--`, `-e`/`-f`,
+per-tool value flags (`-r` takes a value in rg, is recursive in grep) and
+`$( … )` inside double quotes, fails open on what it cannot parse, and carries
+the two-denies brake.
 
 **Practice rules** ([ADR-0105](../decisions/0105-practice-loop.md)) are the
 fifth family and the first driven by data rather than code.
@@ -323,8 +361,9 @@ every mechanical rule in the same session held.
 ### 3.1 Graphify-first
 
 For structural questions the graph is queried **before** files are read —
-a hard rule with per-tool MUST triggers in `personality.ts`, no judgement
-call ([`docs/concepts/graphify-integration.md`](../concepts/graphify-integration.md)).
+a one-line rule in `personality.ts`, the per-tool reference in the
+`marvin:graph-tools` skill, and a design hook that denies Read / Grep / Glob
+until a graph call has happened ([`docs/concepts/graphify-integration.md`](../concepts/graphify-integration.md)).
 Measured 27.5× cheaper per structural question (`graphify benchmark`,
 2026-08-15; an earlier ~36× figure was an estimate, never measured) than
 file-reading; answers cite `file:line`.
@@ -334,14 +373,54 @@ file-reading; answers cite `file:line`.
 Per project ([ADR-0028](../decisions/0028-multi-graph-architecture.md)):
 a **code graph** (`graphify-out/graph.json`, AST-extracted) and a
 **knowledge graph** (`graphify-out/knowledge/graph.json`, heading
-structure + cross-links of docs/ADRs/memory). All six MCP tools accept
-`scope: "code" | "knowledge" | "all"` (default `"code"`).
+structure + cross-links of docs/ADRs/memory/`AGENTS.md`). The graph tools
+accept `scope: "code" | "knowledge" | "all"` (default `"code"`).
+
+Every spawn goes through one resolver (`graphify-bridge/src/graphify-bin.ts`):
+`resolveGraphifyBin` searches `~/.local/bin` (uv, pipx), Homebrew,
+`/usr/local/bin`, `~/Library/Python/*/bin` and PATH and picks the **newest**;
+`GRAPHIFY_BIN` wins; a missing binary reports how to install it. The
+knowledge builder imports graphify as a library, so it runs under
+`graphifyPython()` — the interpreter named in the CLI's shebang — because the
+system `python3` cannot see a uv/pipx venv and exited 2 on every turn with
+stdio discarded (2026-09-29). The bundle ships `build-knowledge-graph.py`
+under `Resources/scripts/`; it had not, and every installed app's knowledge
+graphs had silently stopped refreshing.
 
 ### 3.3 The `marvin-graph` MCP
 
-In-process server (`sidecar/packages/graphify-bridge/`), read-only,
-blanket-allowed at the gate: `graph_summary`, `graph_search`,
-`graph_neighbors`, `graph_query`, `graph_path`, `graph_save_result`.
+In-process server (`sidecar/packages/graphify-bridge/`), read-only, allowed
+at the gate on the SDK's provenance (below): `graph_summary`, `graph_search`,
+`graph_neighbors`, `graph_query`, `graph_path`, `graph_explain`,
+`graph_community`, `graph_god_nodes`, `graph_affected`,
+`graph_change_impact`, `graph_save_result` (with `outcome`),
+`graph_reflect`, plus diagnostics (`graph_diagnose`, `graph_benchmark`,
+`graph_index_schema`, `graph_export_callflow`).
+
+**Provenance** ([ADR-0117](../decisions/0117-mcp-trust-by-provenance.md)).
+Agent SDK 0.3.278 reports `mcpServer: { name, source }` to `canUseTool`, and
+`source: "sdk"` means an in-process server only the host can register.
+`mcpToolPolicy(name, provenance?)` keeps the allow for a MARVIN-prefixed tool
+unless the SDK reports another source, which then confirms (an unknown
+source is untrusted). Missing provenance keeps the name-based allow on
+purpose — subagent calls were not shown to carry it — and is logged as
+`gate.mcp_provenance_missing`.
+
+**`graph_affected`** reads the directed `calls` edges of `graph.json`,
+oriented by call-site file (the source was the caller in 4,633 of 4,633
+edges), with graphify's versioned AST cache as fallback. It had been
+answering from entries frozen on 2026-08-13: graphify moved the cache to
+`cache/ast/<version>/` and stopped caching JS/TS altogether.
+
+**`graph_change_impact`** adds **cross-layer references**
+(`cross-layer-refs.ts`, ADR-0121) beside the call-graph callers: files
+outside the branch that name a changed config/script/infra file, a constant
+or config key the branch removed everywhere, or a path segment from a changed
+path literal, plus **parity gaps** — a value added among sibling constants
+that a spec outside the branch lists the siblings of but not it. One
+`git grep`; rules keyed on token shape, never on a stack; prose, generated
+output and MARVIN's own state skipped; labelled as text matching, not
+proof.
 Edges carry EXTRACTED / INFERRED / AMBIGUOUS confidence tags; god nodes
 and communities are first-class. `graph_path` (undirected BFS, in-process)
 takes a `relations` filter — `["calls", "imports", "imports_from",
@@ -362,7 +441,52 @@ The same ADR budgets first-message context: `buildProjectContext`
 (`sidecar/packages/project-context/`) injects a graph header, the **ADR
 titles index** (not bodies), the **memory tail** (not the log), curated
 docs whole, and open backlog items. Measured effect: ~566K → ~13.4K
-tokens on a mature production project.
+tokens on a mature production project. The code-graph debounce is
+`refreshIntervalMs` = max(10 min, 10 × the last run), so a 65K-node graph
+that takes minutes cannot run most of the time while several tabs commit;
+background builds are reniced to 15, and a failed knowledge build warns once
+with its stderr tail.
+
+**The fixed load** ([ADR-0118](../decisions/0118-one-prompt-per-session-and-settings-isolation.md)).
+Project context was never the whole first request: a fresh tab on the same
+project sent **142,596 tokens** and died on "Autocompact is thrashing".
+Measured with the SDK's `getContextUsage` (logged every turn as
+`runagent.context_baseline`; `sidecar/scripts/context-baseline.ts` for a
+fresh tab), and fixed in four milestones:
+
+1. **One system prompt per session.** `buildTurnSystemPrompt` always builds
+   the full context and `turnSystemPrompt` sets `snapshot: true`, so the SDK
+   records turn 1's prompt and replays it until compaction. Everything
+   per-turn — orientation, mode, session tree, active plan — rides the
+   `<system-reminder>` suffix (`turnReminders`). Before this, a resumed
+   turn's different append *replaced* turn 1's, so from turn 2 the model had
+   no project context from MARVIN, and every switch broke the prompt cache.
+2. **Settings isolation that is real.** Omitting `settingSources` loads every
+   source, so "isolation mode" had never been on: turns carried the user's
+   Claude Code plugins (10 agents, hook-bearing plugins), the project
+   `CLAUDE.md` twice and Claude Code's auto memory. Now
+   `settingSources: ["user"]` (for `~/.claude/skills/`), every user-enabled
+   Claude Code plugin off in the flag layer, and
+   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
+3. **Indexes as a recent slice** — ADR titles, memory and backlog load as
+   their newest entries plus the tool that fetches the rest (Golden Rule 5
+   amended; project documents still load whole). `marvin-memory`, `-backlog`
+   and `-obsidian` are deferred behind `ToolSearch`.
+4. **The base prompt** from 29.4K to ~4.4K tokens (§11).
+
+Result on that project: **72,284 tokens**; a turn that starts over half its
+window shows a row saying so.
+
+**Instruction files** ([ADR-0119](../decisions/0119-instruction-files-claude-md-agents-md-imports-nested.md)).
+`resolveInstructionFiles` reads `CLAUDE.md` / `.claude/CLAUDE.md`, and
+`AGENTS.md` when there is no `CLAUDE.md` or it carries distinct content — a
+near-copy (≥ 50 % of its lines in `CLAUDE.md`; real copies measure 85–88 %, a
+distinct file 9 %) is skipped and reported, pointing at the
+`marvin:instruction-files` skill. `@path` imports expand as Claude Code's do,
+confined to the project by real path. A `PostToolUse` hook surfaces a
+subdirectory's instruction files once per session when a Read/Edit/Write
+first reaches it, reset on compaction, never under dependency, build, VCS or
+`.marvin` directories.
 
 ### 3.5 Project fingerprint & infra probes
 
@@ -426,7 +550,46 @@ moved — and the Sessions pane's *Ready to integrate* rows carry its verdict.
 **Sync** (`POST /api/sessions/sync`) resumes the owning session with a merge
 prompt so conflicts are resolved by the session that made the changes. A
 branch is renamed from its first commit's subject on the first turn that
-leaves one; an integrated tab that receives a message is recut from HEAD.
+leaves one — read only from the tab's own first-parent, non-merge commits not
+already on its base, so a catch-up merge cannot rename it after a sibling's
+commit; an integrated tab that receives a message is recut from HEAD.
+
+**Derivation off the request thread (v0.1.115).** The reconcile reads git
+dozens of times per call — ~150–200 spawns on a project with 24 worktrees —
+and ran with `execFileSync` on request paths; a CPU profile put 4.9 s of
+every 25 s inside `/api/sessions/watch`, and every other request queued behind
+it. The derivation is now written once, as generators that *yield* each git
+read, and driven by `runSync` (mutation paths, tests) or `runAsync`
+(`reconcileWorktreesAsync`, `sweepWorktreesAsync` — every read path), so the
+two can never disagree about a state; a test asserts they derive identically.
+`session-watch.ts` serves each git fact stale-while-revalidate (5 s; callers
+share one in-flight refresh), and `?fresh=1` — sent by the tab close, which
+may discard a tree it believes empty — derives now. The close and boot sweeps
+run in the background under the busy-session guard; `previewIntegration` and
+`dryRunMerge` are async.
+
+**Merged, by content.** `mergedIntoSteps` checks ancestry first, then whether
+merging the branch into its base or the main checkout's branch would change
+nothing (`git merge-tree` yields the target's own tree) — which is how a
+squash, rebase or cherry-pick merge is recognised; such branches had read
+`ready` forever (2.2 GB on one project). A partial pick or a conflict fails the
+test. An open tab whose commits are already integrated carries `mergedInto`
+while its state stays `session`, and the close treats it as merged.
+`adoptOrphans` also registers a checkout under `.marvin/worktrees/` on a branch
+MARVIN did not name (481 MB invisible to every surface before).
+
+**Bookkeeping never blocks a merge.** The runtime writes advisor caveats,
+backlog, memory and security notes to the project root for every tab, and those
+files are tracked, so each branch carries a copy. `mergeWorktree` merges
+`.marvin/` bookkeeping with git's union driver through a per-invocation
+attributes file (the repo's own `.gitattributes` still wins), and sets aside
+uncommitted bookkeeping the branch also changed, restoring it unioned after
+the merge.
+
+**Tab branches stay local** (ADR-0109 second amendment, v0.1.113). Pushing a
+`marvin/tab/*` branch or opening a request for it is **denied** in every mode,
+naming *Merge all* / *Prepare MR*; two tabs had each opened a merge request
+after the metered-CI confirm was allowed twice.
 
 **Shared backlog ([ADR-0113](../decisions/0113-the-backlog-is-the-shared-task-list.md)).**
 Items carry `claimedBy` / `claimedBranch` / `claimedAt` while **doing**;
@@ -531,16 +694,22 @@ unanswered; gaps are closed before the user sees it.
   the active set each turn and tells the model to ignore the rest
   (measured 20 → 7 relevant on MARVIN's own repo). Per-skill toggles in
   the Skills pane persist to `.marvin/skills.json`.
-- **Deterministic triggers** — each core skill
-  (test-driven-development, systematic-debugging, pr-review,
-  security-audit, frontend-design, graphify) has enumerated MUST /
-  MUST-NOT trigger lists in `personality.ts` with no judgement escape
-  hatch in the wording. To be precise about the guarantee: these are
-  prompt-level contracts — enumerated form measurably outperforms soft
-  language, but only the runtime layers (§2) are deterministic. The
-  redesign followed a 2026-05-22 transcript audit that found five of six
-  skills had fired approximately zero times across thousands of
-  qualifying turns.
+- **Triggers** — each core skill (test-driven-development,
+  systematic-debugging, pr-review, security-audit, frontend-design,
+  graphify) has one trigger line in `personality.ts`. The enumerated
+  MUST / MUST-NOT lists that followed the 2026-05-22 audit (five of six
+  skills had fired ~0× across thousands of qualifying turns) were retired in
+  v0.1.115 (ADR-0118): current models over-fire on emphatic lists, and the
+  two that matter most at commit — `pr-review` and `security-audit` — are
+  enforced by the ship-review gate (§2.7), which is the only deterministic
+  layer.
+- **MARVIN's own skills** — `marvin:adr`, `marvin:graph-tools`,
+  `marvin:browser`, `marvin:skill-audit`, `marvin:workflow-audit`,
+  `marvin:greenfield`, `marvin:instruction-files`. Their text lives in
+  `runtime/core-skills.ts`; every turn writes them to
+  `<MARVIN_DATA_DIR>/core-skills/` as a local plugin named `marvin`, so they
+  always match the running version. A test checks every `marvin:` pointer in
+  the prompt resolves and every core skill is pointed at.
 - **Skill audit** ([ADR-0024](../decisions/0024-project-aware-skill-recommendations.md),
   [ADR-0025](../decisions/0025-skills-pane-ui.md)) — a
   `## Skill audit pending` block injects until `.marvin/skills.md`
@@ -626,7 +795,11 @@ history). Major surfaces:
   Search jumping to the matched line, Replace All confirming before it writes,
   and every outcome carrying its kind.
 - **Backlog panel** — browse / Done / Dismiss / Promote-to-plan (which
-  switches to Plan mode and queues if a turn is live — v0.1.53).
+  switches to Plan mode and queues if a turn is live — v0.1.53). Rows are
+  lazy, a status change updates the row in place and rolls back on failure
+  (it used to refetch all 1,076 items, 1.6 MB, per click), and the first load
+  shows a static skeleton rather than "No open backlog items". Source Control
+  and the transcript use the same `SkeletonRows`.
 - **Context panel** — the status-bar `ctx` chip opens a live breakdown:
   exact resident/window % from SDK usage plus per-category estimates
   (system prompt · tools/MCP · project context · transcript · free).
@@ -645,6 +818,22 @@ slow poll from a busy sidecar no longer tears down and rebuilds the IDE
 (`POST /api/chat` → 409 rather than evicting; Stop is authoritative via
 `cancelLiveTurn`); closing the window doesn't kill a running turn
 (resume via `GET /api/chat/resume`).
+
+Three v0.1.114–115 fixes, each settled by a measurement after reading the
+code had produced wrong answers. **The transcript freeze**: the
+`LayoutOscillationProbe` (ADR-0062 addendum 8 — labels on transcript rows and
+the Sessions list via `onGeometryChange`) named assistant rows flipping
+between 45 pt and 69–76 pt 40 times a second; `RichText.sizeThatFits`
+answered a zero or non-finite width proposal with a made-up 400 pt, so the
+bottom-anchored lazy stack never converged. **One chat model**:
+`ChatPreviewModel.shared` replaces view-owned `@State`, because each split-view
+rebuild created a fresh model (`heap`: 68 alive after 64 rebuilds, each
+holding its announce stream open). **Two connection pools**: SSE streams (turn,
+resume, announce, live feed) use their own `URLSession` (16 per host), because
+six open streams filled the shared pool and a tab switch's transcript GET
+queued forever. A loading skeleton is an overlay on the transcript's
+`ScrollView`, never a row of its lazy stack — as a row it spun the main thread
+at 100 % in `LazyLayoutViewCache.updatePrefetchPhases`.
 
 
 ### 8.2 One vocabulary for the seven panes
@@ -704,11 +893,25 @@ whole pane.
   and **fires a real follow-up turn on process exit** with the exit code
   and tail. Limits: ≤3 concurrent per session,
   chain depth ≤8. Shutdown signals (SIGTERM on app quit) are "stopped,
-  not finished" — no spurious failure turns on relaunch (v0.1.48).
+  not finished" — no spurious failure turns on relaunch (v0.1.48). Running
+  jobs are kept in an on-disk ledger that boot reconciles, so a sidecar
+  restart or crash reports "result unknown" instead of silence; a
+  SIGKILL/SIGTERM from outside while MARVIN keeps running fires a "stopped,
+  not finished" turn after a 5 s grace; background jobs inherit the
+  worktree's validated `env` map.
+- **Keep-awake** ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)) —
+  `keep-awake.ts`, wired into `turn-registry.ts`: the first live turn spawns
+  `caffeinate -i -w <sidecar pid>`, the last one's end kills it — one
+  assertion however many tabs run, none outside a turn; darwin only,
+  `MARVIN_KEEP_AWAKE=0` disables. Measured cause: 51 of 51 silent gaps in a
+  20-hour session began at a macOS `Sleep` and ended at a `DarkWake`.
 - **Wakeups** ([ADR-0031](../decisions/0031-self-scheduled-wakeups.md)) —
   `schedule_wakeup` re-invokes MARVIN at a chosen time via a persistent,
   boot-re-armed scheduler (delay 60s–24h, ≤5 pending, re-schedule depth
-  ≤3); a fired wakeup **yields** to a live interactive turn and re-arms.
+  ≤3); a fired wakeup **yields** to a live interactive turn and re-arms. A
+  plain wakeup gives up after 60 deferrals; a `background job done:` wakeup
+  keeps yielding for six hours (`MAX_JOB_DONE_DEFERRALS`) — six job results
+  had been dropped in one day by the 20-minute rule.
 - **Announce SSE** ([ADR-0043](../decisions/0043-server-turn-announcements.md)) —
   an always-on per-project stream re-attaches an idle client to any
   server-initiated turn (job completions, wakeups), with a "background
@@ -748,6 +951,16 @@ whole pane.
   env injection so the SDK-spawned CLI emits spans to the *user's own*
   Honeycomb account — off unless the user configures it; keys redacted
   from all logs.
+- **Agent SDK contract** ([ADR-0073](../decisions/0073-agent-sdk-0-3-upgrade.md)) —
+  `@anthropic-ai/claude-agent-sdk` **0.3.280**. Pins in `sdk-runner.ts`:
+  `TodoWrite` opted back in (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`,
+  `CLAUDE_CODE_ENABLE_TASKS=0`) or the plan spine freezes; `alwaysLoad` on
+  `marvin-graph` and `marvin-control` only; `snapshot: true` with one prompt
+  per session; `settingSources: ["user"]`. `0.3.N` bundles CLI `2.1.N`, and
+  the API rejects a CLI older than the model requires — the 0.3.280 bump was
+  forced when every request, auto-compaction included, failed with *"Claude
+  Code 2.1.278 does not support this model"*, leaving an over-full session
+  unable to shrink itself.
 - **CI/release** — tag push → `release.yml` builds the .app on a macOS
   runner, stamps the version into Info.plist, zips, signs, publishes;
   the cask is then bumped with the published sha256.
@@ -756,8 +969,18 @@ whole pane.
 
 ## 11. Behavioral contracts (`personality.ts`)
 
-The prompt is a contract surface, not vibes. The catalogue (each item a
-MUST list + MUST-NOT list + narrow fallback test):
+The prompt is a contract surface, not vibes. Since v0.1.115
+([ADR-0118](../decisions/0118-one-prompt-per-session-and-settings-isolation.md)
+Milestone 3) it is ~4.4K tokens, down from 29.4K (91 MUSTs, 43 MUST NOTs,
+54 ADR citations; `personality.ts` 2,070 → ~210 lines): one plain rule per
+concern, occasional procedures moved into the `marvin:*` skills (§6), memory
+and backlog content rules in the tool descriptions that enforce them, and a
+gate wherever a rule must hold regardless. `personality-surfaces.test.ts`
+guards the parsed formats verbatim, the moved rules' new homes and an 8K
+budget; checked against the old prompt on an Ask, a Plan and a planted-bug fix
+on a clone of a production project, outcomes matched. Since ADR-0121 Phase 7
+and the backlog paragraph also say that a break your own change caused is part
+of the change, not an item to park. The concerns it covers:
 
 1. **Phase gating** — labelled phases, stops between them, no mutation
    before Phase 6, explicit trivial fast-path.
@@ -809,17 +1032,19 @@ pull / fetch), `graph`, `projects`, `sessions`, `skills` (+ `add`),
 
 | Server | Type | Tools | Gate posture |
 |---|---|---|---|
-| `marvin-graph` | in-process | 6 graph tools | allow (read-only) |
-| `marvin-memory` | in-process | `remember`, `recall` | allow (content-class enforced) |
-| `marvin-backlog` | in-process | `backlog_add/list/claim/resolve` | allow (content-class enforced) |
-| `marvin-control` | in-process | wakeups + background jobs | allow (bounded by rails) |
+| `marvin-graph` | in-process, `alwaysLoad` | 16 graph tools (§3.3) | allow on `source: "sdk"` (read-only) |
+| `marvin-memory` | in-process, deferred | `remember`, `recall` | allow (content-class enforced) |
+| `marvin-backlog` | in-process, deferred | `backlog_add/list/update/claim/resolve/groom` | allow (content-class enforced; an over-cap body or note is refused, never cut) |
+| `marvin-control` | in-process, `alwaysLoad` | wakeups + background jobs + worktrees | allow (bounded by rails) |
 | `playwright` | external stdio, **opt-in** | `browser_*` | observation auto · interaction confirm · `browser_run_code_unsafe` **deny**; scouts get observation only ([ADR-0045](../decisions/0045-playwright-mcp-gated.md)) |
 
 Browser automation defaults to the Playwright **CLI** (one-shot
 screenshots, scripted checks, full `playwright test`); the MCP is for
 stateful navigate→snapshot→assert flows, off by default because a
-browser subprocess per turn is heavy. MCP-vs-CLI selection is itself a
-deterministic trigger in `personality.ts`.
+browser subprocess per turn is heavy. MCP-vs-CLI selection is documented
+in the `marvin:browser` skill. A MARVIN-named tool from any source other
+than `sdk` confirms (ADR-0117); every other `mcp__*` tool confirms by
+default (ADR-0053).
 
 ---
 
@@ -862,13 +1087,13 @@ repo:
   `main`; a gitleaks pre-commit hook is installed from
   `scripts/hooks/pre-commit`; CI is `.github/workflows/release.yml`
   (tag-triggered).
-- **Understanding why** — read `docs/decisions/` (the 51 ADRs) before
+- **Understanding why** — read `docs/decisions/` (the 120 ADRs) before
   proposing structural changes, `docs/roadmap.md` for what's in flight,
-  and `CLAUDE.md` for the golden rules any agentic session in this repo
+  and `AGENTS.md` (which `CLAUDE.md` imports) for the golden rules any agentic session in this repo
   is bound by. Material changes should arrive with an ADR of their own.
 
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v0.1.115 (120 ADRs, 2026-10-01). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*
