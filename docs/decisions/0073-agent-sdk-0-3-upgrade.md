@@ -168,3 +168,53 @@ shows the project `CLAUDE.md` (4,569 tokens), Claude Code's per-project auto
 memory `MEMORY.md` (5,256) and `~/.claude/CLAUDE.md` in every MARVIN turn, 121
 listed skills, and 10 agents from the user's Claude Code plugins. What MARVIN
 should load is a decision for its own ADR, not a line in this addendum.
+
+
+## Addendum — 0.3.278 → 0.3.280 (2026-09-23)
+
+Not a considered upgrade: a **forced** one. The bundled CLI is version-locked
+against the model, and the API enforces it server-side.
+
+```
+API Error: 400 Claude Code 2.1.278 does not support this model;
+version 2.1.280 or newer is required.
+```
+
+`@anthropic-ai/claude-agent-sdk@0.3.N` bundles Claude Code CLI `2.1.N` — the
+two version lines move together (`manifest.json` in the package reports
+`"version": "2.1.280"`). So a model released against a newer CLI rejects every
+request from an older SDK, and the only fix is the SDK bump. All three
+workspace packages moved; the `^0.3.278` ranges already permitted it, and only
+`pnpm-lock.yaml` was holding the old resolution.
+
+**Why it presented as a dead session rather than a failed turn.** The model in
+the session was `claude-opus-5-5`, which CLI 2.1.278 does not know. One
+unknown model, two symptoms:
+
+1. **The window was assumed.** An unknown model gets the default 200K, so the
+   CLI set `autoCompactThreshold: 167000` (observed in the transcript's
+   `marvin.context.baseline` events) and declared a 412K session to be at
+   206 % — forcing a compaction that a correctly-sized window would never have
+   asked for.
+2. **The compaction request was rejected.** Compaction is itself an API call,
+   so it hit the same version check the turn did. The session could not
+   shrink itself, and the retry loop had no exit.
+
+So the compaction failure was not a second fault next to the version error —
+it *was* the version error, reached by a path the version error had also
+created. Nothing about compaction changed in this release.
+
+The lesson for the next bump: **a version-locked dependency's failure mode is
+not always the feature it gates.** The visible message named compaction; the
+cause was a model table two patch versions stale.
+
+**Observed in passing, not fixed here.** MARVIN's own `contextWindowFor`
+(`models.ts`) has the same shape of gap: the Anthropic `/v1/models` API does
+not report window size, so any model without a `[1m]`/`-1m` marker in its id
+falls to the 200K default. The same transcript shows `maxTokens` reported as
+1,000,000 on some turns and 200,000 on others within one session. This only
+drives MARVIN's display and colour bands — the CLI's own threshold is what
+triggers compaction — so it did not cause this incident. Worth its own change.
+
+Type diff is additive; no pin moved. Verified: full suite 1,475 tests / 104
+files green, `tsc --noEmit` clean on `@marvin/runtime`.

@@ -272,7 +272,7 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 | Path | Responsibility |
 |---|---|
 | `sidecar/` | Next.js 16 API-only backend for the native macOS app ([ADR-0075](./docs/decisions/0075-sidecar-drops-browser-ui.md)) — no browser UI. |
-| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.278**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.280**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
 | `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
 | `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
 | `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
@@ -464,7 +464,7 @@ way a plugin reaches a turn:
 
 ## Agent SDK contract — the pins that keep MARVIN's behaviour stable (ADR-0073)
 
-MARVIN is on Agent SDK **0.3.278**. These SDK defaults would silently change
+MARVIN is on Agent SDK **0.3.280**. These SDK defaults would silently change
 what MARVIN does, and each is pinned back in `sdk-runner.ts` with the reason
 at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
 
@@ -484,7 +484,7 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   (3.3K tokens); verified live: `ToolSearch → recall` works.
 - **One system prompt per session** (`turnSystemPrompt`, `snapshot: true`,
   [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)).
-  0.3.278 records turn 1's system prompt and replays it until compaction, so
+  0.3.280 records turn 1's system prompt and replays it until compaction, so
   the append must be identical every turn — `buildTurnSystemPrompt` always
   builds the full context, and everything per-turn (mode, orientation, session
   tree, plan) rides the `<system-reminder>` suffix (`turnReminders`). Putting
