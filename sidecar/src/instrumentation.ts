@@ -40,15 +40,18 @@ export async function register(): Promise<void> {
 
   // ADR-0111 — closed `empty` and `merged` session trees leave the disk at
   // boot, under ADR-0103's guards (never dirty, never ready, never live).
-  // Bounded: one reconcile per registered project.
-  try {
-    const { sweepWorktrees } = await import("@marvin/runtime/worktrees");
+  // Bounded: one reconcile per registered project. In the BACKGROUND: Next
+  // serves nothing until register() returns, and a sweep across every
+  // project's worktrees is seconds of git. The busy-session guard covers any
+  // turn that starts while it runs.
+  void (async () => { try {
+    const { sweepWorktreesAsync } = await import("@marvin/runtime/worktrees");
     const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
     const { logTelemetry } = await import("@marvin/runtime/telemetry");
     let swept = 0;
     for (const p of listProjects()) {
       try {
-        swept += sweepWorktrees(p.workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended })
+        swept += (await sweepWorktreesAsync(p.workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended }))
           .filter((s) => s.deletedBranch).length;
       } catch {
         /* a project whose checkout is gone or not a repo: nothing to sweep */
@@ -62,7 +65,7 @@ export async function register(): Promise<void> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[worktrees] boot sweep failed:", err);
-  }
+  } })();
   const stats = armAll();
   if (stats.armed || stats.firedImmediately || stats.dropped) {
     // eslint-disable-next-line no-console

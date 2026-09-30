@@ -29,7 +29,10 @@ export async function GET(req: NextRequest) {
     .map((s) => s.trim())
     .filter((s) => /^[A-Za-z0-9._-]{1,128}$/.test(s))
     .slice(0, 50);
-  const rows = buildSessionWatch({ projectId, workDir: project.workDir, sessionIds: ids });
+  // `fresh=1`: the requested sessions' worktrees are derived from git now —
+  // the tab close sends it, because it may discard a tree it believes empty.
+  const fresh = params.get("fresh") === "1";
+  const rows = await buildSessionWatch({ projectId, workDir: project.workDir, sessionIds: ids, fresh });
   return NextResponse.json(
     { projectId, rows, generatedAt: new Date().toISOString() },
     { headers: { "Cache-Control": "no-store" } },

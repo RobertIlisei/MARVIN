@@ -57,7 +57,9 @@ public enum TabCloseDecision {
         let onto = target ?? "your current branch"
         let hasCommits = w.commits > 0
 
-        if w.state == "merged" {
+        // `mergedInto` on a `session` tree: the tab is still open, so its state
+        // stays `session`, but its commits are already integrated.
+        if w.state == "merged" || w.mergedInto != nil {
             if w.dirty {
                 return .offer([.keepBranch, .discard],
                               note: "\(name) is already merged into \(w.mergedInto ?? onto) but has uncommitted changes. Keep commits them onto the branch; discard throws them away.")

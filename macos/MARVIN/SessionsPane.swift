@@ -563,7 +563,9 @@ struct SessionsPane: View {
         var parts: [String] = []
         if let tree = e.tree, tree.mode == .worktree {
             parts.append("isolated: \(tree.branch ?? "worktree")")
-            if let w = e.worktree, w.commits > 0 {
+            if let w = e.worktree, let into = w.mergedInto {
+                parts.append("merged into \(into) — close to reclaim")
+            } else if let w = e.worktree, w.commits > 0 {
                 parts.append("\(w.commits) commit\(w.commits == 1 ? "" : "s")")
                 if let b = w.behind, b > 0 { parts.append("behind by \(b)") }
             }

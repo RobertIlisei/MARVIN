@@ -35,7 +35,7 @@ import {
   markSessionWorktreeClosed,
   mergeWorktree,
   reopenSessionWorktree,
-  sweepWorktrees,
+  sweepWorktreesAsync,
   symlinkExcludePattern,
   unstageSymlinkedDirs,
   worktreeHasWork,
@@ -143,12 +143,16 @@ export async function POST(req: NextRequest) {
   }
   if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
   // ADR-0111 — reclaim what this close (or an earlier one) left spent.
-  let swept = 0;
-  try {
-    swept = sweepWorktrees(workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended }).filter((s) => s.deletedBranch).length;
-    if (swept) logTelemetry({ kind: "worktree.session.swept", trigger: "close", swept });
-  } catch {
-    /* best-effort */
-  }
-  return NextResponse.json({ ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message, swept });
+  // In the background: a sweep reconciles every worktree of the project, and
+  // closing a tab waited on it (2026-09-30, "closing tabs is very slow"). The
+  // client never read the count; the busy guard still protects live turns.
+  void sweepWorktreesAsync(workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended })
+    .then((out) => {
+      const swept = out.filter((s) => s.deletedBranch).length;
+      if (swept) logTelemetry({ kind: "worktree.session.swept", trigger: "close", swept });
+    })
+    .catch(() => {
+      /* best-effort */
+    });
+  return NextResponse.json({ ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message });
 }

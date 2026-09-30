@@ -22,11 +22,11 @@
  *     of its own changes; the user in the main checkout has none of it.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readSessionMeta, resolveSessionCwd } from "./session-meta";
 import { resumeSession } from "./session-recovery";
 import { getLiveTurn } from "./turn-registry";
-import { findSessionWorktree, type ReconciledWorktree, reconcileWorktrees } from "./worktrees";
+import { findSessionWorktree, type ReconciledWorktree, reconcileWorktreesAsync } from "./worktrees";
 
 export type IntegrationVerdict = "clean" | "conflict" | "unknown";
 
@@ -57,14 +57,16 @@ export interface IntegrationPreview {
   rows: IntegrationPreviewRow[];
 }
 
-function gitOut(cwd: string, args: string[]): { status: number; stdout: string } {
-  try {
-    const stdout = execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 15_000 });
-    return { status: 0, stdout };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string | Buffer };
-    return { status: typeof e.status === "number" ? e.status : -1, stdout: e.stdout ? String(e.stdout) : "" };
-  }
+/** Async on purpose: the preview runs a reconcile plus a `merge-tree` per
+ *  branch, and the Sessions pane asks for it every time it appears. Run
+ *  synchronously that froze the sidecar for every other request (2026-09-30). */
+function gitOut(cwd: string, args: string[]): Promise<{ status: number; stdout: string }> {
+  return new Promise((done) => {
+    execFile("git", args, { cwd, encoding: "utf-8", timeout: 15_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+      const code = (err as { code?: unknown } | null)?.code;
+      done({ status: err ? (typeof code === "number" ? code : -1) : 0, stdout: stdout ?? "" });
+    });
+  });
 }
 
 /**
@@ -73,13 +75,13 @@ function gitOut(cwd: string, args: string[]): { status: number; stdout: string }
  * per line, then a blank line and the informational messages. Anything else
  * (older git, a bad ref) is `unknown`, never a guess.
  */
-export function dryRunMerge(workDir: string, target: string, branch: string): { verdict: IntegrationVerdict; conflicts: string[] } {
+export async function dryRunMerge(workDir: string, target: string, branch: string): Promise<{ verdict: IntegrationVerdict; conflicts: string[] }> {
   // A missing ref ALSO exits 1 ("not something we can merge", on stderr), so
   // both refs are checked first, and a conflict must come with its tree id.
   for (const ref of [target, branch]) {
-    if (gitOut(workDir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status !== 0) return { verdict: "unknown", conflicts: [] };
+    if ((await gitOut(workDir, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).status !== 0) return { verdict: "unknown", conflicts: [] };
   }
-  const out = gitOut(workDir, ["merge-tree", "--write-tree", "--name-only", target, branch]);
+  const out = await gitOut(workDir, ["merge-tree", "--write-tree", "--name-only", target, branch]);
   if (out.status === 0) return { verdict: "clean", conflicts: [] };
   if (out.status !== 1) return { verdict: "unknown", conflicts: [] };
   const lines = out.stdout.split("\n");
@@ -112,20 +114,20 @@ function skipReasonFor(w: ReconciledWorktree): string | undefined {
  * the current branch. Open tabs are listed too, with a skip reason, so the
  * section can show them greyed rather than pretend they do not exist.
  */
-export function previewIntegration(workDir: string, opts: { slugs?: string[] | undefined; includeOpen?: boolean | undefined } = {}): IntegrationPreview {
-  const target = gitOut(workDir, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim() || "HEAD";
-  const targetHead = gitOut(workDir, ["rev-parse", "HEAD"]).stdout.trim();
-  const probe = gitOut(workDir, ["merge-tree", "--write-tree", "HEAD", "HEAD"]);
+export async function previewIntegration(workDir: string, opts: { slugs?: string[] | undefined; includeOpen?: boolean | undefined } = {}): Promise<IntegrationPreview> {
+  const target = (await gitOut(workDir, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim() || "HEAD";
+  const targetHead = (await gitOut(workDir, ["rev-parse", "HEAD"])).stdout.trim();
+  const probe = await gitOut(workDir, ["merge-tree", "--write-tree", "HEAD", "HEAD"]);
   const previewAvailable = probe.status === 0;
   const wanted = opts.slugs ? new Set(opts.slugs) : null;
   const rows: IntegrationPreviewRow[] = [];
-  for (const w of reconcileWorktrees(workDir)) {
+  for (const w of await reconcileWorktreesAsync(workDir)) {
     if (w.kind !== "session" && !wanted) continue;
     if (wanted && !wanted.has(w.slug)) continue;
     if (!wanted && w.state !== "ready" && !(opts.includeOpen && w.state === "session")) continue;
-    const behind = Number(gitOut(workDir, ["rev-list", "--count", `${w.branch}..HEAD`]).stdout.trim()) || 0;
+    const behind = Number((await gitOut(workDir, ["rev-list", "--count", `${w.branch}..HEAD`])).stdout.trim()) || 0;
     const integrable = w.state === "ready" || w.state === "session";
-    const dry = previewAvailable && integrable && w.commits > 0 ? dryRunMerge(workDir, target, w.branch) : { verdict: "unknown" as const, conflicts: [] };
+    const dry = previewAvailable && integrable && w.commits > 0 ? await dryRunMerge(workDir, target, w.branch) : { verdict: "unknown" as const, conflicts: [] };
     rows.push({
       slug: w.slug,
       branch: w.branch,
@@ -177,10 +179,10 @@ export async function syncWithTarget(projectId: string, marvinSessionId: string,
   if (!resolveSessionCwd(meta).present) return { ok: false, status: 409, code: "worktree-missing", error: "the tab's worktree is missing" };
   const rec = findSessionWorktree(workDir, marvinSessionId);
   const branch = rec?.branch ?? meta.tree.branch;
-  const target = gitOut(workDir, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim() || "HEAD";
-  const targetHead = gitOut(workDir, ["rev-parse", "HEAD"]).stdout.trim();
+  const target = (await gitOut(workDir, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim() || "HEAD";
+  const targetHead = (await gitOut(workDir, ["rev-parse", "HEAD"])).stdout.trim();
   if (branch === target) return { ok: false, status: 409, code: "same-branch", error: "the tab is on the target branch already" };
-  const dry = dryRunMerge(workDir, target, branch);
+  const dry = await dryRunMerge(workDir, target, branch);
   const prompt = syncPrompt({ branch, target, targetHead, conflicts: dry.conflicts });
   const res = await resumeSession(projectId, marvinSessionId, { prompt });
   if (!res.ok) return { ok: false, status: res.status, code: res.code, error: res.error };

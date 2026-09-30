@@ -22,11 +22,13 @@ import {
   mergeWorktree,
   nameSessionBranchFromCommit,
   reconcileWorktrees,
+  reconcileWorktreesAsync,
   removeWorktree,
   reopenSessionWorktree,
   SESSION_BRANCH_PREFIX,
   sessionOwnChanges,
   sweepWorktrees,
+  sweepWorktreesAsync,
 } from "../src/worktrees";
 
 const LATER = Date.now() + 48 * 3_600_000;
@@ -95,6 +97,24 @@ describe("session worktrees", () => {
     reopenSessionWorktree(repo, "s-work");
     expect(reconcileWorktrees(repo).find((w) => w.sessionId === "s-work")?.state).toBe("session");
   });
+
+  // 2026-09-30 — read paths moved to the async driver so a reconcile no longer
+  // freezes the sidecar. Both drivers run the same generator; this pins that
+  // they derive identical states, adoptions and line counts.
+  it("the async reconcile and sweep derive exactly what the sync ones do", async () => {
+    const withWork = createSessionWorktree(repo, { sessionId: "s-work" });
+    createSessionWorktree(repo, { sessionId: "s-none" });
+    createSessionWorktree(repo, { sessionId: "s-open" });
+    commitIn(withWork.path, "b.txt");
+    markSessionWorktreeClosed(repo, "s-work");
+    markSessionWorktreeClosed(repo, "s-none");
+    expect(await reconcileWorktreesAsync(repo, LATER)).toEqual(reconcileWorktrees(repo, LATER));
+    const swept = await sweepWorktreesAsync(repo, LATER);
+    expect(swept.map((s) => s.state)).toEqual(["empty"]);
+    expect(await reconcileWorktreesAsync(repo, LATER)).toEqual(reconcileWorktrees(repo, LATER));
+    // Three worktrees and a dozen git spawns: over vitest's 5 s default on a
+    // loaded machine or a CI runner (the v0.1.56–59 red-CI trap).
+  }, 30_000);
 
   // ADR-0111 — the sweep runs at boot and after every close now, so its
   // guards matter more: a closed tree with a turn in it (a Sync turn) stays.

@@ -3373,6 +3373,9 @@ runner.suite("tab-close-decision") {
     runner.test("a tree holding nothing is discarded without asking") {
         runner.expect(d(worktree: wt(commits: 0, dirty: false)) == .reclaimSilently, "empty and clean")
         runner.expect(d(worktree: wt(state: "merged", commits: 2, dirty: false, mergedInto: "main")) == .reclaimSilently, "merged and clean")
+        // An open tab's tree reads `session` while it is open; the sidecar
+        // still says where its commits went (squash merges included).
+        runner.expect(d(worktree: wt(state: "session", commits: 2, dirty: false, mergedInto: "main")) == .reclaimSilently, "open tab, already merged")
     }
     runner.test("work asks; keep is first and the merge names its target") {
         if case .offer(let a, let note) = d(worktree: wt(commits: 0, dirty: true)) {

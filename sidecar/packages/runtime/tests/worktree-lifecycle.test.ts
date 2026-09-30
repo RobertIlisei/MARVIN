@@ -357,6 +357,96 @@ describe("worktree lifecycle", () => {
     expect(existsSync(rec.path)).toBe(false);
   });
 
+  // 2026-10-01 — agri-saas-platform held 9 GB of finished trees. Four ways a
+  // spent tree escaped the sweep; one test per way, plus the rule that still
+  // must not break (unintegrated work is never collateral).
+
+  it("detects a squash merge — the commits are rewritten, the content is in", () => {
+    const rec = createWorktree(repo, "squashed");
+    commitIn(rec.path, "a.ts");
+    commitIn(rec.path, "b.ts");
+
+    git("merge", "-q", "--squash", "marvin/squashed");
+    git("commit", "-qm", "squash it");
+
+    const w = reconcileWorktrees(repo, LATER)[0];
+    expect(w?.state).toBe("merged");
+    expect(w?.mergedInto).toBe("main");
+
+    const [outcome] = sweepWorktrees(repo, LATER);
+    expect(outcome?.deletedBranch).toBe(true);
+    expect(existsSync(rec.path)).toBe(false);
+  });
+
+  it("a branch only partly integrated by cherry-pick stays `ready` and is never swept", () => {
+    const rec = createWorktree(repo, "partly");
+    commitIn(rec.path, "a.ts");
+    commitIn(rec.path, "b.ts");
+    git("cherry-pick", git("rev-parse", "marvin/partly~1"));
+
+    expect(reconcileWorktrees(repo, LATER)[0]?.state).toBe("ready");
+    expect(sweepWorktrees(repo, LATER)).toEqual([]);
+    expect(existsSync(rec.path)).toBe(true);
+  });
+
+  it("an open tab whose branch is merged stays `session` but says where it went", () => {
+    const rec = createSessionWorktree(repo, { sessionId: "s-merged", title: "merged tab" });
+    commitIn(rec.path, "a.ts");
+    git("merge", "-q", "--squash", rec.branch);
+    git("commit", "-qm", "squash tab");
+
+    const w = reconcileWorktrees(repo, LATER)[0];
+    expect(w?.state).toBe("session");
+    expect(w?.mergedInto).toBe("main");
+    expect(sweepWorktrees(repo, LATER)).toEqual([]);
+    expect(existsSync(rec.path)).toBe(true);
+  });
+
+  it("reclaims a leftover directory git no longer lists, and leaves a real checkout alone", () => {
+    // What a writer racing the removal leaves behind: no `.git`, just output.
+    const leftover = join(repo, ".marvin", "worktrees", "tab-gone");
+    mkdirSync(join(leftover, "graphify-out"), { recursive: true });
+    writeFileSync(join(leftover, "graphify-out", "graph.json"), "{}");
+    const live = createWorktree(repo, "live one");
+    commitIn(live.path, "feature.ts");
+
+    const out = sweepWorktrees(repo, LATER);
+    expect(existsSync(leftover)).toBe(false);
+    expect(out.find((o) => o.slug === "tab-gone")?.reason).toContain("leftover");
+    expect(existsSync(live.path)).toBe(true);
+  });
+
+  it("follows a checkout whose branch was switched and deleted, and never deletes a branch it did not create", () => {
+    const rec = createWorktree(repo, "switched");
+    execFileSync("git", ["checkout", "-q", "-b", "test/users-own"], { cwd: rec.path, stdio: "pipe" });
+    commitIn(rec.path, "mine.ts");
+    git("branch", "-D", "marvin/switched");
+
+    const w = reconcileWorktrees(repo, LATER);
+    expect(w.map((r) => r.branch)).toEqual(["test/users-own"]);
+    expect(w[0]?.state).toBe("ready");
+    expect(w[0]?.checkoutPresent).toBe(true);
+
+    // Merged → the checkout is reclaimed, but the branch is the user's.
+    git("merge", "-q", "--no-ff", "-m", "take it", "test/users-own");
+    const [outcome] = sweepWorktrees(repo, LATER);
+    expect(outcome?.removedCheckout).toBe(true);
+    expect(outcome?.deletedBranch).toBe(false);
+    expect(existsSync(rec.path)).toBe(false);
+    expect(git("branch", "--list", "test/users-own")).toContain("test/users-own");
+    expect(listWorktrees(repo)).toEqual([]);
+  });
+
+  it("adopts an unregistered checkout on a non-MARVIN branch instead of losing it", () => {
+    const path = join(repo, ".marvin", "worktrees", "tab-lost");
+    git("worktree", "add", "-q", "-b", "feature/lost", path);
+    commitIn(path, "x.ts");
+
+    const w = reconcileWorktrees(repo, LATER);
+    expect(w.map((r) => r.branch)).toEqual(["feature/lost"]);
+    expect(w[0]?.state).toBe("ready");
+  });
+
   it("keeps anything dirty, in every state — uncommitted work is never collateral", () => {
     const rec = createWorktree(repo, "left dirty");
     writeFileSync(join(rec.path, "scratch.txt"), "unsaved\n");

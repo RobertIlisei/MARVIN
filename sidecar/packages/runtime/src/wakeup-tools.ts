@@ -24,7 +24,7 @@ import {
   MIN_DELAY_SECONDS,
   scheduleWakeup,
 } from "./wakeup-scheduler";
-import { createWorktree, describeWorktree, mergeWorktree, reconcileWorktrees, removeWorktree, sweepWorktrees } from "./worktrees";
+import { createWorktree, describeWorktree, mergeWorktree, reconcileWorktreesAsync, removeWorktree, sweepWorktreesAsync } from "./worktrees";
 
 /** Per-turn identity + config the wakeup tools capture for the future turn. */
 export interface WakeupToolContext {
@@ -226,7 +226,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     "List this project's implementer worktrees with their DERIVED state — running / empty / ready / merged — plus commits, files changed, and whether the checkout holds uncommitted work. State is recomputed from git on every call, so a branch you merged in a terminal or in another session shows as `merged` here. Use it to report finished work: `ready` is the deliverable, and `git diff <base>...<branch>` reviews it.",
     {},
     async () => {
-      const all = reconcileWorktrees(ctx.workDir ?? ctx.cwd);
+      const all = await reconcileWorktreesAsync(ctx.workDir ?? ctx.cwd);
       if (all.length === 0) return textResult("No worktrees registered.");
       const ready = all.filter((w) => w.state === "ready").length;
       const lines = all.map((w) => describeWorktree(ctx.workDir ?? ctx.cwd, w));
@@ -250,7 +250,7 @@ export function createWakeupMcpServer(ctx: WakeupToolContext) {
     "Reclaim every worktree that is provably safe to remove: branches with no commits, and branches already merged somewhere. Deletes the checkout AND the branch for those. NEVER touches a `ready` branch, a running implementer, or any checkout holding uncommitted work. Run it after merging, or when the user asks about leftover worktrees.",
     {},
     async () => {
-      const swept = sweepWorktrees(ctx.workDir ?? ctx.cwd);
+      const swept = await sweepWorktreesAsync(ctx.workDir ?? ctx.cwd);
       if (swept.length === 0) return textResult("Nothing to reclaim — no empty or merged worktrees.");
       return textResult(swept.map((s) => `${s.slug} (${s.state}): ${s.reason}`).join("\n"));
     },

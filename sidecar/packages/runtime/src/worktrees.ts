@@ -24,9 +24,9 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { toolPolicy } from "@marvin/tools/policy";
@@ -401,7 +401,7 @@ export function removeWorktree(workDir: string, slug: string, opts?: { force?: b
   const record = existing.find((w) => w.slug === slug);
   if (!record) return { removed: null };
   if (!opts?.force) {
-    const state = reconcileOne(workDir, record, checkoutPaths(workDir)).state;
+    const state = runSync(reconcileOne(workDir, record, checkoutPaths(workDir))).state;
     if (state === "session") {
       return {
         removed: null,
@@ -417,11 +417,8 @@ export function removeWorktree(workDir: string, slug: string, opts?: { force?: b
       };
     }
   }
-  try {
-    git(workDir, ["worktree", "remove", "--force", record.path]);
-  } catch {
-    /* already gone on disk — still drop the registry entry */
-  }
+  // Already gone on disk → still drop the registry entry.
+  removeCheckout(workDir, record.path);
   saveWorktrees(
     workDir,
     existing.filter((w) => w.slug !== slug),
@@ -431,7 +428,7 @@ export function removeWorktree(workDir: string, slug: string, opts?: { force?: b
 
 /** Summary an implementer can be briefed with and the user can review from. */
 export function describeWorktree(workDir: string, record: WorktreeRecord): string {
-  const w = reconcileOne(workDir, record, checkoutPaths(workDir));
+  const w = runSync(reconcileOne(workDir, record, checkoutPaths(workDir)));
   const where = w.state === "merged" && w.mergedInto ? ` into ${w.mergedInto}` : "";
   const dirty = w.dirty ? ", dirty" : "";
   const tab = w.kind === "session" ? " (chat tab)" : "";
@@ -486,6 +483,54 @@ function gitOr(workDir: string, args: string[], fallback: string): string {
   }
 }
 
+/**
+ * The reconcile reads git dozens of times per call — ~150–200 spawns on a
+ * project with 24 worktrees. Run with `execFileSync` on a request path, that
+ * froze the whole sidecar for seconds at a time: a CPU profile on 2026-09-30
+ * put 4.9 s of every 25 s inside `/api/sessions/watch`, and every other
+ * request (backlog, git status, health) queued behind it.
+ *
+ * So the derivation is written ONCE, as a generator that yields each git read
+ * it needs, and driven two ways: `runSync` for the rare mutation paths and the
+ * tests, `runAsync` for every read path, which then never blocks the loop.
+ * One implementation means the two can never disagree about a state.
+ */
+type GitRead = { cwd: string; args: string[]; fallback: string; ok?: true };
+type GitSteps<T> = Generator<GitRead, T, string>;
+
+function* gOr(cwd: string, args: string[], fallback: string): GitSteps<string> {
+  return yield { cwd, args, fallback };
+}
+
+function* gOk(cwd: string, args: string[]): GitSteps<boolean> {
+  return (yield { cwd, args, fallback: "", ok: true }) === "1";
+}
+
+function runSync<T>(steps: GitSteps<T>): T {
+  let next = steps.next();
+  while (!next.done) {
+    const r = next.value;
+    next = steps.next(r.ok ? (gitOk(r.cwd, r.args) ? "1" : "") : gitOr(r.cwd, r.args, r.fallback));
+  }
+  return next.value;
+}
+
+async function runAsync<T>(steps: GitSteps<T>): Promise<T> {
+  let next = steps.next();
+  while (!next.done) {
+    const r = next.value;
+    let out: string;
+    try {
+      const { stdout } = await execFileAsync("git", r.args, { cwd: r.cwd, encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
+      out = r.ok ? "1" : stdout.trim();
+    } catch {
+      out = r.ok ? "" : r.fallback;
+    }
+    next = steps.next(out);
+  }
+  return next.value;
+}
+
 /** ADR-0107 — the registered record whose checkout is `path` (canonical
  *  compare, so `/var` vs `/private/var` never hides a match). */
 export function findWorktreeByPath(workDir: string, path: string): WorktreeRecord | null {
@@ -501,7 +546,11 @@ export function listGitWorktreePaths(workDir: string): string[] {
 
 /** Absolute paths git currently considers checked-out worktrees. */
 function checkoutPaths(workDir: string): Set<string> {
-  const out = gitOr(workDir, ["worktree", "list", "--porcelain"], "");
+  return runSync(checkoutPathsSteps(workDir));
+}
+
+function* checkoutPathsSteps(workDir: string): GitSteps<Set<string>> {
+  const out = yield* gOr(workDir, ["worktree", "list", "--porcelain"], "");
   const paths = out
     .split("\n")
     .filter((l) => l.startsWith("worktree "))
@@ -518,11 +567,39 @@ function checkoutPaths(workDir: string): Set<string> {
  * MARVIN — in a terminal, in another session, by hand — visible on the next
  * read, which is the whole point of deriving rather than recording.
  */
-function containingRefs(workDir: string, branch: string): string[] {
-  return gitOr(workDir, ["branch", "--all", "--contains", branch, "--format=%(refname:short)"], "")
+function* containingRefs(workDir: string, branch: string): GitSteps<string[]> {
+  return (yield* gOr(workDir, ["branch", "--all", "--contains", branch, "--format=%(refname:short)"], ""))
     .split("\n")
     .map((r) => r.trim())
     .filter((r) => r && !r.startsWith("(") && r !== branch && !r.endsWith(`/${branch}`));
+}
+
+/**
+ * Where `record.branch` has already been integrated, or undefined.
+ *
+ * Ancestry first (`containingRefs`). Then content, because a squash, rebase or
+ * cherry-pick merge rewrites the commits: `--contains` never sees them, and
+ * such a branch read `ready` forever and was never swept (2026-10-01: 2.2 GB
+ * on agri-saas-platform). The proof is that merging the branch into the target
+ * would change nothing — `merge-tree` yields the target's own tree. That is as
+ * strong as ancestry for the question the sweep asks ("is any work lost if the
+ * branch goes?"), and a partial cherry-pick or a conflict fails it. Only the
+ * tree's base branch and the main checkout's branch are tried: they are where
+ * MARVIN's branches land, and each try is one git call per unmerged tree.
+ */
+function* mergedIntoSteps(workDir: string, record: WorktreeRecord): GitSteps<string | undefined> {
+  const byAncestry = (yield* containingRefs(workDir, record.branch))[0];
+  if (byAncestry) return byAncestry;
+  const head = yield* gOr(workDir, ["symbolic-ref", "--quiet", "--short", "HEAD"], "");
+  const targets = [...new Set([record.baseRef, head])].filter((t): t is string => !!t && t !== record.branch);
+  for (const target of targets) {
+    const tree = yield* gOr(workDir, ["rev-parse", "--verify", "--quiet", `${target}^{tree}`], "");
+    if (!tree) continue;
+    // Exit 1 on conflict → the fallback "" → not merged.
+    const merged = (yield* gOr(workDir, ["merge-tree", "--write-tree", target, record.branch], "")).split("\n")[0];
+    if (merged === tree) return target;
+  }
+  return undefined;
 }
 
 /** A slug no existing record and no live branch is already using. */
@@ -538,13 +615,13 @@ function uniqueSlug(workDir: string, base: string, existing: readonly WorktreeRe
 }
 
 /** Derive one record's live state from git. Pure w.r.t. the registry file. */
-function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<string>, now = Date.now()): ReconciledWorktree {
+function* reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<string>, now = Date.now()): GitSteps<ReconciledWorktree> {
   const checkoutPresent = checkouts.has(canonical(record.path));
-  const dirty = checkoutPresent && gitOr(record.path, ["status", "--porcelain"], "") !== "";
-  const commits = Number(gitOr(workDir, ["rev-list", "--count", `${record.base}..${record.branch}`], "0")) || 0;
+  const dirty = checkoutPresent && (yield* gOr(record.path, ["status", "--porcelain"], "")) !== "";
+  const commits = Number(yield* gOr(workDir, ["rev-list", "--count", `${record.base}..${record.branch}`], "0")) || 0;
   const filesChanged = commits === 0
     ? 0
-    : gitOr(workDir, ["diff", "--name-only", `${record.base}..${record.branch}`], "").split("\n").filter(Boolean).length;
+    : (yield* gOr(workDir, ["diff", "--name-only", `${record.base}..${record.branch}`], "")).split("\n").filter(Boolean).length;
 
   let state: WorktreeState;
   // `running` requires a BOUND implementer. A worktree that was created but
@@ -560,15 +637,18 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
   let mergedInto: string | undefined;
   if (openSession) {
     state = "session";
+    // Still the tab's tree, never swept while it is open — but say it is
+    // spent, so the tab can offer to close and reclaim it.
+    if (commits > 0) mergedInto = yield* mergedIntoSteps(workDir, record);
   } else if (stillRunning) {
     state = "running";
   } else if (commits === 0) {
     state = "empty";
   } else {
-    mergedInto = containingRefs(workDir, record.branch)[0];
+    mergedInto = yield* mergedIntoSteps(workDir, record);
     state = mergedInto ? "merged" : "ready";
   }
-  const lastCommitAt = gitOr(workDir, ["log", "-1", "--format=%cI", record.branch], "");
+  const lastCommitAt = yield* gOr(workDir, ["log", "-1", "--format=%cI", record.branch], "");
   // Line counts only where they inform a decision — a branch still waiting to
   // be integrated. Merged and empty trees are not worth a numstat each on a
   // reconcile that already runs several git calls per tree.
@@ -577,7 +657,7 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
   if (commits > 0 && (state === "ready" || state === "session")) {
     added = 0;
     removed = 0;
-    for (const line of gitOr(workDir, ["diff", "--numstat", `${record.base}..${record.branch}`], "").split("\n")) {
+    for (const line of (yield* gOr(workDir, ["diff", "--numstat", `${record.base}..${record.branch}`], "")).split("\n")) {
       const [a, r] = line.split("\t");
       added += Number(a) || 0;
       removed += Number(r) || 0;
@@ -604,13 +684,14 @@ function reconcileOne(workDir: string, record: WorktreeRecord, checkouts: Set<st
  * two such orphans were found on a real project, both with zero commits, both
  * unreachable through any MARVIN surface. Adoption closes that hole.
  */
-function adoptOrphans(workDir: string, known: readonly WorktreeRecord[], checkouts: Set<string>): WorktreeRecord[] {
+function* adoptOrphans(workDir: string, known: readonly WorktreeRecord[], checkouts: Set<string>): GitSteps<WorktreeRecord[]> {
   const knownBranches = new Set(known.map((w) => w.branch));
-  const branches = gitOr(workDir, ["branch", "--list", `${BRANCH_PREFIX}*`, "--format=%(refname:short)"], "")
+  const branches = (yield* gOr(workDir, ["branch", "--list", `${BRANCH_PREFIX}*`, "--format=%(refname:short)"], ""))
     .split("\n")
     .map((b) => b.trim())
     .filter((b) => b && !knownBranches.has(b));
-  return branches.map((branch) => {
+  const adopted: WorktreeRecord[] = [];
+  for (const branch of branches) {
     // ADR-0107 — a lost SESSION record is classified from its ref name and
     // adopted as an open-tab tree: state `session`, never swept. The user
     // reclaims it from the UI once they know it exists.
@@ -620,16 +701,44 @@ function adoptOrphans(workDir: string, known: readonly WorktreeRecord[], checkou
     const path = checkouts.has(canonical(guessed))
       ? guessed
       : [...checkouts].find((c) => c.endsWith(`/${isSession ? `${SESSION_DIR_PREFIX}${slug}` : slug}`)) ?? guessed;
-    return {
+    const tip = yield* gOr(workDir, ["rev-parse", branch], "");
+    adopted.push({
       slug,
       path,
       branch,
-      base: gitOr(workDir, ["merge-base", branch, "HEAD"], gitOr(workDir, ["rev-parse", branch], "")),
+      base: yield* gOr(workDir, ["merge-base", branch, "HEAD"], tip),
       createdAt: new Date(0).toISOString(),
       task: isSession ? "(adopted session worktree)" : "(adopted — branch found outside the registry)",
       ...(isSession ? { kind: "session" as const } : { finishedAt: new Date(0).toISOString() }),
-    } satisfies WorktreeRecord;
-  });
+    } satisfies WorktreeRecord);
+  }
+  // A checkout under `.marvin/worktrees/` on a branch MARVIN did not name — a
+  // tab that switched branches before its record was lost. Without this it was
+  // invisible to every surface and every sweep (2026-10-01: 481 MB). `marvin/*`
+  // checkouts are left to the pass above, and to a create still in progress.
+  const claimed = new Set([...known, ...adopted].map((w) => canonical(w.path)));
+  const root = canonical(worktreesDir(workDir));
+  for (const path of checkouts) {
+    if (claimed.has(path) || !path.startsWith(`${root}/`)) continue;
+    const branch = yield* checkedOutRef(path);
+    if (!branch || branch.startsWith(BRANCH_PREFIX)) continue;
+    adopted.push({
+      slug: basename(path),
+      path,
+      branch,
+      base: yield* gOr(workDir, ["merge-base", branch, "HEAD"], branch),
+      createdAt: new Date(0).toISOString(),
+      task: "(adopted — checkout found outside the registry)",
+      finishedAt: new Date(0).toISOString(),
+    } satisfies WorktreeRecord);
+  }
+  return adopted;
+}
+
+/** The branch a checkout is on, or its commit when HEAD is detached. */
+function* checkedOutRef(path: string): GitSteps<string> {
+  const ref = yield* gOr(path, ["rev-parse", "--abbrev-ref", "HEAD"], "");
+  return ref === "HEAD" ? yield* gOr(path, ["rev-parse", "HEAD"], "") : ref;
 }
 
 /**
@@ -638,11 +747,49 @@ function adoptOrphans(workDir: string, known: readonly WorktreeRecord[], checkou
  * when something changed, so a read is cheap and idempotent.
  */
 export function reconcileWorktrees(workDir: string, now = Date.now()): ReconciledWorktree[] {
+  return runSync(reconcileSteps(workDir, now));
+}
+
+/**
+ * One session's worktree, derived from git NOW — no memo anywhere. For
+ * decisions that destroy work: a tab close picks "discard silently" when the
+ * tree is empty, and a cached "empty" from before the agent's last commit
+ * would throw that commit away.
+ */
+export async function reconcileSessionWorktreeAsync(workDir: string, sessionId: string, now = Date.now()): Promise<ReconciledWorktree | null> {
+  const record = listWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === sessionId);
+  if (!record) return null;
+  return runAsync(
+    (function* () {
+      const checkouts = yield* checkoutPathsSteps(workDir);
+      return yield* reconcileOne(workDir, record, checkouts, now);
+    })(),
+  );
+}
+
+/** `reconcileWorktrees` without blocking the event loop — for every read path. */
+export function reconcileWorktreesAsync(workDir: string, now = Date.now()): Promise<ReconciledWorktree[]> {
+  return runAsync(reconcileSteps(workDir, now));
+}
+
+function* reconcileSteps(workDir: string, now: number): GitSteps<ReconciledWorktree[]> {
   const stored = listWorktrees(workDir);
-  const checkouts = checkoutPaths(workDir);
-  const alive = stored.filter((w) => gitOk(workDir, ["rev-parse", "--verify", "--quiet", w.branch]));
-  const all = [...alive, ...adoptOrphans(workDir, alive, checkouts)];
-  const reconciled = all.map((w) => reconcileOne(workDir, w, checkouts, now));
+  const checkouts = yield* checkoutPathsSteps(workDir);
+  const alive: WorktreeRecord[] = [];
+  for (const w of stored) {
+    if (yield* gOk(workDir, ["rev-parse", "--verify", "--quiet", w.branch])) {
+      alive.push(w);
+      continue;
+    }
+    // The branch is gone but the checkout is not: the tree was switched to
+    // another branch. Follow it — dropping the record orphaned the checkout.
+    if (!checkouts.has(canonical(w.path))) continue;
+    const current = yield* checkedOutRef(w.path);
+    if (current) alive.push({ ...w, branch: current });
+  }
+  const all = [...alive, ...(yield* adoptOrphans(workDir, alive, checkouts))];
+  const reconciled: ReconciledWorktree[] = [];
+  for (const w of all) reconciled.push(yield* reconcileOne(workDir, w, checkouts, now));
 
   const next: WorktreeRecord[] = reconciled.map((w) => ({
     slug: w.slug,
@@ -687,13 +834,14 @@ export function markWorktreeFinished(workDir: string, taskId: string, now = Date
     all[idx] = { ...record, finishedAt: new Date(now).toISOString() };
     saveWorktrees(workDir, all);
   }
-  return reconcileOne(workDir, all[idx] as WorktreeRecord, checkoutPaths(workDir), now);
+  return runSync(reconcileOne(workDir, all[idx] as WorktreeRecord, checkoutPaths(workDir), now));
 }
 
 export interface SweepOutcome {
   slug: string;
   branch: string;
-  state: WorktreeState;
+  /** `leftover`: a directory under `.marvin/worktrees/` that is no checkout. */
+  state: WorktreeState | "leftover";
   removedCheckout: boolean;
   deletedBranch: boolean;
   reason: string;
@@ -720,8 +868,27 @@ export function sweepWorktrees(
   now = Date.now(),
   opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
 ): SweepOutcome[] {
+  return sweepReconciled(workDir, reconcileWorktrees(workDir, now), opts);
+}
+
+/** `sweepWorktrees` whose reconcile does not block the event loop. The removals
+ *  themselves stay synchronous: they are few, and each must finish before the
+ *  registry is rewritten. */
+export async function sweepWorktreesAsync(
+  workDir: string,
+  now = Date.now(),
+  opts: { isSessionBusy?: (sessionId: string) => boolean } = {},
+): Promise<SweepOutcome[]> {
+  return sweepReconciled(workDir, await reconcileWorktreesAsync(workDir, now), opts);
+}
+
+function sweepReconciled(
+  workDir: string,
+  reconciled: ReconciledWorktree[],
+  opts: { isSessionBusy?: (sessionId: string) => boolean },
+): SweepOutcome[] {
   const out: SweepOutcome[] = [];
-  for (const w of reconcileWorktrees(workDir, now)) {
+  for (const w of reconciled) {
     if (w.state === "running" || w.state === "session" || w.state === "ready") continue;
     // ADR-0111 — a closed tab can still have a turn in its tree (a Sync turn
     // dispatched through the resume path); never pull the floor from under it.
@@ -737,27 +904,84 @@ export function sweepWorktrees(
       });
       continue;
     }
-    const removedCheckout = w.checkoutPresent && gitOk(workDir, ["worktree", "remove", "--force", w.path]);
+    const removedCheckout = w.checkoutPresent && removeCheckout(workDir, w.path);
     gitOk(workDir, ["worktree", "prune"]);
     // `-D`, but only after our own proof: zero commits, or contained in another
     // ref. Never reached for `ready`, which is the state that holds real work.
-    const deletedBranch = gitOk(workDir, ["branch", "-D", w.branch]);
-    if (deletedBranch) {
+    // Never for a branch MARVIN did not name: a tab may have switched its tree
+    // to one of the user's, and that ref is theirs to keep.
+    const ours = w.branch.startsWith(BRANCH_PREFIX);
+    const deletedBranch = ours && gitOk(workDir, ["branch", "-D", w.branch]);
+    if (deletedBranch || (!ours && (removedCheckout || !w.checkoutPresent))) {
       saveWorktrees(
         workDir,
-        listWorktrees(workDir).filter((r) => r.branch !== w.branch),
+        listWorktrees(workDir).filter((r) => r.branch !== w.branch && canonical(r.path) !== canonical(w.path)),
       );
     }
+    const what = w.state === "empty" ? "branch had no commits" : `already merged into ${w.mergedInto ?? "another branch"}`;
     out.push({
       slug: w.slug,
       branch: w.branch,
       state: w.state,
       removedCheckout,
       deletedBranch,
-      reason:
-        w.state === "empty"
-          ? "reclaimed — branch had no commits"
-          : `reclaimed — already merged into ${w.mergedInto ?? "another branch"}`,
+      reason: ours ? `reclaimed — ${what}` : `checkout reclaimed — ${what}; branch ${w.branch} kept, MARVIN did not create it`,
+    });
+  }
+  out.push(...sweepLeftoverDirs(workDir, reconciled));
+  return out;
+}
+
+/**
+ * `git worktree remove`, then make sure nothing is left on disk. A process
+ * still writing into the tree — a graph refresh, a build started by the tab's
+ * last turn — recreates files under it as git deletes them, and git removes
+ * its registration anyway (2026-10-01: 960 MB of `graphify-out/` and Maven
+ * `target/` in two directories nothing tracked any more).
+ */
+function removeCheckout(workDir: string, path: string): boolean {
+  const removed = gitOk(workDir, ["worktree", "remove", "--force", path]);
+  if (removed && existsSync(path)) rmSync(path, { recursive: true, force: true });
+  return removed;
+}
+
+/**
+ * Directories under `.marvin/worktrees/` that are no longer checkouts: what a
+ * writer racing a removal leaves behind after `removeCheckout` has run. Only
+ * MARVIN creates entries here, and a checkout always carries a `.git` file, so
+ * a directory with neither a git registration nor a `.git` holds nothing but
+ * regenerable output. An open tab's or running implementer's path is skipped
+ * regardless — its checkout may be mid-creation.
+ */
+function sweepLeftoverDirs(workDir: string, reconciled: readonly ReconciledWorktree[]): SweepOutcome[] {
+  const dir = worktreesDir(workDir);
+  let names: string[];
+  try {
+    names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+  const checkouts = checkoutPaths(workDir);
+  const held = new Set(
+    reconciled.filter((w) => w.state === "session" || w.state === "running").map((w) => canonical(w.path)),
+  );
+  const out: SweepOutcome[] = [];
+  for (const name of names) {
+    const path = join(dir, name);
+    const real = canonical(path);
+    if (checkouts.has(real) || held.has(real) || existsSync(join(path, ".git"))) continue;
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      continue;
+    }
+    out.push({
+      slug: name,
+      branch: "",
+      state: "leftover",
+      removedCheckout: true,
+      deletedBranch: false,
+      reason: "reclaimed — leftover directory, no longer a git checkout",
     });
   }
   return out;
@@ -1094,7 +1318,7 @@ export function mergeWorktree(
   // the session feed, chat streaming and every other request queue behind it.
   // That is what "MARVIN becomes unresponsive when I merge" was.
   const stored = listWorktrees(workDir).find((r) => r.slug === slug);
-  const w = stored ? reconcileOne(workDir, stored, checkoutPaths(workDir)) : undefined;
+  const w = stored ? runSync(reconcileOne(workDir, stored, checkoutPaths(workDir))) : undefined;
   if (!w) return { ok: false, message: `No worktree named ${slug}.`, slug, branch: "" };
   const fail = (message: string): MergeOutcome => ({ ok: false, message, slug, branch: w.branch });
   if (w.state === "running") return fail(`${w.branch} is still being built by its implementer.`);

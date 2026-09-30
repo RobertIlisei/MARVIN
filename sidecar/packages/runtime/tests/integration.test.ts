@@ -43,7 +43,7 @@ describe("integration preview", () => {
     execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", `edit ${file}`], { cwd: path, stdio: "pipe" });
   };
 
-  it("previews clean, conflict (naming the file) and behind — without touching the checkout", () => {
+  it("previews clean, conflict (naming the file) and behind — without touching the checkout", async () => {
     const a = createSessionWorktree(repo, { sessionId: "sa", title: "adds a file" });
     const b = createSessionWorktree(repo, { sessionId: "sb", title: "edits shared" });
     commitIn(a.path, "new.ts", "a\n");
@@ -54,7 +54,7 @@ describe("integration preview", () => {
     markSessionWorktreeClosed(repo, "sb");
     const headBefore = git("rev-parse", "HEAD");
 
-    const p = previewIntegration(repo);
+    const p = await previewIntegration(repo);
     expect(p.previewAvailable).toBe(true);
     expect(p.target).toBe("main");
     const ra = p.rows.find((r) => r.slug === a.slug)!;
@@ -67,22 +67,22 @@ describe("integration preview", () => {
     expect(git("status", "--porcelain").split("\n").filter((l) => l && !l.includes(".marvin/"))).toEqual([]);
   });
 
-  it("lists an open tab with its reason, and a branch with no commits as clean", () => {
+  it("lists an open tab with its reason, and a branch with no commits as clean", async () => {
     const open = createSessionWorktree(repo, { sessionId: "open", title: "still open" });
     commitIn(open.path, "x.ts", "x\n");
-    const p = previewIntegration(repo, { includeOpen: true });
+    const p = await previewIntegration(repo, { includeOpen: true });
     const row = p.rows.find((r) => r.slug === open.slug)!;
     expect(row.state).toBe("session");
     expect(row.skipReason).toMatch(/open chat tab/);
     expect(row.verdict).toBe("clean");
     const empty = createSessionWorktree(repo, { sessionId: "empty", title: "nothing" });
     markSessionWorktreeClosed(repo, "empty");
-    const p2 = previewIntegration(repo, { slugs: [empty.slug] });
+    const p2 = await previewIntegration(repo, { slugs: [empty.slug] });
     expect(p2.rows[0]).toMatchObject({ commits: 0, verdict: "clean", skipReason: "has no commits" });
   });
 
-  it("dryRunMerge is unknown for a ref that does not exist, never a guess", () => {
-    expect(dryRunMerge(repo, "main", "no-such-branch").verdict).toBe("unknown");
+  it("dryRunMerge is unknown for a ref that does not exist, never a guess", async () => {
+    expect((await dryRunMerge(repo, "main", "no-such-branch")).verdict).toBe("unknown");
   });
 
   it("the Sync prompt names branch, target, the conflicting files, and forbids rebase/push", () => {

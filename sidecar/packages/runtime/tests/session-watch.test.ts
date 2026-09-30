@@ -87,7 +87,7 @@ describe("buildSessionWatch", () => {
 
   // ADR-0111 — the row carries the sidecar's derived worktree state, and a
   // closed tab whose branch holds work stays in the universe.
-  it("a worktree row carries state, commits, dirty and behind; a closed ready tab is still listed", () => {
+  it("a worktree row carries state, commits, dirty and behind; a closed ready tab is still listed", async () => {
     const wt = createSessionWorktree(repo, { sessionId: "ready-sess", title: "ready tab" });
     upsertSessionMeta(projectId, "ready-sess", {
       workDir: repo,
@@ -103,7 +103,7 @@ describe("buildSessionWatch", () => {
     git("commit", "-qm", "main moved");
     __resetSessionReconcileMemoForTests();
 
-    const open = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["ready-sess"] })[0]!;
+    const open = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["ready-sess"] }))[0]!;
     expect(open.worktree).toMatchObject({ slug: wt.slug, branch: wt.branch, state: "session", commits: 1, dirty: false, behind: 1, closed: false, target: "main" });
 
     // Close the tab: the meta is closed (so the recent-metas universe drops
@@ -111,13 +111,35 @@ describe("buildSessionWatch", () => {
     markSessionWorktreeClosed(repo, "ready-sess");
     updateSessionMeta(projectId, "ready-sess", { closedAt: new Date().toISOString() });
     __resetSessionReconcileMemoForTests();
-    const rows = buildSessionWatch({ projectId, workDir: repo });
+    const rows = await buildSessionWatch({ projectId, workDir: repo });
     const row = rows.find((r) => r.marvinSessionId === "ready-sess");
     expect(row?.worktree).toMatchObject({ state: "ready", commits: 1, closed: true });
-    expect(buildSessionWatch({ projectId, workDir: repo, sessionIds: ["shared-x"] }).find((r) => r.marvinSessionId === "shared-x")?.worktree).toBeNull();
+    expect((await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["shared-x"] })).find((r) => r.marvinSessionId === "shared-x")?.worktree).toBeNull();
   });
 
-  it("a worktree session's badge is measured against its base, a shared one against HEAD", () => {
+  // 2026-09-30 — git facts are served stale-while-revalidate, and the tab
+  // close may DISCARD a tree it believes empty. `fresh` must see a commit the
+  // cached reconcile has not.
+  it("fresh derives a tab's worktree from git now, past a stale cached 'empty'", async () => {
+    const wt = createSessionWorktree(repo, { sessionId: "fresh-sess" });
+    upsertSessionMeta(projectId, "fresh-sess", {
+      workDir: repo,
+      tree: { mode: "worktree", slug: wt.slug, path: wt.path, branch: wt.branch, base: wt.base },
+      posture,
+    });
+    __resetSessionReconcileMemoForTests();
+    const before = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["fresh-sess"] }))[0]!;
+    expect(before.worktree?.commits).toBe(0);
+    writeFileSync(join(wt.path, "late.md"), "l\n");
+    execFileSync("git", ["add", "late.md"], { cwd: wt.path, stdio: "pipe" });
+    execFileSync("git", ["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "late"], { cwd: wt.path, stdio: "pipe" });
+    const cached = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["fresh-sess"] }))[0]!;
+    expect(cached.worktree?.commits).toBe(0); // the memo still says empty
+    const fresh = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["fresh-sess"], fresh: true }))[0]!;
+    expect(fresh.worktree?.commits).toBe(1);
+  });
+
+  it("a worktree session's badge is measured against its base, a shared one against HEAD", async () => {
     const wt = createWorktree(repo, "watch tab");
     upsertSessionMeta(projectId, "wt-sess", {
       workDir: repo,
@@ -132,7 +154,7 @@ describe("buildSessionWatch", () => {
     writeFileSync(join(wt.path, "README.md"), "hi\nline2\nline3\nline4\n");
     writeFileSync(join(repo, "README.md"), "hi\nmain\n");
 
-    const rows = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["wt-sess", "shared-sess"] });
+    const rows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["wt-sess", "shared-sess"] });
     const byId = new Map(rows.map((r) => [r.marvinSessionId, r]));
     const w = byId.get("wt-sess")!;
     expect(w.tree.mode).toBe("worktree");
@@ -146,7 +168,7 @@ describe("buildSessionWatch", () => {
     expect(s.state).toBe("idle");
   });
 
-  it("live turn, pending confirm, plan progress and cost land on the row", () => {
+  it("live turn, pending confirm, plan progress and cost land on the row", async () => {
     upsertSessionMeta(projectId, "live-sess", { workDir: repo, tree: { mode: "shared" }, posture });
     const t = registerLiveTurn({ turnId: "watch-t1", marvinSessionId: "live-sess", projectId, kind: "human" });
     setActivity({ projectId, marvinSessionId: "live-sess", turnId: "watch-t1" }, "tool", "Bash");
@@ -157,7 +179,7 @@ describe("buildSessionWatch", () => {
     });
     recordTurnCost({ projectId, marvinSessionId: "live-sess", costUsd: 0.5, tokenUsage: { input_tokens: 1 } });
     try {
-      const row = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["live-sess"] })[0]!;
+      const row = (await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["live-sess"] }))[0]!;
       expect(row.activity).toMatchObject({ state: "tool", tool: "Bash", turnId: "watch-t1" });
       expect(row.state).toBe("awaiting-you");
       expect(row.turn).toMatchObject({ turnId: "watch-t1", kind: "human", mutated: false });
@@ -170,10 +192,10 @@ describe("buildSessionWatch", () => {
     }
   });
 
-  it("a session with no meta (pre-0107) rows as shared on the project root; closed metas are not volunteered", () => {
+  it("a session with no meta (pre-0107) rows as shared on the project root; closed metas are not volunteered", async () => {
     upsertSessionMeta(projectId, "closed", { workDir: repo, tree: { mode: "shared" }, posture }, { closedAt: "2026-09-09T00:00:00.000Z" });
     upsertSessionMeta(projectId, "open", { workDir: repo, tree: { mode: "shared" }, posture });
-    const rows = buildSessionWatch({ projectId, workDir: repo, sessionIds: ["legacy"] });
+    const rows = await buildSessionWatch({ projectId, workDir: repo, sessionIds: ["legacy"] });
     const ids = rows.map((r) => r.marvinSessionId);
     expect(ids).toContain("legacy");
     expect(ids).toContain("open");
@@ -183,10 +205,16 @@ describe("buildSessionWatch", () => {
     expect(legacy.lastTurn).toBeNull();
   });
 
-  it("the diff is memoised briefly so a refreshing strip does not fan out git calls", () => {
-    const first = sessionDiff(repo, null, 1000);
+  // 2026-09-30 — stale-while-revalidate: a request never waits on git once a
+  // value exists. Stale serves the old value AND starts one refresh.
+  it("the diff is served from cache, and a stale one refreshes in the background", async () => {
+    const first = await sessionDiff(repo, null, 1000);
     writeFileSync(join(repo, "README.md"), "hi\nchanged\n");
-    expect(sessionDiff(repo, null, 1500)).toBe(first); // within 2 s: same object
-    expect(sessionDiff(repo, null, 4000)).not.toBe(first);
+    expect(await sessionDiff(repo, null, 1500)).toBe(first); // fresh: same object
+    expect(await sessionDiff(repo, null, 10_000)).toBe(first); // stale: still served at once
+    await new Promise((r) => setTimeout(r, 300)); // the background refresh lands
+    const next = await sessionDiff(repo, null, 10_001);
+    expect(next).not.toBe(first);
+    expect(next?.added).toBeGreaterThan(first?.added ?? 0);
   });
 });

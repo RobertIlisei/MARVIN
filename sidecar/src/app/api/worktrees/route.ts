@@ -22,7 +22,7 @@ import { getIntegrationJob } from "@marvin/runtime/integration-job";
 import { getLiveTurn } from "@marvin/runtime/turn-registry";
 import { previewIntegration } from "@marvin/runtime/integration";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
-import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktrees, removeWorktree, sweepWorktrees } from "@marvin/runtime/worktrees";
+import { mergeAllWorktrees, mergeWorktree, prepareMergeRequest, reconcileWorktreesAsync, removeWorktree, sweepWorktreesAsync } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   const resolved = await resolveCwd(req.nextUrl.searchParams.get("cwd"));
   if (resolved.error) return resolved.error;
   try {
-    const worktrees = reconcileWorktrees(resolved.cwd);
+    const worktrees = await reconcileWorktreesAsync(resolved.cwd);
     // The panel's own refresh is how a running integration is FOUND after a
     // relaunch or a project switch — the poll only keeps it up to date.
     return NextResponse.json({ worktrees, job: getIntegrationJob(resolved.cwd) });
@@ -87,14 +87,14 @@ export async function POST(req: NextRequest) {
     // ADR-0111 — dry-run every finished branch against the current branch.
     if (body.action === "preview") {
       const slugs = Array.isArray(body.slugs) ? body.slugs.filter((x): x is string => typeof x === "string") : undefined;
-      return NextResponse.json(previewIntegration(resolved.cwd, { slugs, includeOpen: true }));
+      return NextResponse.json(await previewIntegration(resolved.cwd, { slugs, includeOpen: true }));
     }
     if (body.action === "sweep") {
       // The busy guard exists in `sweepWorktrees`, and this caller never
       // passed it: a closed tab running a Sync turn (ADR-0111) derives
       // `empty`/`merged`, so Reclaim deleted its checkout and branch out from
       // under the live turn (2026-09-11).
-      return NextResponse.json({ swept: sweepWorktrees(resolved.cwd, Date.now(), { isSessionBusy }) });
+      return NextResponse.json({ swept: await sweepWorktreesAsync(resolved.cwd, Date.now(), { isSessionBusy }) });
     }
     // "drop" is the checkout only — the BRANCH survives (ADR-0081). It is how
     // you reclaim disk from a `ready` tree without discarding its work.

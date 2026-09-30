@@ -31,7 +31,7 @@ import {
 } from "@marvin/runtime/turn-registry";
 import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
 import { noteClaimBranch } from "@marvin/runtime/backlog";
-import { createSessionWorktree, reconcileWorktrees, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { createSessionWorktree, reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -323,7 +323,7 @@ export async function POST(req: NextRequest) {
       if (sessionTree.mode === "worktree") {
         // ADR-0111 — a branch that was already integrated is history, not a
         // place to keep working: cut a fresh tree from the current HEAD.
-        const state = reconcileWorktrees(workDir).find((w) => w.kind === "session" && w.sessionId === marvinSessionId)?.state;
+        const state = (await reconcileWorktreesAsync(workDir)).find((w) => w.kind === "session" && w.sessionId === marvinSessionId)?.state;
         // Integrated, or gone entirely (merged then swept) — either way there
         // is nothing to return to, so cut a fresh tree from the current HEAD.
         if (state === "merged" || !resolved.present) {
