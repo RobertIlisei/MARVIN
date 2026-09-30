@@ -155,7 +155,7 @@ const scopeSchema = z
   .enum(["code", "knowledge", "all"])
   .optional()
   .describe(
-    "Which graph to query. 'code' (default) = AST graph of source files. 'knowledge' = docs/ADRs/memory graph (must be built first via `bin/marvin knowledge-graph`). 'all' = query both and merge results, tagged by source.",
+    "Which graph to query. 'code' (default) = AST graph of source files. 'knowledge' = docs/ADRs/memory graph (MARVIN builds it automatically after a commit). 'all' = query both and merge results, tagged by source.",
   );
 
 /** Truncate long labels so a single community sample line can't blow context. */
@@ -186,7 +186,7 @@ export function createGraphMcpServer(workDir: string) {
           sections.push(
             `[${sc} graph] absent or unreadable — ${summary.error ?? "unknown reason"}` +
               (sc === "knowledge"
-                ? "\n  Build it with: bin/marvin knowledge-graph"
+                ? "\n  MARVIN builds it automatically at the start of a turn after the next commit; if it stays missing, check `[knowledge-watchdog]` in ~/Library/Logs/MARVIN/sidecar.log"
                 : "\n  Build it with: /graphify ."),
           );
           continue;

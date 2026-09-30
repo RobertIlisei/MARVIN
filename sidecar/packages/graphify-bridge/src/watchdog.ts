@@ -10,6 +10,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
+import { setPriority } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -20,10 +21,32 @@ const pExecFile = promisify(execFile);
 const REFRESH_MIN_INTERVAL_MS =
   Number(process.env.GRAPHIFY_REFRESH_MIN_INTERVAL_MS) || 10 * 60 * 1000;
 
+/**
+ * How long to wait after a run that took `lastRunMs`. A large graph (65K
+ * nodes) takes minutes at 100% of a core and 1.2 GB; with several tabs
+ * committing, HEAD moves constantly, so the flat 10-minute floor kept one
+ * running most of the time on an already loaded machine (2026-09-30). Waiting
+ * ten times the last run bounds graphify to ~10% of wall time.
+ */
+export function refreshIntervalMs(lastRunMs: number, floorMs = REFRESH_MIN_INTERVAL_MS): number {
+  return Math.max(floorMs, lastRunMs * 10);
+}
+
+/** Background graph builds yield the CPU to the user's builds and the sidecar. */
+export function deprioritise(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    setPriority(pid, 15);
+  } catch {
+    // The child may already have exited; priority is an optimisation only.
+  }
+}
+
 interface WatchdogState {
   lastTriggerAt: number;
   lastTriggeredForHead: string | null;
   running: boolean;
+  lastRunMs: number;
 }
 
 const stateByWorkDir = new Map<string, WatchdogState>();
@@ -31,7 +54,7 @@ const stateByWorkDir = new Map<string, WatchdogState>();
 function getState(workDir: string): WatchdogState {
   let s = stateByWorkDir.get(workDir);
   if (!s) {
-    s = { lastTriggerAt: 0, lastTriggeredForHead: null, running: false };
+    s = { lastTriggerAt: 0, lastTriggeredForHead: null, running: false, lastRunMs: 0 };
     stateByWorkDir.set(workDir, s);
   }
   return s;
@@ -68,7 +91,7 @@ export async function maybeRefreshGraphify(
 
   if (!options?.force) {
     if (state.running) return { triggered: false, reason: "already running", workDir };
-    if (now - state.lastTriggerAt < REFRESH_MIN_INTERVAL_MS) {
+    if (now - state.lastTriggerAt < refreshIntervalMs(state.lastRunMs)) {
       return { triggered: false, reason: "debounced", workDir };
     }
   }
@@ -100,8 +123,10 @@ export async function maybeRefreshGraphify(
       stdio: "ignore",
       env: process.env,
     });
+    deprioritise(child.pid);
     child.on("close", () => {
       state.running = false;
+      state.lastRunMs = Date.now() - now;
     });
     child.on("error", (err) => {
       state.running = false;

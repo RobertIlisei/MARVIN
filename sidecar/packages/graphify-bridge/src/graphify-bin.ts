@@ -17,7 +17,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, readdirSync } from "node:fs";
+import { accessSync, constants, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
@@ -119,6 +119,26 @@ export function resolveGraphifyBin(opts: GraphifyBinOptions = {}): string {
   }
   if (best && useCache) cached = best;
   return best ?? "graphify";
+}
+
+/**
+ * The Python interpreter that has the `graphify` package — read from the
+ * resolved CLI's shebang. The knowledge-graph builder imports graphify as a
+ * library, and a uv / pipx install keeps it in a private venv the system
+ * `python3` cannot import from: the builder exited 2 on every turn and the
+ * knowledge graph silently went stale (observed 2026-09-29). Falls back to
+ * `python3` when the CLI is missing or is not a Python script.
+ */
+export function graphifyPython(opts: GraphifyBinOptions = {}): string {
+  const bin = resolveGraphifyBin(opts);
+  try {
+    const firstLine = readFileSync(bin, "utf-8").split("\n", 1)[0] ?? "";
+    const m = firstLine.match(/^#!\s*(\S*python[\d.]*)\s*$/);
+    if (m?.[1] && isExecutable(m[1])) return m[1];
+  } catch {
+    // Unreadable or bare `graphify` fallback — use the system interpreter.
+  }
+  return "python3";
 }
 
 /** The install hint when `err` is a spawn that found no binary, else null. */

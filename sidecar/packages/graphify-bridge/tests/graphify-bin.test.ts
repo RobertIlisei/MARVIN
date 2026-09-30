@@ -10,6 +10,7 @@ import {
   GRAPHIFY_MISSING_HINT,
   graphifyCandidates,
   graphifyMissingHint,
+  graphifyPython,
   graphifyVersion,
   resolveGraphifyBin,
 } from "../src/graphify-bin";
@@ -90,5 +91,34 @@ describe("graphifyMissingHint", () => {
     );
     expect(graphifyMissingHint(err)).toBe(GRAPHIFY_MISSING_HINT);
     expect(graphifyMissingHint(new Error("exit 1"))).toBeNull();
+  });
+});
+
+/**
+ * 2026-09-29: the knowledge-graph builder imports graphify as a library and
+ * was spawned with the system `python3`, which cannot see a uv / pipx venv —
+ * it exited 2 on every turn. The interpreter must come from the CLI's shebang.
+ */
+describe("graphifyPython", () => {
+  it("returns the interpreter named in the graphify CLI's shebang", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gpy-"));
+    const python = join(dir, "python");
+    writeFileSync(python, "#!/bin/sh\n");
+    chmodSync(python, 0o755);
+    const bin = join(dir, "graphify");
+    writeFileSync(bin, `#!${python}\nfrom graphify.__main__ import main\n`);
+    chmodSync(bin, 0o755);
+    expect(graphifyPython({ env: { GRAPHIFY_BIN: bin, NODE_ENV: "test" } })).toBe(python);
+  });
+
+  it("falls back to python3 for an env shebang, a missing CLI or a missing interpreter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gpy-"));
+    const envShebang = join(dir, "graphify-env");
+    writeFileSync(envShebang, "#!/usr/bin/env python3\n");
+    const gone = join(dir, "graphify-gone");
+    writeFileSync(gone, `#!${join(dir, "no-such-python")}\n`);
+    expect(graphifyPython({ env: { GRAPHIFY_BIN: envShebang, NODE_ENV: "test" } })).toBe("python3");
+    expect(graphifyPython({ env: { GRAPHIFY_BIN: gone, NODE_ENV: "test" } })).toBe("python3");
+    expect(graphifyPython({ env: { GRAPHIFY_BIN: join(dir, "absent"), NODE_ENV: "test" } })).toBe("python3");
   });
 });

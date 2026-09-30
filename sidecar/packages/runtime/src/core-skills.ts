@@ -90,7 +90,7 @@ description: How to use MARVIN's knowledge-graph tools well — which graph_* to
 
 # Graph tools
 
-Each project has two graphs: the **code graph** (\`graphify-out/graph.json\`, AST extraction, rebuilt automatically) and the **knowledge graph** (\`graphify-out/knowledge/graph.json\`, headings and links across docs, ADRs and memory; rebuild with \`bin/marvin knowledge-graph .\`). Every tool takes \`scope: "code" | "knowledge" | "all"\`; code is the default. Use \`knowledge\` for "what does ADR-N say" or "where is X documented", \`all\` when the question spans both or you do not know which holds the answer.
+Each project has two graphs: the **code graph** (\`graphify-out/graph.json\`, AST extraction, rebuilt automatically) and the **knowledge graph** (\`graphify-out/knowledge/graph.json\`, headings and links across docs, ADRs and memory, rebuilt automatically when HEAD moves). Every tool takes \`scope: "code" | "knowledge" | "all"\`; code is the default. Use \`knowledge\` for "what does ADR-N say" or "where is X documented", \`all\` when the question spans both or you do not know which holds the answer.
 
 ## Which tool
 
@@ -125,8 +125,8 @@ After a graph answer you acted on, call \`graph_save_result({question, answer, o
 ## Missing or stale graphs
 
 - No code graph: tell the user and recommend \`/graphify .\` before going further.
-- No knowledge graph: recommend \`bin/marvin knowledge-graph .\` (free).
-- Stale: \`/graphify . --update\` for code, \`bin/marvin knowledge-graph .\` for knowledge.
+- No or stale knowledge graph: MARVIN rebuilds it itself, free, at the start of a turn after HEAD moves (at most every 10 minutes). If it is still missing or stale after a commit, the auto-refresh is failing: tell the user to look for \`[knowledge-watchdog]\` in \`~/Library/Logs/MARVIN/sidecar.log\`. There is no rebuild command to run from the project.
+- Stale code graph: \`/graphify . --update\`.
 
 ## A project's first graph: write \`.graphifyignore\`
 

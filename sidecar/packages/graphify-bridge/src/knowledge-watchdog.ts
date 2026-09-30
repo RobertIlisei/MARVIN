@@ -8,8 +8,10 @@
  * Strictly scoped to the workDir the caller passes (the active project) — like
  * everything else in this bridge it never touches MARVIN's own repo.
  *
- * Best-effort: if `python3` or the builder script can't be found, it no-ops
- * (returns `triggered: false`). The code graph still refreshes and the
+ * Best-effort: if the builder script can't be found, it no-ops (returns
+ * `triggered: false`). It runs under graphify's own interpreter
+ * (`graphifyPython`), and a build that exits non-zero warns once per process
+ * with the tail of its stderr. The code graph still refreshes and the
  * first-message context degrades to reading ADR files directly, so a missing
  * knowledge graph never breaks a turn.
  */
@@ -19,6 +21,9 @@ import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+
+import { graphifyPython } from "./graphify-bin";
+import { deprioritise } from "./watchdog";
 
 const pExecFile = promisify(execFile);
 
@@ -33,6 +38,7 @@ interface WatchdogState {
 
 const stateByWorkDir = new Map<string, WatchdogState>();
 let warnedMissingScript = false;
+let warnedBuildFailed = false;
 
 function getState(workDir: string): WatchdogState {
   let s = stateByWorkDir.get(workDir);
@@ -129,14 +135,30 @@ export async function maybeRefreshKnowledgeGraph(
   state.running = true;
 
   try {
-    const child = spawn("python3", [script, workDir], {
+    const python = graphifyPython();
+    const child = spawn(python, [script, workDir], {
       cwd: workDir,
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       env: process.env,
     });
-    child.on("close", () => {
+    deprioritise(child.pid);
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-2000);
+    });
+    child.on("close", (code) => {
       state.running = false;
+      // Warn once per process: 2026-09-29 the builder ran under a python3
+      // without the graphify package and exited 2 on every turn, with stdio
+      // discarded — the knowledge graph went stale and nothing said so.
+      if (code !== 0 && !warnedBuildFailed) {
+        warnedBuildFailed = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[knowledge-watchdog] knowledge-graph build failed (exit ${code}, ${python}) for ${workDir} — knowledge graphs will NOT refresh until this is fixed.\n${stderr.trim()}`,
+        );
+      }
     });
     child.on("error", () => {
       state.running = false;
