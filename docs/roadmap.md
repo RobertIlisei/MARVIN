@@ -112,6 +112,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.116** — history paging cannot crash; an orphaned sidecar no longer wedges on a dead stdout pipe; status-bar counters survive a relaunch.
+
 **v0.1.115** — a context that fits (ADR-0118/0119), no stalls (ADR-0120), own-change consequences (ADR-0121), worktree git off the request thread, SDK 0.3.280.
 
 **v0.1.114** — a layout-oscillation probe for the spin the breaker cannot see.

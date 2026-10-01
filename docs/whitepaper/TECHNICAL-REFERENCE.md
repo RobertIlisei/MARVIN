@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.115
+code. Written for contributors and deep evaluators. Covers v0.1.116
 (2026-10-01). Where this document and the repository disagree, the
 repository wins.*
 
@@ -55,6 +55,9 @@ repository wins.*
 > check (ADR-0121, §2.7, §3.3); worktree state derived off the request thread,
 > squash merges and orphaned checkouts reclaimed (§3.x); Agent SDK 0.3.280
 > (§10); and the transcript freeze and connection-pool starvation fixed (§8.1).
+> v0.1.116 (2026-10-01): an orphaned sidecar no longer wedges on its dead
+> stdout pipe; history paging cannot overflow or silently drop a page; the
+> status-bar counters survive a relaunch (§8.1).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -835,6 +838,25 @@ queued forever. A loading skeleton is an overlay on the transcript's
 `ScrollView`, never a row of its lazy stack — as a row it spun the main thread
 at 100 % in `LazyLayoutViewCache.updatePrefetchPhases`.
 
+Three more in v0.1.116, from one crash report and one CPU profile. **The
+orphaned sidecar**: the sidecar outlives the app by design, but its stdout and
+stderr are pipes to it. Once the app died, every log write raised `EPIPE` as an
+uncaught exception, which Next's handler logged to the same dead pipe; the
+profile showed ~98 % CPU in `patch-error-inspect` source-mapping one stack,
+forever, and `/api/health` timing out — a relaunched app would have adopted a
+dead server. `guardStdio` (`stdio-guard.ts`) absorbs write errors on both
+streams at boot. **History paging**: "Show full log" sets the render window to
+`Int.max`; "Show 200 earlier lines" then added 200 and trapped on overflow.
+Widening goes through `HistoryWindow.widened`, which saturates; a page asked
+for during a live turn loads when the turn ends instead of being discarded,
+and a failed fetch says so in the paging row. **Counters after a relaunch**:
+a rebuilt tab replays only its last 200 lines, so `graph N · reads M` counted
+3 of a session's 14 graph calls and hid under its 5-call threshold, and `ctx`
+came only from live events. `GET /api/sessions/[id]` now returns `toolCounts`
+for the whole transcript — a substring count over the raw JSONL, identical to
+a full parse on four real transcripts — and the replay restores `ctx` from the
+last usage it saw.
+
 
 ### 8.2 One vocabulary for the seven panes
 
@@ -1095,5 +1117,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v0.1.115 (120 ADRs, 2026-10-01). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v0.1.116 (120 ADRs, 2026-10-01). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

@@ -8,6 +8,44 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-01 — v0.1.116: three faults found from one crash report.**
+
+  The user: *"pressing buttons to see all log lines or previous 200 lines
+  crashed marvin and also they did not return the previous 200 lines"*, then
+  *"are subsessions and isolated ones even using graphify anymore? i can't see
+  it."*
+
+  **Diagnosis, measured.** `MARVIN-2026-10-01-120321.ips`: `EXC_BREAKPOINT`,
+  *Swift runtime failure: arithmetic overflow* in
+  `ChatPreviewModel.showEarlierLines()` — `loadFullHistory` set
+  `renderWindow = Int.max`, and the next "Show 200 earlier lines" did
+  `+= 200`. Separately, `loadMoreHistory` returned without a word when
+  `isSending` was true, and `try?` swallowed fetch errors. After the crash the
+  sidecar (pid 69846) sat at 84–98 % CPU, state R, `/api/health` timing out;
+  `sample` put the main thread in `TriggerUncaughtException`, and a CDP CPU
+  profile plus a paused frame named it: `Error: write EPIPE` from
+  `console.warn`, logged by Next's uncaught-exception handler to the same dead
+  pipe, its stack source-mapped by `patch-error-inspect` on every pass. Last,
+  the counters: transcripts showed 249 graph calls in six hours, every one an
+  answer (134 main, 115 subagent) — graphify was in use; the chip had replayed
+  only the 200-line tail (3 of 14 calls, under its 5-call threshold) and
+  `ctx` was never rebuilt from a replay.
+
+  **Change.** `HistoryWindow.widened` (saturating, `MARVINLogic`); a page
+  requested during a live turn is deferred to the turn's end; the paging row
+  carries a note for a deferred or failed load. `guardStdio`
+  (`stdio-guard.ts`) on stdout/stderr first thing in `register()`.
+  `countToolUse` over the raw JSONL (`"name":"…"` — matches a full parse on four
+  real transcripts) returned as `toolCounts` by `GET /api/sessions/[id]`; the
+  replay uses it and restores `ctx` from the last usage it saw.
+
+  **Verification.** New: 2 Swift suites' assertions (962 total), 3
+  stdio-guard tests including a real child writing to a closed pipe (exit 3
+  without the guard), 2 tool-count tests including a quoted name that must not
+  count. Full sidecar suite green apart from load-dependent timeouts that pass
+  alone; `pnpm typecheck` 8/8. The wedged sidecar was killed with the user's
+  consent; the new one answered the previously-hung tail request in 0.07 s.
+
 - **2026-10-01 — v0.1.115: a context that fits, sessions that don't stall, and a sidecar that never waits on git.**
 
   Roll-up of everything since v0.1.114 (29 commits). The entries below dated
