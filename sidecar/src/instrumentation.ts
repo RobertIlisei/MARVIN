@@ -11,6 +11,11 @@ export async function register(): Promise<void> {
   // the edge runtime can't host timers or read the data dir.
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // First: once the app's pipe closes, a write error on stdout/stderr must
+  // not become an uncaught exception that Next logs to the same dead pipe.
+  const { guardStdio } = await import("@marvin/runtime/stdio-guard");
+  guardStdio([process.stdout, process.stderr]);
+
   const { setWakeupFireHandler, armAll } = await import(
     "@marvin/runtime/wakeup-scheduler"
   );
