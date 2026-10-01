@@ -49,6 +49,7 @@ import {
   notePracticeRuleFired,
   type RuleEvalResult,
 } from "./practice";
+import { collectNumberedElsewhere, findCollisions } from "./numbered-file-collision";
 import { PROJECT_SKILLS_PLUGIN } from "./project-skills-plugin";
 import { slugifyWorkDir } from "./projects";
 
@@ -170,6 +171,9 @@ export interface DesignTurnContext {
   /** ADR-0121 — commits refused this turn for want of `graph_change_impact`
    *  (capped like the review skills). */
   shipImpactDenies: number;
+  /** Commits refused this turn for a numbered-file collision with a sibling
+   *  worktree (capped at 2, then allowed and logged). */
+  numberedCollisionDenies: number;
   /** ADR-0105 — practice-rule denies issued this turn, per rule id (capped). */
   practiceDenies: Map<string, number>;
   /** ADR-0105 — practice-rule nudges issued this turn (once per rule). */
@@ -305,6 +309,7 @@ export function createTurnDesignContext(
     shipImpactNudgeFired: false,
     shipReviewDenies: {},
     shipImpactDenies: 0,
+    numberedCollisionDenies: 0,
     practiceDenies: new Map(),
     practiceNudges: new Set(),
     mutationCount: 0,
@@ -1445,6 +1450,12 @@ export function runDesignHooks(args: {
     }
   }
 
+  // Hook 3b — numbered files (ADR numbers, migration versions…) must not
+  // collide with what a sibling worktree or the base branch already added in
+  // the same directory. Generic: no project convention is assumed.
+  const numbered = checkNumberedCollision(ctx, toolName, toolInput);
+  if (numbered) return numbered;
+
   // Hook 4 — ADR-0105: rules the user accepted from the practice loop. Data,
   // not code: a rule is a trigger + tier + message in `practice/rules.json`.
   // Runs AFTER the hand-written hooks so a rule that duplicates one of them
@@ -2177,3 +2188,63 @@ export function isExemptFromAdrTriggers(target: string): boolean {
 
 // Moved to `bash-search.ts` (2026-09-07) so the practice extractor mirrors the gate; re-exported for existing importers.
 export { bashSearchTarget, isInsideCwd, isSourceFile };
+
+
+/**
+ * Refuse a `git commit` that adds a numbered file (`0491-x.md`,
+ * `V202610021010__x.sql`) whose number a sibling worktree of the same repository,
+ * or the checkout's own HEAD, already uses in the same directory — parallel tabs
+ * each pick "the next free number" from their own checkout. Two refusals per
+ * turn, then allow and log (same brake as the ship-review gate). Fails open.
+ */
+export function checkNumberedCollision(
+  ctx: DesignTurnContext,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  collect: (cwd: string, parsed: CommitCommand) => ShipDiff | null = collectCommitDiff,
+  elsewhere: (cwd: string, mine: string[]) => { path: string; where: string }[] = collectNumberedElsewhere,
+  isNew: (cwd: string, path: string) => boolean = fileIsNewToHead,
+): DesignHookDeny | null {
+  if (toolName !== "Bash") return null;
+  const cmd = typeof toolInput.command === "string" ? toolInput.command : "";
+  const parsed = parseCommitCommand(cmd);
+  if (!parsed) return null;
+  let collisions;
+  try {
+    const diff = collect(ctx.cwd, parsed);
+    if (!diff) return null;
+    const added = diff.files.filter((f) => isNew(ctx.cwd, f));
+    if (added.length === 0) return null;
+    collisions = findCollisions(added, elsewhere(ctx.cwd, added));
+  } catch {
+    return null;
+  }
+  if (collisions.length === 0) return null;
+  if (ctx.numberedCollisionDenies >= 2) {
+    logDesignHookEvent({ kind: "numbered.collision.bypass", turnId: ctx.turnId, tool: toolName, files: collisions.length });
+    return null;
+  }
+  ctx.numberedCollisionDenies += 1;
+  logDesignHookEvent({ kind: "numbered.collision.deny", turnId: ctx.turnId, tool: toolName, files: collisions.length });
+  const list = collisions
+    .map((c) => `  - \`${c.mine}\` uses the same number as \`${c.theirs.path}\` (${c.theirs.where === "HEAD" ? "already on this branch" : `in worktree ${c.theirs.where}`}) — next free: \`${c.suggestion}\``)
+    .join("\n");
+  return {
+    behavior: "deny",
+    message:
+      `This commit adds numbered files whose number is already taken in the same directory:\n${list}\n\n` +
+      "Parallel tabs each pick the next number from their own checkout, so they collide at merge " +
+      "(duplicate migration versions fail to apply; two ADRs share a number). Renumber yours — " +
+      "file name and every reference to it — then commit again. If the other file is the same " +
+      "change, merge its branch first instead.",
+  };
+}
+
+function fileIsNewToHead(cwd: string, path: string): boolean {
+  try {
+    execFileSync("git", ["-C", cwd, "cat-file", "-e", `HEAD:${path}`], { stdio: "ignore", timeout: 3000 });
+    return false;
+  } catch {
+    return true;
+  }
+}

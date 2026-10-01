@@ -29,8 +29,21 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────
 # Paths + constants
 
+# The directory the user ran `marvin` from. Captured before the cd below:
+# every path argument a user types (`marvin knowledge-graph .`) means a path
+# relative to where they are, never to MARVIN's own checkout. Resolving `.`
+# after the cd silently rebuilt MARVIN's own graph from a project terminal.
+CALLER_PWD="$PWD"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
+
+# from_caller <path> — an absolute path for a path the user typed.
+from_caller() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) (cd "$CALLER_PWD" && cd "$1" 2>/dev/null && pwd) || printf '%s/%s\n' "$CALLER_PWD" "$1" ;;
+  esac
+}
 
 readonly PORT="${MARVIN_PORT:-3030}"
 readonly STATE_DIR=".marvin"
@@ -1096,7 +1109,8 @@ cmd_deps() {
 }
 
 cmd_graph_hooks() {
-  local target="${1:-$PWD}" action="${2:-install}"
+  local target action="${2:-install}"
+  target="$(from_caller "${1:-.}")"
   if ! command -v graphify >/dev/null 2>&1; then
     fail "graphify CLI not found — install it first (uv tool install graphifyy)"
     return 1
@@ -1127,7 +1141,8 @@ cmd_graph_hooks() {
 }
 
 cmd_knowledge_graph() {
-  local target="${1:-.}"
+  local target
+  target="$(from_caller "${1:-.}")"
   shift 2>/dev/null || true
   if ! command -v python3 >/dev/null 2>&1; then
     fail "python3 not found on PATH — required for the knowledge-graph builder"
@@ -1138,8 +1153,19 @@ cmd_knowledge_graph() {
     fail "knowledge-graph script missing: $script"
     return 1
   fi
+  # The builder imports graphify, which lives in graphify's own (uv/pipx)
+  # environment, not the system python3 — same lookup as the sidecar's
+  # graphifyPython(): the interpreter named in the graphify launcher's shebang.
+  local py="python3"
+  if ! python3 -c 'import graphify' >/dev/null 2>&1; then
+    local gbin; gbin="$(command -v graphify 2>/dev/null || true)"
+    if [ -n "$gbin" ]; then
+      local shebang; shebang="$(head -1 "$gbin" 2>/dev/null | sed -n 's/^#![[:space:]]*\([^[:space:]]*python[0-9.]*\)[[:space:]]*$/\1/p')"
+      [ -n "$shebang" ] && [ -x "$shebang" ] && py="$shebang"
+    fi
+  fi
   info "building knowledge graph from $target"
-  python3 "$script" "$target" "$@"
+  "$py" "$script" "$target" "$@"
 }
 
 cmd_help() {

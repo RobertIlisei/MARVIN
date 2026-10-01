@@ -622,3 +622,32 @@ describe("mcpToolPolicy — trust by provenance (ADR-0117)", () => {
     expect(mcpToolPolicy("mcp__some_plugin__x", { name: "some_plugin", source: "plugin" })).toBe("confirm");
   });
 });
+
+describe("toolPolicy — killing processes by name or pattern (ADR-0110)", () => {
+  // 2026-10-01: a tab's `pkill -f spring-boot` stopped the user's dev API and
+  // other tabs' Maven runs. A tab may stop what it started, by exact PID.
+  const deny = [
+    "pkill -f spring-boot",
+    "pkill java",
+    "killall node",
+    "kill $(pgrep -f vite)",
+    "kill -9 $(lsof -ti tcp:8080)",
+    "kill `pidof java`",
+    "pgrep -f 'mvn.*spring-boot' | xargs kill",
+    "lsof -ti :5173 | xargs -r kill -9",
+    "cd /tmp && pkill -f playwright",
+  ];
+  for (const cmd of deny) {
+    it(`denies \`${cmd}\``, () => {
+      const r = toolPolicy("Bash", { command: cmd });
+      expect(r.class).toBe("deny");
+      expect(r.reason).toMatch(/exact PID/);
+    });
+  }
+  const allow = ["kill 12345", "kill -TERM 4242", "pgrep -fl vite", "lsof -ti tcp:5183", "ps aux | grep java"];
+  for (const cmd of allow) {
+    it(`does not refuse \`${cmd}\``, () => {
+      expect(toolPolicy("Bash", { command: cmd }).class).not.toBe("deny");
+    });
+  }
+});

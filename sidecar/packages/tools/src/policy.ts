@@ -227,6 +227,24 @@ const PUBLISH_HARD_DENY: RegExp[] = [
   /\bgh\s+workflow\s+run\s+.*release\b/,
 ];
 
+/**
+ * Killing processes by NAME or PATTERN (ADR-0110: a worktree isolates the
+ * filesystem, not the machine). Several MARVIN tabs — in this project and in
+ * others — run on one machine with the user's own dev servers. On 2026-10-01 a
+ * tab's `pkill -f spring-boot` stopped the user's dev API and other tabs' Maven
+ * runs: the pattern matched every session's processes, not just its own. A tab
+ * may still stop what it started — by exact PID (its background job reports the
+ * PID) — so the deny has a discharge path.
+ */
+const PROCESS_KILL_BY_PATTERN: RegExp[] = [
+  /\bpkill\b/,
+  /\bkillall\b/,
+  // kill $(pgrep …) / kill `pidof …` / kill $(lsof -ti …)
+  /\bkill\b[^|;&\n]*[$`(]\s*\(?\s*(pgrep|pidof|lsof)\b/,
+  // pgrep … | xargs kill / lsof -ti … | xargs kill
+  /\b(pgrep|pidof|lsof)\b[^\n]*\|\s*xargs\s+(-\S+\s+)*kill\b/,
+];
+
 const BASH_HARD_DENY: RegExp[] = [
   // `rm -rf` followed by anything that resolves to a rooted, home-,
   // tilde-, or parent-relative target. The `-r` and `-R` flags both
@@ -423,6 +441,18 @@ export function toolPolicy(name: ToolName, input: Record<string, unknown>): Tool
       return {
         class: "deny",
         reason: `Matches a hard-deny pattern (destructive): \`${destructive.trim().slice(0, 80)}\`.`,
+      };
+    }
+    if (PROCESS_KILL_BY_PATTERN.some((r) => r.test(cmd))) {
+      return {
+        class: "deny",
+        reason:
+          "Refused (ADR-0110): killing processes by name or pattern (`pkill`, " +
+          "`killall`, `kill $(pgrep …)`, `lsof … | xargs kill`) also hits other " +
+          "sessions' processes and the user's own dev servers on this machine. " +
+          "Stop only what you started, by its exact PID (the `run_background_job` " +
+          "result gives it): `kill <pid>`. If something else holds a port you " +
+          "need, use another port or tell the user.",
       };
     }
     // ADR-0077 — outward-facing publish is not recoverable, and `auto`

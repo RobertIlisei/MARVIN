@@ -4276,6 +4276,27 @@ runner.suite("system-notice") {
     }
 }
 
+// MARK: - plan-decision (2026-10-02 — a scope-met handoff is not a question)
+
+runner.suite("plan-decision") {
+    runner.test("a scope-met handoff never reads as a pending decision") {
+        let done = "**Scope met:** the slice is converted. Anything else, or should I stop?\n\n<!-- marvin:scope-met -->"
+        runner.expect(!PlanDecision.isAsking(done), "the marker means the turn is finished")
+        runner.expect(!PlanDecision.isAsking("Scope met: done. Anything else, or should I stop?"),
+                      "the mandated closing sentence alone is not a question")
+    }
+    runner.test("a real choice still reads as a decision") {
+        runner.expect(PlanDecision.isAsking("Two options: (a) rename, (b) keep. Which option do you want?"),
+                      "options plus a question")
+        runner.expect(PlanDecision.isAsking("Should I drop the orphan schema, or repair it?"), "a direct ask")
+        runner.expect(PlanDecision.isAsking("Done with step 2. Anything else, or should I stop? Also: should I rename the ADR to 0501?"),
+                      "a real question next to the closing sentence still counts")
+    }
+    runner.test("plain text without a question is not a decision") {
+        runner.expect(!PlanDecision.isAsking("I recommend option A and will proceed."), "no question mark")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
