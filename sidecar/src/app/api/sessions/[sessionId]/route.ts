@@ -1,4 +1,4 @@
-import { loadSession, loadSessionTail } from "@marvin/runtime/session";
+import { loadSession, loadSessionTail, sessionToolCounts } from "@marvin/runtime/session";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -33,7 +33,7 @@ export async function GET(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
     return NextResponse.json(
-      { ...tailed.record, truncated: tailed.truncated, totalTurns: tailed.totalTurns },
+      { ...tailed.record, truncated: tailed.truncated, totalTurns: tailed.totalTurns, toolCounts: tailed.toolCounts },
       { headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -45,7 +45,7 @@ export async function GET(
   // Report the true total so the client can tell a complete log from a
   // clipped one (ADR-0048).
   return NextResponse.json(
-    { ...record, truncated: false, totalTurns: record.turns.length },
+    { ...record, truncated: false, totalTurns: record.turns.length, toolCounts: sessionToolCounts(projectId, sessionId) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -13,7 +13,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { marvinPaths } from "../src/paths";
-import { appendSessionTurn, loadSession, loadSessionTail, type SessionTurn } from "../src/session";
+import { appendSessionTurn, loadSession, loadSessionTail, sessionToolCounts, type SessionTurn } from "../src/session";
 
 let dataDir: string;
 const projectId = "tail-proj";
@@ -164,5 +164,40 @@ describe("confirm.decision records", () => {
     const t = (loadSession(projectId, sid)?.turns ?? [])[0] as { message?: string; decision?: string };
     expect(t.decision).toBe("deny");
     expect(t.message).toBe("not on the default branch");
+  });
+});
+
+/**
+ * 2026-10-01: after a relaunch every tab is rebuilt from its last 200 lines,
+ * so the status bar's `graph N · reads M` chip counted only that tail — 3
+ * graph calls and 0 reads on a session that had made 14 and 15 — and hid
+ * itself under its 5-call threshold. The counts cover the WHOLE transcript.
+ */
+describe("tool-use counts", () => {
+  const toolUse = (name: string, input: Record<string, unknown> = {}, parent: string | null = null) =>
+    ({
+      type: "cli.event",
+      at: "2026-10-01T00:00:00.000Z",
+      event: { type: "assistant", parent_tool_use_id: parent, message: { content: [{ type: "tool_use", id: name, name, input }] } },
+    }) as SessionTurn;
+
+  it("counts graph, summary and file-read calls across the whole file, not the tail", () => {
+    const sid = "s-tool-counts";
+    appendSessionTurn(projectId, sid, toolUse("mcp__marvin-graph__graph_summary"));
+    appendSessionTurn(projectId, sid, toolUse("mcp__marvin-graph__graph_search"));
+    appendSessionTurn(projectId, sid, toolUse("Read"));
+    appendSessionTurn(projectId, sid, toolUse("Grep", {}, "toolu_parent")); // a subagent's call counts too
+    appendSessionTurn(projectId, sid, toolUse("Glob"));
+    for (let i = 0; i < 5; i += 1) appendSessionTurn(projectId, sid, turn(i));
+    const tailed = loadSessionTail(projectId, sid, 2);
+    expect(tailed?.record.turns).toHaveLength(2);
+    expect(tailed?.toolCounts).toEqual({ graphCalls: 2, graphSummaryCalls: 1, fileReadCalls: 3 });
+    expect(sessionToolCounts(projectId, sid)).toEqual(tailed?.toolCounts);
+  });
+
+  it("a tool name quoted inside another call's input is not a call", () => {
+    const sid = "s-tool-counts-quoted";
+    appendSessionTurn(projectId, sid, toolUse("Bash", { command: `grep '"name":"mcp__marvin-graph__graph_search"' x.jsonl; echo '"name":"Read"'` }));
+    expect(sessionToolCounts(projectId, sid)).toEqual({ graphCalls: 0, graphSummaryCalls: 0, fileReadCalls: 0 });
   });
 });

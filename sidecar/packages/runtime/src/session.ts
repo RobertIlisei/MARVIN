@@ -262,11 +262,46 @@ export function appendSessionTurn(
  * Returns `null` when the file doesn't exist, so callers branch the same way
  * they do on `loadSession`.
  */
+/** Graph and file-read tool calls in a whole transcript — the status bar's
+ *  `graph N · reads M` chip. Main session and subagents alike. */
+export interface SessionToolCounts {
+  graphCalls: number;
+  graphSummaryCalls: number;
+  fileReadCalls: number;
+}
+
+/**
+ * Count tool_use names over the raw JSONL, without parsing it. A transcript
+ * line is compact `JSON.stringify` output, so a call's name appears as
+ * `"name":"<tool>"`; the same text quoted inside a tool input is escaped
+ * (`\"name\":\"…`) and never matches. Pinned against a full parse on four real
+ * agri-saas transcripts (14/15, 97/119, 20/55, 12/11 — identical).
+ *
+ * Whole file, because the client rebuilds a tab from its last 200 lines and
+ * counted only those: 3 graph calls on a session that had made 14, below the
+ * chip's 5-call threshold, so after a relaunch the chip vanished (2026-10-01).
+ */
+export function countToolUse(raw: string): SessionToolCounts {
+  const count = (re: RegExp) => raw.match(re)?.length ?? 0;
+  return {
+    graphCalls: count(/"name":"mcp__marvin-graph__/g),
+    graphSummaryCalls: count(/"name":"mcp__marvin-graph__graph_summary"/g),
+    fileReadCalls: count(/"name":"(?:Read|Grep|Glob)"/g),
+  };
+}
+
+/** `countToolUse` for one session on disk; zeros when it does not exist. */
+export function sessionToolCounts(projectId: string, sessionId: string): SessionToolCounts {
+  const path = marvinPaths.sessionFile(projectId, sessionId);
+  if (!existsSync(path)) return { graphCalls: 0, graphSummaryCalls: 0, fileReadCalls: 0 };
+  return countToolUse(readFileSync(path, "utf-8"));
+}
+
 export function loadSessionTail(
   projectId: string,
   sessionId: string,
   tail: number,
-): { record: SessionRecord; totalTurns: number; truncated: boolean } | null {
+): { record: SessionRecord; totalTurns: number; truncated: boolean; toolCounts: SessionToolCounts } | null {
   const path = marvinPaths.sessionFile(projectId, sessionId);
   if (!existsSync(path)) return null;
   const buf = readFileSync(path);
@@ -309,7 +344,12 @@ export function loadSessionTail(
       // skip malformed line
     }
   }
-  return { record: { sessionId, projectId, turns }, totalTurns, truncated: totalTurns > turns.length };
+  return {
+    record: { sessionId, projectId, turns },
+    totalTurns,
+    truncated: totalTurns > turns.length,
+    toolCounts: countToolUse(buf.toString("utf-8")),
+  };
 }
 
 /** Load a session transcript from disk. Returns `null` when the file doesn't exist. */

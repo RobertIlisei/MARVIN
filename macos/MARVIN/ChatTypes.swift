@@ -289,6 +289,16 @@ struct SessionRecord: Codable {
     let truncated: Bool?
     /// Total turns on disk (before any tail clip).
     let totalTurns: Int?
+    /// Graph / file-read tool calls across the WHOLE transcript, counted by the
+    /// sidecar. A replay of the tail alone undercounted — 3 graph calls on a
+    /// session that had made 14 — and hid the status-bar chip. nil on older
+    /// servers, where the replayed window's own count is used.
+    let toolCounts: ToolCountsWire?
+    struct ToolCountsWire: Codable {
+        let graphCalls: Int
+        let graphSummaryCalls: Int
+        let fileReadCalls: Int
+    }
 }
 
 /// One stored turn from the on-disk JSONL transcript. The set

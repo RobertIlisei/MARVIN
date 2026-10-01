@@ -4236,6 +4236,20 @@ runner.suite("text-sizing-policy") {
     }
 }
 
+// 2026-10-01 crash report: "Show full log" set the render window to Int.max,
+// then "Show 200 earlier lines" added 200 — arithmetic overflow, SIGTRAP.
+runner.suite("history-window") {
+    runner.test("widening the full-log window stays at full, never overflows") {
+        runner.expect(HistoryWindow.widened(HistoryWindow.full, by: 200), equals: HistoryWindow.full, "full + page = full")
+        runner.expect(HistoryWindow.widened(Int.max - 10, by: 200), equals: Int.max, "near the top saturates")
+        runner.expect(HistoryWindow.widened(200, by: 200), equals: 400, "an ordinary page adds")
+    }
+    runner.test("a full window has nothing earlier to page from disk") {
+        runner.expect(HistoryWindow.isFull(HistoryWindow.full), "Int.max is the full log")
+        runner.expect(!HistoryWindow.isFull(400), "a page window is not")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

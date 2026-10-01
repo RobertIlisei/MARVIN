@@ -59,7 +59,10 @@ final class ChatPreviewModel {
     /// button so the user can't queue a second turn (the sidecar
     /// allows it, but the dev panel scope is one turn at a time;
     /// 2f will lift this when it adds proper stop / retry).
-    var isSending: Bool = false
+    var isSending: Bool = false {
+        // A history page asked for during the turn waited for it (below).
+        didSet { if oldValue && !isSending { runDeferredHistoryLoad() } }
+    }
 
     /// The full message list rendered by the native chat view.
     /// Each user submit appends a user-side ChatMessage immediately
@@ -621,15 +624,22 @@ final class ChatPreviewModel {
     /// already in memory, so that costs no fetch — and only pages from disk
     /// once everything in memory is on screen.
     func showEarlierLines() {
-        if renderClipped {
-            renderWindow += Self.historyPage
-        } else {
-            renderWindow += Self.historyPage
-            loadNextHistoryPage()
-        }
+        // Saturating: after "Show full log" the window is Int.max, and a plain
+        // `+=` here trapped on overflow and killed the app (2026-10-01).
+        let wasClipped = renderClipped
+        renderWindow = HistoryWindow.widened(renderWindow, by: Self.historyPage)
+        if !wasClipped { loadNextHistoryPage() }
     }
 
     private(set) var isLoadingEarlierHistory: Bool = false
+    /// Why the last "show earlier" did not change the list — a load waiting
+    /// on the live turn, or a failed fetch. Shown in the paging row; before
+    /// this, both cases looked like a button that did nothing.
+    private(set) var historyNote: String? = nil
+    /// A history load asked for while a turn was streaming. Replaying the
+    /// transcript then would drop the turn's in-flight rows, so it runs when
+    /// `isSending` falls instead of being thrown away. `turns: nil` = full log.
+    private var deferredHistoryLoad: (turns: Int?, sessionId: String)? = nil
     private(set) var historyWindow: Int = 0
     private(set) var historyTotalTurns: Int? = nil
     private(set) var historyTruncated: Bool = false
@@ -1225,6 +1235,8 @@ final class ChatPreviewModel {
         historyTotalTurns = nil
         historyTruncated = false
         renderWindow = Self.historyPage
+        historyNote = nil
+        deferredHistoryLoad = nil
     }
 
     /// Phase 2h — fetch the transcript for `(projectId, sessionId)`,
@@ -1411,16 +1423,57 @@ final class ChatPreviewModel {
     func loadMoreHistory(turns: Int?) {
         guard let projectId = loadedProjectId, let sessionId = loadedSessionId,
               !isLoadingEarlierHistory else { return }
+        if isSending {
+            deferHistoryLoad(turns: turns, sessionId: sessionId)
+            return
+        }
         isLoadingEarlierHistory = true
+        historyNote = nil
         Task { @MainActor in
             defer { isLoadingEarlierHistory = false }
-            let rec = try? await ChatService.shared.fetchSession(
-                projectId: projectId, sessionId: sessionId, tail: turns)
-            guard let rec, loadedSessionId == sessionId, !isSending else { return }
+            let rec: SessionRecord?
+            do {
+                rec = try await ChatService.shared.fetchSession(
+                    projectId: projectId, sessionId: sessionId, tail: turns)
+            } catch {
+                if loadedSessionId == sessionId {
+                    historyNote = "Couldn't load earlier lines — \(error.localizedDescription)"
+                }
+                return
+            }
+            guard loadedSessionId == sessionId else { return }
+            guard let rec else {
+                historyNote = "Couldn't load earlier lines — the transcript was not found."
+                return
+            }
+            // A turn started while the fetch was out: wait for it, as above.
+            if isSending {
+                deferHistoryLoad(turns: turns, sessionId: sessionId)
+                return
+            }
             replay(record: rec)
             historyWindow = rec.turns.count
             historyTotalTurns = rec.totalTurns
             historyTruncated = rec.truncated ?? false
+        }
+    }
+
+    private func deferHistoryLoad(turns: Int?, sessionId: String) {
+        // A full-log request outranks a page request queued before it.
+        if let queued = deferredHistoryLoad, queued.sessionId == sessionId, queued.turns == nil { return }
+        deferredHistoryLoad = (turns, sessionId)
+        historyNote = "Earlier lines load when this turn finishes."
+    }
+
+    private func runDeferredHistoryLoad() {
+        guard let pending = deferredHistoryLoad else { return }
+        deferredHistoryLoad = nil
+        // Next main-actor turn: `isSending` falls inside the turn's teardown,
+        // before the rest of that teardown has run.
+        Task { @MainActor in
+            guard loadedSessionId == pending.sessionId, !isSending else { return }
+            historyNote = nil
+            loadMoreHistory(turns: pending.turns)
         }
     }
 
@@ -1430,7 +1483,7 @@ final class ChatPreviewModel {
     /// fetching every line and then rendering 200 of them would read as the
     /// button doing nothing.
     func loadFullHistory() {
-        renderWindow = Int.max
+        renderWindow = HistoryWindow.full
         loadMoreHistory(turns: nil)
     }
 
@@ -1454,6 +1507,13 @@ final class ChatPreviewModel {
         // (`record.truncated`) that is the loaded tail, not the whole session.
         var replayCounts = ToolUseCounts()
         var replayAgents = SubagentLedger()
+        // The status bar's `ctx` reading. It came only from live events, so
+        // after a relaunch or a tab switch every idle tab showed none until
+        // its next turn (2026-10-01). The last usage in the window is the
+        // same number the live path would have left behind.
+        var replayResident: Int? = nil
+        var replayBillable: Int? = nil
+        var replayWindow: Int? = nil
 
         for turn in record.turns {
             switch turn {
@@ -1479,6 +1539,10 @@ final class ChatPreviewModel {
                     replayCounts.fileReadCalls += d.fileReadCalls
                     replayCounts.graphSummaryCalls += d.graphSummaryCalls
                     replayAgents.apply(cliEventData: data)
+                    let usage = ContextUsageReader.read(cliEventData: data)
+                    if let r = usage.resident { replayResident = r }
+                    if let b = usage.billable { replayBillable = b }
+                    if let w = ContextUsageReader.reportedContextWindow(cliEventData: data) { replayWindow = w }
                 }
             case let .turnError(_, err, cut):
                 // ADR-0107 addendum 4 — the banner belongs to the LAST
@@ -1511,10 +1575,19 @@ final class ChatPreviewModel {
         // re-enable themselves when the resume tail lands a fresh
         // assistant.
         let liveBridge = MarvinBridge.shared
-        liveBridge.sessionGraphCalls = replayCounts.graphCalls
-        liveBridge.sessionFileReadCalls = replayCounts.fileReadCalls
-        liveBridge.sessionGraphSummaryCalls = replayCounts.graphSummaryCalls
+        if let whole = record.toolCounts {
+            liveBridge.sessionGraphCalls = whole.graphCalls
+            liveBridge.sessionFileReadCalls = whole.fileReadCalls
+            liveBridge.sessionGraphSummaryCalls = whole.graphSummaryCalls
+        } else {
+            liveBridge.sessionGraphCalls = replayCounts.graphCalls
+            liveBridge.sessionFileReadCalls = replayCounts.fileReadCalls
+            liveBridge.sessionGraphSummaryCalls = replayCounts.graphSummaryCalls
+        }
         liveBridge.subagents = replayAgents
+        if let r = replayResident { liveBridge.residentContextTokens = r }
+        if let b = replayBillable { liveBridge.billableThisTurn = b }
+        if let w = replayWindow { liveBridge.reportedContextWindow = w }
 
         for i in rebuilt.indices where rebuilt[i].isStreaming {
             rebuilt[i].isStreaming = false
@@ -3670,6 +3743,12 @@ struct ChatPreviewView: View {
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
+                if let note = model.historyNote {
+                    Text(note)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer()
         }
@@ -3692,7 +3771,7 @@ struct ChatPreviewView: View {
                     // remain, a top-of-list control loads the next page (or the
                     // full log). The list is bottom-anchored, so newly-loaded
                     // older lines appear above — scroll up to read them.
-                    if model.historyTruncated || model.renderClipped || model.isLoadingEarlierHistory {
+                    if model.historyTruncated || model.renderClipped || model.isLoadingEarlierHistory || model.historyNote != nil {
                         historyPagingRow
                     }
                     ForEach(model.visibleMessages) { msg in
