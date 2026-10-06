@@ -17,6 +17,10 @@ export default defineConfig({
     // Unit tests are fast + pure; no need for jsdom here. The runtime /
     // tools / web API handlers we test are Node-environment code.
     environment: "node",
+    // The disk-space floor for creating a worktree (ADR-0122) is a property of
+    // the machine; no test should pass or fail on how full this one is. The
+    // tests that exercise the floor set their own value.
+    env: { MARVIN_WORKTREE_MIN_FREE_GB: "0" },
     // Keep the bar visible: terminal output should fit in ~40 lines of
     // test summary, not scroll pages.
     reporters: ["default"],

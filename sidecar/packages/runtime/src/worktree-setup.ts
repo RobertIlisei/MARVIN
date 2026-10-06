@@ -35,7 +35,14 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 
-import { excludeFromStatus, symlinkExcludePattern } from "./worktrees";
+import {
+  createSessionWorktree,
+  discardFreshSessionWorktree,
+  excludeFromStatus,
+  symlinkExcludePattern,
+  type WorktreeRecord,
+  worktreeMinFreeBytes,
+} from "./worktrees";
 
 export interface WorktreeSetupConfig {
   symlinkDirectories: string[];
@@ -59,6 +66,15 @@ export interface WorktreeSetupConfig {
    * tab's turns.
    */
   env: Record<string, string>;
+  /**
+   * Project-relative DIRECTORIES the tab's checkout leaves out (ADR-0122) —
+   * a reference corpus, screenshots, anything a tab rarely reads and every
+   * worktree would otherwise copy. Applied as a non-cone sparse checkout;
+   * the files stay in git, commits and merges are unaffected.
+   */
+  sparseExclude: string[];
+  /** Free-space floor in GB for creating a worktree (ADR-0122); undefined = MARVIN's default. */
+  minFreeGb?: number | undefined;
 }
 
 export interface WorktreeSetupReport {
@@ -72,6 +88,7 @@ export const DEFAULT_SETUP: WorktreeSetupConfig = {
   copyIgnored: [],
   honorWorktreeInclude: true,
   env: {},
+  sparseExclude: [],
 };
 
 const MAX_COPY_FILES = 500;
@@ -134,7 +151,7 @@ export function detectWorktreeSetup(workDir: string): WorktreeSetupConfig {
   // `env` is never detected — MARVIN cannot know which variables make a
   // project's runs independent, and guessing would be project knowledge
   // (Golden Rule 6). The user fills it in; the guide explains why.
-  return { symlinkDirectories, copyIgnored, honorWorktreeInclude: true, env: {} };
+  return { symlinkDirectories, copyIgnored, honorWorktreeInclude: true, env: {}, sparseExclude: [] };
 }
 
 function isDir(p: string): boolean {
@@ -181,6 +198,8 @@ export function readWorktreeSetupConfig(workDir: string): WorktreeSetupConfig {
       copyIgnored: [...new Set(copy)],
       honorWorktreeInclude: raw.honorWorktreeInclude !== false,
       env: readEnvMap(raw.env),
+      sparseExclude: readSparseExclude(raw.sparseExclude),
+      minFreeGb: readMinFreeGb(raw.minFreeGb),
     };
   } catch {
     return { ...DEFAULT_SETUP };
@@ -240,6 +259,46 @@ export function isReservedWorktreeEnvName(name: string): boolean {
   const upper = name.toUpperCase();
   if (RESERVED_ENV_NAMES.has(upper)) return true;
   return RESERVED_ENV_PREFIXES.some((p) => upper.startsWith(p));
+}
+
+/**
+ * `sparseExclude` (ADR-0122). Each entry becomes a gitignore-style pattern in
+ * a sparse-checkout file, and the file is inside a repository somebody else
+ * may have written — so an entry is accepted only if it is boringly a
+ * directory path: slash-separated segments of `[A-Za-z0-9._@+ -]`, no empty
+ * segment, no `.`/`..`, no `.git`, no leading or trailing space on a segment
+ * (gitignore drops trailing spaces silently). Nothing that is glob, negation,
+ * comment, escape or option syntax can pass. A rejected entry is dropped, not
+ * fatal — but a dropped entry means a bigger checkout, never a wider one.
+ */
+const MAX_SPARSE_ENTRIES = 64;
+const MAX_SPARSE_LENGTH = 200;
+const SPARSE_SEGMENT = /^[A-Za-z0-9._@+ -]+$/;
+
+export function safeSparsePath(entry: unknown): string | null {
+  if (typeof entry !== "string") return null;
+  const s = entry.replace(/\/+$/, "");
+  if (!s || s.length > MAX_SPARSE_LENGTH || s.startsWith("/")) return null;
+  for (const seg of s.split("/")) {
+    if (!seg || seg === "." || seg === ".." || seg.toLowerCase() === ".git") return null;
+    if (!SPARSE_SEGMENT.test(seg) || seg !== seg.trim()) return null;
+  }
+  return s;
+}
+
+function readSparseExclude(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const e of raw) {
+    const p = safeSparsePath(e);
+    if (p && !out.includes(p)) out.push(p);
+    if (out.length >= MAX_SPARSE_ENTRIES) break;
+  }
+  return out;
+}
+
+function readMinFreeGb(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 1024 ? raw : undefined;
 }
 
 function readEnvMap(raw: unknown): Record<string, string> {
@@ -377,6 +436,7 @@ export function prepareSessionWorktree(
       report.symlinked.push(dir);
       linked.add(dir);
     } catch (err) {
+      rethrowIfDiskFull(err);
       report.skipped.push({ path: dir, reason: `symlink failed: ${String((err as Error)?.message ?? err)}` });
     }
   }
@@ -425,6 +485,7 @@ export function prepareSessionWorktree(
         bytes += size;
         report.copied.push(relFile.split(sep).join(posix.sep));
       } catch (err) {
+        rethrowIfDiskFull(err);
         report.skipped.push({ path: relFile, reason: `copy failed: ${String((err as Error)?.message ?? err)}` });
       }
     }
@@ -432,11 +493,48 @@ export function prepareSessionWorktree(
   return report;
 }
 
+/**
+ * Setup is best-effort per entry — except when the disk is full (ADR-0122). A
+ * "skipped: copy failed" line on a volume with no space left is the first
+ * symptom of a tab that cannot work; it must fail the tab, not decorate it.
+ */
+export function rethrowIfDiskFull(err: unknown): void {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOSPC" || code === "EDQUOT") throw err;
+}
+
 function isLink(p: string): boolean {
   try {
     return lstatSync(p).isSymbolicLink();
   } catch {
     return false;
+  }
+}
+
+/**
+ * ADR-0122 — the one way to give a tab a worktree. Reads the project's setup,
+ * checks the disk, creates the tree (sparse when the project asked), prepares
+ * it, and — if ANY of that throws — removes what it made and rethrows. The
+ * caller refuses the tab with the message; there is no half-made tree and no
+ * path on which the tab quietly runs in the shared checkout instead.
+ */
+export function createPreparedSessionWorktree(
+  workDir: string,
+  input: { sessionId: string; title?: string | undefined; replace?: boolean | undefined },
+): { record: WorktreeRecord; setup: WorktreeSetupReport; detected: boolean; sparseExclude: string[] } {
+  const { config, detected } = readOrDetectWorktreeSetup(workDir);
+  const record = createSessionWorktree(workDir, {
+    ...input,
+    minFreeBytes: worktreeMinFreeBytes(config.minFreeGb),
+    sparseExclude: config.sparseExclude,
+  });
+  try {
+    const setup = prepareSessionWorktree(workDir, record.path, config);
+    return { record, setup, detected, sparseExclude: config.sparseExclude };
+  } catch (err) {
+    // Setup failed after the tree and its registry record exist: take both back.
+    discardFreshSessionWorktree(workDir, record);
+    throw err;
   }
 }
 

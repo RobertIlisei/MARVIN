@@ -87,7 +87,7 @@ export interface SessionMeta {
   /** Set when the tab was closed through `/api/sessions/close`. */
   closedAt?: string;
   /** What `prepareSessionWorktree` did for this tab's worktree (ADR-0107 addendum). */
-  setup?: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean };
+  setup?: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean; sparseExclude?: string[] };
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

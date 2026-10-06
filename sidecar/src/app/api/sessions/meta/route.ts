@@ -19,14 +19,14 @@ import {
   updateSessionMeta,
 } from "@marvin/runtime/session-meta";
 import { announceProjectEvent, getLiveTurn } from "@marvin/runtime/turn-registry";
-import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
+import { createPreparedSessionWorktree } from "@marvin/runtime/worktree-setup";
 import {
-  createSessionWorktree,
   discardWorktree,
   findSessionWorktree,
   markSessionWorktreeClosed,
   mergeWorktree,
   reopenSessionWorktree,
+  type WorktreeRecord,
 } from "@marvin/runtime/worktrees";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -112,8 +112,21 @@ export async function PUT(req: NextRequest) {
     } else {
       // Enter a worktree: reopen a kept one, or create from the current HEAD.
       const kept = findSessionWorktree(workDir, sessionId);
-      const rec = kept ? (reopenSessionWorktree(workDir, sessionId) ?? kept) : createSessionWorktree(workDir, { sessionId, title: meta.title });
-      if (!kept) prepareSessionWorktree(workDir, rec.path, readOrDetectWorktreeSetup(workDir).config);
+      let rec: WorktreeRecord;
+      try {
+        // ADR-0122 — atomic: a tree that cannot be made (full disk, bad setup)
+        // refuses the switch; the tab stays where it is.
+        if (kept) {
+          rec = reopenSessionWorktree(workDir, sessionId) ?? kept;
+        } else {
+          const made = createPreparedSessionWorktree(workDir, { sessionId, title: meta.title });
+          rec = made.record;
+          patch.setup = { symlinked: made.setup.symlinked, copied: made.setup.copied, skipped: made.setup.skipped.length, detected: made.detected, ...(made.sparseExclude.length ? { sparseExclude: made.sparseExclude } : {}) };
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ error: `worktree could not be created: ${reason}`, code: "worktree-failed", reason }, { status: 409 });
+      }
       tree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
     }
     patch.tree = tree;

@@ -342,9 +342,18 @@ directory makes it the user's thing, not MARVIN's.
   Written by the chat route on every turn; a server-initiated resume rebuilds
   the turn from it, plus `setup` (what was symlinked / copied into the tab's
   worktree). Project-local: `<workDir>/.marvin/worktree.json`
-  (`symlinkDirectories`, `copyIgnored`) makes a fresh session worktree usable;
+  (`symlinkDirectories`, `copyIgnored`, `env`, `sparseExclude`, `minFreeGb`)
+  makes a fresh session worktree usable;
   when the project has none, MARVIN detects one from git-ignored dependency
   dirs and env files and writes it (`"detected": true`) for the user to edit.
+  **A tab gets its worktree or is refused**
+  ([ADR-0122](./docs/decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)):
+  creation is atomic (disk floor — 10 GB default, `MARVIN_WORKTREE_MIN_FREE_GB`
+  — then `git worktree add`, optional non-cone sparse checkout, setup; any
+  failure rolls everything back and answers `409 worktree-failed` before a
+  meta or transcript line is written). There is **no fallback to the shared
+  checkout** — a shared tab exists only because the user chose it. `sparseExclude`
+  and `minFreeGb` are project-controlled input, validated where read.
   User guide: [`docs/guides/worktrees.md`](./docs/guides/worktrees.md).
 - `sessions/<projectId>/.summaries.json` — picker cache for the session list
   ([ADR-0072](./docs/decisions/0072-session-list-must-not-parse-transcripts.md)):

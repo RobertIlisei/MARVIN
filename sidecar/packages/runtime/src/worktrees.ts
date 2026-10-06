@@ -24,7 +24,7 @@
  */
 
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statfsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -193,17 +193,121 @@ export function createWorktree(workDir: string, task: string): WorktreeRecord {
   const slug = uniqueSlug(workDir, worktreeSlug(task), existing);
   const path = join(worktreesDir(workDir), slug);
   const branch = `${BRANCH_PREFIX}${slug}`;
+  return addWorktreeAtomically(workDir, { path, branch }, () => {
+    const base = git(workDir, ["rev-parse", "HEAD"]);
+    const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
+    excludeWorktreesDir(workDir);
+    const record: WorktreeRecord = {
+      slug, path, branch, base, ...(baseRef ? { baseRef } : {}),
+      createdAt: new Date().toISOString(), task, state: "running",
+    };
+    saveWorktrees(workDir, [...existing, record]);
+    return record;
+  });
+}
+
+/** ADR-0122 — below this much free space on the volume, no worktree is created. */
+export const DEFAULT_MIN_FREE_GB = 10;
+const GB = 1024 ** 3;
+
+/**
+ * The free-space floor in bytes. `MARVIN_WORKTREE_MIN_FREE_GB` (the user's own
+ * environment) wins over the project's `minFreeGb`, which wins over the
+ * default — a repository must not be able to override its owner.
+ */
+export function worktreeMinFreeBytes(projectGb?: number): number {
+  const fromEnv = Number(process.env.MARVIN_WORKTREE_MIN_FREE_GB);
+  const raw = process.env.MARVIN_WORKTREE_MIN_FREE_GB?.trim();
+  if (raw && Number.isFinite(fromEnv) && fromEnv >= 0) return fromEnv * GB;
+  if (typeof projectGb === "number" && Number.isFinite(projectGb) && projectGb >= 0) return projectGb * GB;
+  return DEFAULT_MIN_FREE_GB * GB;
+}
+
+/** Free bytes available to an unprivileged writer on the volume holding `dir`. */
+export function freeDiskBytes(dir: string): number {
+  const st = statfsSync(dir);
+  return Number(st.bavail) * Number(st.bsize);
+}
+
+/** ADR-0122 — refuse to start a checkout on a nearly full disk. */
+function assertDiskSpace(dir: string, minBytes: number): void {
+  if (minBytes <= 0) return;
+  let free: number;
+  try {
+    free = freeDiskBytes(dir);
+  } catch {
+    return; // an unreadable volume is git's problem to report, with a real error
+  }
+  if (free < minBytes) {
+    throw new Error(
+      `not enough free disk space for a worktree: ${(free / GB).toFixed(1)} GB free, at least ${(minBytes / GB).toFixed(1)} GB required ` +
+        `(lower it with MARVIN_WORKTREE_MIN_FREE_GB, or "minFreeGb" in .marvin/worktree.json)`,
+    );
+  }
+}
+
+/** Sparse checkout needs per-worktree config, which git gained in 2.36. */
+function assertSparseCapableGit(): void {
+  const m = /git version (\d+)\.(\d+)/.exec(execFileSync("git", ["--version"], { encoding: "utf-8" }));
+  const major = Number(m?.[1] ?? 0);
+  const minor = Number(m?.[2] ?? 0);
+  if (major < 2 || (major === 2 && minor < 36)) {
+    throw new Error(`"sparseExclude" needs git 2.36 or newer (this is ${m?.[0] ?? "unknown"})`);
+  }
+}
+
+/**
+ * ADR-0122 — undo a half-made worktree, tolerating every step: the checkout
+ * (git's view, then the directory), the admin entry, then the branch (which
+ * cannot be deleted while a checkout holds it, so it goes last).
+ */
+function rollbackWorktreeAdd(workDir: string, path: string, branch: string, existed: { path: boolean; branch: boolean }): void {
+  // Undo only what this attempt made: a checkout directory or a branch that was
+  // already there before it is somebody else's.
+  if (!existed.path) {
+    gitOk(workDir, ["worktree", "remove", "--force", path]);
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+  gitOk(workDir, ["worktree", "prune"]);
+  if (!existed.branch) gitOk(workDir, ["branch", "-D", branch]);
+}
+
+/**
+ * ADR-0122 — `git worktree add` as ONE operation: disk preflight, the add, the
+ * optional sparse checkout, and whatever `finish` does (the registry write). If
+ * any step throws, everything made so far is removed and the error propagates —
+ * the caller refuses the tab, it never runs it somewhere else. A disk that
+ * fills mid-add leaves nothing behind to be reconciled as an orphan.
+ */
+function addWorktreeAtomically(
+  workDir: string,
+  spec: { path: string; branch: string; minFreeBytes?: number | undefined; sparseExclude?: readonly string[] | undefined },
+  finish: () => WorktreeRecord,
+): WorktreeRecord {
+  const sparse = spec.sparseExclude ?? [];
   mkdirSync(worktreesDir(workDir), { recursive: true });
-  git(workDir, ["worktree", "add", "-q", "-b", branch, path, "HEAD"]);
-  const base = git(workDir, ["rev-parse", "HEAD"]);
-  const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
-  excludeWorktreesDir(workDir);
-  const record: WorktreeRecord = {
-    slug, path, branch, base, ...(baseRef ? { baseRef } : {}),
-    createdAt: new Date().toISOString(), task, state: "running",
-  };
-  saveWorktrees(workDir, [...existing, record]);
-  return record;
+  assertDiskSpace(worktreesDir(workDir), spec.minFreeBytes ?? worktreeMinFreeBytes());
+  if (sparse.length > 0) assertSparseCapableGit();
+  const existed = { path: existsSync(spec.path), branch: gitOk(workDir, ["show-ref", "--verify", "--quiet", `refs/heads/${spec.branch}`]) };
+  try {
+    git(workDir, ["worktree", "add", "-q", ...(sparse.length > 0 ? ["--no-checkout"] : []), "-b", spec.branch, spec.path, "HEAD"]);
+    if (sparse.length > 0) {
+      // Non-cone: cone mode can only say what to INCLUDE, and the point is
+      // "everything except". Every entry was allowlisted at the read boundary
+      // and is anchored with a leading `/`, so none can parse as an option or
+      // a negation of something else.
+      git(spec.path, ["sparse-checkout", "set", "--no-cone", "--", "/*", ...sparse.map((p) => `!/${p}/`)]);
+      git(spec.path, ["checkout", "-q", spec.branch]);
+    }
+    return finish();
+  } catch (err) {
+    rollbackWorktreeAdd(workDir, spec.path, spec.branch, existed);
+    throw err;
+  }
 }
 
 /**
@@ -215,42 +319,65 @@ export function createWorktree(workDir: string, task: string): WorktreeRecord {
  */
 export function createSessionWorktree(
   workDir: string,
-  input: { sessionId: string; title?: string | undefined; replace?: boolean | undefined },
+  input: {
+    sessionId: string;
+    title?: string | undefined;
+    replace?: boolean | undefined;
+    /** ADR-0122 — free-space floor in bytes; defaults to `worktreeMinFreeBytes()`. */
+    minFreeBytes?: number | undefined;
+    /** ADR-0122 — validated project-relative directories left out of the checkout. */
+    sparseExclude?: readonly string[] | undefined;
+  },
 ): WorktreeRecord {
   let existing = listWorktrees(workDir);
   const already = existing.find((w) => w.kind === "session" && w.sessionId === input.sessionId);
   if (already && !input.replace) return already;
-  if (already) {
-    // ADR-0111 — reopening a tab whose branch was already integrated cuts a
-    // FRESH tree from the current HEAD; the old record loses its session
-    // binding, stays closed, derives `merged`, and the sweep reclaims it.
-    const { sessionId: _drop, ...detached } = already;
-    existing = existing.map((w) => (w.slug === already.slug ? { ...detached, finishedAt: already.finishedAt ?? new Date().toISOString() } : w));
-    saveWorktrees(workDir, existing);
-  }
   const base = worktreeSlug(input.title?.trim() || input.sessionId.slice(0, 8));
   const slug = uniqueSlug(workDir, base, existing, SESSION_BRANCH_PREFIX);
   const path = join(worktreesDir(workDir), `${SESSION_DIR_PREFIX}${slug}`);
   const branch = `${SESSION_BRANCH_PREFIX}${slug}`;
-  mkdirSync(worktreesDir(workDir), { recursive: true });
-  git(workDir, ["worktree", "add", "-q", "-b", branch, path, "HEAD"]);
-  const baseCommit = git(workDir, ["rev-parse", "HEAD"]);
-  const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
-  excludeWorktreesDir(workDir);
-  const record: WorktreeRecord = {
-    slug,
-    path,
-    branch,
-    base: baseCommit,
-    ...(baseRef ? { baseRef } : {}),
-    createdAt: new Date().toISOString(),
-    task: input.title?.trim() || `chat tab ${input.sessionId.slice(0, 8)}`,
-    kind: "session",
-    sessionId: input.sessionId,
-    state: "session",
-  };
-  saveWorktrees(workDir, [...existing, record]);
-  return record;
+  return addWorktreeAtomically(workDir, { path, branch, minFreeBytes: input.minFreeBytes, sparseExclude: input.sparseExclude }, () => {
+    if (already) {
+      // ADR-0111 — reopening a tab whose branch was already integrated cuts a
+      // FRESH tree from the current HEAD; the old record loses its session
+      // binding, stays closed, derives `merged`, and the sweep reclaims it.
+      // Detached only once the new tree exists (ADR-0122): a refused recut
+      // must leave the old record exactly as it was.
+      const { sessionId: _drop, ...detached } = already;
+      existing = existing.map((w) => (w.slug === already.slug ? { ...detached, finishedAt: already.finishedAt ?? new Date().toISOString() } : w));
+    }
+    const baseCommit = git(workDir, ["rev-parse", "HEAD"]);
+    const baseRef = gitOr(workDir, ["symbolic-ref", "--short", "-q", "HEAD"], "");
+    excludeWorktreesDir(workDir);
+    const record: WorktreeRecord = {
+      slug,
+      path,
+      branch,
+      base: baseCommit,
+      ...(baseRef ? { baseRef } : {}),
+      createdAt: new Date().toISOString(),
+      task: input.title?.trim() || `chat tab ${input.sessionId.slice(0, 8)}`,
+      kind: "session",
+      sessionId: input.sessionId,
+      state: "session",
+    };
+    saveWorktrees(workDir, [...existing, record]);
+    return record;
+  });
+}
+
+/**
+ * ADR-0122 — take back a session tree that was created a moment ago and never
+ * ran a turn (its setup failed): checkout, branch and registry record. Unlike
+ * `discardWorktree` it needs no closed tab, because there was never one.
+ */
+export function discardFreshSessionWorktree(workDir: string, rec: WorktreeRecord): void {
+  rollbackWorktreeAdd(workDir, rec.path, rec.branch, { path: false, branch: false });
+  try {
+    saveWorktrees(workDir, listWorktrees(workDir).filter((w) => w.slug !== rec.slug));
+  } catch {
+    /* the registry reconciles a record whose ref is gone */
+  }
 }
 
 /** ADR-0107 — the tab closed: the tree becomes an ordinary deliverable

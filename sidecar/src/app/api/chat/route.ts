@@ -29,9 +29,9 @@ import {
   isPreemptible,
   registerLiveTurn,
 } from "@marvin/runtime/turn-registry";
-import { prepareSessionWorktree, readOrDetectWorktreeSetup } from "@marvin/runtime/worktree-setup";
+import { createPreparedSessionWorktree } from "@marvin/runtime/worktree-setup";
 import { noteClaimBranch } from "@marvin/runtime/backlog";
-import { createSessionWorktree, reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -44,6 +44,25 @@ function isGitRepo(dir: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * ADR-0122 — the answer to a tab whose worktree could not be made. Returned
+ * BEFORE any session meta or transcript line is written, so a refused first
+ * message leaves nothing behind — in particular nothing in the shared checkout.
+ */
+function worktreeFailed(err: unknown, marvinSessionId: string): Response {
+  const reason = err instanceof Error ? err.message : String(err);
+  logTelemetry({ kind: "worktree.session.refused", marvinSessionId, reason: reason.slice(0, 500) });
+  return new Response(
+    JSON.stringify({
+      error: `worktree could not be created: ${reason}`,
+      code: "worktree-failed",
+      reason,
+      hint: "Free some disk space and send again, or open a shared-checkout chat instead.",
+    }),
+    { status: 409, headers: { "Content-Type": "application/json" } },
+  );
 }
 
 function logTelemetry(fields: Record<string, unknown>): void {
@@ -296,8 +315,7 @@ export async function POST(req: NextRequest) {
   // run in the main tree.
   const existingMeta = readSessionMeta(projectId, marvinSessionId);
   let sessionTree: SessionTree;
-  let treeFallback: string | undefined;
-  let setupRecord: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean } | undefined;
+  let setupRecord: { symlinked: string[]; copied: string[]; skipped: number; detected: boolean; sparseExclude?: string[] } | undefined;
   if (cwdCheck.worktree) {
     // The client addressed a registered worktree directly.
     sessionTree = { mode: "worktree", slug: cwdCheck.worktree.slug, path: cwdCheck.worktree.path, branch: cwdCheck.worktree.branch, base: cwdCheck.worktree.base, ...(cwdCheck.worktree.baseRef ? { baseRef: cwdCheck.worktree.baseRef } : {}) };
@@ -319,7 +337,8 @@ export async function POST(req: NextRequest) {
     cwd = resolved.cwd;
     if (existingMeta.closedAt) {
       // A message to a closed tab reopens it (a kept worktree returns to `session`).
-      updateSessionMeta(projectId, marvinSessionId, { closedAt: undefined });
+      // The tree comes first and the meta is cleared only once it exists
+      // (ADR-0122): a refused recut must leave the tab exactly as closed as it was.
       if (sessionTree.mode === "worktree") {
         // ADR-0111 — a branch that was already integrated is history, not a
         // place to keep working: cut a fresh tree from the current HEAD.
@@ -328,43 +347,42 @@ export async function POST(req: NextRequest) {
         // is nothing to return to, so cut a fresh tree from the current HEAD.
         if (state === "merged" || !resolved.present) {
           try {
-            const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: existingMeta.title, replace: true });
-            const { config } = readOrDetectWorktreeSetup(workDir);
-            prepareSessionWorktree(workDir, rec.path, config);
+            const { record: rec } = createPreparedSessionWorktree(workDir, { sessionId: marvinSessionId, title: existingMeta.title, replace: true });
             sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
             cwd = rec.path;
             logTelemetry({ kind: "worktree.session.recut", marvinSessionId, slug: rec.slug, branch: rec.branch });
-          } catch {
-            reopenSessionWorktree(workDir, marvinSessionId);
+          } catch (err) {
+            return worktreeFailed(err, marvinSessionId);
           }
         } else {
           reopenSessionWorktree(workDir, marvinSessionId);
         }
       }
+      updateSessionMeta(projectId, marvinSessionId, { closedAt: undefined });
     }
     if (sessionTree.mode === "shared" && body.lane) {
       const lane = normaliseLane(body.lane);
       if (lane) sessionTree = { mode: "shared", lane };
     }
   } else {
+    // ADR-0122 — the default is decided HERE, from facts about the repository
+    // (a repo with no commit has nothing to branch from). Once a tab wants a
+    // worktree, nothing below may turn that into a shared tab: a failure is
+    // the user's to see, because the shared checkout belongs to every other
+    // tab and the supervisor's merges.
     const wanted = body.tree ?? (isGitRepo(workDir) ? "worktree" : "shared");
     if (wanted === "worktree") {
       try {
-        const rec = createSessionWorktree(workDir, { sessionId: marvinSessionId, title: body.sessionTitle });
-        const { config, detected } = readOrDetectWorktreeSetup(workDir);
-        const setup = prepareSessionWorktree(workDir, rec.path, config);
-        logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, detected, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length });
-        setupRecord = { symlinked: setup.symlinked, copied: setup.copied, skipped: setup.skipped.length, detected };
+        const { record: rec, setup, detected, sparseExclude } = createPreparedSessionWorktree(workDir, { sessionId: marvinSessionId, title: body.sessionTitle });
+        logTelemetry({ kind: "worktree.session.created", marvinSessionId, slug: rec.slug, branch: rec.branch, detected, symlinked: setup.symlinked.length, copied: setup.copied.length, skipped: setup.skipped.length, sparse: sparseExclude.length });
+        setupRecord = { symlinked: setup.symlinked, copied: setup.copied, skipped: setup.skipped.length, detected, ...(sparseExclude.length ? { sparseExclude } : {}) };
         sessionTree = { mode: "worktree", slug: rec.slug, path: rec.path, branch: rec.branch, base: rec.base, ...(rec.baseRef ? { baseRef: rec.baseRef } : {}) };
         cwd = rec.path;
         // ADR-0113 — a claim made from the panel before this branch existed
         // now knows which tab holds it.
         await noteClaimBranch(workDir, marvinSessionId, rec.branch).catch(() => 0);
       } catch (err) {
-        // An unborn HEAD, a bare layout, a submodule: fall back to shared and
-        // say so in the record rather than failing the user's first message.
-        treeFallback = err instanceof Error ? err.message : String(err);
-        sessionTree = { mode: "shared", ...(normaliseLane(body.lane) ? { lane: normaliseLane(body.lane) as string[] } : {}) };
+        return worktreeFailed(err, marvinSessionId);
       }
     } else {
       const lane = normaliseLane(body.lane);
@@ -442,7 +460,6 @@ export async function POST(req: NextRequest) {
     turnId,
     cwd,
     tree: sessionTree,
-    ...(treeFallback ? { treeFallback } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   // SessionTurn union now admits `turn.started` natively (audit

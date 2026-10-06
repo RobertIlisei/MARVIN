@@ -1048,7 +1048,14 @@ final class ChatPreviewModel {
                     handle(event: event)
                 }
             } catch {
-                lastError = "\(error)"
+                // ADR-0122 — a tab whose worktree could not be made was refused
+                // before it started; say why in the server's words.
+                if case ChatServiceError.httpStatus(_, let body) = error,
+                   let refusal = ServerRefusalText.worktreeFailure(fromBody: body) {
+                    lastError = refusal
+                } else {
+                    lastError = "\(error)"
+                }
                 // Transport-level failure (sidecar restart, network
                 // drop, etc.) — no turn.error event will land. Mirror
                 // the cleanup that case does so the UI doesn't sit

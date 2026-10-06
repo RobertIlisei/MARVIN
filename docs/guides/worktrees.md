@@ -139,6 +139,67 @@ over a file that exists. Build output is never symlinked, whatever git ignores.
 
 Set both lists to `[]` for a strictly clean worktree.
 
+## When a worktree cannot be made — the tab is refused, not shared
+
+A tab that wants its own worktree **gets it or is refused**
+([ADR-0122](../decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)).
+If `git worktree add` fails (a full disk, a locked repository, a submodule
+layout), or the setup pass runs out of space, the first message is answered with
+
+> worktree could not be created: *reason*
+
+and nothing is written: no session, no transcript line, no file in your
+checkout. MARVIN removes whatever it had made (checkout, branch, record) so
+there is nothing half-built to reconcile later. Free the space and send again,
+or open a **shared-checkout** chat from the `+` menu if that is what you want —
+a shared tab only ever exists because you chose it. (A project with no commit
+yet has nothing to branch from, so a default tab there is shared and says so.)
+
+Until 2026-10-06 a failed creation silently ran the tab in your main checkout,
+alongside every other tab. That is gone.
+
+### Disk floor
+
+Before creating a checkout MARVIN requires free space on the volume holding
+`.marvin/worktrees`: **10 GB** by default. Below it the tab is refused with the
+numbers. Change it per machine with the environment variable
+`MARVIN_WORKTREE_MIN_FREE_GB` (wins over everything; `0` disables), or per
+project with `"minFreeGb"` in `.marvin/worktree.json`. The same floor applies to
+implementer worktrees.
+
+### Lighter worktrees — `sparseExclude`
+
+Every worktree is a full checkout. If part of the repository is large and a tab
+rarely needs it (a reference corpus of PDFs, screenshots, recorded fixtures),
+leave it out of the tab's checkout:
+
+```json
+{
+  "sparseExclude": ["docs/reference-corpus", "docs/screenshots"]
+}
+```
+
+New tabs are created as a git **sparse checkout** that omits those directories.
+The files are still in git: commits from the tab keep them, merging back into
+your checkout does not touch them, and a catch-up merge of your branch works
+even if you changed something inside them. In the tab they simply are not on
+disk — MARVIN tells the model, which reads them from your main checkout when it
+needs to and does not create files under them. Existing tabs are unaffected.
+
+Rules, because the file lives in the repository and a repository can be hostile:
+
+- entries are **directories**, relative to the project root, made of letters,
+  digits and `. _ @ + -` and spaces; no `..`, no leading `/`, no `.git`, no
+  wildcards or `!` — a bad entry is dropped (the checkout gets larger, never
+  wider); at most 64 entries;
+- needs **git 2.36 or newer**; with an older git a tab is refused by name
+  rather than the setting being ignored;
+- never auto-detected — you decide what to leave out;
+- git records the per-worktree setting by turning on
+  `extensions.worktreeConfig` in the repository's config. Your main checkout and
+  other tabs are unaffected, but the setting stays after the worktree is gone;
+  a repository that does not use `sparseExclude` is never touched.
+
 ## A worktree isolates the filesystem, not the machine
 
 This is the sharp edge, and it has bitten once already.
@@ -208,8 +269,9 @@ when tabs overlap, and failures that move between tabs run to run.
   complains about files "outside the project", copy instead of symlink for that
   directory (`copyIgnored` on a directory pattern) or run that build on the
   main checkout after merging.
-- **Nested `.git` and submodules** are not handled; the tab falls back to the
-  shared checkout with a note in the chip.
+- **Nested `.git` and submodules** are not handled: creating the worktree
+  fails, and the tab is **refused** (see below) — it is never quietly run in the
+  shared checkout.
 - **Ignored data you did not list** (databases, caches, uploaded fixtures) is
   simply absent in the worktree. Add a pattern or a symlink for it.
 

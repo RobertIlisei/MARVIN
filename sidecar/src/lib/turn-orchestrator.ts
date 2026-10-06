@@ -129,7 +129,7 @@ export async function buildTurnSystemPrompt(args: {
 export function buildSessionContext(
   tree: SessionTree,
   workDir: string,
-  setup?: { symlinked: string[]; copied: string[] } | undefined,
+  setup?: { symlinked: string[]; copied: string[]; sparseExclude?: string[] | undefined } | undefined,
 ): string | undefined {
   if (tree.mode === "worktree") {
     const prepared =
@@ -138,12 +138,19 @@ export function buildSessionContext(
           `ignored files copied in: ${setup.copied.length ? setup.copied.slice(0, 6).join(", ") : "none"}. ` +
           `Do not reinstall dependencies unless a symlinked directory is missing.`
         : "";
+    // ADR-0122 — a sparse tab lacks directories on purpose; without being told,
+    // the model reads ENOENT, concludes the files are gone, and "recreates"
+    // them in a place git ignores.
+    const sparse = setup?.sparseExclude?.length
+      ? ` This worktree is a sparse checkout: ${setup.sparseExclude.join(", ")} ${setup.sparseExclude.length === 1 ? "is" : "are"} deliberately not checked out. ` +
+        `Read them from the main checkout (${workDir}) when you need them; do not create files under them here — git will not see them.`
+      : "";
     return (
       `You are working in an isolated git worktree at ${tree.path} on branch ${tree.branch} ` +
       `(cut from ${tree.base.slice(0, 7)}). The project checkout at ${workDir} is read-only from this tab; ` +
       `edits belong in the worktree, relative paths already resolve there; the same tracked files exist in both, so ` +
       `name files by their worktree path, not the main checkout's. Reading from the main checkout is allowed; a command that ` +
-      `writes into it raises a confirm. Commit on this branch — the user merges.${prepared} ` +
+      `writes into it raises a confirm. Commit on this branch — the user merges.${prepared}${sparse} ` +
       `The backlog under THIS worktree's .marvin/backlog is a stale snapshot: use backlog_list / backlog_add / backlog_claim, ` +
       `which read the live store. Other tabs run at the same time — before fixing something you found on your own, ` +
       `check backlog_list for a matching item marked doing (another tab holds it), and claim the item you take.`

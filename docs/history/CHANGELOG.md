@@ -8,6 +8,44 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-06 — A tab gets its worktree or is refused (ADR-0122).**
+
+  The user, from a real project's incident (~06:45): the disk filled up,
+  `git worktree add` failed for two new chat tabs, and the tabs ran in the
+  **shared** main checkout — their session meta showed tree / branch `None` —
+  editing files fifteen other tabs and the supervisor's merges were using.
+  Each worktree was also ~1 GB, ~530 MB of it a `docs/` reference corpus.
+
+  **Diagnosis.** `POST /api/chat`'s first-message path wrapped
+  `createSessionWorktree` + `prepareSessionWorktree` in a `catch` that set
+  `treeFallback` and `tree = { mode: "shared" }`. The comment said why: "rather
+  than failing the user's first message". The recut path for a closed tab had
+  the same shape (its `catch` reopened the old tree after already clearing
+  `closedAt`), and `PUT /api/sessions/meta` let the error escape as a 500.
+  Nothing checked free space, and setup swallowed `ENOSPC` into a `skipped`
+  line.
+
+  **Decision** ([ADR-0122](../decisions/0122-a-tab-gets-its-worktree-or-is-refused.md);
+  amends ADR-0107; advisor go-with-caveats). No fallback: `409 worktree-failed`
+  before any meta / transcript write, shown by the app as the server's sentence.
+  Atomic creation (`addWorktreeAtomically`): disk floor (10 GB default,
+  `MARVIN_WORKTREE_MIN_FREE_GB` > `minFreeGb` > default), add, optional sparse
+  checkout, registry — any failure removes checkout, prunes, deletes the branch.
+  `ENOSPC`/`EDQUOT` in setup fail the tab. A refused recut leaves the tab closed.
+  `sparseExclude` in `.marvin/worktree.json`: non-cone sparse checkout, strict
+  allowlist at the read boundary (REVIEW.md "Project-controlled config"), git
+  ≥ 2.36 or refused by name, the model told which directories are absent.
+
+  **Verification.** `worktree-atomic.test.ts` (13 tests): a shimmed `git`
+  failing `worktree add` with "No space left on device" leaves no record /
+  branch / directory and a clean main checkout; mid-failure rollback; floor and
+  its precedence; implementer path; sparse tree clean, commit keeps the
+  excluded paths, merge back untouched, catch-up merge with main moving inside
+  the excluded path; ~25 hostile `sparseExclude` entries. 970 Swift assertions
+  (`ServerRefusalText`). **Not run:** the chat route's 409 end to end — it
+  imports the SDK runner, and `zod` / `diff` are not installed in this
+  environment (about 18 runtime test files cannot load here, before and after).
+
 - **2026-10-02 — parallel tabs share a machine and a numbering ([ADR-0123](../decisions/0123-parallel-tabs-share-a-machine-and-a-numbering.md)).** One night of 5–7 parallel tabs on one project produced four failures no single tab could see. (1) Numbered files (ADRs, migration versions) collided across worktrees eight times — each tab picks "the next free number" from its own checkout; found only at merge, where a duplicate Flyway version stops the database. A `git commit` that adds a numbered file now checks the same directory in HEAD and in every sibling worktree (committed and pending) and is refused with the clashing file and the next free number (two refusals, then allow + log; fails open; no project convention assumed; calendar-dated names excluded). (2) `pkill -f spring-boot` in one tab stopped the user's dev API and other tabs' builds — killing by name or pattern (`pkill`, `killall`, `kill $(pgrep|lsof …)`, `… | xargs kill`) is now refused in every mode; `kill <pid>` of the tab's own process still works. (3) Every finished tab showed "MARVIN needs your decision": the mandated closing "Anything else, or should I stop?" matched the decision heuristic; a scope-met turn is now never a pending decision (`PlanDecision` moved to MARVINLogic, tested). (4) `bin/marvin knowledge-graph .` resolved `.` after changing into MARVIN's own checkout and ran a python3 without graphify — paths now resolve against the caller's directory and the builder runs on graphify's own interpreter. Tests: tools policy 142, runtime 1555 (+13 new; 2 pre-existing backlog-rail tests flake only under the full parallel run), MARVINTests 968+ assertions.
 
 - **2026-10-01 — v0.1.116: three faults found from one crash report.**

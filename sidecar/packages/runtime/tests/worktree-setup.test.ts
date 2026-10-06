@@ -156,7 +156,7 @@ describe("prepareSessionWorktree", () => {
   it("a malformed config reads as the defaults", () => {
     mkdirSync(join(repo, ".marvin"), { recursive: true });
     writeFileSync(join(repo, ".marvin", "worktree.json"), "{nope");
-    expect(readWorktreeSetupConfig(repo)).toEqual({ symlinkDirectories: [], copyIgnored: [], honorWorktreeInclude: true, env: {} });
+    expect(readWorktreeSetupConfig(repo)).toEqual({ symlinkDirectories: [], copyIgnored: [], honorWorktreeInclude: true, env: {}, sparseExclude: [] });
   });
 });
 

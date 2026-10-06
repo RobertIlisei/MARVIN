@@ -4297,6 +4297,25 @@ runner.suite("plan-decision") {
     }
 }
 
+runner.suite("server-refusal-text") {
+    runner.test("a worktree-failed body reads as the server's own sentence plus the hint") {
+        let body = #"{"error":"worktree could not be created: not enough free disk space for a worktree: 2.1 GB free, at least 10.0 GB required","code":"worktree-failed","reason":"x","hint":"Free some disk space and send again, or open a shared-checkout chat instead."}"#
+        let text = ServerRefusalText.worktreeFailure(fromBody: body)
+        runner.expect(text?.hasPrefix("worktree could not be created: not enough free disk space") == true, "leads with the reason")
+        runner.expect(text?.hasSuffix("open a shared-checkout chat instead.") == true, "ends with the way out")
+    }
+    runner.test("without a hint the error stands alone") {
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: #"{"error":"worktree could not be created: boom","code":"worktree-failed"}"#), equals: "worktree could not be created: boom", "error only")
+    }
+    runner.test("every other failure is left to the caller") {
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: #"{"error":"busy","code":"worktree-missing"}"#) == nil, "another code")
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: #"{"error":"busy"}"#) == nil, "no code")
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: "not json") == nil, "not JSON")
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: nil) == nil, "no body")
+        runner.expect(ServerRefusalText.worktreeFailure(fromBody: #"{"error":"","code":"worktree-failed"}"#) == nil, "empty error")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

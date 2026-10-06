@@ -44,6 +44,8 @@ All fields except `message` are optional. Resolution for `model` / `advisorModel
 | `turn.completed` | `{ sessionId, durationMs, costUsd, tokenUsage }` | Turn finished |
 | `turn.error` | `{ error: string }` | Turn failed (exception, not a tool denial) |
 
+**Refusal — `409 { error, code: "worktree-failed", reason, hint }`.** A new tab that wants its own worktree (the default in a repository with a commit, or `tree: "worktree"`) and whose worktree cannot be created or prepared — a full disk, free space below the floor (`MARVIN_WORKTREE_MIN_FREE_GB`, default 10 GB), a failing `git worktree add` — is refused **before** any session meta or transcript is written. It is never run in the shared checkout; pass `tree: "shared"` to ask for that explicitly ([ADR-0122](../decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)). `PUT /api/sessions/meta` answers the same 409 when a switch to a worktree cannot be made.
+
 SSE connection close does **not** cancel the turn — see [Sessions](../operations/sessions.md). Use `POST /api/chat/cancel` to abort explicitly.
 
 ### `POST /api/chat/cancel`
