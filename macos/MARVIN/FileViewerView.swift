@@ -823,21 +823,34 @@ struct FileViewerNSView: NSViewRepresentable {
             fileExtension: fileExtension,
             filename: filename
         ) else { return }
-        for span in spans {
-            guard let color = HighlightTheme.color(
-                forCapture: span.captureName,
-                isDark: isDark
-            ) else { continue }
-            guard span.range.location >= 0,
-                  span.range.location + span.range.length <= fullRange.length
-            else { continue }
-            textView.addAttributes(
-                [.foregroundColor: color],
-                range: span.range
-            )
+        // One editing transaction for every span, straight on the text
+        // storage. `STTextView.addAttributes` is a transaction per call — it
+        // re-syncs the layout managers and recomputes typing attributes by
+        // copying a paragraph — so a call per span was O(spans × document):
+        // a large file hung the main thread for 16 s (hang report,
+        // 2026-10-05). The two full-range calls above stay on STTextView so
+        // its typing attributes are still maintained.
+        let contentManager = textView.textContentManager
+        guard let storage = (contentManager as? NSTextContentStorage)?.textStorage
+        else { return }
+        contentManager.performEditingTransaction {
+            storage.beginEditing()
+            for span in spans {
+                guard let color = HighlightTheme.color(
+                    forCapture: span.captureName,
+                    isDark: isDark
+                ) else { continue }
+                guard span.range.location >= 0,
+                      span.range.location + span.range.length <= fullRange.length
+                else { continue }
+                storage.addAttributes([.foregroundColor: color], range: span.range)
+            }
+            applyColorSwatches(to: storage, fullLength: fullRange.length)
+            applySquiggles(to: storage, fullLength: fullRange.length)
+            storage.endEditing()
         }
-        applyColorSwatches(to: textView, fullLength: fullRange.length)
-        applySquiggles(to: textView, fullLength: fullRange.length)
+        textView.needsLayout = true
+        textView.needsDisplay = true
     }
 
     /// Red/amber squiggles under the diagnostic's line.
@@ -851,7 +864,7 @@ struct FileViewerNSView: NSViewRepresentable {
     ///
     /// Leading whitespace is skipped so the squiggle sits under the code
     /// rather than trailing off into the indent.
-    private func applySquiggles(to textView: STTextView, fullLength: Int) {
+    private func applySquiggles(to storage: NSTextStorage, fullLength: Int) {
         guard !diagnostics.isEmpty, fullLength > 0 else { return }
         let ns = content as NSString
         for item in diagnostics where item.line > 0 {
@@ -862,7 +875,7 @@ struct FileViewerNSView: NSViewRepresentable {
             let colour: NSColor = item.severity == .error
                 ? NSColor(red: 0.85, green: 0.33, blue: 0.25, alpha: 1)
                 : NSColor(red: 0.91, green: 0.74, blue: 0.47, alpha: 1)
-            textView.addAttributes([
+            storage.addAttributes([
                 .underlineStyle: NSUnderlineStyle.thick.rawValue
                     | NSUnderlineStyle.patternDot.rawValue,
                 .underlineColor: colour,
@@ -904,14 +917,14 @@ struct FileViewerNSView: NSViewRepresentable {
     /// inserted character — `textView.string` stays byte-identical to the file
     /// on disk, so cursor offsets, the status bar's row:col and every save
     /// path are unaffected. Only the drawing changes.
-    private func applyColorSwatches(to textView: STTextView, fullLength: Int) {
+    private func applyColorSwatches(to storage: NSTextStorage, fullLength: Int) {
         for hit in ColorSwatch.scan(content) {
             guard hit.range.location >= 0,
                   hit.range.location + hit.range.length <= fullLength
             else { continue }
             let attachment = NSTextAttachment()
             attachment.attachmentCell = ColorSwatchCell(color: hit.color)
-            textView.addAttributes(
+            storage.addAttributes(
                 [.marvinColorSwatch: attachment],
                 range: NSRange(location: hit.range.location, length: 1)
             )
