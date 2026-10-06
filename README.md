@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.116**). `main` and `development` are fast-forwarded together at each
+> **v0.1.117**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -378,6 +378,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.117 — a large file opens, tabs get their own tree or none, and shell reads go through the graph.** Opening a big file froze the app for 16 s: syntax highlighting made one editor transaction per span, and each re-synced layout; now it is one transaction for the whole file. A tab whose worktree cannot be made — a full disk, a failed checkout — is refused with the reason instead of quietly editing the shared checkout ([ADR-0122](./docs/decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)); creation is atomic, a 10 GB free-space floor comes first, and `sparseExclude` leaves big directories out of a tab's checkout. Parallel tabs no longer pick the same ADR or migration number, kill each other's processes by name, or show "needs your decision" when they are done ([ADR-0123](./docs/decisions/0123-parallel-tabs-share-a-machine-and-a-numbering.md)). `cat`, `sed -n`, `head` and `grep` in the shell now count as source reads for graphify-first, a `graph-pointer` gate refuses whole-file and repo-wide reads once the graph has answered, every worktree tab queries a graph of its own tree, the Sessions pane shows each tab's graph-to-reads ratio, and the sidecar seeds the plan spine from a brief's checklist and keeps it honest ([ADR-0124](./docs/decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md)). Agent SDK 0.3.286 shows the CLI's warnings and plugin load failures in the chat; graphify 0.9.73, and a background graph rebuild never rewrites your skills.
 
 **v0.1.116 — three faults found from one crash report.** Pressing *Show full log* and then *Show 200 earlier lines* crashed the app: the first sets the render window to `Int.max`, the second added 200 to it. Widening now saturates, a page asked for during a live turn loads when the turn ends instead of being thrown away, and a failed fetch says so. The crash then exposed the second fault: the orphaned sidecar's stdout pipe was dead, every log write raised `EPIPE`, and Next logged each one to the same pipe — ~98 % CPU and no answers, so the relaunched app would have adopted a dead server; write errors on stdout/stderr are now absorbed. And after that relaunch, the status bar's `ctx` and `graph N · reads M` were gone: a rebuilt tab counted only its last 200 lines (3 of 14 graph calls, under the chip's threshold) and `ctx` came only from live events. The sidecar now counts the whole transcript and the replay restores `ctx`.
 

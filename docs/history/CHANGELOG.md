@@ -8,6 +8,49 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-06 — v0.1.117: a large file opens, tabs get their own tree or none, and shell reads go through the graph.**
+
+  The release rolls up three branches that had lived only on this machine and
+  the uncommitted dependency work, after a review of each and one integrated
+  test run (1,648 sidecar tests, 990 Swift assertions).
+
+  *Large files* — the user: *"marvin is crashing when opening a big file
+  now"*. It was not a crash: `/Library/Logs/DiagnosticReports` held a
+  16.3 s **hang** report, all 17 main-thread samples in
+  `FileViewerNSView.applyHighlights → STTextView.addAttributes`. Highlighting
+  called `addAttributes` once per syntax span; each call is an editing
+  transaction that re-syncs the layout managers and recomputes typing
+  attributes by copying a paragraph — O(spans × document). Spans, colour
+  swatches and squiggles are now written to the text storage in one
+  transaction, then one layout pass; the two full-range resets stay on
+  STTextView so typing attributes are still maintained.
+
+  *Worktrees* — [ADR-0122](../decisions/0122-a-tab-gets-its-worktree-or-is-refused.md):
+  no silent fallback to the shared checkout, atomic creation, a 10 GB disk
+  floor, opt-in `sparseExclude`. *Parallel tabs* —
+  [ADR-0123](../decisions/0123-parallel-tabs-share-a-machine-and-a-numbering.md):
+  numbered-file collisions caught at the tab's own commit, pattern kills
+  refused, a scope-met turn never reads as a pending decision, `bin/marvin`
+  resolves paths against the caller. *Graph gate* —
+  [ADR-0124](../decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md)
+  (written as ADR-0122 on its branch on 2026-09-30; renumbered when the other
+  two landed first): shell reads count as structural reads, a
+  `builtin:graph-pointer` gate, a code graph per worktree tab, a per-row graph
+  ratio in the Sessions pane, and a plan spine the sidecar seeds from a brief's
+  checklist and holds. *Dependencies*: Agent SDK 0.3.286 (`SystemNotice` rows
+  for `system/informational` and plugin load errors), graphify 0.9.73
+  (`GRAPHIFY_NO_AUTO_REFRESH=1` on every spawn, a 0.9.68 floor the watchdog
+  warns below).
+
+  **Integration notes.** `session-watch.ts` held a literal NUL byte as a memo
+  key separator on the branch's base, so git treated it as binary and would
+  not merge it; main had already replaced the byte, and the merge went through
+  once the base and branch copies were normalised to match. The branch's
+  `buildSessionWatch` calls were synchronous; main had made it async, so its
+  tests now await it. The per-worktree `graphify update` spawn gained
+  `graphifyEnv()`. **Not verified in the running app:** the large-file fix —
+  the installed app was rebuilt but not restarted, by request.
+
 - **2026-10-06 — A tab gets its worktree or is refused (ADR-0122).**
 
   The user, from a real project's incident (~06:45): the disk filled up,

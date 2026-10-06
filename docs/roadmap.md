@@ -125,6 +125,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.117** — large files open without a hang; a tab gets its worktree or is refused (ADR-0122); parallel-tab guards (ADR-0123); shell reads through the graph gate, per-worktree graphs, a sidecar-held plan spine (ADR-0124); Agent SDK 0.3.286, graphify 0.9.73.
+
 **v0.1.116** — history paging cannot crash; an orphaned sidecar no longer wedges on a dead stdout pipe; status-bar counters survive a relaunch.
 
 **v0.1.115** — a context that fits (ADR-0118/0119), no stalls (ADR-0120), own-change consequences (ADR-0121), worktree git off the request thread, SDK 0.3.280.

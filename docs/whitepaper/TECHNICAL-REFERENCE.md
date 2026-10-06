@@ -2,7 +2,7 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.116
+code. Written for contributors and deep evaluators. Covers v0.1.117
 (2026-10-01). Where this document and the repository disagree, the
 repository wins.*
 
@@ -58,6 +58,12 @@ repository wins.*
 > v0.1.116 (2026-10-01): an orphaned sidecar no longer wedges on its dead
 > stdout pipe; history paging cannot overflow or silently drop a page; the
 > status-bar counters survive a relaunch (§8.1).
+> v0.1.117 (2026-10-06): **a tab gets its worktree or is refused** (ADR-0122,
+> §3.x); **parallel-tab guards** — numbered-file collisions, pattern kills,
+> scope-met is not a decision (ADR-0123, §2.7); **shell reads through the
+> graph gate**, a graph per worktree tab, a sidecar-held plan spine (ADR-0124,
+> §1.4, §2.7, §3.2); large files open without a main-thread hang and the
+> CLI's system notices render (§8.1); Agent SDK 0.3.286 (§10).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -290,6 +296,27 @@ provisional backlog items this session parked against the session's own
 changes — first-parent, non-merge commits plus uncommitted files in a
 worktree tab, files written in a shared one — and sends a match back as part
 of the change. The ADR-0057 guard now also recognises ADRs under `docs/adr/`.
+
+**Shell reads and the graph pointer** ([ADR-0124](../decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md),
+v0.1.117). `classifyBashSourceAccess` (`bash-search.ts`) returns every source
+read a shell command performs — `cat`/`nl`/`less`/`bat`, `sed -n` ranges,
+`head`/`tail` counts, `awk` NR ranges, `grep`/`rg`/`ag`/`find`/`fd` — through
+`cd … &&`, loops and `xargs`, quote-aware. It feeds the existing rail:
+graphify-first, the drift tallies and the practice extractor all count a
+shell read as a source read. `builtin:graph-pointer` (`checkGraphPointer`)
+then refuses only the two wide shapes once the graph has answered this turn:
+a whole-file read of a source file over 200 lines, and a search rooted at the
+repository or at a directory no graph result pointed into. Pointers are
+lifted from every `mcp__marvin-graph__*` result by a PostToolUse hook. The
+**plan spine** gains a sidecar writer: `seedTurnSpine` turns a brief's
+checklist into a `[1]…[N]` pending plan before the model's first tool call,
+and `builtin:plan-spine` refuses a repeat commit — and the Stop hook a
+scope-met close — while seeded steps are open and no TodoWrite has run.
+**Parallel tabs** ([ADR-0123](../decisions/0123-parallel-tabs-share-a-machine-and-a-numbering.md)):
+`checkNumberedCollision` refuses a commit that adds a numbered file (`0491-…`,
+`V2026…__…`) whose number a live sibling worktree or HEAD already holds, and
+suggests a free one; the tool policy refuses `pkill`, `killall` and
+`kill $(pgrep …)` in every mode — a tab kills only PIDs it started.
 
 **Stdin searches** ([ADR-0120](../decisions/0120-stalls-are-the-machine-asleep-and-a-turn-held-by-a-hung-search.md)).
 `checkSearchWithoutPath` runs first in `runDesignHooks`: `rg` / `grep` /
@@ -556,6 +583,22 @@ branch is renamed from its first commit's subject on the first turn that
 leaves one — read only from the tab's own first-parent, non-merge commits not
 already on its base, so a catch-up merge cannot rename it after a sibling's
 commit; an integrated tab that receives a message is recut from HEAD.
+
+**A worktree or a refusal (v0.1.117,
+[ADR-0122](../decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)).** A
+full disk once made `git worktree add` fail and two new tabs ran silently in
+the shared checkout. There is no fallback any more: once a tab wants a
+worktree, any failure answers `409 worktree-failed` before a meta or
+transcript line is written. `addWorktreeAtomically` wraps a free-space floor
+(10 GB; `MARVIN_WORKTREE_MIN_FREE_GB` beats `.marvin/worktree.json`'s
+`minFreeGb`), `git worktree add`, an optional non-cone sparse checkout
+(`sparseExclude`) and the registry write, and rolls every step back on
+failure. Both keys are project-controlled input, validated where read. **Each
+tab queries its own graph** ([ADR-0124](../decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md)):
+`resolveGraphRoot` picks `<worktree>/graphify-out/` when it exists, else the
+project graph with a note that the tab's changes are not indexed yet;
+`maybeRefreshWorktreeGraph` seeds it from the project graph and refreshes it
+AST-only at turn start and end, one graphify per project at a time.
 
 **Derivation off the request thread (v0.1.115).** The reconcile reads git
 dozens of times per call — ~150–200 spawns on a project with 24 worktrees —
@@ -857,6 +900,17 @@ for the whole transcript — a substring count over the raw JSONL, identical to
 a full parse on four real transcripts — and the replay restores `ctx` from the
 last usage it saw.
 
+Two in v0.1.117. **Large files**: a 16 s hang report put every main-thread
+sample in `FileViewerNSView.applyHighlights`, which called
+`STTextView.addAttributes` once per syntax span — an editing transaction per
+span, each re-syncing the layout managers and copying a paragraph to
+recompute typing attributes. Spans, swatches and squiggles now go to the text
+storage in one transaction with one layout pass. **System notices**: Agent SDK
+0.3.283+ delivers the CLI's warnings as `system/informational` and plugin load
+failures as `system/init.plugin_errors`; the reducer dropped every system
+event, so `SystemNotice` (`MARVINLogic`) turns warnings, notices and plugin
+errors into a quiet row, once per distinct text.
+
 
 ### 8.2 One vocabulary for the seven panes
 
@@ -974,7 +1028,7 @@ whole pane.
   Honeycomb account — off unless the user configures it; keys redacted
   from all logs.
 - **Agent SDK contract** ([ADR-0073](../decisions/0073-agent-sdk-0-3-upgrade.md)) —
-  `@anthropic-ai/claude-agent-sdk` **0.3.280**. Pins in `sdk-runner.ts`:
+  `@anthropic-ai/claude-agent-sdk` **0.3.286**. Pins in `sdk-runner.ts`:
   `TodoWrite` opted back in (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`,
   `CLAUDE_CODE_ENABLE_TASKS=0`) or the plan spine freezes; `alwaysLoad` on
   `marvin-graph` and `marvin-control` only; `snapshot: true` with one prompt
@@ -1109,7 +1163,7 @@ repo:
   `main`; a gitleaks pre-commit hook is installed from
   `scripts/hooks/pre-commit`; CI is `.github/workflows/release.yml`
   (tag-triggered).
-- **Understanding why** — read `docs/decisions/` (the 120 ADRs) before
+- **Understanding why** — read `docs/decisions/` (the 123 ADRs) before
   proposing structural changes, `docs/roadmap.md` for what's in flight,
   and `AGENTS.md` (which `CLAUDE.md` imports) for the golden rules any agentic session in this repo
   is bound by. Material changes should arrive with an ADR of their own.
@@ -1117,5 +1171,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v0.1.116 (120 ADRs, 2026-10-01). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v0.1.117 (123 ADRs, 2026-10-06). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*
