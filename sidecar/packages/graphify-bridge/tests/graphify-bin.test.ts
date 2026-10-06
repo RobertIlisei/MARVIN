@@ -11,6 +11,9 @@ import {
   graphifyCandidates,
   graphifyMissingHint,
   graphifyPython,
+  graphifyEnv,
+  graphifyBelowMinimum,
+  GRAPHIFY_MIN_VERSION,
   graphifyVersion,
   resolveGraphifyBin,
 } from "../src/graphify-bin";
@@ -120,5 +123,34 @@ describe("graphifyPython", () => {
     expect(graphifyPython({ env: { GRAPHIFY_BIN: envShebang, NODE_ENV: "test" } })).toBe("python3");
     expect(graphifyPython({ env: { GRAPHIFY_BIN: gone, NODE_ENV: "test" } })).toBe("python3");
     expect(graphifyPython({ env: { GRAPHIFY_BIN: join(dir, "absent"), NODE_ENV: "test" } })).toBe("python3");
+  });
+});
+
+/**
+ * graphify 0.9.72 refreshes its installed skill files on ANY non-install
+ * command when they are stale. MARVIN runs graphify on every turn, in the
+ * background; skill updates are the Skills pane's job (ADR-0071), never a
+ * side effect of a graph refresh.
+ */
+describe("graphifyEnv", () => {
+  it("turns graphify's skill auto-refresh off and keeps everything else", () => {
+    const env = graphifyEnv({ NODE_ENV: "test", PATH: "/bin", HOME: "/h" });
+    expect(env.GRAPHIFY_NO_AUTO_REFRESH).toBe("1");
+    expect(env.PATH).toBe("/bin");
+    expect(env.HOME).toBe("/h");
+  });
+});
+
+/**
+ * Below 0.9.68 an incremental `graphify update` dropped cross-file `calls` /
+ * `imports` edges into unchanged files — the edges `graph_affected` reads.
+ */
+describe("graphifyBelowMinimum", () => {
+  it("flags versions older than the floor, and only those", () => {
+    expect(GRAPHIFY_MIN_VERSION).toEqual([0, 9, 68]);
+    expect(graphifyBelowMinimum([0, 9, 65])).toBe(true);
+    expect(graphifyBelowMinimum([0, 9, 68])).toBe(false);
+    expect(graphifyBelowMinimum([0, 10, 0])).toBe(false);
+    expect(graphifyBelowMinimum(null)).toBe(false);
   });
 });

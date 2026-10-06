@@ -218,3 +218,53 @@ triggers compaction — so it did not cause this incident. Worth its own change.
 
 Type diff is additive; no pin moved. Verified: full suite 1,475 tests / 104
 files green, `tsc --noEmit` clean on `@marvin/runtime`.
+
+
+## Addendum — 0.3.280 → 0.3.286 (2026-10-01)
+
+A considered upgrade this time, six releases, read change by change against
+the code. Bundled CLI **2.1.286** (`manifest.json`).
+
+**Verified live, not from `system/init` alone** (the ADR-0079 lesson): a
+`query()` on `claude-sonnet-5-5` with MARVIN's flags reports `TodoWrite` in
+its tools (`Task`, `TaskStop` alongside — `Task` is the subagent tool), so
+the plan-spine pins hold. A deliberately missing `plugins` entry came back in
+`plugin_errors` as `{plugin: "inline[0]", type: "path-not-found", path}`.
+
+**Adopted.**
+- `system/informational` (0.3.283): warnings and notices the CLI used to drop —
+  a hook's block reason, slash-command output. The chat drops every `system`
+  event by design; `SystemNotice` (`MARVINLogic`) lets `notice`, `suggestion`
+  and `warning` through as a quiet row (`info` is transcript-only by the SDK's
+  own contract).
+- `system/init.plugin_errors` (0.3.283): a staged plugin (ADR-0053) that did
+  not load. MARVIN mounts plugins as `--plugin-dir` entries, so an error
+  carries `inline[N]` plus the path; the row names the path's last segment.
+  `init` repeats every turn, so an identical notice already on screen is not
+  added again. Telemetry: `plugin.load_error`.
+- Fixes MARVIN benefits from with no code change: a follow-up turn woken by a
+  finished background agent no longer has stdin closed under it ("Stream
+  closed" in hooks, `canUseTool` and SDK MCP calls — 0.3.284); foreground
+  subagents get the task-tracking tools named in `allowedTools` (0.3.286); an
+  SDK MCP server with one unconvertible tool schema lists the others instead
+  of none (0.3.286); in-process MCP handshakes run inside the SDK and
+  `initialize` is answered before background start-up (0.3.281).
+
+**Checked, no change needed.**
+- *Omitted `permissionMode` now defers to settings, possibly auto mode*
+  (0.3.286). MARVIN passes `permissionMode: "default"` explicitly
+  (`sdk-runner.ts`); the gate stays the only approver.
+- *Bash `timeout` now bounds `run_in_background`* (0.3.285). MARVIN denies
+  `run_in_background` at the gate and tracks long work through
+  `run_background_job` (ADR-0038).
+- *Priority `now` messages join a running turn* (0.3.286). MARVIN does not
+  send priority messages.
+
+**Not adopted, deliberately.** `prewarm()` / `SpareProcess` (alpha — a spare
+CLI per project is real memory on a machine that already runs several tabs;
+revisit when it leaves alpha and a measured turn-start cost justifies it);
+the `/core` entry point (Next's standalone tracer bundles the full package
+either way); `forkSession`, `getSessionMessages`, `getSubagentMessages`,
+`toggleMcpServer`, Ultracode settings, marketplace policy, Artifact
+`read.title` — MARVIN calls none of them.
+

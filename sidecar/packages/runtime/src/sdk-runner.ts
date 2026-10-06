@@ -2652,6 +2652,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {
         lastSessionId = ev.session_id;
+        // Agent SDK 0.3.283 — a staged plugin (ADR-0053) that did not load.
+        // The chat shows it (`SystemNotice`); the log keeps the category.
+        const pluginErrors = (ev as { plugin_errors?: { plugin: string; type: string; path?: string }[] }).plugin_errors;
+        if (pluginErrors?.length) {
+          console.info(
+            "[marvin.telemetry] " +
+              JSON.stringify({ kind: "plugin.load_error", turnId, errors: pluginErrors.map((e) => ({ plugin: e.plugin, type: e.type, path: e.path })), at: new Date().toISOString() }),
+          );
+        }
         // Capture the slash-command catalog for the composer's autocomplete.
         // Fired HERE (not right after `query()`) because `supportedCommands()`
         // is a control request that needs the session handshake done — the

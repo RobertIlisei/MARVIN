@@ -22,7 +22,7 @@ import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { graphifyPython } from "./graphify-bin";
+import { graphifyEnv, graphifyPython } from "./graphify-bin";
 import { deprioritise } from "./watchdog";
 
 const pExecFile = promisify(execFile);
@@ -140,7 +140,7 @@ export async function maybeRefreshKnowledgeGraph(
       cwd: workDir,
       detached: true,
       stdio: ["ignore", "ignore", "pipe"],
-      env: process.env,
+      env: graphifyEnv(),
     });
     deprioritise(child.pid);
     let stderr = "";

@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import { graphifyMissingHint, resolveGraphifyBin } from "@marvin/graphify-bridge/graphify-bin";
+import { graphifyEnv, graphifyMissingHint, resolveGraphifyBin } from "@marvin/graphify-bridge/graphify-bin";
 import { z } from "zod";
 import { relinkBacklogNotes, rewriteBacklogIndex } from "./backlog";
 import { rewriteMemoryIndex } from "./memory-mcp";
@@ -71,6 +71,7 @@ export async function exportGraphCanvas(cwd: string): Promise<{ ok: boolean; det
   try {
     await run(resolveGraphifyBin(), ["export", "obsidian", "--dir", stage], {
       cwd,
+      env: graphifyEnv(),
       timeout: 300_000,
       maxBuffer: 16 * 1024 * 1024,
     });

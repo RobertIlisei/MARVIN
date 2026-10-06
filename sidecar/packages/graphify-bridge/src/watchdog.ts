@@ -14,7 +14,14 @@ import { setPriority } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+import {
+  GRAPHIFY_MIN_VERSION,
+  graphifyBelowMinimum,
+  graphifyEnv,
+  graphifyMissingHint,
+  graphifyVersion,
+  resolveGraphifyBin,
+} from "./graphify-bin";
 
 const pExecFile = promisify(execFile);
 
@@ -39,6 +46,22 @@ export function deprioritise(pid: number | undefined): void {
     setPriority(pid, 15);
   } catch {
     // The child may already have exited; priority is an optimisation only.
+  }
+}
+
+let checkedVersionOf: string | null = null;
+
+/** Once per binary per process: an incremental `update` from a graphify below
+ *  the floor silently drops the cross-file edges the blast-radius tools read. */
+function warnIfBelowMinimum(bin: string): void {
+  if (checkedVersionOf === bin) return;
+  checkedVersionOf = bin;
+  const v = graphifyVersion(bin);
+  if (graphifyBelowMinimum(v)) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[graphify-watchdog] ${bin} is graphify ${v?.join(".")}; MARVIN needs ${GRAPHIFY_MIN_VERSION.join(".")}+ — older versions drop cross-file call edges on every incremental update, so graph_affected under-reports. Upgrade: uv tool install graphifyy@latest --force`,
+    );
   }
 }
 
@@ -117,11 +140,13 @@ export async function maybeRefreshGraphify(
   state.running = true;
 
   try {
-    const child = spawn(resolveGraphifyBin(), ["update", workDir], {
+    const bin = resolveGraphifyBin();
+    warnIfBelowMinimum(bin);
+    const child = spawn(bin, ["update", workDir], {
       cwd: workDir,
       detached: true,
       stdio: "ignore",
-      env: process.env,
+      env: graphifyEnv(),
     });
     deprioritise(child.pid);
     child.on("close", () => {

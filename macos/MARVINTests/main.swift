@@ -4250,6 +4250,32 @@ runner.suite("history-window") {
     }
 }
 
+// Agent SDK 0.3.283 / 0.3.286 — warnings and hook feedback arrive as
+// `system/informational`, plugin load failures as `system/init.plugin_errors`.
+// The chat dropped every system event, so both were invisible.
+runner.suite("system-notice") {
+    func ev(_ json: String) -> Data { Data(json.utf8) }
+    runner.test("informational at notice level and above renders; info does not") {
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"informational","level":"warning","content":"Hook blocked the prompt"}"#)),
+                      equals: "⚠ Hook blocked the prompt", "warning is prefixed")
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"informational","level":"notice","content":"Compacted"}"#)),
+                      equals: "Compacted", "notice renders plain")
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"informational","level":"info","content":"verbose"}"#)) == nil,
+                      "info is transcript-only per the SDK")
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"informational","level":"warning","content":"  "}"#)) == nil,
+                      "empty content renders nothing")
+    }
+    runner.test("plugin load errors on init name the plugin and the reason") {
+        let t = SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"init","plugin_errors":[{"plugin":"inline[2]","type":"path-not-found","message":"no such dir","path":"/x/plugins-stage/grafana"},{"plugin":"seo@m","type":"generic-error","message":"bad manifest"}]}"#))
+        runner.expect(t, equals: "⚠ 2 plugins did not load — grafana: no such dir; seo@m: bad manifest", "path's last segment names an unnamed entry")
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"init"}"#)) == nil, "a clean init renders nothing")
+    }
+    runner.test("other events render nothing") {
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"system","subtype":"compact_boundary"}"#)) == nil, "other subtype")
+        runner.expect(SystemNotice.text(cliEventData: ev(#"{"type":"assistant"}"#)) == nil, "not system")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

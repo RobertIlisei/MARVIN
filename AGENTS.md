@@ -272,7 +272,7 @@ data/.marvin/                # transcripts, cost tracker, graph cache (gitignore
 | Path | Responsibility |
 |---|---|
 | `sidecar/` | Next.js 16 API-only backend for the native macOS app ([ADR-0075](./docs/decisions/0075-sidecar-drops-browser-ui.md)) — no browser UI. |
-| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.280**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
+| `sidecar/packages/runtime/` | Claude Agent SDK (**0.3.286**, [ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)) runner, auth, session persistence, cost tracker, project registry, personality. Confirm gate lives here (`sdk-runner.ts → canUseTool`). |
 | `sidecar/packages/tools/` | Tool policy — which calls auto-allow, confirm, hard-deny. |
 | `sidecar/packages/project-context/` | First-message context injection: project docs + ADRs + `.marvin/memory.md` + graphify summary + opt-in infra probes. |
 | `sidecar/packages/graphify-bridge/` | Read-side of the knowledge graph + the in-process MCP server MARVIN queries per turn. |
@@ -464,7 +464,7 @@ way a plugin reaches a turn:
 
 ## Agent SDK contract — the pins that keep MARVIN's behaviour stable (ADR-0073)
 
-MARVIN is on Agent SDK **0.3.280**. These SDK defaults would silently change
+MARVIN is on Agent SDK **0.3.286**. These SDK defaults would silently change
 what MARVIN does, and each is pinned back in `sdk-runner.ts` with the reason
 at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
 
@@ -484,7 +484,7 @@ at the pin ([ADR-0073](./docs/decisions/0073-agent-sdk-0-3-upgrade.md)):
   (3.3K tokens); verified live: `ToolSearch → recall` works.
 - **One system prompt per session** (`turnSystemPrompt`, `snapshot: true`,
   [ADR-0118](./docs/decisions/0118-one-prompt-per-session-and-settings-isolation.md)).
-  0.3.280 records turn 1's system prompt and replays it until compaction, so
+  0.3.286 records turn 1's system prompt and replays it until compaction, so
   the append must be identical every turn — `buildTurnSystemPrompt` always
   builds the full context, and everything per-turn (mode, orientation, session
   tree, plan) rides the `<system-reminder>` suffix (`turnReminders`). Putting
@@ -564,16 +564,16 @@ Apply it before claiming anything is shipped.
 repo:
 
 - **Code graph** at `graphify-out/graph.json` — AST extraction of source
-  files. 10119 nodes · 21655 edges · 575 communities (2026-09-21
-  rebuild on graphify 0.9.65; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
+  files. 10470 nodes · 24209 edges · 496 communities (2026-10-01
+  rebuild on graphify 0.9.73; honours [`.graphifyignore`](./.graphifyignore)). For a *full*
   rebuild use `graphify . --code-only` — without `--code-only` the run
   aborts on the docs, which need an LLM backend and belong to the knowledge
   graph anyway. (`graphify update .` is the incremental path and needs no
   such flag.)
 - **Knowledge graph** at `graphify-out/knowledge/graph.json` — heading
   structure + cross-doc links from `docs/`, ADRs, `README.md`, `AGENTS.md`, `CLAUDE.md`,
-  `.marvin/memory.md`. 1988 nodes · 2681 edges · 173 communities
-  (built and labelled 2026-09-21).
+  `.marvin/memory.md`. 2042 nodes · 2784 edges · 181 communities
+  (built and labelled 2026-10-01).
 
 **Community names.** Both graphs were 100 % `Community N` placeholders until
 2026-08-15, which made `graph_summary`'s community section unreadable. They
@@ -589,6 +589,9 @@ machine has none).
 > but it is filenames, not concepts. **Re-run `graphify label` after any
 > rebuild that changes the community count.** Do NOT wire this into the
 > per-turn watchdog — it is an LLM pass, and the watchdog runs on every turn.
+> Since graphify 0.9.66 the clustering is **deterministic** (`PYTHONHASHSEED`
+> pinned): two full rebuilds of this repo on 0.9.73 gave identical community
+> assignments, so labels now shift only when the code does, not run to run.
 
 > **Gotcha:** `graphify label` has no `--graph` flag, and `cluster-only
 > --graph <path>` *reads* that path but *writes* the default one — pointing it
@@ -604,7 +607,11 @@ active project's workDir (never MARVIN's own repo). The richer *semantic*
 `/graphify` pass (LLM, `GRAPH_REPORT.md` + `cost.json`) stays manual/opt-in.
 For a **coding-agent session working on MARVIN's own source** (no running IDE in
 the loop), rebuild manually: `graphify update .` (code) and
-`bin/marvin knowledge-graph .` (knowledge) — both free. (Before ADR-0041 the
+`bin/marvin knowledge-graph .` (knowledge) — both free. Every graphify MARVIN spawns runs
+with `GRAPHIFY_NO_AUTO_REFRESH=1` (`graphifyEnv`): since 0.9.72 graphify
+rewrites its installed skill files on any command when they are stale, and a
+per-turn background rebuild must not update the user's skills — that is the
+Skills pane's job (ADR-0071). Your own terminal `graphify` still refreshes. (Before ADR-0041 the
 code-graph watchdog existed but was dormant — never wired to a trigger.)
 
 Each MCP tool (`graph_summary`, `graph_search`, `graph_neighbors`,
@@ -712,18 +719,20 @@ project):
 
 ### God nodes (most-connected abstractions)
 
-After the 2026-09-21 rebuild: `requireMarvinClient()` (123 edges), `cn()`
-(97), `ChatPreviewModel` (94), `checkFsPath()` (89), `MarvinBridge` (87),
-`runAgent()` (75) are the real
+After the 2026-10-01 rebuild: `requireMarvinClient()` (126 edges),
+`runAgent()` (113), `checkFsPath()` (106), `ChatPreviewModel` (103),
+`MarvinBridge` (102), `cn()` (100) are the real
 architectural anchors — the shared client guard and the fs-path check are
 the widest coupling points in the repo, and `MarvinBridge` entering the top
 ten is worth noticing: it is the app-global state store, so a field on it is
 reachable from nearly anywhere, which is exactly how a dead property
 (`activeMarvinSessionId`) kept readers long after its only writer was
 deleted.
-(An incremental `update` can transiently drop a hot node out of the top 10:
-re-extracting only some of its source files prunes its cross-file edges, so
-prefer a full rebuild when counts look off.) This list moves a lot — it
+(Before graphify 0.9.68 an incremental `update` dropped a re-extracted
+file's cross-file edges into unchanged files, which knocked hot nodes out of
+the top 10 — and under-fed `graph_affected`. 0.9.68 fixed it; the watchdog
+now warns once when the installed graphify is older, `GRAPHIFY_MIN_VERSION`
+in `graphify-bin.ts`.) This list moves a lot — it
 changed twice in one afternoon across two rebuilds — so **read it with
 `graphify god-nodes --top 8` rather than trusting the transcription here**,
 which had drifted badly by the time ADR-0066 checked it.

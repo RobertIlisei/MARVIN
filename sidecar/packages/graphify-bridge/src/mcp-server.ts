@@ -64,7 +64,7 @@ import { z } from "zod";
 import { buildCallIndex, callersOf } from "./call-index";
 import { changedFilesOnBranch, changeImpact, renderChangeImpact } from "./change-impact";
 import { crossLayerReferences, renderCrossLayer } from "./cross-layer-refs";
-import { graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
+import { graphifyEnv, graphifyMissingHint, resolveGraphifyBin } from "./graphify-bin";
 import {
   type GraphScope,
   getNeighbors,
@@ -441,7 +441,7 @@ export function createGraphMcpServer(workDir: string) {
         for (const c of context ?? []) args.push("--context", c);
         try {
           const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
-            cwd: workDir,
+            cwd: workDir, env: graphifyEnv(),
             timeout: 60_000,
             maxBuffer: 4 * 1024 * 1024,
           });
@@ -534,7 +534,7 @@ export function createGraphMcpServer(workDir: string) {
       }
       try {
         const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
-          cwd: workDir,
+          cwd: workDir, env: graphifyEnv(),
           timeout: 15_000,
           maxBuffer: 1024 * 1024,
         });
@@ -715,7 +715,7 @@ export function createGraphMcpServer(workDir: string) {
       }
       try {
         const { stdout, stderr } = await pExecFile(graphifyBin(), args, {
-          cwd: workDir,
+          cwd: workDir, env: graphifyEnv(),
           timeout: 60_000,
           maxBuffer: 4 * 1024 * 1024,
         });
@@ -882,7 +882,7 @@ export function createGraphMcpServer(workDir: string) {
         const { stdout } = await pExecFile(
           graphifyBin(),
           ["god-nodes", "--top", String(top), "--graph", graphPathForScope(workDir, "code"), "--json"],
-          { cwd: workDir, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+          { cwd: workDir, env: graphifyEnv(), timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No god nodes reported." }] };
       } catch (err) {
@@ -912,7 +912,7 @@ export function createGraphMcpServer(workDir: string) {
             "--max-examples",
             String(maxExamples),
           ],
-          { cwd: workDir, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
+          { cwd: workDir, env: graphifyEnv(), timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No collapse risk reported." }] };
       } catch (err) {
@@ -956,7 +956,7 @@ export function createGraphMcpServer(workDir: string) {
         const { stdout, stderr } = await pExecFile(
           graphifyBin(),
           ["extract", workDir, "--postgres", dsn, "--code-only"],
-          { cwd: workDir, timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+          { cwd: workDir, env: graphifyEnv(), timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 },
         );
         // The DSN is in argv; keep it out of anything we hand back.
         const clean = (t: string) => t.split(dsn).join(`$${dsnEnv}`).trim();
@@ -997,7 +997,7 @@ export function createGraphMcpServer(workDir: string) {
         const { stdout } = await pExecFile(
           graphifyBin(),
           ["explain", node, "--graph", graphPathForScope(workDir, "code")],
-          { cwd: workDir, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+          { cwd: workDir, env: graphifyEnv(), timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || `No node matching "${node}".` }] };
       } catch (err) {
@@ -1015,7 +1015,7 @@ export function createGraphMcpServer(workDir: string) {
         const { stdout } = await pExecFile(
           graphifyBin(),
           ["benchmark", graphPathForScope(workDir, "code")],
-          { cwd: workDir, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+          { cwd: workDir, env: graphifyEnv(), timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
         );
         return { content: [{ type: "text", text: stdout.trim() || "No benchmark output." }] };
       } catch (err) {
@@ -1034,7 +1034,7 @@ export function createGraphMcpServer(workDir: string) {
     async () => {
       try {
         const { stdout } = await pExecFile(graphifyBin(), ["export", "callflow-html"], {
-          cwd: workDir,
+          cwd: workDir, env: graphifyEnv(),
           timeout: 120_000,
           maxBuffer: 8 * 1024 * 1024,
         });

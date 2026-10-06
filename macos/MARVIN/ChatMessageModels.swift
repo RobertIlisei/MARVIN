@@ -452,6 +452,25 @@ enum ChatStreamReducer {
         // One exception (ADR-0118): a turn whose fixed context load is
         // above half the window gets a quiet row saying so — a fresh tab
         // at 71 % died thrashing with nothing on screen to explain it.
+        //
+        // And (Agent SDK 0.3.283+) `system/informational` warnings and an
+        // init's `plugin_errors` — `SystemNotice`. `init` repeats every turn,
+        // so a notice already on screen is not added again.
+        if let notice = SystemNotice.text(cliEventData: data) {
+            let shown = out.suffix(400).contains { m in
+                m.role == .result && m.blocks.contains { if case .text(_, let t) = $0 { return t == notice } else { return false } }
+            }
+            if !shown {
+                out.append(ChatMessage(
+                    id: "notice-\(UUID().uuidString)",
+                    role: .result,
+                    blocks: [.text(id: UUID().uuidString, text: notice)],
+                    isStreaming: false,
+                    createdAt: Date()
+                ))
+            }
+            return
+        }
         guard let text = ContextBaselineNotice.text(cliEventData: data) else { return }
         out.append(ChatMessage(
             id: "context-\(UUID().uuidString)",

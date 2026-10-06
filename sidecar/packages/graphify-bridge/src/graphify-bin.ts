@@ -141,6 +141,31 @@ export function graphifyPython(opts: GraphifyBinOptions = {}): string {
   return "python3";
 }
 
+/**
+ * The environment for every graphify MARVIN spawns. graphify 0.9.72 refreshes
+ * its installed skill files (`~/.claude/skills/graphify`, `~/.agents/skills`)
+ * on any non-install command when they are stale — and MARVIN runs graphify in
+ * the background on every turn. A skill update is the Skills pane's job
+ * (ADR-0071), never a side effect of a graph refresh. The user's own
+ * `graphify` in a terminal is unaffected and still refreshes.
+ */
+export function graphifyEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, GRAPHIFY_NO_AUTO_REFRESH: "1" };
+}
+
+/**
+ * The oldest graphify MARVIN's graph tools are correct on. Below 0.9.68 an
+ * incremental `graphify update` — the per-turn watchdog's command — dropped
+ * cross-file `calls` / `imports` edges into unchanged files, which are the
+ * edges `graph_affected` and `graph_change_impact` read.
+ */
+export const GRAPHIFY_MIN_VERSION: readonly number[] = [0, 9, 68];
+
+/** True when `version` is known and older than {@link GRAPHIFY_MIN_VERSION}. */
+export function graphifyBelowMinimum(version: number[] | null): boolean {
+  return version !== null && newer([...GRAPHIFY_MIN_VERSION], version);
+}
+
 /** The install hint when `err` is a spawn that found no binary, else null. */
 export function graphifyMissingHint(err: unknown): string | null {
   return (err as { code?: unknown } | null)?.code === "ENOENT" ? GRAPHIFY_MISSING_HINT : null;
