@@ -74,6 +74,13 @@ const FALLBACK_MODELS: ModelInfo[] = [
     live: false,
   },
   {
+    id: "claude-haiku-5-5",
+    displayName: "Claude Haiku 5.5",
+    tier: "haiku",
+    createdAt: null,
+    live: false,
+  },
+  {
     id: "claude-haiku-4-5-20251001",
     displayName: "Claude Haiku 4.5",
     tier: "haiku",
@@ -413,6 +420,11 @@ async function cachedListModels(): Promise<ListModelsResult> {
     modelCache = { result, at: now };
   }
   return result;
+}
+
+/** The TTL-cached catalogue, for resolvers outside this module (role-models.ts). */
+export function listModelsCached(): Promise<ListModelsResult> {
+  return cachedListModels();
 }
 
 /**

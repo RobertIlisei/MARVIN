@@ -320,6 +320,13 @@ struct ModelsDialog: View {
     @State private var source: String = "loading"
     @State private var loadError: String? = nil
     @State private var isLoading: Bool = true
+    /// ADR-0126 — helper roles from `/api/models/roles`, and the user's
+    /// pick per role (nil = the role's default). `savedRoles` is what the
+    /// server holds, so Apply only writes when something changed.
+    @State private var roles: [HelperRole] = []
+    @State private var roleChoices: [String: String] = [:]
+    @State private var savedRoles: [String: String] = [:]
+    @State private var roleSaveError: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -362,6 +369,34 @@ struct ModelsDialog: View {
                     binding: $advisor,
                     description: "second-opinion when MARVIN runs an advisor consult"
                 )
+                if !roles.isEmpty {
+                    Divider()
+                    Text("Helpers")
+                        .font(.headline)
+                    Text("Every other model MARVIN runs. Default resolves against the active provider's live list, so it follows the provider you're on.")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(roles) { role in
+                                pickerRow(
+                                    label: role.label,
+                                    binding: roleBinding(role.role),
+                                    description: role.description,
+                                    defaultLabel: "default · \(role.resolvedLabel)"
+                                )
+                            }
+                        }
+                        .padding(.trailing, 8)
+                    }
+                    .frame(maxHeight: 320)
+                    if let roleSaveError {
+                        Text("Couldn't save helpers: \(roleSaveError)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.red)
+                    }
+                }
             }
 
             // Soft floor (ADR-0033 rationale): the advisor exists to be the
@@ -391,19 +426,27 @@ struct ModelsDialog: View {
                 Button("Reset to default") {
                     executor = nil
                     advisor = nil
+                    roleChoices = [:]
                 }
                 .buttonStyle(.borderless)
-                .disabled(executor == nil && advisor == nil)
+                .disabled(executor == nil && advisor == nil && roleChoices.isEmpty)
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Apply") {
                     NativePrefs.shared.setModels(executor: executor, advisor: advisor)
-                    dismiss()
+                    if roleChoices == savedRoles {
+                        dismiss()
+                    } else {
+                        Task {
+                            if await saveRoles() { dismiss() }
+                        }
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(executor == bridge.executorModel
-                          && advisor == bridge.advisorModel)
+                          && advisor == bridge.advisorModel
+                          && roleChoices == savedRoles)
             }
         }
         .padding(24)
@@ -435,7 +478,8 @@ struct ModelsDialog: View {
     private func pickerRow(
         label: String,
         binding: Binding<String?>,
-        description: String
+        description: String,
+        defaultLabel: String = "default · runtime decides"
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -447,7 +491,7 @@ struct ModelsDialog: View {
                 Spacer()
             }
             Picker("", selection: binding) {
-                Text("default · runtime decides").tag(String?.none)
+                Text(defaultLabel).tag(String?.none)
                 ForEach(["opus", "sonnet", "haiku", "other"], id: \.self) { tier in
                     let group = available.filter { $0.tier == tier }
                     if !group.isEmpty {
@@ -499,6 +543,75 @@ struct ModelsDialog: View {
             source = parsed.source
         } catch {
             loadError = "\(error)"
+        }
+        await loadRoles()
+    }
+
+    private func roleBinding(_ role: String) -> Binding<String?> {
+        Binding(
+            get: { roleChoices[role] },
+            set: { roleChoices[role] = $0 }
+        )
+    }
+
+    /// GET /api/models/roles. A failure leaves the Helpers section out
+    /// rather than failing the dialog: executor/advisor still work.
+    private func loadRoles() async {
+        let url = ServerConfig.baseURL.appendingPathComponent("api/models/roles")
+        var req = URLRequest(url: url)
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let parsed = try? JSONDecoder().decode(HelperRolesWire.self, from: data)
+        else { return }
+        roles = parsed.roles
+        var choices: [String: String] = [:]
+        for r in parsed.roles { if let c = r.choice { choices[r.role] = c } }
+        roleChoices = choices
+        savedRoles = choices
+    }
+
+    /// PUT /api/models/roles with the whole map. True when saved.
+    private func saveRoles() async -> Bool {
+        let url = ServerConfig.baseURL.appendingPathComponent("api/models/roles")
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(["roles": roleChoices])
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+                struct Err: Decodable { let error: String }
+                roleSaveError = (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "server refused"
+                return false
+            }
+            savedRoles = roleChoices
+            return true
+        } catch {
+            roleSaveError = "\(error)"
+            return false
+        }
+    }
+
+    struct HelperRolesWire: Decodable {
+        let roles: [HelperRole]
+    }
+
+    /// One row of `/api/models/roles` (ADR-0126).
+    struct HelperRole: Decodable, Identifiable {
+        struct Default: Decodable { let kind: String; let tier: String? }
+        let role: String
+        let label: String
+        let description: String
+        let `default`: Default
+        let choice: String?
+        let resolved: String?
+        var id: String { role }
+        /// What "default" means for this role right now.
+        var resolvedLabel: String {
+            if self.default.kind == "off" { return "off" }
+            if self.default.kind == "inherit" { return "session model" }
+            return resolved ?? "none available"
         }
     }
 

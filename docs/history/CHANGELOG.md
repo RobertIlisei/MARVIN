@@ -8,6 +8,29 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-12 — A model for every helper role, and Claude's server-side advisor (ADR-0126, ADR-0125).**
+
+  Every model MARVIN runs besides the executor and the advisor used to pin a
+  tier in code — on OpenRouter a pinned Anthropic id is a request to a model
+  that is not there (ADR-0096). Eight helper roles (scout, graph-extractor,
+  Claude Code's background model, server-side advisor, commit messages,
+  practice drafts, session auditor, skill discovery) now resolve through
+  `resolveRoleModel` (`role-models.ts`) against the active provider's live
+  catalogue: no pick → the role's default tier, `inherit` or `off`; a pick →
+  used only when that catalogue lists it, otherwise logged as
+  `model.role.stale` and the default runs, so switching provider never breaks
+  a turn. Stored app-wide at `<MARVIN_DATA_DIR>/role-models.json`, validated on
+  read and on `PUT /api/models/roles`; the Models dialog gains a Helpers
+  section with one picker per role showing what "default" resolves to now.
+
+  [ADR-0125](../decisions/0125-server-side-advisor-alongside-the-advisor-subagent.md):
+  Claude's server-side advisor runs alongside the advisor subagent, off by
+  default. Off (or not on Anthropic) sets `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`,
+  so an `advisorModel` set by `/advisor` in a Claude Code terminal never
+  reaches a MARVIN turn through `settingSources: ["user"]`; on passes
+  `settings.advisorModel`. Still open: consults in the subagent ledger, the
+  per-model cost split, a one-week measurement.
+
 - **2026-10-06 — v0.1.117: a large file opens, tabs get their own tree or none, and shell reads go through the graph.**
 
   The release rolls up three branches that had lived only on this machine and

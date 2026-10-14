@@ -28,6 +28,7 @@
  *      turn, a commit, or a scope-met.
  */
 
+import { resolveRoleModel } from "./role-models";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,7 +39,7 @@ import { buildSubprocessEnv } from "./auth";
 import { type AutoAuditEntry, readAutoAuditTail } from "./auto-audit";
 import { type ChangedFile, listChanges } from "./change-checkpoints";
 import { type CiStatus, collectCiStatus, renderCiStatus } from "./ci-status";
-import { ensureProviderModelId, latestForTier } from "./models";
+import { ensureProviderModelId } from "./models";
 import { readPlanState } from "./plan-state";
 import { loadSession, type SessionTurn } from "./session";
 import { hasScopeMet } from "./workflow-guard";
@@ -653,7 +654,7 @@ export async function runSessionAudit(args: {
 
   // ADR-0096 — same inverted condition as the skill discoverer had; same fix.
   const finalModel =
-    ensureProviderModelId(args.model ?? (await latestForTier("sonnet"))) ?? undefined;
+    ensureProviderModelId(args.model ?? (await resolveRoleModel("sessionAuditor").then((r) => (r === "inherit" ? null : r)))) ?? undefined;
   const prompt = renderAuditPrompt(packet);
 
   let text = "";

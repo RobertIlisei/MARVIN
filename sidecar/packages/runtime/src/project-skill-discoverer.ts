@@ -19,6 +19,7 @@
  * only proposes; the user decides which to build.
  */
 
+import { resolveRoleModel } from "./role-models";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -30,7 +31,7 @@ import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { detectFingerprint } from "@marvin/project-context";
 
 import { buildSubprocessEnv } from "./auth";
-import { ensureProviderModelId, fallbackNewestOfTier, latestForTier } from "./models";
+import { ensureProviderModelId, fallbackNewestOfTier } from "./models";
 
 const pExecFile = promisify(execFile);
 
@@ -288,7 +289,9 @@ export async function discoverProjectSkills(
   // the one case it was guaranteed to break. If nothing resolves, say so —
   // an honest error beats a request addressed to a model that isn't there.
   const discoveryModel = ensureProviderModelId(
-    model?.trim() || (await latestForTier("sonnet")) || fallbackNewestOfTier("sonnet"),
+    model?.trim() ||
+      (await resolveRoleModel("skillDiscoverer").then((r) => (r === "inherit" ? null : r))) ||
+      fallbackNewestOfTier("sonnet"),
   );
   if (!discoveryModel) {
     throw new Error(

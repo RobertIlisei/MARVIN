@@ -11,12 +11,13 @@
  * through the existing approve / edit-message paths.
  */
 
+import { resolveRoleModel } from "./role-models";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildSubprocessEnv } from "./auth";
-import { ensureProviderModelId, latestForTier } from "./models";
+import { ensureProviderModelId } from "./models";
 import { COST_UNITS, POLARITY } from "./practice-extractors";
 import { readLedger, readRules, RULE_TEMPLATES } from "./practice";
 import { getProject } from "./projects";
@@ -117,7 +118,8 @@ export function parseDraft(text: string): { message: string; rationale: string }
 export type DraftDispatch = (prompt: string) => Promise<{ text: string; costUsd?: number }>;
 
 async function defaultDispatch(prompt: string, cwd: string, model?: string): Promise<{ text: string; costUsd?: number }> {
-  const finalModel = ensureProviderModelId(model ?? (await latestForTier("sonnet"))) ?? undefined;
+  const role = model ? null : await resolveRoleModel("practiceDraft");
+  const finalModel = ensureProviderModelId(model ?? (role === "inherit" ? null : role)) ?? undefined;
   const q = query({
     prompt,
     options: {

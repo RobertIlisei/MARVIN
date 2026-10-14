@@ -34,6 +34,8 @@ turn-orchestrator, wakeup records, native effort picker (`ChatAgentsFooter.swift
 > Task-dispatched mechanism that works). If revisited, it must be gated: enable
 > the experimental env var AND pass `--advisor` only for an eligibility-checked
 > advisor id, falling back to no-flag otherwise so a turn never breaks.
+>
+> **Superseded for the server-side advisor by [ADR-0125](./0125-server-side-advisor-alongside-the-advisor-subagent.md) (2026-10-12):** the experimental flag and the allowlist no longer block it on SDK 0.3.286; it is wired per tab, off by default, with the never-break-a-turn condition kept.
 
 ## Context
 

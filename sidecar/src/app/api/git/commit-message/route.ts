@@ -35,6 +35,7 @@ import { runGit } from "@marvin/git";
 import { runClaudeCli } from "@marvin/runtime";
 import { checkFsPath } from "@marvin/runtime/fs-sandbox";
 import { fallbackNewestOfTier } from "@marvin/runtime/models";
+import { resolveRoleModel } from "@marvin/runtime/role-models";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -143,12 +144,14 @@ export async function POST(req: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  // `fallbackNewestOfTier` is provider-scoped, so this resolves to an
-  // OpenRouter id when the user is on BYOK rather than sending a bare
-  // Anthropic one. Null (unknown tier for the provider) falls through
-  // to runClaudeCli's own default.
+  // ADR-0126 — the `commitMessage` role: the user's pick from the Models
+  // dialog when the active catalogue lists it, else the newest live Haiku of
+  // the active provider. `fallbackNewestOfTier` stays the offline last resort;
+  // null falls through to runClaudeCli's own default.
+  const role = await resolveRoleModel("commitMessage");
   const model =
     process.env.MARVIN_COMMIT_MESSAGE_MODEL?.trim() ||
+    (role && role !== "inherit" ? role : null) ||
     fallbackNewestOfTier("haiku") ||
     undefined;
 

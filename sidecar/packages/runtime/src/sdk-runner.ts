@@ -60,6 +60,7 @@ import {
 import { CONTEXT_BASELINE_SUBTYPE, contextBaseline } from "./context-baseline";
 import { coreSkillsPluginConfig } from "./core-skills";
 import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
+import { readRoleModels, resolveRoleModel, roleTurnOverrides } from "./role-models";
 import {
   ADVISOR_SUBAGENT_TYPE,
   clearTurnDesignContext,
@@ -1973,9 +1974,21 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const advisorModelResolved =
     ensureProviderModelId(advisorModel ?? (await latestForTier("opus")) ?? defaultModel()) ??
     defaultModel();
-  // Haiku-tier model for the graph-extractor subagent (ADR-0058). Falls back to
-  // "inherit" (the parent tier) only if Haiku discovery is unavailable.
-  const graphExtractorModel = ensureProviderModelId(await latestForTier("haiku")) ?? "inherit";
+  // ADR-0126 — every helper role resolves against the active provider's
+  // catalogue, with the user's pick from the Models dialog winning when that
+  // catalogue lists it. The graph-extractor defaults to the Haiku tier
+  // (ADR-0058); "inherit" (the parent's model) only if nothing resolves.
+  const roleModels = readRoleModels();
+  const graphExtractorRole = await resolveRoleModel("graphExtractor", roleModels);
+  const graphExtractorModel = graphExtractorRole ?? "inherit";
+  const scoutModel = await resolveRoleModel("scout", roleModels);
+  const backgroundModel = await resolveRoleModel("backgroundModel", roleModels);
+  // ADR-0125 — Claude's server-side advisor. null = off or not on this
+  // provider; then the tool is disabled outright, so a user-level
+  // `advisorModel` from `/advisor` in a Claude Code terminal (settingSources
+  // includes "user") never reaches a MARVIN turn.
+  const serverAdvisorModel = await resolveRoleModel("serverAdvisor", roleModels);
+  const roleOverrides = roleTurnOverrides(backgroundModel, serverAdvisorModel);
 
   // Wire Honeycomb telemetry per-turn. `computeHoneycombTelemetryEnv`
   // is the pure form — it reads the saved config at
@@ -2040,6 +2053,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       process.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH ?? "2",
     CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:
       process.env.CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS ?? "8",
+    // ADR-0125 / ADR-0126 — background model and server-advisor on/off.
+    ...roleOverrides.env,
   };
 
   const abortController = new AbortController();
@@ -2242,7 +2257,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // under bare names; the flag layer turns each user-enabled Claude Code
     // plugin off. MARVIN's per-project plugins arrive through `plugins` below.
     settingSources: ["user"],
-    settings: { enabledPlugins: userPluginsOff() },
+    settings: {
+      enabledPlugins: userPluginsOff(),
+      ...roleOverrides.settings,
+    },
     // ADR-0036 (revised): all modes use `default`. Plan + Ask read-only
     // enforcement lives in the gate (`readOnly`) below — Plan is no longer
     // the SDK's coupled plan permissionMode.
@@ -2371,7 +2389,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // per-advisor effort. Replaces the ADR-0007 `general-purpose` +
     // model-hint spawn (still policy-sanctioned for back-compat).
     agents: {
-      scout: SCOUT_AGENT,
+      scout: scoutModel && scoutModel !== "inherit" ? { ...SCOUT_AGENT, model: scoutModel } : SCOUT_AGENT,
       [ADVISOR_SUBAGENT_TYPE]: buildAdvisorAgent({
         model: advisorModelResolved,
         // Default the advisor to the EXECUTOR's effort when no separate
@@ -2397,15 +2415,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // `resolveEffort`. Defaults to `high` (the SDK default), so existing
     // sessions keep their current responsiveness.
     effort: resolveEffort(input.thinkingMode, model),
-    // Server-side advisor (`--advisor <model>`) is intentionally NOT wired
-    // here. The old inert `options.advisorModel` (a Claude Code *settings*
-    // field the SDK wrapper drops — not a `query()` option) is removed.
-    // Verified against the 0.2.113 binary (2026-06-18): the flag is
-    // EXPERIMENTAL (gated behind `CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL`)
-    // AND the advisor model is allowlisted server-side — the current default
-    // Opus is rejected, so passing it unconditionally would error the turn.
-    // The advisor MODEL still reaches its real consumer: the `agents.advisor`
-    // subagent registered above (ADR-0033). See ADR-0033 addendum.
+    // Server-side advisor: wired through `settings.advisorModel` above, off
+    // by default and disabled by env when off (ADR-0125, superseding the
+    // ADR-0033 addendum's "not wired"). The advisor *subagent* model still
+    // reaches its consumer through the `agents.advisor` registration.
     ...(sessionId ? { resume: sessionId } : {}),
   } as Options;
 

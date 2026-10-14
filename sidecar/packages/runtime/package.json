@@ -51,6 +51,7 @@
     "./stop-all": "./src/stop-all.ts",
     "./change-checkpoints": "./src/change-checkpoints.ts",
     "./models": "./src/models.ts",
+    "./role-models": "./src/role-models.ts",
     "./fs-sandbox": "./src/fs-sandbox.ts",
     "./fs-write-confirm-registry": "./src/fs-write-confirm-registry.ts",
     "./honeycomb-config": "./src/honeycomb-config.ts",
