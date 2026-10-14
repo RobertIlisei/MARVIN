@@ -8,7 +8,7 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
-- **2026-10-12 — A model for every helper role, and Claude's server-side advisor (ADR-0126, ADR-0125).**
+- **2026-10-14 — v0.1.118: a model for every helper role, and Claude's server-side advisor (ADR-0126, ADR-0125; built 2026-10-12).**
 
   Every model MARVIN runs besides the executor and the advisor used to pin a
   tier in code — on OpenRouter a pinned Anthropic id is a request to a model

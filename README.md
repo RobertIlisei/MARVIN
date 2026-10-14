@@ -57,7 +57,7 @@ The Swift app talks to the sidecar over `localhost:3030`. In a brew install the 
 ## Install
 
 > **Releases.** Homebrew installs the latest tagged release (currently
-> **v0.1.117**). `main` and `development` are fast-forwarded together at each
+> **v0.1.118**). `main` and `development` are fast-forwarded together at each
 > release; `development` is where in-progress changes land between them. To
 > build from source on either branch, `git checkout <branch>` then
 > `bin/marvin install-macos-app`.
@@ -378,6 +378,8 @@ docs/
 ---
 
 ## Status
+
+**v0.1.118 — a model for every helper role, and Claude's server-side advisor.** Every model MARVIN runs besides the executor and the advisor — scout, graph-extractor, Claude Code's background model, commit messages, practice drafts, session auditor, skill discovery — used to pin a tier in code, which on OpenRouter addressed models that were not there. Each is now a picker in the Models dialog's Helpers section, resolved against the active provider's live list; a pick that goes stale when you switch provider falls back to the default instead of breaking a turn (ADR-0126). Claude's server-side advisor can run alongside the advisor subagent — off by default, and disabled outright when off so a Claude Code `/advisor` setting never leaks into a MARVIN turn (ADR-0125).
 
 **v0.1.117 — a large file opens, tabs get their own tree or none, and shell reads go through the graph.** Opening a big file froze the app for 16 s: syntax highlighting made one editor transaction per span, and each re-synced layout; now it is one transaction for the whole file. A tab whose worktree cannot be made — a full disk, a failed checkout — is refused with the reason instead of quietly editing the shared checkout ([ADR-0122](./docs/decisions/0122-a-tab-gets-its-worktree-or-is-refused.md)); creation is atomic, a 10 GB free-space floor comes first, and `sparseExclude` leaves big directories out of a tab's checkout. Parallel tabs no longer pick the same ADR or migration number, kill each other's processes by name, or show "needs your decision" when they are done ([ADR-0123](./docs/decisions/0123-parallel-tabs-share-a-machine-and-a-numbering.md)). `cat`, `sed -n`, `head` and `grep` in the shell now count as source reads for graphify-first, a `graph-pointer` gate refuses whole-file and repo-wide reads once the graph has answered, every worktree tab queries a graph of its own tree, the Sessions pane shows each tab's graph-to-reads ratio, and the sidecar seeds the plan spine from a brief's checklist and keeps it honest ([ADR-0124](./docs/decisions/0124-shell-reads-worktree-graphs-and-a-seeded-plan-spine.md)). Agent SDK 0.3.286 shows the CLI's warnings and plugin load failures in the chat; graphify 0.9.73, and a background graph rebuild never rewrites your skills.
 

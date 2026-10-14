@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.117
-(2026-10-01). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v0.1.118
+(2026-10-14). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -64,6 +64,14 @@ repository wins.*
 > graph gate**, a graph per worktree tab, a sidecar-held plan spine (ADR-0124,
 > §1.4, §2.7, §3.2); large files open without a main-thread hang and the
 > CLI's system notices render (§8.1); Agent SDK 0.3.286 (§10).
+> v0.1.118 (2026-10-14): **a model for every helper role** (ADR-0126) — scout,
+> graph-extractor, background model, commit messages, practice drafts, session
+> auditor and skill discovery resolve through `resolveRoleModel`
+> (`runtime/src/role-models.ts`) against the active provider's live catalogue,
+> a stale pick falling back to the role's default; `GET`/`PUT /api/models/roles`
+> and a Helpers section in the Models dialog. **Claude's server-side advisor**
+> (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
+> when off, `settings.advisorModel` when on.
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -1163,7 +1171,7 @@ repo:
   `main`; a gitleaks pre-commit hook is installed from
   `scripts/hooks/pre-commit`; CI is `.github/workflows/release.yml`
   (tag-triggered).
-- **Understanding why** — read `docs/decisions/` (the 123 ADRs) before
+- **Understanding why** — read `docs/decisions/` (the 125 ADRs) before
   proposing structural changes, `docs/roadmap.md` for what's in flight,
   and `AGENTS.md` (which `CLAUDE.md` imports) for the golden rules any agentic session in this repo
   is bound by. Material changes should arrive with an ADR of their own.
@@ -1171,5 +1179,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v0.1.117 (123 ADRs, 2026-10-06). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v0.1.118 (125 ADRs, 2026-10-14). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

@@ -127,6 +127,8 @@ What's in flight, what's deferred, and what MARVIN deliberately won't do. The ch
 
 ## Current version
 
+**v0.1.118** — a model for every helper role, resolved against the active provider (ADR-0126); Claude's server-side advisor alongside the advisor subagent, off by default (ADR-0125).
+
 **v0.1.117** — large files open without a hang; a tab gets its worktree or is refused (ADR-0122); parallel-tab guards (ADR-0123); shell reads through the graph gate, per-worktree graphs, a sidecar-held plan spine (ADR-0124); Agent SDK 0.3.286, graphify 0.9.73.
 
 **v0.1.116** — history paging cannot crash; an orphaned sidecar no longer wedges on a dead stdout pipe; status-bar counters survive a relaunch.
