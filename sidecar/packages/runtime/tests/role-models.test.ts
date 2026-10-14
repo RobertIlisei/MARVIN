@@ -18,6 +18,9 @@ vi.mock("../src/models", () => ({
   listModelsCached: async () => ({ models: state.models, source: "anthropic-api", error: null, fetchedAt: "" }),
 }));
 
+// `isolate: false` — another file may already hold role-models bound to the
+// real models module; drop it so this import picks up the mock.
+vi.resetModules();
 const {
   readRoleModels,
   resolveRoleModel,
