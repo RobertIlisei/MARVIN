@@ -131,6 +131,17 @@ describe("PUT /api/sessions/posture — posture without a turn", () => {
     expect(loadSession("proj", "tab-p")?.turns ?? []).toEqual([]);
   });
 
+  it("refuses a user widening until the app shows API-set posture (milestone 6), naming the widened dimensions", async () => {
+    upsertSessionMeta("proj", "tab-p", { workDir: dataDir, tree: { mode: "shared" }, posture: POSTURE });
+    const r = await put({ projectId: "proj", marvinSessionId: "tab-p", posture: { permissionStrategy: "full", mode: "ask" } });
+    expect(r.status).toBe(409);
+    const body = (await r.json()) as { error: string; widened: string[] };
+    expect(body.widened).toEqual(["permissionStrategy"]);
+    expect(body.error).toContain("permissionStrategy auto → full");
+    expect(readSessionMeta("proj", "tab-p")?.posture).toMatchObject({ permissionStrategy: "auto", mode: POSTURE.mode });
+    expect(readSessionMeta("proj", "tab-p")?.postureRevision).toBeUndefined();
+  });
+
   it("400 on an invalid patch, 404 on an unknown session", async () => {
     upsertSessionMeta("proj", "tab-p", { workDir: dataDir, tree: { mode: "shared" }, posture: POSTURE });
     expect((await put({ projectId: "proj", marvinSessionId: "tab-p", posture: { personality: "marvin" } })).status).toBe(400);

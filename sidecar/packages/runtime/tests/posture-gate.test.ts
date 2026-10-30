@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyPostureChange, clearLiveNarrowing } from "../src/posture";
+import { applyPostureChange, clearLiveNarrowing, getLiveNarrowing } from "../src/posture";
 import { type AgentMode, makeAutoModeLogger, makeGatedCanUseTool, makeLivePostureGate, type PermissionStrategy } from "../src/sdk-runner";
 import { type SessionPosture, upsertSessionMeta } from "../src/session-meta";
 import { buildResumeRecord } from "../src/session-recovery";
@@ -90,11 +90,12 @@ describe("a narrowing reaches the live turn at its next tool call", () => {
     endLiveTurn(turn, { event: "turn.completed", data: {} });
   });
 
-  it("a widening during the turn does not reach it", async () => {
+  it("a widening during the turn is refused, so it never reaches it", async () => {
     upsertSessionMeta("proj", "tab-pg", { workDir, tree: { mode: "shared" }, posture: { ...base, permissionStrategy: "gated" } });
     const turn = registerLiveTurn({ turnId: "turn-pg", marvinSessionId: "tab-pg", projectId: "proj" });
     const r = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-pg", patch: { permissionStrategy: "full" }, actor: "user", lookup: () => null });
-    expect(r.ok && r.liveApplied).toEqual([]);
+    expect(r.ok ? 0 : r.status).toBe(409);
+    expect(getLiveNarrowing("turn-pg")).toBeNull();
     endLiveTurn(turn, { event: "turn.completed", data: {} });
   });
 

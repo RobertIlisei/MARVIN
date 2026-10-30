@@ -97,11 +97,12 @@ Change a tab's posture without sending a turn ([ADR-0127](../decisions/0127-a-su
 
 - **No turn is sent.** The session meta is written with `postureRevision` (+1) and `postureSource`, and `postureOverride` holds the fields set here.
 - **The app's next post does not undo it.** `POST /api/chat` keeps the held fields over the posture a client posts until the client sends `postureRevision` back (watch rows carry it; a client cannot acknowledge a revision the server never issued). A session that never used this route behaves as before.
-- **A narrowing reaches a live turn** at its next tool call (strategy and mode); a widening, and any model or effort change, applies from the next turn. Queued, wakeup, job-completion and resume turns run the narrower of what armed them and what the tab holds now.
+- **Narrowing only, for either actor.** A widening answers `409` with `widened` naming the dimensions, and changes nothing. Until the app shows an API-set posture, a widening here would run a tab wider than its toolbar says; widen from the app. (Re-allowing a user's widening is a follow-up of the native milestone.)
+- **A narrowing reaches a live turn** at its next tool call (strategy and mode); a model or effort change applies from the next turn. Queued, wakeup, job-completion and resume turns run the narrower of what armed them and what the tab holds now.
 - **Orders:** strategy `full` > `auto` > `gated`; mode `agent` > `plan` / `ask`, with Plan ↔ Ask judged by the cost of the model each runs on (Plan runs the advisor); effort `max` > `xhigh` > `high` > `medium` > `low`; a model narrows only when the active catalogue knows it costs no more — an unpriced model is a widening.
-- **`actor: "supervisor"`** needs the per-boot token (`x-marvin-supervisor-token`), may only narrow — a widening answers `409` and changes nothing — and is ledgered as a performed act with the given grounds.
+- **`actor: "supervisor"`** needs the per-boot token (`x-marvin-supervisor-token`) and is ledgered with the given grounds: a narrowing as a performed act, a widening as an escalation.
 
-**Errors:** `400` invalid patch or actor · `403` CSRF or a missing token · `404` unknown session · `409` a supervisor widening.
+**Errors:** `400` invalid patch or actor · `403` CSRF or a missing token · `404` unknown session · `409` a widening (`{ error, changes, widened }`).
 
 ## Supervisor
 

@@ -28,6 +28,7 @@ Mostly from the advisor's review:
 - **`/api/confirm` refuses an `allow` on a question that carries no answer** — the hole the first-class answer exists to close.
 - **`POST /api/confirm/answer` is user authority only.** The supervisor answers for real only after milestone 3's consent gate.
 - **Model changes never apply to a live turn.** `setModel()` on a running query is not used; strategy and mode narrowings do reach the live turn.
+- **The API refuses every widening, the user's included** (decided by the supervisor, 2026-10-30). Until milestone 6 the app neither echoes a revision nor shows an API-set posture, so a user's `permissionStrategy: "full"` through the route made a tab run full auto while its toolbar still read gated. That is a hidden widening, the worst case ADR-0127 §4 names. `applyPostureChange` now answers `409` for any widening with `widened` naming the dimensions; narrowing passes for both actors. Proved by `posture.test.ts` ("a user widening … is refused"), `m2-routes.test.ts` ("refuses a user widening until the app shows API-set posture") and `posture-gate.test.ts` ("a widening during the turn is refused"). **Milestone 6 follow-up:** re-allow a *user's* widening once the app shows API-set posture. A supervisor widening stays an escalation.
 
 ## Constraint that shapes the order
 
@@ -333,6 +334,7 @@ The first time the supervisor performs anything. Each category is switched by th
   - Pause and Kill.
 - **Transcript marking** for supervisor-sent messages and supervisor-given answers.
 - **Posture revisions** — the app echoes `postureRevision` and adopts an API-set posture. ADR-0108's hydration rule is amended to match.
+  - **Follow-up from milestone 2:** once the app shows an API-set posture, re-allow a *user's* widening through `PUT /api/sessions/posture` (refused since 2026-10-30; see "What milestone 2 changed"). A supervisor widening stays an escalation.
 - **The app reads the capability token.**
 - **The `supervisor` role** appears in the Models dialog's Helpers section.
 

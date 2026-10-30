@@ -7,13 +7,18 @@
  *
  * The meta is written with a revision and a source; the chat route keeps the
  * fields set here over what the app posts until the app sends the revision
- * back. A narrowing reaches a live turn at its next tool call; a widening,
- * and any model or effort change, applies from the next turn.
+ * back. A narrowing reaches a live turn at its next tool call; a model or
+ * effort change applies from the next turn.
+ *
+ * Only narrowing is accepted, for either actor: a widening answers 409 with
+ * `widened` naming the dimensions, and changes nothing. Until the app shows an
+ * API-set posture (plan milestone 6) a widening here would run a tab wider
+ * than its toolbar says.
  *
  * CSRF-guarded. `actor: "supervisor"` (the external prototype opting into the
  * supervisor's policy and ledger) also needs the per-boot capability token,
- * may only narrow — a widening answers 409 and changes nothing — and is
- * ledgered as a performed act.
+ * and is ledgered — a narrowing as a performed act, a widening as an
+ * escalation.
  */
 
 import { activeModelLookup, applyPostureChange, validatePosturePatch } from "@marvin/runtime/posture";
@@ -68,7 +73,13 @@ export async function PUT(req: NextRequest) {
     lookup: await activeModelLookup(),
     ...(actor === "supervisor" ? { ledger: { mode: "autonomous" as const, grounds } } : {}),
   });
-  if (!result.ok) return NextResponse.json({ error: result.error, ...(result.changes ? { changes: result.changes } : {}) }, { status: result.status });
+  if (!result.ok) {
+    const widened = result.changes?.filter((c) => c.direction === "widen").map((c) => c.field);
+    return NextResponse.json(
+      { error: result.error, ...(result.changes ? { changes: result.changes } : {}), ...(widened?.length ? { widened } : {}) },
+      { status: result.status },
+    );
+  }
   return NextResponse.json({
     posture: result.meta.posture,
     postureRevision: result.meta.postureRevision,

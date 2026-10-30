@@ -9,16 +9,18 @@
  *     API-set fields over what the app posts until the app sends the revision
  *     back (`apiPostureHold`). A session that never used the route holds
  *     nothing and behaves exactly as before.
- *   - **A supervisor only narrows.** Orders are explicit: strategy
+ *   - **The API only narrows.** Orders are explicit: strategy
  *     full > auto > gated; mode agent > plan > ask; effort max > xhigh > high >
  *     medium > low; a model is narrower only when it is known to cost no more
  *     — a pricier or unpriced model is a widening. Any widening by the
- *     supervisor escalates and changes nothing (ADR-0127 §4 item 5).
+ *     supervisor escalates and changes nothing (ADR-0127 §4 item 5). A
+ *     user's widening is refused too, until the app shows an API-set posture
+ *     (plan milestone 6) — before then it would be a hidden widening.
  *   - **A narrowing reaches a live turn.** Strategy and mode are enforced in
  *     the gate, chosen once per turn; the turn's gate consults
  *     `getLiveNarrowing` on every call, so a narrowing applies at the next
- *     tool call. A widening, and any model or effort change, waits for the
- *     next turn (`setModel()` on a live query is not used until verified).
+ *     tool call. A model or effort change waits for the next turn
+ *     (`setModel()` on a live query is not used until verified).
  *
  * Server-started turns (wakeups, job completions, resumes) take the narrower
  * of what armed them and what the tab holds now (`scheduledTurnPosture`):
@@ -219,10 +221,16 @@ export function applyPostureChange(args: {
       grounds: args.ledger?.grounds ?? [],
     });
   };
-  if (actor === "supervisor" && widening.length) {
+  if (widening.length) {
     const what = widening.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ");
-    ledger("escalate", `widening is the user's act (ADR-0127 §4): ${what}`);
-    return { ok: false, status: 409, error: `a supervisor may only narrow a posture; widening escalates to the user: ${what}`, changes };
+    if (actor === "supervisor") {
+      ledger("escalate", `widening is the user's act (ADR-0127 §4): ${what}`);
+      return { ok: false, status: 409, error: `a supervisor may only narrow a posture; widening escalates to the user: ${what}`, changes };
+    }
+    // Until the app shows an API-set posture (plan milestone 6), a widening here
+    // would run the tab wider than its toolbar says — the hidden widening
+    // ADR-0127 §4 names as the worst case. Widen from the app.
+    return { ok: false, status: 409, error: `the API may only narrow a posture until the app shows API-set posture; widen it in the app: ${what}`, changes };
   }
 
   const revision = (meta.postureRevision ?? 0) + 1;
