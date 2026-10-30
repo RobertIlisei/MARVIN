@@ -21,9 +21,12 @@
       "row-selected-light": { "role": "neutral", "displayName": "Row Selected (light)", "canonical": "#E4E6F1", "source": "macos/MARVIN/MarvinTheme.swift:43" },
       "row-hover-dark": { "role": "neutral", "displayName": "Row Hover (dark)", "canonical": "#2A2D2E", "source": "macos/MARVIN/MarvinTheme.swift:44" },
       "row-hover-light": { "role": "neutral", "displayName": "Row Hover (light)", "canonical": "#F0F0F0", "source": "macos/MARVIN/MarvinTheme.swift:44" },
-      "git-added": { "role": "status", "displayName": "Git Added", "canonical": "#6BD18F", "source": "macos/MARVIN/GitStatusBadge.swift:38", "note": "source is Color(red: 0.420, green: 0.820, blue: 0.560); hex is the source comment's approximation" },
-      "git-modified": { "role": "status", "displayName": "Git Modified", "canonical": "#E8BD78", "source": "macos/MARVIN/GitStatusBadge.swift:36", "note": "source is Color(red: 0.910, green: 0.740, blue: 0.470)" },
-      "git-deleted": { "role": "status", "displayName": "Git Deleted", "canonical": "#D95440", "source": "macos/MARVIN/GitStatusBadge.swift:40", "note": "source is Color(red: 0.850, green: 0.330, blue: 0.250)" }
+      "git-added-dark": { "role": "status", "displayName": "Git Added (dark)", "canonical": "#6BD18F", "source": "macos/MARVINLogic/GitStatusPalette.swift", "note": "unchanged from the original single-value token" },
+      "git-added-light": { "role": "status", "displayName": "Git Added (light)", "canonical": "#257641", "source": "macos/MARVINLogic/GitStatusPalette.swift", "note": "same hue as dark, lightness lowered to >=4.5:1 on every light surface (5.61 on content, 4.51 on row-selected)" },
+      "git-modified-dark": { "role": "status", "displayName": "Git Modified (dark)", "canonical": "#E8BD78", "source": "macos/MARVINLogic/GitStatusPalette.swift" },
+      "git-modified-light": { "role": "status", "displayName": "Git Modified (light)", "canonical": "#8B5E18", "source": "macos/MARVINLogic/GitStatusPalette.swift", "note": "5.66 on content, 4.55 on row-selected" },
+      "git-deleted-dark": { "role": "status", "displayName": "Git Deleted (dark)", "canonical": "#D95440", "source": "macos/MARVINLogic/GitStatusPalette.swift", "note": "4.15 on content-dark, left as shipped" },
+      "git-deleted-light": { "role": "status", "displayName": "Git Deleted (light)", "canonical": "#BC3925", "source": "macos/MARVINLogic/GitStatusPalette.swift", "note": "5.60 on content, 4.50 on row-selected" }
     },
     "typographyMeta": {
       "pane-title": { "displayName": "Pane title", "purpose": "Title row of every left pane; uppercase, tracked, muted.", "source": "macos/MARVIN/PaneHeader.swift:41-47" },

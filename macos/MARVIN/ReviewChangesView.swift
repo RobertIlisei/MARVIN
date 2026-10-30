@@ -575,9 +575,9 @@ final class ReviewWindowTarget {
 
     private func splitRowView(_ row: SBRow) -> some View {
         HStack(spacing: 0) {
-            sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind))
+            sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind), sign: leftSign(row.kind))
             MarvinDivider()
-            sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind))
+            sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind), sign: rightSign(row.kind))
         }
     }
 
@@ -618,13 +618,21 @@ final class ReviewWindowTarget {
         .padding(24)
     }
 
-    private func sbCell(num: Int?, text: String?, tint: Color) -> some View {
+    private func sbCell(num: Int?, text: String?, tint: Color, sign: String) -> some View {
         HStack(alignment: .top, spacing: 0) {
             Text(num.map(String.init) ?? "")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 40, alignment: .trailing)
-                .padding(.trailing, 8)
+                .padding(.trailing, 4)
+            // Added and removed were a 10% green or red wash and nothing else
+            // (K6). The sign says it without colour, as the unified view does.
+            Text(sign)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 10, alignment: .center)
+                .padding(.trailing, 2)
+                .accessibilityHidden(true)
             Text(text ?? " ")
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.primary)
@@ -635,6 +643,31 @@ final class ReviewWindowTarget {
         .padding(.vertical, 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Self.cellDescription(sign: sign, text: text))
+    }
+
+    private static func cellDescription(sign: String, text: String?) -> String {
+        let body = (text ?? "").isEmpty ? "blank line" : text!
+        switch sign {
+        case "+": return "added: \(body)"
+        case "−": return "removed: \(body)"
+        default: return body
+        }
+    }
+
+    private func leftSign(_ kind: SBRowKind) -> String {
+        switch kind {
+        case .removed, .modified: return "−"
+        case .added, .context: return " "
+        }
+    }
+
+    private func rightSign(_ kind: SBRowKind) -> String {
+        switch kind {
+        case .added, .modified: return "+"
+        case .removed, .context: return " "
+        }
     }
 
     private func leftTint(_ kind: SBRowKind) -> Color {

@@ -18,9 +18,12 @@ colors:
   row-selected-light: "#E4E6F1"
   row-hover-dark: "#2A2D2E"
   row-hover-light: "#F0F0F0"
-  git-added: "#6BD18F"
-  git-modified: "#E8BD78"
-  git-deleted: "#D95440"
+  git-added-dark: "#6BD18F"
+  git-added-light: "#257641"
+  git-modified-dark: "#E8BD78"
+  git-modified-light: "#8B5E18"
+  git-deleted-dark: "#D95440"
+  git-deleted-light: "#BC3925"
 typography:
   pane-title:
     fontFamily: "SF Pro (system)"
@@ -149,7 +152,7 @@ A neutral, near-monochrome shell with one system-provided accent and a small sta
 - **Row Selected** (`#37373D` / `#E4E6F1`, `:43`) and **Row Hover** (`#2A2D2E` / `#F0F0F0`, `:44`): row, chip, icon-button and rail states.
 
 ### Status
-- **Git Added** `#6BD18F`, **Git Modified** `#E8BD78`, **Git Deleted** `#D95440` (`GitStatusBadge.swift:36-40`, as `Color(red:green:blue:)`). Reused for notice kinds: success = added, error = deleted (`PaneNoticeStyle.swift:25-27`).
+- **Git Added** `#6BD18F` dark / `#257641` light, **Git Modified** `#E8BD78` / `#8B5E18`, **Git Deleted** `#D95440` / `#BC3925` (`GitStatusBadge.swift`, `GitDecorationColor`, adaptive through `MarvinTheme.adaptive`; both appearances live in `GitStatusPalette`, MARVINLogic). The dark values are unchanged from the original single-value tokens. Each light value keeps its dark value's hue and saturation with the lightness lowered until it reaches at least 4.5:1 on every light surface it can sit on, worst case `row-selected-light` `#E4E6F1`; a test pins the ratios (2026-10-30, audit L4). As text: added `#257641` is 5.61 on content, 5.05 on chrome, 5.23 on inset, 4.92 on row-hover, 4.51 on row-selected; modified `#8B5E18` is 5.66 / 5.10 / 5.28 / 4.96 / 4.55; deleted `#BC3925` is 5.60 / 5.05 / 5.23 / 4.91 / 4.50. The old single values on white were 1.88, 1.75 and 3.97. On dark, added and modified are 8.75 and 9.40 on content; deleted `#D95440` is 4.15 there, below 4.5, and is left as it shipped. Reused for notice kinds: success = added, error = deleted (`PaneNoticeStyle.swift:25-27`).
 - **Orange** (system): warning notices (`PaneNoticeStyle.swift:26`) and tool confirmation (`ConfirmSheet.swift` card icon and badge).
 - System **red** / **green** / **purple** / **blue** appear for errors, success checks, plan approval and links in view code (counts: red 19, purple 13, green 12, blue 7).
 

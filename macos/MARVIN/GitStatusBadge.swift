@@ -32,12 +32,16 @@ import SwiftUI
 /// them from here, because these values have already been re-tuned
 /// once and a second literal elsewhere would just restart the drift.
 enum GitDecorationColor {
+    // Dark values are the ones that shipped. Light values are the same hues
+    // lowered until each reaches 4.5:1 on the worst light surface it can sit on
+    // (`GitStatusPalette` in MARVINLogic holds both and a test pins the ratios);
+    // as text on white the single value was 1.88 / 1.75 / 3.97:1 (audit L4).
     /// Modified / renamed — amber.
-    static let modified = Color(red: 0.910, green: 0.740, blue: 0.470)  // ~#E8BD78
+    static let modified = MarvinTheme.adaptive(dark: GitStatusPalette.modifiedDark, light: GitStatusPalette.modifiedLight)  // dark ~#E8BD78
     /// Added / untracked — green.
-    static let added = Color(red: 0.420, green: 0.820, blue: 0.560)     // ~#6BD18F
+    static let added = MarvinTheme.adaptive(dark: GitStatusPalette.addedDark, light: GitStatusPalette.addedLight)           // dark ~#6BD18F
     /// Deleted / conflicted — red.
-    static let deleted = Color(red: 0.850, green: 0.330, blue: 0.250)   // ~#D95440
+    static let deleted = MarvinTheme.adaptive(dark: GitStatusPalette.deletedDark, light: GitStatusPalette.deletedLight)     // dark ~#D95440
 }
 
 indirect enum GitStatusBadge: Equatable {

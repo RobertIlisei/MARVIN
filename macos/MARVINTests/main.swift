@@ -4162,6 +4162,40 @@ runner.suite("composer-return") {
     }
 }
 
+// MARK: - Git status colours meet contrast in both appearances (audit L4)
+
+runner.suite("git-status-palette") {
+    let lightSurfaces = ["FFFFFF", "F3F3F3", "F7F7F7", "F0F0F0", "E4E6F1"]  // content, chrome, inset, row-hover, row-selected
+    let darkSurfaces = ["1F1F1F", "181818", "262626", "2A2D2E", "37373D"]
+
+    runner.test("the contrast formula agrees with known values") {
+        runner.expect(abs(ContrastRatio.ratio("000000", "FFFFFF") - 21.0) < 0.01, "black on white is 21:1")
+        runner.expect(abs(ContrastRatio.ratio("FFFFFF", "FFFFFF") - 1.0) < 0.001, "identical is 1:1")
+        // The audit's measured figure for the old single-value colour on white.
+        runner.expect(abs(ContrastRatio.ratio("6BD18F", "FFFFFF") - 1.88) < 0.02, "old added green on white: 1.88")
+    }
+
+    runner.test("every light variant reaches 4.5:1 on every light surface it can sit on") {
+        for (name, hex) in [("added", GitStatusPalette.addedLight), ("modified", GitStatusPalette.modifiedLight), ("deleted", GitStatusPalette.deletedLight)] {
+            for bg in lightSurfaces {
+                let r = ContrastRatio.ratio(hex, bg)
+                runner.expect(r >= 4.5, "\(name) \(hex) on #\(bg) is \(String(format: "%.2f", r))")
+            }
+        }
+    }
+
+    runner.test("the dark values are exactly what shipped, and the light ones keep their hue") {
+        runner.expect(GitStatusPalette.addedDark, equals: "6BD18F", "added dark unchanged")
+        runner.expect(GitStatusPalette.modifiedDark, equals: "E8BD78", "modified dark unchanged")
+        runner.expect(GitStatusPalette.deletedDark, equals: "D95440", "deleted dark unchanged")
+        for (d, l) in [(GitStatusPalette.addedDark, GitStatusPalette.addedLight), (GitStatusPalette.modifiedDark, GitStatusPalette.modifiedLight), (GitStatusPalette.deletedDark, GitStatusPalette.deletedLight)] {
+            runner.expect(abs(ContrastRatio.hue(d) - ContrastRatio.hue(l)) < 4.0, "\(d) -> \(l) stays within 4 degrees of hue")
+        }
+        // Dark behaviour is not changed by this; deleted is 4.15 on content, as the audit recorded.
+        runner.expect(ContrastRatio.ratio(GitStatusPalette.addedDark, darkSurfaces[0]) > 8.0, "dark added stays readable")
+    }
+}
+
 // MARK: - Highlighted row of a filter list (audit W1)
 
 runner.suite("list-selection") {
