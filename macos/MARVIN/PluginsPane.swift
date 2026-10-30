@@ -321,11 +321,11 @@ private struct UpdateResponse: Decodable {
     /// are tinted; deferred ones (agents/hooks) are muted with a "·off" hint.
     @ViewBuilder
     private func contributionChips(_ p: PluginSummary) -> some View {
-        HStack(spacing: 5) {
-            if !p.skills.isEmpty { chip("\(p.skills.count) skills", loaded: true) }
+        WrapLayout(spacing: 5, lineSpacing: 4) {
+            if !p.skills.isEmpty { chip("\(p.skills.count) skill\(p.skills.count == 1 ? "" : "s")", loaded: true) }
             if !p.commands.isEmpty { chip("\(p.commands.count) cmds", loaded: true) }
             if p.hasMcp { chip("MCP · gated", loaded: true) }
-            if !p.agents.isEmpty { chip("\(p.agents.count) agents · read-only", loaded: true) }
+            if !p.agents.isEmpty { chip("\(p.agents.count) agent\(p.agents.count == 1 ? "" : "s") · read-only", loaded: true) }
             // Not a count like the others: it is the one line that says what
             // MARVIN refuses to load (ADR-0054). It reads as a caution, not as
             // another tally.

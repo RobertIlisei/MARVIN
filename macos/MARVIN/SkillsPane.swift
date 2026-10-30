@@ -1194,11 +1194,29 @@ private struct SkillsIndexResponse: Decodable {
             }
             Spacer(minLength: 4)
             skillUpdateControl(name: name, scope: scope, source: source)
-            Button("View") {
-                openSkillFile(path)
+            // View and Set source… were two neutral chips on EVERY row; at a
+            // 260 pt sidebar they took the width the skill's name needed and
+            // it truncated to "…" (U3). They are occasional, so they live in
+            // a menu; only a live Update stays inline.
+            Menu {
+                Button("View SKILL.md") { openSkillFile(path) }
+                if source?.updatable != true {
+                    Button("Set source…") {
+                        bindURL = ""; bindError = nil
+                        bindSourceFor = BindTarget(name: name, scope: scope)
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
             }
-            .rowChip(.neutral)
-            .help("Open this skill's SKILL.md")
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More: open SKILL.md\(source?.updatable == true ? "" : ", or give this skill an origin so Update works")")
         }
         .padding(.vertical, 2)
         // Clip rather than reflow: at a narrow width the trailing actions used
@@ -1230,12 +1248,8 @@ private struct SkillsIndexResponse: Decodable {
         if updatingSkill == key {
             ProgressView().controlSize(.small)
         } else if source?.updatable != true {
-            Button("Set source…") {
-                bindURL = ""; bindError = nil
-                bindSourceFor = BindTarget(name: name, scope: scope)
-            }
-            .rowChip(.neutral)
-            .help("This skill has no recorded origin, so there's nothing to re-fetch. Give it the Git URL once and Update works from then on.")
+            // No origin recorded: "Set source…" is in the row's menu.
+            EmptyView()
         } else {
             HStack(spacing: 6) {
                 // One shape for three statuses, and none of them wraps.

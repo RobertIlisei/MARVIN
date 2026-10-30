@@ -125,23 +125,37 @@ import SwiftUI
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
-                Picker("", selection: $section) {
-                    ForEach(Section.allCases) { s in
-                        Text(sectionLabel(s)).tag(s)
-                    }
+                // A segmented control cannot shrink: with counts ("Findings 5")
+                // the fourth tab was cut off at 260 pt (U4). Counts when they
+                // fit, plain labels when they do not.
+                ViewThatFits(in: .horizontal) {
+                    sectionPicker(counts: true)
+                    sectionPicker(counts: false)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 switch section {
                 case .findings: findingsSection
                 case .working: workingSection
                 case .rules: rulesSection
                 case .runs: runsSection
                 }
+                MarvinDivider().padding(.vertical, 4)
+                aboutBlock
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
+    }
+
+    private func sectionPicker(counts: Bool) -> some View {
+        Picker("", selection: $section) {
+            ForEach(Section.allCases) { s in
+                Text(counts ? sectionLabel(s) : s.label).tag(s)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func sectionLabel(_ s: Section) -> String {
@@ -199,6 +213,21 @@ import SwiftUI
                 .foregroundStyle(MarvinTheme.textMuted)
                 .help("Backtest, fit the score weights, reload, and the guide.")
             }
+            // One line of status stays up here; the explanation, the schedule and
+            // the fit statistics moved below the findings (U5: on a 260 pt sidebar
+            // the first finding sat under four lines of intro and a ρ).
+            if let view {
+                Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
+                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// What this pane is, how it works, its schedule and how its weights were
+    /// fitted. Reference, read once — so it follows the findings, not precedes them.
+    private var aboutBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Repeat failures mined from this project's own sessions, next to the same acts done right. It proposes, you approve, and an accepted rule is enforced at the tier you choose — then measured.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -260,9 +289,6 @@ import SwiftUI
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(MarvinTheme.textMuted)
                 }
-                Text(view.lastRun.map { "last run \(Self.relative($0.at)) · \($0.sessionsRead) read · \($0.proposed) newly proposed" } ?? "never run")
-                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
                 if let fitInfo = view.config.fit {
                     Text("weights fitted \(Self.relative(fitInfo.at)) · \(fitInfo.method) · \(fitInfo.labelled)/\(fitInfo.samples) labelled · ρ \(String(format: "%.2f", fitInfo.rho))")
                         .font(.caption2.monospaced()).foregroundStyle(.tertiary)
@@ -436,9 +462,10 @@ import SwiftUI
 
     @ViewBuilder
     private func findingActions(_ f: PracticeFinding) -> some View {
-        // Clip rather than reflow. At a narrow width this row used to stack
-        // its verbs into columns of single letters (2026-09-11).
-        HStack(spacing: 6) {
+        // Wrap, never clip: this row was an HStack clipped at the pane edge
+        // so "Fixed" and a Dismiss could vanish at 260 pt (U4). WrapLayout
+        // puts a verb that does not fit on the next line, whole.
+        WrapLayout(spacing: 6, lineSpacing: 4) {
             switch f.state {
             case "proposed", "observed":
                 if f.template {
@@ -487,10 +514,8 @@ import SwiftUI
             default:
                 EmptyView()
             }
-            Spacer(minLength: 0)
         }
-        .frame(minWidth: 0, alignment: .leading)
-        .clipped()
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 
     private func approveMenu(_ f: PracticeFinding) -> some View {
