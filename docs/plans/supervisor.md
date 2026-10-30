@@ -315,6 +315,12 @@ The first time the supervisor performs anything. Each category is switched by th
 - **`GET /api/supervisor/stats`** — agreement per category, plus the question heuristic's misses.
 - **Headless questions** — `maybeAskUserQuestion` (`sdk-runner.ts:1421-1454`) lets a headless turn's question in a delegated tab wait a bounded time for the supervisor, before ADR-0040's deny.
 - **New wake triggers** — turn ended (except `stopped`), and idle with an open plan and nothing of its own pending.
+- **Idle tabs stay idle (added 2026-10-30, from the day's external supervision).** Tabs that had finished their scope kept starting turns on their own: advisor-condition reconciliation, scope-met checkbacks, stale background-job completions. Each cost $12–57, because each carried the whole context. The supervisor must not add to that:
+  - **`scopeMetAt` on the session meta.** Written when a turn ends with the scope-met marker. Cleared when a user or supervisor-authored turn starts, because that opens new scope. A machine turn (job completion, wakeup, resume, guard) never clears it. A job completion that arrives after the scope-met close is therefore superseded by it.
+  - **The turn-ended trigger fires only for a turn a user or the supervisor started.** A machine turn the supervisor did not author never wakes it. Questions still wake it through `confirm.pending`.
+  - **The idle trigger skips a scope-met tab,** and fires once per plan signature. An unchanged idle tab is not woken again.
+  - **`send` refuses a nudge to a scope-met tab** (`reasonCode: "scope-met"`), and any send prompted by a superseded job completion. Closing such a tab is proposed in [5].
+- **The `confirm.resolved` event carries `answeredBy`** (and `ledgerId` for a supervisor answer). Pairing reads it, and [6]'s sheet dismissal shows it.
 - **The UI's shapes (brief §10.1, §10.3, §10.5 `pairing`, §10.4 `lastActAt`):**
   - `GET /api/supervisor` returns `{state, status}`, with `status` the brief's §10.1 object. `health` and `budget.level` are derived by rule in the runtime, and `revision` increments on every state change;
   - the mutations `start {charter, capUsd, delegations[]}`, `resume`, `disable` (alias of `stop`), `cap`, `autonomy {category, value}` and `wakeNow`. `autonomy` covers `questions`, `nudges`, `posture` and `confirms`; `confirms` is refused until [5];
@@ -335,6 +341,11 @@ The first time the supervisor performs anything. Each category is switched by th
   - Neither happens while its category is still in shadow.
 - **Stats compare against the user.** `GET /api/supervisor/stats` reports agreement per category from a fixture ledger. Answers through `/api/confirm` are counted as the user's.
 - **Headless questions fall back cleanly.** A headless turn's question in a delegated tab waits a bounded time for the supervisor, then falls back to ADR-0040's proceed-on-your-recommendation deny.
+- **Idle tabs stay idle.**
+  - A turn ending with the scope-met marker writes `scopeMetAt`; a user or supervisor turn clears it; a job-completion turn does not. Round-trip test.
+  - A job-completion `turn.ended` in a delegated tab produces zero wakes. A user turn's `turn.ended` produces one.
+  - An idle tab with an open plan wakes the supervisor once per plan signature. A scope-met tab never does.
+  - A nudge to a scope-met tab is refused with `reasonCode: "scope-met"`, in shadow and when autonomous.
 - **The status is the brief's.** A route test reads every §10.1 field from `GET /api/supervisor` for an idle, a waking, a paused-by-budget and a stale fixture. A shadow proposal stays hidden on the watch row until `reveal`, and the reveal is recorded on the pairing.
 
 ### [5] The escalation inbox, the remaining verbs, and the auditor's review
@@ -366,6 +377,7 @@ The first time the supervisor performs anything. Each category is switched by th
   - its first turn is recorded `author: "supervisor"` and is supervisor-touched;
   - one request, one tab: a proposal carries exactly one tab; openings count against the rate limits and the spend cap.
 - **The wake trigger on scope-met handoffs.**
+- **Close an idle, finished tab (added 2026-10-30).** A tab whose `scopeMetAt` is set, with no live turn and nothing pending past the idle threshold, gets one inbox item proposing `close_session` with `keep`. Closing with `keep` is reversible (ADR-0111: the branch and its commits stay), so the item is a one-click consent chip, not the two-step outward path. One item per scope-met close. A user or supervisor turn that clears `scopeMetAt` supersedes the item.
 
 **Touchpoints — the auditor and docs.**
 
@@ -386,6 +398,7 @@ The first time the supervisor performs anything. Each category is switched by th
   - an ordinary Edit confirm in a gated `answer-confirms` tab is answered by the supervisor;
   - the same confirm in an `answer-questions` tab is not;
   - no containment or metered-CI confirm is answered at any level.
+- **A finished idle tab is offered for closing.** A scope-met tab idle past the threshold produces exactly one `close_session` item recommending `keep`, with a single consent action. Accepting it closes the tab as the user, keeping the branch. A second wake over the same scope-met close adds no item. A user message to the tab supersedes the item.
 - **Worktree acts escalate, except a safe sweep.** Merges, merge-all, Prepare MR and drops of work always escalate, with a preview attached. A sweep reclaims empty or merged non-session trees and leaves an open tab's tree alone.
 - **The inbox and the ledger read as the brief says.** Route tests read every §10.2 field from an item of each `kind`, and every §10.5 field from a ledger page, including one line written before [3] (`reasonCode` absent) that projects `code: "unspecified"`. A feed subscriber sees `added`, then `resolved`, for an item answered in its tab.
 - **The auditor reviews without reaching the supervisor.** A supervisor-target audit produces a report over the ledger window with the four new finding classes. Nothing reaches the supervisor session; a test pins the absence.
@@ -406,6 +419,7 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
   - a budget meter;
   - Pause and Kill.
 - **Transcript marking** for supervisor-sent messages and supervisor-given answers.
+- **Required fix (added 2026-10-30): an answer from elsewhere closes the in-chat surface.** When a confirm is resolved outside the chat, the chat's `AskQuestionSheet` and its confirm card must dismiss themselves on the `confirm.resolved` feed event, and say who answered (`answeredBy`, which the event carries from [4]; the brief's `resolvedBy`). "Elsewhere" means the API, the supervisor, or the Sessions pane. Today the Sessions pane clears its row (`SessionRegistry.swift:367`), but the sheet stays open after an API answer. Robert hit this live; a stale sheet invites a second answer to a question that is already settled.
 - **Posture revisions** — the app echoes `postureRevision` and adopts an API-set posture. ADR-0108's hydration rule is amended to match.
   - **Follow-up from milestone 2:** once the app shows an API-set posture, re-allow a *user's* widening through `PUT /api/sessions/posture` (refused since 2026-10-30; see "What milestone 2 changed"). A supervisor widening stays an escalation.
 - **The app reads the capability token.**
@@ -427,6 +441,7 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
   - read the ledger;
   - see the budget;
   - pause or kill it.
+- **An external answer dismisses the sheet.** With a question's sheet open (or a confirm card shown) in the chat, an answer through `POST /api/confirm/answer` closes it within one feed event. A one-line note replaces it: "Answered by the supervisor" or "Answered elsewhere by you". Answering in the sheet afterwards is impossible, not a 409. Covered by a MARVINLogic assertion on the state transition and a snapshot of the note.
 - **Supervisor output looks different.** A supervisor-sent message and a supervisor-given answer render visibly differently from the user's.
 - **Posture stays in sync.** A posture changed in the toolbar after an API-set one sends the new revision. The toolbar shows an API-set posture within one watch refresh.
 
