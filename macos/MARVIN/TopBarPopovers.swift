@@ -511,6 +511,9 @@ import MARVINLogic
             }
             .pickerStyle(.menu)
             .labelsHidden()
+            // Hidden visually, but the control's accessible name (audit W4):
+            // "Supervisor model", not an unnamed pop-up.
+            .accessibilityLabel("\(label) model")
         }
     }
 
