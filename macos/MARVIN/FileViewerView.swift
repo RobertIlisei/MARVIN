@@ -1162,7 +1162,7 @@ final class MarvinEditorTextView: STTextView {
                 if let i = bridge.openFiles.firstIndex(of: path) {
                     tabScrollIndex = i
                 }
-                withAnimation(MarvinTheme.transition) {
+                MarvinMotion.with(MarvinTheme.transition) {
                     proxy.scrollTo(path, anchor: .center)
                 }
             }
@@ -1199,7 +1199,7 @@ final class MarvinEditorTextView: STTextView {
             let clamped = min(max(next, 0), max(tabs.count - 1, 0))
             tabScrollIndex = clamped
             guard tabs.indices.contains(clamped) else { return }
-            withAnimation(MarvinTheme.transition) {
+            MarvinMotion.with(MarvinTheme.transition) {
                 proxy.scrollTo(tabs[clamped], anchor: edge == .leading ? .leading : .trailing)
             }
         } label: {
@@ -1219,31 +1219,49 @@ final class MarvinEditorTextView: STTextView {
         let buffer = model.buffer(for: path)
         let isDirty = buffer?.isDirty ?? false
         let kind = FileTypeIcon.kind(for: path)
+        let fileName = (path as NSString).lastPathComponent
         return HStack(spacing: 6) {
-            Image(systemName: FileTypeIcon.symbol(for: kind))
-                .font(.system(size: 11))
-                .foregroundStyle(FileTypeIcon.color(for: kind))
-            Text((path as NSString).lastPathComponent)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(isActive ? .primary : .secondary)
-                .lineLimit(1)
-            // Dirty marker — IDE convention is a bullet point that
-            // replaces the close × until the user hovers, but we
-            // keep both visible. Simpler, less hover-state surface.
-            if isDirty {
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: 6, height: 6)
+            // The tab itself is a Button, not a tap gesture on a stack: it is
+            // reachable with full keyboard access, VoiceOver announces it as a
+            // button, and the active tab carries the selected trait (K3). The
+            // whole-tab `onTapGesture` below stays as the pointer's wider target.
+            Button {
+                if !isActive { bridge.setSelectedFile(path) }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: FileTypeIcon.symbol(for: kind))
+                        .font(.system(size: 11))
+                        .foregroundStyle(FileTypeIcon.color(for: kind))
+                    Text(fileName)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                        .lineLimit(1)
+                    // Dirty marker — IDE convention is a bullet point that
+                    // replaces the close × until the user hovers, but we
+                    // keep both visible. Simpler, less hover-state surface.
+                    if isDirty {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
+                    }
+                }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(fileName)
+            .accessibilityValue(isDirty ? "unsaved changes" : "")
+            .accessibilityAddTraits(isActive ? .isSelected : [])
             Button {
                 requestClose(path: path)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .help("Close \((path as NSString).lastPathComponent)")
+            .help("Close \(fileName)")
+            .accessibilityLabel("Close \(fileName)")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)

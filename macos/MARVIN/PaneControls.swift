@@ -58,11 +58,15 @@ private struct PaneIconButtonStyle: ButtonStyle {
 /// this view holding any state of its own.
 @MainActor struct PaneEnableToggle: View {
     let isOn: Bool
+    /// What the switch turns on or off — the skill's or plugin's name. Hidden
+    /// visually (the row beside it already shows it) but it is the control's
+    /// accessible name; an empty title read as an unnamed switch (L8).
+    let name: String
     var help: String? = nil
     let onToggle: (Bool) -> Void
 
     var body: some View {
-        Toggle("", isOn: Binding(get: { isOn }, set: { onToggle($0) }))
+        Toggle(name, isOn: Binding(get: { isOn }, set: { onToggle($0) }))
             .toggleStyle(.switch)
             .controlSize(.mini)
             .labelsHidden()

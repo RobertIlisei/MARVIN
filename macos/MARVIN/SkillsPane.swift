@@ -1151,6 +1151,7 @@ private struct SkillsIndexResponse: Decodable {
                 // it is the pane's central control (ADR-0114).
                 PaneEnableToggle(
                     isOn: active,
+                    name: name,
                     help: active
                         ? "Active for this project — switch off to stop offering it here."
                         : "Inactive here — switch on to offer it to MARVIN for this project."

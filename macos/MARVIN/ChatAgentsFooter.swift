@@ -16,6 +16,8 @@ import SwiftUI
 @MainActor struct ChatAgentsFooter: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var modelsDialogOpen = false
+    /// Asked before a click would step INTO full auto (audit C2).
+    @State private var confirmingFullAuto = false
 
     @State private var open = false
 
@@ -200,8 +202,16 @@ import SwiftUI
     /// (ADR-0115).
     private var modeBadge: some View {
         let strategy = bridge.permissionStrategy
+        let current = PermissionStrategyChoice.parse(strategy)
         return Button {
-            NativePrefs.shared.setPermissionStrategy(PermissionStrategyChoice.parse(strategy).next.rawValue)
+            // One click used to take auto → full auto, waiving the containment
+            // confirms, with nothing said (C2). Stepping into that posture asks;
+            // every other step is the instant cycle it always was.
+            if current.next.needsConfirmation(from: current) {
+                confirmingFullAuto = true
+            } else {
+                NativePrefs.shared.setPermissionStrategy(current.next.rawValue)
+            }
         } label: {
             HStack(spacing: 4) {
                 Circle()
@@ -223,7 +233,27 @@ import SwiftUI
             )
         }
         .buttonStyle(.plain)
-        .help(PermissionStrategyChoice.parse(strategy).help)
+        .help(current.help)
+        .accessibilityLabel("Permissions")
+        .accessibilityValue(current.label)
+        .accessibilityHint("Changes to \(current.next.label)")
+        .confirmationDialog(
+            "Switch to full auto?",
+            isPresented: $confirmingFullAuto,
+            titleVisibility: .visible
+        ) {
+            Button("Switch to Full Auto", role: .destructive) {
+                NativePrefs.shared.setPermissionStrategy(PermissionStrategyChoice.full.rawValue)
+            }
+            // The cycle runs gated → auto → full → gated, so declining full
+            // auto must not strand someone who wanted to tighten up.
+            Button("Switch to Gated") {
+                NativePrefs.shared.setPermissionStrategy(PermissionStrategyChoice.gated.rawValue)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(PermissionStrategyChoice.full.entryWarning)
+        }
     }
 
     // MARK: - Helpers

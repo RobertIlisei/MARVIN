@@ -655,6 +655,11 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// invalidates body when the user toggles the system setting,
     /// so the renderer's frame-rate cap updates without a relaunch.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// With no explicit theme `bridge.preferredColorScheme` is nil, and the
+    /// renderer reads nil as dark — a dark brain on a light system (audit K4,
+    /// the half U6 left: it fixed the editor). The environment's scheme is what
+    /// the window is actually showing.
+    @Environment(\.colorScheme) private var environmentColorScheme
 
     /// Phase 5f — launch animation gate. The brain mounts in
     /// `.boot` (a small bright cluster at the centre); after a
@@ -702,7 +707,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         VStack(spacing: 8) {
             BrainMetalView(
                 state: state,
-                colorScheme: bridge.preferredColorScheme,
+                colorScheme: bridge.preferredColorScheme ?? environmentColorScheme,
                 reduceMotion: reduceMotion
             )
             // Square aspect — keeps the visible sphere circular

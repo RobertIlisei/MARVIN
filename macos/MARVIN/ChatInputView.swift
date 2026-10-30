@@ -215,7 +215,7 @@ final class ChatNSTextView: NSTextView {
         // actually being open, so none of this is reachable during normal
         // typing. ⏎ is included so Enter accepts the highlighted command
         // instead of submitting a half-typed `/emi` as a chat message.
-        if isCommandPopupOpen?() == true {
+        if isCommandPopupOpen?() == true, !hasMarkedText() {
             let mods = event.modifierFlags
             let plain = !mods.contains(.command) && !mods.contains(.option) && !mods.contains(.control)
             switch event.keyCode {
@@ -239,15 +239,24 @@ final class ChatNSTextView: NSTextView {
         // Shift+Enter / Option+Enter inserts a literal newline. ⌘⏎
         // also submits — preserves muscle memory from earlier MARVIN
         // versions and from Slack/Linear/iMessage.
-        let isReturn = event.keyCode == 36
         let mods = event.modifierFlags
         let isShift = mods.contains(.shift)
         let isOption = mods.contains(.option)
         let isCommand = mods.contains(.command)
-        if isReturn && !isShift && !isOption {
+        switch ComposerReturn.decide(
+            keyCode: event.keyCode, shift: isShift, option: isOption,
+            hasMarkedText: hasMarkedText()
+        ) {
+        case .submit:
             // Enter alone (or ⌘⏎) → submit.
             onSubmit?()
             return
+        case .deferToInputMethod:
+            // Return confirms an IME composition; it must not send the message (C1).
+            super.keyDown(with: event)
+            return
+        case .newline, .notReturn:
+            break
         }
         // Phase 5f — `@` at a word boundary fires the inline mention
         // picker. Word-boundary check (start-of-text / preceding
@@ -573,7 +582,10 @@ final class ChatNSTextView: NSTextView {
                         return true
                     }
                 )
-                .frame(height: editorHeight)
+                // A persisted height is a preference, not a demand: it yields
+                // down to the minimum when the window is short, instead of
+                // pushing the transcript and the Send row off the bottom (C6).
+                .frame(minHeight: 60, idealHeight: editorHeight, maxHeight: editorHeight)
 
                 if text.isEmpty && attachments.isEmpty {
                     Text("Message MARVIN — ⏎ send · ⇧⏎ newline · / commands · @ mention · paste image / file")

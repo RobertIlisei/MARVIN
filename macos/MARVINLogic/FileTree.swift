@@ -187,3 +187,65 @@ public func allDirectoryPaths(_ roots: [FileNode]) -> Set<String> {
     walk(roots)
     return out
 }
+
+// MARK: - Keyboard navigation
+
+/// The keys the Files tree answers to once it has focus (audit L2: it handled
+/// Space and nothing else, so a keyboard user could not move through it).
+public enum FileTreeKey: Sendable {
+    case up, down, left, right, home, end
+}
+
+/// What a key press should do. The view applies it; it never decides it.
+public enum FileTreeNavigation: Equatable, Sendable {
+    case select(String)
+    case expand(String)
+    case collapse(String)
+    case none
+}
+
+/// Finder / NSOutlineView semantics over the visible rows:
+/// ↑ ↓ move, → opens a closed folder and then steps into it, ← closes an open
+/// folder and otherwise climbs to the parent, Home / End jump to the ends.
+/// A selection that is no longer listed (the folder holding it was closed, the
+/// file was deleted) is treated as no selection, so the keys never dead-end.
+public func fileTreeNavigate(
+    rows: [FileTreeDisplayRow],
+    selectedPath: String?,
+    key: FileTreeKey
+) -> FileTreeNavigation {
+    guard !rows.isEmpty else { return .none }
+    let index = selectedPath.flatMap { p in rows.firstIndex(where: { $0.node.path == p }) }
+
+    switch key {
+    case .home:
+        return rows[0].node.path == selectedPath ? .none : .select(rows[0].node.path)
+    case .end:
+        let last = rows[rows.count - 1].node.path
+        return last == selectedPath ? .none : .select(last)
+    case .down:
+        guard let i = index else { return .select(rows[0].node.path) }
+        return i + 1 < rows.count ? .select(rows[i + 1].node.path) : .none
+    case .up:
+        guard let i = index else { return .select(rows[rows.count - 1].node.path) }
+        return i > 0 ? .select(rows[i - 1].node.path) : .none
+    case .right:
+        guard let i = index else { return .none }
+        let row = rows[i]
+        guard row.isExpandable else { return .none }
+        if !row.isExpanded { return .expand(row.node.path) }
+        return i + 1 < rows.count && rows[i + 1].depth > row.depth ? .select(rows[i + 1].node.path) : .none
+    case .left:
+        guard let i = index else { return .none }
+        let row = rows[i]
+        if row.isExpandable && row.isExpanded { return .collapse(row.node.path) }
+        guard row.depth > 0 else { return .none }
+        // The parent is the nearest earlier row one level shallower.
+        var j = i - 1
+        while j >= 0 {
+            if rows[j].depth == row.depth - 1 { return .select(rows[j].node.path) }
+            j -= 1
+        }
+        return .none
+    }
+}

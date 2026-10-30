@@ -52,6 +52,9 @@ struct FindFileResult: Identifiable {
     @State private var collapsedFiles: Set<String> = []
 
     @State private var searchTask: Task<Void, Never>? = nil
+    /// True from a keystroke until its search lands. Replace All reads this so
+    /// it never rewrites files from a result list for a query that has changed.
+    @State private var searchPending: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,7 +80,7 @@ struct FindFileResult: Identifiable {
             // Search row
             HStack(spacing: 6) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { replaceExpanded.toggle() }
+                    MarvinMotion.with(.easeInOut(duration: 0.15)) { replaceExpanded.toggle() }
                 } label: {
                     Image(systemName: replaceExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
@@ -148,7 +151,7 @@ struct FindFileResult: Identifiable {
                         // control in the sidebar (ADR-0114).
                         Button("Replace All…") { confirmingReplace = true }
                             .rowChip(.tinted(GitDecorationColor.deleted))
-                            .disabled(query.isEmpty || results.isEmpty || replace.isEmpty || regexError != nil)
+                            .disabled(query.isEmpty || results.isEmpty || replace.isEmpty || regexError != nil || isSearching || searchPending)
                             .help("Rewrite every match in every file listed below. There is no undo.")
                             .confirmationDialog(
                                 "Replace \(matchTotal) match\(matchTotal == 1 ? "" : "es") in \(results.count) file\(results.count == 1 ? "" : "s")?",
@@ -460,8 +463,10 @@ struct FindFileResult: Identifiable {
         guard q.count >= 2 else {
             results = []
             errorMessage = nil
+            searchPending = false
             return
         }
+        searchPending = true
         searchTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000) // 300 ms debounce
             guard !Task.isCancelled else { return }
@@ -481,7 +486,7 @@ struct FindFileResult: Identifiable {
         guard let cwd = bridge.projectWorkDir else { return }
         isSearching = true
         errorMessage = nil
-        defer { isSearching = false }
+        defer { isSearching = false; searchPending = false }
 
         do {
             var components = URLComponents(string: "\(ServerConfig.baseURLString)/api/files/search")!
@@ -518,6 +523,10 @@ struct FindFileResult: Identifiable {
         let r = replace
         guard !q.isEmpty, !results.isEmpty else { return }
         guard let cwd = bridge.projectWorkDir else { return }
+        let pattern = ReplacePattern.make(
+            query: q, replacement: r, useRegex: useRegex,
+            wholeWord: wholeWord, caseSensitive: caseSensitive
+        )
         isReplacing = true
         replaceError = nil
         Task { @MainActor in
@@ -530,20 +539,9 @@ struct FindFileResult: Identifiable {
                         cwd: cwd, path: fileResult.relPath
                     )
                     guard !resp.binary, let text = resp.content else { continue }
-                    let newText: String
-                    if useRegex {
-                        let opts: NSRegularExpression.Options =
-                            caseSensitive ? [] : .caseInsensitive
-                        let rx = try NSRegularExpression(pattern: q, options: opts)
-                        let range = NSRange(text.startIndex..., in: text)
-                        newText = rx.stringByReplacingMatches(
-                            in: text, range: range, withTemplate: r
-                        )
-                    } else {
-                        let opts: String.CompareOptions =
-                            caseSensitive ? [.literal] : [.caseInsensitive, .literal]
-                        newText = text.replacingOccurrences(of: q, with: r, options: opts)
-                    }
+                    // The same rule search used: whole word, case and regex
+                    // are honoured here too, not just in the list (L6).
+                    let newText = try pattern.apply(to: text)
                     guard newText != text else { continue }
                     _ = try await FilesService.shared.saveFile(
                         cwd: cwd, path: fileResult.relPath, content: newText

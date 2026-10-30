@@ -72,7 +72,7 @@ enum MarvinTheme {
         static let card: CGFloat = 6
     }
 
-    private static func adaptive(dark: String, light: String) -> Color {
+    static func adaptive(dark: String, light: String) -> Color {
         Color(nsColor: adaptiveNS(dark: dark, light: light))
     }
 

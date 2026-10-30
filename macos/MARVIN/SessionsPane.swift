@@ -444,6 +444,11 @@ import SwiftUI
         .padding(.vertical, 3)
         .contentShape(Rectangle())
         .onTapGesture { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
+        // The row is a tap gesture; give VoiceOver the same act (L24), and keep
+        // the Allow / Deny chips inside it individually reachable.
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAction(named: "Switch to tab") { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(selected ? Color(nsColor: .textBackgroundColor) : Color.clear)
@@ -494,25 +499,54 @@ import SwiftUI
     /// The pending tool, its one-line excerpt, and Allow / Deny — the same
     /// decision the tray card offers, from here.
     private func inlineConfirm(_ c: PendingConfirmInfo, sessionId: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(c.toolName)
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.16)))
-                Text(c.excerpt ?? "wants to run")
-                    .font(.system(size: 9.5, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
-                Button("Deny") { Task { await registry.answer(c, in: sessionId, allow: false) } }
-                    .rowChip(.tinted(GitDecorationColor.deleted))
-                    .help("Refuse this tool call. The tab is told no and carries on.")
-                Button("Allow") { Task { await registry.answer(c, in: sessionId, allow: true) } }
-                    .rowChip(.tinted(GitDecorationColor.added))
-                    .help("Let this tool call run, without switching to that tab.")
+        let excerpt = c.excerpt ?? "wants to run"
+        let toolBadge = Text(c.toolName)
+            .font(.system(size: 9.5, design: .monospaced))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.16)))
+        let deny = Button("Deny") { Task { await registry.answer(c, in: sessionId, allow: false) } }
+            .rowChip(.tinted(GitDecorationColor.deleted))
+            .help("Refuse this tool call. The tab is told no and carries on.")
+            .accessibilityLabel("Deny \(c.toolName)")
+        let allow = Button("Allow") { Task { await registry.answer(c, in: sessionId, allow: true) } }
+            .rowChip(.tinted(GitDecorationColor.added))
+            .help("Let this tool call run, without switching to that tab.")
+            .accessibilityLabel("Allow \(c.toolName)")
+        return VStack(alignment: .leading, spacing: 3) {
+            // What is being approved, in full where it fits (L7). This was one
+            // line, middle-truncated, with the whole text only in a tooltip — a
+            // decision made on the part of a command that survived the
+            // ellipsis. A short command keeps the compact one-line row; one
+            // that does not fit gets its own lines (four, cut at the end,
+            // selectable) with the buttons below, so it never squeezes them.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    toolBadge
+                    Text(excerpt)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    Spacer(minLength: 4)
+                    deny
+                    allow
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    toolBadge
+                    Text(excerpt)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .help(excerpt)
+                    HStack(spacing: 6) {
+                        Spacer(minLength: 4)
+                        deny
+                        allow
+                    }
+                }
             }
             if let r = c.reason, !r.isEmpty {
                 Text(r).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)

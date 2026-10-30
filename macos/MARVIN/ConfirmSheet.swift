@@ -443,5 +443,13 @@ private func prettyJSON(_ value: ChatJSON) -> String {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.06))
+        // A blocked turn waits on this card; say so (C3). One container with a
+        // name so VoiceOver reads which tool before it reads the buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(isPlanApproval ? "Plan approval needed" : "Permission needed for \(request.toolName)")
+        .announced(isPlanApproval
+            ? "MARVIN has a plan and is waiting for your approval."
+            : "MARVIN is waiting for permission to use \(request.toolName).",
+            when: request.toolUseId)
     }
 }

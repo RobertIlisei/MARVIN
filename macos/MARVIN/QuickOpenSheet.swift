@@ -34,7 +34,7 @@ import AppKit
                     .textFieldStyle(.plain)
                     .focused($queryFocused)
                     .onSubmit {
-                        if let path = selection ?? filtered.first {
+                        if let path = effectiveSelection {
                             open(path)
                         }
                     }
@@ -64,26 +64,35 @@ import AppKit
             } else {
                 let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
                 let showSections = q.isEmpty && !validRecents.isEmpty
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if showSections {
-                            sectionLabel("RECENT")
-                            ForEach(validRecents, id: \.self) { path in
-                                row(path: path)
-                            }
-                            sectionLabel("ALL FILES")
-                            let recentSet = Set(validRecents)
-                            ForEach(allFiles.filter { !recentSet.contains($0) }.prefix(140), id: \.self) { path in
-                                row(path: path)
-                            }
-                        } else {
-                            ForEach(filtered.prefix(150), id: \.self) { path in
-                                row(path: path)
+                // Resolved once per body: the row Return will open is drawn as
+                // selected from the first keystroke, and scrolled into view (W1).
+                let sel = effectiveSelection
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            if showSections {
+                                sectionLabel("RECENT")
+                                ForEach(validRecents, id: \.self) { path in
+                                    row(path: path, selected: path == sel).id(path)
+                                }
+                                sectionLabel("ALL FILES")
+                                let recentSet = Set(validRecents)
+                                ForEach(allFiles.filter { !recentSet.contains($0) }.prefix(140), id: \.self) { path in
+                                    row(path: path, selected: path == sel).id(path)
+                                }
+                            } else {
+                                ForEach(filtered.prefix(150), id: \.self) { path in
+                                    row(path: path, selected: path == sel).id(path)
+                                }
                             }
                         }
                     }
+                    .frame(height: 380)
+                    .onChange(of: sel) { _, path in
+                        guard let path else { return }
+                        proxy.scrollTo(path, anchor: .center)
+                    }
                 }
-                .frame(height: 380)
             }
 
             HStack {
@@ -147,7 +156,7 @@ import AppKit
         .padding(.bottom, 2)
     }
 
-    private func row(path: String) -> some View {
+    private func row(path: String, selected isSelected: Bool) -> some View {
         let kind = FileTypeIcon.kind(for: path)
         let name = (path as NSString).lastPathComponent
         let parent = (path as NSString).deletingLastPathComponent
@@ -155,7 +164,6 @@ import AppKit
         let displayParent = parent.hasPrefix(cwd)
             ? String(parent.dropFirst(cwd.count).drop(while: { $0 == "/" }))
             : parent
-        let isSelected = selection == path
         return Button {
             open(path)
         } label: {
@@ -185,6 +193,7 @@ import AppKit
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var filtered: [String] {
@@ -211,15 +220,19 @@ import AppKit
         return nameMatches + pathMatches
     }
 
+    /// The row Return opens: the stored pick if it is still listed, else the
+    /// first row (`ListSelection`, asserted).
+    private var effectiveSelection: String? {
+        let list = Array(filtered.prefix(150))
+        let current = selection.flatMap { list.firstIndex(of: $0) }
+        return ListSelection.effective(current, count: list.count).map { list[$0] }
+    }
+
     private func moveSelection(_ delta: Int) {
         let list = Array(filtered.prefix(150))
-        guard !list.isEmpty else { return }
-        if let current = selection, let i = list.firstIndex(of: current) {
-            let next = (i + delta).clamped(to: 0...(list.count - 1))
-            selection = list[next]
-        } else {
-            selection = list[delta > 0 ? 0 : list.count - 1]
-        }
+        let current = effectiveSelection.flatMap { list.firstIndex(of: $0) }
+        guard let next = ListSelection.step(current, by: delta, count: list.count) else { return }
+        selection = list[next]
     }
 
     private func open(_ path: String) {

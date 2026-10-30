@@ -23,6 +23,7 @@
 // baselines — rejecting here restores the user's uncommitted state, not
 // HEAD. (See ADR-0034 for why git discard is the wrong revert.)
 
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Cross-window notification
@@ -305,6 +306,11 @@ final class ReviewWindowTarget {
     /// Keyed by path so switching files re-applies the guard.
     @State private var expandedLarge: Set<String> = []
 
+    /// A reject that is waiting on the user's answer (audit K1). Restoring
+    /// baselines rewrites files on disk with no undo, so a file or a whole
+    /// review asks first; a single hunk does not (`ReviewRejectScope`).
+    @State private var pendingReject: ReviewRejectScope?
+
     /// Above this many diff lines a file is held behind a "Show anyway"
     /// placeholder (GitHub's "Large diffs are not rendered by default").
     private let largeDiffLineCap = 1500
@@ -325,6 +331,29 @@ final class ReviewWindowTarget {
             }
         }
         .task(id: model.marvinSessionId) { await model.refresh() }
+        .confirmationDialog(
+            pendingReject?.title ?? "",
+            isPresented: Binding(get: { pendingReject != nil }, set: { if !$0 { pendingReject = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingReject
+        ) { scope in
+            Button(scope.confirmLabel, role: .destructive) { performReject(scope) }
+            Button("Cancel", role: .cancel) {}
+        } message: { scope in
+            Text(scope.message)
+        }
+    }
+
+    private func requestReject(_ scope: ReviewRejectScope) {
+        if scope.needsConfirmation { pendingReject = scope } else { performReject(scope) }
+    }
+
+    private func performReject(_ scope: ReviewRejectScope) {
+        switch scope {
+        case .all: model.resolve(action: "reject")
+        case .file(let path): model.resolve(action: "reject", path: path)
+        case .hunk: break // hunks go straight through `hunkHeaderBar`
+        }
     }
 
     private var toolbar: some View {
@@ -350,7 +379,7 @@ final class ReviewWindowTarget {
             .frame(width: 92)
             .help("Split — side-by-side. Inline — unified single column.")
             MarvinDivider().frame(height: 16)
-            Button("Reject all") { model.resolve(action: "reject") }
+            Button("Reject all") { requestReject(.all(files: model.files.count)) }
                 .disabled(model.busy || model.files.isEmpty)
             Button("Accept all") { model.resolve(action: "accept") }
                 .keyboardShortcut(.defaultAction)
@@ -400,7 +429,7 @@ final class ReviewWindowTarget {
             .tag(file.path)
             .contextMenu {
                 Button("Accept file") { model.resolve(action: "accept", path: file.path) }
-                Button("Reject file") { model.resolve(action: "reject", path: file.path) }
+                Button("Reject file") { requestReject(.file(path: file.path)) }
             }
         }
         .listStyle(.sidebar)
@@ -416,7 +445,7 @@ final class ReviewWindowTarget {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    Button("Reject file") { model.resolve(action: "reject", path: diff.path) }
+                    Button("Reject file") { requestReject(.file(path: diff.path)) }
                         .disabled(model.busy)
                     Button("Accept file") { model.resolve(action: "accept", path: diff.path) }
                         .disabled(model.busy)
@@ -546,9 +575,9 @@ final class ReviewWindowTarget {
 
     private func splitRowView(_ row: SBRow) -> some View {
         HStack(spacing: 0) {
-            sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind))
+            sbCell(num: row.leftNum, text: row.leftText, tint: leftTint(row.kind), sign: leftSign(row.kind))
             MarvinDivider()
-            sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind))
+            sbCell(num: row.rightNum, text: row.rightText, tint: rightTint(row.kind), sign: rightSign(row.kind))
         }
     }
 
@@ -589,13 +618,21 @@ final class ReviewWindowTarget {
         .padding(24)
     }
 
-    private func sbCell(num: Int?, text: String?, tint: Color) -> some View {
+    private func sbCell(num: Int?, text: String?, tint: Color, sign: String) -> some View {
         HStack(alignment: .top, spacing: 0) {
             Text(num.map(String.init) ?? "")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 40, alignment: .trailing)
-                .padding(.trailing, 8)
+                .padding(.trailing, 4)
+            // Added and removed were a 10% green or red wash and nothing else
+            // (K6). The sign says it without colour, as the unified view does.
+            Text(sign)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 10, alignment: .center)
+                .padding(.trailing, 2)
+                .accessibilityHidden(true)
             Text(text ?? " ")
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.primary)
@@ -606,6 +643,31 @@ final class ReviewWindowTarget {
         .padding(.vertical, 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Self.cellDescription(sign: sign, text: text))
+    }
+
+    private static func cellDescription(sign: String, text: String?) -> String {
+        let body = (text ?? "").isEmpty ? "blank line" : text!
+        switch sign {
+        case "+": return "added: \(body)"
+        case "−": return "removed: \(body)"
+        default: return body
+        }
+    }
+
+    private func leftSign(_ kind: SBRowKind) -> String {
+        switch kind {
+        case .removed, .modified: return "−"
+        case .added, .context: return " "
+        }
+    }
+
+    private func rightSign(_ kind: SBRowKind) -> String {
+        switch kind {
+        case .added, .modified: return "+"
+        case .removed, .context: return " "
+        }
     }
 
     private func leftTint(_ kind: SBRowKind) -> Color {

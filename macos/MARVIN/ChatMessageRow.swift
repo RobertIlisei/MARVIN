@@ -394,12 +394,21 @@ private enum ToolStyle {
                 .truncationMode(.tail)
             Spacer()
             statusPip
-            Button(expanded ? "▾" : "▸") {
-                withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+            // A drawn chevron, not the text glyphs ▸/▾: it has a name and a
+            // state for VoiceOver and a hit area wider than the glyph (C4).
+            Button {
+                MarvinMotion.with(.easeOut(duration: 0.12)) { expanded.toggle() }
+            } label: {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 18, height: 14)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .font(.caption.monospaced())
             .foregroundStyle(.secondary)
+            .help(expanded ? "Hide details" : "Show details")
+            .accessibilityLabel("\(name) details")
+            .accessibilityValue(expanded ? "expanded" : "collapsed")
         }
     }
 
@@ -409,14 +418,17 @@ private enum ToolStyle {
         if isPending {
             ProgressView()
                 .controlSize(.mini)
+                .accessibilityLabel("Running")
         } else if isErrored {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
                 .font(.caption)
+                .accessibilityLabel("Failed")
         } else {
             Image(systemName: "checkmark")
                 .foregroundStyle(.green)
                 .font(.caption.weight(.semibold))
+                .accessibilityLabel("Done")
         }
     }
 
@@ -592,7 +604,7 @@ extension ChatJSON {
                 .textSelection(.enabled)
             if output.count > inlineLimit {
                 Button(expanded ? "show less" : "show all (\(output.count) chars)") {
-                    withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+                    MarvinMotion.with(.easeOut(duration: 0.12)) { expanded.toggle() }
                 }
                 .buttonStyle(.borderless)
                 .font(.caption.monospaced())

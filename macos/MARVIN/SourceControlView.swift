@@ -867,8 +867,15 @@ final class SourceControlModel {
         model.repos.filter { !$0.isCurrent }
     }
 
+    // A `Group`, not a `VStack`: this is built inside the pane's `LazyVStack`,
+    // and a `VStack` child is realised whole — every changed file (the file
+    // header cites 477) became a stateful row and was re-evaluated on every
+    // model change (audit L5). A `Group` lets each `ForEach` row be a direct
+    // lazy child. The enclosing `LazyVStack` already supplies leading
+    // alignment and zero spacing.
+    @ViewBuilder
     private var repoGroup: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
             repoHeaderRow
             composer
             if !model.conflicted.isEmpty {
@@ -1163,7 +1170,12 @@ final class SourceControlModel {
         .buttonStyle(.plain)
 
         if !isCollapsed {
-            ForEach(files, id: \.path) { file in
+            // Identity is section + path. A file that is both staged and
+            // modified appears in two sections, and now that the rows are
+            // direct children of one lazy stack a bare `\.path` collided across
+            // them and dropped a row (seen in the render after L5).
+            ForEach(files.map { SectionedFile(section: id, file: $0) }) { entry in
+                let file = entry.file
                 SourceControlRow(
                     file: file,
                     cwd: cwd,
@@ -1691,6 +1703,13 @@ struct DiffSheetItem: Identifiable {
 /// different reading order from the porcelain two-column badge the
 /// panel used to lead with — the filename is what you scan for, so it
 /// goes first and the status code goes last.
+/// A changed file as one section lists it — identity is the section AND the path.
+private struct SectionedFile: Identifiable {
+    let section: String
+    let file: GitStatusFile
+    var id: String { section + "\u{0}" + file.path }
+}
+
 @MainActor private struct SourceControlRow: View {
     let file: GitStatusFile
     let cwd: String
@@ -1704,6 +1723,13 @@ struct DiffSheetItem: Identifiable {
     let onReveal: () -> Void
 
     @State private var hovering = false
+
+    /// Which control inside the row holds keyboard focus. The per-file actions
+    /// used to exist only while the pointer hovered (L1); they now also show
+    /// while any part of the row has focus, so Tab can reach them.
+    private enum FocusTarget: Hashable { case row, open, discard, stage }
+    @FocusState private var focus: FocusTarget?
+    private var showActions: Bool { hovering || focus != nil }
 
     private static let rowHeight: CGFloat = 22
 
@@ -1729,7 +1755,7 @@ struct DiffSheetItem: Identifiable {
             Spacer(minLength: 4)
             if isInFlight {
                 ProgressView().controlSize(.small).scaleEffect(0.6)
-            } else if hovering {
+            } else if showActions {
                 hoverActions
             }
             Text(badge.label)
@@ -1739,12 +1765,35 @@ struct DiffSheetItem: Identifiable {
         }
         .padding(.horizontal, 12)
         .frame(height: Self.rowHeight)
-        .background(hovering ? MarvinTheme.rowHover : Color.clear)
+        .background(showActions ? MarvinTheme.rowHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
+        // Keyboard: the row takes focus; Return opens the diff, Space stages or
+        // unstages. Discard stays a visible, deliberate button (it confirms).
+        .focusable()
+        .focused($focus, equals: .row)
+        .focusEffectDisabled()
+        .onKeyPress(.return) { onTap(); return .handled }
+        .onKeyPress(.space) {
+            guard section != "conflicted", !isInFlight else { return .ignored }
+            if section == "staged" { onUnstage() } else { onStage() }
+            return .handled
+        }
         .help(relativePath)
         .contextMenu { menu }
+        // VoiceOver: one element per file, its status as the value, and the
+        // actions the hover buttons offered as custom actions (L1).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(fileName)
+        .accessibilityValue(badge.tooltip)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default, onTap)
+        .accessibilityAction(named: "Open changes", onTap)
+        .accessibilityAction(named: section == "staged" ? "Unstage" : "Stage") {
+            if section == "staged" { onUnstage() } else { onStage() }
+        }
+        .accessibilityAction(named: file.entryType == "untracked" ? "Delete file" : "Discard changes", onDiscard)
         .accessibilityIdentifier("scm-row:\(file.path)")
     }
 
@@ -1761,18 +1810,19 @@ struct DiffSheetItem: Identifiable {
     /// stage/unstage closest to the status letter.
     private var hoverActions: some View {
         HStack(spacing: 2) {
-            rowIcon("arrow.left.arrow.right", help: "Open changes", action: onTap)
+            rowIcon("arrow.left.arrow.right", help: "Open changes", target: .open, action: onTap)
             if section != "conflicted" {
                 rowIcon(
                     "arrow.uturn.backward",
                     help: file.entryType == "untracked"
                         ? "Delete file" : "Discard changes",
+                    target: .discard,
                     action: onDiscard
                 )
                 if section == "staged" {
-                    rowIcon("minus", help: "Unstage", action: onUnstage)
+                    rowIcon("minus", help: "Unstage", target: .stage, action: onUnstage)
                 } else {
-                    rowIcon("plus", help: "Stage", action: onStage)
+                    rowIcon("plus", help: "Stage", target: .stage, action: onStage)
                 }
             }
         }
@@ -1781,6 +1831,7 @@ struct DiffSheetItem: Identifiable {
     private func rowIcon(
         _ symbol: String,
         help: String,
+        target: FocusTarget,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1791,7 +1842,9 @@ struct DiffSheetItem: Identifiable {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .focused($focus, equals: target)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     @ViewBuilder
