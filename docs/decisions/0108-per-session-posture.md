@@ -124,3 +124,10 @@ themselves chose moments earlier.
 - [x] `GET /api/sessions/watch` carries each row's stored posture, and the
       client seeds only tabs it has no local record for.
 - [x] `swift build` clean; 800 Swift assertions green.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — the supervisor may narrow a tab's posture, never widen it
+
+- Posture stays per session, and the user's choice stays the authority. `PUT /api/sessions/posture` changes a tab's posture without sending a turn; the meta records a revision and a source.
+- On its own the supervisor may only **narrow**: auto or full → gated, Agent → Plan or Ask, a cheaper model, lower effort. Every widening — including Plan → Agent, which is how plan approval is expressed today — escalates to the user.
+- "A local record always outranks the server's" is amended for API-set posture: the chat route keeps an API-set posture until the client has seen its revision. The app adopts revisions in ADR-0127 milestone 6; a user who never uses the route sees no change.
+- Server-started turns — wakeups, job completions, resumes, supervisor sends — run in the tab's stored **mode**. Today that path drops it and runs them as Agent (`turn-orchestrator.ts:725-745`, `sdk-runner.ts:2158`); fixed in ADR-0127 milestone 2.

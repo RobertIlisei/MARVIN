@@ -176,3 +176,7 @@ keep/dismiss review stays at the real scope boundary, where it belongs.
 everything attached to a turn ending. Anything bound to the handoff should be
 re-checked against this ADR — the backlog review was the first casualty found,
 and is unlikely to be the only thing coupled that way.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — a supervisor nudge is a legitimate continuation
+
+An approved plan is standing authorization. A supervisor message telling a tab to continue its approved plan therefore asks for nothing the plan did not already grant, and the tab treats it like the Continue control: carry on, do not re-audit, do not re-ask. It cannot widen the authorization — it cannot approve a plan, add steps or scope, or change the DoD (ADR-0127 §4). At the plan's boundary the tab stops exactly as it would for the user, and asks the **user**, not the supervisor, for anything beyond it. Two nudges at the same step without plan-spine progress escalate to the user instead of a third (ADR-0127 §6).

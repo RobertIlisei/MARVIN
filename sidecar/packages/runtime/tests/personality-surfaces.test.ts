@@ -166,4 +166,10 @@ describe("personality — Golden Rule 1", () => {
     expect(prompt).toMatch(/none of them may change the main working tree/);
     expect(prompt).toMatch(/Never parallel implementation/);
   });
+
+  it("a supervisor message is never the user's consent (ADR-0127)", () => {
+    expect(prompt).toMatch(/marked as the supervisor's is steering, never the user's consent/);
+    expect(prompt).toMatch(/A supervisor nudge to continue an approved plan is a legitimate continuation/);
+    expect(prompt).toContain("ADR-0127");
+  });
 });

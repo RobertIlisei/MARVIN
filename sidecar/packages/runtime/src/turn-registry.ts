@@ -73,6 +73,10 @@ export interface LiveTurn {
    * case the caller falls back to the durable queue (ADR-0069).
    */
   inject?: (text: string) => boolean;
+  /** ADR-0127 §5 — who wrote the message that started this turn. Absent: the user (or the runtime, for `machine`). */
+  author?: "user" | "supervisor";
+  /** ADR-0127 milestone 4 — set when the supervisor cancelled the turn, so it is never recorded as the user's Stop. */
+  cancelledBy?: "supervisor";
 }
 
 /**
@@ -91,6 +95,8 @@ export interface TurnAnnouncement {
   startedAt: number;
   /** ADR-0107 — human or machine (wakeup / resume) turn. */
   kind?: "human" | "machine";
+  /** ADR-0127 §5 — a supervisor-authored turn. */
+  author?: "supervisor";
 }
 
 /**
@@ -111,7 +117,12 @@ export type ProjectEvent =
         outcome: "completed" | "error";
         error?: string;
         cancelled?: boolean;
+        /** ADR-0127 milestone 4 — the supervisor, not the user, cancelled it. */
+        cancelledBy?: "supervisor";
         costUsd?: number | null;
+        /** ADR-0127 milestone 4 — who started the turn: the supervisor wakes only for a human or supervisor-authored one. */
+        kind?: "human" | "machine";
+        author?: "supervisor";
       };
     }
   | {
@@ -120,9 +131,25 @@ export type ProjectEvent =
     }
   | {
       event: "confirm.resolved";
-      data: { marvinSessionId: string; projectId: string; turnId: string; toolUseId: string; decision: "allow" | "deny" };
+      data: {
+        marvinSessionId: string;
+        projectId: string;
+        turnId: string;
+        toolUseId: string;
+        decision: "allow" | "deny";
+        /** ADR-0127 — who answered; absent on a timeout or a turn's own unwinding. */
+        answeredBy?: "user" | "supervisor";
+        ledgerId?: string;
+        /** A question's chosen labels per question, in question order (shadow pairing). */
+        answerValues?: string[];
+      };
     }
   | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } }
+  | {
+      /** ADR-0127 §5 — the supervisor touched a turn. */
+      event: "turn.supervisor-touched";
+      data: { marvinSessionId: string; projectId: string; turnId: string; at: string; by: "message" | "answer" };
+    }
   | {
       /** ADR-0107 addendum — what the session's live turn is doing now. */
       event: "session.activity";
@@ -172,6 +199,8 @@ export function registerLiveTurn(input: {
   /** ADR-0069 — defaults to "human" so an un-migrated caller is never
    *  mistaken for a machine turn and preempted. */
   kind?: "human" | "machine";
+  /** ADR-0127 §5 — a supervisor message started it (always `kind: "machine"`, so a user message preempts it). */
+  author?: "supervisor";
 }): LiveTurn {
   // If a prior turn was registered under this session but never ended
   // cleanly (rare — server crash, or an explicit replace), evict it so
@@ -206,6 +235,7 @@ export function registerLiveTurn(input: {
     ended: false,
     kind: input.kind ?? "human",
     mutated: false,
+    ...(input.author ? { author: input.author } : {}),
   };
   live.set(input.marvinSessionId, turn);
   // ADR-0120 — the machine must not idle-sleep while a turn is in flight.
@@ -218,6 +248,7 @@ export function registerLiveTurn(input: {
     turnId: turn.turnId,
     startedAt: turn.startedAt,
     kind: turn.kind,
+    ...(turn.author === "supervisor" ? { author: "supervisor" as const } : {}),
   };
   announcer.emit("turn", announcement);
   announceProjectEvent({ event: "turn.registered", data: announcement });
@@ -286,8 +317,11 @@ export function endLiveTurn(
       projectId: turn.projectId,
       turnId: turn.turnId,
       outcome: terminal.event === "turn.completed" ? "completed" : "error",
+      kind: turn.kind,
+      ...(turn.author === "supervisor" ? { author: "supervisor" as const } : {}),
       ...(typeof d.error === "string" ? { error: d.error } : {}),
       ...(d.cancelled === true ? { cancelled: true } : {}),
+      ...(d.cancelledBy === "supervisor" ? { cancelledBy: "supervisor" as const } : {}),
       ...(typeof d.costUsd === "number" ? { costUsd: d.costUsd } : {}),
     },
   });
@@ -317,6 +351,9 @@ export function endLiveTurn(
  * identifies its own cause instead of needing to be guessed at
  * (user, 2026-09-01: aborts appearing on session switch).
  */
+/** What a supervisor cancel says in the transcript and on the terminal event. */
+export const SUPERVISOR_CANCEL_MESSAGE = "Cancelled by the MARVIN supervisor, not by the user.";
+
 export function cancelLiveTurn(
   marvinSessionId: string,
   source = "unspecified",
@@ -333,6 +370,10 @@ export function cancelLiveTurn(
       at: new Date().toISOString(),
     })}`,
   );
+  // ADR-0127 §5 — a supervisor cancel names its author in every record it
+  // leaves; it is never written as the user's Stop.
+  const bySupervisor = source === "supervisor";
+  if (bySupervisor) turn.cancelledBy = "supervisor";
   // Ask the agent to stop gracefully...
   turn.abortController.abort();
   // ...but do NOT wait for it. Force the turn terminal now so the session
@@ -343,7 +384,9 @@ export function cancelLiveTurn(
   // duplicate terminal.
   endLiveTurn(turn, {
     event: "turn.error",
-    data: { error: "cancelled by user", cancelled: true },
+    data: bySupervisor
+      ? { error: SUPERVISOR_CANCEL_MESSAGE, cancelled: true, cancelledBy: "supervisor" }
+      : { error: "cancelled by user", cancelled: true },
   });
   return true;
 }

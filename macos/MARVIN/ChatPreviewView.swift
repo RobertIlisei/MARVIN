@@ -2915,9 +2915,11 @@ final class ChatPreviewModel {
             switch outcome {
             case .closeNow:
                 closeTab(sid, action: nil)
-            case .reclaimSilently:
+            case .reclaimSilently where row?.worktree != nil:
                 closeTab(sid, action: .discard)
-            case .stopTurnFirst, .offer:
+            case .stopTurnFirst, .offer, .reclaimSilently:
+                // A silent discard only on state fetched just now; on the
+                // ledger's cached guess it is asked, with the discard named.
                 pendingClose = TabCloseChoice(id: sid, outcome: outcome, branch: worktree?.branch ?? entry?.tree?.branch, target: target)
             }
         }

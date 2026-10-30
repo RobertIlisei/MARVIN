@@ -1,6 +1,12 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // The sidecar's `@/…` import alias (sidecar/tsconfig.json), so a route
+  // handler can be imported by a test. Anchored on `@/` so `@marvin/*` and
+  // `@anthropic-ai/*` resolve as packages.
+  resolve: {
+    alias: [{ find: /^@\//, replacement: `${new URL("./sidecar/src/", import.meta.url).pathname}` }],
+  },
   test: {
     include: [
       "sidecar/packages/**/tests/**/*.test.ts",

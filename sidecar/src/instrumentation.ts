@@ -78,6 +78,20 @@ export async function register(): Promise<void> {
       `[wakeup-scheduler] re-armed ${stats.armed}, fired ${stats.firedImmediately} past-due, dropped ${stats.dropped} stale`,
     );
   }
+  // ADR-0127 — re-arm every persisted supervisor and mint this boot's
+  // capability token. State only: the wake loop starts from route code, in the
+  // routes' module graph, where the project event bus lives.
+  try {
+    const { bootSupervisor } = await import("@marvin/runtime/supervisor-state");
+    const { armed } = bootSupervisor();
+    if (armed.length) {
+      // eslint-disable-next-line no-console
+      console.log(`[supervisor] re-armed ${armed.length} supervisor(s) in shadow mode`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[supervisor] boot failed:", err);
+  }
   // ADR-0038 addendum (2026-09-29): jobs that were running when the sidecar
   // went away get a completion turn saying their result is unknown.
   try {

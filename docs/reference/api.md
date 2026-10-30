@@ -48,6 +48,8 @@ All fields except `message` are optional. Resolution for `model` / `advisorModel
 
 SSE connection close does **not** cancel the turn — see [Sessions](../operations/sessions.md). Use `POST /api/chat/cancel` to abort explicitly.
 
+**A supervisor message — `author: "supervisor"`** ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md) §5, milestone 3). Needs the per-boot token in `x-marvin-supervisor-token` (`403` without it); any other `author` than `user` / `supervisor` is a `400`. Body: `{ author: "supervisor", message, projectId, marvinSessionId, supervisor?: { kind: "nudge" | "instruction", grounds?: [{ kind, ref }] } }` — an existing tab only. It takes the same server-side send path as the supervisor: the message is wrapped in an envelope that names the sender, recorded as `turn.user` with `author: "supervisor"` and `supervisor: { kind, ledgerId, grounds }`, and starts a `machine` turn (`turn.started.author: "supervisor"`) in the tab's stored posture, mode included, which is **supervisor-touched**: every human-only act in it raises a confirm only the user can answer, in every posture. It never injects into or preempts a live turn — it waits for it — and a user message preempts the turn it starts (ADR-0069). **Response:** `202 { ok: true, queued }` (no SSE; the turn announces itself on the feed), or `409 { error, detail }` with `error` one of `stopped` (the user stopped the tab), `waiting-on-own` (its own job or wakeup is pending), `shared-busy` (another session is working in the shared checkout), `secret` (a secret-shaped string), `closed`, `no-session`, `worktree-missing`, `supervisor-session`, `empty`, `too-long`. A queued message is checked again when it fires and dropped — with a ledger `drop` line — if the tab was stopped, put to waiting or closed meanwhile, the supervisor paused, or the tab stayed busy through every deferral.
+
 ### `POST /api/chat/cancel`
 
 Abort an in-flight turn.
@@ -75,6 +77,80 @@ Resolve a pending confirm card.
 The server looks up the pending resolver in [`confirm-registry`](../../../sidecar/packages/runtime/src/confirm-registry.ts) and resolves it — the SDK's `canUseTool` promise returns `{ behavior: decision, message: denyMessage }`.
 
 For an **AskUserQuestion** decision (ADR-0040) the `allow` reply carries `updatedInput` (the `{ answers, questions }` the user chose) which becomes the tool result. Such confirms register with **no** auto-deny timeout — a decision waits for the human (fixed in v0.1.40; the 5-min default used to silently deny a slow decision).
+
+Since ADR-0127 milestone 2 an `allow` on a question **must** carry `updatedInput.answers` — keys are pending question texts, values strings, at least one non-empty — or it answers `400` and the question stays pending (it used to resolve with the original input and nothing chosen). `questions` is taken from the registry, not the caller. Every decision is recorded on the transcript as `confirm.decision` with `answeredBy: "user"`.
+
+### `POST /api/confirm/answer`
+
+Answer a pending AskUserQuestion by label, so no caller hand-builds `updatedInput` ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md) §9). CSRF-guarded; user authority only.
+
+**Request body:** `{ marvinSessionId, toolUseId, answers?: { [questionText]: label | label[] }, other?: { [questionText]: string }, turnId? }`.
+**Response:** `{ ok: true, updatedInput }` — built exactly as the native sheet builds it (`AskQuestionSheet.swift`): every question keyed by its full text, picked labels in option order then the trimmed "Other" text, joined with `,`; an unanswered question is `""`; the original `questions` echoed. A single-select takes one answer (an option or "Other", not both).
+**Errors:** `400` an unknown label (the message lists the valid ones), a question that was not asked, no answer, or a confirm that is not a question · `409` no live turn, a `turnId` that disagrees with the session's live turn, or already answered · `403` CSRF.
+
+## Session posture
+
+### `PUT /api/sessions/posture`
+
+Change a tab's posture without sending a turn ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md) §9, ADR-0108 amendment). CSRF-guarded.
+
+**Request body:** `{ projectId, marvinSessionId, posture: { model?, thinkingMode?, permissionStrategy?, mode? }, actor?: "user" | "supervisor", grounds? }`.
+**Response:** `{ posture, postureRevision, postureSource, changes, liveApplied }` — `changes` lists each field with its direction (`narrow` / `widen` / `same`); `liveApplied` names the fields that reached a live turn.
+
+- **No turn is sent.** The session meta is written with `postureRevision` (+1) and `postureSource`, and `postureOverride` holds the fields set here.
+- **The app's next post does not undo it.** `POST /api/chat` keeps the held fields over the posture a client posts until the client sends `postureRevision` back (watch rows carry it as `postureRevision`, with `postureSource`; a client cannot acknowledge a revision the server never issued). The held fields and their source are recorded on the turn's `turn.started`. A session that never used this route behaves as before.
+- **Narrowing only, for either actor** — with one exception since milestone 4: a `user` may restore a field the supervisor narrowed to exactly the value it had before (`postureBeforeSupervisor` on the session meta, kept from the supervisor's first narrowing; a field the user sets drops out). Every other widening answers `409` with `widened` naming the dimensions, and changes nothing. `postureSetAt` records when the route last changed the posture. Until the app shows an API-set posture, a widening here would run a tab wider than its toolbar says; widen from the app. (Re-allowing a user's widening is a follow-up of the native milestone.)
+- **A narrowing reaches a live turn** at its next tool call (strategy and mode); a model or effort change applies from the next turn. Queued, wakeup, job-completion and resume turns run the narrower of what armed them and what the tab holds now.
+- **Orders:** strategy `full` > `auto` > `gated`; mode `agent` > `plan` / `ask`, with Plan ↔ Ask judged by the cost of the model each runs on (Plan runs the advisor); effort `max` > `xhigh` > `high` > `medium` > `low`; a model narrows only when the active catalogue knows it costs no more — an unpriced model is a widening.
+- **`actor: "supervisor"`** needs the per-boot token (`x-marvin-supervisor-token`) and is ledgered with the given grounds: a narrowing as a performed act, a widening as an escalation.
+
+**Errors:** `400` invalid patch or actor · `403` CSRF or a missing token · `404` unknown session · `409` a widening (`{ error, changes, widened }`).
+
+## Supervisor
+
+[ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md). Ships off; starts in shadow (proposes, performs nothing). From milestone 4 the user switches **autonomy per category** — `questions` (`answer`), `nudges` (`send`, `cancel`), `posture` (`set_posture`, narrowing only); `confirms` stays shadow until milestone 5. Every route needs the per-boot capability token in `x-marvin-supervisor-token`, read from `<MARVIN_DATA_DIR>/supervisor/token` (0600, minted at boot). Without it: `403`. A tab's model cannot reach these routes — the gate denies a tab tool call that names MARVIN's control API.
+
+### `GET /api/supervisor?projectId=…`
+
+**Response:** `{ state, status }`.
+
+- **`state`** — `mode` (`off` | `shadow` | `autonomous`, derived: autonomous when any category is), `autonomy` (`{ questions, nudges, posture, confirms }`: `shadow` | `autonomous`), `revision` (increments on every change), `paused`, `pause` (`{ reason: "user" | "kill" | "budget" | "breaker" | "refusals" | "repeated-failures", at, detail? }` or `null`), `delegation` (`{ [marvinSessionId]: "observe" | "answer-questions" | "answer-confirms" }`), `charter`, `charterUpdatedAt`, `caps`, `lastWake`, `supervisorSessionId`, `spend` (`{ day, usd, ownUsd, tabsUsd }` — `usd` is what the daily cap reads; at the cap it pauses with `pause.reason: "budget"` and escalates).
+- **`status`** — the design brief's §10.1 object: `projectId`, `revision`, `mode`, `autonomy`, `run` (`idle` | `waking` | `paused`), `pause`, `currentWake` (`{ wakeId, startedAt, itemCount }` or `null`), `queuedEvents`, `lastWake` (`{ wakeId, at, outcome: ok | failed | aborted | breaker, error? }`), `health` (`ok` | `stale` | `failed`, derived: `failed` when the last wake errored, `stale` when events have waited over five minutes with no wake running) with `healthSince`, `watchedTabs`, `openEscalations` (0 until the inbox, milestone 5), `budget` (`{ capUsd, spentUsd, spentOwnUsd, spentTabsUsd, resetsAt, level: ok | near (≥ 80 %) | reached }`), `charter` (`{ text, updatedAt }`), `model` (`{ role: "supervisor", resolved, label }`), `stats` (per category, as `/api/supervisor/stats`), `suggestedBar` (`{ minProposals: 20, minAgreement: 0.9 }` — a suggestion, never a gate), `confirmsEligible` (a tab is at `answer-confirms`), `caps` (`{ maxActionsPerWake, maxTurnsPerWake, perTabRate, globalRate }`).
+
+### `POST /api/supervisor`
+
+CSRF-guarded (`X-Marvin-Client: 1`) and token-gated.
+
+**Request body:** `{ projectId, action, … }` — `action` is one of:
+
+- `start` — shadow mode, every category in shadow. Optional set-up fields, all checked before any applies: `charter`, `capUsd` (0 < cap ≤ 1000), `delegations: [{ sessionId, level }]` (≤ 50).
+- `stop` / `disable` (the brief's name) — off; every category back to shadow.
+- `pause`, `kill` (abort the wake in flight, then pause), `resume`, `wakeNow` (resume and wake at once, re-scanning pending questions). `resume` and `wakeNow` answer `409` while over the daily cap, or while off.
+- `mode` — `{ mode: "off" | "shadow" }`; autonomy is per category, not here.
+- `autonomy` — `{ category: "questions" | "nudges" | "posture" | "confirms", value: "shadow" | "autonomous" }`. `409` while off, and for `confirms` → `autonomous` (milestone 5).
+- `cap` — `{ capUsd }`, 0 < cap ≤ 1000.
+- `delegate` — `{ marvinSessionId, level }`; level `off` removes it; the supervisor's own session answers `400`.
+- `charter` — `{ text }`, ≤ 4000 chars.
+
+**Response:** `{ state, status }`, or `{ error }` with `400` / `403` / `409` / `413`. Every accepted action is a `control` line in the ledger.
+
+### `GET /api/supervisor/stats?projectId=…`
+
+Token-gated. **Response:** `{ stats, suggestedBar }` — per category: `proposals` (shadow proposals), `agreed`, `agreedBlind` (agreed without the user having revealed the proposal first), `agreementRate` (`agreed / paired`, `null` with nothing paired), `humanOnlyProposedAsAct` (the supervisor tried to act and the policy stopped a human-only act: a heuristic hit, a §4 confirm, a widening), `heuristicMisses` (a question the heuristic passed in a turn that then raised a human-only confirm). Agreement counts only the **user's** answers — the sheet, `/api/confirm`, `/api/confirm/answer`.
+
+### `POST /api/supervisor/reveal`
+
+CSRF-guarded and token-gated. **Body:** `{ projectId, ledgerId }`. A shadow proposal is blind on the watch row until revealed (brief open decision 1); the reveal is a ledger line, and the pairing records whether it came before the answer. Idempotent. **Response:** `{ ok: true }` · `404` no such shadow proposal · `409` already answered.
+
+### `GET /api/supervisor/ledger?projectId=…&tab=…&limit=…`
+
+Token-gated. **Response:** `{ entries }` — the append-only ledger (`<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`), oldest first; `limit` keeps the newest N (default 200, max 2000); `tab` filters to one session. Each entry: `id` (from milestone 4; the brief's `ledgerId`), `at`, `kind` (`verb` | `wake` | `rotation` | `control` | `pairing` | `reveal` | `heuristic-miss`), `verb`, `tab`, `wakeId`, `mode`, `decision` (`propose` | `act` | `escalate` | `refuse` | `drop`), `reason`, `reasonCode` (a stable code, on lines written from milestone 3 on), `argsDigest`, `grounds` (with `provenance`), `heuristic`, `planSignature` (a `send` nudge's plan step, `done/total@lastTodoAt`), `costUsd`; from milestone 4 `turnId`, `toolUseId` and `answer` (the proposed labels per question, or `[allow|deny]`) on `answer` / `confirm` lines, `proposalId` on `pairing` / `reveal` / `heuristic-miss` lines, and `pairing` (`{ actualAnswer, answeredBy, agreement: agree | disagree, proposalSeenBeforeAnswer }`).
+
+**Watch rows** (`GET /api/sessions/watch`) carry, from milestone 4, `supervisor.lastActAt` and, on each pending confirm, `supervisorProposal` (`{ ledgerId, actionId, answer?, grounds }` — `answer` and `grounds` only once revealed) and `proposalRevealed`. `answer` is the labels per question in question order (the brief sketched a map). The project feed's `confirm.resolved` carries `answeredBy` (`user` | `supervisor`), `ledgerId` for a supervisor answer, and a question's `answerValues`; `turn.ended` carries `kind` (`human` | `machine`) and `author`.
+
+`POST /api/chat` answers `409 { error: "supervisor-session" }` for the supervisor's own `marvinSessionId`: it is never run as an ordinary tab.
+
+**The watch row (`GET /api/sessions/watch`) — milestone 3 fields.** Each row carries `supervisor: { delegation, sharedCheckout, touchedTurn: { turnId, at, by: "message" | "answer" } | null, waitingOnOwn: "job" | "wakeup" | null, stoppedByUser }` (design brief §10.4); a live `turn` carries `author: "supervisor"` when a supervisor message started it; each `pending[]` confirm carries `userOnly` — only the user may answer it (a containment, money or touched-turn confirm in a supervisor-touched turn). The transcript gains `turn.supervisor-touched` lines, and `confirm.decision` carries `grounds` and `ledgerId` when the supervisor answered. The session meta keeps `supervisorTouched`, so a resume after a restart inherits the touch.
 
 ## Backlog
 

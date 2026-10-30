@@ -27,6 +27,7 @@ import {
   renderPendingPrompt,
 } from "@marvin/runtime/pending-input";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
+import { activeModelLookup, apiPostureHold, scheduledTurnPosture } from "@marvin/runtime/posture";
 import { practicePromptBlock } from "@marvin/runtime/practice";
 import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
 import {
@@ -41,8 +42,11 @@ import {
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
-import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
+import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
+import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
+import { markTurnTouched } from "@marvin/runtime/supervisor-touch";
 import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
 import { logTelemetry } from "@marvin/runtime/telemetry";
 import {
@@ -59,6 +63,7 @@ import {
   getLiveTurn,
   type LiveTurn,
   registerLiveTurn,
+  SUPERVISOR_CANCEL_MESSAGE,
 } from "@marvin/runtime/turn-registry";
 import {
   deferIfSessionBusy,
@@ -332,6 +337,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   };
   refreshTabGraph("turn-start");
 
+  // ADR-0127 milestone 4 — a turn a person or the supervisor started opens
+  // new scope; a machine turn (job completion, wakeup, resume) does not.
+  const scopeStart = nextScopeMetAt({ phase: "start", kind: liveTurn.kind, ...(liveTurn.author ? { author: liveTurn.author } : {}) });
+  if (scopeStart) updateSessionMeta(projectId, marvinSessionId, scopeStart);
+
   const result = await runAgent({
     message,
     inputChannel,
@@ -411,8 +421,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // is an interruption the user can resume, not a user stop and not an
     // error; only the abort signal tells the two apart.
     const failure = classifyTurnFailure(result.error ?? "Unknown error", liveTurn.abortController.signal.aborted);
+    // ADR-0127 milestone 4 — a supervisor cancel is recorded as the supervisor's, never as the user's Stop.
+    const bySupervisor = failure.cancelled && liveTurn.cancelledBy === "supervisor";
     const payload = {
-      error: failure.error,
+      error: bySupervisor ? SUPERVISOR_CANCEL_MESSAGE : failure.error,
+      ...(bySupervisor ? { cancelledBy: "supervisor" as const } : {}),
       ...(failure.interrupted ? { interrupted: true as const, code: "interrupted" } : {}),
       ...(failure.cancelled ? { cancelled: true as const, code: "stopped" } : {}),
     };
@@ -430,7 +443,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
     });
     // A turn the user stopped is never retried. `classifyTurnError` would not
     // call "Stopped." transient, but the intent must not rest on the wording.
@@ -478,6 +491,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
+    ...(nextScopeMetAt({ phase: "end", scopeMet: !!result.scopeMet }) ?? {}),
   });
   // ADR-0111 — the first turn that leaves a commit on the tab's branch names
   // the branch after that commit; the chip follows through `session.tree`.
@@ -501,6 +515,9 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     costUsd: finalCostUsd,
     tokenUsage: result.tokenUsage ?? null,
   });
+  // ADR-0127 §6 — a tab turn the supervisor started spends against its cap.
+  // Counted for turns that complete; a failed turn's cost is not reported here.
+  if (liveTurn.author === "supervisor") noteSupervisorTabSpend(projectId, finalCostUsd);
   // Fire and forget balance poll (ADR-0071: OpenRouter native balance tracking)
   pollOpenRouterBalance().catch(() => {});
   try {
@@ -579,6 +596,16 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
     enqueuePending(prev.projectId, prev.marvinSessionId, message);
     return;
   }
+  // ADR-0127 §9 — a narrowing set through the posture route while the previous
+  // turn ran must survive into this one: the narrower of that turn's posture
+  // and what the tab holds now, field by field (never wider than either).
+  const tabMeta = readSessionMeta(prev.projectId, prev.marvinSessionId);
+  const posture = scheduledTurnPosture(
+    { model: prev.model, permissionStrategy: prev.permissionStrategy, thinkingMode: prev.thinkingMode, mode: prev.mode },
+    tabMeta?.posture ?? null,
+    apiPostureHold(tabMeta, tabMeta?.postureAck) ?? undefined,
+    await activeModelLookup(),
+  );
   const turnId = randomUUID();
   const liveTurn = registerLiveTurn({
     turnId,
@@ -602,14 +629,14 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
   const turnStartedPayload = {
     marvinSessionId: prev.marvinSessionId,
     projectId: prev.projectId,
-    model: prev.model,
+    model: posture.model,
     advisorModel: prev.advisorModel ?? null,
     runtimeMode: (prev.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
     personality: prev.personality,
-    permissionStrategy: prev.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
     playwrightEnabled: prev.playwrightEnabled ?? false,
-    mode: prev.mode ?? "agent",
-    thinkingMode: prev.thinkingMode,
+    mode: posture.mode,
+    thinkingMode: posture.thinkingMode,
     advisorThinkingMode: prev.advisorThinkingMode ?? null,
     sdkSessionFresh: !sessionId,
     turnId,
@@ -623,6 +650,10 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
   });
   await runDetachedTurn({
     ...prev,
+    model: posture.model,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
+    thinkingMode: posture.thinkingMode,
     liveTurn,
     turnId,
     message,
@@ -663,7 +694,18 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const sessionTree = meta?.tree;
   const sessionContext = sessionTree ? buildSessionContext(sessionTree, workDir, meta?.setup) : undefined;
 
-  const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
+  // ADR-0127 §5 — a supervisor message: re-checked now (the tab may have been
+  // stopped or put to waiting since it was queued), sent as its envelope, not
+  // as a wakeup prompt. A refusal drops it, and the ledger says so.
+  const fromSupervisor = record.author === "supervisor";
+  if (fromSupervisor) {
+    const refusal = supervisorFireRefusal(record);
+    if (refusal) {
+      ledgerDroppedSend(record, refusal);
+      return;
+    }
+  }
+  const message = fromSupervisor ? record.prompt : `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
   const appendSystemPrompt = await buildTurnSystemPrompt({
     workDir,
@@ -686,6 +728,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     type: "turn.user",
     at: new Date().toISOString(),
     message,
+    ...(fromSupervisor ? { author: "supervisor" as const, ...(record.supervisor ? { supervisor: record.supervisor } : {}) } : {}),
   });
 
   const liveTurn = registerLiveTurn({
@@ -693,27 +736,41 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     marvinSessionId,
     projectId,
     kind: "machine",
+    ...(fromSupervisor ? { author: "supervisor" as const } : {}),
   });
   // ADR-0069 — record the start so the scheduler can space the NEXT one.
   noteMachineTurnStarted(marvinSessionId);
+  // ADR-0127 §5 — touched before its first tool call: a supervisor message
+  // started it, or it resumes a turn the supervisor had touched.
+  if (fromSupervisor || record.supervisorTouched) {
+    markTurnTouched({ projectId, marvinSessionId, turnId, by: fromSupervisor ? "message" : (record.supervisorTouched ?? "message") });
+  }
 
   // Dynamic effort: whoever armed this wakeup may have asked for less than
   // the user's ceiling (a check-and-report turn, a job that succeeded).
   // The clamp is the guarantee that "less" is the only direction.
-  const effectiveEffort = clampEffort(record.effort, record.thinkingMode, record.model);
+  // ADR-0127 §9 — the narrower of what armed this turn and what the tab holds
+  // now, mode included: a Plan or Ask tab's wakeup, job completion or resume
+  // turn stays read-only (the mode used to be dropped and every such turn ran
+  // as Agent), a narrowing set through the posture route applies, and a
+  // widening since arming does not elevate (ADR-0031).
+  const posture = scheduledTurnPosture(record, meta?.posture ?? null, apiPostureHold(meta, meta?.postureAck) ?? undefined, await activeModelLookup());
+  const effectiveEffort = clampEffort(record.effort, posture.thinkingMode, posture.model);
 
   const turnStartedPayload = {
     marvinSessionId,
     projectId,
-    model: record.model,
+    model: posture.model,
     advisorModel: record.advisorModel,
     runtimeMode: (record.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
     personality: record.personality,
-    permissionStrategy: record.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
     thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
+    ...(fromSupervisor ? { author: "supervisor" as const } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   appendSessionTurn(projectId, marvinSessionId, {
@@ -732,9 +789,10 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     workDir,
     ...(sessionContext ? { sessionContext } : {}),
     ...(sessionTree ? { sessionTree } : {}),
-    model: record.model,
+    model: posture.model,
     advisorModel: record.advisorModel ?? undefined,
-    permissionStrategy: record.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
     playwrightEnabled: record.playwrightEnabled,
     thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode,

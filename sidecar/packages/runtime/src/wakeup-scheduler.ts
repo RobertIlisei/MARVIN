@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { ensureDir, marvinPaths } from "./paths";
+import { appendLedgerEntry } from "./supervisor-ledger";
 import { getLiveTurn } from "./turn-registry";
 
 export const MIN_DELAY_SECONDS = 60;
@@ -86,6 +87,9 @@ export interface WakeupRecord {
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated" | "full";
+  /** ADR-0127 §9 — the autonomy mode the turn was armed under; absent = agent.
+   *  `startScheduledTurn` runs the narrower of this and the tab's current mode. */
+  mode?: "agent" | "ask" | "plan";
   /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
    *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */
   playwrightEnabled?: boolean;
@@ -117,6 +121,15 @@ export interface WakeupRecord {
    * background wakeup never evicts an interactive turn.
    */
   deferrals?: number;
+  /**
+   * ADR-0127 §5 — a supervisor message: the fired turn is recorded as the
+   * supervisor's, its prompt is the envelope, and the turn is touched.
+   * Persisted with the record, so a deferral keeps the tag.
+   */
+  author?: "supervisor";
+  supervisor?: { kind: "nudge" | "instruction"; ledgerId: string | null; grounds: Array<{ kind: string; ref: string; provenance: string }> };
+  /** ADR-0127 §5 — a resume of a touched turn: the fired turn is touched too (never laundered by a restart). */
+  supervisorTouched?: "message" | "answer";
 }
 
 interface WakeupFile {
@@ -438,6 +451,19 @@ export function deferIfSessionBusy(record: WakeupRecord): boolean {
   const maxDeferrals = isJobDoneWakeup(record) ? MAX_JOB_DONE_DEFERRALS : MAX_FIRE_DEFERRALS;
   if (deferrals > maxDeferrals) {
     unpersist(record.projectId, record.id);
+    // ADR-0127 §6 — a supervisor message that will never arrive is ledgered,
+    // never lost to a console line.
+    if (record.author === "supervisor") {
+      appendLedgerEntry(record.projectId, {
+        kind: "verb",
+        verb: "send",
+        tab: record.marvinSessionId,
+        wakeId: null,
+        decision: "drop",
+        reason: `queued message dropped: the tab stayed busy through ${maxDeferrals} deferrals`,
+        reasonCode: "deferral-exhausted",
+      });
+    }
     // eslint-disable-next-line no-console
     console.warn(
       `[wakeup-scheduler] dropping wakeup ${record.id} (${record.reason}) — session ${record.marvinSessionId} stayed busy through ${maxDeferrals} deferrals.`,

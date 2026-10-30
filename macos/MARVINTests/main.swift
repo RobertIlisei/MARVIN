@@ -3396,11 +3396,19 @@ runner.suite("session-title") {
 
 runner.suite("tab-close-decision") {
     // ADR-0111 — nothing survives a tab unless it holds a commit.
-    func wt(state: String = "session", commits: Int = 0, dirty: Bool = false, mergedInto: String? = nil) -> SessionWatchRowWire.Worktree {
-        SessionWatchRowWire.Worktree(slug: "x", branch: "marvin/tab/x", state: state, commits: commits, dirty: dirty, base: "abc", behind: 0, closed: false, mergedInto: mergedInto)
+    func wt(state: String = "session", commits: Int = 0, dirty: Bool = false, mergedInto: String? = nil, closed: Bool = false) -> SessionWatchRowWire.Worktree {
+        SessionWatchRowWire.Worktree(slug: "x", branch: "marvin/tab/x", state: state, commits: commits, dirty: dirty, base: "abc", behind: 0, closed: closed, mergedInto: mergedInto)
     }
     func d(live: Bool = false, mode: SessionMode = .worktree, worktree: SessionWatchRowWire.Worktree? = nil, target: String? = "main") -> TabCloseDecision.Outcome {
         TabCloseDecision.decide(isLive: live, mode: mode, worktree: worktree, target: target)
+    }
+    // 2026-10-30 — the supervisor closed a tab through the API with "keep"; the
+    // tab stayed in the app's strip, and closing it there 13 minutes later
+    // asked again and sent `discard`, which deleted the kept branch.
+    runner.test("a tab the server already closed just closes: its tree's fate was decided") {
+        runner.expect(d(worktree: wt(state: "ready", commits: 12, closed: true)) == .closeNow, "kept branch is not re-asked")
+        runner.expect(d(worktree: wt(state: "empty", closed: true)) == .closeNow, "empty kept tree: the sweep reclaims it, not the client")
+        runner.expect(d(worktree: wt(state: "merged", commits: 2, mergedInto: "main", closed: true)) == .closeNow, "merged kept tree likewise")
     }
     runner.test("shared, no worktree yet, or a live turn decide before anything else") {
         runner.expect(d(mode: .shared, worktree: wt()) == .closeNow, "shared closes")

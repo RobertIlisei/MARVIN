@@ -32,6 +32,12 @@ import {
 import { createPreparedSessionWorktree } from "@marvin/runtime/worktree-setup";
 import { noteClaimBranch } from "@marvin/runtime/backlog";
 import { reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { ackRevision, apiPostureHold } from "@marvin/runtime/posture";
+import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
+import type { LedgerGround } from "@marvin/runtime/supervisor-ledger";
+import { sendAsSupervisor } from "@marvin/runtime/supervisor-send";
+import { isSupervisorSessionId, SUPERVISOR_TOKEN_HEADER, verifySupervisorToken } from "@marvin/runtime/supervisor-state";
+import { noteSidecarPort } from "@marvin/tools/policy";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -78,6 +84,10 @@ export const dynamic = "force-dynamic";
 
 interface ChatRequestBody {
   message: string;
+  /** ADR-0127 §5 — `"supervisor"` sends through the supervisor's send path (token required). Absent: the user. */
+  author?: string;
+  /** With `author: "supervisor"` — the message's kind and the grounds it cites. */
+  supervisor?: { kind?: string; grounds?: unknown };
   /** Active project working directory — where the CLI runs. */
   cwd?: string;
   /** Logical project identifier for session persistence. Defaults to a slug
@@ -137,6 +147,13 @@ interface ChatRequestBody {
    * follow-up.
    */
   resetSdkSession?: boolean;
+  /**
+   * ADR-0127 §9 — the last posture revision this client has seen
+   * (`GET /api/sessions/watch` carries it). Until it matches the session's,
+   * the fields set through `PUT /api/sessions/posture` win over the posture
+   * posted here. Omitted by clients that predate the route.
+   */
+  postureRevision?: number;
 }
 
 /**
@@ -149,6 +166,32 @@ interface ChatRequestBody {
  * via `GET /api/chat/resume?marvinSessionId=…`, and the transcript on
  * disk lets the client rebuild whatever it missed before reconnecting.
  */
+function jsonResponse(payload: unknown, status: number): Response {
+  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}
+
+const GROUND_KINDS = new Set(["plan", "dod", "adr", "memory", "charter", "file"]);
+
+async function supervisorSend(body: ChatRequestBody): Promise<Response> {
+  const projectId = body.projectId?.trim() ?? "";
+  const marvinSessionId = body.marvinSessionId?.trim() ?? "";
+  if (!projectId || !marvinSessionId) return jsonResponse({ error: "a supervisor message names an existing tab: projectId and marvinSessionId" }, 400);
+  // Grounds are recorded as given: the route cannot resolve them without the tab's context.
+  const raw = Array.isArray(body.supervisor?.grounds) ? (body.supervisor?.grounds as unknown[]) : [];
+  const grounds = raw
+    .filter((g): g is { kind: string; ref: string } => !!g && typeof g === "object" && GROUND_KINDS.has((g as { kind?: string }).kind ?? "") && typeof (g as { ref?: unknown }).ref === "string")
+    .slice(0, 10)
+    .map((g): LedgerGround => ({ kind: g.kind as LedgerGround["kind"], ref: g.ref.slice(0, 500), provenance: "unresolved" }));
+  const r = await sendAsSupervisor({
+    projectId,
+    marvinSessionId,
+    text: typeof body.message === "string" ? body.message : "",
+    kind: body.supervisor?.kind === "nudge" ? "nudge" : "instruction",
+    grounds,
+  });
+  return r.ok ? jsonResponse({ ok: true, queued: r.queued }, 202) : jsonResponse({ error: r.code, detail: r.reason }, 409);
+}
+
 export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);
   if (guard) return guard;
@@ -161,6 +204,30 @@ export async function POST(req: NextRequest) {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // ADR-0127 — the side-door rule keys on the port requests really arrive on;
+  // the supervisor's loop subscribes in this module graph; and the supervisor's
+  // own session is never run as an ordinary tab, with a tab's tools.
+  noteSidecarPort(req.nextUrl.port);
+  ensureSupervisorLoop();
+  if (body.marvinSessionId && isSupervisorSessionId(body.marvinSessionId.trim())) {
+    return new Response(
+      JSON.stringify({ error: "supervisor-session", detail: "the supervisor's session is not a tab; talk to it through /api/supervisor (ADR-0127)" }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  // ADR-0127 §5 — a supervisor message takes the server-side send path: tagged
+  // as the supervisor's, enveloped, never injected into or preempting a live
+  // turn, and the turn it starts is supervisor-touched. Same path the
+  // supervisor's own send uses; the per-boot token is the authority.
+  if (body.author !== undefined && body.author !== "user") {
+    if (body.author !== "supervisor") return jsonResponse({ error: 'author must be "user" or "supervisor"' }, 400);
+    if (!verifySupervisorToken(req.headers.get(SUPERVISOR_TOKEN_HEADER))) {
+      return jsonResponse({ error: "a supervisor message needs the per-boot capability token (ADR-0127 §5)" }, 403);
+    }
+    return supervisorSend(body);
   }
 
   const message = body.message?.trim();
@@ -273,12 +340,20 @@ export async function POST(req: NextRequest) {
       );
     }
   }
+  // ADR-0127 §9 — fields set through PUT /api/sessions/posture hold over what
+  // this client posts until it has seen their revision. Null for a session
+  // that never used the route.
+  const clientRevision = typeof body.postureRevision === "number" && Number.isFinite(body.postureRevision) ? body.postureRevision : undefined;
+  const postureMeta = readSessionMeta(projectId, marvinSessionId);
+  const held = apiPostureHold(postureMeta, clientRevision);
+  // A client may only acknowledge a revision the server issued.
+  const postureAck = ackRevision(postureMeta, clientRevision);
   const personality: PersonalityMode = body.personality ?? "ultron";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
-  const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
+  const permissionStrategy: PermissionStrategy = held?.permissionStrategy ?? body.permissionStrategy ?? "auto";
   const playwrightEnabled: boolean = body.playwrightEnabled ?? false;
-  const mode: AgentMode = body.mode ?? "agent";
-  const thinkingMode: string = body.thinkingMode ?? "high";
+  const mode: AgentMode = held?.mode ?? body.mode ?? "agent";
+  const thinkingMode: string = held?.thinkingMode ?? body.thinkingMode ?? "high";
   // Advisor effort intentionally has NO "high" fallback here — undefined
   // means "follow the executor", resolved inside runAgent (ADR-0033).
   const advisorThinkingMode: string | undefined =
@@ -287,7 +362,7 @@ export async function POST(req: NextRequest) {
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
   const resolved = await resolveRuntimeMode(runtimeMode);
-  const executorModel = body.model?.trim() || resolved.model || defaultModel();
+  const executorModel = held?.model || body.model?.trim() || resolved.model || defaultModel();
   const advisorModel = body.advisorModel?.trim() || resolved.advisorModel;
   // ADR-0036 (revised): planning runs on the chosen ADVISOR model, execution
   // on the EXECUTOR model — routed by ROLE, never hardcoded. In Plan mode the
@@ -403,7 +478,7 @@ export async function POST(req: NextRequest) {
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     mode,
   };
-  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}), ...(setupRecord ? { setup: setupRecord } : {}) });
+  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}), ...(setupRecord ? { setup: setupRecord } : {}), ...(postureAck !== undefined ? { postureAck } : {}) });
   if (!existingMeta) {
     announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree: sessionTree } });
   }
@@ -460,6 +535,8 @@ export async function POST(req: NextRequest) {
     turnId,
     cwd,
     tree: sessionTree,
+    // ADR-0127 §9 — a held posture is visible in the transcript and the watch.
+    ...(held ? { postureHeld: held, ...(postureMeta?.postureSource ? { postureSource: postureMeta.postureSource } : {}) } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   // SessionTurn union now admits `turn.started` natively (audit

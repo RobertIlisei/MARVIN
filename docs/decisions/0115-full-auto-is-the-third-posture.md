@@ -63,3 +63,7 @@ Parsing is deliberately asymmetric: an unknown, stale or hand-edited value resol
 - [x] `PermissionStrategyChoice` in `MARVINLogic` — parse, label, cycle, help — so the decisions are asserted (ADR-0114's rule)
 - [x] Pill cycles three ways, red for full, "full auto" in two words; Settings carries the plain-words warning; prefs accept the third value and reject anything else
 - [x] 6 sidecar tests on the gate (what it waives, what it still denies, what still asks) and 12 Swift assertions on the choice
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — a supervisor-touched turn re-raises what `full` waives
+
+`full` waives the three containment confirms because the user, choosing it, consented in advance — for their own turns. That consent does not extend to acts a supervisor induced. In a turn a supervisor message started, or in which the supervisor answered a question or confirm, every human-only act (ADR-0127 §4) — the three containment confirms included — raises a confirm only the user can answer, in `full` as in every other posture. A user-started turn the supervisor never touched behaves exactly as this ADR describes. The supervisor can never move a tab into `full`: that is a widening (ADR-0108 amendment).

@@ -10,6 +10,10 @@
  * real money, or write to shared systems must be in `confirm` by default.
  */
 
+import { supervisorBoundaryDenial } from "./supervisor-boundary";
+
+export { noteSidecarPort, supervisorBoundaryDenial } from "./supervisor-boundary";
+
 export type ToolName =
   | "Bash"
   | "Edit"
@@ -393,6 +397,12 @@ export interface ToolPolicyDecision {
 }
 
 export function toolPolicy(name: ToolName, input: Record<string, unknown>): ToolPolicyDecision {
+  // ADR-0127 §5 — MARVIN's control API and the supervisor's data directory
+  // are never a tab's to use. First, so nothing below can auto-allow them.
+  // (Read / Grep / Glob never reach this from the SDK; the executor's
+  // PreToolUse hook applies the same rule to them.)
+  const sideDoor = supervisorBoundaryDenial(name, input);
+  if (sideDoor) return sideDoor;
   if (name === "Bash") {
     // Background Bash is hard-denied (ADR-0032). The SDK Bash tool's
     // `run_in_background` returns a shell id and expects the model to poll
@@ -611,6 +621,7 @@ export function isTrustedMcpName(name: string): boolean {
 /** The mcpServers key MARVIN registers Playwright under → tools arrive as
  *  `mcp__playwright__browser_*`. Shared with sdk-runner's registration. */
 export const PLAYWRIGHT_SERVER_KEY = "playwright";
+const SUPERVISE_PREFIX = "mcp__marvin-supervise__";
 const PLAYWRIGHT_PREFIX = `mcp__${PLAYWRIGHT_SERVER_KEY}__`;
 
 // Observational / read-only — safe to auto-run (and the only browser tools a
@@ -642,6 +653,10 @@ const PLAYWRIGHT_DENY: ReadonlySet<string> = new Set(["browser_run_code_unsafe"]
  */
 export function mcpToolPolicy(name: string, provenance?: McpProvenance): ToolPolicyClass | null {
   if (!name.startsWith("mcp__")) return null;
+  // ADR-0127 — the supervisor's verbs are registered only in the supervisor
+  // session, which has its own closed `canUseTool`. In any turn this gate
+  // classifies they are refused, whatever the provenance says.
+  if (name.startsWith(SUPERVISE_PREFIX)) return "deny";
   // MARVIN's own in-process servers stay blanket-allowed — unless the SDK says
   // the call reached a server from somewhere else (ADR-0117). The name is a
   // convention; `source: "sdk"` is a fact only the host can make true.
