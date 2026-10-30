@@ -287,6 +287,7 @@ export async function runSupervisorWake(
     items: args.items,
     charter: st.charter,
     freshSession: fresh,
+    autonomy: st.autonomy,
     ...(fresh ? { ledgerTail: readLedger(projectId, { limit: 50 }) } : {}),
   });
 

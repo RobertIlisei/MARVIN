@@ -199,26 +199,37 @@ export function applyPostureChange(args: {
   patch: PosturePatch;
   actor: "user" | "supervisor";
   lookup: ModelLookup;
-  /** How a supervisor act is ledgered: `autonomous` when this call performs it. */
-  ledger?: { mode: "shadow" | "autonomous"; grounds?: LedgerGround[] };
+  /**
+   * How a supervisor act is ledgered: `autonomous` when this call performs it.
+   * `false` when the caller ledgers the act itself (the `set_posture` verb,
+   * milestone 4), so one act is one line.
+   */
+  ledger?: { mode: "shadow" | "autonomous"; grounds?: LedgerGround[] } | false;
 }): PostureChangeResult {
   const { projectId, marvinSessionId, patch, actor, lookup } = args;
   const meta = readSessionMeta(projectId, marvinSessionId);
   if (!meta) return { ok: false, status: 404, error: "no such session (posture can only change on a session that has started)" };
   const changes = classifyPostureChange(meta.posture, patch, lookup);
-  const widening = changes.filter((c) => c.direction === "widen");
+  // Milestone 4 — the user's way back from a supervisor narrowing: a field the
+  // supervisor narrowed may be restored by the user to exactly the value it had
+  // before, never anything wider. Until the app echoes revisions (milestone 6)
+  // this is the only widening the API accepts.
+  const before = meta.postureBeforeSupervisor ?? {};
+  const isRestore = (c: FieldChange) =>
+    actor === "user" && c.field in before && (patch as Record<string, unknown>)[c.field] === (before as Record<string, unknown>)[c.field];
+  const widening = changes.filter((c) => c.direction === "widen" && !isRestore(c));
   const ledger = (decision: "act" | "escalate", reason: string) => {
-    if (actor !== "supervisor" || !isSafeProjectId(projectId)) return;
+    if (actor !== "supervisor" || args.ledger === false || !isSafeProjectId(projectId)) return;
     appendLedgerEntry(projectId, {
       kind: "verb",
       verb: "set_posture",
       tab: marvinSessionId,
       wakeId: null,
-      mode: args.ledger?.mode ?? "autonomous",
+      mode: (args.ledger || undefined)?.mode ?? "autonomous",
       decision,
       reason,
       argsDigest: digestArgs(patch),
-      grounds: args.ledger?.grounds ?? [],
+      grounds: (args.ledger || undefined)?.grounds ?? [],
     });
   };
   if (widening.length) {
@@ -237,11 +248,25 @@ export function applyPostureChange(args: {
   // Fields the app has not seen yet keep their hold; once it has, a change starts a fresh hold.
   const unacked = (meta.postureAck ?? 0) < (meta.postureRevision ?? 0);
   const postureOverride = { ...(unacked ? meta.postureOverride : {}), ...patch };
+  // What the supervisor narrowed away, kept per field from its FIRST narrowing;
+  // a field the user sets is theirs again, and drops out.
+  const nextBefore: Record<string, unknown> = { ...before };
+  for (const c of changes) {
+    if (c.direction === "same") continue;
+    if (actor === "supervisor") {
+      if (!(c.field in nextBefore)) nextBefore[c.field] = (meta.posture as unknown as Record<string, unknown>)[c.field];
+    } else {
+      delete nextBefore[c.field];
+    }
+  }
+  if (actor === "user") for (const k of Object.keys(patch)) delete nextBefore[k];
   const next = updateSessionMeta(projectId, marvinSessionId, {
     posture: { ...meta.posture, ...patch },
     postureRevision: revision,
     postureSource: actor,
+    postureSetAt: new Date().toISOString(),
     postureOverride,
+    postureBeforeSupervisor: Object.keys(nextBefore).length ? (nextBefore as PosturePatch) : undefined,
   });
   if (!next) return { ok: false, status: 400, error: "could not write the session meta" };
 

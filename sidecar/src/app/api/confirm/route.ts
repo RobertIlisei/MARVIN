@@ -1,4 +1,4 @@
-import { normalizeSheetAnswer, recordConfirmDecision } from "@marvin/runtime/confirm-answer";
+import { answerValuesInOrder, normalizeSheetAnswer, recordConfirmDecision } from "@marvin/runtime/confirm-answer";
 import {
   getPendingConfirm,
   getPendingOriginalInput,
@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
   }
 
   let ok: boolean;
+  // ADR-0127 milestone 4 — a question's chosen labels, for shadow pairing.
+  let answerValues: string[] | undefined;
   if (decision === "allow") {
     // The SDK's PermissionResult zod schema rejects an `allow` reply that
     // omits `updatedInput`. Prefer the client-supplied edit; otherwise fall
@@ -58,6 +60,7 @@ export async function POST(req: NextRequest) {
       const answered = normalizeSheetAnswer(original, body.updatedInput);
       if (!answered.ok) return NextResponse.json({ error: answered.error }, { status: 400 });
       updatedInput = answered.updatedInput;
+      answerValues = answerValuesInOrder(original, answered.updatedInput.answers);
     }
     ok = resolvePendingConfirm(turnId, toolUseId, {
       behavior: "allow",
@@ -90,6 +93,7 @@ export async function POST(req: NextRequest) {
     toolUseId,
     decision,
     answeredBy: "user",
+    ...(answerValues ? { answerValues } : {}),
     ...(decision === "deny" && typeof body.message === "string" && body.message.trim() ? { message: body.message.trim() } : {}),
   });
   return NextResponse.json({ ok: true, decision });

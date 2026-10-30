@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SHADOW_PERFORM } from "./supervisor-shadow-perform";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -59,6 +60,8 @@ const verbCtx = () => ({
     listRows: async () => [],
     getPending: () => null,
     sendRefusal: () => null,
+    scopeMet: () => false,
+    perform: SHADOW_PERFORM,
     readTranscriptTail: () => "",
     readBrief: () => null,
     tabStartedAt: () => null,

@@ -121,7 +121,7 @@ export function registerPendingConfirm(
   resolver: Resolver,
   originalInput: Record<string, unknown> = {},
   timeoutMs: number = DEFAULT_CONFIRM_TIMEOUT_MS,
-  meta: { toolName?: string; raisedBy?: ConfirmRule } = {},
+  meta: { toolName?: string; raisedBy?: ConfirmRule; /** What the timeout answers (milestone 4 — a headless question's ADR-0040 fallback). */ timeoutMessage?: string } = {},
 ): void {
   let bucket = registry.get(turnId);
   if (!bucket) {
@@ -143,7 +143,7 @@ export function registerPendingConfirm(
     entry.timeoutHandle = setTimeout(() => {
       resolvePendingConfirm(turnId, toolUseId, {
         behavior: "deny",
-        message: `Auto-denied — no user response within ${Math.round(timeoutMs / 1000)}s.`,
+        message: meta.timeoutMessage ?? `Auto-denied — no user response within ${Math.round(timeoutMs / 1000)}s.`,
         interrupt: false,
       });
     }, timeoutMs);

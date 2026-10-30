@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1], [2] and [3] built 2026-10-30 (shadow mode; see "What milestone 1 changed", "What milestone 2 changed" and "What milestone 3 changed" below). Milestones [4]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Status:** milestones [1]–[4] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 4 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous. Milestones [5]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -46,6 +46,36 @@ Mostly from the advisor's review of the consent gate (go-with-caveats):
 - **The loop's over-budget skip became a pause** (`pause.reason: "budget"`) with an escalation, as the DoD asks.
 - **Spend counts completed turns.** A supervisor-started tab turn that fails or is preempted reports no cost to the tracker, so it does not reach `tabsUsd`.
 - **Not caught, by design.** Obfuscated shell writes (ADR-0127 §5). A `git commit` whose diff touches a boundary file: each write met the gate when it was made, and writes from before the touch were the user's turn. Plan approval: no server-side approval exists yet (ADR-0127 §4 item 6).
+
+## What milestone 4 changed from the text below
+
+- **A category acts only when switched, and `start` always means shadow.** `start`, `disable` and `mode` reset every category to shadow; the switches persist across a restart. A state file claiming `autonomous` with no category behind it boots off, as in [1]. `confirms` is refused (`409`) until [5].
+- **The tab's model reads a supervisor answer as the supervisor's.** The SDK renders an AskUserQuestion result as "User has answered your questions". So each value the supervisor gives carries a mark after the label ("… answered by the MARVIN supervisor on the user's behalf, not by the user"). Pairing compares the unmarked labels.
+- **"Each act marks the turn touched" applies to the acts that put supervisor words into a turn.** `answer` touches it through `answerQuestion`, and `send` starts a touched turn ([3]). `cancel` ends the turn. A `set_posture` narrowing only removes authority. Neither touches.
+- **The performing functions are injected** (`VerbDeps.perform`), as [3] did for the send refusals. `supervisor-mcp.ts` still imports nothing that resolves a confirm, starts a turn or changes a posture. A shadow fixture's `perform` throws, so the [1]–[3] suites now also prove nothing was performed.
+- **An act names its ledger line before performing,** so `confirm.decision.ledgerId` and a `send`'s `supervisor.ledgerId` cite it. A perform that fails becomes a `refuse` line with the failure's code. Ledger lines gain `id` from [4]. Older lines have none, and the [5] projection keys them by `seq`.
+- **Pairing is written as new lines, not edits:** `pairing`, `reveal` and `heuristic-miss` kinds name their proposal by `proposalId`. Agreement counts only the user's answers. The supervisor agreeing with its own act is not evidence.
+- **`heuristicMisses` is defined deterministically.** A miss is a question the heuristic passed, answered or proposed, in a turn that then raised a human-only confirm.
+- **The headless wait covers the no-UI path only.** Every production turn runs through `runDetachedTurn`, which always wires a UI callback, so a wakeup turn's question already waits for a person (ADR-0040's no-timeout rule), and the supervisor answers it through `confirm.pending`. The bounded wait (3 min, then ADR-0040's deny) applies where the gate has no UI. It needs a delegated tab, autonomous questions, and a supervisor that is running and under budget.
+- **Idle tabs stay idle:** `scopeMetAt` and the trigger rules, from the day's supervision (see [4]'s touchpoints).
+- **The wake packet states the categories every wake,** and the system prompt no longer claims shadow. A resumed SDK session must not act on yesterday's switches.
+- **Status details.** `status.model.label` is the catalogue's display name. `supervisorProposal.answer` is the labels per question in question order; the brief sketched a map keyed by question text. `health` reads `stale` after five minutes of queued events with no wake.
+- **From the advisor's review (go-with-caveats):**
+  - *A user way back from a supervisor narrowing.* The app neither echoes revisions nor widens through the API before [6], so an autonomous narrowing would otherwise be permanent. The posture route now accepts one widening: a user restoring a field the supervisor narrowed to exactly its prior value (`postureBeforeSupervisor`, kept from the supervisor's first narrowing). Anything wider is still refused.
+  - *A supervisor cancel is the supervisor's.* The transcript's `turn.error`, `lastTurn.stoppedBy` and the terminal event all name it, and the watch row's `stoppedByUser` stays false. It still parks the tab for the user: a runaway is not re-nudged on the supervisor's own say-so.
+  - *Autonomous `cancel` stops only a machine or supervisor turn that has not begun writing.* A turn the user started, or a mid-write one (ADR-0069), escalates.
+  - *A pause, a kill or the cap reached mid-wake stops every act not yet performed* (`paused` / `budget` refusals), as `headlessQuestion` already did.
+  - *The state loader never boots wider than its file.* `mode: "shadow"` loads every category in shadow. Autonomy restored at boot is ledgered as a `boot` line.
+  - *The answer mark* says the answer authorises nothing the user must decide, not "on the user's behalf".
+  - *The heuristic also reads the supervisor's own words:* a `send` message and an "Other" answer naming a §4 act escalate.
+  - *A scope-met claim the ADR-0057 guard rejects does not set `scopeMetAt`* (`reportsScopeMet`).
+  - *The turn-ended and idle triggers need `answer-questions`.* An `observe` tab has nothing to act on and, before the inbox, nowhere to escalate.
+  - *The headless wait is 10 minutes, not 3,* so it outlasts a wake already running. The pending question carries its payload, so the watch row shows it.
+  - *A widening refused at perform time counts in `humanOnlyProposedAsAct`.*
+- **From the security audit:** a `charter` or `dod` ground resolved whenever its `ref` was any substring of the charter or brief. One character made a strong ground, and since [4] a strong ground is what lets the supervisor act. A quote now needs at least 12 characters and two words (`MIN_QUOTE_CHARS`).
+- **From the pre-landing review:** the polled watch route and every `confirm.resolved` now read the ledger. `readLedger` caches the parsed file on its (size, mtime); the file is append-only.
+  - *Not done here, stated:* the act's ledger line is written after the act, so a crash between them loses the line while the transcript cites its id. ADR-0127 §2 trigger 4 (wake on a scope-met handoff and read the claim against the evidence) is deferred to [5]; until then a scope-met tab is the one the supervisor does not look at. Parked: charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes (§6).
+- **A test-harness trap, recorded for the next milestone.** This worktree had no `node_modules`, so `@marvin/*` resolved to the main checkout's packages, and sidecar tests ran against main's runtime. With `isolate: false`, the global supervisor loop can also be subscribed to a `turn-registry` that another file reset. A route test that needs the loop starts its own.
 
 ## Constraint that shapes the order
 
@@ -315,6 +345,12 @@ The first time the supervisor performs anything. Each category is switched by th
 - **`GET /api/supervisor/stats`** — agreement per category, plus the question heuristic's misses.
 - **Headless questions** — `maybeAskUserQuestion` (`sdk-runner.ts:1421-1454`) lets a headless turn's question in a delegated tab wait a bounded time for the supervisor, before ADR-0040's deny.
 - **New wake triggers** — turn ended (except `stopped`), and idle with an open plan and nothing of its own pending.
+- **Idle tabs stay idle (added 2026-10-30, from the day's external supervision).** Tabs that had finished their scope kept starting turns on their own: advisor-condition reconciliation, scope-met checkbacks, stale background-job completions. Each cost $12–57, because each carried the whole context. The supervisor must not add to that:
+  - **`scopeMetAt` on the session meta.** Written when a turn ends with the scope-met marker. Cleared when a user or supervisor-authored turn starts, because that opens new scope. A machine turn (job completion, wakeup, resume, guard) never clears it. A job completion that arrives after the scope-met close is therefore superseded by it.
+  - **The turn-ended trigger fires only for a turn a user or the supervisor started.** A machine turn the supervisor did not author never wakes it. Questions still wake it through `confirm.pending`.
+  - **The idle trigger skips a scope-met tab,** and fires once per plan signature. An unchanged idle tab is not woken again.
+  - **`send` refuses a nudge to a scope-met tab** (`reasonCode: "scope-met"`), and any send prompted by a superseded job completion. Closing such a tab is proposed in [5].
+- **The `confirm.resolved` event carries `answeredBy`** (and `ledgerId` for a supervisor answer). Pairing reads it, and [6]'s sheet dismissal shows it.
 - **The UI's shapes (brief §10.1, §10.3, §10.5 `pairing`, §10.4 `lastActAt`):**
   - `GET /api/supervisor` returns `{state, status}`, with `status` the brief's §10.1 object. `health` and `budget.level` are derived by rule in the runtime, and `revision` increments on every state change;
   - the mutations `start {charter, capUsd, delegations[]}`, `resume`, `disable` (alias of `stop`), `cap`, `autonomy {category, value}` and `wakeNow`. `autonomy` covers `questions`, `nudges`, `posture` and `confirms`; `confirms` is refused until [5];
@@ -335,6 +371,11 @@ The first time the supervisor performs anything. Each category is switched by th
   - Neither happens while its category is still in shadow.
 - **Stats compare against the user.** `GET /api/supervisor/stats` reports agreement per category from a fixture ledger. Answers through `/api/confirm` are counted as the user's.
 - **Headless questions fall back cleanly.** A headless turn's question in a delegated tab waits a bounded time for the supervisor, then falls back to ADR-0040's proceed-on-your-recommendation deny.
+- **Idle tabs stay idle.**
+  - A turn ending with the scope-met marker writes `scopeMetAt`; a user or supervisor turn clears it; a job-completion turn does not. Round-trip test.
+  - A job-completion `turn.ended` in a delegated tab produces zero wakes. A user turn's `turn.ended` produces one.
+  - An idle tab with an open plan wakes the supervisor once per plan signature. A scope-met tab never does.
+  - A nudge to a scope-met tab is refused with `reasonCode: "scope-met"`, in shadow and when autonomous.
 - **The status is the brief's.** A route test reads every §10.1 field from `GET /api/supervisor` for an idle, a waking, a paused-by-budget and a stale fixture. A shadow proposal stays hidden on the watch row until `reveal`, and the reveal is recorded on the pairing.
 
 ### [5] The escalation inbox, the remaining verbs, and the auditor's review
@@ -366,6 +407,7 @@ The first time the supervisor performs anything. Each category is switched by th
   - its first turn is recorded `author: "supervisor"` and is supervisor-touched;
   - one request, one tab: a proposal carries exactly one tab; openings count against the rate limits and the spend cap.
 - **The wake trigger on scope-met handoffs.**
+- **Close an idle, finished tab (added 2026-10-30).** A tab whose `scopeMetAt` is set, with no live turn and nothing pending past the idle threshold, gets one inbox item proposing `close_session` with `keep`. Closing with `keep` is reversible (ADR-0111: the branch and its commits stay), so the item is a one-click consent chip, not the two-step outward path. One item per scope-met close. A user or supervisor turn that clears `scopeMetAt` supersedes the item.
 
 **Touchpoints — the auditor and docs.**
 
@@ -386,6 +428,7 @@ The first time the supervisor performs anything. Each category is switched by th
   - an ordinary Edit confirm in a gated `answer-confirms` tab is answered by the supervisor;
   - the same confirm in an `answer-questions` tab is not;
   - no containment or metered-CI confirm is answered at any level.
+- **A finished idle tab is offered for closing.** A scope-met tab idle past the threshold produces exactly one `close_session` item recommending `keep`, with a single consent action. Accepting it closes the tab as the user, keeping the branch. A second wake over the same scope-met close adds no item. A user message to the tab supersedes the item.
 - **Worktree acts escalate, except a safe sweep.** Merges, merge-all, Prepare MR and drops of work always escalate, with a preview attached. A sweep reclaims empty or merged non-session trees and leaves an open tab's tree alone.
 - **The inbox and the ledger read as the brief says.** Route tests read every §10.2 field from an item of each `kind`, and every §10.5 field from a ledger page, including one line written before [3] (`reasonCode` absent) that projects `code: "unspecified"`. A feed subscriber sees `added`, then `resolved`, for an item answered in its tab.
 - **The auditor reviews without reaching the supervisor.** A supervisor-target audit produces a report over the ledger window with the four new finding classes. Nothing reaches the supervisor session; a test pins the absence.
@@ -406,6 +449,7 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
   - a budget meter;
   - Pause and Kill.
 - **Transcript marking** for supervisor-sent messages and supervisor-given answers.
+- **Required fix (added 2026-10-30): an answer from elsewhere closes the in-chat surface.** When a confirm is resolved outside the chat, the chat's `AskQuestionSheet` and its confirm card must dismiss themselves on the `confirm.resolved` feed event, and say who answered (`answeredBy`, which the event carries from [4]; the brief's `resolvedBy`). "Elsewhere" means the API, the supervisor, or the Sessions pane. Today the Sessions pane clears its row (`SessionRegistry.swift:367`), but the sheet stays open after an API answer. Robert hit this live; a stale sheet invites a second answer to a question that is already settled.
 - **Posture revisions** — the app echoes `postureRevision` and adopts an API-set posture. ADR-0108's hydration rule is amended to match.
   - **Follow-up from milestone 2:** once the app shows an API-set posture, re-allow a *user's* widening through `PUT /api/sessions/posture` (refused since 2026-10-30; see "What milestone 2 changed"). A supervisor widening stays an escalation.
 - **The app reads the capability token.**
@@ -427,6 +471,7 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
   - read the ledger;
   - see the budget;
   - pause or kill it.
+- **An external answer dismisses the sheet.** With a question's sheet open (or a confirm card shown) in the chat, an answer through `POST /api/confirm/answer` closes it within one feed event. A one-line note replaces it: "Answered by the supervisor" or "Answered elsewhere by you". Answering in the sheet afterwards is impossible, not a 409. Covered by a MARVINLogic assertion on the state transition and a snapshot of the note.
 - **Supervisor output looks different.** A supervisor-sent message and a supervisor-given answer render visibly differently from the user's.
 - **Posture stays in sync.** A posture changed in the toolbar after an API-set one sends the new revision. The toolbar shows an API-set posture within one watch refresh.
 

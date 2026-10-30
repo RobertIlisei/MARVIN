@@ -275,3 +275,45 @@ describe("scheduledTurnPosture — a wakeup, job-completion or resume turn", () 
     expect(scheduledTurnPosture(record, base, undefined).model).toBe("claude-opus-5-5");
   });
 });
+
+// ADR-0127 milestone 4 — with posture autonomy, the supervisor can narrow a tab
+// while the app still neither echoes revisions nor widens through the API
+// (milestone 6). The user's way back: restore a field the supervisor narrowed
+// to exactly the value it had before — never anything wider.
+describe("the user's escape from a supervisor narrowing", () => {
+  it("restores a supervisor-narrowed field to its prior value, and only to that", () => {
+    seedMeta();
+    expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated", mode: "plan" }, actor: "supervisor", lookup }).ok).toBe(true);
+    expect(readSessionMeta("proj", "tab-1")?.postureBeforeSupervisor).toEqual({ permissionStrategy: "auto", mode: "agent" });
+
+    // Wider than before: still refused.
+    const wider = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "full" }, actor: "user", lookup });
+    expect(wider.ok).toBe(false);
+    // Exactly what it was: allowed, and the record of that field is spent.
+    const back = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "auto" }, actor: "user", lookup });
+    expect(back.ok).toBe(true);
+    const meta = readSessionMeta("proj", "tab-1");
+    expect(meta?.posture.permissionStrategy).toBe("auto");
+    expect(meta?.postureSource).toBe("user");
+    expect(meta?.postureBeforeSupervisor).toEqual({ mode: "agent" });
+    // The same widening again has nothing to restore.
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated" }, actor: "user", lookup });
+    expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "auto" }, actor: "user", lookup }).ok).toBe(false);
+  });
+
+  it("a second supervisor narrowing keeps the first prior value, and the supervisor can never use the escape", () => {
+    seedMeta();
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { thinkingMode: "medium" }, actor: "supervisor", lookup });
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { thinkingMode: "low" }, actor: "supervisor", lookup });
+    expect(readSessionMeta("proj", "tab-1")?.postureBeforeSupervisor).toEqual({ thinkingMode: "high" });
+    expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { thinkingMode: "high" }, actor: "supervisor", lookup }).ok).toBe(false);
+    expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { thinkingMode: "high" }, actor: "user", lookup }).ok).toBe(true);
+  });
+
+  it("a field the user narrowed themselves is theirs: no restore of a supervisor value under it", () => {
+    seedMeta();
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated" }, actor: "supervisor", lookup });
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated" }, actor: "user", lookup });
+    expect(readSessionMeta("proj", "tab-1")?.postureBeforeSupervisor).toBeUndefined();
+  });
+});

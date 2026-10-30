@@ -25,6 +25,7 @@
     "./supervisor-loop": "./src/supervisor-loop.ts",
     "./supervisor-send": "./src/supervisor-send.ts",
     "./supervisor-touch": "./src/supervisor-touch.ts",
+    "./supervisor-status": "./src/supervisor-status.ts",
     "./graph-usage": "./src/graph-usage.ts",
     "./worktree-setup": "./src/worktree-setup.ts",
     "./session-recovery": "./src/session-recovery.ts",

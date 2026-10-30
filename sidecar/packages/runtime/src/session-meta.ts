@@ -69,6 +69,8 @@ export interface SessionLastTurn {
   endedAt?: string;
   /** `stopped` = the user pressed Stop. Not a failure, and not resumable. */
   outcome?: "completed" | "error" | "interrupted" | "stopped";
+  /** ADR-0127 milestone 4 — a `stopped` turn the supervisor cancelled, not the user. Absent: the user. */
+  stoppedBy?: "supervisor";
   error?: string;
 }
 
@@ -101,6 +103,24 @@ export interface SessionMeta {
    */
   postureRevision?: number;
   postureSource?: "user" | "supervisor";
+  /** When the posture route last changed it (brief §10.7; milestone 4). */
+  postureSetAt?: string;
+  /**
+   * Milestone 4 — the value each field had before the supervisor first
+   * narrowed it. The user may restore a field to exactly this through the
+   * posture route (the one widening the API accepts until milestone 6); a
+   * field the user sets drops out.
+   */
+  postureBeforeSupervisor?: { model?: string; thinkingMode?: string; permissionStrategy?: SessionPosture["permissionStrategy"]; mode?: NonNullable<SessionPosture["mode"]> };
+  /**
+   * ADR-0127 milestone 4 — when a turn last closed its scope with the
+   * scope-met marker. Cleared when a user or supervisor-authored turn starts
+   * (new scope); a machine turn — a job completion, a wakeup, a resume, a
+   * guard — never clears it, so a completion arriving after the close is
+   * recognisably superseded by it. The supervisor neither wakes for nor
+   * nudges a tab while it is set (`nextScopeMetAt`).
+   */
+  scopeMetAt?: string;
   postureOverride?: { model?: string; thinkingMode?: string; permissionStrategy?: SessionPosture["permissionStrategy"]; mode?: NonNullable<SessionPosture["mode"]> };
   postureAck?: number;
   /**
@@ -110,6 +130,19 @@ export interface SessionMeta {
    * laundering it, and the watch row reads it without the live turn.
    */
   supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" };
+}
+
+/**
+ * The `scopeMetAt` transition (milestone 4). A turn that STARTS clears it only
+ * when a person or the supervisor wrote its message; a turn that ENDS sets it
+ * when its final text carried the scope-met marker, and otherwise leaves it.
+ * Returns the patch to apply, or null for no change.
+ */
+export function nextScopeMetAt(
+  e: { phase: "start"; kind: "human" | "machine"; author?: "user" | "supervisor" } | { phase: "end"; scopeMet: boolean; at?: string },
+): { scopeMetAt: string | undefined } | null {
+  if (e.phase === "start") return e.kind === "human" || e.author === "supervisor" ? { scopeMetAt: undefined } : null;
+  return e.scopeMet ? { scopeMetAt: e.at ?? new Date().toISOString() } : null;
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

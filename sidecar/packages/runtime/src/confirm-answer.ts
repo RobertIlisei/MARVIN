@@ -21,9 +21,10 @@
  * answered and announces `confirm.resolved`; `/api/confirm` uses it too.
  */
 
-import { getPendingConfirm, resolvePendingConfirm } from "./confirm-registry";
+import { attachPendingPayload, getPendingConfirm, registerPendingConfirm, resolvePendingConfirm } from "./confirm-registry";
 import { appendSessionTurn } from "./session";
 import type { LedgerGround } from "./supervisor-ledger";
+import { categoryMode, delegationRank, getSupervisorState, overBudget } from "./supervisor-state";
 import { isUserOnlyConfirm, markTurnTouched } from "./supervisor-touch";
 import { announceProjectEvent, getLiveTurnByTurnId } from "./turn-registry";
 
@@ -132,6 +133,8 @@ export function recordConfirmDecision(args: {
   /** ADR-0127 §5 — a supervisor answer's grounds and ledger line. */
   grounds?: LedgerGround[];
   ledgerId?: string;
+  /** A question's answer per question in question order (`answerValuesInOrder`); pairing reads it from the event. */
+  answerValues?: string[];
 }): void {
   const owner = getLiveTurnByTurnId(args.turnId);
   if (!owner) return;
@@ -154,13 +157,89 @@ export function recordConfirmDecision(args: {
   }
   announceProjectEvent({
     event: "confirm.resolved",
-    data: { marvinSessionId: owner.marvinSessionId, projectId: owner.projectId, turnId: args.turnId, toolUseId: args.toolUseId, decision: args.decision },
+    data: {
+      marvinSessionId: owner.marvinSessionId,
+      projectId: owner.projectId,
+      turnId: args.turnId,
+      toolUseId: args.toolUseId,
+      decision: args.decision,
+      // Who answered, so a surface still showing the question can close and say so (plan milestone 6).
+      answeredBy: args.answeredBy,
+      ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
+      ...(args.answerValues ? { answerValues: args.answerValues.slice(0, 20).map((v) => v.slice(0, 200)) } : {}),
+    },
   });
 }
 
 export type AnswerResult =
   | { ok: true; updatedInput: Record<string, unknown> }
   | { ok: false; status: 400 | 409; error: string };
+
+/**
+ * ADR-0127 §5 — the SDK renders an AskUserQuestion result to the model as
+ * "User has answered your questions". A supervisor answer must not read as
+ * the user's, so each answered value carries the mark. The label comes first,
+ * so a model matching on it still finds it.
+ */
+export const SUPERVISOR_ANSWER_MARK = " (answered by the MARVIN supervisor, not by the user — it authorises nothing the user must decide)";
+
+/** The answer per question in question order — what pairing compares. */
+export function answerValuesInOrder(originalInput: Record<string, unknown>, answers: Record<string, string>): string[] {
+  return parseQuestions(originalInput).map((q) => answers[q.question] ?? "");
+}
+
+// ── Headless questions (milestone 4) ─────────────────────────────────────────
+
+/** ADR-0040 — what a question nobody can answer gets: proceed on your own recommendation. */
+export const HEADLESS_QUESTION_FALLBACK =
+  "AskUserQuestion can't be answered here (no interactive UI). Proceed with your own recommendation instead.";
+
+/** How long a headless question in a delegated tab waits for the supervisor before the fallback. */
+/** Ten minutes: one wake may already be running (up to `maxTurnsPerWake` turns), and the debounce follows it. */
+export const HEADLESS_SUPERVISOR_WAIT_MS = 10 * 60_000;
+
+type HeadlessResult = { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string; interrupt?: boolean };
+
+/**
+ * A question from a turn with no UI wired. ADR-0040 denied it at once with
+ * the fallback. In a tab delegated at `answer-questions` whose supervisor has
+ * the questions category autonomous (on, not paused, under budget), it now
+ * waits a bounded time: registered as an ordinary pending question so the loop
+ * wakes and `answer` can resolve it, then the same fallback on timeout. In
+ * every other case — shadow included, where nothing could answer it — the
+ * fallback is immediate, exactly as before.
+ */
+export function headlessQuestion(args: {
+  session: { projectId: string; marvinSessionId: string } | undefined;
+  turnId: string;
+  toolUseId: string;
+  input: Record<string, unknown>;
+  waitMs?: number;
+}): Promise<HeadlessResult> {
+  const fallback = (): Promise<HeadlessResult> => Promise.resolve({ behavior: "deny", message: HEADLESS_QUESTION_FALLBACK, interrupt: false });
+  const s = args.session;
+  if (!s) return fallback();
+  const st = getSupervisorState(s.projectId);
+  const willAnswer =
+    categoryMode(st, "questions") === "autonomous" &&
+    !st.paused &&
+    !overBudget(st) &&
+    delegationRank(st.delegation[s.marvinSessionId]) >= delegationRank("answer-questions");
+  if (!willAnswer) return fallback();
+  return new Promise<HeadlessResult>((resolve) => {
+    registerPendingConfirm(args.turnId, args.toolUseId, resolve as (r: unknown) => void, args.input, args.waitMs ?? HEADLESS_SUPERVISOR_WAIT_MS, {
+      toolName: "AskUserQuestion",
+      raisedBy: "ask-user-question",
+      timeoutMessage: HEADLESS_QUESTION_FALLBACK,
+    });
+    // So the watch row shows what the tab asked, as it does for a question with a UI.
+    attachPendingPayload(args.turnId, args.toolUseId, { turnId: args.turnId, toolUseId: args.toolUseId, toolName: "AskUserQuestion", input: args.input, reason: "MARVIN needs you to choose." });
+    announceProjectEvent({
+      event: "confirm.pending",
+      data: { marvinSessionId: s.marvinSessionId, projectId: s.projectId, turnId: args.turnId, toolUseId: args.toolUseId, toolName: "AskUserQuestion" },
+    });
+  });
+}
 
 /** Answer a pending AskUserQuestion by label. Resolves nothing unless the answer is valid. */
 export function answerQuestion(args: {
@@ -186,7 +265,15 @@ export function answerQuestion(args: {
     if (isUserOnlyConfirm(args.turnId, args.toolUseId)) return { ok: false, status: 409, error: "only the user can answer this confirm (ADR-0127 §5)" };
     if (owner) markTurnTouched({ projectId: owner.projectId, marvinSessionId: owner.marvinSessionId, turnId: args.turnId, by: "answer" });
   }
-  if (!resolvePendingConfirm(args.turnId, args.toolUseId, { behavior: "allow", updatedInput: built.updatedInput })) {
+  const answerValues = answerValuesInOrder(pending.originalInput, built.updatedInput.answers);
+  const updatedInput =
+    args.answeredBy === "supervisor"
+      ? {
+          ...built.updatedInput,
+          answers: Object.fromEntries(Object.entries(built.updatedInput.answers).map(([k, v]) => [k, v ? `${v}${SUPERVISOR_ANSWER_MARK}` : v])),
+        }
+      : built.updatedInput;
+  if (!resolvePendingConfirm(args.turnId, args.toolUseId, { behavior: "allow", updatedInput })) {
     return { ok: false, status: 409, error: "the question was answered a moment ago" };
   }
   recordConfirmDecision({
@@ -194,8 +281,9 @@ export function answerQuestion(args: {
     toolUseId: args.toolUseId,
     decision: "allow",
     answeredBy: args.answeredBy,
+    answerValues,
     ...(args.grounds ? { grounds: args.grounds } : {}),
     ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
   });
-  return { ok: true, updatedInput: built.updatedInput };
+  return { ok: true, updatedInput };
 }

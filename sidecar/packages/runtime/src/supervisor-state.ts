@@ -39,6 +39,23 @@ export function delegationRank(level: Delegation | undefined): number {
   return level ? DELEGATION_LEVELS.indexOf(level) : 0;
 }
 
+/**
+ * Milestone 4 — the user switches autonomy per category (brief §10.1). Each
+ * starts in shadow; `confirms` stays in shadow until milestone 5.
+ */
+export const AUTONOMY_CATEGORIES = ["questions", "nudges", "posture", "confirms"] as const;
+export type AutonomyCategory = (typeof AUTONOMY_CATEGORIES)[number];
+export type CategoryMode = "shadow" | "autonomous";
+export type Autonomy = Record<AutonomyCategory, CategoryMode>;
+const SHADOW_ALL = (): Autonomy => ({ questions: "shadow", nudges: "shadow", posture: "shadow", confirms: "shadow" });
+/** Categories that cannot leave shadow yet. */
+const NOT_YET_AUTONOMOUS: ReadonlySet<AutonomyCategory> = new Set(["confirms"]);
+
+/** How one category runs: off when the supervisor is off, else the user's switch. */
+export function categoryMode(s: SupervisorState, category: AutonomyCategory): SupervisorMode {
+  return s.mode === "off" ? "off" : s.autonomy[category];
+}
+
 /** Initial values, to be measured in shadow (plan, milestone 1). */
 export interface SupervisorCaps {
   dailyBudgetUsd: number;
@@ -47,6 +64,8 @@ export interface SupervisorCaps {
   globalActsPer10Min: number;
   maxTurnsPerWake: number;
   debounceMs: number;
+  /** An idle tab with an open plan wakes the supervisor after this long (milestone 4). */
+  idleMs: number;
 }
 
 export const DEFAULT_CAPS: SupervisorCaps = {
@@ -56,18 +75,36 @@ export const DEFAULT_CAPS: SupervisorCaps = {
   globalActsPer10Min: 20,
   maxTurnsPerWake: 12,
   debounceMs: 5_000,
+  idleMs: 10 * 60_000,
 };
 
+/** The highest daily cap the route accepts — a typo should not authorise $10 000 a day. */
+export const MAX_DAILY_BUDGET_USD = 1_000;
+
 export const MAX_CHARTER_CHARS = 4_000;
+
+export interface SupervisorLastWake {
+  wakeId: string;
+  at: string;
+  outcome: "ok" | "failed" | "aborted" | "breaker";
+  error?: { message: string; detail: string };
+}
 
 export interface SupervisorState {
   version: 1;
   projectId: string;
+  /** Derived while on: `autonomous` when any category is (brief §10.1). */
   mode: SupervisorMode;
+  autonomy: Autonomy;
+  /** Increments on every state change, so a client applies updates in order. */
+  revision: number;
   paused: boolean;
   delegation: Record<string, Delegation>;
   charter: string;
+  charterUpdatedAt: string | null;
   caps: SupervisorCaps;
+  /** The last wake's outcome, for the status projection's health. */
+  lastWake: SupervisorLastWake | null;
   /** The supervisor's own MARVIN session id — never a tab, never a target. */
   supervisorSessionId: string | null;
   /** The SDK session resumed across wakes; null starts a fresh one (rotation). */
@@ -109,10 +146,14 @@ function defaultState(projectId: string): SupervisorState {
     version: 1,
     projectId,
     mode: "off",
+    autonomy: SHADOW_ALL(),
+    revision: 0,
     paused: false,
     delegation: {},
     charter: "",
+    charterUpdatedAt: null,
     caps: { ...DEFAULT_CAPS },
+    lastWake: null,
     supervisorSessionId: null,
     sdkSessionId: null,
     sdkSessionStartedAt: null,
@@ -124,7 +165,15 @@ function defaultState(projectId: string): SupervisorState {
 }
 
 function clone(s: SupervisorState): SupervisorState {
-  return { ...s, delegation: { ...s.delegation }, caps: { ...s.caps }, spend: { ...s.spend }, pause: s.pause ? { ...s.pause } : null };
+  return {
+    ...s,
+    autonomy: { ...s.autonomy },
+    delegation: { ...s.delegation },
+    caps: { ...s.caps },
+    spend: { ...s.spend },
+    pause: s.pause ? { ...s.pause } : null,
+    lastWake: s.lastWake ? { ...s.lastWake } : null,
+  };
 }
 
 /** The state the runtime enforces. An unknown project is off. */
@@ -153,6 +202,8 @@ function persist(s: SupervisorState): void {
 }
 
 function commit(s: SupervisorState): SupervisorState {
+  if (s.mode !== "off") s.mode = AUTONOMY_CATEGORIES.some((c) => s.autonomy[c] === "autonomous") ? "autonomous" : "shadow";
+  s.revision = (store().states.get(s.projectId)?.revision ?? s.revision) + 1;
   s.updatedAt = new Date().toISOString();
   store().states.set(s.projectId, s);
   persist(s);
@@ -164,9 +215,40 @@ function sanitize(raw: unknown, projectId: string): SupervisorState {
   const base = defaultState(projectId);
   if (!raw || typeof raw !== "object") return base;
   const r = raw as Record<string, unknown>;
-  // Boot never re-arms autonomy: milestone 1 has no path into it, so a file
-  // claiming it was edited by hand.
-  if (r.mode === "shadow") base.mode = "shadow";
+  // The user's per-category switches persist. A category that cannot leave
+  // shadow yet (confirms) stays there whatever the file says.
+  const autonomy = r.autonomy as Record<string, unknown> | undefined;
+  if (autonomy && typeof autonomy === "object") {
+    for (const c of AUTONOMY_CATEGORIES) {
+      if (autonomy[c] === "autonomous" && !NOT_YET_AUTONOMOUS.has(c)) base.autonomy[c] = "autonomous";
+    }
+  }
+  const anyAutonomous = AUTONOMY_CATEGORIES.some((c) => base.autonomy[c] === "autonomous");
+  // The mode and the categories must agree, as this runtime writes them; a
+  // disagreement loads as the narrower reading, never the wider one.
+  //   "autonomous" + a category behind it → autonomous;
+  //   "autonomous" with none behind it    → off (edited by hand);
+  //   "shadow"                            → shadow, every category shadow.
+  if (r.mode === "autonomous" && anyAutonomous) base.mode = "autonomous";
+  else {
+    base.autonomy = SHADOW_ALL();
+    if (r.mode === "shadow") base.mode = "shadow";
+  }
+  if (typeof r.revision === "number" && Number.isSafeInteger(r.revision) && r.revision >= 0) base.revision = r.revision;
+  const caps = r.caps as { dailyBudgetUsd?: unknown } | undefined;
+  if (caps && typeof caps.dailyBudgetUsd === "number" && caps.dailyBudgetUsd > 0 && caps.dailyBudgetUsd <= MAX_DAILY_BUDGET_USD) {
+    base.caps.dailyBudgetUsd = caps.dailyBudgetUsd;
+  }
+  if (typeof r.charterUpdatedAt === "string") base.charterUpdatedAt = r.charterUpdatedAt;
+  const lw = r.lastWake as Partial<SupervisorLastWake> | null | undefined;
+  if (lw && typeof lw.wakeId === "string" && typeof lw.at === "string" && ["ok", "failed", "aborted", "breaker"].includes(String(lw.outcome))) {
+    base.lastWake = {
+      wakeId: lw.wakeId.slice(0, 64),
+      at: lw.at,
+      outcome: lw.outcome as SupervisorLastWake["outcome"],
+      ...(lw.error && typeof lw.error.message === "string" ? { error: { message: lw.error.message.slice(0, 500), detail: String(lw.error.detail ?? "").slice(0, 2_000) } } : {}),
+    };
+  }
   if (r.paused === true) base.paused = true;
   if (r.delegation && typeof r.delegation === "object") {
     for (const [id, level] of Object.entries(r.delegation as Record<string, unknown>)) {
@@ -260,20 +342,49 @@ export function bootSupervisor(): { armed: string[] } {
     }
   }
   writeToken();
+  // Authority that survived a restart is ledgered, so the ledger shows where
+  // an act after a boot got its permission from.
+  for (const s of st.states.values()) {
+    const on = AUTONOMY_CATEGORIES.filter((c) => s.autonomy[c] === "autonomous");
+    if (s.mode === "off" || !on.length) continue;
+    try {
+      appendLedgerEntry(s.projectId, { kind: "control", verb: "boot", tab: null, wakeId: null, mode: s.mode, reason: `restored autonomous categories: ${on.join(", ")}` });
+    } catch {
+      /* a ledger write must not stop the boot */
+    }
+  }
   return { armed: [...st.states.values()].filter((s) => s.mode !== "off").map((s) => s.projectId) };
 }
 
 // ── User actions ─────────────────────────────────────────────────────────────
 
 export type SupervisorAction =
-  | { projectId: string; action: "start" }
+  | { projectId: string; action: "start"; charter?: string; capUsd?: number; delegations?: Array<{ sessionId: string; level: string }> }
   | { projectId: string; action: "stop" }
+  | { projectId: string; action: "disable" }
   | { projectId: string; action: "pause" }
   | { projectId: string; action: "resume" }
   | { projectId: string; action: "kill" }
   | { projectId: string; action: "mode"; mode: string }
   | { projectId: string; action: "delegate"; marvinSessionId: string; level: string }
-  | { projectId: string; action: "charter"; text: string };
+  | { projectId: string; action: "charter"; text: string }
+  | { projectId: string; action: "cap"; capUsd: number }
+  | { projectId: string; action: "autonomy"; category: string; value: string }
+  | { projectId: string; action: "wakeNow" };
+
+const MAX_START_DELEGATIONS = 50;
+
+function validCap(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 && v <= MAX_DAILY_BUDGET_USD;
+}
+
+/** Null when the delegation may be set; otherwise why not. */
+function delegationError(s: SupervisorState, id: string, level: unknown): string | null {
+  if (!id || id.length > 200) return "marvinSessionId required";
+  if (id === s.supervisorSessionId || isSupervisorSessionId(id)) return "a supervisor session cannot be delegated or targeted";
+  if (typeof level !== "string" || !(DELEGATION_LEVELS as readonly string[]).includes(level)) return `level must be one of ${DELEGATION_LEVELS.join(", ")}`;
+  return null;
+}
 
 export type SupervisorActionResult =
   | { ok: true; state: SupervisorState }
@@ -294,14 +405,37 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
   let detail = "";
 
   switch (a.action) {
-    case "start":
+    case "start": {
+      // The set-up sheet (brief §10.1): every field is checked before any applies.
+      s.supervisorSessionId ??= randomUUID();
+      const delegations = a.delegations === undefined ? [] : a.delegations;
+      if (!Array.isArray(delegations) || delegations.length > MAX_START_DELEGATIONS) return fail(400, `delegations must be an array of at most ${MAX_START_DELEGATIONS}`);
+      for (const d of delegations) {
+        const id = d && typeof d === "object" && typeof d.sessionId === "string" ? d.sessionId.trim() : "";
+        const err = delegationError(s, id, d?.level);
+        if (err) return fail(400, `delegations: ${err}`);
+      }
+      if (a.capUsd !== undefined && !validCap(a.capUsd)) return fail(400, `capUsd must be a number above 0 and at most ${MAX_DAILY_BUDGET_USD}`);
+      if (a.charter !== undefined && typeof a.charter !== "string") return fail(400, "charter must be a string");
       s.mode = "shadow";
+      s.autonomy = SHADOW_ALL(); // "Start in shadow", always
       s.paused = false;
       s.pause = null;
-      s.supervisorSessionId ??= randomUUID();
+      for (const d of delegations) {
+        if (d.level === "off") delete s.delegation[d.sessionId.trim()];
+        else s.delegation[d.sessionId.trim()] = d.level as Delegation;
+      }
+      if (a.capUsd !== undefined) s.caps.dailyBudgetUsd = a.capUsd;
+      if (typeof a.charter === "string") {
+        s.charter = a.charter.slice(0, MAX_CHARTER_CHARS);
+        s.charterUpdatedAt = new Date().toISOString();
+      }
       break;
+    }
     case "stop":
+    case "disable":
       s.mode = "off";
+      s.autonomy = SHADOW_ALL();
       break;
     case "pause":
     case "kill":
@@ -309,28 +443,43 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
       s.pause = { reason: a.action === "kill" ? "kill" : "user", at: new Date().toISOString() };
       break;
     case "resume":
+    case "wakeNow":
+      if (s.mode === "off") return fail(409, "the supervisor is off — start it first");
+      // The cap is the user's; resuming over it would spend past what they set.
+      if (overBudget(s)) return fail(409, `over the daily cap ($${s.spend.usd.toFixed(2)} of $${s.caps.dailyBudgetUsd}) — raise the cap first`);
       s.paused = false;
       s.pause = null;
       break;
+    case "cap":
+      if (!validCap(a.capUsd)) return fail(400, `capUsd must be a number above 0 and at most ${MAX_DAILY_BUDGET_USD}`);
+      s.caps.dailyBudgetUsd = a.capUsd;
+      detail = `$${a.capUsd}`;
+      break;
+    case "autonomy": {
+      const category = a.category as AutonomyCategory;
+      if (!(AUTONOMY_CATEGORIES as readonly string[]).includes(String(a.category))) return fail(400, `category must be one of ${AUTONOMY_CATEGORIES.join(", ")}`);
+      if (a.value !== "shadow" && a.value !== "autonomous") return fail(400, "value must be shadow or autonomous");
+      if (s.mode === "off") return fail(409, "the supervisor is off — start it first");
+      if (a.value === "autonomous" && NOT_YET_AUTONOMOUS.has(category)) return fail(409, "confirms autonomy arrives with the escalation inbox (plan milestone 5)");
+      s.autonomy[category] = a.value;
+      detail = `${category}=${a.value}`;
+      break;
+    }
     case "mode": {
       if (a.mode === "shadow" || a.mode === "off") {
         s.mode = a.mode;
+        s.autonomy = SHADOW_ALL();
         if (a.mode === "shadow") s.supervisorSessionId ??= randomUUID();
       } else {
-        return fail(400, "only off and shadow exist in milestone 1; autonomy is switched per category later");
+        return fail(400, "mode takes off or shadow; autonomy is switched per category (`autonomy {category, value}`)");
       }
       detail = String(a.mode);
       break;
     }
     case "delegate": {
       const id = typeof a.marvinSessionId === "string" ? a.marvinSessionId.trim() : "";
-      if (!id || id.length > 200) return fail(400, "marvinSessionId required");
-      if (id === s.supervisorSessionId || isSupervisorSessionId(id)) {
-        return fail(400, "a supervisor session cannot be delegated or targeted");
-      }
-      if (typeof a.level !== "string" || !(DELEGATION_LEVELS as readonly string[]).includes(a.level)) {
-        return fail(400, `level must be one of ${DELEGATION_LEVELS.join(", ")}`);
-      }
+      const err = delegationError(s, id, a.level);
+      if (err) return fail(400, err);
       if (a.level === "off") delete s.delegation[id];
       else s.delegation[id] = a.level as Delegation;
       detail = `${id}=${a.level}`;
@@ -339,6 +488,7 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
     case "charter": {
       if (typeof a.text !== "string") return fail(400, "text required");
       s.charter = a.text.slice(0, MAX_CHARTER_CHARS);
+      s.charterUpdatedAt = new Date().toISOString();
       break;
     }
     default:
@@ -395,9 +545,10 @@ export function pauseSupervisorForFault(projectId: string, reason: string, code:
 /** Runtime bookkeeping the loop owns (session rotation, spend) — not user authority. */
 export function updateSupervisorRuntime(
   projectId: string,
-  patch: Partial<Pick<SupervisorState, "sdkSessionId" | "sdkSessionStartedAt" | "lastInputTokens">> & { addSpendUsd?: number },
+  patch: Partial<Pick<SupervisorState, "sdkSessionId" | "sdkSessionStartedAt" | "lastInputTokens" | "lastWake">> & { addSpendUsd?: number },
 ): SupervisorState {
   const s = getSupervisorState(projectId);
+  if (patch.lastWake !== undefined) s.lastWake = patch.lastWake;
   if ("sdkSessionId" in patch) s.sdkSessionId = patch.sdkSessionId ?? null;
   if ("sdkSessionStartedAt" in patch) s.sdkSessionStartedAt = patch.sdkSessionStartedAt ?? null;
   if (patch.lastInputTokens !== undefined) s.lastInputTokens = patch.lastInputTokens;

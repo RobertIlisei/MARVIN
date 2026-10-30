@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SHADOW_PERFORM } from "./supervisor-shadow-perform";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,6 +103,8 @@ beforeEach(() => {
       tabStartedAt: () => null,
       readPlanText: () => "1. schema\n2. api\n3. ui\n4. tests",
       sendRefusal: (tab: string) => refusals[tab] ?? null,
+      scopeMet: () => false,
+      perform: SHADOW_PERFORM,
       modelLookup: async () => (id: string) =>
         ({ "claude-opus-5-5": { tier: "opus" }, "claude-sonnet-5-5": { tier: "sonnet" } })[id] ?? null,
     },
@@ -127,7 +130,8 @@ describe("send — shadow only", () => {
     const text = await createSupervisorVerbs(ctx).send({ marvinSessionId: "tab-1", message: "Step 2 is open — wire the API.", kind: "nudge", grounds: GROUND });
     expect(text).toMatch(/shadow/i);
     expect(last()).toMatchObject({ verb: "send", decision: "propose", tab: "tab-1", reasonCode: "grounded", planSignature: "1/4@-" });
-    expect(getLiveTurn("tab-1")).toBeNull();
+    // No turn RUNNING: an ended turn from another test stays in the registry for its grace window.
+    expect(getLiveTurn("tab-1")?.ended ?? true).toBe(true);
     expect(listWakeups({ marvinSessionId: "tab-1" })).toEqual([]);
   });
 
@@ -173,7 +177,9 @@ describe("send — shadow only", () => {
 
 describe("cancel — shadow only", () => {
   it("a delegated tab with a live turn: a proposal, and the turn is not aborted", async () => {
-    const live = registerLiveTurn({ turnId: "turn-tab-1", marvinSessionId: "tab-1", projectId: "proj" });
+    // A machine turn that has not written: since milestone 4 a user-started or mid-write turn escalates instead.
+    rows = [row("tab-1", { turn: { turnId: "turn-tab-1", kind: "machine", startedAt: new Date().toISOString(), mutated: false } })];
+    const live = registerLiveTurn({ turnId: "turn-tab-1", marvinSessionId: "tab-1", projectId: "proj", kind: "machine" });
     await createSupervisorVerbs(ctx).cancel({ marvinSessionId: "tab-1", reason: "looping on the same failing test", grounds: GROUND });
     expect(last()).toMatchObject({ verb: "cancel", decision: "propose" });
     expect(live.abortController.signal.aborted).toBe(false);

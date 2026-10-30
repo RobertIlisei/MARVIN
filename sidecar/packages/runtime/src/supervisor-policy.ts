@@ -73,6 +73,14 @@ function inside(root: string, rel: string): string | null {
   return abs === r || abs.startsWith(`${r}${path.sep}`) ? abs : null;
 }
 
+/**
+ * A charter or brief ground is a quote, and a strong ground is what lets an
+ * autonomous act happen (milestone 4): a fragment like "e" is a substring of
+ * every charter. At least this many characters, and two words.
+ */
+export const MIN_QUOTE_CHARS = 12;
+const isQuote = (ref: string) => ref.length >= MIN_QUOTE_CHARS && /\S\s+\S/.test(ref);
+
 export function resolveGround(g: GroundRef, ctx: GroundContext): LedgerGround & { why?: string } {
   const out = (provenance: LedgerGround["provenance"], why?: string) => ({
     kind: g.kind,
@@ -93,8 +101,10 @@ export function resolveGround(g: GroundRef, ctx: GroundContext): LedgerGround & 
       return out("unresolved", `ADR-${num} does not exist`);
     }
     case "charter":
+      if (!isQuote(ref)) return out("unresolved", `a charter ground quotes at least ${MIN_QUOTE_CHARS} characters and two words`);
       return ctx.charter?.includes(ref) ? out("strong") : out("unresolved", "not a quote from the charter");
     case "dod":
+      if (!isQuote(ref)) return out("unresolved", `a DoD ground quotes at least ${MIN_QUOTE_CHARS} characters and two words`);
       return ctx.brief?.includes(ref) ? out("strong") : out("unresolved", "not in the user's brief");
     case "plan": {
       const m = /^(\d+)(?:\.\d+)?$/.exec(ref);
@@ -248,7 +258,7 @@ export function evaluateSetPosture(input: {
   const changes = classifyPostureChange(input.from, input.patch, input.lookup);
   const widening = changes.filter((c) => c.direction === "widen");
   if (widening.length) {
-    return done("escalate", `widening is the user's act: ${widening.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ")}`);
+    return { ...done("escalate", `widening is the user's act: ${widening.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ")}`), reasonCode: "widening" };
   }
   if (grounds.length === 0) return done("refuse", "no grounds cited — every posture change cites what it rests on");
   const bad = grounds.filter((g) => g.provenance === "unresolved");
@@ -301,7 +311,15 @@ export function evaluateSend(input: {
   kind: "nudge" | "instruction";
   /** The tab's own state, from the send path's refusal rules. */
   tabRefusal: { code: string; reason: string } | null;
+  /**
+   * The tab closed its scope (`scopeMetAt`) and no user or supervisor turn has
+   * opened new scope since. A nudge would re-open finished work, an
+   * instruction would change scope (ADR-0127 §4) — both are refused.
+   */
+  scopeMet: boolean;
   secret: boolean;
+  /** The question heuristic over the supervisor's own message (milestone 4) — a message naming a §4 act escalates. */
+  heuristic?: string | null;
   /** Nudges already proposed or sent at this plan step with no spine progress. */
   priorNudgesAtStep: number;
   grounds: GroundRef[];
@@ -315,12 +333,20 @@ export function evaluateSend(input: {
   }
   if (input.secret) return done("refuse", "secret", "the message carries a secret-shaped string (ADR-0127 §6)");
   if (input.tabRefusal) return done("refuse", input.tabRefusal.code, input.tabRefusal.reason);
+  if (input.scopeMet) {
+    return done("refuse", "scope-met", "the tab closed its scope (scope met) and has been idle since; a finished tab is the user's to reopen or close");
+  }
+  if (input.heuristic) {
+    return { ...done("escalate", "heuristic", `the message names a human-only act ("${input.heuristic}", heuristic)`), heuristic: input.heuristic };
+  }
   if (input.kind === "nudge" && input.priorNudgesAtStep >= NUDGES_PER_PLAN_STEP) {
     return done("escalate", "nudge-cap", `${input.priorNudgesAtStep} nudges at this plan step without spine progress — the user decides what happens next`);
   }
   const g = groundsVerdict(resolved, done, "message");
   if (g) return g;
-  return done("propose", "grounded", "grounded; shadow mode records the proposal and sends nothing");
+  return input.mode === "autonomous"
+    ? done("act", "grounded", "grounded; the nudges category is autonomous")
+    : done("propose", "grounded", "grounded; shadow mode records the proposal and sends nothing");
 }
 
 /** `cancel` — stop a runaway turn (`answer-questions` and up). */
@@ -329,6 +355,8 @@ export function evaluateCancel(input: {
   delegation: Delegation | undefined;
   targetIsSupervisor: boolean;
   hasLiveTurn: boolean;
+  /** Milestone 4 — who started the live turn, and whether it has begun writing. */
+  turn?: { kind: "human" | "machine"; author?: "supervisor" | undefined; mutated: boolean } | null;
   grounds: GroundRef[];
   groundCtx: GroundContext;
 }): PolicyOutcome {
@@ -339,9 +367,18 @@ export function evaluateCancel(input: {
     return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow cancelling a turn`);
   }
   if (!input.hasLiveTurn) return done("refuse", "no-live-turn", "the tab has no turn running");
+  // A turn the user started is theirs to stop (§5: never over the user), and a
+  // turn that has begun writing is not cut off mid-edit — not even a user
+  // message preempts one (ADR-0069).
+  if (input.turn?.kind === "human" && input.turn.author !== "supervisor") {
+    return done("escalate", "human-turn", "the running turn is one the user started — only the user stops it");
+  }
+  if (input.turn?.mutated) return done("escalate", "mid-write", "the running turn has started writing; cancelling it could leave a half-applied edit (ADR-0069)");
   const g = groundsVerdict(resolved, done, "cancel");
   if (g) return g;
-  return done("propose", "grounded", "grounded; shadow mode records the proposal and cancels nothing");
+  return input.mode === "autonomous"
+    ? done("act", "grounded", "grounded; the nudges category is autonomous")
+    : done("propose", "grounded", "grounded; shadow mode records the proposal and cancels nothing");
 }
 
 /**
