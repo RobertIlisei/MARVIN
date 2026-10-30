@@ -18,7 +18,7 @@ import {
 import { readSessionMeta, type SessionPosture, upsertSessionMeta } from "../src/session-meta";
 import { readLedger } from "../src/supervisor-ledger";
 import { bootSupervisor, resetSupervisorStateForTests } from "../src/supervisor-state";
-import { endLiveTurn, registerLiveTurn } from "../src/turn-registry";
+import { endLiveTurn, registerLiveTurn, subscribeProjectEvents } from "../src/turn-registry";
 
 // ADR-0127 §9 / ADR-0108 amendment — a tab's posture can change without a
 // turn; the change is versioned so the app's next post does not silently
@@ -144,26 +144,48 @@ describe("applyPostureChange — no turn sent, versioned, supervisor narrows onl
     expect(meta?.postureOverride).toEqual({ permissionStrategy: "gated", thinkingMode: "low" });
   });
 
-  // Until milestone 6 the app does not show an API-set posture, so a widening
-  // through the API would run a tab wider than its toolbar says (ADR-0127 §4:
-  // widening is human-only, and a hidden widening is the worst case).
+  // Milestone 6: the app echoes `postureRevision` and adopts an API-set posture
+  // within one watch refresh, so a user's widening is no longer hidden from
+  // the toolbar. Widening stays human-only: the supervisor's still escalates.
   it.each([
     [{ permissionStrategy: "full" as const }, ["permissionStrategy"]],
     [{ thinkingMode: "max" }, ["thinkingMode"]],
     [{ model: "unknown/model" }, ["model"]],
     [{ permissionStrategy: "gated" as const, thinkingMode: "max", mode: "agent" as const }, ["mode", "thinkingMode"]],
-  ])("a user widening %j is refused, names %j, and changes nothing", (patch, widened) => {
+  ])("a user widening %j is accepted, revisioned and held as the user's", (patch, widened) => {
     seedMeta("tab-1", { ...base, mode: "plan" });
     const r = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch, actor: "user", lookup });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.status).toBe(409);
-    for (const field of widened) expect(r.error).toContain(field);
-    expect(r.error).not.toContain("permissionStrategy auto → gated");
-    expect(r.changes?.filter((c) => c.direction === "widen").map((c) => c.field)).toEqual(widened);
-    expect(readSessionMeta("proj", "tab-1")?.postureRevision).toBeUndefined();
-    expect(readSessionMeta("proj", "tab-1")?.posture.mode).toBe("plan");
-    expect(readLedger("proj")).toEqual([]); // the user's refusal is not a supervisor act
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.changes.filter((c) => c.direction === "widen").map((c) => c.field)).toEqual(widened);
+    const meta = readSessionMeta("proj", "tab-1");
+    expect(meta?.posture).toMatchObject(patch);
+    expect(meta?.postureRevision).toBe(1);
+    expect(meta?.postureSource).toBe("user");
+    expect(meta?.postureOverride).toEqual(patch);
+    expect(readLedger("proj")).toEqual([]); // the user's act is not a supervisor act
+  });
+
+  it("a stored change is announced on the project feed with its revision and source, and nothing else", () => {
+    seedMeta();
+    const seen: unknown[] = [];
+    const off = subscribeProjectEvents((e) => {
+      if (e.event === "session.posture") seen.push(e.data);
+    });
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { mode: "ask" }, actor: "user", lookup });
+    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "full" }, actor: "supervisor", lookup });
+    off();
+    // The refused supervisor widening announces nothing; the feed holds no token, so no posture values.
+    expect(seen).toEqual([{ projectId: "proj", marvinSessionId: "tab-1", postureRevision: 1, postureSource: "user" }]);
+  });
+
+  it("a user widening never reaches a live turn; it applies from the next one", () => {
+    seedMeta("tab-1", { ...base, permissionStrategy: "gated" });
+    const turn = registerLiveTurn({ turnId: "turn-w", marvinSessionId: "tab-1", projectId: "proj" });
+    const r = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "full" }, actor: "user", lookup });
+    expect(r.ok && r.liveApplied).toEqual([]);
+    expect(getLiveNarrowing("turn-w")).toBeNull();
+    endLiveTurn(turn, { event: "turn.completed", data: {} });
   });
 
   it("a supervisor narrowing passes and is ledgered as a performed act, with the caller's grounds", () => {
@@ -281,14 +303,11 @@ describe("scheduledTurnPosture — a wakeup, job-completion or resume turn", () 
 // (milestone 6). The user's way back: restore a field the supervisor narrowed
 // to exactly the value it had before — never anything wider.
 describe("the user's escape from a supervisor narrowing", () => {
-  it("restores a supervisor-narrowed field to its prior value, and only to that", () => {
+  it("the user may restore a supervisor-narrowed field, or widen past it (milestone 6); either spends the record", () => {
     seedMeta();
     expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated", mode: "plan" }, actor: "supervisor", lookup }).ok).toBe(true);
     expect(readSessionMeta("proj", "tab-1")?.postureBeforeSupervisor).toEqual({ permissionStrategy: "auto", mode: "agent" });
 
-    // Wider than before: still refused.
-    const wider = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "full" }, actor: "user", lookup });
-    expect(wider.ok).toBe(false);
     // Exactly what it was: allowed, and the record of that field is spent.
     const back = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "auto" }, actor: "user", lookup });
     expect(back.ok).toBe(true);
@@ -296,9 +315,10 @@ describe("the user's escape from a supervisor narrowing", () => {
     expect(meta?.posture.permissionStrategy).toBe("auto");
     expect(meta?.postureSource).toBe("user");
     expect(meta?.postureBeforeSupervisor).toEqual({ mode: "agent" });
-    // The same widening again has nothing to restore.
-    applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "gated" }, actor: "user", lookup });
-    expect(applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "auto" }, actor: "user", lookup }).ok).toBe(false);
+    // Wider than before: the user's call since milestone 6.
+    const wider = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-1", patch: { permissionStrategy: "full", mode: "agent" }, actor: "user", lookup });
+    expect(wider.ok).toBe(true);
+    expect(readSessionMeta("proj", "tab-1")?.postureBeforeSupervisor).toBeUndefined();
   });
 
   it("a second supervisor narrowing keeps the first prior value, and the supervisor can never use the escape", () => {

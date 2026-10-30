@@ -90,11 +90,13 @@ describe("a narrowing reaches the live turn at its next tool call", () => {
     endLiveTurn(turn, { event: "turn.completed", data: {} });
   });
 
-  it("a widening during the turn is refused, so it never reaches it", async () => {
+  it("a widening during the turn never reaches it: the supervisor's is refused, the user's waits for the next turn", async () => {
     upsertSessionMeta("proj", "tab-pg", { workDir, tree: { mode: "shared" }, posture: { ...base, permissionStrategy: "gated" } });
     const turn = registerLiveTurn({ turnId: "turn-pg", marvinSessionId: "tab-pg", projectId: "proj" });
-    const r = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-pg", patch: { permissionStrategy: "full" }, actor: "user", lookup: () => null });
-    expect(r.ok ? 0 : r.status).toBe(409);
+    const bySupervisor = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-pg", patch: { permissionStrategy: "full" }, actor: "supervisor", lookup: () => null, ledger: false });
+    expect(bySupervisor.ok ? 0 : bySupervisor.status).toBe(409);
+    const byUser = applyPostureChange({ projectId: "proj", marvinSessionId: "tab-pg", patch: { permissionStrategy: "full" }, actor: "user", lookup: () => null });
+    expect(byUser.ok && byUser.liveApplied).toEqual([]);
     expect(getLiveNarrowing("turn-pg")).toBeNull();
     endLiveTurn(turn, { event: "turn.completed", data: {} });
   });

@@ -107,9 +107,8 @@ export interface SessionMeta {
   postureSetAt?: string;
   /**
    * Milestone 4 — the value each field had before the supervisor first
-   * narrowed it. The user may restore a field to exactly this through the
-   * posture route (the one widening the API accepts until milestone 6); a
-   * field the user sets drops out.
+   * narrowed it: what is still the supervisor's narrowing. A field the user
+   * sets (restoring it, or since milestone 6 widening past it) drops out.
    */
   postureBeforeSupervisor?: { model?: string; thinkingMode?: string; permissionStrategy?: SessionPosture["permissionStrategy"]; mode?: NonNullable<SessionPosture["mode"]> };
   /**
