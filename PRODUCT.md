@@ -4,9 +4,21 @@
 
 ## Platform
 
-adaptive
+ios
 
-The platform field is recorded as `adaptive` at the user's choice because Impeccable's schema has no macOS value. The real surface is a native macOS 14+ app (SwiftUI, STTextView, SwiftTreeSitter), not an iOS or Android app. Impeccable's iOS and Android guidance is the closest Apple-platform reference and applies only by analogy. Web-oriented guidance (CSS, live mode) does not apply: the sidecar is API-only and its browser UI was removed (ADR-0075).
+MARVIN is a native macOS 14+ app (SwiftUI, STTextView, SwiftTreeSitter). `ios` is recorded because Impeccable's schema has no macOS value and the user chose Apple HIG only, with no Android guidance. Impeccable's `ios.md` is written for iPhone, so the block below overrides it wherever they differ. The sidecar is API-only (ADR-0075), so web guidance (CSS, live mode) does not apply.
+
+### macOS translation
+
+Where `ios.md` and this block disagree, this block wins.
+
+- **Input:** pointer and keyboard first. Hover is a legitimate affordance. Everything is reachable from the keyboard, with ⌘ shortcuts, and the ⇧⌘P command registry is the single source for menu, palette and shortcut sheet. No gesture-only actions.
+- **Navigation:** menu bar and commands, not tab bars. Structure is sidebar / split view / toolbar / inspector in resizable windows and panes. There are no safe areas, notch or home indicator.
+- **Size:** macOS control sizes (mini, small, regular) and hit areas, not the 44 pt touch target. Dense is acceptable in an IDE if the hit area stays comfortable for a pointer.
+- **Type:** system text styles at macOS sizes. There is no Dynamic Type. Use SF Pro for UI and SF Mono for code.
+- **Color:** semantic NSColor / SwiftUI colors and materials. Light and dark appearance both ship. Honor Increase Contrast and Reduce Motion.
+- **Icons:** SF Symbols.
+- **Verifying the build:** the offscreen snapshot harness (`MARVIN_SNAPSHOT_VIEW` / `MARVIN_SNAPSHOT_OUT`), not the iOS Simulator and not `xcrun simctl`. Say which surfaces the harness covers; the rest need the running app.
 
 ## Users
 
