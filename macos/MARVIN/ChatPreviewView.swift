@@ -2149,7 +2149,7 @@ final class ChatPreviewModel {
 ///   ├──────────────────────────────────┤
 ///   │ [text editor]              [Send]│
 ///   └──────────────────────────────────┘
-struct ChatPreviewView: View {
+@MainActor struct ChatPreviewView: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.openWindow) private var openWindow
     private let model = ChatPreviewModel.shared

@@ -20,7 +20,7 @@
 
 import SwiftUI
 
-struct PaneHeader<Trailing: View>: View {
+@MainActor struct PaneHeader<Trailing: View>: View {
     let title: String
     var symbol: String? = nil
     /// Section headers shout; a pane showing the PROJECT's name does not.

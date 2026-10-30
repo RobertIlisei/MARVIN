@@ -11,7 +11,7 @@
 import SwiftUI
 import WebKit
 
-struct GraphPaneView: View {
+@MainActor struct GraphPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
 
     enum Availability: Equatable {
@@ -137,7 +137,7 @@ struct GraphPaneView: View {
 /// Minimal WKWebView host for the sandboxed graph document. Unlike the
 /// preview pane there is no URL bar or history — the graph is a single
 /// self-contained page; pan/zoom run client-side under the CSP sandbox.
-private struct GraphWebView: NSViewRepresentable {
+@MainActor private struct GraphWebView: NSViewRepresentable {
     let url: URL
     let reloadKey: Int
 

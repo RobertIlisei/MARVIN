@@ -18,7 +18,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct RichText: NSViewRepresentable {
+@MainActor struct RichText: NSViewRepresentable {
     let attributed: NSAttributedString
     /// Return true when the link was handled in-app; false lets AppKit open it.
     let onLink: (URL) -> Bool

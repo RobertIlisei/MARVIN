@@ -22,7 +22,7 @@
 import AppKit
 import SwiftUI
 
-struct SplitViewAutosave: NSViewRepresentable {
+@MainActor struct SplitViewAutosave: NSViewRepresentable {
     /// NSUserDefaults key under "NSSplitView Subview Frames <name>".
     /// Bump when the split's pane order or count changes — old
     /// frames don't apply to a new layout.

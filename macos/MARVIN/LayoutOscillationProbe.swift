@@ -67,7 +67,7 @@ enum LayoutOscillationProbe {
     }
 }
 
-extension View {
+@MainActor extension View {
     /// Report this view's size changes to `LayoutOscillationProbe` under
     /// `label`. No-op below macOS 15, where `onGeometryChange` does not
     /// exist and the only alternative inserts a view.

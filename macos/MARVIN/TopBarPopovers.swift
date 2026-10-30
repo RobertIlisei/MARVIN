@@ -30,7 +30,7 @@ import MARVINLogic
 /// Toolbar popover surface for pane visibility — files / graph /
 /// brain / preview / terminal. Mirrors the web LayoutPopover row
 /// for row.
-struct LayoutPopoverContent: View {
+@MainActor struct LayoutPopoverContent: View {
     @Environment(MarvinBridge.self) private var bridge
 
     var body: some View {
@@ -146,7 +146,7 @@ struct LayoutPopoverContent: View {
 /// Mirrors the web SetupPopover. Models opens a dedicated sheet via
 /// `onOpenModelsDialog` instead of stuffing the picker in here —
 /// the picker is too tall (preset cards + two selects).
-struct SetupPopoverContent: View {
+@MainActor struct SetupPopoverContent: View {
     @Environment(MarvinBridge.self) private var bridge
     @Binding var modelsDialogOpen: Bool
 
@@ -310,7 +310,7 @@ struct SetupPopoverContent: View {
 /// Mirrors the web ModelsDialog at a smaller surface — preset cards
 /// are deferred (they're ergonomic sugar; the two pickers cover the
 /// functional case fully).
-struct ModelsDialog: View {
+@MainActor struct ModelsDialog: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
 

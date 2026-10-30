@@ -86,7 +86,7 @@ struct ChatAttachment: Identifiable, Equatable {
 
 /// Horizontal bar with a `+` button + chip list. Sits directly
 /// above the ChatInputBar.
-struct ChatAttachmentsBar: View {
+@MainActor struct ChatAttachmentsBar: View {
     @Environment(MarvinBridge.self) private var bridge
     @Binding var attachments: [ChatAttachment]
     @State private var pickerOpen = false
@@ -259,7 +259,7 @@ enum AttachmentThumbnail {
 /// Cursor / VS Code style. Plain SF Symbol with a soft hover fill.
 /// Pulled out as its own struct so the hover @State works (a closure
 /// passed into a function loses its identity each render).
-private struct IconBarButton: View {
+@MainActor private struct IconBarButton: View {
     let icon: String
     let help: String
     let action: () -> Void
@@ -289,7 +289,7 @@ private struct IconBarButton: View {
 /// Reuses the QuickOpen tree-walk + filter logic but returns the
 /// chosen path through a callback instead of opening it in a tab.
 /// Keeps the IDE feel consistent — same fuzzy filter, same icons.
-struct FileMentionPicker: View {
+@MainActor struct FileMentionPicker: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
 

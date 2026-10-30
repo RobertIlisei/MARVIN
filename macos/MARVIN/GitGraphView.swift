@@ -214,7 +214,7 @@ final class GitGraphModel {
 
 /// The scrollable graph list. Hosted by `SourceControlView` as its
 /// bottom section; sized by the caller.
-struct GitGraphView: View {
+@MainActor struct GitGraphView: View {
     let cwd: String
     var model: GitGraphModel
 
@@ -271,7 +271,7 @@ struct GitGraphView: View {
     }
 }
 
-private struct GitGraphRowView: View {
+@MainActor private struct GitGraphRowView: View {
     let row: GitGraphRow
     let laneCount: Int
     let rowHeight: CGFloat

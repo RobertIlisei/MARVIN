@@ -37,7 +37,7 @@
 
 import SwiftUI
 
-struct ConfirmSheet: View {
+@MainActor struct ConfirmSheet: View {
     let request: ConfirmRequest
     let onAllow: () -> Void
     let onDeny: (String?) -> Void
@@ -198,7 +198,7 @@ struct ConfirmSheet: View {
 /// confirm sheet's needs (e.g. editable Bash command, diff preview
 /// for Edit) outgrow the chat list's needs without breaking either.
 /// Phase 2e keeps it terse; future phases polish.
-struct ConfirmToolInput: View {
+@MainActor struct ConfirmToolInput: View {
     let name: String
     let input: ChatJSON
 
@@ -387,7 +387,7 @@ private func prettyJSON(_ value: ChatJSON) -> String {
 /// as a card in the tray above the input, never as a sheet over the
 /// transcript. Same decision, same inputs, no scrim. The question sheet
 /// (ADR-0040) stays a sheet, because it is a form.
-struct ConfirmCard: View {
+@MainActor struct ConfirmCard: View {
     let request: ConfirmRequest
     let onAllow: () -> Void
     let onDeny: (String?) -> Void

@@ -110,7 +110,7 @@ private extension NSColor {
 /// behaviour: it is orientation-aware, drawing horizontally inside a `VStack`
 /// and vertically inside an `HStack`. A fixed-size `Rectangle` would have to
 /// pick one and be wrong half the time.
-struct MarvinDivider: View {
+@MainActor struct MarvinDivider: View {
     var body: some View {
         Divider().overlay(MarvinTheme.border)
     }

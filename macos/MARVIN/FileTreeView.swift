@@ -136,7 +136,7 @@ final class FileTreeModel {
 ///   ├──────────────────────────────────┤
 ///   │ ⚠ error banner (if any)          │
 ///   └──────────────────────────────────┘
-struct FileTreeView: View {
+@MainActor struct FileTreeView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = FileTreeModel()
 
@@ -705,7 +705,7 @@ struct FileTreeView: View {
 /// The folder/file icon is an SF Symbol so we get the user's accent
 /// colour for free; the row is tagged with the node's absolute path
 /// so tests / future drag-source code can pick rows up by path.
-private struct FileTreeRow: View {
+@MainActor private struct FileTreeRow: View {
     let node: FileNode
     /// Nesting level. `OutlineGroup` used to supply indentation implicitly;
     /// with a flat list the row draws its own leading pad from this.
@@ -993,7 +993,7 @@ private struct FileTreeRow: View {
 /// supported), so we wrap the optional-conditional shape that the
 /// drag source needs into a small extension. Used here only —
 /// keeps the modifier private.
-private extension View {
+@MainActor private extension View {
     @ViewBuilder
     func ifLet<T, Content: View>(
         _ value: T?,
@@ -1035,7 +1035,7 @@ struct RenameContext: Identifiable {
 /// the user can type immediately. Empty name disables the create
 /// button; trimming happens on submit so leading/trailing spaces
 /// don't sneak into filenames.
-private struct NewEntrySheet: View {
+@MainActor private struct NewEntrySheet: View {
     let context: NewEntryContext
     let onCreate: (String) -> Void
     let onCancel: () -> Void
@@ -1089,7 +1089,7 @@ private struct NewEntrySheet: View {
 /// and pre-selects the basename (without extension) for files so the
 /// user can type a new name without manually clearing the extension —
 /// matches Finder's rename behaviour.
-private struct RenameSheet: View {
+@MainActor private struct RenameSheet: View {
     let context: RenameContext
     let onRename: (String) -> Void
     let onCancel: () -> Void

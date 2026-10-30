@@ -118,7 +118,7 @@ final class GitRefPickerModel {
     }
 }
 
-struct GitRefPickerSheet: View {
+@MainActor struct GitRefPickerSheet: View {
     let cwd: String
     /// Fired after any successful mutation so the host can refresh its
     /// own git state (status panel, status bar, file tree badges).

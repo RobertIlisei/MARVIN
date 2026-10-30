@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-struct WelcomeView: View {
+@MainActor struct WelcomeView: View {
     @Environment(MarvinBridge.self) private var bridge
 
     private var projects: [BridgeProject] { bridge.projects }

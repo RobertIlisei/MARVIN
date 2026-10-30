@@ -15,7 +15,7 @@
 
 import SwiftUI
 
-struct TerminalPaneView: View {
+@MainActor struct TerminalPaneView: View {
     @State private var focusToken = 0
     @Environment(MarvinBridge.self) private var bridge
 

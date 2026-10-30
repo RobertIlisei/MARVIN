@@ -518,7 +518,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
 /// The Coordinator owns the NSWindow occlusion observer so the
 /// listener tracks the actual hosting window rather than a global
 /// app-wide proxy.
-struct BrainMetalView: NSViewRepresentable {
+@MainActor struct BrainMetalView: NSViewRepresentable {
     let state: BrainState
     let colorScheme: ColorScheme?
     let reduceMotion: Bool
@@ -648,7 +648,7 @@ struct BrainMetalView: NSViewRepresentable {
 /// paneHeight) so it stays circular regardless of how the user
 /// resizes the right pane vertically. Padding leaves room for the
 /// state caption.
-struct BrainPaneView: View {
+@MainActor struct BrainPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
     /// Phase 4h — System Settings → Accessibility → Display →
     /// Reduce Motion. SwiftUI tracks the current value and re-

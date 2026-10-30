@@ -34,7 +34,7 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     }
 }
 
-struct BacklogPanel: View {
+@MainActor struct BacklogPanel: View {
     let workDir: String
     /// Parent seeds a turn from the item (model.sendControl) + flips it to `doing`.
     let onPromote: (BacklogItem) -> Void
@@ -827,7 +827,7 @@ struct BacklogPanel: View {
 /// picker, resolve with an optional note, promote/export. Title stays
 /// read-only — the slug/id/filename derive from it, so a rename is a
 /// new item, not an edit (backlog.ts `updateBacklogItem`).
-struct BacklogDetailView: View {
+@MainActor struct BacklogDetailView: View {
     let workDir: String
     let item: BacklogItem
     let onPromote: (BacklogItem) -> Void

@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-30T00:00:00Z",
+  "title": "Design System: MARVIN (native macOS app)",
+  "derivedFrom": "Swift source under macos/MARVIN, not checked against renders. See DESIGN.md provenance note.",
+  "extensions": {
+    "colorMeta": {
+      "chrome-dark": { "role": "neutral", "displayName": "Chrome (dark)", "canonical": "#181818", "source": "macos/MARVIN/MarvinTheme.swift:22" },
+      "chrome-light": { "role": "neutral", "displayName": "Chrome (light)", "canonical": "#F3F3F3", "source": "macos/MARVIN/MarvinTheme.swift:22" },
+      "content-dark": { "role": "neutral", "displayName": "Content (dark)", "canonical": "#1F1F1F", "source": "macos/MARVIN/MarvinTheme.swift:26" },
+      "content-light": { "role": "neutral", "displayName": "Content (light)", "canonical": "#FFFFFF", "source": "macos/MARVIN/MarvinTheme.swift:26" },
+      "inset-dark": { "role": "neutral", "displayName": "Inset (dark)", "canonical": "#262626", "source": "macos/MARVIN/MarvinTheme.swift:31" },
+      "inset-light": { "role": "neutral", "displayName": "Inset (light)", "canonical": "#F7F7F7", "source": "macos/MARVIN/MarvinTheme.swift:31" },
+      "hairline-dark": { "role": "neutral", "displayName": "Hairline (dark)", "canonical": "#2B2B2B", "source": "macos/MARVIN/MarvinTheme.swift:35" },
+      "hairline-light": { "role": "neutral", "displayName": "Hairline (light)", "canonical": "#E5E5E5", "source": "macos/MARVIN/MarvinTheme.swift:35" },
+      "text-primary-dark": { "role": "neutral", "displayName": "Text Primary (dark)", "canonical": "#D4D4D4", "source": "macos/MARVIN/MarvinTheme.swift:39" },
+      "text-primary-light": { "role": "neutral", "displayName": "Text Primary (light)", "canonical": "#1F1F1F", "source": "macos/MARVIN/MarvinTheme.swift:39" },
+      "text-muted-dark": { "role": "neutral", "displayName": "Text Muted (dark)", "canonical": "#9D9D9D", "source": "macos/MARVIN/MarvinTheme.swift:41" },
+      "text-muted-light": { "role": "neutral", "displayName": "Text Muted (light)", "canonical": "#6E6E6E", "source": "macos/MARVIN/MarvinTheme.swift:41" },
+      "row-selected-dark": { "role": "neutral", "displayName": "Row Selected (dark)", "canonical": "#37373D", "source": "macos/MARVIN/MarvinTheme.swift:43" },
+      "row-selected-light": { "role": "neutral", "displayName": "Row Selected (light)", "canonical": "#E4E6F1", "source": "macos/MARVIN/MarvinTheme.swift:43" },
+      "row-hover-dark": { "role": "neutral", "displayName": "Row Hover (dark)", "canonical": "#2A2D2E", "source": "macos/MARVIN/MarvinTheme.swift:44" },
+      "row-hover-light": { "role": "neutral", "displayName": "Row Hover (light)", "canonical": "#F0F0F0", "source": "macos/MARVIN/MarvinTheme.swift:44" },
+      "git-added": { "role": "status", "displayName": "Git Added", "canonical": "#6BD18F", "source": "macos/MARVIN/GitStatusBadge.swift:38", "note": "source is Color(red: 0.420, green: 0.820, blue: 0.560); hex is the source comment's approximation" },
+      "git-modified": { "role": "status", "displayName": "Git Modified", "canonical": "#E8BD78", "source": "macos/MARVIN/GitStatusBadge.swift:36", "note": "source is Color(red: 0.910, green: 0.740, blue: 0.470)" },
+      "git-deleted": { "role": "status", "displayName": "Git Deleted", "canonical": "#D95440", "source": "macos/MARVIN/GitStatusBadge.swift:40", "note": "source is Color(red: 0.850, green: 0.330, blue: 0.250)" }
+    },
+    "typographyMeta": {
+      "pane-title": { "displayName": "Pane title", "purpose": "Title row of every left pane; uppercase, tracked, muted.", "source": "macos/MARVIN/PaneHeader.swift:41-47" },
+      "pane-title-project": { "displayName": "Pane title (project name)", "purpose": "A user-supplied name; never uppercased.", "source": "macos/MARVIN/PaneHeader.swift:42" },
+      "section-header": { "displayName": "Section header", "purpose": "Section label with optional count capsule.", "source": "macos/MARVIN/PaneSectionHeader.swift:31-36" },
+      "chip-label": { "displayName": "Chip label", "purpose": "Inline action chips; compact is 10.", "source": "macos/MARVIN/InlineActionChip.swift:58" },
+      "notice": { "displayName": "Notice", "purpose": "Outcome strip headline.", "source": "macos/MARVIN/PaneNoticeStrip.swift:37" },
+      "notice-detail": { "displayName": "Notice detail", "purpose": "Monospaced detail, three lines max.", "source": "macos/MARVIN/PaneNoticeStrip.swift:42" },
+      "empty-headline": { "displayName": "Empty-state headline", "purpose": "What a pane says when it has nothing to show.", "source": "macos/MARVIN/PaneStateViews.swift:27" },
+      "chat-body": { "displayName": "Chat body", "purpose": "Transcript prose, semantic .body text style.", "source": "macos/MARVIN/ChatMessageRow.swift:232" },
+      "chat-meta": { "displayName": "Transcript meta", "purpose": "Role gutter, tool rows, streaming label: .caption monospaced.", "source": "macos/MARVIN/ChatMessageRow.swift:131" },
+      "editor": { "displayName": "Editor", "purpose": "File viewer text, SF Mono 12.", "source": "macos/MARVIN/FileViewerView.swift:417-420" }
+    },
+    "shadows": [
+      { "name": "popup-ambient", "value": "0 4px 12px rgba(0,0,0,0.18)", "purpose": "The only shadow in the views: the slash-command popup. SwiftUI: .shadow(color: .black.opacity(0.18), radius: 12, y: 4).", "source": "macos/MARVIN/SlashCommandPopup.swift:226" }
+    ],
+    "motion": [
+      { "name": "transition", "value": "easeOut 0.18s", "purpose": "Pane show/hide, tab switches, state changes.", "source": "macos/MARVIN/MarvinTheme.swift:50" },
+      { "name": "press-chip", "value": "snappy 0.16s, extraBounce 0", "purpose": "Chip press and hover.", "source": "macos/MARVIN/InlineActionChip.swift:82-83" },
+      { "name": "press-icon", "value": "snappy 0.14s, extraBounce 0", "purpose": "Icon button press and hover.", "source": "macos/MARVIN/PaneControls.swift:38-39" }
+    ],
+    "breakpoints": []
+  },
+  "components": [],
+  "componentsNote": "The sidecar schema's components carry self-contained HTML/CSS snippets for a web panel. MARVIN's UI is native SwiftUI/AppKit and is not web-renderable, so none are synthesized; DESIGN.md Components describes them with source citations instead.",
+  "narrative": {
+    "northStar": "The Quiet Instrument",
+    "overview": "MARVIN's shell is a dense, flat tool that recedes so the work (code, a plan, a diff, a confirm) leads. Regions are separated by hairline borders, not by fill contrast, in two close greys sampled from Antigravity/VS Code chrome. Native macOS controls, the system accent, SF Pro for interface text, SF Mono for anything code-like, and SF Symbols sit on top.",
+    "keyCharacteristics": [
+      "Two surface greys 1–2 steps apart; hairline borders do the separating.",
+      "Light and dark both ship, as fixed hex pairs resolved per appearance, not as derived system colors.",
+      "Dense, small chrome type with a fixed-point scale; semantic text styles in the transcript.",
+      "Monospace is a first-class voice (tool rows, role labels, notice detail, editor), not just code.",
+      "Hover is a real affordance; press feedback is a 0.97 scale and a deeper fill.",
+      "The system accent is the only chromatic brand color; the app defines none of its own."
+    ],
+    "rules": [
+      { "name": "The Hairline Rule", "body": "Regions are separated by a 0.5–1 pt MarvinTheme.border, not by fill contrast. Surfaces stay within one or two greys of each other.", "section": "colors" },
+      { "name": "The One Accent Rule", "body": "The only chromatic brand color is the system accent, and at most one accent-filled (primary) chip appears per group.", "section": "colors" },
+      { "name": "The Outcome Color Rule", "body": "Green, orange and red mean outcome and are paired with a distinct glyph, because a red word among tinted status text is just another tinted word.", "section": "colors" },
+      { "name": "The Mono-For-Machines Rule", "body": "Tool names, paths, role labels, counts and diagnostics set in SF Mono; prose in SF Pro.", "section": "typography" },
+      { "name": "The Uppercase-Chrome Rule", "body": "Pane and section titles are uppercase, tracked +0.4, muted. A user-supplied name (the project) is never uppercased.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Nothing casts a shadow at rest. A shadow or material is an exception that needs a reason.", "section": "elevation" },
+      { "name": "The No-Overshoot Rule", "body": "Control animation is critically damped (extraBounce: 0); nothing bounces.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use MarvinTheme colors for shell surfaces and text, so appearance switching stays consistent.",
+      "Do separate regions with MarvinDivider / MarvinTheme.border, not with a darker fill.",
+      "Do build left-pane UI from the ADR-0114 vocabulary (PaneHeader, PaneSectionHeader, paneRow, chip/rowChip, paneIconButton, PaneNoticeStrip, PaneEmptyView).",
+      "Do pick corner radii from MarvinTheme.Radius (3 / 5 / 6).",
+      "Do give every status color a glyph, and keep at most one accent-filled chip per group.",
+      "Do keep a pane's intrinsic width at zero because all seven panes stay mounted.",
+      "Do honor Reduce Motion by dropping scale effects.",
+      "Do set machine-flavored text in SF Mono."
+    ],
+    "donts": [
+      "Don't make a primary action look like text.",
+      "Don't add a height transition inside a pane slot, or .textSelection on a ScrollView-rooted left-pane view.",
+      "Don't make a pane header .focusable().",
+      "Don't tint the user bubble with the accent.",
+      "Don't use a bare Spacer() in a header row.",
+      "Don't introduce shadows or materials without a reason; the system has one of each."
+    ]
+  }
+}

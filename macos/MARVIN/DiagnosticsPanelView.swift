@@ -26,7 +26,7 @@
 import AppKit
 import SwiftUI
 
-struct DiagnosticsPanelView: View {
+@MainActor struct DiagnosticsPanelView: View {
     @Environment(MarvinBridge.self) private var bridge
     /// A computed reference, not `@State`: the service is a singleton the
     /// view observes, not state the view owns. `@Observable` tracks any

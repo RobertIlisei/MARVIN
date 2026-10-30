@@ -40,7 +40,7 @@ private struct PaneIconButtonStyle: ButtonStyle {
     }
 }
 
-extension View {
+@MainActor extension View {
     /// An icon-only action in a pane header or a row.
     func paneIconButton(_ size: CGFloat = 11) -> some View {
         buttonStyle(PaneIconButtonStyle(size: size))
@@ -56,7 +56,7 @@ extension View {
 /// a switch with its state. `onToggle` fires with the value the user asked
 /// for, so the caller can await the round trip and revert on failure without
 /// this view holding any state of its own.
-struct PaneEnableToggle: View {
+@MainActor struct PaneEnableToggle: View {
     let isOn: Bool
     var help: String? = nil
     let onToggle: (Bool) -> Void

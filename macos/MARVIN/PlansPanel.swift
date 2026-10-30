@@ -8,7 +8,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct PlansPanel: View {
+@MainActor struct PlansPanel: View {
     let plans: [Plan]
     let activePlanId: String?
     /// Make this plan active (focuses its file too — model.selectPlan).
