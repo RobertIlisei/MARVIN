@@ -2,7 +2,8 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1] and [2] built 2026-10-30 (shadow mode; see "What milestone 1 changed" and "What milestone 2 changed" below). Milestones [3]–[6] not started.
+- **Status:** milestones [1] and [2] built 2026-10-30 (shadow mode; see "What milestone 1 changed" and "What milestone 2 changed" below). Milestones [3]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
 ## What milestone 1 changed from the text below
@@ -32,11 +33,47 @@ Mostly from the advisor's review:
 
 ## Constraint that shapes the order
 
-This machine has no Swift 6.1 toolchain. It has Command Line Tools 15.3 and Swift 5.10, so the macOS app cannot be built here.
-
 - **Milestones 1–5 are sidecar-only:** engine, routes and verbs, fully covered by vitest. Robert's external Claude Code mod is the interim UI, through the routes.
-- **Milestone 6 is the native surface** and waits on the toolchain.
-- `macos/Package.swift` is not modified to work around this.
+- **Milestone 6 is the native surface, and it is not blocked.** This plan first said the Mac had no Swift 6.1 toolchain and could not build the app. Since 2026-10-30 it can, with the recipe in `macos/MARVIN/SurfaceSnapshot.swift`'s header:
+  - Swift 6.4.2 from swift.org, against the Command Line Tools' 14.4 SDK;
+  - a local SwiftTerm 1.20.0 pin;
+  - the Metal `.process` → `.copy` patch in the SwiftTerm checkout;
+  - `-DMARVIN_LEGACY_SDK`.
+
+  All of it touches only untracked state (`Package.resolved`, `.build/`). `macos/Package.swift` is still not modified to work around the SDK.
+- **The order still holds.** Milestone 6 consumes the shapes milestones 3–5 produce, so it comes last.
+
+## The UI's shapes — the design brief's §10, reconciled
+
+The brief lists every backend field and mutation the Supervisor UI reads. Each group lands in the milestone that owns the behaviour behind it, so no field is a placeholder with nothing writing it (REVIEW.md: a declared record needs its writer).
+
+| Brief §10 group | Milestone | Notes |
+|---|---|---|
+| §10.7 transcript marking: `author`, `supervisor {kind, ledgerId, grounds}`, `answeredBy` + `grounds` + `ledgerId`, `supervisorTouched {at, by}` | **[3]** | `kind` is `nudge` / `instruction` in [3]; `first-message` arrives with `new_session` in [5]. `by: "confirm"` arrives with confirm autonomy in [5]. |
+| §10.4 watch row `supervisor`: `delegation`, `sharedCheckout`, `touchedTurn`, `waitingOnOwn`, `stoppedByUser` | **[3]** | The send refusals need these exact facts. |
+| §10.4 `lastActAt` | [4] | Nothing acts before [4]. |
+| §10.4 `openEscalations` | [5] | It counts inbox items. |
+| §10.1 inputs: spend split own / tabs, and a `pause {reason, at, detail?}` record | **[3]** | Spend attribution and the budget pause are [3]'s. |
+| §10.1 the status projection: `GET /api/supervisor` returns `{state, status}`, `status` holding every §10.1 field (`revision`, `mode`, `autonomy`, `run`, `pause`, `currentWake`, `queuedEvents`, `lastWake`, `health`, `watchedTabs`, `openEscalations`, `budget`, `charter`, `model`, `stats`, `suggestedBar`, `confirmsEligible`, `caps`) | [4] | Server-derived values (`health`, `budget.level`) are computed by rule in the runtime. `openEscalations` reads 0 until [5]. |
+| §10.1 mutations `start {charter, capUsd, delegations[]}`, `resume`, `disable`, `cap`, `autonomy {category, value}`, `wakeNow`; each returns the new state with its `revision` | [4] | `pause`, `kill`, `delegate` and `charter` exist since [1]. |
+| §10.3 shadow "would answer": `supervisorProposal`, `proposalRevealed`, `POST /api/supervisor/reveal` | [4] | Pairs with shadow pairing. The brief's open decision 1, blind until revealed, is adopted. |
+| §10.5 ledger `pairing` and §10.1 `stats` | [4] | — |
+| §10.2 the inbox, whole, with the `supervisor.inbox` feed events | [5] | — |
+| §10.5 the ledger read shape (`seq`, `actor`, `sessionId`, `tabTitle`, `reason {code, text}`, `argDigest`, `argSummary`, `inboxItemId`, `hasMore`, `nextBefore`, `todayCount`; query `before`, `limit`, `sessionId`, `decision`) and the `supervisor.ledger` / `supervisor.state` feed events | [5] | — |
+| §10.6 `Ground`, full: `tree`, `label`, `resolved`, `excerpt`, `openTarget` | [5] | — |
+| §10.8 the `supervisor` role in `/api/models/roles` | done in [1] | — |
+| §10.9 the token file | done in [1] | — |
+
+**Where the server differs from the brief, and why:**
+
+- **`postureSource` has no `"api"` value.** The server records `"user"` or `"supervisor"`, and both mean the posture was set through the API; no `postureSource` means the app set it. The brief's `"api"` is the server's `"user"`. Renaming stored meta for a label the app can derive was not worth a migration. `postureSetAt` is added with [4].
+- **Ground kind `plan`, not `plan-step`.** The `ref` (`plan:[3]`) already names the step. Stored ledger lines since [1] say `plan`.
+- **Ground `provenance` is stored as `strong` / `weak` / `unresolved`.** The [5] projection splits it into the brief's `provenance: strong | weak` plus `resolved: bool`; an unresolved ground projects as `weak`, `resolved: false`.
+- **The ledger stores `tab` and `argsDigest`.** The [5] read projection names them `sessionId` and `argDigest`. Lines on disk are never rewritten (append-only). `seq` is the line's position, and `actor` derives from the line's `kind`: `verb` → supervisor, `control` → user, `wake` / `rotation` → runtime.
+- **`reason {code, text}`.** Lines written from [3] onward carry a `reasonCode`. Older lines project `code: "unspecified"`.
+- **`tabTitle`** is snapshotted on lines written from [5]. Older lines project `null`.
+- **The inbox mutation is `POST /api/supervisor/inbox {id, actionId, edits?}`,** as the brief has it, not the separate `accept` / `override` / `dismiss` verbs [5] first named. Those become action `role`s (`consent`, `refuse`, `dismiss`, plus `edit`), and the server supplies the labels.
+- **`disable` is the brief's name for today's `stop`.** [4] accepts both and documents `disable`. The `mode` action is replaced by `autonomy {category, value}`; `mode: "autonomous"` is then derived (at least one category autonomous).
 
 **Order rule:** the gate that holds supervisor-touched turns to the user's consent (milestone 3) lands **before** any category can leave shadow mode (milestone 4).
 
@@ -228,6 +265,13 @@ The gate learns who touched a turn, and holds touched turns to the user's consen
 - **Spend attribution** of supervisor-started tab turns, via `cost-tracker`.
 - **The secret-shape scan** on `send` and `answer` text.
 - **The `send` and `cancel` verbs**, in shadow.
+- **The UI's shapes (brief §10.7, §10.4, §10.1 inputs):**
+  - the transcript's user-message line carries `author: "supervisor"` and `supervisor: {kind: "nudge" | "instruction", ledgerId, grounds}`;
+  - `confirm.decision` carries `grounds` and `ledgerId` beside `answeredBy` when the supervisor answered;
+  - the turn record carries `supervisorTouched: {at, by: "message" | "answer"}`, written when the mark is set;
+  - each watch row carries `supervisor: {delegation, sharedCheckout, touchedTurn, waitingOnOwn, stoppedByUser}`;
+  - state records spend split `{ownUsd, tabsUsd}` and `pause: {reason, at, detail?}`;
+  - ledger lines added here carry a `reasonCode`.
 
 **DoD.**
 
@@ -241,6 +285,7 @@ The gate learns who touched a turn, and holds touched turns to the user's consen
 - **The chat route matches.** `POST /api/chat` with `author: "supervisor"` gets identical treatment. Without the token it is refused. A user message during a supervisor-started turn preempts it (ADR-0069).
 - **Sends are refused where they should be,** in the three cases above. A third nudge at one plan step without spine progress is an escalation. A send carrying a secret-shaped string is refused.
 - **Spend is attributed.** Tab turns the supervisor started count against its daily cap. At the cap, the loop pauses and ledgers an escalation.
+- **The shapes round-trip.** Every field in this milestone's "UI's shapes" bullet is written by its writer and read back by a test: a transcript line, a `confirm.decision`, a turn record, a watch row, and a state with `pause.reason: "budget"`.
 
 ### [4] Autonomy for questions, nudges and narrowing
 
@@ -254,6 +299,12 @@ The first time the supervisor performs anything. Each category is switched by th
 - **`GET /api/supervisor/stats`** — agreement per category, plus the question heuristic's misses.
 - **Headless questions** — `maybeAskUserQuestion` (`sdk-runner.ts:1421-1454`) lets a headless turn's question in a delegated tab wait a bounded time for the supervisor, before ADR-0040's deny.
 - **New wake triggers** — turn ended (except `stopped`), and idle with an open plan and nothing of its own pending.
+- **The UI's shapes (brief §10.1, §10.3, §10.5 `pairing`, §10.4 `lastActAt`):**
+  - `GET /api/supervisor` returns `{state, status}`, with `status` the brief's §10.1 object. `health` and `budget.level` are derived by rule in the runtime, and `revision` increments on every state change;
+  - the mutations `start {charter, capUsd, delegations[]}`, `resume`, `disable` (alias of `stop`), `cap`, `autonomy {category, value}` and `wakeNow`. `autonomy` covers `questions`, `nudges`, `posture` and `confirms`; `confirms` is refused until [5];
+  - each `pendingConfirms[toolUseId]` on a watch row carries `supervisorProposal` and `proposalRevealed`, with `POST /api/supervisor/reveal {ledgerId}`;
+  - ledger `pairing` and `status.stats` (`proposals`, `agreed`, `agreedBlind`, `agreementRate`, `humanOnlyProposedAsAct`, `heuristicMisses`);
+  - `lastActAt` on the watch row's `supervisor`, and `postureSetAt` on the session meta.
 
 **DoD.**
 
@@ -268,14 +319,17 @@ The first time the supervisor performs anything. Each category is switched by th
   - Neither happens while its category is still in shadow.
 - **Stats compare against the user.** `GET /api/supervisor/stats` reports agreement per category from a fixture ledger. Answers through `/api/confirm` are counted as the user's.
 - **Headless questions fall back cleanly.** A headless turn's question in a delegated tab waits a bounded time for the supervisor, then falls back to ADR-0040's proceed-on-your-recommendation deny.
+- **The status is the brief's.** A route test reads every §10.1 field from `GET /api/supervisor` for an idle, a waking, a paused-by-budget and a stale fixture. A shadow proposal stays hidden on the watch row until `reveal`, and the reveal is recorded on the pairing.
 
 ### [5] The escalation inbox, the remaining verbs, and the auditor's review
 
 **Touchpoints — the inbox.**
 
 - **The store and its route** — an inbox store beside the ledger, and `src/app/api/supervisor/inbox/route.ts`, token required:
-  - GET;
-  - POST `accept` / `override` / `dismiss`. Accept performs the raw act with `actor: "user"`.
+  - `GET ?state=open`, oldest first;
+  - `POST {id, actionId, edits?}` (brief §10.2). The server lists each item's `actions` with a `role` (`consent`, `refuse`, `edit`, `dismiss`); a `consent` action performs the raw act with `actor: "user"`.
+- **Items carry the brief's §10.2 shape:** `kind`, `escalatedBecause {code, label, rule?}`, `heuristic`, `rawAct` (with a `summary` built by the server from the tool and its input, never from supervisor text), `preview`, `question`, `linkedConfirm`, `recommendation`, `grounds`, `actions`, `newTab`, `postureChange`, `guardrail`, `modeAtCreation`, `state` / `resolvedBy` / `resolvedAt`, `burstRank`. Budget, breaker and refusal pauses each become a tabless `guardrail` item.
+- **The ledger read shape and the feed** (brief §10.5, §10.6): the ledger route's projection, and full `Ground`s (`tree`, `label`, `resolved`, `excerpt`, `openTarget`), per "The UI's shapes" above. The `supervisor.state`, `supervisor.inbox` (added / updated / resolved) and `supervisor.ledger` events go on the project event bus. Each watch row gets `openEscalations`.
 - **Items show the raw act** — tool, input, digest, and a `git merge-tree` preview for merges — with the recommendation beside it.
 - **Items resolve on their own** when their underlying confirm or question resolves anywhere.
 - **`POST /api/supervisor/message`** — the user's conversation with the supervisor. It cannot grant consent.
@@ -317,16 +371,19 @@ The first time the supervisor performs anything. Each category is switched by th
   - the same confirm in an `answer-questions` tab is not;
   - no containment or metered-CI confirm is answered at any level.
 - **Worktree acts escalate, except a safe sweep.** Merges, merge-all, Prepare MR and drops of work always escalate, with a preview attached. A sweep reclaims empty or merged non-session trees and leaves an open tab's tree alone.
+- **The inbox and the ledger read as the brief says.** Route tests read every §10.2 field from an item of each `kind`, and every §10.5 field from a ledger page, including one line written before [3] (`reasonCode` absent) that projects `code: "unspecified"`. A feed subscriber sees `added`, then `resolved`, for an item answered in its tab.
 - **The auditor reviews without reaching the supervisor.** A supervisor-target audit produces a report over the ledger window with the four new finding classes. Nothing reaches the supervisor session; a test pins the absence.
 - **Docs catch up.**
   - `docs/guides/supervisor.md` explains delegation, shadow, the human-only list, the inbox, the token and what same-user code execution can still do.
   - The documents that still state the superseded clauses describe the supervisor as shipped: `docs/concepts/single-assistant.md`, the white paper and Technical Reference, and the README bullet.
 
-### [6] The native surface — blocked on the Swift 6.1 toolchain
+### [6] The native surface — not blocked
+
+Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), on the toolchain recipe in "Constraint that shapes the order".
 
 **Touchpoints.**
 
-- **A Supervisor strip in `SessionsPane`**, in the ADR-0114 vocabulary:
+- **A Supervisor strip in `SessionsPane`**, in the ADR-0114 vocabulary, laid out as the brief's §5–§6 describe:
   - the escalation inbox, with one-click accept or override on the raw act;
   - the ledger;
   - a per-tab delegation chip;
@@ -337,10 +394,16 @@ The first time the supervisor performs anything. Each category is switched by th
   - **Follow-up from milestone 2:** once the app shows an API-set posture, re-allow a *user's* widening through `PUT /api/sessions/posture` (refused since 2026-10-30; see "What milestone 2 changed"). A supervisor widening stays an escalation.
 - **The app reads the capability token.**
 - **The `supervisor` role** appears in the Models dialog's Helpers section.
+- **Supervisor fixtures in the snapshot harness** (`SurfaceSnapshot.swift` / `SurfaceSnapshotFixtures`), one per brief §7 state, fed with the server shapes from "The UI's shapes".
 
 **DoD.**
 
-- **It builds.** `swift build` and the MARVINLogic assertions are green on a Swift 6.1 toolchain, with no change to `macos/Package.swift` made to work around a missing toolchain.
+- **Built from the brief.** The strip, cards, rows, chip, log, off line, transcript marking and Helpers row follow the brief's §5–§9. Each place the build departs from the brief is recorded in the brief's §11 with the reason.
+- **It builds.** `swift build -Xswiftc -DMARVIN_LEGACY_SDK` and the MARVINLogic assertions are green on the recipe's toolchain (Swift 6.4.2, 14.4 SDK, local SwiftTerm 1.20.0 pin, Metal `.copy` patch), with no change to `macos/Package.swift` made to work around the SDK.
+- **Supervisor fixtures exist in the snapshot harness,** one surface per brief §7 state, populated from neutral fixture data and listed in `COVERAGE.md` as "fixture", not "empty".
+- **Every §7 state was rendered and looked at.** Each state is captured at 260 and 420 pt, in light and dark, and each PNG was opened and read. Defects found are fixed, or recorded with a reason. Measured, not assumed.
+- **`/impeccable critique`, then `polish`, ran on those renders.** Critique findings are fixed or recorded in the brief's §11. Polish ran on the fixed surface, and the renders were re-captured afterwards.
+- **User widening is re-allowed.** `PUT /api/sessions/posture` accepts a *user's* widening again once the app shows API-set posture (the milestone 2 follow-up). A test pins it; a supervisor widening still escalates.
 - **The Sessions pane is enough.** From the Sessions pane alone, the user can:
   - enable the supervisor;
   - set a tab's delegation;
@@ -348,8 +411,6 @@ The first time the supervisor performs anything. Each category is switched by th
   - read the ledger;
   - see the budget;
   - pause or kill it.
-
-  Each state is captured in a screenshot — measured, not assumed.
 - **Supervisor output looks different.** A supervisor-sent message and a supervisor-given answer render visibly differently from the user's.
 - **Posture stays in sync.** A posture changed in the toolbar after an API-set one sends the new revision. The toolbar shows an API-set posture within one watch refresh.
 
