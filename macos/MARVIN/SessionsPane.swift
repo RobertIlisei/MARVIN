@@ -302,10 +302,10 @@ import SwiftUI
             }
             Spacer(minLength: 4)
             if needsSync {
-                smallAction("Sync", role: .tinted(.orange)) { Task { await registry.sync(e.id) } }
+                smallAction("Sync", role: .neutral) { Task { await registry.sync(e.id) } }
                     .help("Ask this tab to merge \(registry.integrationTarget ?? "the current branch") into its branch in its own worktree, resolve conflicts, test, and commit. Never pushes.")
             }
-            smallAction("Merge", role: .tinted(GitDecorationColor.added)) { Task { await registry.mergeKept(e.id) } }
+            smallAction("Merge", role: .neutral) { Task { await registry.mergeKept(e.id) } }
                 .help("Merge \(w?.branch ?? "this branch") into \(registry.integrationTarget ?? "the current branch"), locally. Never pushes.")
         }
         .padding(.horizontal, 14)
@@ -372,14 +372,16 @@ import SwiftUI
             HStack(spacing: 10) {
                 if items.count > 1 {
                     Button("Merge all") { Task { await registry.mergeAllKept() } }
-                        .chip(.neutral)
+                        .chip(.primary)
                         .disabled(registry.integrationBusy)
                         .help("Fold all \(items.count) branches into \(registry.integrationTarget ?? "the current branch"), oldest first, locally. Stops at the first conflict. Never pushes.")
                 }
+                // Neutral, and the tooltip says why: this is the one that spends
+                // CI minutes, so it must not read as the default action (U22).
                 Button("Prepare MR…") { bridge.requestSourceControl(.prepareMR) }
-                    .chip(.primary)
+                    .chip(.neutral)
                     .disabled(registry.integrationBusy)
-                    .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request (ADR-0109).")
+                    .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request. Spends CI minutes; Merge all stays local.")
                 Spacer()
             }
             .padding(.horizontal, 14)
@@ -561,11 +563,11 @@ import SwiftUI
     private func action(for row: Row) -> some View {
         switch row.state {
         case .needsYou:
-            smallAction("Answer", role: .tinted(.orange)) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Answer", role: .primary) { bridge.requestChatTab(.select(row.id)) }
         case .working:
-            smallAction("Stop", role: .tinted(GitDecorationColor.deleted)) { Task { await registry.stop(row.id) } }
+            smallAction("Stop", role: .neutral) { Task { await registry.stop(row.id) } }
         case .interrupted:
-            smallAction("Resume", role: .tinted(.orange)) { Task { await registry.resume(row.id) } }
+            smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
             smallAction("Open", role: .neutral) { bridge.requestChatTab(.select(row.id)) }
         case .idle, .draft:

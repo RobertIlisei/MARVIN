@@ -230,7 +230,7 @@ Icons are SF Symbols (83 distinct `systemName`s; most used: `xmark` 15, `xmark.c
 
 ### Buttons and chips
 - **Chip** (`InlineChipStyle`, `InlineActionChip.swift:46-121`): the one way an inline action reads as an action. Radius 5, 0.5 pt stroke, label medium 10.5 (compact 10), padding 8×3 (compact 7×2.5), `lineLimit(1)` and `fixedSize` so it clips rather than wraps.
-- **Roles**: `primary` (accent text, accent-tinted fill 0.15/0.24/0.32, at most one per group), `neutral` (inset fill, hairline stroke, primary text; hover → row-hover, pressed → row-selected), `tinted(Color)` (green to merge, orange to sync, red to discard).
+- **Roles**: `primary` (accent text, accent-tinted fill 0.15/0.24/0.32, at most one per group), `neutral` (inset fill, hairline stroke, primary text; hover → row-hover, pressed → row-selected), `tinted(Color)` (reserved for a decision pair whose colour is the cue, such as the confirm card's Deny / Allow; a row's Merge, Sync, Stop and Resume are `neutral`, and a row's one call to action is `primary`, 2026-10-30, critique U22). The primary of a group is the safe, common action: Merge all is primary, Prepare MR… (spends CI minutes) is neutral.
 - **Icon button** (`paneIconButton`, `PaneControls.swift:19-48`): size + 8 square, muted glyph at medium weight, radius 5, hover → row-hover, pressed → row-selected, 0.94 scale.
 - **Enable toggle** (`PaneEnableToggle`, `:59-71`): a real `Toggle` with `.switch` style and `.mini` size, used for Skills and Plugins. Chosen over a tinted glyph because enabling a plugin loads MCP servers.
 - Native styles also appear throughout: `buttonStyle` `.plain` 74×, `.borderless` 36×, `.borderedProminent` 25×, `.bordered` 15×, `.link` 6×.
@@ -249,7 +249,7 @@ Icons are SF Symbols (83 distinct `systemName`s; most used: `xmark` 15, `xmark.c
 ### Chat transcript
 - **User message**: right-aligned bubble, inset fill, 1 pt hairline stroke, radius 12, padding 12×8, tracked uppercase mono "you" label in the accent at 0.8 opacity. Neutral rather than accent-tinted because background-job reports arrive as user messages and rendered as "a large navy block" (`ChatMessageRow.swift:113-124`).
 - **Assistant / system / result**: no bubble; a 56 pt mono role gutter colored by role (assistant → primary, system → muted, result → muted at 0.7).
-- **Tool call block** (`ChatMessageRow.swift:338+`): radius 6 container, mono caption name badge (radius 4, tinted), input/output in mono caption, errors in red 0.85.
+- **Tool call block** (`ChatMessageRow.swift:338+`): radius 6 container on the inset fill with a hairline (red 0.4 stroke only when the call failed), a neutral name badge led by a kind glyph (`terminal`, `doc.text.magnifyingglass`, `pencil`, `globe`), input/output in mono caption, errors in red 0.85. The kind is a glyph, never a hue: green, orange and red are left to the outcome (Outcome Color Rule; critique U10, 2026-10-30).
 - **Confirm card** (`ConfirmSheet.swift:390+`): in the tray above the input (ADR-0112), shield glyph in orange (purple for plan approval), mono tool badge on `orange.opacity(0.16)`, `Deny` (small) and `Allow` (small, `.borderedProminent`).
 
 ### Editor and markdown
