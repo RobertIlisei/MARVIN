@@ -73,6 +73,7 @@ import {
   recordAllowedTool,
 } from "./design-hooks";
 import { makeSideDoorPreToolUseHook } from "./side-door-hook";
+import { clearLiveNarrowing, getLiveNarrowing, narrowerMode, narrowerStrategy } from "./posture";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -1831,6 +1832,33 @@ export function makeAutoModeLogger(args: {
 }
 
 /**
+ * ADR-0127 §9 — the turn's gate, re-chosen on every call: the turn's own
+ * strategy and mode, narrowed by whatever `PUT /api/sessions/posture` set
+ * while it runs (`getLiveNarrowing`). Only narrowing ever applies here; a
+ * widening waits for the next turn.
+ */
+export function makeLivePostureGate(args: {
+  turnId: string;
+  permissionStrategy: PermissionStrategy;
+  mode: AgentMode;
+  gateFor: (strategy: PermissionStrategy, mode: AgentMode) => CanUseTool;
+}): CanUseTool {
+  const cache = new Map<string, CanUseTool>();
+  return (toolName, toolInput, opts) => {
+    const live = getLiveNarrowing(args.turnId);
+    const s = narrowerStrategy(args.permissionStrategy, live?.permissionStrategy);
+    const m = narrowerMode(args.mode, live?.mode);
+    const key = `${s}|${m}`;
+    let gate = cache.get(key);
+    if (!gate) {
+      gate = args.gateFor(s, m);
+      cache.set(key, gate);
+    }
+    return gate(toolName, toolInput, opts);
+  };
+}
+
+/**
  * Build the `gated` mode `canUseTool` callback. Auto-class allows
  * (audit-logged); deny-class hard-denies; confirm-class registers a
  * pending Promise and emits an `onConfirmRequest` event the UI handles
@@ -2160,6 +2188,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const readOnly = mode === "ask" || mode === "plan";
   const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
   const autoModeLogger = makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly, mode, permissionStrategy, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  // The gate for any narrower posture this turn may be moved to mid-flight.
+  const gateFor = (s: PermissionStrategy, m: AgentMode): CanUseTool => {
+    if (s === permissionStrategy && m === mode) return s === "gated" ? gatedCanUseTool : autoModeLogger;
+    const ro = m === "ask" || m === "plan";
+    return s === "gated"
+      ? makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly: ro, mode: m, ...(checkpoint ? { checkpoint } : {}) })
+      : makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly: ro, mode: m, permissionStrategy: s, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  };
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -2266,7 +2302,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // enforcement lives in the gate (`readOnly`) below — Plan is no longer
     // the SDK's coupled plan permissionMode.
     permissionMode: "default",
-    canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
+    // ADR-0127 §9 — re-chosen on every call, so a narrowing set through the
+    // posture route while this turn runs applies at the next tool call.
+    canUseTool: makeLivePostureGate({ turnId, permissionStrategy, mode, gateFor }),
     // ADR-0036: SDK-level backstop for Ask read-only — the gate already
     // hard-denies these, this is the belt-and-braces (same shape as the
     // scout). Bash is NOT disallowed: read-only shell (ls/grep/cat) stays
@@ -2964,6 +3002,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     bgDrain.clear();
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
+    clearLiveNarrowing(turnId);
     clearSubagentsForTurn(turnId);
     // ADR-0060 follow-up — emit the turn's graph:file summary BEFORE dropping
     // the context, so the ratio is readable from the sidecar log instead of

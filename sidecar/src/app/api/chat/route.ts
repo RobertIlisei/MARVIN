@@ -32,6 +32,7 @@ import {
 import { createPreparedSessionWorktree } from "@marvin/runtime/worktree-setup";
 import { noteClaimBranch } from "@marvin/runtime/backlog";
 import { reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { ackRevision, apiPostureHold } from "@marvin/runtime/posture";
 import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
 import { isSupervisorSessionId } from "@marvin/runtime/supervisor-state";
 import { noteSidecarPort } from "@marvin/tools/policy";
@@ -140,6 +141,13 @@ interface ChatRequestBody {
    * follow-up.
    */
   resetSdkSession?: boolean;
+  /**
+   * ADR-0127 §9 — the last posture revision this client has seen
+   * (`GET /api/sessions/watch` carries it). Until it matches the session's,
+   * the fields set through `PUT /api/sessions/posture` win over the posture
+   * posted here. Omitted by clients that predate the route.
+   */
+  postureRevision?: number;
 }
 
 /**
@@ -288,12 +296,20 @@ export async function POST(req: NextRequest) {
       );
     }
   }
+  // ADR-0127 §9 — fields set through PUT /api/sessions/posture hold over what
+  // this client posts until it has seen their revision. Null for a session
+  // that never used the route.
+  const clientRevision = typeof body.postureRevision === "number" && Number.isFinite(body.postureRevision) ? body.postureRevision : undefined;
+  const postureMeta = readSessionMeta(projectId, marvinSessionId);
+  const held = apiPostureHold(postureMeta, clientRevision);
+  // A client may only acknowledge a revision the server issued.
+  const postureAck = ackRevision(postureMeta, clientRevision);
   const personality: PersonalityMode = body.personality ?? "ultron";
   const runtimeMode: RuntimeMode = body.runtimeMode ?? "opus";
-  const permissionStrategy: PermissionStrategy = body.permissionStrategy ?? "auto";
+  const permissionStrategy: PermissionStrategy = held?.permissionStrategy ?? body.permissionStrategy ?? "auto";
   const playwrightEnabled: boolean = body.playwrightEnabled ?? false;
-  const mode: AgentMode = body.mode ?? "agent";
-  const thinkingMode: string = body.thinkingMode ?? "high";
+  const mode: AgentMode = held?.mode ?? body.mode ?? "agent";
+  const thinkingMode: string = held?.thinkingMode ?? body.thinkingMode ?? "high";
   // Advisor effort intentionally has NO "high" fallback here — undefined
   // means "follow the executor", resolved inside runAgent (ADR-0033).
   const advisorThinkingMode: string | undefined =
@@ -302,7 +318,7 @@ export async function POST(req: NextRequest) {
   // Resolution order for model/advisorModel: explicit body fields win;
   // runtimeMode fills the gap; defaultModel() is the last resort.
   const resolved = await resolveRuntimeMode(runtimeMode);
-  const executorModel = body.model?.trim() || resolved.model || defaultModel();
+  const executorModel = held?.model || body.model?.trim() || resolved.model || defaultModel();
   const advisorModel = body.advisorModel?.trim() || resolved.advisorModel;
   // ADR-0036 (revised): planning runs on the chosen ADVISOR model, execution
   // on the EXECUTOR model — routed by ROLE, never hardcoded. In Plan mode the
@@ -418,7 +434,7 @@ export async function POST(req: NextRequest) {
     ...(advisorThinkingMode ? { advisorThinkingMode } : {}),
     mode,
   };
-  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}), ...(setupRecord ? { setup: setupRecord } : {}) });
+  upsertSessionMeta(projectId, marvinSessionId, { workDir, tree: sessionTree, posture }, { posture, tree: sessionTree, ...(body.sessionTitle ? { title: body.sessionTitle } : {}), ...(setupRecord ? { setup: setupRecord } : {}), ...(postureAck !== undefined ? { postureAck } : {}) });
   if (!existingMeta) {
     announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree: sessionTree } });
   }
@@ -475,6 +491,8 @@ export async function POST(req: NextRequest) {
     turnId,
     cwd,
     tree: sessionTree,
+    // ADR-0127 §9 — a held posture is visible in the transcript and the watch.
+    ...(held ? { postureHeld: held, ...(postureMeta?.postureSource ? { postureSource: postureMeta.postureSource } : {}) } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   // SessionTurn union now admits `turn.started` natively (audit

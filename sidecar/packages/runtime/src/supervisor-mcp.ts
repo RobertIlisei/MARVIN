@@ -23,14 +23,15 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
 import type { getPendingConfirm } from "./confirm-registry";
+import { type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import type { SessionWatchRow } from "./session-watch";
 import { appendLedgerEntry, digestArgs, type LedgerDecision, type LedgerGround, readLedger } from "./supervisor-ledger";
-import { type ActionLimiter, evaluateAnswer, type GroundRef } from "./supervisor-policy";
+import { type ActionLimiter, evaluateAnswer, evaluateSetPosture, type GroundContext, type GroundRef } from "./supervisor-policy";
 import { wrapUntrusted } from "./supervisor-prompt";
 import { getSupervisorState, isSupervisorSessionId } from "./supervisor-state";
 
 export const SUPERVISE_SERVER_NAME = "marvin-supervise";
-export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer"] as const;
+export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer", "set_posture"] as const;
 
 /** What the verbs read, injected so tests run on fixtures and the runtime on the real stores. */
 export interface VerbDeps {
@@ -40,6 +41,8 @@ export interface VerbDeps {
   readBrief(marvinSessionId: string): string | null;
   tabStartedAt(marvinSessionId: string): number | null;
   readPlanText(marvinSessionId: string): string;
+  /** What models cost, for telling a narrowing from a widening (milestone 2). */
+  modelLookup(): Promise<ModelLookup>;
 }
 
 export interface VerbContext {
@@ -62,6 +65,12 @@ export interface AnswerArgs {
   other?: Record<string, string>;
   grounds?: GroundRef[];
   escalate?: { reason: string; recommendation?: string };
+}
+
+export interface SetPostureArgs {
+  marvinSessionId: string;
+  posture: PosturePatch;
+  grounds?: GroundRef[];
 }
 
 export interface ReadArgs {
@@ -244,7 +253,53 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     });
   }
 
-  return { sessions, read, answer };
+  /** Milestone 2 — a narrowing is proposed, a widening escalates; in shadow nothing changes. */
+  async function set_posture(args: SetPostureArgs): Promise<string> {
+    const st = getSupervisorState(projectId);
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const argsDigest = digestArgs({ posture: args.posture ?? {} });
+    const log = (decision: LedgerDecision, reason: string, grounds: LedgerGround[] = []) => {
+      appendLedgerEntry(projectId, { kind: "verb", verb: "set_posture", tab: tab || null, wakeId: ctx.wakeId, mode: st.mode, decision, reason, argsDigest, grounds });
+      return decision === "propose"
+        ? "Recorded as a proposal (shadow mode). The tab's posture is unchanged; your proposal is compared with what the user does later."
+        : REPLY[decision](reason);
+    };
+    if (isSupervisorSessionId(tab)) return log("refuse", "a supervisor session is never a target (no recursion)");
+    const row = (await ctx.deps.listRows()).find((r) => r.marvinSessionId === tab);
+    if (!row?.posture) return log("refuse", `no open tab ${tab} with a recorded posture`);
+    const valid = validatePosturePatch(args.posture);
+    if (!valid.ok) return log("refuse", valid.error);
+    const key = `set_posture:${argsDigest}`;
+    const gate = ctx.limiter.check(projectId, tab, key, ctx.wake.acts);
+    if (!gate.ok) return log("drop", gate.reason);
+    ctx.wake.acts += 1;
+    ctx.limiter.record(projectId, tab, key);
+    const outcome = evaluateSetPosture({
+      mode: st.mode,
+      delegation: st.delegation[tab],
+      targetIsSupervisor: false,
+      from: row.posture,
+      patch: valid.patch,
+      lookup: await ctx.deps.modelLookup(),
+      grounds: Array.isArray(args.grounds) ? args.grounds : [],
+      groundCtx: groundContextFor(row, st.charter),
+    });
+    return log(outcome.decision, outcome.reason, outcome.grounds);
+  }
+
+  function groundContextFor(row: SessionWatchRow, charter: string): GroundContext {
+    return {
+      mainRoot: ctx.workDir,
+      tabRoot: row.tree.mode === "worktree" ? row.tree.path : null,
+      charter,
+      brief: ctx.deps.readBrief(row.marvinSessionId),
+      planStepCount: row.plan?.total ?? 0,
+      planSeeded: row.plan?.seeded ?? false,
+      tabStartedAt: ctx.deps.tabStartedAt(row.marvinSessionId),
+    };
+  }
+
+  return { sessions, read, answer, set_posture };
 }
 
 const groundSchema = z.object({
@@ -290,6 +345,23 @@ export function supervisorToolDefs(ctx: VerbContext) {
         escalate: z.object({ reason: z.string().min(1).max(500), recommendation: z.string().max(500).optional() }).optional(),
       },
       async (args) => text(await v.answer(args as AnswerArgs)),
+    ),
+    tool(
+      "set_posture",
+      "Propose a change to a tab's posture (model, thinkingMode, permissionStrategy, mode). You may only NARROW " +
+        "(gated over auto over full; ask/plan over agent; lower effort; a model known to cost no more): any widening " +
+        "escalates to the user, Plan → Agent included. Cite `grounds`. In shadow mode nothing changes.",
+      {
+        marvinSessionId: z.string().min(1),
+        posture: z.object({
+          model: z.string().optional(),
+          thinkingMode: z.string().optional(),
+          permissionStrategy: z.enum(["gated", "auto", "full"]).optional(),
+          mode: z.enum(["ask", "plan", "agent"]).optional(),
+        }),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.set_posture(args as SetPostureArgs)),
     ),
   ];
 }

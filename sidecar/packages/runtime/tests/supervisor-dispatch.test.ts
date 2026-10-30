@@ -62,6 +62,7 @@ const verbCtx = () => ({
     readBrief: () => null,
     tabStartedAt: () => null,
     readPlanText: () => "",
+    modelLookup: async () => () => null,
   },
 });
 

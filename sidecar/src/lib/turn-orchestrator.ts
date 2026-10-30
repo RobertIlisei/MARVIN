@@ -27,6 +27,7 @@ import {
   renderPendingPrompt,
 } from "@marvin/runtime/pending-input";
 import { buildSystemPrompt, type PersonalityMode } from "@marvin/runtime/personality";
+import { activeModelLookup, apiPostureHold, scheduledTurnPosture } from "@marvin/runtime/posture";
 import { practicePromptBlock } from "@marvin/runtime/practice";
 import { slugifyWorkDir, touchProject } from "@marvin/runtime/projects";
 import {
@@ -579,6 +580,16 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
     enqueuePending(prev.projectId, prev.marvinSessionId, message);
     return;
   }
+  // ADR-0127 §9 — a narrowing set through the posture route while the previous
+  // turn ran must survive into this one: the narrower of that turn's posture
+  // and what the tab holds now, field by field (never wider than either).
+  const tabMeta = readSessionMeta(prev.projectId, prev.marvinSessionId);
+  const posture = scheduledTurnPosture(
+    { model: prev.model, permissionStrategy: prev.permissionStrategy, thinkingMode: prev.thinkingMode, mode: prev.mode },
+    tabMeta?.posture ?? null,
+    apiPostureHold(tabMeta, tabMeta?.postureAck) ?? undefined,
+    await activeModelLookup(),
+  );
   const turnId = randomUUID();
   const liveTurn = registerLiveTurn({
     turnId,
@@ -602,14 +613,14 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
   const turnStartedPayload = {
     marvinSessionId: prev.marvinSessionId,
     projectId: prev.projectId,
-    model: prev.model,
+    model: posture.model,
     advisorModel: prev.advisorModel ?? null,
     runtimeMode: (prev.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
     personality: prev.personality,
-    permissionStrategy: prev.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
     playwrightEnabled: prev.playwrightEnabled ?? false,
-    mode: prev.mode ?? "agent",
-    thinkingMode: prev.thinkingMode,
+    mode: posture.mode,
+    thinkingMode: posture.thinkingMode,
     advisorThinkingMode: prev.advisorThinkingMode ?? null,
     sdkSessionFresh: !sessionId,
     turnId,
@@ -623,6 +634,10 @@ async function startQueuedTurn(prev: DetachedTurnParams, message: string): Promi
   });
   await runDetachedTurn({
     ...prev,
+    model: posture.model,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
+    thinkingMode: posture.thinkingMode,
     liveTurn,
     turnId,
     message,
@@ -700,16 +715,23 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   // Dynamic effort: whoever armed this wakeup may have asked for less than
   // the user's ceiling (a check-and-report turn, a job that succeeded).
   // The clamp is the guarantee that "less" is the only direction.
-  const effectiveEffort = clampEffort(record.effort, record.thinkingMode, record.model);
+  // ADR-0127 §9 — the narrower of what armed this turn and what the tab holds
+  // now, mode included: a Plan or Ask tab's wakeup, job completion or resume
+  // turn stays read-only (the mode used to be dropped and every such turn ran
+  // as Agent), a narrowing set through the posture route applies, and a
+  // widening since arming does not elevate (ADR-0031).
+  const posture = scheduledTurnPosture(record, meta?.posture ?? null, apiPostureHold(meta, meta?.postureAck) ?? undefined, await activeModelLookup());
+  const effectiveEffort = clampEffort(record.effort, posture.thinkingMode, posture.model);
 
   const turnStartedPayload = {
     marvinSessionId,
     projectId,
-    model: record.model,
+    model: posture.model,
     advisorModel: record.advisorModel,
     runtimeMode: (record.advisorModel ? "advisor" : "opus") as "advisor" | "opus",
     personality: record.personality,
-    permissionStrategy: record.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
     thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
@@ -732,9 +754,10 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     workDir,
     ...(sessionContext ? { sessionContext } : {}),
     ...(sessionTree ? { sessionTree } : {}),
-    model: record.model,
+    model: posture.model,
     advisorModel: record.advisorModel ?? undefined,
-    permissionStrategy: record.permissionStrategy,
+    permissionStrategy: posture.permissionStrategy,
+    mode: posture.mode,
     playwrightEnabled: record.playwrightEnabled,
     thinkingMode: effectiveEffort,
     advisorThinkingMode: record.advisorThinkingMode,

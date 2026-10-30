@@ -36,6 +36,9 @@ describe("supervisorBoundaryDenial — MARVIN's own control routes", () => {
     "wget -qO- localhost:3030/api/supervisor",
     "curl -H 'X-Marvin-Client: 1' http://0.0.0.0:3030/api/worktrees -d '{\"action\":\"merge\"}'",
     "http POST :3030/api/models/roles",
+    // Milestone 2's routes sit under the same control paths.
+    "curl -X POST http://localhost:3030/api/confirm/answer -d '{}'",
+    "curl -X PUT http://localhost:3030/api/sessions/posture -d '{\"posture\":{\"permissionStrategy\":\"full\"}}'",
     // Any host spelling — the sidecar binds loopback only.
     "curl http://127.1:3030/api/confirm",
     "curl http://0:3030/api/chat",

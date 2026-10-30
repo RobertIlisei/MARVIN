@@ -61,6 +61,7 @@ function row(id: string): SessionWatchRow {
     title: id,
     updatedAt: new Date().toISOString(),
     posture: null,
+    postureRevision: null,
   } as SessionWatchRow;
 }
 
@@ -71,6 +72,7 @@ const verbDeps = (): VerbDeps => ({
   readBrief: () => "Build billing.",
   tabStartedAt: () => null,
   readPlanText: () => "",
+  modelLookup: async () => () => null,
 });
 
 function pending(tab: string, toolUseId: string, toolName = "AskUserQuestion") {

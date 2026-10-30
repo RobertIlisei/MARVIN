@@ -104,6 +104,11 @@ export type RoleModels = Partial<Record<Role, string>>;
  *  names a model with (whitespace, control characters, absurd length). */
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,199}$/;
 
+/** True for a string some provider could name a model with (shared with the posture route, ADR-0127). */
+export function isValidModelId(id: string): boolean {
+  return MODEL_ID_RE.test(id);
+}
+
 export function roleModelsPath(): string {
   const root = process.env.MARVIN_DATA_DIR?.trim() || path.join(homedir(), ".marvin");
   return path.join(root, "role-models.json");

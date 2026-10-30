@@ -258,6 +258,7 @@ export function buildResumeRecord(meta: SessionMeta, opts: { prompt?: string | u
     advisorModel: meta.posture.advisorModel,
     personality: meta.posture.personality,
     permissionStrategy: meta.posture.permissionStrategy,
+    ...(meta.posture.mode ? { mode: meta.posture.mode } : {}),
     ...(meta.posture.playwrightEnabled !== undefined ? { playwrightEnabled: meta.posture.playwrightEnabled } : {}),
     thinkingMode: meta.posture.thinkingMode,
     ...(meta.posture.advisorThinkingMode ? { advisorThinkingMode: meta.posture.advisorThinkingMode } : {}),

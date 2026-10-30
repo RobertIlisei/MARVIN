@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestone [1] built 2026-10-30 (shadow mode; see "What milestone 1 changed" below). Milestones [2]–[6] not started.
+- **Status:** milestones [1] and [2] built 2026-10-30 (shadow mode; see "What milestone 1 changed" and "What milestone 2 changed" below). Milestones [3]–[6] not started.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
 ## What milestone 1 changed from the text below
@@ -16,6 +16,18 @@ Found while building it, mostly from the advisor's review of the security surfac
 - **The token is minted only at boot.** Verification fails closed before boot, and the GET routes need the token too.
 - **Deferred to milestone 4, with the idle trigger that needs them:** the `background-jobs.ts` / `wakeup-scheduler.ts` lookups. Milestone 1's only trigger is a pending question.
 - **Plan steps count as strong grounds only when the plan was seeded from the user's brief.** Plan approval is not recorded server-side yet (ADR-0127 §4 item 6), so a plan the tab presented is weak.
+
+## What milestone 2 changed from the text below
+
+Mostly from the advisor's review:
+
+- **Queued turns** get the narrower-of rule too, not only wakeup, job-completion and resume turns: a narrowing set while a turn runs survives into the queued message that follows it.
+- **A client cannot acknowledge a revision the server never issued** (`ackRevision` clamps it), and a held posture is recorded on `turn.started` (`postureHeld`, `postureSource`).
+- **Plan ↔ Ask is judged by model cost.** Both are read-only at the gate, but Plan runs the advisor model; Agent → Plan / Ask stays a narrowing.
+- **Server-started turns move only to a model known to cost no more** than the one that armed them; a pricier override does not elevate a wakeup.
+- **`/api/confirm` refuses an `allow` on a question that carries no answer** — the hole the first-class answer exists to close.
+- **`POST /api/confirm/answer` is user authority only.** The supervisor answers for real only after milestone 3's consent gate.
+- **Model changes never apply to a live turn.** `setModel()` on a running query is not used; strategy and mode narrowings do reach the live turn.
 
 ## Constraint that shapes the order
 

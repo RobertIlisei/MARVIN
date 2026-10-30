@@ -96,6 +96,8 @@ export interface SessionWatchRow {
   /** ADR-0108 — the posture this session's turns last ran with, so a client
    *  restoring a tab shows the mode / models / gate it had, not app defaults. */
   posture: SessionPosture | null;
+  /** ADR-0127 §9 — the posture revision a client echoes on its next turn; null when the posture route was never used. */
+  postureRevision: number | null;
 }
 
 /** The one derivation the UI trusts. Pure, so it is pinned by tests. */
@@ -399,6 +401,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       title: meta?.title ?? summary?.firstUserMessage ?? null,
       updatedAt: meta?.updatedAt ?? summary?.updatedAt ?? new Date(now).toISOString(),
       posture: meta?.posture ?? null,
+      postureRevision: meta?.postureRevision ?? null,
     };
   }));
 }

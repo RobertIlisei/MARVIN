@@ -44,6 +44,11 @@ export type SessionTurn =
       cwd?: string;
       tree?: { mode: "worktree"; slug: string; path: string; branch: string; base: string; baseRef?: string }
         | { mode: "shared"; lane?: string[] };
+      /** ADR-0127 §9 — the autonomy mode the turn ran in. Optional: older records lack it. */
+      mode?: "agent" | "ask" | "plan";
+      /** ADR-0127 §9 — fields the posture route held over what the client posted, and who set them. */
+      postureHeld?: { model?: string; thinkingMode?: string; permissionStrategy?: "auto" | "gated" | "full"; mode?: "agent" | "ask" | "plan" };
+      postureSource?: "user" | "supervisor";
     }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {
@@ -84,6 +89,8 @@ export type SessionTurn =
       toolUseId: string;
       decision: "allow" | "deny";
       message?: string;
+      /** ADR-0127 — who answered. Absent on records written before the field. */
+      answeredBy?: "user" | "supervisor";
     }
   /**
    * An implementer subagent finished and left a branch behind (ADR-0103).

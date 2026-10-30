@@ -25,6 +25,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { getPendingConfirm } from "./confirm-registry";
 import { marvinPaths } from "./paths";
 import { readPlanState } from "./plan-state";
+import { activeModelLookup } from "./posture";
 import { getProject } from "./projects";
 import { loadSessionTail } from "./session";
 import { readSessionMeta } from "./session-meta";
@@ -258,6 +259,7 @@ export function defaultVerbDeps(projectId: string, workDir: string): VerbDeps {
       return Number.isFinite(t) ? t : null;
     },
     readPlanText: (id) => readPlanText(projectId, id),
+    modelLookup: activeModelLookup,
   };
 }
 

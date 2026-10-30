@@ -19,6 +19,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { classifyPostureChange, type ModelLookup, type PosturePatch } from "./posture";
+import type { SessionPosture } from "./session-meta";
 import type { GroundKind, LedgerDecision, LedgerGround } from "./supervisor-ledger";
 import { type Delegation, delegationRank, type SupervisorCaps, type SupervisorMode } from "./supervisor-state";
 
@@ -211,6 +213,47 @@ export function evaluateAnswer(input: AnswerEvaluationInput): PolicyOutcome {
   return input.mode === "autonomous"
     ? done("act", "grounded; the questions category is autonomous")
     : done("propose", "grounded; shadow mode records the proposal and performs nothing");
+}
+
+// ── The set_posture verb's decision (milestone 2) ───────────────────────────
+
+/**
+ * A supervisor may narrow a tab's posture on its own; any widening is the
+ * user's act and escalates (ADR-0127 §4 item 5) — Plan → Agent included, which
+ * is how plan approval is expressed. Grounds are required, as for answers.
+ */
+export function evaluateSetPosture(input: {
+  mode: SupervisorMode;
+  delegation: Delegation | undefined;
+  targetIsSupervisor: boolean;
+  from: SessionPosture;
+  patch: PosturePatch;
+  lookup: ModelLookup;
+  grounds: GroundRef[];
+  groundCtx: GroundContext;
+}): PolicyOutcome {
+  const grounds = input.grounds.map((g) => resolveGround(g, input.groundCtx));
+  const plain = grounds.map(({ kind, ref, provenance }) => ({ kind, ref, provenance }));
+  const done = (decision: LedgerDecision, reason: string): PolicyOutcome => ({ decision, reason, grounds: plain });
+
+  if (input.targetIsSupervisor) return done("refuse", "a supervisor session is never a target (no recursion)");
+  if (input.mode === "off") return done("refuse", "the supervisor is off");
+  if (delegationRank(input.delegation) < delegationRank("answer-questions")) {
+    return done("refuse", `delegation "${input.delegation ?? "off"}" does not allow changing posture`);
+  }
+  const changes = classifyPostureChange(input.from, input.patch, input.lookup);
+  const widening = changes.filter((c) => c.direction === "widen");
+  if (widening.length) {
+    return done("escalate", `widening is the user's act: ${widening.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ")}`);
+  }
+  if (grounds.length === 0) return done("refuse", "no grounds cited — every posture change cites what it rests on");
+  const bad = grounds.filter((g) => g.provenance === "unresolved");
+  if (bad.length) return done("refuse", `citation does not resolve: ${bad.map((g) => `${g.kind}:${g.ref} (${g.why ?? "unresolved"})`).join("; ")}`);
+  if (!grounds.some((g) => g.provenance === "strong")) return done("escalate", "only weak grounds — every cited artifact was written by the tab itself");
+  const what = changes.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ") || "no change";
+  return input.mode === "autonomous"
+    ? done("act", `narrowing (${what}); the posture category is autonomous`)
+    : done("propose", `narrowing (${what}); shadow mode records the proposal and performs nothing`);
 }
 
 // ── Stopping conditions (§6) ─────────────────────────────────────────────────

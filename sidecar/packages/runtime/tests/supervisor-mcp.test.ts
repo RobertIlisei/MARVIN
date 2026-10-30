@@ -59,6 +59,7 @@ function row(id: string, overrides: Partial<SessionWatchRow> = {}): SessionWatch
     title: `title ${id}`,
     updatedAt: new Date().toISOString(),
     posture: null,
+    postureRevision: null,
     ...overrides,
   } as SessionWatchRow;
 }
@@ -93,6 +94,8 @@ beforeEach(() => {
       readBrief: () => "Build the billing page.",
       tabStartedAt: () => null,
       readPlanText: () => "1. schema\n2. api\n3. ui\n4. tests",
+      modelLookup: async () => (id: string) =>
+        ({ "claude-opus-5-5": { tier: "opus" }, "claude-sonnet-5-5": { tier: "sonnet" } })[id] ?? null,
     },
   };
 });
@@ -133,9 +136,9 @@ describe("confirm registry — the raising rule is recorded at the source (ADR-0
 });
 
 describe("marvin-supervise — milestone 1 verbs", () => {
-  it("exposes exactly sessions, read and answer", () => {
-    expect([...SUPERVISE_TOOL_NAMES]).toEqual(["sessions", "read", "answer"]);
-    expect(supervisorToolDefs(ctx).map((t) => t.name)).toEqual(["sessions", "read", "answer"]);
+  it("exposes exactly sessions, read, answer and (milestone 2) set_posture", () => {
+    expect([...SUPERVISE_TOOL_NAMES]).toEqual(["sessions", "read", "answer", "set_posture"]);
+    expect(supervisorToolDefs(ctx).map((t) => t.name)).toEqual(["sessions", "read", "answer", "set_posture"]);
   });
 
   it("one grounded answer → one `propose` ledger line with provenance; the question is still pending", async () => {
@@ -288,5 +291,51 @@ describe("marvin-supervise — milestone 1 verbs", () => {
 
   it("read refuses an undelegated tab", async () => {
     expect(await createSupervisorVerbs(ctx).read({ marvinSessionId: "tab-off", what: "transcript" })).toMatch(/not delegated/i);
+  });
+});
+
+describe("marvin-supervise — set_posture (milestone 2, shadow)", () => {
+  const POSTURE = { model: "claude-opus-5-5", advisorModel: null, personality: "ultron" as const, permissionStrategy: "auto" as const, thinkingMode: "high", mode: "agent" as const };
+  beforeEach(() => {
+    rows = [row("tab-1", { posture: POSTURE }), row("tab-obs", { posture: POSTURE })];
+  });
+
+  it.each([
+    [{ permissionStrategy: "gated" }],
+    [{ mode: "ask" }],
+    [{ model: "claude-sonnet-5-5" }],
+  ] as const)("a grounded narrowing %j is a proposal that changes nothing", async (posture) => {
+    const text = await createSupervisorVerbs(ctx).set_posture({ marvinSessionId: "tab-1", posture, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(text).toMatch(/shadow/i);
+    expect(verbLines().at(-1)).toMatchObject({ verb: "set_posture", decision: "propose", tab: "tab-1", mode: "shadow" });
+  });
+
+  it.each([
+    [{ permissionStrategy: "full" }],
+    [{ thinkingMode: "max" }],
+    [{ model: "unknown/model" }],
+  ] as const)("a widening %j escalates to the user", async (posture) => {
+    await createSupervisorVerbs(ctx).set_posture({ marvinSessionId: "tab-1", posture, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(verbLines().at(-1)).toMatchObject({ verb: "set_posture", decision: "escalate" });
+    expect(verbLines().at(-1)?.reason).toMatch(/widen/i);
+  });
+
+  it("Plan -> Agent (how plan approval is expressed) escalates", async () => {
+    rows = [row("tab-1", { posture: { ...POSTURE, mode: "plan" } })];
+    await createSupervisorVerbs(ctx).set_posture({ marvinSessionId: "tab-1", posture: { mode: "agent" }, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(verbLines().at(-1)).toMatchObject({ decision: "escalate" });
+  });
+
+  it("needs grounds, an answer-questions delegation, a valid patch, and never targets a supervisor", async () => {
+    const v = createSupervisorVerbs(ctx);
+    await v.set_posture({ marvinSessionId: "tab-1", posture: { mode: "ask" }, grounds: [] });
+    expect(verbLines().at(-1)).toMatchObject({ decision: "refuse" });
+    await v.set_posture({ marvinSessionId: "tab-obs", posture: { mode: "ask" }, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(verbLines().at(-1)).toMatchObject({ decision: "refuse" });
+    await v.set_posture({ marvinSessionId: "tab-1", posture: { personality: "marvin" } as never, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(verbLines().at(-1)).toMatchObject({ decision: "refuse" });
+    const own = getSupervisorState("proj").supervisorSessionId as string;
+    await v.set_posture({ marvinSessionId: own, posture: { mode: "ask" }, grounds: [{ kind: "charter", ref: "Billing page" }] });
+    expect(verbLines().at(-1)?.reason).toMatch(/supervisor/i);
   });
 });

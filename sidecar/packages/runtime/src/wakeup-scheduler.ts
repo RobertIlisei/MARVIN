@@ -86,6 +86,9 @@ export interface WakeupRecord {
   advisorModel: string | null;
   personality: "marvin" | "neutral" | "ultron";
   permissionStrategy: "auto" | "gated" | "full";
+  /** ADR-0127 §9 — the autonomy mode the turn was armed under; absent = agent.
+   *  `startScheduledTurn` runs the narrower of this and the tab's current mode. */
+  mode?: "agent" | "ask" | "plan";
   /** Opt-in Playwright MCP for the fired turn (ADR-0045); inherits the
    *  scheduling turn's toggle. Optional so pre-0045 records keep parsing. */
   playwrightEnabled?: boolean;
