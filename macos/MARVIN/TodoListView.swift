@@ -188,7 +188,7 @@ import SwiftUI
                         }
                     }
                 }
-                .frame(height: bodyHeight)
+                .frame(minHeight: Self.minBodyHeight, idealHeight: bodyHeight, maxHeight: bodyHeight)
                 resizeGrip
             }
         }

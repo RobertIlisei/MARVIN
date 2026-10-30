@@ -301,6 +301,20 @@ enum SurfaceSnapshot {
                         SurfaceFixtures.populateBridge(b)
                         ChatPreviewModel.shared.messages = SurfaceFixtures.transcript
                     }) { AnyView(ChatPreviewView()) },
+            // A short window with the largest persisted composer and plan-strip
+            // heights (audit C6). Proves the persisted sizes yield to the window.
+            Surface("chat-pane-short", "Chat pane in a short window with the composer and plan strip persisted at their maximum heights",
+                    .populated, widths: [520], height: 320,
+                    configure: { b in
+                        SurfaceFixtures.populateBridge(b)
+                        ChatPreviewModel.shared.messages = SurfaceFixtures.transcript
+                        // An isolated suite, never `.standard`: the persisted sizes
+                        // would otherwise leak into every later surface and run.
+                        let suite = UserDefaults(suiteName: "marvin.snapshot.short")!
+                        suite.removePersistentDomain(forName: "marvin.snapshot.short")
+                        suite.set(600.0, forKey: "marvin.chat.editorHeight")
+                        suite.set(520.0, forKey: "marvin.planStripHeight")
+                    }) { AnyView(ChatPreviewView().defaultAppStorage(UserDefaults(suiteName: "marvin.snapshot.short")!)) },
             Surface("terminal", "Terminal pane (a login shell running a neutral command). Observed offscreen, unverified in the live app: in dark the terminal background draws white under default-white text, so the output is invisible", .populated,
                     widths: [700, 1000], height: 360, settleMs: 2500, prepareEachAppearance: true, prepare: seedTerminal) {
                 AnyView(TerminalPaneView())

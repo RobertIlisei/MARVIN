@@ -264,6 +264,9 @@ import SwiftUI
                 Text("• **Claude CLI (free with Claude Pro)** — open Terminal and run:")
                 Text("`brew install claude-code && claude login`")
                     .font(.system(.callout, design: .monospaced))
+                    // The one command this screen tells you to run: it has to
+                    // be copyable (W3). UpdatePromptView does the same.
+                    .textSelection(.enabled)
                     .padding(8)
                     .background(Color(nsColor: .controlBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 6))

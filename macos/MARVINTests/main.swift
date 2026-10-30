@@ -4137,6 +4137,31 @@ runner.suite("file-tree-navigation") {
     }
 }
 
+// MARK: - Return in the composer, mid-IME (audit C1)
+
+runner.suite("composer-return") {
+    func d(_ code: UInt16 = 36, shift: Bool = false, option: Bool = false, marked: Bool = false) -> ComposerReturn {
+        ComposerReturn.decide(keyCode: code, shift: shift, option: option, hasMarkedText: marked)
+    }
+
+    runner.test("Return submits, Shift/Option+Return is a newline") {
+        runner.expect(d(), equals: .submit, "plain Return")
+        runner.expect(d(shift: true), equals: .newline, "Shift+Return")
+        runner.expect(d(option: true), equals: .newline, "Option+Return")
+    }
+
+    runner.test("Return while an input method is composing belongs to the input method") {
+        // Confirming a CJK / accent composition must not send a half-typed message.
+        runner.expect(d(marked: true), equals: .deferToInputMethod, "composition in progress")
+        runner.expect(d(shift: true, marked: true), equals: .deferToInputMethod, "even with Shift held")
+    }
+
+    runner.test("other keys are not Return") {
+        runner.expect(d(0), equals: .notReturn, "a letter")
+        runner.expect(d(0, marked: true), equals: .notReturn, "a letter mid-composition goes to the input method on its own")
+    }
+}
+
 // MARK: - Highlighted row of a filter list (audit W1)
 
 runner.suite("list-selection") {
