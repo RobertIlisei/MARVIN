@@ -10,7 +10,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct PaneEmptyView: View {
+@MainActor struct PaneEmptyView: View {
     let state: PaneEmptyState
     /// An optional way out, which is what turns an empty state into wayfinding.
     var actionTitle: String? = nil
@@ -51,7 +51,7 @@ struct PaneEmptyView: View {
     }
 }
 
-struct PaneLoadingView: View {
+@MainActor struct PaneLoadingView: View {
     var label: String? = nil
 
     var body: some View {

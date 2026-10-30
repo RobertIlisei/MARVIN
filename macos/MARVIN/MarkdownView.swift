@@ -14,7 +14,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct MarkdownView: View {
+@MainActor struct MarkdownView: View {
     let text: String
     /// Assistant/system/result text fills the row; user text sizes to its
     /// bubble.
@@ -288,7 +288,7 @@ struct MarkdownView: View {
     private static let inlineCacheCap = 600
 }
 
-private struct CodeBlockView: View {
+@MainActor private struct CodeBlockView: View {
     let language: String
     let content: String
     @State private var copied = false
@@ -342,7 +342,7 @@ private struct CodeBlockView: View {
     /// Syntax-highlight via the same tree-sitter path the file viewer uses.
     /// Falls back to plain monospace when the language is unknown or parsing
     /// fails — broken highlighting must never hide the code.
-    private var highlighted: AttributedString {
+    @MainActor private var highlighted: AttributedString {
         let base: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.labelColor,
         ]
@@ -438,7 +438,7 @@ private struct TableRowLayout: Layout {
     }
 }
 
-private struct MarkdownTableView: View {
+@MainActor private struct MarkdownTableView: View {
     let headers: [String]
     let rows: [[String]]
     let attributed: (String, NSFont) -> NSAttributedString

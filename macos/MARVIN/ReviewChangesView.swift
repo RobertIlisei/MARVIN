@@ -252,7 +252,7 @@ final class ReviewWindowTarget {
 
 // MARK: - Review window (own large resizable window)
 
-struct ReviewChangesWindow: View {
+@MainActor struct ReviewChangesWindow: View {
     @Environment(ReviewWindowTarget.self) private var target
     @State private var model: ReviewChangesModel? = nil
     @State private var builtToken: String = ""
@@ -298,7 +298,7 @@ struct ReviewChangesWindow: View {
 
 // MARK: - Review screen (file list + diff editor)
 
-struct ReviewChangesScreen: View {
+@MainActor struct ReviewChangesScreen: View {
     @State var model: ReviewChangesModel
 
     /// Paths the user chose to render despite the large-diff guard (fix 3).
@@ -775,7 +775,7 @@ func sideBySideRows(_ hunk: AgentDiffHunk) -> [SBRow] {
 
 // MARK: - Live chip strip (hosted by ChatPreviewView)
 
-struct AgentChangesStrip: View {
+@MainActor struct AgentChangesStrip: View {
     let files: [AgentChangedFile]
     let onReview: () -> Void
 

@@ -15,7 +15,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct PracticePane: View {
+@MainActor struct PracticePane: View {
     @Environment(MarvinBridge.self) private var bridge
 
     private enum Section: String, CaseIterable, Identifiable {
@@ -980,7 +980,7 @@ struct PracticePane: View {
 /// measured size to the unified log without inserting a view, so the next
 /// "the pane broke" report can be answered with numbers:
 ///   log show --last 10m --predicate 'process == "MARVIN" && eventMessage CONTAINS "[pane-probe]"'
-struct PaneGeometryProbe: ViewModifier {
+@MainActor struct PaneGeometryProbe: ViewModifier {
     let name: String
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {

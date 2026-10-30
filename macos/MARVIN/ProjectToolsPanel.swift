@@ -158,7 +158,7 @@ enum GraphOutline {
 
 // MARK: - View
 
-struct ProjectToolsPanel: View {
+@MainActor struct ProjectToolsPanel: View {
     /// How many sections are expanded, reported upward so the enclosing split
     /// can give the panel a sensible target height instead of the panel
     /// demanding one. Sizing from the inside is what made expanding a section

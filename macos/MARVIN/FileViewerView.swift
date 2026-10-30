@@ -371,7 +371,7 @@ final class MarvinEditorTextView: STTextView {
     }
 }
 
-struct FileViewerNSView: NSViewRepresentable {
+@MainActor struct FileViewerNSView: NSViewRepresentable {
     /// Path that owns this buffer — the Coordinator carries it back
     /// out to the model on every textDidChange. Must match the path
     /// the model is indexing under.
@@ -939,7 +939,7 @@ struct FileViewerNSView: NSViewRepresentable {
 /// list + active path; the model owns per-buffer state. ⌘S in the
 /// editor saves through the model's save flow with mtime stale
 /// detection. ⌘W closes the active tab.
-struct FileViewerView: View {
+@MainActor struct FileViewerView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = FileViewerModel()
     /// M5: per-file diff markers. Refreshed on file open and save.
@@ -1688,7 +1688,7 @@ struct FileViewerView: View {
 /// Scrollable, fit-to-width image preview for binary image files.
 /// Replaces the "Binary file — preview not available" placeholder
 /// when the selected file has an image extension (png/jpg/webp/etc).
-private struct ImageFilePreview: View {
+@MainActor private struct ImageFilePreview: View {
     let image: NSImage
     let filename: String
 

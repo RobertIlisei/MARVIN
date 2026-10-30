@@ -25,7 +25,7 @@ struct FindFileResult: Identifiable {
 
 // MARK: - View
 
-struct FindInFilesView: View {
+@MainActor struct FindInFilesView: View {
     @Environment(MarvinBridge.self) private var bridge
 
     @State private var query: String = ""
@@ -572,13 +572,13 @@ struct FindInFilesView: View {
 
 // MARK: - Hover effect helper
 
-private extension View {
+@MainActor private extension View {
     func hoverEffect() -> some View {
         self.modifier(HoverHighlight())
     }
 }
 
-private struct HoverHighlight: ViewModifier {
+@MainActor private struct HoverHighlight: ViewModifier {
     @State private var hovered = false
     func body(content: Content) -> some View {
         content

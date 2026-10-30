@@ -9,7 +9,7 @@
 
 import SwiftUI
 
-struct AboutView: View {
+@MainActor struct AboutView: View {
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
 

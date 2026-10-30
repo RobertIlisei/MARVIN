@@ -12,7 +12,7 @@ import MARVINLogic
 import SwiftTerm
 import SwiftUI
 
-struct PTYTerminalView: NSViewRepresentable {
+@MainActor struct PTYTerminalView: NSViewRepresentable {
     let session: TerminalSession
     /// Bumped when something types a command into this shell from elsewhere —
     /// the Tasks panel, the build-task sheet. Focus follows, so ⌃C reaches the
@@ -67,7 +67,7 @@ struct PTYTerminalView: NSViewRepresentable {
     /// Put `tv` in `container` edge-to-edge, wire the delegate, and let the
     /// session flush anything it buffered while detached. One path, so a swap
     /// can never do less than the initial mount did.
-    private func mount(_ tv: TerminalView, in container: FocusingContainer, context: Context) {
+    @MainActor private func mount(_ tv: TerminalView, in container: FocusingContainer, context: Context) {
         tv.terminalDelegate = context.coordinator
         applyTheme(tv)
         tv.translatesAutoresizingMaskIntoConstraints = false

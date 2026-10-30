@@ -21,7 +21,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct MarkdownFilePreview: View {
+@MainActor struct MarkdownFilePreview: View {
     let text: String
     var workDir: String?
 

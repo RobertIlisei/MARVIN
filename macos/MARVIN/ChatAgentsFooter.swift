@@ -13,7 +13,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct ChatAgentsFooter: View {
+@MainActor struct ChatAgentsFooter: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var modelsDialogOpen = false
 

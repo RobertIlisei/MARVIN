@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-struct FileHistoryPopover: View {
+@MainActor struct FileHistoryPopover: View {
     let commits: [GitCommit]
     let isLoading: Bool
 

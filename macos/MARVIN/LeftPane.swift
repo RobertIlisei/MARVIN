@@ -63,7 +63,7 @@ private struct LeftPaneWidthKey: PreferenceKey {
     }
 }
 
-struct LeftPane: View {
+@MainActor struct LeftPane: View {
     /// Picker selection persists across tab switches but not across
     /// app restarts — `@State` is sufficient. Phase 3e doesn't store
     /// it in @AppStorage because the daily-driver expectation is
@@ -403,7 +403,7 @@ struct LeftPane: View {
 /// on a `.plain` Button nested in overlays never surfaced a tooltip
 /// (2026-08-29 "no hover tooltips" finding); attaching it to the icon
 /// itself, with an explicit hover fill, matches how VS Code's rail feels.
-private struct ActivityBarButton: View {
+@MainActor private struct ActivityBarButton: View {
     let tab: LeftPaneTab
     let selected: Bool
     /// Receives the AppKit hit view so the click can reach the enclosing
@@ -440,7 +440,7 @@ private struct ActivityBarButton: View {
 
 /// Transparent NSView that provides a native tooltip, hover tracking and a
 /// click callback for whatever SwiftUI content it's overlaid on.
-struct TooltipHitLayer: NSViewRepresentable {
+@MainActor struct TooltipHitLayer: NSViewRepresentable {
     let tooltip: String
     @Binding var hovered: Bool
     /// Passed the hit view itself — callers that need to reach AppKit (the

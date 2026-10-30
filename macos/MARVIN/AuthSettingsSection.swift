@@ -34,7 +34,7 @@ private struct AuthConfigStatus: Decodable {
     }
 }
 
-struct AuthSettingsSection: View {
+@MainActor struct AuthSettingsSection: View {
     @State private var status: AuthConfigStatus?
     @State private var draftMode: String = "cli"      // local picker state
     @State private var draftProvider: String = "anthropic"

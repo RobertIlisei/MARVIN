@@ -31,7 +31,7 @@ import MARVINLogic
 /// place: 1178 of 1306 main-thread samples inside `StackLayout` across the
 /// rendered rows, 39 in platform-view measurement, none in MARVIN code — the
 /// rows were not being measured expensively, they were all being re-laid-out.
-struct ChatMessageRow: View, Equatable {
+@MainActor struct ChatMessageRow: View, Equatable {
     let message: ChatMessage
 
     var body: some View {
@@ -200,7 +200,7 @@ struct ChatMessageRow: View, Equatable {
 
 // MARK: - Per-block subviews
 
-private struct TextBlockView: View {
+@MainActor private struct TextBlockView: View {
     let text: String
     let role: ChatRole
 
@@ -264,7 +264,7 @@ private struct TextBlockView: View {
 /// Falls back to the plain `@path` token when the file will not load — a
 /// mention of a deleted or non-image file must still read correctly rather
 /// than leaving a blank gap.
-private struct SentAttachmentImage: View {
+@MainActor private struct SentAttachmentImage: View {
     let path: String
 
     var body: some View {
@@ -335,7 +335,7 @@ private enum ToolStyle {
 /// one-line summary of the input, a status pip (running / done /
 /// errored), and a chevron. Expanded body shows the full input
 /// dump and (when arrived) the full output.
-private struct ToolCallBlockView: View {
+@MainActor private struct ToolCallBlockView: View {
     let name: String
     let input: ChatJSON?
     let result: ChatToolResult?
@@ -464,7 +464,7 @@ extension ChatJSON {
 /// style; Edit / Write / Read show the file path on its own line
 /// followed by the rest of the input fields; everything else gets
 /// the pretty JSON dump.
-private struct ToolInputView: View {
+@MainActor private struct ToolInputView: View {
     let name: String
     let input: ChatJSON
 
@@ -566,7 +566,7 @@ private struct ToolInputView: View {
 
 /// Tool output renderer. Truncates long outputs with a show-all
 /// toggle; renders errors red.
-private struct ToolOutputView: View {
+@MainActor private struct ToolOutputView: View {
     let output: String
     let isError: Bool
 
@@ -603,7 +603,7 @@ private struct ToolOutputView: View {
 /// Defensive renderer for a tool_result that arrived without a
 /// matching tool_use. Surfaces the output so we don't lose data on
 /// out-of-order delivery.
-private struct OrphanToolResultBlockView: View {
+@MainActor private struct OrphanToolResultBlockView: View {
     let toolUseId: String
     let output: String
     let isError: Bool
@@ -626,7 +626,7 @@ private struct OrphanToolResultBlockView: View {
 /// render as: `unhandled block: thinking` over a struct dump whose `text`
 /// was nil. One dim disclosure row, expandable, matching how the tool cards
 /// already hide their payload.
-private struct ThinkingBlockView: View {
+@MainActor private struct ThinkingBlockView: View {
     let text: String
     let redacted: Bool
     @State private var expanded = false
@@ -667,7 +667,7 @@ private struct ThinkingBlockView: View {
     }
 }
 
-private struct UnknownBlockView: View {
+@MainActor private struct UnknownBlockView: View {
     let kind: String
     let raw: String
 

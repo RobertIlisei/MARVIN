@@ -120,7 +120,7 @@ struct InlineChipStyle: ButtonStyle {
     }
 }
 
-extension View {
+@MainActor extension View {
     /// A section action: `Merge all`, `Prepare MR…`.
     func chip(_ role: ChipRole) -> some View {
         buttonStyle(InlineChipStyle(role: role))

@@ -57,7 +57,7 @@ private enum GitConfirmSeverity: String {
     }
 }
 
-struct GitConfirmSheet: View {
+@MainActor struct GitConfirmSheet: View {
     /// Action verb the button will display ("Discard", "Amend",
     /// "Force-push" etc.) — caller-provided so each action site
     /// can describe itself precisely.

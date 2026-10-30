@@ -14,7 +14,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct SessionsPane: View {
+@MainActor struct SessionsPane: View {
     @Environment(MarvinBridge.self) private var bridge
     private let registry = SessionRegistry.shared
     @State private var expandedIdle = false

@@ -12,7 +12,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct PaneSectionHeader<Trailing: View>: View {
+@MainActor struct PaneSectionHeader<Trailing: View>: View {
     let title: String
     var count: Int? = nil
     var tint: Color = MarvinTheme.textMuted

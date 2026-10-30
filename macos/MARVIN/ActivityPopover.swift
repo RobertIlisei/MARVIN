@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct ActivityPopover: View {
+@MainActor struct ActivityPopover: View {
     let projectId: String?
     let sessionId: String?
     let workDir: String?
