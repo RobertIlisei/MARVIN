@@ -89,7 +89,7 @@ private struct UpdateResponse: Decodable {
 
 // MARK: - View
 
-struct PluginsPane: View {
+@MainActor struct PluginsPane: View {
     @Environment(MarvinBridge.self) private var bridge
 
     @State private var plugins: [PluginSummary] = []

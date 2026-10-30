@@ -10,7 +10,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct UpdatePromptView: View {
+@MainActor struct UpdatePromptView: View {
     let decision: UpdateDecision
     let onSkip: () -> Void
     let onLater: () -> Void

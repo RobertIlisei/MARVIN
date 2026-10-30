@@ -165,7 +165,7 @@ final class SlashCommandModel {
     }
 }
 
-struct SlashCommandPopup: View {
+@MainActor struct SlashCommandPopup: View {
     let matches: [SlashCommand]
     let selected: Int
     /// Adaptive ceiling for the list. Driven by how much room actually exists

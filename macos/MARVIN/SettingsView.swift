@@ -12,7 +12,7 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-struct SettingsView: View {
+@MainActor struct SettingsView: View {
     @Environment(HealthMonitor.self) private var health
     @Environment(MarvinBridge.self) private var bridge
 

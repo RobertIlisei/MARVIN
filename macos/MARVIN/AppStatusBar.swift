@@ -45,7 +45,7 @@ private let statusBarPopoverEdge: Edge = .top
 
 
 
-struct AppStatusBar: View {
+@MainActor struct AppStatusBar: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(HealthMonitor.self) private var health
 
@@ -703,7 +703,7 @@ struct AppStatusBar: View {
 
 // MARK: - Notification log popover
 
-struct NotificationLogPopover: View {
+@MainActor struct NotificationLogPopover: View {
     let notifications: [MarvinBridge.NotificationEntry]
 
     private static let timeFormatter: DateFormatter = {
@@ -762,7 +762,7 @@ struct NotificationLogPopover: View {
 
 
 /// Breakdown of this session's subagent use (ADR-0080/0081).
-struct SubagentStatsPopover: View {
+@MainActor struct SubagentStatsPopover: View {
     let summary: SubagentSummary
 
     private static let order = ["scout", "advisor", "implementer", "graph-extractor", "Explore", "Plan", "general-purpose"]

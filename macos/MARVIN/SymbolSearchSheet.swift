@@ -20,7 +20,7 @@ struct GraphNode: Identifiable {
 
 // MARK: - Sheet
 
-struct SymbolSearchSheet: View {
+@MainActor struct SymbolSearchSheet: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
 
@@ -240,7 +240,7 @@ struct SymbolSearchSheet: View {
     /// graphify writes `source_location` as `L<line>` (e.g. `L725`); a bare
     /// number and a `L12-40` range both appear in older graphs, so take the
     /// first run of digits and ignore the rest.
-    static func line(from location: String?) -> Int? {
+    nonisolated static func line(from location: String?) -> Int? {
         guard let location else { return nil }
         var digits = ""
         for ch in location {

@@ -13,7 +13,7 @@
 
 import SwiftUI
 
-private struct PaneRowModifier: ViewModifier {
+@MainActor private struct PaneRowModifier: ViewModifier {
     let selected: Bool
     let hovering: Bool
 
@@ -31,7 +31,7 @@ private struct PaneRowModifier: ViewModifier {
     }
 }
 
-extension View {
+@MainActor extension View {
     /// Common row padding, hover and selection. Hover is the caller's `@State`
     /// because a row that owns it re-renders its whole list on every pointer
     /// move.

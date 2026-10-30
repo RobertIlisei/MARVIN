@@ -606,7 +606,7 @@ final class SourceControlModel {
 
 // MARK: - View
 
-struct SourceControlView: View {
+@MainActor struct SourceControlView: View {
     @Environment(MarvinBridge.self) private var bridge
     @State private var model = SourceControlModel()
     @State private var graphModel = GitGraphModel()
@@ -1660,7 +1660,7 @@ struct SourceControlView: View {
 /// Applies ⌘⏎ only while `enabled`. SwiftUI has no conditional
 /// `.keyboardShortcut`, and passing `nil` is not available on the
 /// deployment target, so the branch is on the view itself.
-private struct CommitReturnShortcut: ViewModifier {
+@MainActor private struct CommitReturnShortcut: ViewModifier {
     let enabled: Bool
 
     @ViewBuilder
@@ -1691,7 +1691,7 @@ struct DiffSheetItem: Identifiable {
 /// different reading order from the porcelain two-column badge the
 /// panel used to lead with — the filename is what you scan for, so it
 /// goes first and the status code goes last.
-private struct SourceControlRow: View {
+@MainActor private struct SourceControlRow: View {
     let file: GitStatusFile
     let cwd: String
     /// Section id — decides which inline action is offered.

@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct ChatModeToolbar: View {
+@MainActor struct ChatModeToolbar: View {
     @Environment(MarvinBridge.self) private var bridge
 
     var body: some View {

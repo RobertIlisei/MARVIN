@@ -21,7 +21,7 @@ import SwiftUI
 /// is reliable inside Views but can be nil-at-runtime when read
 /// directly on an `App` — pulling it through a small View bridges
 /// it into a `.commands` closure safely.
-private struct OpenAboutButton: View {
+@MainActor private struct OpenAboutButton: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         Button("About MARVIN") {
@@ -61,7 +61,7 @@ private struct OpenAboutButton: View {
 /// commands DSL a tracked re-render boundary — without the View
 /// wrapper, items capture a stale snapshot at command-tree creation
 /// time and the list never updates.
-private struct OpenRecentMenuContent: View {
+@MainActor private struct OpenRecentMenuContent: View {
     var body: some View {
         // ADR-0021 M2: ProjectsService is the authority; MarvinBridge
         // mirrors the same list but ProjectsService is the write origin.
@@ -132,7 +132,7 @@ func registryItems(_ slot: CommandMenuSlot) -> some View {
 /// One menu item. Split out because `.keyboardShortcut` takes a
 /// non-optional `KeyEquivalent`, so a command with no shortcut needs a
 /// different view — not a `nil` argument.
-struct RegistryMenuItem: View {
+@MainActor struct RegistryMenuItem: View {
     let command: AppCommand
 
     var body: some View {
@@ -153,7 +153,7 @@ struct RegistryMenuItem: View {
 /// `.commands { }` block one past it. The compiler reports that as "extra
 /// argument in call" on whichever group happens to be last, which points at
 /// an innocent line — worth knowing before chasing the wrong menu.
-struct EditorMenus: Commands {
+@MainActor struct EditorMenus: Commands {
     var body: some Commands {
         // ── Edit ────────────────────────────────────────────────────
         //

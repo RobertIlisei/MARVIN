@@ -4,7 +4,7 @@
 
 import SwiftUI
 
-struct LaneSheet: View {
+@MainActor struct LaneSheet: View {
     let initial: [String]
     let onSave: ([String]) -> Void
     @Environment(\.dismiss) private var dismiss

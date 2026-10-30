@@ -12,7 +12,7 @@
 
 import SwiftUI
 
-struct PrepareMRSheet: View {
+@MainActor struct PrepareMRSheet: View {
     let worktrees: [WorktreeEntry]
     /// ADR-0111 — dry-run verdicts by slug; a conflict is shown on the row
     /// before anything is squashed, so the first conflict is not discovered

@@ -143,7 +143,7 @@ private struct SkillsIndexResponse: Decodable {
 
 // MARK: - View
 
-struct SkillsPane: View {
+@MainActor struct SkillsPane: View {
     @Environment(MarvinBridge.self) private var bridge
 
     @State private var index: SkillsIndexResponse?

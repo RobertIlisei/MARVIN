@@ -54,7 +54,7 @@ enum PlanCard {
 /// The structured plan card: header (title + step count + collapse),
 /// body (the plan markdown, line-styled). Approval actions stay in the
 /// status-tray chip — the card is the readable artifact.
-struct PlanCardView: View {
+@MainActor struct PlanCardView: View {
     let text: String
 
     @State private var collapsed = false

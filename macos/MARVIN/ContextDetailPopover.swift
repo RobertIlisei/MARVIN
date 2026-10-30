@@ -12,7 +12,7 @@
 import SwiftUI
 import MARVINLogic
 
-struct ContextDetailPopover: View {
+@MainActor struct ContextDetailPopover: View {
     let resident: Int
     let billable: Int?
     let workDir: String?

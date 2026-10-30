@@ -13,7 +13,7 @@ import MARVINLogic
 import SwiftUI
 import AppKit
 
-struct QuickOpenSheet: View {
+@MainActor struct QuickOpenSheet: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
 

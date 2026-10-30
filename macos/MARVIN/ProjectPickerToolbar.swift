@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-struct ProjectPickerToolbarItem: View {
+@MainActor struct ProjectPickerToolbarItem: View {
     @Environment(MarvinBridge.self) private var bridge
 
     var body: some View {

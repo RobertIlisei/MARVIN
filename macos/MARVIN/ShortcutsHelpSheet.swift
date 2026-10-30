@@ -23,7 +23,7 @@
 
 import SwiftUI
 
-struct ShortcutsHelpSheet: View {
+@MainActor struct ShortcutsHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private struct Section: Identifiable {

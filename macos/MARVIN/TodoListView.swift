@@ -19,7 +19,7 @@ import SwiftUI
 ///     plan IS the to-do list — it persists, ticks off in place, and links to
 ///     the saved plan file. Purple, titled, with an "Open plan" affordance.
 /// A non-nil `steps` selects tier 2; otherwise the strip is tier 1.
-struct TodoListStrip: View {
+@MainActor struct TodoListStrip: View {
     /// Tier 1 — a bare `TodoWrite` checklist (no plan behind it).
     var todos: [TodoItem] = []
     /// Tier 2 (ADR-0046) — the active plan's top-level steps, each with nested

@@ -142,7 +142,7 @@ private func classify(_ line: String) -> DiffLineKind {
     return .context
 }
 
-struct DiffSheet: View {
+@MainActor struct DiffSheet: View {
     @State var model: DiffSheetModel
     let onDismiss: () -> Void
 

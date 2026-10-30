@@ -11,7 +11,7 @@ import AppKit
 import MARVINLogic
 import SwiftUI
 
-struct SessionModeChip: View {
+@MainActor struct SessionModeChip: View {
     let entry: SessionEntry?
     let isDraft: Bool
     /// The default a draft tab will use on its first message.
@@ -78,7 +78,7 @@ struct SessionModeChip: View {
     }
 }
 
-struct SessionModePopover: View {
+@MainActor struct SessionModePopover: View {
     let entry: SessionEntry?
     let isDraft: Bool
     let mode: SessionMode

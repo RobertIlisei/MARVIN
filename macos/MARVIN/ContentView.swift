@@ -14,7 +14,7 @@ import MARVINLogic
 import SwiftUI
 
 
-struct ContentView: View {
+@MainActor struct ContentView: View {
     /// ADR-0086 — update prompt, presented from the root so it shows
     /// whatever pane arrangement the user is in.
     @State private var updateService = UpdateService.shared
@@ -746,7 +746,7 @@ struct ContentView: View {
 
 }
 
-private struct FlatToolbarBackground: ViewModifier {
+@MainActor private struct FlatToolbarBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .toolbarBackground(MarvinTheme.background, for: .windowToolbar)
@@ -770,7 +770,7 @@ private struct FlatToolbarBackground: ViewModifier {
 /// global bottom strip) can reuse it from its own cost segment —
 /// the toolbar pill it used to anchor was retired in the same
 /// phase as part of de-duplicating top + bottom chrome.
-struct CostHistoryPopover: View {
+@MainActor struct CostHistoryPopover: View {
     let summary: CostSummary
     /// ADR-0082 — on a Claude subscription the `$` figures are what the
     /// tokens WOULD cost at API rates (the SDK's `total_cost_usd`); nothing
@@ -953,7 +953,7 @@ struct CostHistoryPopover: View {
 /// file scope so both CostToolbarItem and CostHistoryPopover share
 /// the same formatter.
 /// One Claude plan window: label, percentage, bar, refill time (ADR-0082).
-private struct ClaudeWindowRow: View {
+@MainActor private struct ClaudeWindowRow: View {
     let window: CostSummary.ClaudeWindow
 
     var body: some View {
@@ -1038,7 +1038,7 @@ private func fmtUsd(_ v: Double) -> String {
 /// scene doesn't expose (Phase 1c: `frameAutosaveName`). Phase 1+
 /// may grow more uses; keep them all flowing through here so the
 /// `view.window` resolution + main-thread dispatch lives in one place.
-private struct WindowAccessor: NSViewRepresentable {
+@MainActor private struct WindowAccessor: NSViewRepresentable {
     let onWindow: (NSWindow) -> Void
 
     func makeNSView(context: Context) -> NSView {
@@ -1060,7 +1060,7 @@ private struct WindowAccessor: NSViewRepresentable {
 /// Tiny inline code block — selectable, monospaced, subtly framed.
 /// Avoids pulling in SwiftUI Text styling tricks the user might
 /// override globally later.
-private struct CodeBlock: View {
+@MainActor private struct CodeBlock: View {
     let text: String
     var body: some View {
         Text(text)
@@ -1091,7 +1091,7 @@ private struct CodeBlock: View {
 /// chained modifiers tipped it over with "unable to type-check this
 /// expression in reasonable time". A `ViewModifier` is a separate
 /// type-checking context, so its cost is paid separately.
-private struct CommandSurfaces: ViewModifier {
+@MainActor private struct CommandSurfaces: ViewModifier {
     let bridge: MarvinBridge
     @Binding var paletteOpen: Bool
     @Binding var goToLineOpen: Bool

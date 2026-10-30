@@ -23,7 +23,7 @@
 import SwiftUI
 import WebKit
 
-struct PreviewPaneView: View {
+@MainActor struct PreviewPaneView: View {
     @Environment(MarvinBridge.self) private var bridge
 
     @State private var urlString: String = ""
@@ -307,7 +307,7 @@ struct PreviewPaneView: View {
 
 /// Browser-shaped WKWebView wrapper. Owns the back/forward stack;
 /// surfaces canGoBack / canGoForward / current URL up to the host.
-private struct PreviewWebView: NSViewRepresentable {
+@MainActor private struct PreviewWebView: NSViewRepresentable {
     let urlString: String
     let reloadKey: Int
     let navTrigger: Int

@@ -13,7 +13,7 @@
 import AppKit
 import SwiftUI
 
-struct CommandPaletteSheet: View {
+@MainActor struct CommandPaletteSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
@@ -155,7 +155,7 @@ struct CommandPaletteSheet: View {
 
 /// ^G. Accepts `120` or `120:8` — the `line:col` form is what every
 /// citation in MARVIN's own output uses, so pasting one should just work.
-struct GoToLineSheet: View {
+@MainActor struct GoToLineSheet: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""

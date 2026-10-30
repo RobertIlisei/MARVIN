@@ -19,7 +19,7 @@
 
 import SwiftUI
 
-extension View {
+@MainActor extension View {
     /// Keep this view mounted (state preserved) but inert and invisible when
     /// `active` is false.
     func keptMounted(active: Bool) -> some View {

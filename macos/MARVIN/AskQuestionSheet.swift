@@ -63,7 +63,7 @@ struct AskQuestion: Identifiable, Equatable {
 
 // MARK: - Sheet
 
-struct AskQuestionSheet: View {
+@MainActor struct AskQuestionSheet: View {
     let request: ConfirmRequest
     /// Allow with the AskUserQuestionOutput `updatedInput`.
     let onSubmit: ([String: Any]) -> Void

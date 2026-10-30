@@ -4,7 +4,7 @@
 
 import SwiftUI
 
-struct BuildTaskSheet: View {
+@MainActor struct BuildTaskSheet: View {
     @Environment(MarvinBridge.self) private var bridge
     @Environment(\.dismiss) private var dismiss
 

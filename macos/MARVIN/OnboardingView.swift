@@ -23,7 +23,7 @@
 
 import SwiftUI
 
-struct OnboardingView: View {
+@MainActor struct OnboardingView: View {
     @State private var step: Step = .welcome
     @State private var credentialStatus: CredentialStatus = .checking
 

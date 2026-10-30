@@ -18,7 +18,7 @@
 import MARVINLogic
 import SwiftUI
 
-struct PaneNoticeStrip: View {
+@MainActor struct PaneNoticeStrip: View {
     let notice: PaneNotice
     /// The one thing this outcome offers to do about itself — "Retry" after a
     /// failure, "Undo" after something reversible. One verb, never a row.

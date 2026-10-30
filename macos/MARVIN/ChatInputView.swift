@@ -40,7 +40,7 @@ import UniformTypeIdentifiers
 
 /// SwiftUI wrapper around an NSTextView. Bidirectional binding on
 /// `text`; `onSubmit` fires when the user hits ⌘⏎.
-struct ChatTextEditor: NSViewRepresentable {
+@MainActor struct ChatTextEditor: NSViewRepresentable {
     @Binding var text: String
     let onSubmit: () -> Void
     /// Disable the editor (e.g. while a turn is in flight). The
@@ -389,7 +389,7 @@ final class ChatNSTextView: NSTextView {
 /// Sits at the bottom of the chat pane. Phase 5e adds the
 /// attachments bar on top (file mentions / pasted images) and an
 /// onAttachImage callback so paste lands a chip instead of a blob.
-struct ChatInputBar: View {
+@MainActor struct ChatInputBar: View {
     @Binding var text: String
     let onSubmit: () -> Void
     /// Cancel the in-flight turn. Surfaced as a Stop button next to

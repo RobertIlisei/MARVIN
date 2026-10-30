@@ -14,7 +14,7 @@ struct TabCloseChoice: Identifiable, Equatable {
     var target: String? = nil
 }
 
-extension View {
+@MainActor extension View {
     /// A confirmation dialog for `choice`. `onAction` receives the picked
     /// worktree action (nil for "stop the turn first" / cancel paths).
     func tabCloseDialog(

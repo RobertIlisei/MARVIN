@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct SkeletonRows: View {
+@MainActor struct SkeletonRows: View {
     /// How many placeholder rows to draw.
     var count: Int = 6
     /// Lines per row after the title bar (0 for single-line lists).
