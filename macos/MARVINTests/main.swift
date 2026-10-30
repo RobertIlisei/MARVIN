@@ -4763,6 +4763,20 @@ runner.suite("unified-diff") {
     }
 }
 
+// MARK: - Empty states point the way out (critique U18)
+
+runner.suite("pane-empty-actions") {
+    runner.test("the no-project state offers to open one; no other state does") {
+        runner.expect(PaneEmptyState.noProject("skills").offersOpenProject, equals: true, "no project")
+        runner.expect(PaneEmptyState.nothingYet("plans").offersOpenProject, equals: false, "nothing yet")
+        runner.expect(PaneEmptyState.notARepo().offersOpenProject, equals: false, "not a repo")
+        runner.expect(PaneEmptyState.noResults(query: "x").offersOpenProject, equals: false, "no results")
+    }
+    runner.test("the hint keeps its noun") {
+        runner.expect(PaneEmptyState.noProject("sessions").hint, equals: "Open a project to see its sessions.", "hint keeps its noun")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

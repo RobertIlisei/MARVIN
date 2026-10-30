@@ -775,6 +775,18 @@ final class ChatNSTextView: NSTextView {
                         dragStartHeight = nil
                     }
             )
+            // The grip is a drag and nothing else (audit C16). VoiceOver can
+            // now step it, so the input's height is not pointer-only.
+            .accessibilityElement()
+            .accessibilityLabel("Resize the message box")
+            .accessibilityValue("\(Int(editorHeight)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: editorHeight = min(600, editorHeight + 24)
+                case .decrement: editorHeight = max(60, editorHeight - 24)
+                @unknown default: break
+                }
+            }
     }
 }
 

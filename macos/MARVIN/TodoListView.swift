@@ -109,9 +109,14 @@ import SwiftUI
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(done)/\(total)")
-                    .font(.system(size: 10, design: .monospaced))
+                // "0/3" beside a list with two ticks read as a contradiction:
+                // the count is of top-level steps, the ticks are sub-tasks
+                // (U20). Say what is counted.
+                Text(isPlan ? "\(done) of \(total) steps" : "\(done) of \(total)")
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 // ADR-0046 — switch the active plan when more than one exists,
                 // so a newer plan never strands the earlier ones.
                 if isPlan, plans.count > 1, let onSelectPlan {
@@ -246,6 +251,16 @@ import SwiftUI
                     .onEnded { _ in dragging = false }
             )
             .accessibilityLabel("Resize the plan checklist")
+            .accessibilityValue("\(Int(bodyHeight)) points")
+            .accessibilityAdjustableAction { direction in
+                // Grows upward, like the drag (see above): "increment" = taller.
+                let step = 24.0
+                switch direction {
+                case .increment: bodyHeight = min(Self.maxBodyHeight, bodyHeight + step)
+                case .decrement: bodyHeight = max(Self.minBodyHeight, bodyHeight - step)
+                @unknown default: break
+                }
+            }
     }
 
     private func row(_ item: TodoItem, indent: Bool = false) -> some View {
@@ -258,10 +273,13 @@ import SwiftUI
             Image(systemName: statusIcon(item.status))
                 .font(.system(size: indent ? 10 : 11))
                 .foregroundStyle(statusColour(item.status))
+            // The tick already says "done", so a finished step is dimmed, not
+            // struck through (a struck-through paragraph is the loudest thing in
+            // the strip), and the step in progress is the one at full weight.
             Text(label)
-                .font(.system(size: indent ? 10 : 11))
-                .strikethrough(completed)
-                .foregroundStyle(completed ? .secondary : (running ? .primary : .secondary))
+                .font(.system(size: indent ? 10 : 11, weight: running ? .semibold : .regular))
+                .foregroundStyle(completed ? .secondary : .primary)
+                .lineLimit(completed ? 2 : nil)
             Spacer(minLength: 0)
         }
         // Nested sub-tasks (ADR-0046) sit indented under their plan step.
