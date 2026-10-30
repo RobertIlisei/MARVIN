@@ -3818,6 +3818,19 @@ final class ChatPreviewModel {
                 SkeletonRows(count: 4, detailLines: 2).padding(12).allowsHitTesting(false)
             }
         }
+        // The list is bottom-anchored, so when the transcript is taller than
+        // the pane its oldest message is cut at the top edge. A hard cut read
+        // as a clipped bubble (U9); a short fade into the pane fill says
+        // "scrolled, more above". An overlay, not a mask: a mask on a scroll
+        // view makes SwiftUI composite its content offscreen.
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [MarvinTheme.background, MarvinTheme.background.opacity(0)],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: 14)
+            .allowsHitTesting(false)
+        }
         .background(MarvinTheme.background)
     }
 

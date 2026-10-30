@@ -30,6 +30,11 @@ import SwiftUI
                 Text(trim(bridge.executorModel) ?? "default")
                     .foregroundStyle(bridge.executorModel == nil ? Color.secondary : Color.accentColor)
                 dot
+                // Named, because "opus-5 · sonnet-5" does not say which model
+                // is the second opinion (U8).
+                if bridge.advisorModel != nil {
+                    Text("advisor").foregroundStyle(.tertiary)
+                }
                 Text(bridge.advisorModel.flatMap(trim) ?? "no advisor")
                     .foregroundStyle(bridge.advisorModel == nil ? Color.secondary : Color.accentColor)
                 dot

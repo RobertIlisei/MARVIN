@@ -334,6 +334,28 @@ runner.suite("scope-met") {
         runner.expect(ScopeMetDetector.isPresent(in: text), "whitespace-tolerant")
     }
 
+    runner.test("the sentinel is stripped from what is displayed, and only the sentinel") {
+        let text = "**Scope met:** done. Anything else, or should I stop?\n\n<!-- marvin:scope-met -->"
+        runner.expect(
+            ScopeMetDetector.displayText(text),
+            equals: "**Scope met:** done. Anything else, or should I stop?",
+            "marker and the blank line before it are gone"
+        )
+        runner.expect(ScopeMetDetector.displayText("plain reply"), equals: "plain reply", "no sentinel: unchanged")
+        runner.expect(
+            ScopeMetDetector.displayText("a <!-- other comment --> b"),
+            equals: "a <!-- other comment --> b",
+            "other HTML comments are left alone"
+        )
+        let quoted = "End a turn with `<!-- marvin:scope-met -->` so the strip appears."
+        runner.expect(ScopeMetDetector.displayText(quoted), equals: quoted, "a sentinel quoted mid-prose is not the marker")
+        runner.expect(
+            ScopeMetDetector.displayText("  \n<!-- marvin:scope-met -->  \n "),
+            equals: "",
+            "a message that is only the sentinel displays as empty"
+        )
+    }
+
     runner.test("a sentinel under a stated scope-not-met does NOT match") {
         // 2026-09-29: a tab ended "Scope is not met. Bullets 1 and 3 haven't
         // happened." and appended the sentinel anyway.
