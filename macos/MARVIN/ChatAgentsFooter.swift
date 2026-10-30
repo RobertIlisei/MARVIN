@@ -26,29 +26,12 @@ import SwiftUI
         Button {
             open.toggle()
         } label: {
-            HStack(spacing: 5) {
-                Text(trim(bridge.executorModel) ?? "default")
-                    .foregroundStyle(bridge.executorModel == nil ? Color.secondary : Color.accentColor)
-                dot
-                // Named, because "opus-5 · sonnet-5" does not say which model
-                // is the second opinion (U8).
-                if bridge.advisorModel != nil {
-                    Text("advisor").foregroundStyle(.tertiary)
-                }
-                Text(bridge.advisorModel.flatMap(trim) ?? "no advisor")
-                    .foregroundStyle(bridge.advisorModel == nil ? Color.secondary : Color.accentColor)
-                dot
-                Text(bridge.personality ?? "ultron")
-                    .foregroundStyle(.secondary)
-                dot
-                Circle()
-                    .fill(Self.strategyTint(bridge.permissionStrategy))
-                    .frame(width: 6, height: 6)
-                Text(PermissionStrategyChoice.parse(bridge.permissionStrategy).label)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
+            // The advisor is named when the pill has room ("opus-5 · sonnet-5"
+            // does not say which model is the second opinion — U8); in a narrow
+            // pane it drops the word rather than truncating the models.
+            ViewThatFits(in: .horizontal) {
+                postureRow(namesAdvisor: true)
+                postureRow(namesAdvisor: false)
             }
             .font(.system(size: 11, design: .monospaced))
             .lineLimit(1)
@@ -99,6 +82,32 @@ import SwiftUI
             ModelsDialog()
                 .environment(bridge)
         }
+    }
+
+    private func postureRow(namesAdvisor: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(trim(bridge.executorModel) ?? "default")
+                .foregroundStyle(bridge.executorModel == nil ? Color.secondary : Color.accentColor)
+            dot
+            if namesAdvisor, bridge.advisorModel != nil {
+                Text("advisor").foregroundStyle(.tertiary)
+            }
+            Text(bridge.advisorModel.flatMap(trim) ?? "no advisor")
+                .foregroundStyle(bridge.advisorModel == nil ? Color.secondary : Color.accentColor)
+            dot
+            Text(bridge.personality ?? "ultron")
+                .foregroundStyle(.secondary)
+            dot
+            Circle()
+                .fill(Self.strategyTint(bridge.permissionStrategy))
+                .frame(width: 6, height: 6)
+            Text(PermissionStrategyChoice.parse(bridge.permissionStrategy).label)
+                .foregroundStyle(.secondary)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var dot: some View {
