@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { applyPostureChange } from "../src/posture";
-import { readSessionMeta, upsertSessionMeta } from "../src/session-meta";
+import { readSessionMeta, type SessionPosture, upsertSessionMeta } from "../src/session-meta";
 import { defaultInboxPerform } from "../src/supervisor-inbox-perform";
 import {
   addInboxItem,
@@ -324,7 +324,7 @@ describe("the ledger's read shape (§10.5)", () => {
 
 describe("a posture-widen item's consent (milestone 6)", () => {
   it("performs the widening as the user, revisioned, from the next turn; the supervisor still cannot", async () => {
-    const posture = { model: "claude-sonnet-5-5", personality: "ultron", permissionStrategy: "auto" as const, thinkingMode: "high", mode: "agent" as const };
+    const posture: SessionPosture = { model: "claude-sonnet-5-5", advisorModel: null, personality: "ultron", permissionStrategy: "auto", thinkingMode: "high", mode: "agent" };
     upsertSessionMeta(P, "tab-1", { workDir: mainRoot, tree: { mode: "shared" }, posture });
     const perform = defaultInboxPerform(P, mainRoot, null);
     const r = await perform.posture({ sessionId: "tab-1", patch: { permissionStrategy: "full" } });
