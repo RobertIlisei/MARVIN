@@ -290,6 +290,10 @@ import MARVINLogic
                 }
                 .help("\((path as NSString).lastPathComponent) — click to preview")
                 .accessibilityLabel("Attached image \((path as NSString).lastPathComponent)")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: "Preview") {
+                    QuickLookCoordinator.shared.show(url: URL(fileURLWithPath: path))
+                }
         } else {
             Text("@\(path)")
                 .font(.body.monospaced())

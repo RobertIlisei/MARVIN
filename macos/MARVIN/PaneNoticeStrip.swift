@@ -52,12 +52,13 @@ import SwiftUI
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 14, height: 14)
+                    .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.tertiary)
             .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

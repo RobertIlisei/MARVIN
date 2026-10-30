@@ -84,9 +84,12 @@ import SwiftUI
                             Image(systemName: "xmark")
                                 .font(.system(size: 8, weight: .semibold))
                                 .foregroundStyle(.secondary)
+                                .frame(width: 18, height: 18)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help("Close this shell")
+                        .accessibilityLabel("Close shell \(s.number)")
                     }
                 }
             }
@@ -97,9 +100,12 @@ import SwiftUI
                 Image(systemName: "plus")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("New shell")
+            .accessibilityLabel("New shell")
         }
         .fixedSize()
     }

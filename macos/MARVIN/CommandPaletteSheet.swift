@@ -116,10 +116,11 @@ import SwiftUI
                         .foregroundStyle(.tertiary)
                 }
             }
-            .contentShape(Rectangle())
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .background(selected ? MarvinTheme.rowSelected : Color.clear)
+            // After the padding, so the gaps between rows click too (audit W18).
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

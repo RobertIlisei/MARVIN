@@ -270,9 +270,12 @@ import SwiftUI
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 9, weight: .medium))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Re-run the dry-run preview")
+                    .accessibilityLabel("Re-run the preview")
                 }
                 ForEach(items) { e in integrateRow(e) }
                 integrateFooter(items)
@@ -449,11 +452,11 @@ import SwiftUI
         // The row is a tap gesture; give VoiceOver the same act (L24), and keep
         // the Allow / Deny chips inside it individually reachable.
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(named: "Switch to tab") { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(selected ? Color(nsColor: .textBackgroundColor) : Color.clear)
+                .fill(selected ? MarvinTheme.rowSelected : Color.clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(focused && listFocused ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)

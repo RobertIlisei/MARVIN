@@ -146,6 +146,8 @@ import SwiftUI
         }
         .buttonStyle(.plain)
         .help(on ? "Hide \(sev.rawValue)s" : "Show \(sev.rawValue)s")
+        .accessibilityLabel("\(n) \(sev.rawValue)\(n == 1 ? "" : "s")")
+        .accessibilityValue(on ? "shown" : "hidden")
     }
 
     private var filterField: some View {
@@ -306,6 +308,7 @@ import SwiftUI
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 if let glyph = SymbolsIcon.image(
                     forPath: group.file, isDirectory: false, size: 13
                 ) {
@@ -334,6 +337,7 @@ import SwiftUI
         }
         .buttonStyle(.plain)
         .background(MarvinTheme.background)
+        .accessibilityValue(collapsed ? "collapsed" : "expanded")
     }
 
     private func row(_ item: DiagnosticItem) -> some View {

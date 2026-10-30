@@ -373,9 +373,12 @@ final class ReviewWindowTarget {
                 set: { model.viewMode = $0 }
             )) {
                 Image(systemName: "rectangle.split.2x1").tag(DiffViewMode.split)
+                    .accessibilityLabel("Split")
                 Image(systemName: "list.bullet.rectangle").tag(DiffViewMode.inline)
+                    .accessibilityLabel("Inline")
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("Diff layout")
             .frame(width: 92)
             .help("Split — side-by-side. Inline — unified single column.")
             MarvinDivider().frame(height: 16)

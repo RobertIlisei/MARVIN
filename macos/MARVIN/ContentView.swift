@@ -535,6 +535,7 @@ import SwiftUI
                 }
                 .buttonStyle(.plain)
                 .help(tab.title)
+                .accessibilityAddTraits(active ? .isSelected : [])
             }
             Spacer()
             Button {
@@ -542,10 +543,13 @@ import SwiftUI
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.tertiary)
             .help("Hide panel (⌘J)")
+            .accessibilityLabel("Hide panel")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -885,6 +889,9 @@ import SwiftUI
                         .onHover { hovering in
                             hoveredDay = hovering ? entry.day : nil
                         }
+                        // The day's figures are otherwise hover-only (audit W10).
+                        .accessibilityElement()
+                        .accessibilityLabel("\(entry.day.suffix(5)): \(fmtUsd(entry.costUsd)), \(entry.turns.formatted()) turns")
                 }
             }
             .frame(height: 50, alignment: .bottom)

@@ -194,6 +194,8 @@ final class SlashCommandModel {
                                 .id(cmd.id)
                                 .contentShape(Rectangle())
                                 .onTapGesture { onPick(idx) }
+                                .accessibilityAddTraits(idx == selected ? [.isButton, .isSelected] : .isButton)
+                                .accessibilityAction { onPick(idx) }
                         }
                     }
                 }

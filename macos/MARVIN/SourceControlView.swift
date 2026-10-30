@@ -981,6 +981,7 @@ final class SourceControlModel {
         }
         .paneIconButton(10)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     // MARK: - Composer
@@ -1840,7 +1841,7 @@ private struct SectionedFile: Identifiable {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 9))
-                .frame(width: 15, height: 15)
+                .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

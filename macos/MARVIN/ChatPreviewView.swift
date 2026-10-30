@@ -2804,13 +2804,15 @@ final class ChatPreviewModel {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("New tab — click for the default, hold for shared chat or isolated worktree")
             .buttonStyle(.plain)
             // ⌘⇧N is owned by File ▸ New Session, which posts
             // .marvinRequestNewSession to the observer above — the same
             // action. Redeclaring it here made three buttons compete for
             // one key.
-            .help("New chat (⌘⇧N)")
+            // One tooltip: a second `.help` replaced the first, dropping the
+            // "hold for shared or worktree" hint (audit C27).
+            .help("New chat (⌘⇧N) — click for the default, hold for shared chat or isolated worktree")
+            .accessibilityLabel("New tab")
             .padding(.trailing, 8)
         }
         .frame(height: 32)
@@ -3059,16 +3061,18 @@ final class ChatPreviewModel {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityAddTraits(active ? .isSelected : [])
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Close tab")
+                .accessibilityLabel("Close tab \(title)")
             }
         }
         .padding(.leading, 9)
@@ -4310,9 +4314,12 @@ final class ChatPreviewModel {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Remove from queue")
+                    .accessibilityLabel("Remove from queue")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)

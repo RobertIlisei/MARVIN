@@ -266,6 +266,7 @@ enum GraphOutline {
             .frame(height: 24)
         }
         .buttonStyle(.plain)
+        .accessibilityValue(isCollapsed ? "collapsed" : "expanded")
 
         if !isCollapsed {
             // A ScrollView, because it is what CLIPS as well as bounds: a

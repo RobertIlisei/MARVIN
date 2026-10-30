@@ -1304,6 +1304,7 @@ final class MarvinEditorTextView: STTextView {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .textSelection(.enabled)
                 .help(bridge.selectedFilePath ?? "No file open")
             if let buffer = activeBuffer, buffer.truncated {
                 Text("truncated")
@@ -1749,14 +1750,17 @@ final class MarvinEditorTextView: STTextView {
                 Button { scale = max(0.1, scale - 0.25) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }
+                .accessibilityLabel("Zoom out")
                 Text("\(Int(scale * 100))%")
                     .font(.system(size: 11, design: .monospaced))
                 Button { scale = min(8.0, scale + 0.25) } label: {
                     Image(systemName: "plus.magnifyingglass")
                 }
+                .accessibilityLabel("Zoom in")
                 Button { scale = 1.0 } label: {
                     Text("1:1").font(.system(size: 11, design: .monospaced))
                 }
+                .accessibilityLabel("Actual size")
                 Text("\(Int(image.size.width))×\(Int(image.size.height))")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
