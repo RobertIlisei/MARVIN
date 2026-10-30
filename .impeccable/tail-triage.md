@@ -16,8 +16,8 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 | ID | Sev | Status | Group | Note |
 |----|-----|--------|-------|------|
 | C7 | P2 | defer | — | design: which composer controls collapse first at 280 pt; composer layout has a crash history |
-| C8 | P2 | defer | — | design: should a keyboard Allow exist while the composer owns Return |
-| C9 | P2 | defer | — | design: one-step Deny with an optional reason, or keep two steps and focus the field |
+| C8 | P2 | fix | G5 | supervisor-approved: Allow is ⌘⏎, bare Return does nothing on the card; ADR-0112 amendment (2026-10-30) |
+| C9 | P2 | fix | G5 | supervisor-approved: Deny acts on the first click; "Deny with reason…" opens a focused field |
 | C10 | P2 | fix | G2 | tray rows are index-keyed; a half-typed deny reason carries to the next confirm |
 | C11 | P2 | fix | G1 | slash rows: button + selected traits |
 | C12 | P2 | fix | G2 | Revise overwrites the unsent draft |
@@ -45,7 +45,7 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 | W5 | P2 | defer | — | design: bind F-keys (private-use scalar trick unverified) or stop printing them |
 | W6 | P2 | fix | G2 | Reset deletes the stored key with no confirm; Return does not save |
 | W7 | P2 | fix | G1 | status-bar segments hit-test on their glyph; bell unread state is glyph + colour only |
-| W8 | P2 | defer | — | design: how ctx pressure shows without colour |
+| W8 | P2 | fix | G5 | supervisor-approved, partial: ctx at high / critical gets a warning glyph (asserted); graph/reads stays colour-only |
 | W9 | P2 | already fixed | — | `ViewThatFits` with full / compact / minimal tiers (`AppStatusBar.swift:66`) |
 | W10 | P2 | fix | G1 | cost-history bars: accessibility elements |
 | W11 | P2 | defer | — | budget: `ContentView.body` sits at the type-checker budget, needs a modifier |
@@ -75,7 +75,7 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 | L12 | P2 | fix | G2 | "Discard branch" has no confirm |
 | L13 | P2 | fix | G1 | leftover small / help-only icon buttons |
 | L14 | P2 | fix | G3 | failure detail and hints are `.tertiary`; colour to `textMuted`, sizes unchanged |
-| L15 | P2 | defer | — | design: raise the shared `elevated` token or give the chip a stronger stroke |
+| L15 | P2 | fix | G5 | supervisor-approved, partial: the neutral chip has its own ~3:1 stroke and a stronger one under Increase Contrast; the shared `elevated` token is unchanged |
 | L16 | P2 | defer | — | risk: clamp to pane height (layout-pass history); budget |
 | L17 | P2 | defer | — | risk: ADR-0114 width history |
 | L18 | P2 | fix | G2 | the inert status-fetch `×` only; the error copy is a design call |
@@ -91,8 +91,8 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 
 | ID | Sev | Status | Group | Note |
 |----|-----|--------|-------|------|
-| K5 | P1 | defer | — | design: Brain idle rate (assessed and left unchanged in `86c8e2e`) |
-| K6 | P1 | defer | — | design: split diff has +/− signs; the 3 pt editor gutter cannot hold a glyph |
+| K5 | P1 | fix | G5 | supervisor-approved: idle drops to 10 fps once the transition has settled (30 fps during it) |
+| K6 | P1 | fix | G5 | supervisor-approved: modified lines are hatched (2 pt on / 2 pt off), added stay solid, removed keep the triangle |
 | K7 | P2 | fix | G4 | image decoded on main inside the `content` builder |
 | K8 | P2 | already fixed | — | `DiffSheet` is a `LazyVStack` and parses once (`3819440`) |
 | K9 | P2 | fix | G1 | terminal `×` / `+` hit areas; confirm-on-close is a design call |
@@ -106,7 +106,7 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 | K17 | P2 | defer | — | budget |
 | K18 | P2 | fix | G2 | `cd` escapes only spaces, so a path with a quote or `$` runs as shell; click-runs-immediately is a design call |
 | K19 | P2 | defer | — | budget: needs cancel + actor cache |
-| K20 | P2 | defer | — | design: freeze or slow the Brain under Reduce Motion |
+| K20 | P2 | fix | G5 | supervisor-approved: Reduce Motion shows each state as one settled frame, then stops the display link; no boot lerp. The 1.5 s settle is not verified against the Metal view (the harness cannot mount it) |
 | K21 | P2 | defer | — | design: where font zoom lives; risk in the editor |
 | K22 | P2 | fix | G3 | Problems / Tasks / Terminal info text at 8–9 pt `.tertiary` |
 | K23 | P2 | defer | — | design: overlay scrollers are a documented choice |
@@ -118,6 +118,7 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 
 | ID | Sev | Status | Group | Note |
 |----|-----|--------|-------|------|
+| U7 | P2 | already fixed | — | closed: the dark terminal was an offscreen-harness artifact; Robert confirmed his live terminal is dark (supervisor, 2026-10-30) |
 | U23 | P3 | defer | — | design: the row is `Equatable`; hiding a repeated label needs the previous message passed in, and what a tool-only continuation shows |
 | U24 | P3 | fix | G4 | Graph pane spinner with no text |
 | U25 | P3 | fix | G4 | Settings: "Sidecar", "Re-probe now", "Effective" |
@@ -125,12 +126,12 @@ Fix groups (one commit each, `pr-review` on every commit, re-render and compare 
 
 ## Counts
 
-87 rows: the 85 inputs plus K5 and K6, listed because the brief names them as design calls.
+88 rows: the 85 inputs, K5 and K6 (named by the brief), and U7 (closed on the supervisor's word).
 
 | Status | Rows |
 |---|---|
-| already fixed | 2 (W9, K8) |
-| fix | 43 (G1 17 · G2 11 · G3 5 · G4 10) |
-| defer | 42 |
+| already fixed | 3 (W9, K8, U7) |
+| fix | 50 (G1 17 · G2 11 · G3 5 · G4 10 · G5 7) |
+| defer | 35 |
 
-Three `fix` rows are partial by design: K11 (the duplicate `.help` only), L18 (the inert `×` only) and K26 (path selection only). Their remainder is deferred for the reason in the note.
+G5 is the supervisor-approved design calls (2026-10-30): C8, C9, K5, K20, K6, L15, W8. Five `fix` rows are partial by design: K11 (the duplicate `.help` only), L18 (the inert `×` only), K26 (path selection only), L15 (the chip stroke only) and W8 (the ctx glyph only); their remainder stays deferred for the reason in the note. C24 (the 11 pt type floor) was deferred to the backlog by the supervisor.

@@ -50,6 +50,7 @@ struct InlineChipStyle: ButtonStyle {
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -114,7 +115,13 @@ struct InlineChipStyle: ButtonStyle {
 
     private var stroke: Color {
         switch role {
-        case .neutral: return MarvinTheme.border
+        // The hairline (1.25:1) was the only cue that a neutral chip is a
+        // button, so it gets its own stroke at ~3:1 against the chrome, and a
+        // stronger one under Increase Contrast (audit L15).
+        case .neutral:
+            return contrast == .increased
+                ? MarvinTheme.adaptive(dark: "8A8A8A", light: "6E6E6E")
+                : MarvinTheme.adaptive(dark: "666666", light: "8A8A8A")
         case .primary, .tinted: return tint.opacity(hovering ? 0.45 : 0.28)
         }
     }

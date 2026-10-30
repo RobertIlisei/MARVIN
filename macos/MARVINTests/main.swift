@@ -4797,6 +4797,17 @@ runner.suite("tail-g2") {
     }
 }
 
+// MARK: - Tail triage, approved design calls (audit W8)
+
+runner.suite("tail-ctx-glyph") {
+    runner.test("pressure past climbing is marked by shape, not only by colour") {
+        runner.expect(ContextBand.healthy.needsWarningGlyph, equals: false, "healthy: no glyph")
+        runner.expect(ContextBand.climbing.needsWarningGlyph, equals: false, "climbing: no glyph")
+        runner.expect(ContextBand.high.needsWarningGlyph, equals: true, "high: warning glyph")
+        runner.expect(ContextBand.critical.needsWarningGlyph, equals: true, "critical: warning glyph")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -281,6 +281,9 @@ Icons are SF Symbols (83 distinct `systemName`s; most used: `xmark` 15, `xmark.c
 - **Do** give every status color a glyph, and keep at most one accent-filled chip per group.
 - **Do** keep a pane's intrinsic width at zero (`minWidth: 0`, `Spacer(minLength: 0)`, clip) because all seven panes stay mounted.
 - **Do** honor Reduce Motion by dropping scale effects (already done in chip and icon button).
+- **Do** give a neutral chip its own stroke and not the hairline: the hairline is 1.25:1, so it was the only cue that the chip is a button and could not carry it. The stroke is `#666666` dark / `#8A8A8A` light (about 3:1 on the chrome), and `#8A8A8A` / `#6E6E6E` under Increase Contrast (`InlineActionChip.swift`, audit L15, 2026-10-30).
+- **Do** mark an editor-gutter change by shape as well as hue: added is a solid 3 pt strip, modified is the same strip hatched 2 pt on / 2 pt off, removed is a triangular pip (`DiffGutterBar.swift`, audit K6, 2026-10-30). A status colour that reaches high pressure also gets a glyph: `ctx` swaps its gauge for a warning triangle at high and critical (`ContextBand.needsWarningGlyph`, audit W8).
+- **Do** keep Return off a confirm: a tool confirm's Allow is ⌘⏎ and Deny is one click, so a stray Return never consents (ADR-0112 amendment, audit C8/C9, 2026-10-30).
 - **Do** set machine-flavored text (tool names, paths, counts) in SF Mono.
 
 ### Don't:

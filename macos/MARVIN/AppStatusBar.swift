@@ -448,7 +448,9 @@ private let statusBarPopoverEdge: Edge = .top
                 contextPopoverOpen.toggle()
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "gauge.with.dots.needle.50percent")
+                    Image(systemName: band.needsWarningGlyph
+                          ? "exclamationmark.triangle.fill"
+                          : "gauge.with.dots.needle.50percent")
                         .font(.system(size: 10))
                     Text(detail == .full ? "ctx \(Int(kCtx))K" : "\(Int(kCtx))K")
                 }
