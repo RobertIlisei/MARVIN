@@ -1,6 +1,6 @@
 # 0077 — Selective adoption of the AI-native SDLC playbook
 
-Status: Accepted · Date: 2026-08-29
+Status: Accepted · Date: 2026-08-29 · Golden Rule 1 clarification partially superseded by [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) (2026-10-30)
 
 ## Context
 
@@ -129,3 +129,7 @@ Three findings drove the accepted items:
 - [ADR-0067](./0067-gate-on-scope-not-turn-boundaries.md) — the stall
   measurement that argues against stage-boundary approval gates.
 - `scripts/sdlc-metrics.py` — the metrics half of the playbook, already shipped.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — the Golden Rule 1 clarification, partially superseded
+
+Decision item 4 said a human steering N parallel sessions is N single-assistant loops; Golden Rule 1 added that two sessions must never be dispatched by a model. ADR-0127 supersedes that second half: a user-started supervisor may message and steer the sessions the user opened. The ban this ADR clarified — model dispatching model **on shared state**, a flat swarm with no human between the agents — stands. The supervisor writes nothing, never starts a turn in a shared checkout another live session is using, never creates sessions, and routes every consent-shaped decision to the user. Item 1's firm-surface evals now also pin the supervisor-consent rule in `personality.ts`.

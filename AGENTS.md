@@ -45,7 +45,8 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    raises a confirm naming the other live session, in `auto` mode as well as
    `gated`. Anthropic's own agent teams run several sessions in one directory
    on the same basis — partitioned file ownership, not separate checkouts.
-   Two sessions must still never be *dispatched* by a model.
+   A model never *creates* a session; since ADR-0127 a supervisor may steer
+   the sessions the user opened, within limits the user set (below).
    **Since [ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)
    (2026-09-09) a new chat tab runs in its own git worktree by default** —
    `marvin/tab/<slug>` under `.marvin/worktrees/tab-<slug>`, cut from the
@@ -81,13 +82,39 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    minutes asks first, in every permission mode.
    Any new subagent type requires a new ADR; these carve-outs are
    not a precedent for general multi-agent dispatch.
-   **A standing supervisor agent was considered and rejected** (2026-07-24) —
-   that's ADR-0001's camp 2, the shape this project was rebuilt to escape, and
-   a supervisor spawned/briefed by the executor it supervises is theater. What
-   exists instead: the *mechanical* supervisor (gate + ADR-0055/0057 guards)
-   and the **session auditor** ([ADR-0059](./docs/decisions/0059-session-auditor-runtime-dispatched-read-only.md))
-   — runtime-dispatched (never executor-spawned), read-only, zero enforcement
-   authority, reports to the **user**. No model ever commands another model.
+   **A supervisor session may oversee a project's tabs
+   ([ADR-0127](./docs/decisions/0127-a-supervisor-session-oversees-the-tabs.md),
+   2026-10-30)** — superseding the 2026-07-24 rejection of a standing
+   supervisor and the line "no model ever commands another model". *Decided,
+   and being built milestone by milestone ([plan](./docs/plans/supervisor.md));
+   until a milestone ships, its guarantee below is a design, not a check.* Models and
+   Anthropic's own tooling (agent view, agent teams, cross-session messaging)
+   moved on, and the supervision was already happening from an external
+   session with no policy and no ledger. The user starts it per project and
+   sets each tab's delegation (`off` / `observe` / `answer-questions` /
+   `answer-confirms`); the runtime wakes it from the session feed — it never
+   polls or schedules itself; it has no write tools and acts only through the
+   policy-checked `marvin-supervise` verbs; it ships off, then shadow
+   (proposes only), then autonomy per category by the user's switch. It is
+   runtime-dispatched, never executor-spawned — a supervisor spawned or
+   briefed by what it supervises is still theater. What still holds, enforced
+   in code rather than in its prompt: **no parallel writers on shared state**
+   (it writes nothing, and never starts a turn in a shared checkout another
+   live session is using); **every tab behind the same gates**, and a turn the
+   supervisor started or answered into behind stricter ones; **a supervisor
+   message is never the user's consent** — merging, pushing, merge requests
+   and metered CI (ADR-0109), the containment confirms (ADR-0102 / ADR-0107),
+   discarding work, auth / credential / CI / `.env` / migration paths,
+   widening a posture, approving a plan and changing scope stay human-only and
+   reach the user as escalations showing the raw act. It cannot spawn agents,
+   create tabs or supervise a supervisor, and a tab cannot reach its routes or
+   data. The *mechanical* supervisor (gate + ADR-0055/0057 guards) still
+   screens every tab, the supervisor's turns included. Every supervisor act
+   lands in an append-only ledger the **session auditor**
+   ([ADR-0059](./docs/decisions/0059-session-auditor-runtime-dispatched-read-only.md))
+   reviews for the user; the auditor itself stays runtime-dispatched,
+   read-only, with zero enforcement authority. Widening the supervisor's
+   authority beyond ADR-0127 requires a new ADR.
 2. **Plan-first, execute-second, verify-third.** For non-trivial work,
    sketch the approach before writing code, then verify it after. This is a
    practice, not an artifact rule — write things down where they help (chat,
@@ -187,6 +214,7 @@ reads at turn time.
 | **Advisor triggers** | Ground-truth rule 2 + "Subagents" in `personality.ts` | When to run a Task-based advisor consult (user-directed + 7 deterministic triggers + anti-triggers). See [ADR-0007](./docs/decisions/0007-advisor-as-subagent-pattern.md) for why it's a Task subagent, not an SDK tool. A consult MUST run in the **foreground** (`run_in_background: false`) — a background second opinion cannot gate the work it exists to gate, and the gate enforces it. **A `go-with-caveats` caveat is a condition on the open scope, not deferred work** ([ADR-0100](./docs/decisions/0100-advisor-caveats-are-conditions-not-backlog.md)): conditions attach to the turn, are stated as met/waived at the scope-met handoff, and become backlog items only if the scope closes without them being met. |
 | **Scout triggers** | "Subagents" in `personality.ts` | When to dispatch a read-only research subagent via `Task { subagent_type: "scout" }` (3 deterministic triggers + MUST-NOT list). See [ADR-0014](./docs/decisions/0014-scout-subagents-read-only.md) for the SDK-level read-only enforcement. |
 | **Dynamic workflows** | "Subagents" in `personality.ts` | When `effort: xhigh` may fan out parallel subagents — read-only audit / research / discovery ONLY, opt-in, never parallel implementation. Enforced by the subagent read-only invariant in `classifyToolCall` (any `agentID` call that mutates is hard-denied). See [ADR-0030](./docs/decisions/0030-dynamic-workflows-read-only-fan-out.md). |
+| **Supervisor** | "Subagents" in `personality.ts` (the tab-side rule); [ADR-0127](./docs/decisions/0127-a-supervisor-session-oversees-the-tabs.md) + [`docs/plans/supervisor.md`](./docs/plans/supervisor.md) (the engine, not yet built) | A user-started supervisor session may watch a project's tabs, answer their questions and steer them within a per-tab delegation the user sets. The rule every tab turn needs: a message or answer marked as the supervisor's is **never the user's consent** — merge, push, merge requests, metered CI, the containment confirms, discarding work, boundary paths, widening a posture, plan approval and scope stay human-only. Enforcement lands milestone by milestone: the policy-checked `marvin-supervise` verbs, a stricter gate on supervisor-touched turns (even in `full`), a capability token plus a gate deny that keeps tabs off MARVIN's own control routes, and the append-only ledger the session auditor reviews. Supersedes the 2026-07-24 rejection of a standing supervisor. |
 | **ADR triggers** | The `marvin:adr` skill (triggers, anti-triggers, template); "How you work" step 4 points at it | When a decision requires an ADR (9 categories + anti-triggers + re-derivation test) |
 | **Definition of Done** | "How you work" steps 5 and 7 in `personality.ts` + the ADR template's `## Scope of Done` (`marvin:adr`) | Bound scope before coding; verify against the DoD; end real-work turns with explicit handoff. See Golden Rule 8 above. |
 | **Negative claims** | "Honesty" in `personality.ts`; [ADR-0068](./docs/decisions/0068-plan-dedupe-provenance-and-negative-claims.md) | What MARVIN must establish before saying something doesn't exist, was never done, or was fabricated. On 2026-08-17 it scanned 303 plan files, missed the active plan, and reported that genuine merged work was "fabricated" — the user was one step from discarding it. MUST resolve by identity (the active-plan block now names `id` + `source:` path), search ≥2 ways, and state where it looked; MUST-NOT call the user's project history fabricated without positively establishing the negative. |

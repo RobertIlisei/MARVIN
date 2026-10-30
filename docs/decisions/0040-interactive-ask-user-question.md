@@ -92,3 +92,11 @@ the model still asks in prose.
       pending a live session; the `updatedInput → tool result` mapping follows
       the SDK type defs + claude-code-guide's reading but isn't yet exercised
       against a real turn.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — who may answer an AskUserQuestion
+
+- **The user**, from any surface, always.
+- **The supervisor**, when all of these hold: the tab's delegation is `answer-questions` or higher; the questions category is autonomous; the answer carries at least one strong ground; and the question's text and options do not name a human-only act (ADR-0127 §4, a heuristic measured in shadow). Its answer goes through `POST /api/confirm/answer`, built on the server from the registry's stored input into the same `{ questions, answers }` shape `AskQuestionSheet` returns. It is recorded `answeredBy: "supervisor"` with its grounds, reaches the tab marked as the supervisor's, and marks the turn supervisor-touched — which re-raises every human-only confirm for the rest of that turn.
+- **First answer wins**; the later one gets the already-resolved response.
+- **The headless rule gains a step.** "No UI → deny with *proceed on your recommendation*" still applies, but in a tab delegated to a running supervisor the question first waits a bounded time for the supervisor.
+- **"A question can never be auto-answered" is refined:** never by default, never by MARVIN on its own judgement — only by a supervisor the user enabled for that tab.

@@ -1,6 +1,6 @@
 # ADR-0001 — Single assistant, not an agent team
 
-**Status:** Accepted
+**Status:** Accepted — camp 2's rejection partially superseded by [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) (2026-10-30)
 **Date:** 2026-04-17
 **Deciders:** @robertilisei, MARVIN (single-assistant session)
 
@@ -95,3 +95,7 @@ Subagents do NOT make design decisions, write code the main thread hasn't review
 - [The 8-phase workflow](../concepts/eight-phase-workflow.md) — what replaces "multiple agents."
 - [`personality.ts` CORE_BEHAVIOR](../../../packages/runtime/src/personality.ts) — where this is encoded in MARVIN's system prompt.
 - [CLAUDE.md Golden Rule 1](../../../CLAUDE.md) — the same claim stated as a repo-level rule.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — camp 2, partially superseded
+
+This ADR's rejection of a supervising model *at all* is superseded. A user-started supervisor session may watch a project's tabs, answer their questions within limits the user sets, and steer them with messages tagged as its own. What this ADR measured and rejected stands: role decomposition, handoff pipelines, Kanban-as-source-of-truth, and splitting one sequential task across agents. Under ADR-0127 every tab is still one assistant with one continuous context; the supervisor never assigns or splits work, writes nothing itself, and every consent-shaped decision stays with the user.
