@@ -74,8 +74,18 @@ export interface SupervisorState {
   sdkSessionId: string | null;
   sdkSessionStartedAt: string | null;
   lastInputTokens: number;
-  spend: { day: string; usd: number };
+  /** Today's spend: `usd` is the total the cap reads; `ownUsd` the supervisor's own turns, `tabsUsd` the tab turns it started (ADR-0127 §6). */
+  spend: { day: string; usd: number; ownUsd: number; tabsUsd: number };
+  /** Why it is paused, when it is (brief §10.1). Null while running. */
+  pause: SupervisorPause | null;
   updatedAt: string;
+}
+
+export const PAUSE_REASONS = ["user", "kill", "budget", "breaker", "refusals", "repeated-failures"] as const;
+export interface SupervisorPause {
+  reason: (typeof PAUSE_REASONS)[number];
+  at: string;
+  detail?: string;
 }
 
 interface Store {
@@ -107,13 +117,14 @@ function defaultState(projectId: string): SupervisorState {
     sdkSessionId: null,
     sdkSessionStartedAt: null,
     lastInputTokens: 0,
-    spend: { day: today(), usd: 0 },
+    spend: { day: today(), usd: 0, ownUsd: 0, tabsUsd: 0 },
+    pause: null,
     updatedAt: new Date().toISOString(),
   };
 }
 
 function clone(s: SupervisorState): SupervisorState {
-  return { ...s, delegation: { ...s.delegation }, caps: { ...s.caps }, spend: { ...s.spend } };
+  return { ...s, delegation: { ...s.delegation }, caps: { ...s.caps }, spend: { ...s.spend }, pause: s.pause ? { ...s.pause } : null };
 }
 
 /** The state the runtime enforces. An unknown project is off. */
@@ -170,9 +181,22 @@ function sanitize(raw: unknown, projectId: string): SupervisorState {
   }
   if (typeof r.sdkSessionId === "string" && r.sdkSessionId.length <= 200) base.sdkSessionId = r.sdkSessionId;
   if (typeof r.sdkSessionStartedAt === "string") base.sdkSessionStartedAt = r.sdkSessionStartedAt;
-  const spend = r.spend as { day?: unknown; usd?: unknown } | undefined;
+  const spend = r.spend as { day?: unknown; usd?: unknown; ownUsd?: unknown; tabsUsd?: unknown } | undefined;
   if (spend && typeof spend.day === "string" && typeof spend.usd === "number" && Number.isFinite(spend.usd)) {
-    base.spend = { day: spend.day, usd: Math.max(0, spend.usd) };
+    const part = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, v) : 0);
+    const usd = Math.max(0, spend.usd);
+    // A file from before the split: everything spent so far was the supervisor's own.
+    const tabsUsd = part(spend.tabsUsd);
+    base.spend = { day: spend.day, usd, tabsUsd, ownUsd: spend.ownUsd === undefined ? usd - tabsUsd : part(spend.ownUsd) };
+  }
+  const pause = r.pause as { reason?: unknown; at?: unknown; detail?: unknown } | null | undefined;
+  if (base.paused) {
+    const reason = pause && typeof pause.reason === "string" && (PAUSE_REASONS as readonly string[]).includes(pause.reason) ? (pause.reason as SupervisorPause["reason"]) : "user";
+    base.pause = {
+      reason,
+      at: pause && typeof pause.at === "string" ? pause.at : base.updatedAt,
+      ...(pause && typeof pause.detail === "string" ? { detail: pause.detail.slice(0, 500) } : {}),
+    };
   }
   if (base.supervisorSessionId) delete base.delegation[base.supervisorSessionId];
   return base;
@@ -273,6 +297,7 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
     case "start":
       s.mode = "shadow";
       s.paused = false;
+      s.pause = null;
       s.supervisorSessionId ??= randomUUID();
       break;
     case "stop":
@@ -281,9 +306,11 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
     case "pause":
     case "kill":
       s.paused = true;
+      s.pause = { reason: a.action === "kill" ? "kill" : "user", at: new Date().toISOString() };
       break;
     case "resume":
       s.paused = false;
+      s.pause = null;
       break;
     case "mode": {
       if (a.mode === "shadow" || a.mode === "off") {
@@ -349,11 +376,12 @@ export function onSupervisorControl(listener: (e: SupervisorControlEvent) => voi
  * The runtime pauses a supervisor that is faulting (ADR-0127 §6). Narrowing
  * only — it never resumes one — so it needs no token. Escalated in the ledger.
  */
-export function pauseSupervisorForFault(projectId: string, reason: string): SupervisorState {
+export function pauseSupervisorForFault(projectId: string, reason: string, code: Exclude<SupervisorPause["reason"], "user" | "kill"> = "refusals"): SupervisorState {
   const s = getSupervisorState(projectId);
   s.paused = true;
+  s.pause = { reason: code, at: new Date().toISOString(), detail: reason.slice(0, 500) };
   const state = commit(s);
-  appendLedgerEntry(projectId, { kind: "control", verb: "auto-pause", tab: null, wakeId: null, mode: state.mode, decision: "escalate", reason });
+  appendLedgerEntry(projectId, { kind: "control", verb: "auto-pause", tab: null, wakeId: null, mode: state.mode, decision: "escalate", reason, reasonCode: code });
   for (const l of store().listeners) {
     try {
       l({ projectId, action: "pause" });
@@ -375,10 +403,42 @@ export function updateSupervisorRuntime(
   if (patch.lastInputTokens !== undefined) s.lastInputTokens = patch.lastInputTokens;
   if (patch.addSpendUsd !== undefined && Number.isFinite(patch.addSpendUsd)) {
     const day = today();
-    if (s.spend.day !== day) s.spend = { day, usd: 0 };
+    if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0 };
     s.spend.usd += Math.max(0, patch.addSpendUsd);
+    s.spend.ownUsd += Math.max(0, patch.addSpendUsd);
   }
   return commit(s);
+}
+
+/**
+ * ADR-0127 §6 — a tab turn the supervisor started spends the tab's money, so
+ * it counts against the supervisor's daily cap. At the cap the supervisor
+ * pauses and the ledger escalates. A project whose supervisor is off (the
+ * external prototype sending with the token) still has its spend counted.
+ */
+export function noteSupervisorTabSpend(projectId: string, costUsd: number | null | undefined): SupervisorState {
+  const s = getSupervisorState(projectId);
+  const add = typeof costUsd === "number" && Number.isFinite(costUsd) ? Math.max(0, costUsd) : 0;
+  const day = today();
+  if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0 };
+  s.spend.usd += add;
+  s.spend.tabsUsd += add;
+  const state = commit(s);
+  if (state.mode !== "off" && !state.paused && overBudget(state)) {
+    return pauseSupervisorForFault(
+      projectId,
+      `daily cap reached: $${state.spend.usd.toFixed(2)} of $${state.caps.dailyBudgetUsd} (tab turns it started: $${state.spend.tabsUsd.toFixed(2)})`,
+      "budget",
+    );
+  }
+  return state;
+}
+
+/** Test-only — the cap mutation is a later milestone's (`cap {capUsd}`, brief §10.1). */
+export function setSupervisorCapsForTests(projectId: string, caps: Partial<SupervisorCaps>): void {
+  const s = getSupervisorState(projectId);
+  s.caps = { ...s.caps, ...caps };
+  commit(s);
 }
 
 /** Today's spend against the cap (a new day starts at zero). */

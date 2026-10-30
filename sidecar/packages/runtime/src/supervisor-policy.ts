@@ -22,6 +22,8 @@ import path from "node:path";
 import { classifyPostureChange, type ModelLookup, type PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
 import type { GroundKind, LedgerDecision, LedgerGround } from "./supervisor-ledger";
+import type { ConfirmRule } from "./confirm-registry";
+import { HUMAN_ONLY_CONFIRM_RULES, type HumanOnlyAct } from "./supervisor-acts";
 import { type Delegation, delegationRank, type SupervisorCaps, type SupervisorMode } from "./supervisor-state";
 
 export interface GroundRef {
@@ -175,6 +177,8 @@ export interface PolicyOutcome {
   reason: string;
   grounds: LedgerGround[];
   heuristic?: string;
+  /** A stable code for the reason (ledger `reasonCode`, brief §10.5). Set by the milestone 3 evaluators. */
+  reasonCode?: string;
 }
 
 export function evaluateAnswer(input: AnswerEvaluationInput): PolicyOutcome {
@@ -254,6 +258,124 @@ export function evaluateSetPosture(input: {
   return input.mode === "autonomous"
     ? done("act", `narrowing (${what}); the posture category is autonomous`)
     : done("propose", `narrowing (${what}); shadow mode records the proposal and performs nothing`);
+}
+
+// ── Milestone 3: send, cancel and confirm ───────────────────────────────────
+
+type Done = (decision: LedgerDecision, reasonCode: string, reason: string) => PolicyOutcome;
+
+function judge(grounds: GroundRef[], groundCtx: GroundContext): { done: Done; resolved: Array<LedgerGround & { why?: string }> } {
+  const resolved = grounds.map((g) => resolveGround(g, groundCtx));
+  const plain = resolved.map(({ kind, ref, provenance }) => ({ kind, ref, provenance }));
+  return { resolved, done: (decision, reasonCode, reason) => ({ decision, reason, reasonCode, grounds: plain }) };
+}
+
+/** Grounds every act needs: present, resolvable, at least one the tab did not write. Null when they hold. */
+function groundsVerdict(resolved: Array<LedgerGround & { why?: string }>, done: Done, what: string): PolicyOutcome | null {
+  if (resolved.length === 0) return done("refuse", "ungrounded", `no grounds cited — every ${what} cites what it rests on`);
+  const bad = resolved.filter((g) => g.provenance === "unresolved");
+  if (bad.length) return done("refuse", "unresolvable-citation", `citation does not resolve: ${bad.map((g) => `${g.kind}:${g.ref} (${g.why ?? "unresolved"})`).join("; ")}`);
+  if (!resolved.some((g) => g.provenance === "strong")) return done("escalate", "weak-grounds-only", "only weak grounds — every cited artifact was written by the tab itself");
+  return null;
+}
+
+function common(input: { mode: SupervisorMode; targetIsSupervisor: boolean }, done: Done): PolicyOutcome | null {
+  if (input.targetIsSupervisor) return done("refuse", "supervisor-session", "a supervisor session is never a target (no recursion)");
+  if (input.mode === "off") return done("refuse", "off", "the supervisor is off");
+  return null;
+}
+
+/** Nudges a tab may get at one plan step with no spine progress; the next one escalates (§6). */
+export const NUDGES_PER_PLAN_STEP = 2;
+
+/**
+ * `send` — a follow-up or nudge inside the tab's approved plan (ADR-0127 §3,
+ * `answer-questions` and up). Refused for a tab the user stopped, one waiting
+ * on its own job or wakeup, a busy shared checkout and secret-shaped text; a
+ * third nudge at one plan step without spine progress escalates.
+ */
+export function evaluateSend(input: {
+  mode: SupervisorMode;
+  delegation: Delegation | undefined;
+  targetIsSupervisor: boolean;
+  kind: "nudge" | "instruction";
+  /** The tab's own state, from the send path's refusal rules. */
+  tabRefusal: { code: string; reason: string } | null;
+  secret: boolean;
+  /** Nudges already proposed or sent at this plan step with no spine progress. */
+  priorNudgesAtStep: number;
+  grounds: GroundRef[];
+  groundCtx: GroundContext;
+}): PolicyOutcome {
+  const { done, resolved } = judge(input.grounds, input.groundCtx);
+  const first = common(input, done);
+  if (first) return first;
+  if (delegationRank(input.delegation) < delegationRank("answer-questions")) {
+    return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow messages`);
+  }
+  if (input.secret) return done("refuse", "secret", "the message carries a secret-shaped string (ADR-0127 §6)");
+  if (input.tabRefusal) return done("refuse", input.tabRefusal.code, input.tabRefusal.reason);
+  if (input.kind === "nudge" && input.priorNudgesAtStep >= NUDGES_PER_PLAN_STEP) {
+    return done("escalate", "nudge-cap", `${input.priorNudgesAtStep} nudges at this plan step without spine progress — the user decides what happens next`);
+  }
+  const g = groundsVerdict(resolved, done, "message");
+  if (g) return g;
+  return done("propose", "grounded", "grounded; shadow mode records the proposal and sends nothing");
+}
+
+/** `cancel` — stop a runaway turn (`answer-questions` and up). */
+export function evaluateCancel(input: {
+  mode: SupervisorMode;
+  delegation: Delegation | undefined;
+  targetIsSupervisor: boolean;
+  hasLiveTurn: boolean;
+  grounds: GroundRef[];
+  groundCtx: GroundContext;
+}): PolicyOutcome {
+  const { done, resolved } = judge(input.grounds, input.groundCtx);
+  const first = common(input, done);
+  if (first) return first;
+  if (delegationRank(input.delegation) < delegationRank("answer-questions")) {
+    return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow cancelling a turn`);
+  }
+  if (!input.hasLiveTurn) return done("refuse", "no-live-turn", "the tab has no turn running");
+  const g = groundsVerdict(resolved, done, "cancel");
+  if (g) return g;
+  return done("propose", "grounded", "grounded; shadow mode records the proposal and cancels nothing");
+}
+
+/**
+ * `confirm` — allow or deny an ORDINARY permission confirm (`answer-confirms`).
+ * A confirm only the user may answer (a supervisor-touched turn) is refused;
+ * a containment or money confirm, or one whose act is on the §4 list, is
+ * escalated at every level; a question belongs to `answer`.
+ */
+export function evaluateConfirm(input: {
+  mode: SupervisorMode;
+  delegation: Delegation | undefined;
+  targetIsSupervisor: boolean;
+  raisedBy: ConfirmRule | null;
+  userOnly: boolean;
+  act: HumanOnlyAct | null;
+  grounds: GroundRef[];
+  groundCtx: GroundContext;
+}): PolicyOutcome {
+  const { done, resolved } = judge(input.grounds, input.groundCtx);
+  const first = common(input, done);
+  if (first) return first;
+  if (delegationRank(input.delegation) < delegationRank("observe")) return done("refuse", "delegation", "this tab is not delegated to the supervisor");
+  if (input.raisedBy === "ask-user-question") return done("refuse", "is-question", "that is a question — use `answer`");
+  if (input.userOnly) return done("refuse", "user-only", "only the user can answer this confirm: the supervisor touched this turn (ADR-0127 §5)");
+  if (input.raisedBy && HUMAN_ONLY_CONFIRM_RULES.has(input.raisedBy)) {
+    return done("escalate", "human-only", `a ${input.raisedBy} confirm is a human-only act (ADR-0127 §4)`);
+  }
+  if (input.act) return done("escalate", "human-only", `${input.act.label} is a human-only act (ADR-0127 §4, ${input.act.item})`);
+  if (delegationRank(input.delegation) < delegationRank("answer-confirms")) {
+    return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow answering confirms`);
+  }
+  const g = groundsVerdict(resolved, done, "confirm");
+  if (g) return g;
+  return done("propose", "grounded", "grounded; shadow mode records the proposal and answers nothing");
 }
 
 // ── Stopping conditions (§6) ─────────────────────────────────────────────────

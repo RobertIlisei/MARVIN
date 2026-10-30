@@ -17,8 +17,22 @@ import { dirname } from "node:path";
 import type { ClaudeStreamEvent, TokenUsage } from "./claude-cli";
 import { marvinPaths } from "./paths";
 
+/** ADR-0127 §5 — what a supervisor-authored message carries beside its text (brief §10.7). */
+export interface SupervisorMessageTag {
+  kind: "nudge" | "instruction";
+  ledgerId: string | null;
+  grounds: Array<{ kind: string; ref: string; provenance: string }>;
+}
+
 export type SessionTurn =
-  | { type: "turn.user"; at: string; message: string }
+  | {
+      type: "turn.user";
+      at: string;
+      message: string;
+      /** ADR-0127 §5 — absent means the user. A supervisor message is never rendered as the user's. */
+      author?: "user" | "supervisor";
+      supervisor?: SupervisorMessageTag;
+    }
   | {
       /**
        * Turn-start event recorded once per turn. Carries the model
@@ -49,6 +63,15 @@ export type SessionTurn =
       /** ADR-0127 §9 — fields the posture route held over what the client posted, and who set them. */
       postureHeld?: { model?: string; thinkingMode?: string; permissionStrategy?: "auto" | "gated" | "full"; mode?: "agent" | "ask" | "plan" };
       postureSource?: "user" | "supervisor";
+      /** ADR-0127 §5 — who started the turn; absent means the user. */
+      author?: "user" | "supervisor";
+    }
+  | {
+      /** ADR-0127 §5 — the supervisor touched this turn; §4 acts in it are the user's alone from here. */
+      type: "turn.supervisor-touched";
+      at: string;
+      turnId: string;
+      by: "message" | "answer";
     }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {
@@ -91,6 +114,9 @@ export type SessionTurn =
       message?: string;
       /** ADR-0127 — who answered. Absent on records written before the field. */
       answeredBy?: "user" | "supervisor";
+      /** ADR-0127 §5 — what a supervisor answer rested on, and its ledger line. */
+      grounds?: Array<{ kind: string; ref: string; provenance: string }>;
+      ledgerId?: string;
     }
   /**
    * An implementer subagent finished and left a branch behind (ADR-0103).
@@ -176,6 +202,11 @@ const SECRET_PATTERNS: RegExp[] = [
   // [REDACTED] mid-block).
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
 ];
+
+/** ADR-0127 §6 — a supervisor `send` / `answer` carrying a secret-shaped string is refused. Same patterns as the redactor: one list. */
+export function containsSecretShape(s: string): boolean {
+  return SECRET_PATTERNS.some((p) => new RegExp(p.source, p.flags.replace("g", "")).test(s));
+}
 
 function redactSecrets(s: string): string {
   let out = s;

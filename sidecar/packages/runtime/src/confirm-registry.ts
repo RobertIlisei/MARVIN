@@ -31,7 +31,9 @@ export type ConfirmRule =
   | "metered-ci"
   | "lane"
   | "session-worktree"
-  | "gated";
+  | "gated"
+  /** ADR-0127 §5 — a §4 act inside a supervisor-touched turn; only the user answers it. */
+  | "supervisor-touched";
 
 interface PendingEntry {
   resolver: Resolver;
@@ -66,6 +68,8 @@ export interface PendingConfirmSummary {
   reason?: string | undefined;
   /** ADR-0127 — the rule that raised it. */
   raisedBy?: ConfirmRule | undefined;
+  /** ADR-0127 §5 — only the user may answer it (set by the watch, which knows which turns are touched). */
+  userOnly?: boolean;
 }
 
 /** One line a Needs-you row can show without the full payload. */

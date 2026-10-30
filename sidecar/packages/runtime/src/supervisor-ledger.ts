@@ -37,8 +37,12 @@ export interface LedgerEntryInput {
   mode?: "off" | "shadow" | "autonomous";
   decision?: LedgerDecision;
   reason: string;
+  /** A stable code for `reason` (brief §10.5 `reason.code`); written from milestone 3 on. */
+  reasonCode?: string;
   argsDigest?: string;
   grounds?: LedgerGround[];
+  /** A nudge's plan step, `done/total@lastTodoAt` — the nudge cap counts lines that share it (§6). */
+  planSignature?: string;
   /** The question heuristic's matched term, when it fired (ADR-0127 §4 — measured in shadow). */
   heuristic?: string;
   costUsd?: number;

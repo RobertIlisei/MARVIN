@@ -23,6 +23,8 @@
     "./supervisor-state": "./src/supervisor-state.ts",
     "./supervisor-ledger": "./src/supervisor-ledger.ts",
     "./supervisor-loop": "./src/supervisor-loop.ts",
+    "./supervisor-send": "./src/supervisor-send.ts",
+    "./supervisor-touch": "./src/supervisor-touch.ts",
     "./graph-usage": "./src/graph-usage.ts",
     "./worktree-setup": "./src/worktree-setup.ts",
     "./session-recovery": "./src/session-recovery.ts",

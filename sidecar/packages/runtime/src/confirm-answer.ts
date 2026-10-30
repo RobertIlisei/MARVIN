@@ -23,6 +23,8 @@
 
 import { getPendingConfirm, resolvePendingConfirm } from "./confirm-registry";
 import { appendSessionTurn } from "./session";
+import type { LedgerGround } from "./supervisor-ledger";
+import { isUserOnlyConfirm, markTurnTouched } from "./supervisor-touch";
 import { announceProjectEvent, getLiveTurnByTurnId } from "./turn-registry";
 
 interface Question {
@@ -127,6 +129,9 @@ export function recordConfirmDecision(args: {
   decision: "allow" | "deny";
   answeredBy: "user" | "supervisor";
   message?: string;
+  /** ADR-0127 §5 — a supervisor answer's grounds and ledger line. */
+  grounds?: LedgerGround[];
+  ledgerId?: string;
 }): void {
   const owner = getLiveTurnByTurnId(args.turnId);
   if (!owner) return;
@@ -141,6 +146,8 @@ export function recordConfirmDecision(args: {
       decision: args.decision,
       answeredBy: args.answeredBy,
       ...(args.message ? { message: args.message.slice(0, 500) } : {}),
+      ...(args.grounds ? { grounds: args.grounds } : {}),
+      ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
     });
   } catch {
     /* the decision stands; only the record is lost */
@@ -162,6 +169,8 @@ export function answerQuestion(args: {
   answers: Record<string, string | string[]>;
   other: Record<string, string>;
   answeredBy: "user" | "supervisor";
+  grounds?: LedgerGround[];
+  ledgerId?: string;
 }): AnswerResult {
   const pending = getPendingConfirm(args.turnId, args.toolUseId);
   if (!pending) return { ok: false, status: 409, error: "no pending question with that id — already answered, or never asked" };
@@ -170,9 +179,23 @@ export function answerQuestion(args: {
   }
   const built = buildAnswerInput(pending.originalInput, args.answers, args.other);
   if (!built.ok) return built;
+  const owner = getLiveTurnByTurnId(args.turnId);
+  if (args.answeredBy === "supervisor") {
+    // ADR-0127 §5 — a supervisor answer touches the turn. Marked BEFORE the
+    // question resolves, so the tab's next tool call already sees it.
+    if (isUserOnlyConfirm(args.turnId, args.toolUseId)) return { ok: false, status: 409, error: "only the user can answer this confirm (ADR-0127 §5)" };
+    if (owner) markTurnTouched({ projectId: owner.projectId, marvinSessionId: owner.marvinSessionId, turnId: args.turnId, by: "answer" });
+  }
   if (!resolvePendingConfirm(args.turnId, args.toolUseId, { behavior: "allow", updatedInput: built.updatedInput })) {
     return { ok: false, status: 409, error: "the question was answered a moment ago" };
   }
-  recordConfirmDecision({ turnId: args.turnId, toolUseId: args.toolUseId, decision: "allow", answeredBy: args.answeredBy });
+  recordConfirmDecision({
+    turnId: args.turnId,
+    toolUseId: args.toolUseId,
+    decision: "allow",
+    answeredBy: args.answeredBy,
+    ...(args.grounds ? { grounds: args.grounds } : {}),
+    ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
+  });
   return { ok: true, updatedInput: built.updatedInput };
 }

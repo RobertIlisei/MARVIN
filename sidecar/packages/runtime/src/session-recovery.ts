@@ -267,6 +267,8 @@ export function buildResumeRecord(meta: SessionMeta, opts: { prompt?: string | u
     createdAt: new Date(opts.now ?? Date.now()).toISOString(),
     fireAt: opts.now ?? Date.now(),
     depth: 0,
+    // ADR-0127 §5 — the cut-off turn was touched; its resume is too.
+    ...(meta.supervisorTouched && last && meta.supervisorTouched.turnId === last.turnId ? { supervisorTouched: meta.supervisorTouched.by } : {}),
   };
 }
 

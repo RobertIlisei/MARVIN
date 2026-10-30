@@ -74,6 +74,8 @@ import {
 } from "./design-hooks";
 import { makeSideDoorPreToolUseHook } from "./side-door-hook";
 import { clearLiveNarrowing, getLiveNarrowing, narrowerMode, narrowerStrategy } from "./posture";
+import { classifyHumanOnlyAct, type HumanOnlyAct } from "./supervisor-acts";
+import { isTurnTouched } from "./supervisor-touch";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -1842,20 +1844,69 @@ export function makeLivePostureGate(args: {
   permissionStrategy: PermissionStrategy;
   mode: AgentMode;
   gateFor: (strategy: PermissionStrategy, mode: AgentMode) => CanUseTool;
+  /** ADR-0127 §5 — what the touched-turn rule needs: the tab's checkout, its tree, and a UI to ask. */
+  consent?: { cwd: string; treeMode?: "shared" | "worktree" | undefined; onConfirmRequest?: ((request: ConfirmRequestPayload) => void) | undefined };
 }): CanUseTool {
   const cache = new Map<string, CanUseTool>();
-  return (toolName, toolInput, opts) => {
-    const live = getLiveNarrowing(args.turnId);
-    const s = narrowerStrategy(args.permissionStrategy, live?.permissionStrategy);
-    const m = narrowerMode(args.mode, live?.mode);
+  const gateAt = (s: PermissionStrategy, m: AgentMode): CanUseTool => {
     const key = `${s}|${m}`;
     let gate = cache.get(key);
     if (!gate) {
       gate = args.gateFor(s, m);
       cache.set(key, gate);
     }
-    return gate(toolName, toolInput, opts);
+    return gate;
   };
+  return (toolName, toolInput, opts) => {
+    const live = getLiveNarrowing(args.turnId);
+    let s = narrowerStrategy(args.permissionStrategy, live?.permissionStrategy);
+    const m = narrowerMode(args.mode, live?.mode);
+    // ADR-0127 §5 — a turn the supervisor touched. `full` waives the
+    // containment confirms (ADR-0115); in a touched turn they are back, and
+    // every §4 act asks the user first — subagent calls included.
+    if (args.consent && isTurnTouched(args.turnId)) {
+      if (s === "full") s = "auto";
+      const act = m === "agent" ? classifyHumanOnlyAct({ toolName, input: normaliseInput(toolInput), cwd: args.consent.cwd, treeMode: args.consent.treeMode }) : null;
+      if (act) return touchedTurnConfirm({ turnId: args.turnId, toolName, input: normaliseInput(toolInput), opts, act, onConfirmRequest: args.consent.onConfirmRequest, then: gateAt(s === "gated" ? "auto" : s, m) });
+    }
+    return gateAt(s, m)(toolName, toolInput, opts);
+  };
+}
+
+/**
+ * ADR-0127 §5 — a §4 act inside a supervisor-touched turn. Only the user can
+ * answer this card (`raisedBy: "supervisor-touched"`; the supervisor's verbs
+ * refuse it). On the user's allow the call still passes the ordinary gate —
+ * the hard-deny floor and local-only integration hold — at `auto`, so a
+ * gated tab does not ask the same question twice. A containment or money
+ * rule may still ask its own question after this one (a second card for the
+ * same act); that is the known cost of keeping those rules' richer reasons.
+ * With no UI attached the act is denied, never run unattended.
+ */
+async function touchedTurnConfirm(args: {
+  turnId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  opts: Parameters<CanUseTool>[2];
+  act: HumanOnlyAct;
+  onConfirmRequest?: ((request: ConfirmRequestPayload) => void) | undefined;
+  then: CanUseTool;
+}): Promise<Awaited<ReturnType<CanUseTool>>> {
+  const { turnId, toolName, input, opts, act, onConfirmRequest } = args;
+  const reason =
+    `The supervisor steered this turn (ADR-0127 §5), so ${act.label} is your decision alone — ` +
+    `a supervisor message or answer is never your consent. Allow to run it, or deny.`;
+  if (!onConfirmRequest) {
+    return { behavior: "deny", message: `${reason} No interactive UI is attached to this turn, so it was denied rather than run unattended.`, interrupt: false } as PermissionResult;
+  }
+  const toolUseID = opts.toolUseID;
+  const decided = await new Promise<PermissionResult>((resolve) => {
+    // No auto-deny timer: it waits for the user, like the rest of the family.
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "supervisor-touched" });
+    onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason });
+  });
+  if (decided.behavior !== "allow") return decided;
+  return args.then(toolName, (decided.updatedInput as Record<string, unknown> | undefined) ?? input, opts);
 }
 
 /**
@@ -2122,7 +2173,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     facts: () => ({
       mutations: designCtx.mutationCount,
       lastTodos: lastTodoPayload,
-      machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued)/.test(message),
+      // ADR-0127 §5 — a supervisor message is not the user's either.
+      machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued|Message from the MARVIN supervisor)/.test(message),
       // Plan-stale (2026-09-03): the persisted plan spine's open steps, so a
       // real-work turn that never touched TodoWrite can be asked to.
       planOpenSteps:
@@ -2304,7 +2356,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     permissionMode: "default",
     // ADR-0127 §9 — re-chosen on every call, so a narrowing set through the
     // posture route while this turn runs applies at the next tool call.
-    canUseTool: makeLivePostureGate({ turnId, permissionStrategy, mode, gateFor }),
+    canUseTool: makeLivePostureGate({ turnId, permissionStrategy, mode, gateFor, consent: { cwd, treeMode: input.sessionTree?.mode, onConfirmRequest } }),
     // ADR-0036: SDK-level backstop for Ask read-only — the gate already
     // hard-denies these, this is the belt-and-braces (same shape as the
     // scout). Bash is NOT disallowed: read-only shell (ls/grep/cat) stays

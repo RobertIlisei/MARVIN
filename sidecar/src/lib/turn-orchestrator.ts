@@ -44,6 +44,9 @@ import {
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
 import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
+import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
+import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
+import { markTurnTouched } from "@marvin/runtime/supervisor-touch";
 import { formatActiveSkillsBlock } from "@marvin/runtime/skill-enablement";
 import { logTelemetry } from "@marvin/runtime/telemetry";
 import {
@@ -502,6 +505,9 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     costUsd: finalCostUsd,
     tokenUsage: result.tokenUsage ?? null,
   });
+  // ADR-0127 §6 — a tab turn the supervisor started spends against its cap.
+  // Counted for turns that complete; a failed turn's cost is not reported here.
+  if (liveTurn.author === "supervisor") noteSupervisorTabSpend(projectId, finalCostUsd);
   // Fire and forget balance poll (ADR-0071: OpenRouter native balance tracking)
   pollOpenRouterBalance().catch(() => {});
   try {
@@ -678,7 +684,18 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
   const sessionTree = meta?.tree;
   const sessionContext = sessionTree ? buildSessionContext(sessionTree, workDir, meta?.setup) : undefined;
 
-  const message = `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
+  // ADR-0127 §5 — a supervisor message: re-checked now (the tab may have been
+  // stopped or put to waiting since it was queued), sent as its envelope, not
+  // as a wakeup prompt. A refusal drops it, and the ledger says so.
+  const fromSupervisor = record.author === "supervisor";
+  if (fromSupervisor) {
+    const refusal = supervisorFireRefusal(record);
+    if (refusal) {
+      ledgerDroppedSend(record, refusal);
+      return;
+    }
+  }
+  const message = fromSupervisor ? record.prompt : `[scheduled wakeup — ${record.reason}]\n\n${record.prompt}`;
 
   const appendSystemPrompt = await buildTurnSystemPrompt({
     workDir,
@@ -701,6 +718,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     type: "turn.user",
     at: new Date().toISOString(),
     message,
+    ...(fromSupervisor ? { author: "supervisor" as const, ...(record.supervisor ? { supervisor: record.supervisor } : {}) } : {}),
   });
 
   const liveTurn = registerLiveTurn({
@@ -708,9 +726,15 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     marvinSessionId,
     projectId,
     kind: "machine",
+    ...(fromSupervisor ? { author: "supervisor" as const } : {}),
   });
   // ADR-0069 — record the start so the scheduler can space the NEXT one.
   noteMachineTurnStarted(marvinSessionId);
+  // ADR-0127 §5 — touched before its first tool call: a supervisor message
+  // started it, or it resumes a turn the supervisor had touched.
+  if (fromSupervisor || record.supervisorTouched) {
+    markTurnTouched({ projectId, marvinSessionId, turnId, by: fromSupervisor ? "message" : (record.supervisorTouched ?? "message") });
+  }
 
   // Dynamic effort: whoever armed this wakeup may have asked for less than
   // the user's ceiling (a check-and-report turn, a job that succeeded).
@@ -736,6 +760,7 @@ export async function startScheduledTurn(record: WakeupRecord): Promise<void> {
     advisorThinkingMode: record.advisorThinkingMode ?? null,
     sdkSessionFresh: !sdkResumeId,
     turnId,
+    ...(fromSupervisor ? { author: "supervisor" as const } : {}),
   };
   emitTurnEvent(liveTurn, "turn.started", turnStartedPayload);
   appendSessionTurn(projectId, marvinSessionId, {

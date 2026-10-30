@@ -31,6 +31,7 @@ import { loadSessionTail } from "./session";
 import { readSessionMeta } from "./session-meta";
 import { buildSessionWatch } from "./session-watch";
 import { runSupervisorWake, type WakeResult } from "./supervisor-dispatch";
+import { tabSendRefusal } from "./supervisor-send";
 import { appendLedgerEntry, readLedger } from "./supervisor-ledger";
 import type { VerbContext, VerbDeps } from "./supervisor-mcp";
 import { ActionLimiter } from "./supervisor-policy";
@@ -41,6 +42,7 @@ import {
   isSupervisorSessionId,
   onSupervisorControl,
   overBudget,
+  pauseSupervisorForFault,
 } from "./supervisor-state";
 import { type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
 
@@ -62,7 +64,6 @@ export class SupervisorLoop {
   private readonly queues = new Map<string, Map<string, PendingRef>>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly running = new Map<string, AbortController>();
-  private readonly budgetSkipDay = new Map<string, string>();
   private readonly limiters = new Map<string, ActionLimiter>();
   private unsubscribers: Array<() => void> = [];
 
@@ -137,19 +138,8 @@ export class SupervisorLoop {
     const queue = this.queues.get(projectId);
     if (!queue?.size) return;
     if (overBudget(st)) {
-      const day = st.spend.day;
-      if (this.budgetSkipDay.get(projectId) !== day) {
-        this.budgetSkipDay.set(projectId, day);
-        appendLedgerEntry(projectId, {
-          kind: "wake",
-          verb: "skip",
-          tab: null,
-          wakeId: null,
-          mode: st.mode,
-          decision: "escalate",
-          reason: `over the daily budget ($${st.spend.usd.toFixed(2)} of $${st.caps.dailyBudgetUsd})`,
-        });
-      }
+      // ADR-0127 §6 — at the cap the loop pauses and escalates; the user raises the cap or resumes.
+      pauseSupervisorForFault(projectId, `over the daily budget ($${st.spend.usd.toFixed(2)} of $${st.caps.dailyBudgetUsd})`, "budget");
       return;
     }
     const refs = [...queue.values()].filter((r) => getPendingConfirm(r.turnId, r.toolUseId) !== null && this.eligibleTab(projectId, r.marvinSessionId));
@@ -202,7 +192,8 @@ function renderTail(projectId: string, marvinSessionId: string): string {
   if (!tail) return "";
   const out: string[] = [];
   for (const t of tail.record.turns) {
-    if (t.type === "turn.user") out.push(`user: ${t.message}`);
+    // ADR-0127 §5 — the supervisor's own earlier messages are not the user's words.
+    if (t.type === "turn.user") out.push(t.author === "supervisor" ? `supervisor (you, earlier — not the user): ${t.message}` : `user: ${t.message}`);
     else if (t.type === "cli.event") {
       const ev = t.event as { type?: string; message?: { content?: unknown } };
       if (ev.type !== "assistant" || !Array.isArray(ev.message?.content)) continue;
@@ -226,8 +217,8 @@ function readBrief(projectId: string, marvinSessionId: string): string | null {
     for (const line of buf.subarray(0, n).toString("utf8").split("\n")) {
       if (!line.includes('"turn.user"')) continue;
       try {
-        const t = JSON.parse(line) as { type?: string; message?: unknown };
-        if (t.type === "turn.user" && typeof t.message === "string") return t.message;
+        const t = JSON.parse(line) as { type?: string; message?: unknown; author?: unknown };
+        if (t.type === "turn.user" && t.author !== "supervisor" && typeof t.message === "string") return t.message;
       } catch {
         /* a torn line at the buffer edge */
       }
@@ -260,6 +251,7 @@ export function defaultVerbDeps(projectId: string, workDir: string): VerbDeps {
     },
     readPlanText: (id) => readPlanText(projectId, id),
     modelLookup: activeModelLookup,
+    sendRefusal: (id) => tabSendRefusal(projectId, id),
   };
 }
 

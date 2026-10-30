@@ -34,7 +34,9 @@ import { noteClaimBranch } from "@marvin/runtime/backlog";
 import { reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
 import { ackRevision, apiPostureHold } from "@marvin/runtime/posture";
 import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
-import { isSupervisorSessionId } from "@marvin/runtime/supervisor-state";
+import type { LedgerGround } from "@marvin/runtime/supervisor-ledger";
+import { sendAsSupervisor } from "@marvin/runtime/supervisor-send";
+import { isSupervisorSessionId, SUPERVISOR_TOKEN_HEADER, verifySupervisorToken } from "@marvin/runtime/supervisor-state";
 import { noteSidecarPort } from "@marvin/tools/policy";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
@@ -82,6 +84,10 @@ export const dynamic = "force-dynamic";
 
 interface ChatRequestBody {
   message: string;
+  /** ADR-0127 §5 — `"supervisor"` sends through the supervisor's send path (token required). Absent: the user. */
+  author?: string;
+  /** With `author: "supervisor"` — the message's kind and the grounds it cites. */
+  supervisor?: { kind?: string; grounds?: unknown };
   /** Active project working directory — where the CLI runs. */
   cwd?: string;
   /** Logical project identifier for session persistence. Defaults to a slug
@@ -160,6 +166,32 @@ interface ChatRequestBody {
  * via `GET /api/chat/resume?marvinSessionId=…`, and the transcript on
  * disk lets the client rebuild whatever it missed before reconnecting.
  */
+function jsonResponse(payload: unknown, status: number): Response {
+  return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+}
+
+const GROUND_KINDS = new Set(["plan", "dod", "adr", "memory", "charter", "file"]);
+
+async function supervisorSend(body: ChatRequestBody): Promise<Response> {
+  const projectId = body.projectId?.trim() ?? "";
+  const marvinSessionId = body.marvinSessionId?.trim() ?? "";
+  if (!projectId || !marvinSessionId) return jsonResponse({ error: "a supervisor message names an existing tab: projectId and marvinSessionId" }, 400);
+  // Grounds are recorded as given: the route cannot resolve them without the tab's context.
+  const raw = Array.isArray(body.supervisor?.grounds) ? (body.supervisor?.grounds as unknown[]) : [];
+  const grounds = raw
+    .filter((g): g is { kind: string; ref: string } => !!g && typeof g === "object" && GROUND_KINDS.has((g as { kind?: string }).kind ?? "") && typeof (g as { ref?: unknown }).ref === "string")
+    .slice(0, 10)
+    .map((g): LedgerGround => ({ kind: g.kind as LedgerGround["kind"], ref: g.ref.slice(0, 500), provenance: "unresolved" }));
+  const r = await sendAsSupervisor({
+    projectId,
+    marvinSessionId,
+    text: typeof body.message === "string" ? body.message : "",
+    kind: body.supervisor?.kind === "nudge" ? "nudge" : "instruction",
+    grounds,
+  });
+  return r.ok ? jsonResponse({ ok: true, queued: r.queued }, 202) : jsonResponse({ error: r.code, detail: r.reason }, 409);
+}
+
 export async function POST(req: NextRequest) {
   const guard = requireMarvinClient(req);
   if (guard) return guard;
@@ -184,6 +216,18 @@ export async function POST(req: NextRequest) {
       JSON.stringify({ error: "supervisor-session", detail: "the supervisor's session is not a tab; talk to it through /api/supervisor (ADR-0127)" }),
       { status: 409, headers: { "Content-Type": "application/json" } },
     );
+  }
+
+  // ADR-0127 §5 — a supervisor message takes the server-side send path: tagged
+  // as the supervisor's, enveloped, never injected into or preempting a live
+  // turn, and the turn it starts is supervisor-touched. Same path the
+  // supervisor's own send uses; the per-boot token is the authority.
+  if (body.author !== undefined && body.author !== "user") {
+    if (body.author !== "supervisor") return jsonResponse({ error: 'author must be "user" or "supervisor"' }, 400);
+    if (!verifySupervisorToken(req.headers.get(SUPERVISOR_TOKEN_HEADER))) {
+      return jsonResponse({ error: "a supervisor message needs the per-boot capability token (ADR-0127 §5)" }, 403);
+    }
+    return supervisorSend(body);
   }
 
   const message = body.message?.trim();

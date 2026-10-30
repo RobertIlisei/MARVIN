@@ -207,7 +207,7 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
         index: turns.length,
         turnId: null,
         message,
-        machine: /^\[(scheduled wakeup|queued |\d+ messages queued)/.test(message),
+        machine: /^\[(scheduled wakeup|queued |\d+ messages queued|Message from the MARVIN supervisor)/.test(message),
         startedAt: at,
         endedAt: null,
         tools: [],

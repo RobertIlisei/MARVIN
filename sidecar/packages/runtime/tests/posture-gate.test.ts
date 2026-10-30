@@ -101,7 +101,7 @@ describe("a narrowing reaches the live turn at its next tool call", () => {
 
   it("runAgent wires the live gate and clears it when the turn ends (a wiring pin: runAgent needs the SDK)", () => {
     const src = readFileSync(path.join(__dirname, "../src/sdk-runner.ts"), "utf8");
-    expect(src).toMatch(/canUseTool: makeLivePostureGate\(\{ turnId, permissionStrategy, mode, gateFor \}\)/);
+    expect(src).toMatch(/canUseTool: makeLivePostureGate\(\{ turnId, permissionStrategy, mode, gateFor, consent: \{ cwd, treeMode: input\.sessionTree\?\.mode, onConfirmRequest \} \}\)/);
     expect(src).toMatch(/clearTurnConfirms\(turnId\);\n\s+clearLiveNarrowing\(turnId\);/);
   });
 });

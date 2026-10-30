@@ -103,6 +103,13 @@ export interface SessionMeta {
   postureSource?: "user" | "supervisor";
   postureOverride?: { model?: string; thinkingMode?: string; permissionStrategy?: SessionPosture["permissionStrategy"]; mode?: NonNullable<SessionPosture["mode"]> };
   postureAck?: number;
+  /**
+   * ADR-0127 §5 — the last turn the supervisor touched: it started the turn
+   * (`message`) or answered a question in it (`answer`). Kept here, not only
+   * in memory, so a resume after a restart inherits the touch instead of
+   * laundering it, and the watch row reads it without the live turn.
+   */
+  supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" };
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

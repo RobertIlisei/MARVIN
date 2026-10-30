@@ -11,9 +11,11 @@
  *                  in shadow mode it performs NOTHING. This module imports no
  *                  function that could resolve a confirm.
  *
- * Every other verb (`send`, `cancel`, `set_posture`, `worktrees`,
- * `close_session`, `new_session`) arrives with the milestone that can classify
- * it (plan, milestones 2–5).
+ * Milestone 2 adds `set_posture`; milestone 3 adds `send`, `cancel` and
+ * `confirm` — evaluated and ledgered, performing nothing: no turn starts, no
+ * turn is aborted, no confirm resolves. `confirm` refuses any confirm only the
+ * user may answer (a supervisor-touched turn, ADR-0127 §5). The remaining
+ * verbs (`worktrees`, `close_session`, `new_session`) arrive with milestone 5.
  *
  * Registered only in the supervisor session; the executor gate denies the
  * server's tools everywhere else (`@marvin/tools/policy`).
@@ -26,12 +28,25 @@ import type { getPendingConfirm } from "./confirm-registry";
 import { type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import type { SessionWatchRow } from "./session-watch";
 import { appendLedgerEntry, digestArgs, type LedgerDecision, type LedgerGround, readLedger } from "./supervisor-ledger";
-import { type ActionLimiter, evaluateAnswer, evaluateSetPosture, type GroundContext, type GroundRef } from "./supervisor-policy";
+import {
+  type ActionLimiter,
+  evaluateAnswer,
+  evaluateCancel,
+  evaluateConfirm,
+  evaluateSend,
+  evaluateSetPosture,
+  type GroundContext,
+  type GroundRef,
+  type PolicyOutcome,
+} from "./supervisor-policy";
 import { wrapUntrusted } from "./supervisor-prompt";
+import { containsSecretShape } from "./session";
+import { classifyHumanOnlyAct } from "./supervisor-acts";
 import { getSupervisorState, isSupervisorSessionId } from "./supervisor-state";
+import { isUserOnlyConfirm } from "./supervisor-touch";
 
 export const SUPERVISE_SERVER_NAME = "marvin-supervise";
-export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer", "set_posture"] as const;
+export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer", "set_posture", "send", "cancel", "confirm"] as const;
 
 /** What the verbs read, injected so tests run on fixtures and the runtime on the real stores. */
 export interface VerbDeps {
@@ -43,6 +58,8 @@ export interface VerbDeps {
   readPlanText(marvinSessionId: string): string;
   /** What models cost, for telling a narrowing from a widening (milestone 2). */
   modelLookup(): Promise<ModelLookup>;
+  /** Why the tab cannot take a message now (stopped, waiting on its own job, busy shared checkout), or null (milestone 3). */
+  sendRefusal(marvinSessionId: string): { code: string; reason: string } | null;
 }
 
 export interface VerbContext {
@@ -70,6 +87,27 @@ export interface AnswerArgs {
 export interface SetPostureArgs {
   marvinSessionId: string;
   posture: PosturePatch;
+  grounds?: GroundRef[];
+}
+
+export interface SendArgs {
+  marvinSessionId: string;
+  message: string;
+  kind: "nudge" | "instruction";
+  grounds?: GroundRef[];
+}
+
+export interface CancelArgs {
+  marvinSessionId: string;
+  reason: string;
+  grounds?: GroundRef[];
+}
+
+export interface ConfirmArgs {
+  marvinSessionId: string;
+  toolUseId: string;
+  decision: "allow" | "deny";
+  message?: string;
   grounds?: GroundRef[];
 }
 
@@ -194,10 +232,11 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const tab = String(args.marvinSessionId ?? "").trim();
     const toolUseId = String(args.toolUseId ?? "").trim();
     const argsDigest = digestArgs({ toolUseId, answers: args.answers ?? {}, other: args.other ?? {}, escalate: args.escalate ?? null });
-    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string } = {}) => {
+    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string; reasonCode?: string } = {}) => {
       appendLedgerEntry(projectId, {
         kind: "verb",
         verb: "answer",
+        ...(extra.reasonCode ? { reasonCode: extra.reasonCode } : {}),
         tab: tab || null,
         wakeId: ctx.wakeId,
         mode: st.mode,
@@ -222,6 +261,10 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (!args.escalate) {
       const bad = validateAnswers(questions, args.answers ?? {}, args.other ?? {});
       if (bad) return log("refuse", bad);
+      // ADR-0127 §6 — secret hygiene on answer text.
+      if (Object.values(args.other ?? {}).some((t) => typeof t === "string" && containsSecretShape(t))) {
+        return log("refuse", "the answer carries a secret-shaped string (ADR-0127 §6)", { reasonCode: "secret" });
+      }
     }
     const key = `answer:${toolUseId}`;
     const gate = ctx.limiter.check(projectId, tab, key, ctx.wake.acts);
@@ -299,7 +342,123 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     };
   }
 
-  return { sessions, read, answer, set_posture };
+  /** Ledger a milestone 3 verb's outcome and reply to the model. Shadow: nothing is performed. */
+  function settle(verb: "send" | "cancel" | "confirm", tab: string, argsDigest: string, o: PolicyOutcome, extra: { planSignature?: string } = {}): string {
+    const st = getSupervisorState(projectId);
+    appendLedgerEntry(projectId, {
+      kind: "verb",
+      verb,
+      tab: tab || null,
+      wakeId: ctx.wakeId,
+      mode: st.mode,
+      decision: o.decision,
+      reason: o.reason,
+      ...(o.reasonCode ? { reasonCode: o.reasonCode } : {}),
+      argsDigest,
+      grounds: o.grounds,
+      ...(extra.planSignature ? { planSignature: extra.planSignature } : {}),
+    });
+    if (o.decision !== "propose") return REPLY[o.decision](o.reason);
+    const what = { send: "Nothing was sent", cancel: "Nothing was cancelled", confirm: "Nothing was answered — the confirm stays pending for the user" }[verb];
+    return `Recorded as a proposal (shadow mode). ${what}; your proposal is compared with what the user does later.`;
+  }
+
+  const refused = (reasonCode: string, reason: string): PolicyOutcome => ({ decision: "refuse", reason, reasonCode, grounds: [] });
+
+  /** Rate limits and the per-wake breaker, shared by every act verb. Null when the act may be evaluated. */
+  function limited(tab: string, key: string): PolicyOutcome | null {
+    const gate = ctx.limiter.check(projectId, tab, key, ctx.wake.acts);
+    if (!gate.ok) return { decision: "drop", reason: gate.reason, reasonCode: "rate-limit", grounds: [] };
+    ctx.wake.acts += 1;
+    ctx.limiter.record(projectId, tab, key);
+    return null;
+  }
+
+  async function rowFor(tab: string): Promise<SessionWatchRow | null> {
+    if (isSupervisorSessionId(tab)) return null;
+    return (await ctx.deps.listRows()).find((r) => r.marvinSessionId === tab) ?? null;
+  }
+
+  /** Milestone 3 — a message to a tab, proposed; in shadow nothing is sent. */
+  async function send(args: SendArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const kind = args.kind === "nudge" ? "nudge" : "instruction";
+    const message = String(args.message ?? "");
+    const argsDigest = digestArgs({ kind, message });
+    if (isSupervisorSessionId(tab)) return settle("send", tab, argsDigest, refused("supervisor-session", "a supervisor session is never a target (no recursion)"));
+    const row = await rowFor(tab);
+    if (!row) return settle("send", tab, argsDigest, refused("no-tab", `no open tab ${tab}`));
+    const planSignature = kind === "nudge" ? (row.plan ? `${row.plan.done}/${row.plan.total}@${row.plan.lastTodoAt ?? "-"}` : "no-plan") : undefined;
+    const drop = limited(tab, `send:${argsDigest}`);
+    if (drop) return settle("send", tab, argsDigest, drop, planSignature ? { planSignature } : {});
+    // Counted from the ledger, not memory, so a restart does not reset the cap (§6).
+    const priorNudgesAtStep = planSignature
+      ? readLedger(projectId, { tab, limit: 200 }).filter((e) => e.verb === "send" && e.planSignature === planSignature && (e.decision === "propose" || e.decision === "act")).length
+      : 0;
+    const st = getSupervisorState(projectId);
+    const outcome = evaluateSend({
+      mode: st.mode,
+      delegation: st.delegation[tab],
+      targetIsSupervisor: false,
+      kind,
+      tabRefusal: ctx.deps.sendRefusal(tab),
+      secret: containsSecretShape(message),
+      priorNudgesAtStep,
+      grounds: Array.isArray(args.grounds) ? args.grounds : [],
+      groundCtx: groundContextFor(row, st.charter),
+    });
+    return settle("send", tab, argsDigest, outcome, planSignature ? { planSignature } : {});
+  }
+
+  /** Milestone 3 — stop a runaway turn, proposed; in shadow nothing is cancelled. */
+  async function cancel(args: CancelArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const argsDigest = digestArgs({ reason: String(args.reason ?? "").slice(0, 500) });
+    if (isSupervisorSessionId(tab)) return settle("cancel", tab, argsDigest, refused("supervisor-session", "a supervisor session is never a target (no recursion)"));
+    const row = await rowFor(tab);
+    if (!row) return settle("cancel", tab, argsDigest, refused("no-tab", `no open tab ${tab}`));
+    const drop = limited(tab, `cancel:${row.turn?.turnId ?? "none"}`);
+    if (drop) return settle("cancel", tab, argsDigest, drop);
+    const st = getSupervisorState(projectId);
+    const outcome = evaluateCancel({
+      mode: st.mode,
+      delegation: st.delegation[tab],
+      targetIsSupervisor: false,
+      hasLiveTurn: !!row.turn,
+      grounds: Array.isArray(args.grounds) ? args.grounds : [],
+      groundCtx: groundContextFor(row, st.charter),
+    });
+    return settle("cancel", tab, argsDigest, outcome);
+  }
+
+  /** Milestone 3 — an ordinary confirm, proposed; never one only the user may answer. In shadow nothing resolves. */
+  async function confirm(args: ConfirmArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const toolUseId = String(args.toolUseId ?? "").trim();
+    const argsDigest = digestArgs({ toolUseId, decision: args.decision, message: args.message ?? null });
+    if (isSupervisorSessionId(tab)) return settle("confirm", tab, argsDigest, refused("supervisor-session", "a supervisor session is never a target (no recursion)"));
+    const row = await rowFor(tab);
+    if (!row) return settle("confirm", tab, argsDigest, refused("no-tab", `no open tab ${tab}`));
+    const turnId = row.turn?.turnId;
+    const pending = turnId && toolUseId ? ctx.deps.getPending(turnId, toolUseId) : null;
+    if (!turnId || !pending) return settle("confirm", tab, argsDigest, refused("no-pending", `no pending confirm ${toolUseId} on tab ${tab}`));
+    const drop = limited(tab, `confirm:${toolUseId}`);
+    if (drop) return settle("confirm", tab, argsDigest, drop);
+    const st = getSupervisorState(projectId);
+    const outcome = evaluateConfirm({
+      mode: st.mode,
+      delegation: st.delegation[tab],
+      targetIsSupervisor: false,
+      raisedBy: pending.raisedBy,
+      userOnly: isUserOnlyConfirm(turnId, toolUseId),
+      act: classifyHumanOnlyAct({ toolName: pending.toolName, input: pending.originalInput, cwd: row.tree.cwd, treeMode: row.tree.mode }),
+      grounds: Array.isArray(args.grounds) ? args.grounds : [],
+      groundCtx: groundContextFor(row, st.charter),
+    });
+    return settle("confirm", tab, argsDigest, outcome);
+  }
+
+  return { sessions, read, answer, set_posture, send, cancel, confirm };
 }
 
 const groundSchema = z.object({
@@ -362,6 +521,45 @@ export function supervisorToolDefs(ctx: VerbContext) {
         grounds: z.array(groundSchema).max(10).optional(),
       },
       async (args) => text(await v.set_posture(args as SetPostureArgs)),
+    ),
+    tool(
+      "send",
+      "Propose a message to a delegated tab: a `nudge` toward its approved plan, or an `instruction`. It reaches the tab " +
+        "marked as yours, never as the user's, and it can authorise nothing on the human-only list. Cite `grounds`. " +
+        "Refused for a tab the user stopped, one waiting on its own build or wakeup, or one sharing a busy checkout; a " +
+        "third nudge at the same plan step without progress escalates. In shadow mode nothing is sent.",
+      {
+        marvinSessionId: z.string().min(1),
+        message: z.string().min(1).max(4_000),
+        kind: z.enum(["nudge", "instruction"]),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.send(args as SendArgs)),
+    ),
+    tool(
+      "cancel",
+      "Propose cancelling a delegated tab's running turn — a runaway loop. Give the `reason` and cite `grounds`. " +
+        "In shadow mode nothing is cancelled.",
+      {
+        marvinSessionId: z.string().min(1),
+        reason: z.string().min(1).max(500),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.cancel(args as CancelArgs)),
+    ),
+    tool(
+      "confirm",
+      "Propose allowing or denying an ORDINARY permission confirm (a gated Edit / Write / shell card) in a tab delegated " +
+        "at answer-confirms. A confirm in a turn you touched is the user's alone and is refused; containment, money and " +
+        "every other human-only act escalate. Cite `grounds`. In shadow mode nothing is answered.",
+      {
+        marvinSessionId: z.string().min(1),
+        toolUseId: z.string().min(1),
+        decision: z.enum(["allow", "deny"]),
+        message: z.string().max(500).optional(),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.confirm(args as ConfirmArgs)),
     ),
   ];
 }

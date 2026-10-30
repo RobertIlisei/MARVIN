@@ -62,12 +62,14 @@ function row(id: string): SessionWatchRow {
     updatedAt: new Date().toISOString(),
     posture: null,
     postureRevision: null,
+    supervisor: { delegation: "answer-questions", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false },
   } as SessionWatchRow;
 }
 
 const verbDeps = (): VerbDeps => ({
   listRows: async () => [row("tab-1"), row("tab-2")],
   getPending: getPendingConfirm,
+  sendRefusal: () => null,
   readTranscriptTail: () => "",
   readBrief: () => "Build billing.",
   tabStartedAt: () => null,
@@ -253,7 +255,7 @@ describe("SupervisorLoop — woken by code, not by itself", () => {
     loop.stop();
   });
 
-  it("over the daily budget: no wake, and the skip is ledgered once", async () => {
+  it("over the daily budget: no wake; the supervisor pauses (reason budget) and escalates once (milestone 3)", async () => {
     updateSupervisorRuntime("proj", { addSpendUsd: getSupervisorState("proj").caps.dailyBudgetUsd });
     const loop = new SupervisorLoop(deps());
     loop.start();
@@ -262,7 +264,8 @@ describe("SupervisorLoop — woken by code, not by itself", () => {
     pending("tab-2", "q2");
     await tick(debounce());
     expect(wakes).toHaveLength(0);
-    expect(readLedger("proj").filter((e) => e.kind === "wake" && e.verb === "skip")).toHaveLength(1);
+    expect(getSupervisorState("proj")).toMatchObject({ paused: true, pause: { reason: "budget" } });
+    expect(readLedger("proj").filter((e) => e.decision === "escalate" && e.reasonCode === "budget")).toHaveLength(1);
     loop.stop();
   });
 });

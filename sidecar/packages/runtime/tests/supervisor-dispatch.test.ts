@@ -58,6 +58,7 @@ const verbCtx = () => ({
   deps: {
     listRows: async () => [],
     getPending: () => null,
+    sendRefusal: () => null,
     readTranscriptTail: () => "",
     readBrief: () => null,
     tabStartedAt: () => null,

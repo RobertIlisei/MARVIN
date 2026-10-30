@@ -48,6 +48,8 @@ All fields except `message` are optional. Resolution for `model` / `advisorModel
 
 SSE connection close does **not** cancel the turn — see [Sessions](../operations/sessions.md). Use `POST /api/chat/cancel` to abort explicitly.
 
+**A supervisor message — `author: "supervisor"`** ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md) §5, milestone 3). Needs the per-boot token in `x-marvin-supervisor-token` (`403` without it); any other `author` than `user` / `supervisor` is a `400`. Body: `{ author: "supervisor", message, projectId, marvinSessionId, supervisor?: { kind: "nudge" | "instruction", grounds?: [{ kind, ref }] } }` — an existing tab only. It takes the same server-side send path as the supervisor: the message is wrapped in an envelope that names the sender, recorded as `turn.user` with `author: "supervisor"` and `supervisor: { kind, ledgerId, grounds }`, and starts a `machine` turn (`turn.started.author: "supervisor"`) in the tab's stored posture, mode included, which is **supervisor-touched**: every human-only act in it raises a confirm only the user can answer, in every posture. It never injects into or preempts a live turn — it waits for it — and a user message preempts the turn it starts (ADR-0069). **Response:** `202 { ok: true, queued }` (no SSE; the turn announces itself on the feed), or `409 { error, detail }` with `error` one of `stopped` (the user stopped the tab), `waiting-on-own` (its own job or wakeup is pending), `shared-busy` (another session is working in the shared checkout), `secret` (a secret-shaped string), `closed`, `no-session`, `worktree-missing`, `supervisor-session`, `empty`, `too-long`. A queued message is checked again when it fires and dropped — with a ledger `drop` line — if the tab was stopped, put to waiting or closed meanwhile, the supervisor paused, or the tab stayed busy through every deferral.
+
 ### `POST /api/chat/cancel`
 
 Abort an in-flight turn.
@@ -110,7 +112,7 @@ Change a tab's posture without sending a turn ([ADR-0127](../decisions/0127-a-su
 
 ### `GET /api/supervisor?projectId=…`
 
-**Response:** `{ state }` — `mode` (`off` | `shadow`), `paused`, `delegation` (`{ [marvinSessionId]: "observe" | "answer-questions" | "answer-confirms" }`), `charter`, `caps`, `supervisorSessionId`, `spend`.
+**Response:** `{ state }` — `mode` (`off` | `shadow`), `paused`, `pause` (`{ reason: "user" | "kill" | "budget" | "breaker" | "refusals" | "repeated-failures", at, detail? }` or `null`), `delegation` (`{ [marvinSessionId]: "observe" | "answer-questions" | "answer-confirms" }`), `charter`, `caps`, `supervisorSessionId`, `spend` (`{ day, usd, ownUsd, tabsUsd }` — `usd` is what the daily cap reads: the supervisor's own turns plus the tab turns it started; at the cap it pauses with `pause.reason: "budget"` and escalates).
 
 ### `POST /api/supervisor`
 
@@ -121,9 +123,11 @@ CSRF-guarded (`X-Marvin-Client: 1`) and token-gated.
 
 ### `GET /api/supervisor/ledger?projectId=…&tab=…&limit=…`
 
-Token-gated. **Response:** `{ entries }` — the append-only ledger (`<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`), oldest first; `limit` keeps the newest N (default 200, max 2000); `tab` filters to one session. Each entry: `at`, `kind` (`verb` | `wake` | `rotation` | `control`), `verb`, `tab`, `wakeId`, `mode`, `decision` (`propose` | `act` | `escalate` | `refuse` | `drop`), `reason`, `argsDigest`, `grounds` (with `provenance`), `heuristic`, `costUsd`.
+Token-gated. **Response:** `{ entries }` — the append-only ledger (`<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`), oldest first; `limit` keeps the newest N (default 200, max 2000); `tab` filters to one session. Each entry: `at`, `kind` (`verb` | `wake` | `rotation` | `control`), `verb`, `tab`, `wakeId`, `mode`, `decision` (`propose` | `act` | `escalate` | `refuse` | `drop`), `reason`, `reasonCode` (a stable code, on lines written from milestone 3 on), `argsDigest`, `grounds` (with `provenance`), `heuristic`, `planSignature` (a `send` nudge's plan step, `done/total@lastTodoAt`), `costUsd`.
 
 `POST /api/chat` answers `409 { error: "supervisor-session" }` for the supervisor's own `marvinSessionId`: it is never run as an ordinary tab.
+
+**The watch row (`GET /api/sessions/watch`) — milestone 3 fields.** Each row carries `supervisor: { delegation, sharedCheckout, touchedTurn: { turnId, at, by: "message" | "answer" } | null, waitingOnOwn: "job" | "wakeup" | null, stoppedByUser }` (design brief §10.4); a live `turn` carries `author: "supervisor"` when a supervisor message started it; each `pending[]` confirm carries `userOnly` — only the user may answer it (a containment, money or touched-turn confirm in a supervisor-touched turn). The transcript gains `turn.supervisor-touched` lines, and `confirm.decision` carries `grounds` and `ledgerId` when the supervisor answered. The session meta keeps `supervisorTouched`, so a resume after a restart inherits the touch.
 
 ## Backlog
 

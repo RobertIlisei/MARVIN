@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1] and [2] built 2026-10-30 (shadow mode; see "What milestone 1 changed" and "What milestone 2 changed" below). Milestones [3]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Status:** milestones [1], [2] and [3] built 2026-10-30 (shadow mode; see "What milestone 1 changed", "What milestone 2 changed" and "What milestone 3 changed" below). Milestones [4]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -30,6 +30,22 @@ Mostly from the advisor's review:
 - **`POST /api/confirm/answer` is user authority only.** The supervisor answers for real only after milestone 3's consent gate.
 - **Model changes never apply to a live turn.** `setModel()` on a running query is not used; strategy and mode narrowings do reach the live turn.
 - **The API refuses every widening, the user's included** (decided by the supervisor, 2026-10-30). Until milestone 6 the app neither echoes a revision nor shows an API-set posture, so a user's `permissionStrategy: "full"` through the route made a tab run full auto while its toolbar still read gated. That is a hidden widening, the worst case ADR-0127 §4 names. `applyPostureChange` now answers `409` for any widening with `widened` naming the dimensions; narrowing passes for both actors. Proved by `posture.test.ts` ("a user widening … is refused"), `m2-routes.test.ts` ("refuses a user widening until the app shows API-set posture") and `posture-gate.test.ts` ("a widening during the turn is refused"). **Milestone 6 follow-up:** re-allow a *user's* widening once the app shows API-set posture. A supervisor widening stays an escalation.
+
+## What milestone 3 changed from the text below
+
+Mostly from the advisor's review of the consent gate (go-with-caveats):
+
+- **A touched turn turns containment back on.** `full` waives the lane, shared-tree and session-worktree confirms (ADR-0115); in a touched turn the gate runs those rules as `auto`, and each confirm they raise is the user's alone. A worktree tab's Edit into the main checkout is denied outright, as in `auto`.
+- **The classifier (`supervisor-acts.ts`) reads the act, not a description of it,** and covers more than the DoD's four examples. It catches integration (push, merge, merge and pull requests, CI). It catches containment, scoped to a shared checkout; in a tab's own worktree, `git pull` / `stash` / `checkout -b` are routine. It catches discard commands, writes to the ship-review gate's boundary list (`matchShipBoundary` — one list, which already holds auth, migrations and `.github/workflows`), and plain shell writes to those paths: redirect, `tee`, `cp`, `mv`, `install`, `sed -i`. It catches tools on an MCP server MARVIN did not register, and the `marvin-control` merge and remove verbs. It also runs for subagent calls: an implementer's push inside a touched turn asks the user. The security audit found that git's global options (`-C dir`, `-c k=v`, `--git-dir=…`) hid the subcommand from it; they are stripped before classification.
+- **The touched card does not double a gated one.** The user's allow runs the call through the ordinary gate at `auto`, so the hard-deny floor holds and no second gated card appears. A containment or money rule can still ask its own question after it: a known second card, kept for those rules' richer reasons.
+- **User-only is decided when asked, not when raised** (`isUserOnlyConfirm`). It holds for the touched rule's own card, and for a containment or money confirm in a turn touched now, including one raised before the supervisor answered a question in the same turn.
+- **The touch survives a restart.** It lives in memory for the gate, on the session meta (`supervisorTouched`) for readers, and in the transcript (`turn.supervisor-touched`). A resume of a touched, interrupted turn is touched too.
+- **A queued supervisor message is checked again when it fires.** One dropped — the tab was stopped, put to waiting or closed, the supervisor paused, or the tab stayed busy through every deferral — leaves a ledger `drop` line, never only a console warning.
+- **The nudge cap counts from the ledger** (`planSignature` on each nudge line), so a restart does not reset it.
+- **A shadow `confirm` verb arrives here, not in milestone 5.** The DoD's "the supervisor's confirm verb refuses it" needs a verb to test. It evaluates and ledgers only; there is no confirms autonomy. Like every verb, it imports nothing that resolves a confirm or starts a turn: the send path's refusal rules reach the verbs as an injected dependency.
+- **The loop's over-budget skip became a pause** (`pause.reason: "budget"`) with an escalation, as the DoD asks.
+- **Spend counts completed turns.** A supervisor-started tab turn that fails or is preempted reports no cost to the tracker, so it does not reach `tabsUsd`.
+- **Not caught, by design.** Obfuscated shell writes (ADR-0127 §5). A `git commit` whose diff touches a boundary file: each write met the gate when it was made, and writes from before the touch were the user's turn. Plan approval: no server-side approval exists yet (ADR-0127 §4 item 6).
 
 ## Constraint that shapes the order
 
