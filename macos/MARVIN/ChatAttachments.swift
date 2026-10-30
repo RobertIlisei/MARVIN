@@ -89,37 +89,21 @@ struct ChatAttachment: Identifiable, Equatable {
 @MainActor struct ChatAttachmentsBar: View {
     @Environment(MarvinBridge.self) private var bridge
     @Binding var attachments: [ChatAttachment]
-    @State private var pickerOpen = false
-
     var body: some View {
-        VStack(spacing: 4) {
-            // Phase 5f — Cursor-style: a single small icon button on
-            // the left, attachment chips inline. The `@ Mention`
-            // button collapsed into the editor itself (typing `@`
-            // at a word boundary opens the same picker), so one
-            // entry point is enough. Borderless icon = matches the
-            // rest of the chat surface; bordered controls read as
-            // heavy in this context.
-            HStack(spacing: 4) {
-                iconButton(
-                    icon: "paperclip",
-                    help: "Attach file (or type @ in the message)"
-                ) {
-                    pickerOpen = true
-                }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-                .disabled(bridge.projectWorkDir == nil)
-                if !attachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(attachments) { att in
-                                chip(att)
-                            }
+        // Chips only. The paperclip used to own a row of its own above the
+        // editor even with nothing attached; it now sits in the send row
+        // (`ChatInputView`) and this bar takes no height until there is
+        // something to show (critique U11).
+        Group {
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachments) { att in
+                            chip(att)
                         }
                     }
-                    .frame(height: 26)
                 }
-                Spacer()
+                .frame(height: 26)
             }
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -137,26 +121,6 @@ struct ChatAttachment: Identifiable, Equatable {
             }
             return !providers.isEmpty
         }
-        .sheet(isPresented: $pickerOpen) {
-            FileMentionPicker { picked in
-                if let picked {
-                    attachments.append(ChatAttachment(kind: .file(absPath: picked)))
-                }
-                pickerOpen = false
-            }
-            .environment(bridge)
-        }
-    }
-
-    /// Small borderless icon button — Cursor / VS Code chat style.
-    /// Hover state via `.buttonStyle(.plain)` + a soft fill on hover
-    /// (achieved with `.background` + `.onHover`). Phase 5f.
-    private func iconButton(
-        icon: String,
-        help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        IconBarButton(icon: icon, help: help, action: action)
     }
 
     private func chip(_ att: ChatAttachment) -> some View {
@@ -259,7 +223,7 @@ enum AttachmentThumbnail {
 /// Cursor / VS Code style. Plain SF Symbol with a soft hover fill.
 /// Pulled out as its own struct so the hover @State works (a closure
 /// passed into a function loses its identity each render).
-@MainActor private struct IconBarButton: View {
+@MainActor struct IconBarButton: View {
     let icon: String
     let help: String
     let action: () -> Void
@@ -281,6 +245,7 @@ enum AttachmentThumbnail {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 

@@ -266,6 +266,20 @@ private struct UpdateResponse: Decodable {
             }
             Spacer()
             updateControl(p)
+            // Occasional actions live here, not in a button on every row (U14).
+            Menu {
+                pluginMenu(p)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 18)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More for \(p.name)")
+            .accessibilityLabel("More actions for \(p.name)")
         }
         .padding(.vertical, 3)
         .frame(minWidth: 0, alignment: .leading)
@@ -283,16 +297,10 @@ private struct UpdateResponse: Decodable {
     private func updateControl(_ p: PluginSummary) -> some View {
         let status = updateStatus[p.key]
         if p.source?.updatable != true {
-            // A dead grey label sat here where Skills offers a control for the
-            // identical problem. Re-installing through MARVIN records the
-            // source, which is the way out — so it is a button (ADR-0114).
-            Button("Set source…") {
-                installError = nil; marketplacePlugins = []; marketplaceName = nil
-                installURL = p.source?.url ?? ""
-                installSheetOpen = true
-            }
-            .rowChip(.neutral)
-            .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
+            // No recorded source, so nothing to update. "Set source…" moved to
+            // the row's menu: a neutral button on every such row repeated the
+            // same action down the list (U14).
+            EmptyView()
         } else if updatingKey == p.key {
             ProgressView().controlSize(.small)
         } else {
@@ -318,31 +326,33 @@ private struct UpdateResponse: Decodable {
         return "Re-fetch from \(origin). Last updated \(s.lastUpdated)."
     }
 
-    /// Small chips summarising what the plugin contributes. Loaded contributions
-    /// are tinted; deferred ones (agents/hooks) are muted with a "·off" hint.
+    /// What the plugin contributes, as one line of words. Four capsules per row
+    /// repeated the same tally down the whole pane (U14). Hooks are the one
+    /// part MARVIN refuses to load (ADR-0054), so that stays a caution with its
+    /// own glyph rather than another count.
     @ViewBuilder
     private func contributionChips(_ p: PluginSummary) -> some View {
-        WrapLayout(spacing: 5, lineSpacing: 4) {
-            if !p.skills.isEmpty { chip("\(p.skills.count) skill\(p.skills.count == 1 ? "" : "s")", loaded: true) }
-            if !p.commands.isEmpty { chip("\(p.commands.count) command\(p.commands.count == 1 ? "" : "s")", loaded: true) }
-            if p.hasMcp { chip("MCP · gated", loaded: true) }
-            if !p.agents.isEmpty { chip("\(p.agents.count) agent\(p.agents.count == 1 ? "" : "s") · read-only", loaded: true) }
-            // Not a count like the others: it is the one line that says what
-            // MARVIN refuses to load (ADR-0054). It reads as a caution, not as
-            // another tally.
-            if p.hasHooks { chip("hooks · off", loaded: false, caution: true) }
+        let parts: [String] = [
+            p.skills.isEmpty ? nil : "\(p.skills.count) skill\(p.skills.count == 1 ? "" : "s")",
+            p.commands.isEmpty ? nil : "\(p.commands.count) command\(p.commands.count == 1 ? "" : "s")",
+            p.hasMcp ? "MCP (asks first)" : nil,
+            p.agents.isEmpty ? nil : "\(p.agents.count) agent\(p.agents.count == 1 ? "" : "s") (read-only)",
+        ].compactMap { $0 }
+        WrapLayout(spacing: 8, lineSpacing: 2) {
+            if !parts.isEmpty {
+                Text(parts.joined(separator: " · "))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if p.hasHooks {
+                Label("hooks never load", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
-    }
-
-    private func chip(_ text: String, loaded: Bool, caution: Bool = false) -> some View {
-        let tint: Color = caution ? .orange : (loaded ? Color.accentColor : .secondary)
-        return Text(text)
-            .font(.system(size: 9.5, design: .monospaced))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Capsule().fill(tint.opacity(caution ? 0.16 : 0.12)))
     }
 
     /// One shape for every update status. Three existed: a capsule, grey text
@@ -508,6 +518,15 @@ private struct UpdateResponse: Decodable {
     /// (ADR-0114).
     @ViewBuilder
     private func pluginMenu(_ p: PluginSummary) -> some View {
+        if p.source?.updatable != true {
+            Button("Set source…") {
+                installError = nil; marketplacePlugins = []; marketplaceName = nil
+                installURL = p.source?.url ?? ""
+                installSheetOpen = true
+            }
+            .help("MARVIN didn't install this one, so it has no recorded URL to re-fetch from. Installing it through MARVIN once records the source and enables updates.")
+            Divider()
+        }
         // `/api/plugins` does not send an install path, so this opens the
         // directory every plugin lives in rather than inventing a field.
         Button("Reveal the plugins folder") {

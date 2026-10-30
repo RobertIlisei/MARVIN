@@ -362,10 +362,22 @@ final class GitGraphModel {
         .frame(width: laneWidth * CGFloat(laneCount))
     }
 
+    /// Ref chips, then the subject, then the author. The chips are the part a
+    /// person scans for (which row is HEAD, which is main), so they keep their
+    /// width and the author is what leaves first: at a 260 pt sidebar they were
+    /// squeezed to "H…D" and "f…er" while the author kept its column (U15).
     private var content: some View {
+        ViewThatFits(in: .horizontal) {
+            contentRow(showsAuthor: true)
+            contentRow(showsAuthor: false)
+        }
+    }
+
+    private func contentRow(showsAuthor: Bool) -> some View {
         HStack(spacing: 6) {
             ForEach(row.commit.refs.prefix(3), id: \.self) { ref in
                 refChip(ref)
+                    .layoutPriority(2)
             }
             Text(row.commit.subject)
                 .font(.system(size: 11))
@@ -373,10 +385,13 @@ final class GitGraphModel {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
-            Text(hovering ? row.commit.shortSha : row.commit.author)
-                .font(.system(size: 10).monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
+            if showsAuthor || hovering {
+                Text(hovering ? row.commit.shortSha : row.commit.author)
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
         }
     }
 

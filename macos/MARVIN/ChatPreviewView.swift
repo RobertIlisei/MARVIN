@@ -2254,18 +2254,6 @@ final class ChatPreviewModel {
             MarvinDivider()
             header
             MarvinDivider()
-            // Agents bar — model pills, personality, perms (auto/gated).
-            // Was previously below the input bar, sandwiched against
-            // Send/Queue, which made the layout feel cramped: two rows
-            // of small interactive pills competing for the eye next to
-            // the primary submit button. Moving it above the messages
-            // matches the convention in ChatGPT / Claude desktop and
-            // keeps the input footer focused on Send / Queue / Stop.
-            ChatAgentsFooter()
-                .environment(bridge)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-            MarvinDivider()
             // The message log OWNS the flexible vertical space — it expands
             // and contracts so the docked tray below never overlaps it.
             //
@@ -3682,27 +3670,48 @@ final class ChatPreviewModel {
     /// branch chip) and the way back to what is closed (History). The session
     /// hash lives in the tooltip; the header's New button is gone — the `+`
     /// beside the tabs is the one place a tab starts.
+    /// Project, tree, posture and history in ONE bar. They were two (a project
+    /// row, then a posture row under its own divider) on top of the tab strip,
+    /// so three bars stood between the user and the transcript (critique U8).
+    /// The posture pill joins the project row when the pane is wide enough and
+    /// drops to a second line of the same bar when it is not.
     private var header: some View {
-        HStack(spacing: 8) {
-            Text(bridge.projectName ?? "no project active")
-                .font(.callout.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(model.loadedSessionId.map { "Session \($0)" } ?? "No session loaded")
-            if let sid = model.loadedSessionId {
-                SessionModeChip(
-                    entry: SessionRegistry.shared.entry(sid),
-                    isDraft: SessionRegistry.shared.isDraft(sid),
-                    draftIsolated: UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true,
-                    onSwitch: { mode, action in applyTreeSwitch(sid, to: mode, action: action) },
-                    onLane: { lane in applyLane(sid, lane: lane) }
-                )
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                headerIdentity
+                Spacer(minLength: 8)
+                ChatAgentsFooter().environment(bridge)
+                sessionsMenu
             }
-            Spacer()
-            sessionsMenu
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    headerIdentity
+                    Spacer(minLength: 8)
+                    sessionsMenu
+                }
+                ChatAgentsFooter().environment(bridge)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var headerIdentity: some View {
+        Text(bridge.projectName ?? "no project active")
+            .font(.callout.weight(.semibold))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(model.loadedSessionId.map { "Session \($0)" } ?? "No session loaded")
+        if let sid = model.loadedSessionId {
+            SessionModeChip(
+                entry: SessionRegistry.shared.entry(sid),
+                isDraft: SessionRegistry.shared.isDraft(sid),
+                draftIsolated: UserDefaults.standard.object(forKey: "marvin.newTabsIsolated") as? Bool ?? true,
+                onSwitch: { mode, action in applyTreeSwitch(sid, to: mode, action: action) },
+                onLane: { lane in applyLane(sid, lane: lane) }
+            )
+        }
     }
 
     /// The two shapes a new tab can take, named by what they mean for the
