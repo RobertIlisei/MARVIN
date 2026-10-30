@@ -737,6 +737,32 @@ A standing pattern rather than a type: after drafting an ADR, an advisor
 "future-MARVIN critique pass" lists every question the ADR leaves
 unanswered; gaps are closed before the user sees it.
 
+**The supervisor** ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md),
+plan milestones 1–5; the native surface is milestone 6) is not a subagent:
+it is a session the user starts per project and the runtime wakes. A
+deterministic loop (`supervisor-loop.ts`) wakes it on a pending question or
+ordinary confirm, a user- or supervisor-started turn ending, an idle tab with
+an open plan, a scope-met handoff, or a message from the user. Each wake is
+one bounded turn (`maxTurns`, a per-wake breaker, rate limits, a daily cap
+that also counts the tab turns it starts). Its tools are the
+`marvin-supervise` verbs plus the read-only graph: `answer`, `send`,
+`cancel`, `set_posture`, `confirm`, `worktrees`, `close_session`,
+`review_scope`, `new_session`, `reply`. Each passes `supervisor-policy.ts`:
+delegation per tab (`observe` / `answer-questions` / `answer-confirms`),
+grounds that must resolve, with at least one the tab did not write, and the
+human-only list (`supervisor-acts.ts`). The user switches each category from
+shadow to autonomous. An escalation becomes an inbox item
+(`supervisor-inbox.ts`, event-sourced, 0600 under the data dir) showing the
+raw act with a server-built summary and the recommendation beside it.
+`POST /api/supervisor/inbox` performs the act with the user's authority.
+`new_session` only proposes; the user's confirmation opens one tab in a fresh
+worktree through ADR-0122's atomic path, at no more than the confirmed
+posture, with a supervisor-authored, touched first turn. Every act lands in
+an append-only ledger. `POST /api/audit {target:"supervisor"}` has the
+session auditor review a window of it for `ungrounded`, `overreach`, `loop`
+and `consent`, and the report goes to the user only. The routes need a
+per-boot token, and the gate denies a tab any tool call naming them.
+
 ---
 
 ## 6. Skills

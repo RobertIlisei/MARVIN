@@ -127,9 +127,9 @@ export interface WakeupRecord {
    * Persisted with the record, so a deferral keeps the tag.
    */
   author?: "supervisor";
-  supervisor?: { kind: "nudge" | "instruction"; ledgerId: string | null; grounds: Array<{ kind: string; ref: string; provenance: string }> };
+  supervisor?: { kind: "nudge" | "instruction" | "first-message"; ledgerId: string | null; grounds: Array<{ kind: string; ref: string; provenance: string }>; editedByUser?: boolean };
   /** ADR-0127 §5 — a resume of a touched turn: the fired turn is touched too (never laundered by a restart). */
-  supervisorTouched?: "message" | "answer";
+  supervisorTouched?: "message" | "answer" | "confirm";
 }
 
 interface WakeupFile {

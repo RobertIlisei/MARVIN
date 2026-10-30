@@ -44,7 +44,7 @@ const row = async () => (await buildSessionWatch({ projectId: "proj", workDir, s
 
 describe("the watch row's `supervisor` object (brief §10.4)", () => {
   it("an undelegated, quiet tab", async () => {
-    expect((await row())?.supervisor).toEqual({ delegation: "off", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false, lastActAt: null });
+    expect((await row())?.supervisor).toEqual({ delegation: "off", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false, lastActAt: null, openEscalations: 0 });
   });
 
   it("carries the delegation, the touched turn, a pending wakeup of its own, and a user stop", async () => {
@@ -53,7 +53,7 @@ describe("the watch row's `supervisor` object (brief §10.4)", () => {
     const touched = markTurnTouched({ projectId: "proj", marvinSessionId: "tab-w", turnId: "turn-1", by: "answer" });
     scheduleWakeup({ marvinSessionId: "tab-w", projectId: "proj", cwd: workDir, workDir, model: POSTURE.model, advisorModel: null, personality: "ultron", permissionStrategy: "auto", thinkingMode: "high", delaySeconds: 600, schedulingDepth: 0, prompt: "check", reason: "build" });
     updateSessionMeta("proj", "tab-w", { lastTurn: { turnId: "turn-1", startedAt: new Date().toISOString(), outcome: "stopped" } });
-    expect((await row())?.supervisor).toEqual({ delegation: "answer-questions", sharedCheckout: true, touchedTurn: touched, waitingOnOwn: "wakeup", stoppedByUser: true, lastActAt: null });
+    expect((await row())?.supervisor).toEqual({ delegation: "answer-questions", sharedCheckout: true, touchedTurn: touched, waitingOnOwn: "wakeup", stoppedByUser: true, lastActAt: null, openEscalations: 0 });
   });
 
   it("the live turn row names a supervisor author", async () => {

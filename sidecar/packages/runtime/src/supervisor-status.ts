@@ -241,7 +241,15 @@ function nextUtcMidnight(day: string): string {
   return d.toISOString();
 }
 
-export function buildSupervisorStatus(st: SupervisorState, loop: LoopSnapshot, entries: readonly LedgerEntry[], model: SupervisorModelInfo, now: number = Date.now()) {
+export function buildSupervisorStatus(
+  st: SupervisorState,
+  loop: LoopSnapshot,
+  entries: readonly LedgerEntry[],
+  model: SupervisorModelInfo,
+  now: number = Date.now(),
+  /** Milestone 5 — open inbox items (`openEscalationCounts`). */
+  openEscalations = 0,
+) {
   const today = new Date(now).toISOString().slice(0, 10);
   const current = st.spend.day === today;
   const spentUsd = current ? st.spend.usd : 0;
@@ -272,8 +280,7 @@ export function buildSupervisorStatus(st: SupervisorState, loop: LoopSnapshot, e
     health,
     healthSince,
     watchedTabs: delegations.filter((d) => d !== "off").length,
-    // The inbox arrives with milestone 5; until then nothing is counted.
-    openEscalations: 0,
+    openEscalations,
     budget: {
       capUsd: cap,
       spentUsd,

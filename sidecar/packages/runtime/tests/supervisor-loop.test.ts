@@ -64,7 +64,7 @@ function row(id: string): SessionWatchRow {
     posture: null,
     postureRevision: null,
     postureSource: null,
-    supervisor: { delegation: "answer-questions", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false, lastActAt: null },
+    supervisor: { delegation: "answer-questions", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false, lastActAt: null, openEscalations: 0 },
   } as SessionWatchRow;
 }
 

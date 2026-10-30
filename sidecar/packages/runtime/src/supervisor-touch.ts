@@ -18,7 +18,8 @@ import { readSessionMeta, type SessionMeta, updateSessionMeta } from "./session-
 import { HUMAN_ONLY_CONFIRM_RULES } from "./supervisor-acts";
 import { announceProjectEvent } from "./turn-registry";
 
-export type TouchBy = "message" | "answer";
+/** `confirm` — the supervisor answered an ordinary permission confirm (milestone 5). */
+export type TouchBy = "message" | "answer" | "confirm";
 
 export interface TouchedTurn {
   turnId: string;

@@ -17,6 +17,8 @@ import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readF
 import path from "node:path";
 
 import { getMarvinDataDir } from "./paths";
+import { readSessionMeta } from "./session-meta";
+import { announceProjectEvent } from "./turn-registry";
 
 export type LedgerDecision = "propose" | "act" | "escalate" | "refuse" | "drop";
 export type GroundKind = "plan" | "dod" | "adr" | "memory" | "charter" | "file";
@@ -45,9 +47,11 @@ export interface LedgerEntryInput {
    * `verb` — a supervisor proposal or act; `wake` / `rotation` — the loop;
    * `control` — the user changed state; `pairing` / `reveal` — a proposal met
    * its answer, or the user looked at it first; `heuristic-miss` — a question
-   * the heuristic passed led to a human-only confirm in the same turn.
+   * the heuristic passed led to a human-only confirm in the same turn;
+   * `inbox` — the user acted on an escalation (milestone 5), `actor: "user"`;
+   * `message` — the user wrote to the supervisor (milestone 5).
    */
-  kind: "verb" | "wake" | "rotation" | "control" | "pairing" | "reveal" | "heuristic-miss";
+  kind: "verb" | "wake" | "rotation" | "control" | "pairing" | "reveal" | "heuristic-miss" | "inbox" | "message";
   verb: string;
   tab: string | null;
   wakeId: string | null;
@@ -74,6 +78,12 @@ export interface LedgerEntryInput {
   pairing?: LedgerPairing;
   /** Why a wake was raised (milestone 4): a question, a turn that ended, or an idle tab. */
   trigger?: "question" | "turn-ended" | "idle";
+  /** The tab's title when the line was written (milestone 5), so a closed tab keeps its name. Filled in by `appendLedgerEntry`. */
+  tabTitle?: string | null;
+  /** The inbox item this line raised or acted on (milestone 5). */
+  inboxItemId?: string;
+  /** A one-line, server-built summary of the arguments (milestone 5) — never the supervisor's prose. */
+  argSummary?: string;
 }
 
 /** Labels, not the tab's content: each capped, at most twenty. */
@@ -146,15 +156,64 @@ function stableStringify(v: unknown): string {
     .join(",")}}`;
 }
 
+/** The tab's title now, or null — a snapshot, read once at write time. */
+function titleOf(projectId: string, tab: string | null): string | null {
+  if (!tab) return null;
+  try {
+    return readSessionMeta(projectId, tab)?.title?.slice(0, 200) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function appendLedgerEntry(projectId: string, input: LedgerEntryInput): LedgerEntry {
   ensureSupervisorDir(projectId);
-  const entry: LedgerEntry = { at: new Date().toISOString(), projectId, ...input, id: input.id ?? newLedgerId() };
+  const entry: LedgerEntry = {
+    at: new Date().toISOString(),
+    projectId,
+    ...input,
+    id: input.id ?? newLedgerId(),
+    tabTitle: input.tabTitle !== undefined ? input.tabTitle : titleOf(projectId, input.tab),
+  };
+  const prevSize = existsSync(ledgerPath(projectId)) ? statSync(ledgerPath(projectId)).size : 0;
   const fd = openSync(ledgerPath(projectId), "a", 0o600);
   try {
     writeSync(fd, `${JSON.stringify(entry)}\n`);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
+  }
+  // Our own append extends a fresh cache in place, so the next read (and this seq) parse nothing.
+  const p = ledgerPath(projectId);
+  const hit = parsedCache.get(p);
+  let seq = -1;
+  try {
+    const st = statSync(p);
+    if (hit && hit.size === prevSize) {
+      hit.entries.push(entry);
+      hit.size = st.size;
+      hit.mtimeMs = st.mtimeMs;
+      seq = hit.entries.length - 1;
+    }
+  } catch {
+    /* fall through to a full read */
+  }
+  // Milestone 5 — the feed says a line was appended and where; the line itself is token-gated.
+  try {
+    announceProjectEvent({
+      event: "supervisor.ledger",
+      data: {
+        projectId,
+        seq: seq >= 0 ? seq : readLedger(projectId).length - 1,
+        id: entry.id as string,
+        sessionId: entry.tab,
+        verb: entry.verb,
+        decision: entry.decision ?? null,
+        inboxItemId: entry.inboxItemId ?? null,
+      },
+    });
+  } catch {
+    /* the line is written; only the notification is lost */
   }
   return entry;
 }

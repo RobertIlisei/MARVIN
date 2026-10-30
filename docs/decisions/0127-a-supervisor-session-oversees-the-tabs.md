@@ -372,9 +372,9 @@ This machine has no Swift 6.1 toolchain, so the work is sequenced **sidecar firs
   - A user-started supervisor, woken only by the runtime loop, runs with the SDK-level disallowed list plus the `canUseTool` read deny, and acts only through `marvin-supervise`.
   - No executor tool, and no tab tool call against MARVIN's own API or data directory, can start, brief, message or reconfigure it.
   - Tests pin the tool set, the gate deny and the token requirement.
-- [ ] **Human-only acts.** Every act on the §4 list is escalated and never performed, at every delegation level and in every posture. Inside a supervisor-touched turn it raises a user-only confirm even in `full`. Covered by a table test over the classifier plus gate tests.
+- [x] **Human-only acts.** Every act on the §4 list is escalated and never performed, at every delegation level and in every posture. Inside a supervisor-touched turn it raises a user-only confirm even in `full`. Covered by a table test over the classifier plus gate tests. *(Gate: milestone 3. Every verb's escalation as an inbox item showing the raw act: milestone 5 — `supervisor-m5-verbs.test.ts`.)*
 - [x] **Consent.** Supervisor messages and answers reach a tab tagged as the supervisor's, and the gate never treats them as the user's consent. Covered by integration tests from the server-side send path and through `POST /api/chat` with `author: "supervisor"`.
-- [ ] **Ledger and rollout.**
+- [x] **Ledger and rollout.** *(Milestone 5 — the auditor's review: `supervisor-audit.test.ts`; `new_session`: `supervisor-m5-newtab.test.ts`.)*
   - Every proposal, act, refusal, drop and escalation is in the append-only ledger, and the auditor can review it.
   - The supervisor ships off, and shadow precedes autonomy per category.
   - `PUT /api/sessions/posture` and `POST /api/confirm/answer` exist.

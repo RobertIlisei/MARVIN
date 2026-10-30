@@ -59,14 +59,12 @@ describe("per-category autonomy", () => {
     expect(getSupervisorState("proj").mode).toBe("shadow");
   });
 
-  it("refuses confirms autonomy until milestone 5, and an unknown category or value", () => {
+  it("switches confirms from milestone 5, and refuses an unknown category or value", () => {
     act({ action: "start" });
-    const c = act({ action: "autonomy", category: "confirms", value: "autonomous" });
-    expect(c.ok).toBe(false);
-    if (!c.ok) expect(c.status).toBe(409);
+    expect(act({ action: "autonomy", category: "confirms", value: "autonomous" }).ok).toBe(true);
+    expect(getSupervisorState("proj").autonomy.confirms).toBe("autonomous");
     expect(act({ action: "autonomy", category: "merges", value: "autonomous" }).ok).toBe(false);
     expect(act({ action: "autonomy", category: "questions", value: "yes" }).ok).toBe(false);
-    expect(getSupervisorState("proj").autonomy.confirms).toBe("shadow");
   });
 
   it("refuses autonomy while the supervisor is off; every category reads off then", () => {
@@ -116,7 +114,7 @@ describe("per-category autonomy", () => {
     expect(boot[0]?.reason).toContain("questions");
   });
 
-  it("a hand-edited file cannot switch confirms on", () => {
+  it("a hand-edited file loads no wider than it says: an unknown value reads shadow", () => {
     act({ action: "start" });
     const file = path.join(supervisorDir("proj"), "state.json");
     const raw = JSON.parse(readFileSync(file, "utf8"));
@@ -125,7 +123,7 @@ describe("per-category autonomy", () => {
     writeFileSync(file, JSON.stringify(raw));
     bootSupervisor();
     const s = getSupervisorState("proj");
-    expect(s.autonomy).toEqual({ questions: "autonomous", nudges: "shadow", posture: "shadow", confirms: "shadow" });
+    expect(s.autonomy).toEqual({ questions: "autonomous", nudges: "shadow", posture: "shadow", confirms: "autonomous" });
   });
 });
 

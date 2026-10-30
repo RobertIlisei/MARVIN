@@ -19,27 +19,12 @@
  * After every close the sweep runs, bounded and best-effort, so closed
  * `empty` and `merged` trees leave the disk without a button (ADR-0111).
  *
- * Refused while the tab has a live turn.
+ * Refused while the tab has a live turn. The logic is `closeSession` in
+ * `@marvin/runtime/session-close`, which the supervisor inbox shares.
  */
 
 import { getProject } from "@marvin/runtime/projects";
-import { readSessionMeta, updateSessionMeta } from "@marvin/runtime/session-meta";
-import { logTelemetry } from "@marvin/runtime/telemetry";
-import { getLiveTurn } from "@marvin/runtime/turn-registry";
-import { readWorktreeSetupConfig } from "@marvin/runtime/worktree-setup";
-import {
-  commitWorktreeWorkInProgress,
-  discardWorktree,
-  excludeFromStatus,
-  findSessionWorktree,
-  markSessionWorktreeClosed,
-  mergeWorktree,
-  reopenSessionWorktree,
-  sweepWorktreesAsync,
-  symlinkExcludePattern,
-  unstageSymlinkedDirs,
-  worktreeHasWork,
-} from "@marvin/runtime/worktrees";
+import { closeSession } from "@marvin/runtime/session-close";
 import { type NextRequest, NextResponse } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 
@@ -75,84 +60,8 @@ export async function POST(req: NextRequest) {
   }
   const project = getProject(projectId);
   if (!project) return NextResponse.json({ error: "unknown project" }, { status: 404 });
-  const live = getLiveTurn(sessionId);
-  if (live && !live.ended) {
-    return NextResponse.json({ error: "a turn is running in this tab — stop it first", code: "turn-live" }, { status: 409 });
-  }
-  const workDir = project.workDir;
-  const meta = readSessionMeta(projectId, sessionId);
-  const rec = findSessionWorktree(workDir, sessionId);
-  const closedAt = new Date().toISOString();
-
-  if (!rec) {
-    if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
-    return NextResponse.json({ ok: true, worktree: null, message: "closed" });
-  }
-
-  markSessionWorktreeClosed(workDir, sessionId);
-  let message = `kept ${rec.branch}`;
-  if (action === "merge") {
-    // MARVIN's own symlinks (node_modules and friends) are not the tab's work:
-    // exclude them by name — a worktree created before the exclude line
-    // existed has none — and unstage any a previous attempt's `add -A` caught.
-    const linked = readWorktreeSetupConfig(workDir).symlinkDirectories;
-    excludeFromStatus(workDir, linked.map(symlinkExcludePattern));
-    unstageSymlinkedDirs(rec.path, linked);
-    if (worktreeHasWork(rec.path)) {
-      if (!body.commitFirst) {
-        reopenSessionWorktree(workDir, sessionId);
-        return NextResponse.json(
-          { error: "the worktree has uncommitted changes", code: "worktree-dirty", branch: rec.branch },
-          { status: 409 },
-        );
-      }
-      const committed = await commitWorktreeWorkInProgress(rec.path, rec.slug);
-      if (!committed.ok) {
-        reopenSessionWorktree(workDir, sessionId);
-        return NextResponse.json(
-          { error: `could not commit the worktree: ${committed.message}`, code: "commit-failed", branch: rec.branch },
-          { status: 409 },
-        );
-      }
-    }
-    const out = mergeWorktree(workDir, rec.slug);
-    if (!out.ok) {
-      reopenSessionWorktree(workDir, sessionId);
-      return NextResponse.json({ error: out.message, code: "merge-failed", branch: rec.branch }, { status: 409 });
-    }
-    message = out.message;
-  } else if (action === "discard") {
-    const out = discardWorktree(workDir, rec.slug);
-    if (!out.ok) return NextResponse.json({ error: out.message, code: "discard-failed" }, { status: 409 });
-    message = out.message;
-  } else if (body.commitFirst && worktreeHasWork(rec.path)) {
-    // ADR-0111 — "keep" on a dirty tree commits the work so the kept branch
-    // holds it; a clean tree is left exactly as it is.
-    const linked = readWorktreeSetupConfig(workDir).symlinkDirectories;
-    excludeFromStatus(workDir, linked.map(symlinkExcludePattern));
-    unstageSymlinkedDirs(rec.path, linked);
-    const committed = await commitWorktreeWorkInProgress(rec.path, rec.slug);
-    if (!committed.ok) {
-      reopenSessionWorktree(workDir, sessionId);
-      return NextResponse.json(
-        { error: `could not commit the worktree: ${committed.message}`, code: "commit-failed", branch: rec.branch },
-        { status: 409 },
-      );
-    }
-    message = `kept ${rec.branch} with its changes committed`;
-  }
-  if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
-  // ADR-0111 — reclaim what this close (or an earlier one) left spent.
-  // In the background: a sweep reconciles every worktree of the project, and
-  // closing a tab waited on it (2026-09-30, "closing tabs is very slow"). The
-  // client never read the count; the busy guard still protects live turns.
-  void sweepWorktreesAsync(workDir, Date.now(), { isSessionBusy: (id) => !!getLiveTurn(id) && !getLiveTurn(id)?.ended })
-    .then((out) => {
-      const swept = out.filter((s) => s.deletedBranch).length;
-      if (swept) logTelemetry({ kind: "worktree.session.swept", trigger: "close", swept });
-    })
-    .catch(() => {
-      /* best-effort */
-    });
-  return NextResponse.json({ ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message });
+  // The close itself lives in the runtime (`session-close.ts`), shared with the
+  // supervisor inbox's close-with-keep consent (ADR-0127 milestone 5).
+  const out = await closeSession({ projectId, workDir: project.workDir, sessionId, action, commitFirst: body.commitFirst });
+  return NextResponse.json(out.body, { status: out.status });
 }

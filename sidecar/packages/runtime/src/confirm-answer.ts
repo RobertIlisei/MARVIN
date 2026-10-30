@@ -23,6 +23,8 @@
 
 import { attachPendingPayload, getPendingConfirm, registerPendingConfirm, resolvePendingConfirm } from "./confirm-registry";
 import { appendSessionTurn } from "./session";
+import { readSessionMeta, resolveSessionCwd } from "./session-meta";
+import { classifyHumanOnlyAct, HUMAN_ONLY_CONFIRM_RULES } from "./supervisor-acts";
 import type { LedgerGround } from "./supervisor-ledger";
 import { categoryMode, delegationRank, getSupervisorState, overBudget } from "./supervisor-state";
 import { isUserOnlyConfirm, markTurnTouched } from "./supervisor-touch";
@@ -286,4 +288,64 @@ export function answerQuestion(args: {
     ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
   });
   return { ok: true, updatedInput };
+}
+
+/**
+ * Allow or deny an ORDINARY permission confirm by its id (milestone 5) — the
+ * supervisor's confirms autonomy, and the user's consent from the inbox.
+ *
+ * - A question is refused: it is answered by label (`answerQuestion`).
+ * - For the supervisor, a confirm only the user may answer is refused, and so
+ *   is any confirm a human-only rule raised (ADR-0127 §4): the policy already
+ *   escalates those, and this is the second lock. Its answer touches the turn
+ *   (`by: "confirm"`) BEFORE the confirm resolves, so the tab's next tool call
+ *   already runs behind the stricter gate.
+ * - An allow carries the original input: nothing the supervisor or the inbox
+ *   holds can edit what the tool runs with.
+ */
+export function resolveConfirm(args: {
+  turnId: string;
+  toolUseId: string;
+  decision: "allow" | "deny";
+  message?: string | undefined;
+  answeredBy: "user" | "supervisor";
+  grounds?: LedgerGround[];
+  ledgerId?: string;
+}): { ok: true } | { ok: false; status: 400 | 409; error: string } {
+  const pending = getPendingConfirm(args.turnId, args.toolUseId);
+  if (!pending) return { ok: false, status: 409, error: "no pending confirm with that id — already answered, or never raised" };
+  if (pending.raisedBy === "ask-user-question") return { ok: false, status: 400, error: "that is a question — answer it by label" };
+  if (args.answeredBy === "supervisor") {
+    if (isUserOnlyConfirm(args.turnId, args.toolUseId) || (pending.raisedBy && HUMAN_ONLY_CONFIRM_RULES.has(pending.raisedBy)) || pending.raisedBy !== "gated") {
+      return { ok: false, status: 409, error: "only the user can answer this confirm (ADR-0127 §4–§5)" };
+    }
+    const owner = getLiveTurnByTurnId(args.turnId);
+    // The act itself, read again here: the verb classifies it first, and this is the second lock (ADR-0127 §4).
+    const meta = owner ? readSessionMeta(owner.projectId, owner.marvinSessionId) : null;
+    const cwd = meta ? resolveSessionCwd(meta).cwd : process.cwd();
+    if (classifyHumanOnlyAct({ toolName: pending.toolName, input: pending.originalInput, cwd, treeMode: meta?.tree.mode })) {
+      return { ok: false, status: 409, error: "that act is on the human-only list (ADR-0127 §4) — only the user answers it" };
+    }
+    if (owner) markTurnTouched({ projectId: owner.projectId, marvinSessionId: owner.marvinSessionId, turnId: args.turnId, by: "confirm" });
+  }
+  const message = args.message?.trim() ? args.message.trim().slice(0, 500) : undefined;
+  const ok =
+    args.decision === "allow"
+      ? resolvePendingConfirm(args.turnId, args.toolUseId, { behavior: "allow", updatedInput: pending.originalInput })
+      : resolvePendingConfirm(args.turnId, args.toolUseId, {
+          behavior: "deny",
+          message: message ?? (args.answeredBy === "supervisor" ? "the MARVIN supervisor denied the tool use" : "user denied the tool use"),
+          interrupt: false,
+        });
+  if (!ok) return { ok: false, status: 409, error: "the confirm was answered a moment ago" };
+  recordConfirmDecision({
+    turnId: args.turnId,
+    toolUseId: args.toolUseId,
+    decision: args.decision,
+    answeredBy: args.answeredBy,
+    ...(args.decision === "deny" && message ? { message } : {}),
+    ...(args.grounds ? { grounds: args.grounds } : {}),
+    ...(args.ledgerId ? { ledgerId: args.ledgerId } : {}),
+  });
+  return { ok: true };
 }

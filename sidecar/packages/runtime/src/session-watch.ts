@@ -35,9 +35,10 @@ import {
   type SessionPosture,
   type SessionTree,
 } from "./session-meta";
-import { readLedger } from "./supervisor-ledger";
+import { openEscalationCounts } from "./supervisor-inbox";
+import { isSafeProjectId, readLedger } from "./supervisor-ledger";
 import { type Delegation, getSupervisorState } from "./supervisor-state";
-import { lastActAtByTab, proposalView, type ProposalView } from "./supervisor-status";
+import { lastActAtByTab, type ProposalView, proposalView } from "./supervisor-status";
 import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
 import { listLiveTurns } from "./turn-registry";
 import { listWakeups } from "./wakeup-scheduler";
@@ -123,6 +124,8 @@ export interface SessionWatchSupervisor {
   stoppedByUser: boolean;
   /** When the supervisor last performed an act on this tab (milestone 4), from the ledger. */
   lastActAt: string | null;
+  /** Open escalation inbox items about this tab (milestone 5) — "+N more for this tab". */
+  openEscalations: number;
 }
 
 /** The one derivation the UI trusts. Pure, so it is pinned by tests. */
@@ -389,6 +392,8 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
   // One ledger read per build, and none for a project whose supervisor is off.
   const ledger = supervisorState.mode === "off" ? [] : readLedger(projectId);
   const lastActs = lastActAtByTab(ledger);
+  // Milestone 5 — open inbox items per tab. Items outlive a supervisor switched off, so they are read regardless.
+  const escalations = isSafeProjectId(projectId) ? openEscalationCounts(projectId).byTab : new Map<string, number>();
   // One read of the wakeup store per build, not per row: this route is polled.
   const ownWakeups = new Set(listWakeups({ projectId }).filter((w) => w.author !== "supervisor").map((w) => w.marvinSessionId));
   // Rows resolve concurrently: each one's git facts are independent.
@@ -444,6 +449,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         waitingOnOwn: listBackgroundJobs(id).length ? "job" : ownWakeups.has(id) ? "wakeup" : null,
         stoppedByUser: meta?.lastTurn?.outcome === "stopped" && meta.lastTurn.stoppedBy !== "supervisor",
         lastActAt: lastActs.get(id) ?? null,
+        openEscalations: escalations.get(id) ?? 0,
       },
     };
   }));

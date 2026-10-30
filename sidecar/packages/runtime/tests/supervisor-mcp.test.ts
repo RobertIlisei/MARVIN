@@ -141,8 +141,8 @@ describe("confirm registry — the raising rule is recorded at the source (ADR-0
 });
 
 describe("marvin-supervise — milestone 1 verbs", () => {
-  it("exposes exactly sessions, read, answer, (milestone 2) set_posture and (milestone 3) send, cancel, confirm", () => {
-    const names = ["sessions", "read", "answer", "set_posture", "send", "cancel", "confirm"];
+  it("exposes exactly sessions, read, answer, (milestone 2) set_posture, (milestone 3) send, cancel, confirm and (milestone 5) worktrees, close_session, review_scope, new_session, reply", () => {
+    const names = ["sessions", "read", "answer", "set_posture", "send", "cancel", "confirm", "worktrees", "close_session", "review_scope", "new_session", "reply"];
     expect([...SUPERVISE_TOOL_NAMES]).toEqual(names);
     expect(supervisorToolDefs(ctx).map((t) => t.name)).toEqual(names);
   });

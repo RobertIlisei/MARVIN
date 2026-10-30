@@ -120,8 +120,10 @@ describe("POST /api/supervisor — the §10.1 mutations", () => {
     const r2 = await POST(post("/api/supervisor", { projectId: "proj", action: "cap", capUsd: 3 }));
     const j2 = (await r2.json()) as { state: { revision: number } };
     expect(j2.state.revision).toBeGreaterThan(j1.state.revision);
+    // Milestone 5 — confirms may leave shadow now that the inbox takes what they may not answer.
     const r3 = await POST(post("/api/supervisor", { projectId: "proj", action: "autonomy", category: "confirms", value: "autonomous" }));
-    expect(r3.status).toBe(409);
+    expect(r3.status).toBe(200);
+    expect(((await r3.json()) as { status: { autonomy: Record<string, string> } }).status.autonomy.confirms).toBe("autonomous");
     const r4 = await POST(post("/api/supervisor", { projectId: "proj", action: "disable" }));
     expect(((await r4.json()) as { state: { mode: string } }).state.mode).toBe("off");
   });

@@ -25,6 +25,15 @@
  * posture. An act's ledger line is named before it is performed, so the
  * transcript can cite it; a perform that fails is ledgered as a refusal.
  *
+ * Milestone 5 — `confirm` performs for `answer-confirms` tabs once the user
+ * switches confirms to autonomous, for the gated strategy's ordinary card
+ * only. Every escalation becomes an inbox item (`supervisor-inbox.ts`) that
+ * shows the raw act beside the recommendation. New verbs: `worktrees` (list,
+ * preview, a safe sweep performed; merge / merge-all / Prepare MR / drop
+ * escalated), `close_session` (escalated), `review_scope` (the scope-met
+ * trigger's answer, escalated), `new_session` (only on a user request,
+ * escalated — the user's confirmation opens the tab) and `reply`.
+ *
  * Registered only in the supervisor session; the executor gate denies the
  * server's tools everywhere else (`@marvin/tools/policy`).
  */
@@ -33,8 +42,20 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
 import type { getPendingConfirm } from "./confirm-registry";
-import { type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
+import { classifyPostureChange, type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
+import { containsSecretShape } from "./session";
+import type { SessionPosture } from "./session-meta";
 import type { SessionWatchRow } from "./session-watch";
+import { classifyHumanOnlyAct } from "./supervisor-acts";
+import {
+  addInboxItem,
+  buildRawAct,
+  type EscalationCode,
+  type InboxDraft,
+  type InboxKind,
+  listInbox,
+  type MergePreview,
+} from "./supervisor-inbox";
 import {
   appendLedgerEntry,
   capAnswer,
@@ -55,16 +76,28 @@ import {
   type GroundContext,
   type GroundRef,
   type PolicyOutcome,
-  questionHeuristic,
+  questionHeuristic,resolveGround 
 } from "./supervisor-policy";
 import { wrapUntrusted } from "./supervisor-prompt";
-import { containsSecretShape } from "./session";
-import { classifyHumanOnlyAct } from "./supervisor-acts";
-import { categoryMode, getSupervisorState, isSupervisorSessionId, overBudget } from "./supervisor-state";
+import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
+import { categoryMode, getSupervisorState, isSupervisorSessionId, overBudget, type SupervisorMode } from "./supervisor-state";
 import { isUserOnlyConfirm } from "./supervisor-touch";
 
 export const SUPERVISE_SERVER_NAME = "marvin-supervise";
-export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer", "set_posture", "send", "cancel", "confirm"] as const;
+export const SUPERVISE_TOOL_NAMES = [
+  "sessions",
+  "read",
+  "answer",
+  "set_posture",
+  "send",
+  "cancel",
+  "confirm",
+  "worktrees",
+  "close_session",
+  "review_scope",
+  "new_session",
+  "reply",
+] as const;
 
 type Performed = { ok: true } | { ok: false; code?: string; error: string };
 
@@ -89,6 +122,18 @@ export interface VerbPerform {
   cancel(marvinSessionId: string): boolean;
   /** `applyPostureChange` with `actor: "supervisor"`; the verb ledgers, so the service does not. */
   setPosture(a: { marvinSessionId: string; patch: PosturePatch; grounds: LedgerGround[] }): Promise<Performed>;
+  /** Milestone 5 — `resolveConfirm` with `answeredBy: "supervisor"`: an ordinary confirm only; it touches the turn. */
+  confirm(a: { turnId: string; toolUseId: string; decision: "allow" | "deny"; message?: string | undefined; grounds: LedgerGround[]; ledgerId: string }): { ok: true } | { ok: false; error: string };
+}
+
+/** One worktree as the `worktrees` verb lists it (milestone 5). */
+export interface WorktreeListing {
+  slug: string;
+  branch: string;
+  state: string;
+  sessionId?: string | undefined;
+  commits: number;
+  dirty: boolean;
 }
 
 /** What the verbs read, injected so tests run on fixtures and the runtime on the real stores. */
@@ -105,6 +150,26 @@ export interface VerbDeps {
   sendRefusal(marvinSessionId: string): { code: string; reason: string } | null;
   /** The tab closed its scope and nothing has reopened it (`scopeMetAt`, milestone 4). */
   scopeMet(marvinSessionId: string): boolean;
+  /*
+   * Milestone 5. Optional so a fixture that predates them still builds; an
+   * absent one makes its verb refuse, never act.
+   */
+  /** When that scope-met close happened; one close item per value. */
+  scopeMetAt?(marvinSessionId: string): string | null;
+  /** A model's display name, for the new-tab card. */
+  modelLabel?(model: string): Promise<string>;
+  /** The project's worktrees: list and preview live, sweep performed (what `worktree_sweep` reclaims). */
+  worktrees?: {
+    list(): Promise<WorktreeListing[]>;
+    preview(slugs: string[] | null): Promise<MergePreview | null>;
+    sweep(): Promise<Array<{ slug: string; branch: string; deletedBranch: boolean; reason: string }>>;
+  };
+  /** Milestone 5 — a message the user wrote to the supervisor (`POST /api/supervisor/message`): the only request `new_session` accepts. */
+  userRequest?(id: string): { id: string; at: string; text: string } | null;
+  /** The posture and base a new tab would start from: the user's most recent tab, and the main checkout's HEAD. */
+  newTabBase?(): Promise<{ posture: SessionPosture; baseRef: string | null; baseSha: string | null } | null>;
+  /** The supervisor's reply in its conversation with the user (milestone 5). Optional: a wake with no conversation has none. */
+  postReply?(text: string): void;
   perform: VerbPerform;
 }
 
@@ -154,6 +219,40 @@ export interface ConfirmArgs {
   toolUseId: string;
   decision: "allow" | "deny";
   message?: string;
+  grounds?: GroundRef[];
+}
+
+export interface WorktreesArgs {
+  op: "list" | "preview" | "sweep" | "merge" | "merge-all" | "prepare-mr" | "drop";
+  slugs?: string[];
+  push?: boolean;
+  openMergeRequest?: boolean;
+  recommendation?: string;
+  grounds?: GroundRef[];
+}
+
+export interface CloseSessionArgs {
+  marvinSessionId: string;
+  worktree: "keep" | "merge" | "discard";
+  recommendation?: string;
+  grounds?: GroundRef[];
+}
+
+export interface ReviewScopeArgs {
+  marvinSessionId: string;
+  verdict: "ready" | "missing";
+  text: string;
+  grounds?: GroundRef[];
+}
+
+export interface NewSessionArgs {
+  requestId: string;
+  firstMessage: string;
+  title?: string;
+  posture?: PosturePatch;
+  /** Only "worktree" is accepted: a new tab never runs in the shared checkout or an existing tree. */
+  tree?: string;
+  recommendation?: string;
   grounds?: GroundRef[];
 }
 
@@ -217,6 +316,31 @@ function answerValues(qs: Question[], answers: Record<string, string | string[]>
   });
 }
 
+/** An inbox draft as a verb builds it; the runtime adds the mode, wake and ledger link. */
+type ItemDraft = Omit<InboxDraft, "modeAtCreation" | "wakeId" | "ledgerId" | "id">;
+
+/** A policy reason code as the inbox's `escalatedBecause.code` (brief §10.2). */
+function escalationCode(reasonCode: string | undefined): EscalationCode {
+  switch (reasonCode) {
+    case "heuristic":
+    case "nudge-cap":
+    case "weak-grounds-only":
+    case "ungrounded":
+    case "unresolvable-citation":
+      return reasonCode;
+    default:
+      return "human-only";
+  }
+}
+
+/** Which card a confirm escalation is: the act it would perform, or the rule that raised it. */
+function confirmKind(raisedBy: string | null, act: { item: string } | null): InboxKind {
+  if (act) return act.item === "external-mcp" ? "confirm" : (act.item as InboxKind);
+  if (raisedBy === "metered-ci") return "integration";
+  if (raisedBy === "shared-tree" || raisedBy === "lane" || raisedBy === "session-worktree") return "containment";
+  return "confirm";
+}
+
 const REPLY: Record<LedgerDecision, (reason: string) => string> = {
   propose: () =>
     "Recorded as a proposal (shadow mode). Nothing was answered — the question stays pending for the user, and your proposal is compared with their answer later.",
@@ -230,6 +354,15 @@ export function createSupervisorVerbs(ctx: VerbContext) {
   const { projectId } = ctx;
 
   const visible = (id: string) => !isSupervisorSessionId(id) && !!getSupervisorState(projectId).delegation[id];
+
+  /**
+   * Milestone 5 — an escalation is an inbox item. The line and the item name
+   * each other: both ids are chosen first, and an item that already exists
+   * for the same cause (its `dedupeKey`) is cited rather than duplicated.
+   */
+  function raise(draft: ItemDraft, mode: SupervisorMode, ledgerId: string): string {
+    return addInboxItem(projectId, { ...draft, modeAtCreation: mode === "autonomous" ? "autonomous" : "shadow", wakeId: ctx.wakeId, ledgerId }).id;
+  }
 
   /**
    * Read again at the moment of acting: a pause, a kill or the budget cap
@@ -309,9 +442,10 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const argsDigest = digestArgs({ toolUseId, answers: args.answers ?? {}, other: args.other ?? {}, escalate: args.escalate ?? null });
     const mode = categoryMode(st, "questions");
     let target: Pick<LedgerEntryInput, "turnId" | "toolUseId" | "answer"> = {};
-    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string; reasonCode?: string; id?: string } = {}) => {
+    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string; reasonCode?: string; id?: string; inboxItemId?: string } = {}) => {
       appendLedgerEntry(projectId, {
         ...(extra.id ? { id: extra.id } : {}),
+        ...(extra.inboxItemId ? { inboxItemId: extra.inboxItemId } : {}),
         kind: "verb",
         verb: "answer",
         ...(extra.reasonCode ? { reasonCode: extra.reasonCode } : {}),
@@ -391,6 +525,33 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       if (!done.ok) return log("refuse", `could not answer: ${done.error}`, { grounds: outcome.grounds, reasonCode: "perform-failed", id });
       return log("act", outcome.reason, { grounds: outcome.grounds, id });
     }
+    if (outcome.decision === "escalate" && row.turn) {
+      // Milestone 5 — the question waits for the user as an inbox item, with the proposed answer beside it.
+      const id = newLedgerId();
+      const code: EscalationCode = outcome.heuristic ? "heuristic" : args.escalate ? "ungrounded" : "weak-grounds-only";
+      const proposed = args.escalate ? undefined : args.answers;
+      const inboxItemId = raise(
+        {
+          sessionId: tab,
+          tabTitle: row.title ?? null,
+          kind: "question",
+          escalatedBecause: { code, label: outcome.reason.slice(0, 200) },
+          heuristic: outcome.heuristic ? { matched: outcome.heuristic } : null,
+          question: { questions: Array.isArray(pending.originalInput.questions) ? (pending.originalInput.questions as unknown[]) : [] },
+          linkedConfirm: { sessionId: tab, turnId: row.turn.turnId, toolUseId, raisingRule: "ask-user-question" },
+          recommendation: {
+            actionId: "answer",
+            ...(proposed && Object.keys(proposed).length ? { answer: proposed } : {}),
+            text: String(args.escalate?.recommendation ?? args.escalate?.reason ?? outcome.reason),
+          },
+          grounds: outcome.grounds,
+          act: { type: "answer", turnId: row.turn.turnId, toolUseId, answers: args.answers ?? {}, other: args.other ?? {} },
+        },
+        mode,
+        id,
+      );
+      return log("escalate", `${outcome.reason}${rec}`, { grounds: outcome.grounds, ...(outcome.heuristic ? { heuristic: outcome.heuristic } : {}), id, inboxItemId });
+    }
     return log(outcome.decision, `${outcome.reason}${rec}`, {
       grounds: outcome.grounds,
       ...(outcome.heuristic ? { heuristic: outcome.heuristic } : {}),
@@ -403,8 +564,9 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const tab = String(args.marvinSessionId ?? "").trim();
     const argsDigest = digestArgs({ posture: args.posture ?? {} });
     const mode = categoryMode(st, "posture");
-    const log = (decision: LedgerDecision, reason: string, grounds: LedgerGround[] = [], reasonCode?: string) => {
+    const log = (decision: LedgerDecision, reason: string, grounds: LedgerGround[] = [], reasonCode?: string, link: { id?: string; inboxItemId?: string } = {}) => {
       appendLedgerEntry(projectId, {
+        ...link,
         kind: "verb",
         verb: "set_posture",
         tab: tab || null,
@@ -430,13 +592,14 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (!gate.ok) return log("drop", gate.reason);
     ctx.wake.acts += 1;
     ctx.limiter.record(projectId, tab, key);
+    const lookup = await ctx.deps.modelLookup();
     const outcome = evaluateSetPosture({
       mode,
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       from: row.posture,
       patch: valid.patch,
-      lookup: await ctx.deps.modelLookup(),
+      lookup,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
@@ -447,6 +610,30 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       // that slipped in since the row was read is refused there too.
       const done = await ctx.deps.perform.setPosture({ marvinSessionId: tab, patch: valid.patch, grounds: outcome.grounds });
       if (!done.ok) return log("refuse", `could not change posture: ${done.error}`, outcome.grounds, done.code ?? "perform-failed");
+    }
+    if (outcome.decision === "escalate") {
+      const changes = classifyPostureChange(row.posture, valid.patch, lookup);
+      const widened = changes.filter((c) => c.direction === "widen").map((c) => c.field);
+      const pick = (side: "from" | "to") => Object.fromEntries(changes.map((c) => [c.field, c[side] ?? null]));
+      const id = newLedgerId();
+      const inboxItemId = raise(
+        {
+          sessionId: tab,
+          tabTitle: row.title ?? null,
+          kind: widened.length ? "posture-widen" : "scope",
+          escalatedBecause: widened.length
+            ? { code: "human-only", label: "Widening a tab's posture is the user's act", rule: "§4.5 posture" }
+            : { code: "weak-grounds-only", label: outcome.reason.slice(0, 200) },
+          rawAct: buildRawAct("set_posture", { marvinSessionId: tab, posture: valid.patch }),
+          postureChange: { from: pick("from"), to: pick("to"), widenedDimensions: widened },
+          recommendation: { actionId: "perform", text: outcome.reason },
+          grounds: outcome.grounds,
+          act: { type: "posture", sessionId: tab, patch: valid.patch },
+        },
+        mode,
+        id,
+      );
+      return log("escalate", outcome.reason, outcome.grounds, outcome.reasonCode, { id, inboxItemId });
     }
     return log(outcome.decision, outcome.reason, outcome.grounds, outcome.reasonCode);
   }
@@ -472,12 +659,20 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     argsDigest: string,
     o: PolicyOutcome,
     extra: { planSignature?: string; id?: string } & Pick<LedgerEntryInput, "turnId" | "toolUseId" | "answer"> = {},
+    /** Milestone 5 — what the inbox item shows when this escalates. */
+    item?: () => ItemDraft,
   ): string {
     const st = getSupervisorState(projectId);
     const mode = categoryMode(st, CATEGORY[verb]);
     const { planSignature, ...rest } = extra;
+    let link: { id?: string; inboxItemId?: string } = {};
+    if (o.decision === "escalate" && item) {
+      const id = rest.id ?? newLedgerId();
+      link = { id, inboxItemId: raise(item(), mode, id) };
+    }
     appendLedgerEntry(projectId, {
       ...rest,
+      ...link,
       kind: "verb",
       verb,
       tab: tab || null,
@@ -492,6 +687,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       ...(planSignature ? { planSignature } : {}),
     });
     if (o.decision === "act") {
+      if (verb === "confirm") return `${rest.answer?.[0] === "deny" ? "Denied" : "Allowed"} (the confirms category is autonomous). The tab reads it as yours, and this turn is now supervisor-touched.`;
       return verb === "send"
         ? "Sent (the nudges category is autonomous). It reaches the tab marked as yours, after any live turn ends."
         : "Cancelled the tab's running turn (the nudges category is autonomous).";
@@ -548,6 +744,17 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       groundCtx: groundContextFor(row, st.charter),
     });
     const sig = planSignature ? { planSignature } : {};
+    const sendItem = (): ItemDraft => ({
+      sessionId: tab,
+      tabTitle: row.title ?? null,
+      kind: "scope",
+      escalatedBecause: { code: escalationCode(outcome.reasonCode), label: outcome.reason.slice(0, 200) },
+      heuristic: outcome.heuristic ? { matched: outcome.heuristic } : null,
+      rawAct: buildRawAct("send", { marvinSessionId: tab, message, kind }),
+      recommendation: { actionId: "perform", text: outcome.reason },
+      grounds: outcome.grounds,
+      act: { type: "send", sessionId: tab, text: message, kind, grounds: outcome.grounds },
+    });
     if (outcome.decision === "act") {
       const hold = actHold();
       if (hold) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, sig);
@@ -556,7 +763,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       if (!sent.ok) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: sent.code, reason: `could not send: ${sent.reason}` }, { ...sig, id });
       return settle("send", tab, argsDigest, outcome, { ...sig, id });
     }
-    return settle("send", tab, argsDigest, outcome, sig);
+    return settle("send", tab, argsDigest, outcome, sig, sendItem);
   }
 
   /** Milestone 3 — stop a runaway turn, proposed; in shadow nothing is cancelled. */
@@ -585,7 +792,16 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (outcome.decision === "act" && !ctx.deps.perform.cancel(tab)) {
       return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "no-live-turn", reason: "the turn ended before it could be cancelled" });
     }
-    return settle("cancel", tab, argsDigest, outcome);
+    return settle("cancel", tab, argsDigest, outcome, {}, () => ({
+      sessionId: tab,
+      tabTitle: row.title ?? null,
+      kind: "scope",
+      escalatedBecause: { code: escalationCode(outcome.reasonCode), label: outcome.reason.slice(0, 200) },
+      rawAct: buildRawAct("cancel", { marvinSessionId: tab }),
+      recommendation: { actionId: "perform", text: String(args.reason ?? "").slice(0, 500) },
+      grounds: outcome.grounds,
+      act: { type: "cancel", sessionId: tab },
+    }));
   }
 
   /** Milestone 3 — an ordinary confirm, proposed; never one only the user may answer. In shadow nothing resolves. */
@@ -602,21 +818,306 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const drop = limited(tab, `confirm:${toolUseId}`);
     if (drop) return settle("confirm", tab, argsDigest, drop);
     const st = getSupervisorState(projectId);
+    const humanAct = classifyHumanOnlyAct({ toolName: pending.toolName, input: pending.originalInput, cwd: row.tree.cwd, treeMode: row.tree.mode });
     const outcome = evaluateConfirm({
-      // Confirms cannot leave shadow before milestone 5; the state refuses the switch.
       mode: categoryMode(st, "confirms"),
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       raisedBy: pending.raisedBy,
       userOnly: isUserOnlyConfirm(turnId, toolUseId),
-      act: classifyHumanOnlyAct({ toolName: pending.toolName, input: pending.originalInput, cwd: row.tree.cwd, treeMode: row.tree.mode }),
+      act: humanAct,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
-    return settle("confirm", tab, argsDigest, outcome, { turnId, toolUseId, answer: [args.decision === "deny" ? "deny" : "allow"] });
+    const decision = args.decision === "deny" ? "deny" : "allow";
+    const target = { turnId, toolUseId, answer: [decision] };
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, target);
+      const id = newLedgerId();
+      const done = ctx.deps.perform.confirm({ turnId, toolUseId, decision, message: args.message, grounds: outcome.grounds, ledgerId: id });
+      if (!done.ok) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "perform-failed", reason: `could not answer: ${done.error}` }, { ...target, id });
+      return settle("confirm", tab, argsDigest, outcome, { ...target, id });
+    }
+    return settle("confirm", tab, argsDigest, outcome, target, () => {
+      const kind = confirmKind(pending.raisedBy, humanAct);
+      return {
+        sessionId: tab,
+        tabTitle: row.title ?? null,
+        kind,
+        escalatedBecause: {
+          code: escalationCode(outcome.reasonCode),
+          label: outcome.reason.slice(0, 200),
+          ...(humanAct ? { rule: `§4 ${humanAct.item}: ${humanAct.label}`.slice(0, 120) } : pending.raisedBy && kind !== "confirm" ? { rule: `§4 ${pending.raisedBy}` } : {}),
+        },
+        rawAct: buildRawAct(pending.toolName, pending.originalInput),
+        linkedConfirm: { sessionId: tab, turnId, toolUseId, raisingRule: pending.raisedBy },
+        recommendation: { actionId: decision, text: String(args.message ?? outcome.reason).slice(0, 500) },
+        grounds: outcome.grounds,
+        act: { type: "confirm", turnId, toolUseId },
+      };
+    });
   }
 
-  return { sessions, read, answer, set_posture, send, cancel, confirm };
+  // ── Milestone 5: worktrees, close_session, review_scope, new_session, reply ──
+
+  /** Project-level grounds (a worktree or a new tab has no tab of its own to cite). */
+  function projectGrounds(refs: GroundRef[] | undefined): LedgerGround[] {
+    const gctx: GroundContext = { mainRoot: ctx.workDir, tabRoot: null, charter: getSupervisorState(projectId).charter, brief: null, planStepCount: 0, planSeeded: false, tabStartedAt: null };
+    return (Array.isArray(refs) ? refs : []).slice(0, 10).map((g) => {
+      const { kind, ref, provenance } = resolveGround(g, gctx);
+      return { kind, ref, provenance };
+    });
+  }
+
+  /** A ledger line for the milestone 5 verbs. */
+  function note(verb: string, tab: string | null, decision: LedgerDecision, reasonCode: string, reason: string, extra: Partial<LedgerEntryInput> = {}): string {
+    const st = getSupervisorState(projectId);
+    appendLedgerEntry(projectId, { kind: "verb", verb, tab, wakeId: ctx.wakeId, mode: st.mode, decision, reason, reasonCode, ...extra });
+    return REPLY[decision](reason);
+  }
+
+  async function worktrees(args: WorktreesArgs): Promise<string> {
+    const op = args.op;
+    const wt = ctx.deps.worktrees;
+    if (!wt) return "Refused: worktree access is not wired in this wake.";
+    if (op === "list") return JSON.stringify(await wt.list(), null, 2);
+    if (op === "preview") return JSON.stringify(await wt.preview(args.slugs?.length ? args.slugs.map(String).slice(0, 20) : null), null, 2);
+    const verb = `worktrees.${op}`;
+    const slugs = (Array.isArray(args.slugs) ? args.slugs : []).map(String).slice(0, 20);
+    const push = op === "prepare-mr" && args.push === true;
+    const openMergeRequest = op === "prepare-mr" && args.openMergeRequest === true;
+    const argsDigest = digestArgs({ op, slugs, push, openMergeRequest });
+    const st = getSupervisorState(projectId);
+    if (st.mode === "off") return note(verb, null, "refuse", "off", "the supervisor is off", { argsDigest });
+    const gate = ctx.limiter.check(projectId, "", `${verb}:${argsDigest}`, ctx.wake.acts);
+    if (!gate.ok) return note(verb, null, "drop", "rate-limit", gate.reason, { argsDigest });
+    ctx.wake.acts += 1;
+    ctx.limiter.record(projectId, "", `${verb}:${argsDigest}`);
+
+    if (op === "sweep") {
+      // Not discarding (ADR-0127 §4 item 3): exactly what `worktree_sweep` reclaims — empty or
+      // merged, clean, never an open tab's tree. MARVIN already sweeps on every tab close.
+      const hold = actHold();
+      if (hold) return note(verb, null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+      const out = await wt.sweep();
+      const reclaimed = out.filter((o) => o.deletedBranch);
+      const summary = reclaimed.length ? `reclaimed ${reclaimed.map((o) => o.slug).join(", ")}` : "nothing spent to reclaim";
+      note(verb, null, "act", "safe-sweep", `swept: ${summary}`, { argsDigest, argSummary: summary.slice(0, 300) });
+      return `Swept. ${JSON.stringify(out, null, 2)}`;
+    }
+
+    const all = await wt.list();
+    if (op !== "merge-all") {
+      if (!slugs.length) return note(verb, null, "refuse", "no-slugs", `${op} needs the worktree slug(s)`, { argsDigest });
+      if (op === "merge" && slugs.length !== 1) return note(verb, null, "refuse", "one-slug", "merge takes one slug; merge-all takes none", { argsDigest });
+      for (const slug of slugs) {
+        const w = all.find((x) => x.slug === slug);
+        if (!w) return note(verb, null, "refuse", "no-worktree", `no worktree ${slug}`, { argsDigest });
+        if (w.state === "session") return note(verb, null, "refuse", "open-tab", `${slug} belongs to an open tab — its branch is decided when the user closes the tab (ADR-0109)`, { argsDigest });
+      }
+    }
+    const grounds = projectGrounds(args.grounds);
+    const rawAct = buildRawAct(verb, { slugs, ...(op === "prepare-mr" ? { push, openMergeRequest } : {}) });
+    const preview = op === "drop" ? null : await wt.preview(op === "merge-all" ? null : slugs);
+    const id = newLedgerId();
+    const label = op === "drop" ? "Dropping a worktree that holds work is the user's act" : "Integration is the user's act";
+    const inboxItemId = raise(
+      {
+        sessionId: null,
+        kind: op === "drop" ? "discard" : "integration",
+        escalatedBecause: { code: "human-only", label, rule: op === "drop" ? "§4.3 discard" : "§4.1 integration" },
+        rawAct,
+        preview,
+        recommendation: { actionId: "perform", text: String(args.recommendation ?? "").slice(0, 500) || rawAct.summary },
+        grounds,
+        act: { type: "worktrees", op, slugs, ...(op === "prepare-mr" ? { push, openMergeRequest } : {}) },
+      },
+      st.mode,
+      id,
+    );
+    return note(verb, null, "escalate", "human-only", `${label} (ADR-0127 §4) — it is in the user's inbox with a preview`, { id, inboxItemId, argsDigest, grounds, argSummary: rawAct.summary });
+  }
+
+  /** A close-with-keep item for a scope-met tab, keyed on its scope-met close so it is raised once. */
+  function closeItem(row: SessionWatchRow, worktree: CloseSessionArgs["worktree"], text: string, grounds: LedgerGround[], mode: SupervisorMode, id: string): string {
+    const tab = row.marvinSessionId;
+    const scopeMetAt = (ctx.deps.scopeMetAt?.(tab) ?? null);
+    return raise(
+      {
+        sessionId: tab,
+        tabTitle: row.title ?? null,
+        kind: worktree === "keep" ? "scope" : worktree === "merge" ? "integration" : "discard",
+        escalatedBecause: {
+          code: "human-only",
+          label: "Closing a tab is the user's act",
+          rule: worktree === "merge" ? "§4.1 integration" : "§4.3 discard",
+        },
+        rawAct: buildRawAct("close_session", { marvinSessionId: tab, worktree }),
+        recommendation: { actionId: "perform", text: text.slice(0, 500) || "Close this tab" },
+        grounds,
+        act: { type: "close", sessionId: tab, worktree },
+        ...(worktree === "keep" && scopeMetAt ? { dedupeKey: `close:${tab}:${scopeMetAt}` } : {}),
+      },
+      mode,
+      id,
+    );
+  }
+
+  async function close_session(args: CloseSessionArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const worktree = args.worktree === "merge" || args.worktree === "discard" ? args.worktree : "keep";
+    const argsDigest = digestArgs({ worktree });
+    if (!visible(tab)) return note("close_session", tab || null, "refuse", "delegation", `tab ${tab} is not delegated to you (or is a supervisor session)`, { argsDigest });
+    const row = await rowFor(tab);
+    if (!row) return note("close_session", tab, "refuse", "no-tab", `no open tab ${tab}`, { argsDigest });
+    if (row.turn) return note("close_session", tab, "refuse", "turn-live", "a turn is running in this tab", { argsDigest });
+    const drop = limited(tab, `close_session:${argsDigest}`);
+    if (drop) return note("close_session", tab, "drop", "rate-limit", drop.reason, { argsDigest });
+    const st = getSupervisorState(projectId);
+    const grounds = (Array.isArray(args.grounds) ? args.grounds : []).map((g) => {
+      const { kind, ref, provenance } = resolveGround(g, groundContextFor(row, st.charter));
+      return { kind, ref, provenance };
+    });
+    const id = newLedgerId();
+    const inboxItemId = closeItem(row, worktree, String(args.recommendation ?? ""), grounds, st.mode, id);
+    return note("close_session", tab, "escalate", "human-only", "closing a tab is the user's act (ADR-0127 §4, ADR-0111) — it is in the user's inbox", { id, inboxItemId, argsDigest, grounds, argSummary: `close ${worktree}` });
+  }
+
+  /**
+   * ADR-0127 §2 trigger 4 — a tab claimed its scope met. The supervisor reads
+   * the claim against the evidence and either marks the tab ready for the
+   * user's review (a close-with-keep item) or says what is missing (an item
+   * that sends it, on the user's click: reopening scope is theirs, §4 item 6).
+   */
+  async function review_scope(args: ReviewScopeArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const text = String(args.text ?? "").trim();
+    const verdict = args.verdict === "missing" ? "missing" : "ready";
+    const argsDigest = digestArgs({ verdict, text });
+    if (!visible(tab)) return note("review_scope", tab || null, "refuse", "delegation", `tab ${tab} is not delegated to you (or is a supervisor session)`, { argsDigest });
+    const row = await rowFor(tab);
+    if (!row) return note("review_scope", tab, "refuse", "no-tab", `no open tab ${tab}`, { argsDigest });
+    if (!(ctx.deps.scopeMetAt?.(tab) ?? null)) return note("review_scope", tab, "refuse", "no-scope-met", "the tab has not claimed its scope met — there is no claim to review", { argsDigest });
+    if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return note("review_scope", tab, "refuse", "text", `the review needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`, { argsDigest });
+    if (containsSecretShape(text)) return note("review_scope", tab, "refuse", "secret", "the review carries a secret-shaped string (ADR-0127 §6)", { argsDigest });
+    const drop = limited(tab, `review_scope:${argsDigest}`);
+    if (drop) return note("review_scope", tab, "drop", "rate-limit", drop.reason, { argsDigest });
+    const st = getSupervisorState(projectId);
+    const grounds = (Array.isArray(args.grounds) ? args.grounds : []).map((g) => {
+      const { kind, ref, provenance } = resolveGround(g, groundContextFor(row, st.charter));
+      return { kind, ref, provenance };
+    });
+    const id = newLedgerId();
+    const inboxItemId =
+      verdict === "ready"
+        ? closeItem(row, "keep", text, grounds, st.mode, id)
+        : raise(
+            {
+              sessionId: tab,
+              tabTitle: row.title ?? null,
+              kind: "scope",
+              escalatedBecause: { code: "human-only", label: "Reopening a finished tab's scope is the user's act", rule: "§4.6 scope" },
+              rawAct: buildRawAct("send", { marvinSessionId: tab, message: text, kind: "instruction" }),
+              recommendation: { actionId: "perform", text: "The scope-met claim misses something; send the tab what is missing" },
+              grounds,
+              act: { type: "send", sessionId: tab, text, kind: "instruction", grounds },
+            },
+            st.mode,
+            id,
+          );
+    return note("review_scope", tab, "escalate", "human-only", `scope review (${verdict}) — it is in the user's inbox`, { id, inboxItemId, argsDigest, grounds, argSummary: `scope ${verdict}` });
+  }
+
+  /**
+   * ADR-0127 §4 item 7 — open a tab, only on the user's word. The verb never
+   * opens one: it proposes an inbox item with the first message, the tree (a
+   * fresh worktree, always) and the posture, and the user's confirmation opens
+   * it. One request, one tab.
+   */
+  async function new_session(args: NewSessionArgs): Promise<string> {
+    const requestId = String(args.requestId ?? "").trim();
+    const firstMessage = String(args.firstMessage ?? "").trim();
+    const title = typeof args.title === "string" ? args.title.trim().slice(0, 120) : "";
+    const argsDigest = digestArgs({ requestId, firstMessage, posture: args.posture ?? {}, tree: args.tree ?? null, title });
+    const refuse = (code: string, reason: string) => note("new_session", null, "refuse", code, reason, { argsDigest });
+    const st = getSupervisorState(projectId);
+    if (st.mode === "off") return refuse("off", "the supervisor is off");
+    const request = requestId ? (ctx.deps.userRequest?.(requestId) ?? null) : null;
+    if (!request) return refuse("no-request", "a new tab is proposed only on the user's own request — cite the id of their message (ADR-0127 §4 item 7)");
+    if (listInbox(projectId).some((i) => i.act?.type === "new-tab" && i.act.requestId === requestId && (i.state === "open" || i.state === "resolved"))) {
+      return refuse("request-used", "that request already has its tab — one request, one tab");
+    }
+    if (args.tree !== undefined && args.tree !== "worktree") {
+      return refuse("tree", "a new tab always gets a fresh worktree — never the shared checkout or an existing tree (ADR-0122)");
+    }
+    if (!firstMessage || firstMessage.length > MAX_SUPERVISOR_MESSAGE_CHARS) return refuse("text", `the first message needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`);
+    if (containsSecretShape(firstMessage) || containsSecretShape(title)) return refuse("secret", "the first message carries a secret-shaped string (ADR-0127 §6)");
+    // No posture given: the base posture as it is.
+    const valid: ReturnType<typeof validatePosturePatch> = args.posture && Object.keys(args.posture).length ? validatePosturePatch(args.posture) : { ok: true, patch: {} };
+    if (!valid.ok) return refuse("posture", valid.error);
+    const key = `new_session:${requestId}`;
+    const gate = ctx.limiter.check(projectId, "", key, ctx.wake.acts);
+    if (!gate.ok) return note("new_session", null, "drop", "rate-limit", gate.reason, { argsDigest });
+    ctx.wake.acts += 1;
+    ctx.limiter.record(projectId, "", key);
+
+    const base = await ctx.deps.newTabBase?.();
+    if (!base) return note("new_session", null, "refuse", "no-base", "the project has no posture to start a tab from", { argsDigest });
+    const patch = valid.patch;
+    const posture: SessionPosture = {
+      ...base.posture,
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.thinkingMode !== undefined ? { thinkingMode: patch.thinkingMode } : {}),
+      ...(patch.permissionStrategy !== undefined ? { permissionStrategy: patch.permissionStrategy } : {}),
+      ...(patch.mode !== undefined ? { mode: patch.mode } : {}),
+    };
+    const wider = classifyPostureChange(base.posture, patch, await ctx.deps.modelLookup())
+      .filter((c) => c.direction === "widen")
+      .map((c) => c.field);
+    const grounds = projectGrounds(args.grounds);
+    const rawAct = buildRawAct("new_session", { firstMessage, tree: "worktree", posture: patch, ...(title ? { title } : {}) });
+    const id = newLedgerId();
+    const inboxItemId = raise(
+      {
+        sessionId: null,
+        kind: "new-tab",
+        escalatedBecause: { code: "human-only", label: "Opening a tab is the user's act", rule: "§4.7 topology" },
+        rawAct,
+        newTab: {
+          firstMessage,
+          tree: { baseRef: base.baseRef, baseSha: base.baseSha, mode: "worktree" },
+          posture: {
+            model: posture.model,
+            modelLabel: (await ctx.deps.modelLabel?.(posture.model)) ?? posture.model,
+            effort: String(posture.thinkingMode ?? ""),
+            strategy: String(posture.permissionStrategy ?? ""),
+            mode: String(posture.mode ?? "agent"),
+          },
+          wider,
+          requestedBy: { kind: "user-message", ref: requestId, at: request.at },
+        },
+        recommendation: { actionId: "open", text: String(args.recommendation ?? "").slice(0, 500) || "You asked for a tab for this" },
+        grounds,
+        act: { type: "new-tab", requestId, ...(title ? { title } : {}), posture, grounds },
+      },
+      st.mode,
+      id,
+    );
+    return note("new_session", null, "escalate", "human-only", "opening a tab is the user's act — the proposal is in their inbox (ADR-0127 §4 item 7)", { id, inboxItemId, argsDigest, grounds, argSummary: rawAct.summary });
+  }
+
+  /** Milestone 5 — answer the user in the supervisor's conversation. A reply authorises nothing. */
+  async function reply(args: { text: string }): Promise<string> {
+    const text = String(args.text ?? "").trim();
+    if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return `Refused: a reply needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters.`;
+    if (containsSecretShape(text)) return "Refused: the reply carries a secret-shaped string (ADR-0127 §6).";
+    if (!ctx.deps.postReply) return "Refused: no conversation is open this wake.";
+    ctx.deps.postReply(text);
+    return "Sent to the user.";
+  }
+
+  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply };
 }
 
 const groundSchema = z.object({
@@ -719,6 +1220,75 @@ export function supervisorToolDefs(ctx: VerbContext) {
         grounds: z.array(groundSchema).max(10).optional(),
       },
       async (args) => text(await v.confirm(args as ConfirmArgs)),
+    ),
+    tool(
+      "worktrees",
+      "The project's worktrees. `list` and `preview` (a merge-tree dry run against the current branch) read live. " +
+        "`sweep` reclaims exactly what is provably spent — empty or merged, clean, never an open tab's tree — and is performed. " +
+        "`merge`, `merge-all`, `prepare-mr` and `drop` are the user's acts: each becomes an inbox item with the raw act and a preview. " +
+        "Give your `recommendation` and `grounds`.",
+      {
+        op: z.enum(["list", "preview", "sweep", "merge", "merge-all", "prepare-mr", "drop"]),
+        slugs: z.array(z.string().min(1).max(200)).max(20).optional(),
+        push: z.boolean().optional(),
+        openMergeRequest: z.boolean().optional(),
+        recommendation: z.string().max(500).optional(),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.worktrees(args as WorktreesArgs)),
+    ),
+    tool(
+      "close_session",
+      "Propose closing a delegated tab: `keep` (its branch stays — reversible), `merge` or `discard`. Closing is the user's act: " +
+        "it becomes an inbox item, never performed by you.",
+      {
+        marvinSessionId: z.string().min(1),
+        worktree: z.enum(["keep", "merge", "discard"]),
+        recommendation: z.string().max(500).optional(),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.close_session(args as CloseSessionArgs)),
+    ),
+    tool(
+      "review_scope",
+      "Review a tab's scope-met claim against its plan and DoD. `ready` proposes closing it with its branch kept; " +
+        "`missing` proposes sending the tab `text` (what is missing). Both go to the user's inbox — reopening scope is theirs.",
+      {
+        marvinSessionId: z.string().min(1),
+        verdict: z.enum(["ready", "missing"]),
+        text: z.string().min(1).max(4_000),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.review_scope(args as ReviewScopeArgs)),
+    ),
+    tool(
+      "new_session",
+      "Propose opening ONE new tab, only when the user asked you for one: cite the id of their message as `requestId`. " +
+        "Give the `firstMessage`, an optional `title` and `posture`. The tab always gets a fresh worktree. The user confirms " +
+        "it from the inbox; you never open a tab yourself, and one request is one tab.",
+      {
+        requestId: z.string().min(1).max(100),
+        firstMessage: z.string().min(1).max(4_000),
+        title: z.string().max(120).optional(),
+        posture: z
+          .object({
+            model: z.string().optional(),
+            thinkingMode: z.string().optional(),
+            permissionStrategy: z.enum(["gated", "auto", "full"]).optional(),
+            mode: z.enum(["ask", "plan", "agent"]).optional(),
+          })
+          .optional(),
+        tree: z.string().max(200).optional(),
+        recommendation: z.string().max(500).optional(),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.new_session(args as NewSessionArgs)),
+    ),
+    tool(
+      "reply",
+      "Answer the user in your conversation with them (their messages reach you as `message` items). A reply authorises nothing.",
+      { text: z.string().min(1).max(4_000) },
+      async (args) => text(await v.reply(args)),
     ),
   ];
 }

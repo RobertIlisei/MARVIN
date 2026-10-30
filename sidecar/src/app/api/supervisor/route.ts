@@ -12,7 +12,8 @@
  *             mode (off|shadow) | delegate { marvinSessionId, level } |
  *             charter { text } | cap { capUsd } |
  *             autonomy { category: questions|nudges|posture|confirms, value: shadow|autonomous }
- *     `confirms` cannot leave shadow before milestone 5 (409).
+ *     `confirms` may leave shadow from milestone 5. `status.openEscalations`
+ *     counts open inbox items (`/api/supervisor/inbox`).
  *
  * Every call needs the per-boot capability token in `x-marvin-supervisor-token`
  * (read from `<MARVIN_DATA_DIR>/supervisor/token`) — GET too, because the state
@@ -21,13 +22,14 @@
  * tool call that names MARVIN's control API (ADR-0127 §5).
  */
 
+import { openEscalationCounts } from "@marvin/runtime/supervisor-inbox";
 import { readLedger } from "@marvin/runtime/supervisor-ledger";
 import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
 import {
   applySupervisorAction,
   getSupervisorState,
-  type SupervisorState,
   SUPERVISOR_TOKEN_HEADER,
+  type SupervisorState,
   verifySupervisorToken,
 } from "@marvin/runtime/supervisor-state";
 import { buildSupervisorStatus, supervisorModelInfo } from "@marvin/runtime/supervisor-status";
@@ -43,7 +45,7 @@ const TOKEN_REFUSAL = { error: "supervisor routes need the per-boot capability t
 
 async function statusOf(state: SupervisorState) {
   const loop = ensureSupervisorLoop();
-  return buildSupervisorStatus(state, loop.snapshot(state.projectId), readLedger(state.projectId), await supervisorModelInfo());
+  return buildSupervisorStatus(state, loop.snapshot(state.projectId), readLedger(state.projectId), await supervisorModelInfo(), Date.now(), openEscalationCounts(state.projectId).total);
 }
 
 export async function GET(req: NextRequest) {
