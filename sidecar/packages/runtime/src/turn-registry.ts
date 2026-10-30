@@ -73,6 +73,8 @@ export interface LiveTurn {
    * case the caller falls back to the durable queue (ADR-0069).
    */
   inject?: (text: string) => boolean;
+  /** ADR-0127 §5 — who wrote the message that started this turn. Absent: the user (or the runtime, for `machine`). */
+  author?: "user" | "supervisor";
 }
 
 /**
@@ -91,6 +93,8 @@ export interface TurnAnnouncement {
   startedAt: number;
   /** ADR-0107 — human or machine (wakeup / resume) turn. */
   kind?: "human" | "machine";
+  /** ADR-0127 §5 — a supervisor-authored turn. */
+  author?: "supervisor";
 }
 
 /**
@@ -123,6 +127,11 @@ export type ProjectEvent =
       data: { marvinSessionId: string; projectId: string; turnId: string; toolUseId: string; decision: "allow" | "deny" };
     }
   | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } }
+  | {
+      /** ADR-0127 §5 — the supervisor touched a turn. */
+      event: "turn.supervisor-touched";
+      data: { marvinSessionId: string; projectId: string; turnId: string; at: string; by: "message" | "answer" };
+    }
   | {
       /** ADR-0107 addendum — what the session's live turn is doing now. */
       event: "session.activity";
@@ -172,6 +181,8 @@ export function registerLiveTurn(input: {
   /** ADR-0069 — defaults to "human" so an un-migrated caller is never
    *  mistaken for a machine turn and preempted. */
   kind?: "human" | "machine";
+  /** ADR-0127 §5 — a supervisor message started it (always `kind: "machine"`, so a user message preempts it). */
+  author?: "supervisor";
 }): LiveTurn {
   // If a prior turn was registered under this session but never ended
   // cleanly (rare — server crash, or an explicit replace), evict it so
@@ -206,6 +217,7 @@ export function registerLiveTurn(input: {
     ended: false,
     kind: input.kind ?? "human",
     mutated: false,
+    ...(input.author ? { author: input.author } : {}),
   };
   live.set(input.marvinSessionId, turn);
   // ADR-0120 — the machine must not idle-sleep while a turn is in flight.
@@ -218,6 +230,7 @@ export function registerLiveTurn(input: {
     turnId: turn.turnId,
     startedAt: turn.startedAt,
     kind: turn.kind,
+    ...(turn.author === "supervisor" ? { author: "supervisor" as const } : {}),
   };
   announcer.emit("turn", announcement);
   announceProjectEvent({ event: "turn.registered", data: announcement });

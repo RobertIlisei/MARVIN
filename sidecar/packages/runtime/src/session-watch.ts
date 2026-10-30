@@ -19,6 +19,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
 
+import { listBackgroundJobs } from "./background-jobs";
 import { listPendingConfirms, type PendingConfirmSummary } from "./confirm-registry";
 import { sessionCostTotals } from "./cost-tracker";
 import { type SessionGraphUsage, sessionGraphUsage } from "./graph-usage";
@@ -34,7 +35,10 @@ import {
   type SessionPosture,
   type SessionTree,
 } from "./session-meta";
+import { type Delegation, getSupervisorState } from "./supervisor-state";
+import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
 import { listLiveTurns } from "./turn-registry";
+import { listWakeups } from "./wakeup-scheduler";
 import { type ReconciledWorktree, reconcileSessionWorktreeAsync, reconcileWorktreesAsync } from "./worktrees";
 
 export type SessionWatchState = "working" | "idle" | "awaiting-you" | "failed" | "interrupted";
@@ -76,7 +80,7 @@ export interface SessionWatchRow {
   state: SessionWatchState;
   /** ADR-0111 — null for a shared tab or before the first message. */
   worktree: SessionWatchWorktree | null;
-  turn: { turnId: string; kind: "human" | "machine"; startedAt: string; mutated: boolean } | null;
+  turn: { turnId: string; kind: "human" | "machine"; startedAt: string; mutated: boolean; author?: "supervisor" } | null;
   /** What the live turn is doing now (thinking / writing / tool + name); null when idle. */
   activity: SessionActivity | null;
   pending: PendingConfirmSummary[];
@@ -96,6 +100,24 @@ export interface SessionWatchRow {
   /** ADR-0108 — the posture this session's turns last ran with, so a client
    *  restoring a tab shows the mode / models / gate it had, not app defaults. */
   posture: SessionPosture | null;
+  /** ADR-0127 §9 — the posture revision a client echoes on its next turn; null when the posture route was never used. */
+  postureRevision: number | null;
+  /** ADR-0127 §9 — who set the API posture (`user` or `supervisor`); null when the route was never used. */
+  postureSource: "user" | "supervisor" | null;
+  /** ADR-0127 / design brief §10.4 — what the delegation chip and the tab row read. */
+  supervisor: SessionWatchSupervisor;
+}
+
+export interface SessionWatchSupervisor {
+  delegation: Delegation;
+  /** The tab works in the shared checkout (a send waits while another session works there). */
+  sharedCheckout: boolean;
+  /** The last turn the supervisor touched, if any (ADR-0127 §5). */
+  touchedTurn: TouchedTurn | null;
+  /** The tab is waiting on its own background job or wakeup — the supervisor leaves it alone. */
+  waitingOnOwn: "job" | "wakeup" | null;
+  /** The user stopped the tab's last turn — the supervisor waits for the user (ADR-0111). */
+  stoppedByUser: boolean;
 }
 
 /** The one derivation the UI trusts. Pure, so it is pinned by tests. */
@@ -357,11 +379,14 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
     if (w.state === "ready" && w.sessionId) push(w.sessionId);
   }
 
+  const delegations = getSupervisorState(projectId).delegation;
+  // One read of the wakeup store per build, not per row: this route is polled.
+  const ownWakeups = new Set(listWakeups({ projectId }).filter((w) => w.author !== "supervisor").map((w) => w.marvinSessionId));
   // Rows resolve concurrently: each one's git facts are independent.
   return Promise.all(ids.slice(0, MAX_ROWS).map(async (id) => {
     const meta: SessionMeta | null = metas.get(id) ?? readSessionMeta(projectId, id);
     const turn = live.get(id) ?? null;
-    const pending = turn ? listPendingConfirms(turn.turnId) : [];
+    const pending = turn ? listPendingConfirms(turn.turnId).map((p) => ({ ...p, userOnly: isUserOnlyConfirm(p.turnId, p.toolUseId) })) : [];
     const tree: SessionTree = meta?.tree ?? { mode: "shared" };
     const cwdInfo = meta ? resolveSessionCwd(meta) : { cwd: workDir, present: existsSync(workDir) };
     const base = tree.mode === "worktree" ? tree.base : null;
@@ -378,7 +403,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         now,
       }),
       turn: turn
-        ? { turnId: turn.turnId, kind: turn.kind, startedAt: new Date(turn.startedAt).toISOString(), mutated: turn.mutated }
+        ? { turnId: turn.turnId, kind: turn.kind, startedAt: new Date(turn.startedAt).toISOString(), mutated: turn.mutated, ...(turn.author === "supervisor" ? { author: "supervisor" as const } : {}) }
         : null,
       activity: turn ? getActivity(id) : null,
       worktree: tree.mode === "worktree"
@@ -399,6 +424,15 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       title: meta?.title ?? summary?.firstUserMessage ?? null,
       updatedAt: meta?.updatedAt ?? summary?.updatedAt ?? new Date(now).toISOString(),
       posture: meta?.posture ?? null,
+      postureRevision: meta?.postureRevision ?? null,
+      postureSource: meta?.postureSource ?? null,
+      supervisor: {
+        delegation: delegations[id] ?? "off",
+        sharedCheckout: tree.mode !== "worktree",
+        touchedTurn: touchedTurnFor(projectId, id, meta),
+        waitingOnOwn: listBackgroundJobs(id).length ? "job" : ownWakeups.has(id) ? "wakeup" : null,
+        stoppedByUser: meta?.lastTurn?.outcome === "stopped",
+      },
     };
   }));
 }

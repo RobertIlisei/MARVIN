@@ -258,6 +258,7 @@ export function buildResumeRecord(meta: SessionMeta, opts: { prompt?: string | u
     advisorModel: meta.posture.advisorModel,
     personality: meta.posture.personality,
     permissionStrategy: meta.posture.permissionStrategy,
+    ...(meta.posture.mode ? { mode: meta.posture.mode } : {}),
     ...(meta.posture.playwrightEnabled !== undefined ? { playwrightEnabled: meta.posture.playwrightEnabled } : {}),
     thinkingMode: meta.posture.thinkingMode,
     ...(meta.posture.advisorThinkingMode ? { advisorThinkingMode: meta.posture.advisorThinkingMode } : {}),
@@ -266,6 +267,8 @@ export function buildResumeRecord(meta: SessionMeta, opts: { prompt?: string | u
     createdAt: new Date(opts.now ?? Date.now()).toISOString(),
     fireAt: opts.now ?? Date.now(),
     depth: 0,
+    // ADR-0127 §5 — the cut-off turn was touched; its resume is too.
+    ...(meta.supervisorTouched && last && meta.supervisorTouched.turnId === last.turnId ? { supervisorTouched: meta.supervisorTouched.by } : {}),
   };
 }
 

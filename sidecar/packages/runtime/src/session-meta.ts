@@ -92,6 +92,24 @@ export interface SessionMeta {
    *  from it. Outlives the spine file, so "no spine at all" in a checklist tab
    *  is known to be a gap, not a chore. */
   checklist?: { planId: string; steps: number; seededAt: string };
+  /**
+   * ADR-0127 §9 — a posture set through `PUT /api/sessions/posture`, without a
+   * turn. `postureRevision` counts those changes; `postureOverride` holds the
+   * fields they set, which the chat route keeps over what the app posts until
+   * the app sends `postureRevision` back (`postureAck`). Absent on a session
+   * that never used the route — it behaves exactly as before.
+   */
+  postureRevision?: number;
+  postureSource?: "user" | "supervisor";
+  postureOverride?: { model?: string; thinkingMode?: string; permissionStrategy?: SessionPosture["permissionStrategy"]; mode?: NonNullable<SessionPosture["mode"]> };
+  postureAck?: number;
+  /**
+   * ADR-0127 §5 — the last turn the supervisor touched: it started the turn
+   * (`message`) or answered a question in it (`answer`). Kept here, not only
+   * in memory, so a resume after a restart inherits the touch instead of
+   * laundering it, and the watch row reads it without the live turn.
+   */
+  supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" };
 }
 
 export function sessionMetaPath(projectId: string, sessionId: string): string {

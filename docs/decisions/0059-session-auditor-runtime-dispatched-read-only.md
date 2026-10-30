@@ -1,6 +1,6 @@
 # ADR-0059 — Session auditor: runtime-dispatched, read-only, reports to the user
 
-**Status:** Accepted — 2026-07-24
+**Status:** Accepted — 2026-07-24. Amended and partially superseded by [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md) (2026-10-30): the auditor reviews the supervisor; "no model ever commands another model" no longer holds.
 **Touches:** a new `session-auditor.ts` in `@marvin/runtime`
 (audit-packet assembly + the auditor session dispatch), a `POST/GET /api/audit`
 route, `ChatPreviewView.swift` (scope-met "Audit session" chip + findings
@@ -295,3 +295,11 @@ noise), so nothing is auto-parked — the user triages per finding.
 - [x] `personality.ts` notes the auditor's existence + that MARVIN never
       invokes it; `CLAUDE.md` Golden Rule 1 list updated; full suite +
       typecheck green; app rebuilt.
+
+## Amendment (2026-10-30, [ADR-0127](./0127-a-supervisor-session-oversees-the-tabs.md)) — the auditor reviews the supervisor
+
+- **Superseded:** "No model ever commands another model" (Decision) and the rejected alternative "Standing supervisor over executor+advisor". ADR-0127 admits a user-started supervisor session over a project's tabs.
+- **§5 still binds the auditor:** not a gate, not a dispatcher, not a writer, not resident. The supervisor *is* a dispatcher, bounded by ADR-0127's policy; the auditor is not one and stays not one.
+- **A new audit target:** the supervisor ledger (`<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`) over a window, set against the transcripts of the tabs it acted on. New finding classes: `ungrounded`, `overreach`, `loop`, `consent`. User-initiated; a scheduled ledger audit is opt-in and off by default — the use §1's deferred scheduled trigger was waiting for.
+- **The report goes to the user, never to the supervisor.** The reviewed is not briefed by its reviewer — the same out-of-band property this ADR was built on.
+- Lands in ADR-0127 milestone 5.

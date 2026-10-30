@@ -72,6 +72,10 @@ import {
   noteBashFailure,
   recordAllowedTool,
 } from "./design-hooks";
+import { makeSideDoorPreToolUseHook } from "./side-door-hook";
+import { clearLiveNarrowing, getLiveNarrowing, narrowerMode, narrowerStrategy } from "./posture";
+import { classifyHumanOnlyAct, type HumanOnlyAct } from "./supervisor-acts";
+import { isTurnTouched } from "./supervisor-touch";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -1442,7 +1446,7 @@ function maybeAskUserQuestion(args: {
     // user's pending answer and making a later "Send choice" click hit a
     // resolved/gone confirm (404 → "nothing happens"). It now waits for the
     // human; the turn's `finally` (clearTurnConfirms) + Stop are the escapes.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "AskUserQuestion" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "AskUserQuestion", raisedBy: "ask-user-question" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1549,7 +1553,7 @@ function maybeSharedTreeConfirm(args: {
     // No auto-deny timer, same reasoning as AskUserQuestion: this is a human
     // decision about their own two sessions, and a silent timeout would turn
     // into the mystery failure the confirm exists to replace.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash", raisedBy: "shared-tree" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1621,7 +1625,7 @@ function maybeMeteredCiConfirm(args: {
     // No auto-deny timer, same reasoning as the rest of the family: this is a
     // human decision about their own budget, and a silent timeout would be the
     // mystery failure the confirm exists to replace.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash", raisedBy: "metered-ci" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1670,7 +1674,7 @@ function maybeLaneConfirm(args: {
     } as PermissionResult);
   }
   return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "lane" });
     onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason });
   });
 }
@@ -1708,7 +1712,7 @@ function maybeSessionWorktreeGate(args: {
     } as PermissionResult);
   }
   return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "session-worktree" });
     onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason: verdict.reason });
   });
 }
@@ -1830,6 +1834,82 @@ export function makeAutoModeLogger(args: {
 }
 
 /**
+ * ADR-0127 §9 — the turn's gate, re-chosen on every call: the turn's own
+ * strategy and mode, narrowed by whatever `PUT /api/sessions/posture` set
+ * while it runs (`getLiveNarrowing`). Only narrowing ever applies here; a
+ * widening waits for the next turn.
+ */
+export function makeLivePostureGate(args: {
+  turnId: string;
+  permissionStrategy: PermissionStrategy;
+  mode: AgentMode;
+  gateFor: (strategy: PermissionStrategy, mode: AgentMode) => CanUseTool;
+  /** ADR-0127 §5 — what the touched-turn rule needs: the tab's checkout, its tree, and a UI to ask. */
+  consent?: { cwd: string; treeMode?: "shared" | "worktree" | undefined; onConfirmRequest?: ((request: ConfirmRequestPayload) => void) | undefined };
+}): CanUseTool {
+  const cache = new Map<string, CanUseTool>();
+  const gateAt = (s: PermissionStrategy, m: AgentMode): CanUseTool => {
+    const key = `${s}|${m}`;
+    let gate = cache.get(key);
+    if (!gate) {
+      gate = args.gateFor(s, m);
+      cache.set(key, gate);
+    }
+    return gate;
+  };
+  return (toolName, toolInput, opts) => {
+    const live = getLiveNarrowing(args.turnId);
+    let s = narrowerStrategy(args.permissionStrategy, live?.permissionStrategy);
+    const m = narrowerMode(args.mode, live?.mode);
+    // ADR-0127 §5 — a turn the supervisor touched. `full` waives the
+    // containment confirms (ADR-0115); in a touched turn they are back, and
+    // every §4 act asks the user first — subagent calls included.
+    if (args.consent && isTurnTouched(args.turnId)) {
+      if (s === "full") s = "auto";
+      const act = m === "agent" ? classifyHumanOnlyAct({ toolName, input: normaliseInput(toolInput), cwd: args.consent.cwd, treeMode: args.consent.treeMode }) : null;
+      if (act) return touchedTurnConfirm({ turnId: args.turnId, toolName, input: normaliseInput(toolInput), opts, act, onConfirmRequest: args.consent.onConfirmRequest, then: gateAt(s === "gated" ? "auto" : s, m) });
+    }
+    return gateAt(s, m)(toolName, toolInput, opts);
+  };
+}
+
+/**
+ * ADR-0127 §5 — a §4 act inside a supervisor-touched turn. Only the user can
+ * answer this card (`raisedBy: "supervisor-touched"`; the supervisor's verbs
+ * refuse it). On the user's allow the call still passes the ordinary gate —
+ * the hard-deny floor and local-only integration hold — at `auto`, so a
+ * gated tab does not ask the same question twice. A containment or money
+ * rule may still ask its own question after this one (a second card for the
+ * same act); that is the known cost of keeping those rules' richer reasons.
+ * With no UI attached the act is denied, never run unattended.
+ */
+async function touchedTurnConfirm(args: {
+  turnId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  opts: Parameters<CanUseTool>[2];
+  act: HumanOnlyAct;
+  onConfirmRequest?: ((request: ConfirmRequestPayload) => void) | undefined;
+  then: CanUseTool;
+}): Promise<Awaited<ReturnType<CanUseTool>>> {
+  const { turnId, toolName, input, opts, act, onConfirmRequest } = args;
+  const reason =
+    `The supervisor steered this turn (ADR-0127 §5), so ${act.label} is your decision alone — ` +
+    `a supervisor message or answer is never your consent. Allow to run it, or deny.`;
+  if (!onConfirmRequest) {
+    return { behavior: "deny", message: `${reason} No interactive UI is attached to this turn, so it was denied rather than run unattended.`, interrupt: false } as PermissionResult;
+  }
+  const toolUseID = opts.toolUseID;
+  const decided = await new Promise<PermissionResult>((resolve) => {
+    // No auto-deny timer: it waits for the user, like the rest of the family.
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "supervisor-touched" });
+    onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason });
+  });
+  if (decided.behavior !== "allow") return decided;
+  return args.then(toolName, (decided.updatedInput as Record<string, unknown> | undefined) ?? input, opts);
+}
+
+/**
  * Build the `gated` mode `canUseTool` callback. Auto-class allows
  * (audit-logged); deny-class hard-denies; confirm-class registers a
  * pending Promise and emits an `onConfirmRequest` event the UI handles
@@ -1934,7 +2014,7 @@ export function makeGatedCanUseTool(args: {
     }
     // confirm — wait on the client.
     return new Promise<PermissionResult>((resolve) => {
-      registerPendingConfirm(turnId, toolUseID, resolve, safeInput, undefined, { toolName });
+      registerPendingConfirm(turnId, toolUseID, resolve, safeInput, undefined, { toolName, raisedBy: "gated" });
       onConfirmRequest({
         turnId,
         toolUseId: toolUseID,
@@ -2093,7 +2173,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     facts: () => ({
       mutations: designCtx.mutationCount,
       lastTodos: lastTodoPayload,
-      machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued)/.test(message),
+      // ADR-0127 §5 — a supervisor message is not the user's either.
+      machineTurn: /^\[(scheduled wakeup|queued |\d+ messages queued|Message from the MARVIN supervisor)/.test(message),
       // Plan-stale (2026-09-03): the persisted plan spine's open steps, so a
       // real-work turn that never touched TodoWrite can be asked to.
       planOpenSteps:
@@ -2159,6 +2240,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const readOnly = mode === "ask" || mode === "plan";
   const gatedCanUseTool = makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly, mode, ...(checkpoint ? { checkpoint } : {}) });
   const autoModeLogger = makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly, mode, permissionStrategy, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  // The gate for any narrower posture this turn may be moved to mid-flight.
+  const gateFor = (s: PermissionStrategy, m: AgentMode): CanUseTool => {
+    if (s === permissionStrategy && m === mode) return s === "gated" ? gatedCanUseTool : autoModeLogger;
+    const ro = m === "ask" || m === "plan";
+    return s === "gated"
+      ? makeGatedCanUseTool({ cwd, workDir, sessionTree: input.sessionTree, turnId, onConfirmRequest, readOnly: ro, mode: m, ...(checkpoint ? { checkpoint } : {}) })
+      : makeAutoModeLogger({ cwd, workDir, sessionTree: input.sessionTree, turnId, readOnly: ro, mode: m, permissionStrategy: s, onConfirmRequest, ...(checkpoint ? { checkpoint } : {}) });
+  };
 
   // In-process MCP server exposing graphify graph tools to MARVIN. Built
   // per-turn so the server is scoped to the current workDir. Safe to always
@@ -2265,7 +2354,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // enforcement lives in the gate (`readOnly`) below — Plan is no longer
     // the SDK's coupled plan permissionMode.
     permissionMode: "default",
-    canUseTool: permissionStrategy === "gated" ? gatedCanUseTool : autoModeLogger,
+    // ADR-0127 §9 — re-chosen on every call, so a narrowing set through the
+    // posture route while this turn runs applies at the next tool call.
+    canUseTool: makeLivePostureGate({ turnId, permissionStrategy, mode, gateFor, consent: { cwd, treeMode: input.sessionTree?.mode, onConfirmRequest } }),
     // ADR-0036: SDK-level backstop for Ask read-only — the gate already
     // hard-denies these, this is the belt-and-braces (same shape as the
     // scout). Bash is NOT disallowed: read-only shell (ls/grep/cat) stays
@@ -2298,7 +2389,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // without consulting it. The design hooks need to gate the read /
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
-      PreToolUse: [{ hooks: [designPreToolUseHook] }],
+      // ADR-0127 — the side-door rule (MARVIN's control API, the supervisor's
+      // data dir) first, for the read tools `toolPolicy` never sees.
+      PreToolUse: [{ hooks: [makeSideDoorPreToolUseHook(), designPreToolUseHook] }],
       PostToolUse: [
         {
           hooks: [
@@ -2961,6 +3054,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     bgDrain.clear();
     // Any lingering confirm requests are auto-denied so the SDK unwinds.
     clearTurnConfirms(turnId);
+    clearLiveNarrowing(turnId);
     clearSubagentsForTurn(turnId);
     // ADR-0060 follow-up — emit the turn's graph:file summary BEFORE dropping
     // the context, so the ratio is readable from the sidecar log instead of
