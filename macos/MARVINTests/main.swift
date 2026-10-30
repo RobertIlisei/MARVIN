@@ -4623,6 +4623,146 @@ runner.suite("plain-labels") {
     }
 }
 
+// MARK: - Unified diff parser (critique U16: one renderer for both diff surfaces)
+
+runner.suite("unified-diff") {
+    let simple = """
+    diff --git a/Sources/A.swift b/Sources/A.swift
+    index 3a9c1f2..b84e07d 100644
+    --- a/Sources/A.swift
+    +++ b/Sources/A.swift
+    @@ -4,4 +4,5 @@ struct A {
+         let id: UUID
+    -    let cost: Double
+    +    let cost: Decimal
+    +    let model: String
+         let turns: Int
+    @@ -20,3 +21,3 @@ struct A {
+         }
+    -    --- not a header
+    +    +++ not a header either
+         }
+
+    """
+    runner.test("a modified file parses into hunks with line numbers") {
+        let d = UnifiedDiff.parse(simple)
+        runner.expect(d != nil, "parses")
+        runner.expect(d?.oldPath, equals: "Sources/A.swift", "old path")
+        runner.expect(d?.newPath, equals: "Sources/A.swift", "new path")
+        runner.expect(d?.hunks.count, equals: 2, "two hunks")
+        runner.expect(d?.hunks[0].header, equals: "@@ -4,4 +4,5 @@ struct A {", "header kept verbatim")
+        let l = d?.hunks[0].lines ?? []
+        runner.expect(l.map(\.kind), equals: [.context, .removed, .added, .added, .context], "kinds")
+        runner.expect(l[0].oldNumber, equals: 4, "context old number")
+        runner.expect(l[0].newNumber, equals: 4, "context new number")
+        runner.expect(l[1].oldNumber, equals: 5, "removed has an old number")
+        runner.expect(l[1].newNumber == nil, "removed has no new number")
+        runner.expect(l[2].newNumber, equals: 5, "added has a new number")
+        runner.expect(l[2].oldNumber == nil, "added has no old number")
+        runner.expect(l[4].oldNumber, equals: 6, "context resumes old numbering after the removal")
+        runner.expect(l[4].newNumber, equals: 7, "context resumes new numbering after the additions")
+        runner.expect(l[1].text, equals: "    let cost: Double", "the sign is not part of the text")
+        runner.expect(d?.additions, equals: 3, "additions")
+        runner.expect(d?.deletions, equals: 2, "deletions")
+    }
+    runner.test("a removed line that starts with dashes inside a hunk is a line, not a header") {
+        let d = UnifiedDiff.parse(simple)
+        let l = d?.hunks[1].lines ?? []
+        runner.expect(l[1].kind, equals: .removed, "--- inside a hunk is a removed line")
+        runner.expect(l[1].text, equals: "    --- not a header", "text keeps its dashes and its indent")
+        runner.expect(l[2].kind, equals: .added, "+++ inside a hunk is an added line")
+    }
+    runner.test("a rename carries both names") {
+        let d = UnifiedDiff.parse("""
+        diff --git a/old/Name.swift b/new/Name.swift
+        similarity index 92%
+        rename from old/Name.swift
+        rename to new/Name.swift
+        index 111..222 100644
+        --- a/old/Name.swift
+        +++ b/new/Name.swift
+        @@ -1,2 +1,2 @@
+         a
+        -b
+        +c
+        """)
+        runner.expect(d?.renamedFrom, equals: "old/Name.swift", "from")
+        runner.expect(d?.renamedTo, equals: "new/Name.swift", "to")
+        runner.expect(d?.hunks.count, equals: 1, "the edit is still shown")
+    }
+    runner.test("a pure rename has no hunks and is not an error") {
+        let d = UnifiedDiff.parse("diff --git a/x b/y\nsimilarity index 100%\nrename from x\nrename to y\n")
+        runner.expect(d != nil, "parses")
+        runner.expect(d?.hunks.isEmpty, equals: true, "no hunks")
+        runner.expect(d?.renamedTo, equals: "y", "still names the target")
+    }
+    runner.test("a binary file is flagged and has no hunks") {
+        let d = UnifiedDiff.parse("diff --git a/logo.png b/logo.png\nindex 1..2 100644\nBinary files a/logo.png and b/logo.png differ\n")
+        runner.expect(d?.isBinary, equals: true, "binary")
+        runner.expect(d?.hunks.isEmpty, equals: true, "no hunks")
+    }
+    runner.test("'No newline at end of file' marks the line before it and is not counted") {
+        let d = UnifiedDiff.parse("""
+        diff --git a/n.txt b/n.txt
+        index 1..2 100644
+        --- a/n.txt
+        +++ b/n.txt
+        @@ -1 +1 @@
+        -old
+        \\ No newline at end of file
+        +new
+        \\ No newline at end of file
+        """)
+        let l = d?.hunks.first?.lines ?? []
+        runner.expect(l.map(\.kind), equals: [.removed, .noNewline, .added, .noNewline], "markers keep their place")
+        runner.expect(l[1].text, equals: "No newline at end of file", "marker text")
+        runner.expect(l[1].oldNumber == nil && l[1].newNumber == nil, "a marker has no line number")
+        runner.expect(d?.additions, equals: 1, "marker not an addition")
+        runner.expect(d?.deletions, equals: 1, "marker not a deletion")
+    }
+    runner.test("a mode-only change reports both modes and no hunks") {
+        let d = UnifiedDiff.parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")
+        runner.expect(d?.oldMode, equals: "100644", "old mode")
+        runner.expect(d?.newMode, equals: "100755", "new mode")
+        runner.expect(d?.hunks.isEmpty, equals: true, "no hunks")
+    }
+    runner.test("new and deleted files are flagged") {
+        let n = UnifiedDiff.parse("diff --git a/a b/a\nnew file mode 100644\nindex 0..1\n--- /dev/null\n+++ b/a\n@@ -0,0 +1,2 @@\n+x\n+y\n")
+        runner.expect(n?.isNewFile, equals: true, "new file")
+        runner.expect(n?.oldPath == nil, "no old path for /dev/null")
+        runner.expect(n?.newPath, equals: "a", "new path")
+        runner.expect(n?.additions, equals: 2, "two additions")
+        let g = UnifiedDiff.parse("diff --git a/a b/a\ndeleted file mode 100644\nindex 1..0\n--- a/a\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n")
+        runner.expect(g?.isDeletedFile, equals: true, "deleted file")
+        runner.expect(g?.newPath == nil, "no new path for /dev/null")
+    }
+    runner.test("an empty diff is a valid diff with nothing in it") {
+        for text in ["", "\n", "  \n"] {
+            let d = UnifiedDiff.parse(text)
+            runner.expect(d != nil, "empty parses: \(text.debugDescription)")
+            runner.expect(d?.hunks.isEmpty, equals: true, "no hunks")
+        }
+    }
+    runner.test("a blank context line that lost its leading space is still context") {
+        let d = UnifiedDiff.parse("diff --git a/b b/b\n--- a/b\n+++ b/b\n@@ -1,3 +1,3 @@\n a\n\n-c\n+d\n")
+        let l = d?.hunks.first?.lines ?? []
+        runner.expect(l.map(\.kind), equals: [.context, .context, .removed, .added], "blank line is context")
+        runner.expect(l[1].newNumber, equals: 2, "and is numbered")
+    }
+    runner.test("anything that is not a diff fails, so the caller can show the raw text") {
+        runner.expect(UnifiedDiff.parse("fatal: bad revision 'HEAD~9'") == nil, "an error message")
+        runner.expect(UnifiedDiff.parse("just some prose\nacross lines") == nil, "prose")
+        runner.expect(UnifiedDiff.parse("diff --git a/b b/b\n@@ -x,y +z @@\n+a\n") == nil, "a hunk header that does not parse")
+        runner.expect(UnifiedDiff.parse("diff --git a/a b/a\n@@ -1 +1 @@\n+x\ndiff --git a/c b/c\n@@ -1 +1 @@\n+y\n") == nil, "two files in one text")
+    }
+    runner.test("the summary names what changed in one line") {
+        runner.expect(UnifiedDiff.parse(simple)?.summary, equals: "+3 \u{2212}2", "counts")
+        runner.expect(UnifiedDiff.parse("diff --git a/x b/y\nrename from x\nrename to y\n")?.summary, equals: "renamed from x", "rename")
+        runner.expect(UnifiedDiff.parse("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")?.summary, equals: "mode 100644 \u{2192} 100755", "mode")
+        runner.expect(UnifiedDiff.parse("")?.summary, equals: "", "empty")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)
