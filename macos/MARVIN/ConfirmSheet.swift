@@ -35,6 +35,7 @@
 // it'll need a Settings-side store (`marvin.allowAlways = ["Bash",…]`)
 // the bridge consults.
 
+import MARVINLogic
 import SwiftUI
 
 @MainActor struct ConfirmSheet: View {
@@ -82,7 +83,7 @@ import SwiftUI
                     .font(.headline)
                 Text(isPlanApproval
                      ? "Review it — approve to start executing, or keep planning."
-                     : (request.title ?? request.displayName ?? request.toolName))
+                     : (request.title ?? request.displayName ?? ToolLabel.plain(request.toolName)))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -125,14 +126,15 @@ import SwiftUI
     private var toolBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text(request.toolName)
-                    .font(.caption.monospaced().weight(.semibold))
+                Text(ToolLabel.plain(request.toolName))
+                    .font(.caption.weight(.semibold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.orange.opacity(0.18))
                     )
+                    .help(request.toolName)
                 if let desc = request.description, !desc.isEmpty {
                     Text(desc)
                         .font(.callout)
@@ -401,14 +403,21 @@ private func prettyJSON(_ value: ChatJSON) -> String {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: isPlanApproval ? "checklist" : "exclamationmark.shield.fill")
                     .foregroundStyle(isPlanApproval ? .purple : .orange)
-                Text(isPlanApproval ? "MARVIN has a plan — approve to execute" : "MARVIN wants to use a tool")
+                Text(isPlanApproval ? "MARVIN has a plan" : "MARVIN wants to use a tool")
                     .font(.system(size: 12, weight: .semibold))
-                Text(request.toolName)
-                    .font(.caption.monospaced())
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.orange.opacity(0.16)))
-                Spacer()
+                    .lineLimit(1)
+                // The raw SDK name is the model's word for the call. The card
+                // says what it does, and keeps the name in the tooltip (U12).
+                if !isPlanApproval {
+                    Text(ToolLabel.plain(request.toolName))
+                        .font(.caption)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.orange.opacity(0.16)))
+                        .help(request.toolName)
+                }
+                Spacer(minLength: 0)
                 Button(isPlanApproval ? "Keep planning" : "Deny") {
                     if denyOpen || isPlanApproval { onDeny(denyMessage.isEmpty ? nil : denyMessage) } else { denyOpen = true }
                 }
@@ -446,10 +455,10 @@ private func prettyJSON(_ value: ChatJSON) -> String {
         // A blocked turn waits on this card; say so (C3). One container with a
         // name so VoiceOver reads which tool before it reads the buttons.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(isPlanApproval ? "Plan approval needed" : "Permission needed for \(request.toolName)")
+        .accessibilityLabel(isPlanApproval ? "Plan approval needed" : "Permission needed for \(ToolLabel.plain(request.toolName))")
         .announced(isPlanApproval
             ? "MARVIN has a plan and is waiting for your approval."
-            : "MARVIN is waiting for permission to use \(request.toolName).",
+            : "MARVIN is waiting for permission to use \(ToolLabel.plain(request.toolName)).",
             when: request.toolUseId)
     }
 }

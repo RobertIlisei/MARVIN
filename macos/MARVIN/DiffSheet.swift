@@ -1,8 +1,10 @@
 // DiffSheet — Phase 3f. Native unified-diff viewer.
 //
-// Renders the response from GET /api/git/diff as monospace text
-// with per-line tinting (green for `+`, red for `-`, gray for hunk
-// headers, default for context). Mode picker at the top lets the
+// Renders the response from GET /api/git/diff through the same line
+// vocabulary as Review Changes (DiffRows.swift): the text is parsed once
+// (`UnifiedDiff`), git's own header lines become one summary strip, and each
+// hunk is drawn with numbered, signed, washed rows. Text that does not parse
+// is shown as git said it, never dropped. Mode picker at the top lets the
 // user switch between working / staged / combined diffs without
 // closing the sheet.
 //
@@ -54,6 +56,9 @@ final class DiffSheetModel {
 
     var mode: DiffMode = .working
     private(set) var response: GitDiffResponse? = nil
+    /// `response.diff` parsed; nil when it is not one file's unified diff, in
+    /// which case the sheet shows the raw text.
+    private(set) var parsed: UnifiedDiff? = nil
     private(set) var isLoading: Bool = false
     private(set) var lastError: String? = nil
 
@@ -82,6 +87,7 @@ final class DiffSheetModel {
                 )
                 guard !Task.isCancelled, mode == captured else { return }
                 response = res
+                parsed = (res.binary || res.truncated) ? nil : UnifiedDiff.parse(res.diff)
             } catch is CancellationError {
                 /* mode flipped under us — quiet */
             } catch {
@@ -90,56 +96,6 @@ final class DiffSheetModel {
             }
         }
     }
-}
-
-/// One line classified for tinting. We split the raw diff text on
-/// "\n" once and tag each line so SwiftUI's diff stays cheap on
-/// updates. (A full attributed-string would re-render on every
-/// scroll — measured slower for our 50-line typical diff.)
-private enum DiffLineKind {
-    case header   // "diff --git", "index", "@@"
-    case added    // "+ ..."
-    case removed  // "- ..."
-    case context  // " ..."
-    case meta     // "--- a/..." / "+++ b/..."
-
-    var foreground: Color {
-        switch self {
-        case .header, .meta: return .secondary
-        case .added: return .green
-        case .removed: return .red
-        case .context: return .primary
-        }
-    }
-
-    var background: Color {
-        switch self {
-        case .added: return Color.green.opacity(0.08)
-        case .removed: return Color.red.opacity(0.08)
-        case .header, .meta, .context: return .clear
-        }
-    }
-}
-
-private struct DiffLine: Identifiable {
-    let id: Int
-    let kind: DiffLineKind
-    let text: String
-}
-
-/// Classify one diff line. Order matters: hunk headers start with
-/// "@@" but contain "+" mid-line; check prefixes most-specific-first.
-private func classify(_ line: String) -> DiffLineKind {
-    if line.hasPrefix("diff --git") || line.hasPrefix("index ")
-        || line.hasPrefix("@@") {
-        return .header
-    }
-    if line.hasPrefix("--- ") || line.hasPrefix("+++ ") {
-        return .meta
-    }
-    if line.hasPrefix("+") { return .added }
-    if line.hasPrefix("-") { return .removed }
-    return .context
 }
 
 @MainActor struct DiffSheet: View {
@@ -201,8 +157,10 @@ private func classify(_ line: String) -> DiffLineKind {
                 placeholder("(diff exceeded 2 MB cap — open in editor for full view)")
             } else if response.diff.isEmpty {
                 placeholder("(no changes for this mode)")
+            } else if let parsed = model.parsed {
+                structured(parsed)
             } else {
-                diffBody(text: response.diff)
+                rawText(response.diff)
             }
         } else if model.isLoading {
             placeholder("Loading…")
@@ -211,30 +169,106 @@ private func classify(_ line: String) -> DiffLineKind {
         }
     }
 
-    private func diffBody(text: String) -> some View {
-        // Split + classify once on render. ScrollViewReader is
-        // omitted because we don't need to programmatically scroll;
-        // the user drives via trackpad / scroll wheel.
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            .enumerated()
-            .map { (i, sub) in
-                DiffLine(id: i, kind: classify(String(sub)), text: String(sub))
+    /// One flat list of rows, so a long diff virtualises and every hunk draws
+    /// with the same rows Review Changes uses.
+    private struct Row: Identifiable {
+        let id: Int
+        let content: Content
+        enum Content {
+            case hunk(String)
+            case line(UnifiedDiffLine)
+        }
+    }
+
+    private func rows(for diff: UnifiedDiff) -> [Row] {
+        var out: [Row] = []
+        for hunk in diff.hunks {
+            out.append(Row(id: out.count, content: .hunk(hunk.header)))
+            for line in hunk.lines { out.append(Row(id: out.count, content: .line(line))) }
+        }
+        return out
+    }
+
+    private func structured(_ diff: UnifiedDiff) -> some View {
+        VStack(spacing: 0) {
+            summaryStrip(diff)
+            if diff.hunks.isEmpty {
+                placeholder(diff.isBinary ? "(binary file — diff not shown)" : "(no content changes)")
+            } else {
+                // Top-aligned and vertical-only: a two-axis ScrollView centres
+                // content shorter than the viewport, which left the sheet's
+                // diff floating under a tall empty band (U16).
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(rows(for: diff)) { row in
+                            switch row.content {
+                            case let .hunk(header): DiffHunkBar(header: header) { EmptyView() }
+                            case let .line(line):
+                                DiffLineRow(kind: line.kind, text: line.text,
+                                            number: line.newNumber ?? line.oldNumber, showsNumbers: true)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+                .background(MarvinTheme.panel)
             }
-        return ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(lines) { line in
-                    Text(line.text.isEmpty ? " " : line.text)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(line.kind.foreground)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(line.kind.background)
+        }
+    }
+
+    /// git's `diff --git` / `index` / `---` / `+++` header said in one line, and
+    /// only what the title does not already say: a rename, a new or deleted
+    /// file, a mode change, and the counts.
+    @ViewBuilder
+    private func summaryStrip(_ diff: UnifiedDiff) -> some View {
+        let notes = [
+            diff.isNewFile ? "New file" : nil,
+            diff.isDeletedFile ? "Deleted file" : nil,
+            diff.renamedFrom.map { "Renamed from \($0)" },
+            (diff.oldMode != nil && diff.newMode != nil) ? "Mode \(diff.oldMode!) → \(diff.newMode!)" : nil,
+        ].compactMap { $0 }
+        if !notes.isEmpty || diff.additions + diff.deletions > 0 {
+            HStack(spacing: 10) {
+                Text(notes.joined(separator: " · "))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                if diff.additions + diff.deletions > 0 {
+                    Text("+\(diff.additions)")
+                        .foregroundStyle(GitDecorationColor.added)
+                    Text("\u{2212}\(diff.deletions)")
+                        .foregroundStyle(GitDecorationColor.deleted)
                 }
             }
-            .textSelection(.enabled)
+            .font(.system(size: 11, design: .monospaced))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            MarvinDivider()
         }
-        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    /// The parse failed: show git's text unchanged, with a line saying why it
+    /// is plain.
+    private func rawText(_ text: String) -> some View {
+        VStack(spacing: 0) {
+            Text("Couldn't read this as a diff — showing git's output as is.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            MarvinDivider()
+            ScrollView([.vertical, .horizontal]) {
+                Text(text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .background(MarvinTheme.panel)
+        }
     }
 
     private func placeholder(_ text: String) -> some View {

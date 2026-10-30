@@ -320,9 +320,11 @@ import MARVINLogic
 
 // MARK: - Tool-call card (Phase 2d)
 
-/// Visual style for one tool's name pill. Each tool gets a distinct
-/// tint so a turn that runs Bash + Edit + Read is scannable at a
-/// glance — matches the colour grouping the web side uses.
+/// The kind of one tool call, carried by a glyph. It used to be carried by
+/// colour — Bash orange, Edit green, Read blue — which collided with the
+/// Outcome Color Rule: green, orange and red mean what happened (a green
+/// check beside an orange Bash block, a red error under an orange one). The
+/// kind is now a neutral glyph; colour is left to the outcome (critique U10).
 private enum ToolStyle {
     case execute    // Bash, Task, AskUserQuestion — actions that run
     case read       // Read, Grep, Glob — read-only inspection
@@ -330,13 +332,13 @@ private enum ToolStyle {
     case web        // WebFetch, WebSearch — external IO
     case other      // anything we haven't mapped yet
 
-    var tint: Color {
+    var symbol: String {
         switch self {
-        case .execute: .orange
-        case .read: .blue
-        case .write: .green
-        case .web: .purple
-        case .other: .secondary
+        case .execute: "terminal"
+        case .read: "doc.text.magnifyingglass"
+        case .write: "pencil"
+        case .web: "globe"
+        case .other: "wrench.and.screwdriver"
         }
     }
 
@@ -386,25 +388,30 @@ private enum ToolStyle {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(style.tint.opacity(0.06))
+                .fill(MarvinTheme.elevated)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(style.tint.opacity(0.25), lineWidth: 1)
+                .strokeBorder(isErrored ? Color.red.opacity(0.4) : MarvinTheme.border, lineWidth: 1)
         )
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text(name)
-                .font(.caption.monospaced().weight(.semibold))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(style.tint.opacity(0.18))
-                )
-                .foregroundStyle(style.tint.opacity(0.9))
+            HStack(spacing: 4) {
+                Image(systemName: style.symbol)
+                    .font(.system(size: 10))
+                    .accessibilityHidden(true)
+                Text(name)
+                    .font(.caption.monospaced().weight(.semibold))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.primary.opacity(0.08))
+            )
+            .foregroundStyle(.secondary)
             Text(inputSummary)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)

@@ -379,9 +379,13 @@ final class ReviewWindowTarget {
             .frame(width: 92)
             .help("Split — side-by-side. Inline — unified single column.")
             MarvinDivider().frame(height: 16)
+            // Accept is the bordered-prominent one; Reject (restores baselines,
+            // no undo) is plain and sits a step away from it (U17).
             Button("Reject all") { requestReject(.all(files: model.files.count)) }
                 .disabled(model.busy || model.files.isEmpty)
+                .padding(.trailing, 6)
             Button("Accept all") { model.resolve(action: "accept") }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.busy || model.files.isEmpty)
         }
@@ -411,6 +415,7 @@ final class ReviewWindowTarget {
                 VStack(alignment: .leading, spacing: 1) {
                     Text((file.path as NSString).lastPathComponent)
                         .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text((file.path as NSString).deletingLastPathComponent)
                         .font(.system(size: 10))
@@ -421,10 +426,10 @@ final class ReviewWindowTarget {
                 Spacer(minLength: 4)
                 Text("+\(file.additions)")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(GitDecorationColor.added)
                 Text("−\(file.deletions)")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(GitDecorationColor.deleted)
             }
             .tag(file.path)
             .contextMenu {
@@ -446,8 +451,12 @@ final class ReviewWindowTarget {
                         .truncationMode(.middle)
                     Spacer()
                     Button("Reject file") { requestReject(.file(path: diff.path)) }
+                        .controlSize(.small)
                         .disabled(model.busy)
+                        .padding(.trailing, 6)
                     Button("Accept file") { model.resolve(action: "accept", path: diff.path) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                         .disabled(model.busy)
                 }
                 .padding(.horizontal, 12)
@@ -628,13 +637,13 @@ final class ReviewWindowTarget {
             // Added and removed were a 10% green or red wash and nothing else
             // (K6). The sign says it without colour, as the unified view does.
             Text(sign)
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .font(DiffStyle.font)
+                .foregroundStyle(sign == "+" ? DiffStyle.signColor(.added) : sign == "−" ? DiffStyle.signColor(.removed) : Color.secondary)
                 .frame(width: 10, alignment: .center)
                 .padding(.trailing, 2)
                 .accessibilityHidden(true)
             Text(text ?? " ")
-                .font(.system(size: 11.5, design: .monospaced))
+                .font(DiffStyle.font)
                 .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -672,16 +681,16 @@ final class ReviewWindowTarget {
 
     private func leftTint(_ kind: SBRowKind) -> Color {
         switch kind {
-        case .removed, .modified: return Color.red.opacity(0.10)
-        case .added: return Color.primary.opacity(0.03)  // empty gutter on the original side
+        case .removed, .modified: return DiffStyle.removedWash
+        case .added: return DiffStyle.gapWash  // empty gutter on the original side
         case .context: return .clear
         }
     }
 
     private func rightTint(_ kind: SBRowKind) -> Color {
         switch kind {
-        case .added, .modified: return Color.green.opacity(0.10)
-        case .removed: return Color.primary.opacity(0.03)  // empty gutter on the modified side
+        case .added, .modified: return DiffStyle.addedWash
+        case .removed: return DiffStyle.gapWash  // empty gutter on the modified side
         case .context: return .clear
         }
     }
@@ -689,42 +698,33 @@ final class ReviewWindowTarget {
     // MARK: Inline (unified) rendering
 
     private func diffLineRow(_ line: AgentDiffLine) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(line.kind == "added" ? "+" : line.kind == "removed" ? "−" : " ")
-                .font(.system(size: 11.5, design: .monospaced))
-                .frame(width: 16, alignment: .center)
-            Text(line.text.isEmpty ? " " : line.text)
-                .font(.system(size: 11.5, design: .monospaced))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+        DiffLineRow(kind: Self.unifiedKind(line.kind), text: line.text)
+    }
+
+    private static func unifiedKind(_ kind: String) -> UnifiedDiffLine.Kind {
+        switch kind {
+        case "added": return .added
+        case "removed": return .removed
+        default: return .context
         }
-        .foregroundStyle(
-            line.kind == "added" ? Color.green
-            : line.kind == "removed" ? Color.red
-            : Color.primary.opacity(0.75)
-        )
-        .background(
-            line.kind == "added" ? Color.green.opacity(0.08)
-            : line.kind == "removed" ? Color.red.opacity(0.08)
-            : Color.clear
-        )
     }
 
     // MARK: Shared hunk header (accept/reject buttons)
 
     private func hunkHeaderBar(_ hunk: AgentDiffHunk, path: String) -> some View {
-        HStack(spacing: 8) {
-            Text(hunk.header)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Spacer()
+        DiffHunkBar(header: hunk.header) {
+            // Rejecting restores the baseline on disk; accepting only stops the
+            // hunk counting as pending. Same size, different weight: Reject is
+            // plain text, Accept is the bordered control (U17). The file and
+            // review-wide buttons step up one more rung.
             Button {
                 model.resolve(action: "reject", path: path, hunkIndex: hunk.index)
             } label: {
                 Label("Reject", systemImage: "xmark")
                     .font(.system(size: 10))
             }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
             .disabled(model.busy)
             .help("Revert this hunk on disk; the rest of the file stays.")
             Button {
@@ -733,12 +733,10 @@ final class ReviewWindowTarget {
                 Label("Accept", systemImage: "checkmark")
                     .font(.system(size: 10))
             }
+            .controlSize(.small)
             .disabled(model.busy)
             .help("Keep this hunk; it stops counting as a pending change.")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(MarvinTheme.background)
     }
 
     private func statusGlyph(_ status: String) -> some View {

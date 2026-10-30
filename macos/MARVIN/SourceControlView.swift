@@ -1135,11 +1135,14 @@ final class SourceControlModel {
                 .menuIndicator(.hidden)
                 .frame(width: 22)
                 .padding(.vertical, 5)
+                // Follows the Commit button beside it: with nothing to commit
+                // the button reads disabled, and a saturated chevron next to
+                // it was the only live-looking control in the pane (U15).
                 .background(
                     RoundedRectangle(cornerRadius: 5)
-                        .fill(Color.accentColor.opacity(0.85))
+                        .fill(model.canCommit ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.08))
                 )
-                .foregroundStyle(.white)
+                .foregroundStyle(model.canCommit ? Color.white : Color.secondary)
                 .help("Commit variants")
             }
         }

@@ -567,9 +567,19 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     private func row(_ item: BacklogItem, findings itemFindings: [BacklogFinding]) -> some View {
         let resolved = item.status == "done" || item.status == "dismissed"
         return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: severityIcon(item.severity))
-                .foregroundStyle(severityColor(item.severity))
-                .help("severity: \(item.severity)")
+            // Severity is the default sort, so the row says it in words as well
+            // as a glyph and a colour (U13).
+            VStack(spacing: 2) {
+                Image(systemName: severityIcon(item.severity))
+                    .foregroundStyle(severityColor(item.severity))
+                Text(severityLabel(item.severity))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 28)
+            .help("severity: \(item.severity)")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Severity \(severityLabel(item.severity))")
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(item.title).font(.body.weight(.semibold))
@@ -603,9 +613,11 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                         .lineLimit(3).textSelection(.enabled)
                 }
                 findingAnnotations(itemFindings)
+                // Two actions in the row, the rest behind "…": five buttons of one
+                // weight made every row a toolbar, and Done sat beside Dismiss
+                // with nothing to tell them apart (U13). Dismiss is in the menu,
+                // away from Done.
                 HStack(spacing: 8) {
-                    Button("Details") { detailItem = item }
-                        .controlSize(.small)
                     if resolved {
                         Button("Reopen") { Task { await setStatus(item, "open") } }
                             .controlSize(.small)
@@ -614,11 +626,23 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                             .controlSize(.small)
                         Button("Done") { Task { await setStatus(item, "done") } }
                             .controlSize(.small)
-                        Button("Dismiss") { Task { await setStatus(item, "dismissed") } }
-                            .controlSize(.small)
-                        Button("Export to issue") { Task { await exportIssue(item) } }
-                            .controlSize(.small)
                     }
+                    Menu {
+                        Button("Details") { detailItem = item }
+                        if !resolved {
+                            Button("Export to issue") { Task { await exportIssue(item) } }
+                            Divider()
+                            Button("Dismiss", role: .destructive) { Task { await setStatus(item, "dismissed") } }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 22, height: 18)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("More: details, export to an issue, dismiss")
+                    .accessibilityLabel("More actions for \(item.title)")
                 }
                 .padding(.top, 2)
             }

@@ -38,6 +38,7 @@
 // gate actually need.
 
 import AppKit
+import MARVINLogic
 import STTextView
 import SwiftUI
 
@@ -1303,6 +1304,7 @@ final class MarvinEditorTextView: STTextView {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(bridge.selectedFilePath ?? "No file open")
             if let buffer = activeBuffer, buffer.truncated {
                 Text("truncated")
                     .font(.caption2.monospaced())
@@ -1422,6 +1424,7 @@ final class MarvinEditorTextView: STTextView {
                     .font(.system(size: 11, weight: .medium))
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Close tab")
             .keyboardShortcut("w", modifiers: [.command])
             .disabled(bridge.selectedFilePath == nil)
             .help("Close active tab (⌘W)")
@@ -1556,8 +1559,15 @@ final class MarvinEditorTextView: STTextView {
         return ["html", "htm", "svg", "pdf"].contains(ext)
     }
 
+    /// Relative to the project when the file is inside it: the absolute path
+    /// repeated `/Users/…/` on every file and pushed the name out of a narrow
+    /// pane (U21). The full path stays in the tooltip.
     private var headerSubtitle: String {
-        bridge.selectedFilePath ?? "—"
+        guard let path = bridge.selectedFilePath else { return "—" }
+        if let root = bridge.projectWorkDir, let rel = WorkspaceRelativePath.of(path, in: root), !rel.isEmpty {
+            return rel
+        }
+        return path
     }
 
     private func placeholder(_ text: String) -> some View {

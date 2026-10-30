@@ -39,6 +39,17 @@ public enum PermissionStrategyChoice: String, CaseIterable, Sendable {
         }
     }
 
+    /// What the posture pill reads. `label` is the posture's name, used where
+    /// there is room to explain it; the pill sits in a row of model ids, where
+    /// a bare "auto" reads as a setting nobody can decode (critique U8).
+    public var pillLabel: String {
+        switch self {
+        case .gated: return "asks first"
+        case .auto: return "auto-approve"
+        case .full: return "full auto"
+        }
+    }
+
     /// Cycling forward walks toward MORE autonomy and wraps at the end, so the
     /// dangerous posture is never one stray click away from the safest one.
     public var next: PermissionStrategyChoice {

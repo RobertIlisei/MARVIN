@@ -39,6 +39,11 @@ import SwiftUI
                 Button(actionTitle, action: action)
                     .chip(.neutral)
                     .padding(.top, 2)
+            } else if state.offersOpenProject {
+                Button("Open Project…") { MarvinBridge.shared.triggerOpenProject() }
+                    .chip(.neutral)
+                    .padding(.top, 2)
+                    .help("Choose a folder to work in (⌘O)")
             }
         }
         // A readable column, capped. Prose that is allowed to be as wide as

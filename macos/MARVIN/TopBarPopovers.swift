@@ -27,6 +27,17 @@ import MARVINLogic
 
 // MARK: - Layout popover
 
+/// A popover section's title in the chrome voice (DESIGN.md Uppercase-Chrome
+/// Rule): SF Pro, uppercase, tracked, muted. The words are spelled out — the
+/// popovers read "PERMS" and "brain" in mono before (critique U19).
+private func popoverSectionLabel(_ title: String) -> some View {
+    Text(title)
+        .font(.system(size: 9.5, weight: .semibold))
+        .textCase(.uppercase)
+        .tracking(0.4)
+        .foregroundStyle(.secondary)
+}
+
 /// Toolbar popover surface for pane visibility — files / graph /
 /// brain / preview / terminal. Mirrors the web LayoutPopover row
 /// for row.
@@ -35,16 +46,13 @@ import MARVINLogic
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("PANES")
-                .font(.system(size: 9, design: .monospaced))
-                .tracking(2)
-                .foregroundStyle(.tertiary)
+            popoverSectionLabel("Panes")
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 6)
             paneRow(
                 key: "files",
-                label: "files",
+                label: "Files",
                 kbd: "⌘B",
                 tip: "project file tree",
                 active: bridge.panes.files,
@@ -52,36 +60,36 @@ import MARVINLogic
             )
             paneRow(
                 key: "graph",
-                label: "graph",
+                label: "Graph",
                 kbd: "⌘G",
-                tip: "knowledge graph of the codebase",
+                tip: "map of how the code connects",
                 active: bridge.panes.graph,
                 disabled: bridge.projectWorkDir == nil
             )
             paneRow(
                 key: "brain",
-                label: "brain",
+                label: "Brain",
                 kbd: nil,
-                tip: "live MARVIN brain visualization",
+                tip: "live view of what MARVIN is doing",
                 active: bridge.panes.brain,
                 disabled: false
             )
             paneRow(
                 key: "preview",
-                label: "preview",
+                label: "Preview",
                 // ^⇧P — ⇧⌘P belongs to the Command Palette. The row's own
                 // toggle routes through `togglePane("preview")`, which now
                 // flips the editor-surface flag rather than a bottom tab.
                 kbd: "^⇧P",
-                tip: "live web preview — opens in the editor, not the bottom panel",
+                tip: "web preview, opens in the editor",
                 active: bridge.panes.preview,
                 disabled: bridge.projectWorkDir == nil
             )
             paneRow(
                 key: "terminal",
-                label: "terminal",
+                label: "Terminal",
                 kbd: "⌘J",
-                tip: "embedded terminal in the project cwd",
+                tip: "terminal in the project folder",
                 active: bridge.panes.terminal,
                 disabled: bridge.projectWorkDir == nil
             )
@@ -102,14 +110,23 @@ import MARVINLogic
             NativePrefs.shared.togglePane(key)
         } label: {
             HStack(spacing: 8) {
+                // Shown panes carry a checkmark, as in the View menu: it reads
+                // as state, where an "on"/"off" pill read as the action (U19).
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .opacity(active ? 1 : 0)
+                    .frame(width: 12)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(label)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: 12))
                         .foregroundStyle(.primary)
                     Text(tip)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 if let kbd {
@@ -117,22 +134,13 @@ import MARVINLogic
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-                // On/off pip mirrors the web PaneToggle.
-                Text(active ? "on" : "off")
-                    .font(.system(size: 10, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(active
-                                  ? Color.accentColor.opacity(0.18)
-                                  : Color.gray.opacity(0.12))
-                    )
-                    .foregroundStyle(active ? Color.accentColor : .secondary)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(active ? "shown" : "hidden")
+        .accessibilityHint("Shows or hides the \(label.lowercased()) pane")
         .disabled(disabled)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -154,10 +162,7 @@ import MARVINLogic
         VStack(alignment: .leading, spacing: 0) {
             // Permissions
             HStack(spacing: 8) {
-                Text("PERMS")
-                    .font(.system(size: 10, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(.tertiary)
+                popoverSectionLabel("Permissions")
                 Spacer(minLength: 8)
                 segmented(
                     options: [("auto", "auto"), ("gated", "gated")],
@@ -174,10 +179,7 @@ import MARVINLogic
 
             // Models — one-line summary + button to open the dialog.
             VStack(alignment: .leading, spacing: 6) {
-                Text("MODELS")
-                    .font(.system(size: 10, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(.tertiary)
+                popoverSectionLabel("Models")
                 Button {
                     modelsDialogOpen = true
                 } label: {
@@ -187,8 +189,8 @@ import MARVINLogic
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
-                            Text("executor / advisor — click to configure")
-                                .font(.system(size: 10, design: .monospaced))
+                            Text("Executor and advisor — click to choose")
+                                .font(.system(size: 10.5))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
@@ -217,10 +219,7 @@ import MARVINLogic
             // Voice (= personality). The label sits above its control, like
             // MODELS: three options beside a label did not fit the popover.
             VStack(alignment: .leading, spacing: 6) {
-                Text("VOICE")
-                    .font(.system(size: 10, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(.tertiary)
+                popoverSectionLabel("Voice")
                 segmented(
                     options: [("ultron", "ultron"), ("marvin", "marvin"), ("neutral", "neutral")],
                     active: bridge.personality ?? "ultron",
