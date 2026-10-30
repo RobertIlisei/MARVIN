@@ -12,14 +12,44 @@
 //     MARVIN_SNAPSHOT_OUT=<directory>
 //     [MARVIN_SNAPSHOT_SETTLE_MS=<ms>]   run-loop settle before capture (default 600)
 //
-//     MARVIN_SNAPSHOT_VIEW=all MARVIN_SNAPSHOT_OUT=/tmp/surfaces .build/debug/MARVIN
+//     MARVIN_PORT=1 MARVIN_SNAPSHOT_VIEW=all MARVIN_SNAPSHOT_OUT=/tmp/surfaces .build/debug/MARVIN
+//
+// `MARVIN_PORT=1` is REQUIRED: `ServerConfig.port` is read before this runs,
+// so the harness cannot redirect it itself, and it refuses to run while the
+// port is 3030 (a snapshot must never talk to the user's real sidecar).
+//
+// ## Building on a Mac without Xcode 16 (Command Line Tools + a swift.org toolchain)
+//
+// Verified 2026-10-30 on macOS 14.4, CLT 15.3 (SDK 14.4), Swift 6.4.2 from
+// https://swift.org installed under ~/Library/Developer/Toolchains. Nothing
+// below is committed to the repo; steps 1-2 touch only untracked, git-ignored
+// state (`Package.resolved`, `.build/`).
+//
+//     cd macos
+//     export SDKROOT="$(xcrun --show-sdk-path)"
+//     SWIFT=$HOME/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift
+//
+//  1. `$SWIFT package resolve && $SWIFT package resolve swiftterm --version 1.20.0`
+//     (a local pin to the oldest SwiftTerm Package.swift allows; 1.99.x needs
+//     the macOS 15 SDK. The identity is lowercase `swiftterm`.)
+//  2. In `.build/checkouts/SwiftTerm/Package.swift` change
+//     `.process("Apple/Metal/Shaders.metal")` to `.copy(...)`. That skips the
+//     `metal` compiler (only Xcode has it); SwiftTerm compiles the shader from
+//     source at runtime.
+//  3. `$SWIFT build -Xswiftc -DMARVIN_LEGACY_SDK`  (flag enables
+//     LegacySDKShims.swift; the sources carry explicit @MainActor for the 14.4 SDK).
+//  4. `MARVIN_PORT=1 MARVIN_SNAPSHOT_VIEW=all MARVIN_SNAPSHOT_OUT=/tmp/surfaces .build/debug/MARVIN`
+//  5. Tests: `$SWIFT run -Xswiftc -DMARVIN_LEGACY_SDK MARVINTests`
+//
+// The run takes well under a minute and writes 88 PNGs (22 surfaces × light/
+// dark × two widths; PNGs are 2× pixel size). The harness fills each surface
+// with `windowBackgroundColor`, not `MarvinTheme.background`, so the grey you
+// see is the system window grey (#333-ish in dark), not the app's chrome fill.
 //
 // Files are `<out>/<surface>--<light|dark>--<width>.png`, plus `COVERAGE.md`
 // recording what each surface actually showed.
 //
-// NO LIVE SERVICES. The run points the app at a closed port before anything
-// reads `ServerConfig`, and refuses to start if that did not take (a snapshot
-// must never talk to the user's real sidecar). Views are mounted exactly as
+// NO LIVE SERVICES. Views are mounted exactly as
 // they ship — no view was changed for the harness and no internals are
 // mocked — so a view that loads from the sidecar renders the state it has
 // with nothing to load: its no-project / offline / empty state. That is a
@@ -144,7 +174,7 @@ enum SurfaceSnapshot {
                 AnyView(LayoutPopoverContent())
             },
             Surface("topbar-setup-popover", "Top bar: setup popover", .empty("default bridge"), widths: [340, 480]) {
-                AnyView(SetupPopoverContent())
+                AnyView(SetupPopoverContent(modelsDialogOpen: .constant(false)))
             },
             Surface("topbar-models-dialog", "Top bar: models dialog", .empty("default bridge; the live model list needs the sidecar"),
                     widths: [520, 720], height: 560) {
@@ -221,10 +251,9 @@ enum SurfaceSnapshot {
         let env = ProcessInfo.processInfo.environment
         guard let which = env["MARVIN_SNAPSHOT_VIEW"], !which.isEmpty else { return false }
 
-        // Before anything reads ServerConfig: point at a closed port so no
-        // view can reach the user's real sidecar. ServerConfig.port is a lazy
-        // static, so this only works if nothing has read it yet — verify.
-        if getenv("MARVIN_PORT") == nil { setenv("MARVIN_PORT", "1", 1) }
+        // Refuse to run against the live sidecar. `ServerConfig.port` is a lazy
+        // static that the app reads before this point, so the caller must pass
+        // MARVIN_PORT=<closed port> (see the header).
         guard ServerConfig.port != 3030 || env["MARVIN_SNAPSHOT_ALLOW_LIVE"] == "1" else {
             fail("refusing to run against port 3030 (a live sidecar). Set MARVIN_PORT to a closed port.")
             return true

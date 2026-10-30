@@ -108,7 +108,7 @@ enum SurfaceFixtures {
 
 /// Holds the bindings `ChatInputBar` wants, so a fixture can mount the real
 /// view without a session behind it.
-struct ChatInputFixture: View {
+@MainActor struct ChatInputFixture: View {
     @State private var text: String
     @State private var attachments: [ChatAttachment] = []
     let isSending: Bool
