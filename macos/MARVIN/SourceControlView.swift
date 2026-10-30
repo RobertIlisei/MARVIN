@@ -867,8 +867,15 @@ final class SourceControlModel {
         model.repos.filter { !$0.isCurrent }
     }
 
+    // A `Group`, not a `VStack`: this is built inside the pane's `LazyVStack`,
+    // and a `VStack` child is realised whole — every changed file (the file
+    // header cites 477) became a stateful row and was re-evaluated on every
+    // model change (audit L5). A `Group` lets each `ForEach` row be a direct
+    // lazy child. The enclosing `LazyVStack` already supplies leading
+    // alignment and zero spacing.
+    @ViewBuilder
     private var repoGroup: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
             repoHeaderRow
             composer
             if !model.conflicted.isEmpty {
@@ -1163,7 +1170,12 @@ final class SourceControlModel {
         .buttonStyle(.plain)
 
         if !isCollapsed {
-            ForEach(files, id: \.path) { file in
+            // Identity is section + path. A file that is both staged and
+            // modified appears in two sections, and now that the rows are
+            // direct children of one lazy stack a bare `\.path` collided across
+            // them and dropped a row (seen in the render after L5).
+            ForEach(files.map { SectionedFile(section: id, file: $0) }) { entry in
+                let file = entry.file
                 SourceControlRow(
                     file: file,
                     cwd: cwd,
@@ -1691,6 +1703,13 @@ struct DiffSheetItem: Identifiable {
 /// different reading order from the porcelain two-column badge the
 /// panel used to lead with — the filename is what you scan for, so it
 /// goes first and the status code goes last.
+/// A changed file as one section lists it — identity is the section AND the path.
+private struct SectionedFile: Identifiable {
+    let section: String
+    let file: GitStatusFile
+    var id: String { section + "\u{0}" + file.path }
+}
+
 @MainActor private struct SourceControlRow: View {
     let file: GitStatusFile
     let cwd: String
