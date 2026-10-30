@@ -35,7 +35,9 @@ import {
   type SessionPosture,
   type SessionTree,
 } from "./session-meta";
+import { readLedger } from "./supervisor-ledger";
 import { type Delegation, getSupervisorState } from "./supervisor-state";
+import { lastActAtByTab, proposalView, type ProposalView } from "./supervisor-status";
 import { isUserOnlyConfirm, type TouchedTurn, touchedTurnFor } from "./supervisor-touch";
 import { listLiveTurns } from "./turn-registry";
 import { listWakeups } from "./wakeup-scheduler";
@@ -83,7 +85,8 @@ export interface SessionWatchRow {
   turn: { turnId: string; kind: "human" | "machine"; startedAt: string; mutated: boolean; author?: "supervisor" } | null;
   /** What the live turn is doing now (thinking / writing / tool + name); null when idle. */
   activity: SessionActivity | null;
-  pending: PendingConfirmSummary[];
+  /** Each pending confirm, with the supervisor's shadow proposal for it (brief §10.3): blind until revealed. */
+  pending: Array<PendingConfirmSummary & Partial<ProposalView>>;
   /** `currentBranch` is what git reports for the checkout now; a worktree's own `branch` is the one it was cut on. */
   tree: SessionTree & { cwd: string; currentBranch: string | null; present: boolean };
   diff: SessionWatchDiff | null;
@@ -118,6 +121,8 @@ export interface SessionWatchSupervisor {
   waitingOnOwn: "job" | "wakeup" | null;
   /** The user stopped the tab's last turn — the supervisor waits for the user (ADR-0111). */
   stoppedByUser: boolean;
+  /** When the supervisor last performed an act on this tab (milestone 4), from the ledger. */
+  lastActAt: string | null;
 }
 
 /** The one derivation the UI trusts. Pure, so it is pinned by tests. */
@@ -379,14 +384,20 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
     if (w.state === "ready" && w.sessionId) push(w.sessionId);
   }
 
-  const delegations = getSupervisorState(projectId).delegation;
+  const supervisorState = getSupervisorState(projectId);
+  const delegations = supervisorState.delegation;
+  // One ledger read per build, and none for a project whose supervisor is off.
+  const ledger = supervisorState.mode === "off" ? [] : readLedger(projectId);
+  const lastActs = lastActAtByTab(ledger);
   // One read of the wakeup store per build, not per row: this route is polled.
   const ownWakeups = new Set(listWakeups({ projectId }).filter((w) => w.author !== "supervisor").map((w) => w.marvinSessionId));
   // Rows resolve concurrently: each one's git facts are independent.
   return Promise.all(ids.slice(0, MAX_ROWS).map(async (id) => {
     const meta: SessionMeta | null = metas.get(id) ?? readSessionMeta(projectId, id);
     const turn = live.get(id) ?? null;
-    const pending = turn ? listPendingConfirms(turn.turnId).map((p) => ({ ...p, userOnly: isUserOnlyConfirm(p.turnId, p.toolUseId) })) : [];
+    const pending = turn
+      ? listPendingConfirms(turn.turnId).map((p) => ({ ...p, userOnly: isUserOnlyConfirm(p.turnId, p.toolUseId), ...(ledger.length ? proposalView(ledger, p.toolUseId) : {}) }))
+      : [];
     const tree: SessionTree = meta?.tree ?? { mode: "shared" };
     const cwdInfo = meta ? resolveSessionCwd(meta) : { cwd: workDir, present: existsSync(workDir) };
     const base = tree.mode === "worktree" ? tree.base : null;
@@ -431,7 +442,8 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
         sharedCheckout: tree.mode !== "worktree",
         touchedTurn: touchedTurnFor(projectId, id, meta),
         waitingOnOwn: listBackgroundJobs(id).length ? "job" : ownWakeups.has(id) ? "wakeup" : null,
-        stoppedByUser: meta?.lastTurn?.outcome === "stopped",
+        stoppedByUser: meta?.lastTurn?.outcome === "stopped" && meta.lastTurn.stoppedBy !== "supervisor",
+        lastActAt: lastActs.get(id) ?? null,
       },
     };
   }));

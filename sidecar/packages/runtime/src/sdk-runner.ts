@@ -47,6 +47,7 @@ import { BackgroundDrainBound, BackgroundTaskLedger, backgroundTasksPayload, tas
 import { listBacklog } from "./backlog";
 import { createBacklogMcpServer } from "./backlog-mcp";
 import { recordPreImage } from "./change-checkpoints";
+import { headlessQuestion } from "./confirm-answer";
 import {
   buildCheckBackWakeup,
   detectUncoveredCheckBack,
@@ -479,6 +480,17 @@ export interface RunAgentResult {
     cache_read_input_tokens?: number;
   };
   permissionDenials?: number;
+  /** ADR-0127 milestone 4 — the turn closed its scope with the scope-met marker (the orchestrator records `scopeMetAt`). */
+  scopeMet?: boolean;
+}
+
+/**
+ * ADR-0127 milestone 4 — whether a turn closed its scope: the scope-met marker,
+ * and the ADR-0057 guard did not find the claim unsupported. A rejected claim
+ * is not scope met — the tab still has work, and the supervisor must still see it.
+ */
+export function reportsScopeMet(finalText: string, claimRejected: boolean): boolean {
+  return hasScopeMet(finalText) && !claimRejected;
 }
 
 // `KNOWN_TOOL_NAMES` is the canonical gate-set; imported from
@@ -1428,15 +1440,14 @@ function maybeAskUserQuestion(args: {
   toolUseID: string;
   input: Record<string, unknown>;
   onConfirmRequest?: (request: ConfirmRequestPayload) => void;
+  /** The tab, so a headless question in a delegated tab can wait for the supervisor (milestone 4). */
+  session?: { projectId: string; marvinSessionId: string } | undefined;
 }): Promise<PermissionResult> | null {
   const { toolName, turnId, toolUseID, input, onConfirmRequest } = args;
   if (toolName !== ASK_USER_TOOL) return null;
   if (!onConfirmRequest) {
-    return Promise.resolve({
-      behavior: "deny",
-      message: "AskUserQuestion can't be answered here (no interactive UI). Proceed with your own recommendation instead.",
-      interrupt: false,
-    } as PermissionResult);
+    // ADR-0040 denies at once; a delegated tab with autonomous questions waits a bounded time first.
+    return headlessQuestion({ session: args.session, turnId, toolUseId: toolUseID, input }) as Promise<PermissionResult>;
   }
   return new Promise<PermissionResult>((resolve) => {
     // NO auto-deny timer (timeoutMs = 0). AskUserQuestion is the model
@@ -1754,7 +1765,7 @@ export function makeAutoModeLogger(args: {
     const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (planApproval) return planApproval;
     // AskUserQuestion always reaches the user, even in auto mode (ADR-0040).
-    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest, session: checkpoint });
     if (ask) return ask;
     // Two sessions, one checkout: a HEAD-moving command reaches the user in
     // every mode. `checkpoint` is where this callback already carries the
@@ -1939,7 +1950,7 @@ export function makeGatedCanUseTool(args: {
     const planApproval = maybePlanApproval({ mode, toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
     if (planApproval) return planApproval;
     // AskUserQuestion routes to the same confirm channel (ADR-0040).
-    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest });
+    const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest, session: checkpoint });
     if (ask) return ask;
     // Two sessions, one checkout. Ahead of `classifyToolCall` because the
     // conflict is about WHO ELSE is in the tree, not about the command's own
@@ -2536,6 +2547,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   // and whether any follow-through mechanism was armed during the turn, so at
   // turn-end we can auto-arm a wakeup for an unbacked "I'll check back" promise.
   let finalAssistantText = "";
+  /** ADR-0127 milestone 4 — the ADR-0057 guard found the scope-met claim unsupported; it does not count as scope met. */
+  let scopeClaimRejected = false;
   let armedWakeup = false;
   let armedBackgroundJob = false;
   // Workflow-completion guard state (ADR-0057). Latest TodoWrite payload and the
@@ -3236,6 +3249,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ownConsequences,
     };
     if (hasWorkflowGap(gap)) {
+      scopeClaimRejected = true;
       const { reason, prompt } = buildReconcilePrompt(gap);
       const res = scheduleWakeup({
         ...wakeupCtx,
@@ -3283,5 +3297,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     ...(costUsd != null ? { costUsd } : {}),
     ...(tokenUsage ? { tokenUsage } : {}),
     permissionDenials,
+    ...(reportsScopeMet(finalAssistantText, scopeClaimRejected) ? { scopeMet: true } : {}),
   };
 }

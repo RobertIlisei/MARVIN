@@ -89,7 +89,11 @@ export function tabSendRefusal(projectId: string, marvinSessionId: string): Send
   if (meta.closedAt) return { code: "closed", reason: "the tab is closed" };
   if (!resolveSessionCwd(meta).present) return { code: "worktree-missing", reason: "the tab's worktree is missing" };
   if (meta.lastTurn?.outcome === "stopped") {
-    return { code: "stopped", reason: "the user stopped this tab's last turn — the supervisor waits for the user (ADR-0111)" };
+    // A turn the supervisor cancelled parks the tab for the user too: a runaway
+    // is not re-nudged on the supervisor's own say-so.
+    return meta.lastTurn.stoppedBy === "supervisor"
+      ? { code: "stopped", reason: "the supervisor cancelled this tab's last turn — the user decides what happens next" }
+      : { code: "stopped", reason: "the user stopped this tab's last turn — the supervisor waits for the user (ADR-0111)" };
   }
   const jobs = listBackgroundJobs(marvinSessionId);
   const ownWakeups = listWakeups({ marvinSessionId, projectId }).filter((w) => w.author !== "supervisor");

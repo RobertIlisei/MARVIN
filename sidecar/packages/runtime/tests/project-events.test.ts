@@ -47,7 +47,7 @@ describe("project events", () => {
     endLiveTurn(t, { event: "turn.completed", data: { costUsd: 0.42, durationMs: 10 } });
     expect(events.at(-1)).toEqual({
       event: "turn.ended",
-      data: { marvinSessionId: s, projectId: "p", turnId: "t2", outcome: "completed", costUsd: 0.42 },
+      data: { marvinSessionId: s, projectId: "p", turnId: "t2", outcome: "completed", kind: "human", costUsd: 0.42 },
     });
   });
 

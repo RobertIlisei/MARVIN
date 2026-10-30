@@ -23,10 +23,13 @@ export const SUPERVISOR_SYSTEM_PROMPT = [
   "ordinary permission card). Read, Grep and Glob let you check grounds in the files;",
   "`marvin-graph` answers structural questions. You have no write tools.",
   "",
-  "## Shadow mode",
-  "You are in SHADOW mode: every answer you give is recorded as a proposal and",
-  "the user still answers the tab. Propose what you would answer; the user's",
-  "real answer is compared with yours later.",
+  "## Shadow and autonomous categories",
+  "The user switches each category on separately: questions (`answer`), nudges",
+  "(`send`, `cancel`), posture (`set_posture`, narrowing only); confirms stay in",
+  "shadow. Each wake packet says which are on. In SHADOW a call is recorded as a",
+  "proposal and compared with what the user does. In AUTONOMOUS it is performed:",
+  "the tab reads your answer or message marked as yours, never as the user's.",
+  "The same rules hold either way; an unsafe call escalates in both.",
   "",
   "## Rules the verb layer enforces — expect refusals if you break them",
   "- Every answer cites `grounds`: a charter quote, a DoD line from the tab's",
@@ -54,6 +57,8 @@ export function wrapUntrusted(kind: "transcript" | "plan" | "question", tab: str
 }
 
 export interface WakeItem {
+  /** Milestone 4 — why this tab is in the packet. Absent: a pending question. */
+  trigger?: "question" | "turn-ended" | "idle";
   marvinSessionId: string;
   title: string | null;
   delegation: string;
@@ -68,9 +73,19 @@ export interface WakeItem {
 }
 
 /** One wake's prompt: every pending item, with tab content wrapped as untrusted data. */
-export function renderWakePacket(args: { items: WakeItem[]; charter: string; freshSession: boolean; ledgerTail?: LedgerEntry[] }): string {
+export function renderWakePacket(args: {
+  items: WakeItem[];
+  charter: string;
+  freshSession: boolean;
+  ledgerTail?: LedgerEntry[];
+  /** Milestone 4 — the user's per-category switches, stated every wake (a resumed session must not act on stale ones). */
+  autonomy?: Record<string, string>;
+}): string {
   const out: string[] = [];
   out.push(`# Wake — ${args.items.length} item(s) need a look`);
+  if (args.autonomy) {
+    out.push("", `Categories now: ${Object.entries(args.autonomy).map(([k, v]) => `${k} ${v.toUpperCase()}`).join(", ")}.`);
+  }
   if (args.freshSession) {
     out.push("", "## The user's charter", args.charter.trim() || "(the user has not written a charter)");
     if (args.ledgerTail?.length) {
@@ -78,13 +93,17 @@ export function renderWakePacket(args: { items: WakeItem[]; charter: string; fre
     }
   }
   for (const it of args.items) {
+    const trigger = it.trigger ?? "question";
+    const why =
+      trigger === "question"
+        ? [`Delegation: ${it.delegation}. Pending question toolUseId: ${it.toolUseId}.`, "", "### The pending question (written by the tab)", wrapUntrusted("question", it.marvinSessionId, JSON.stringify(it.question, null, 2))]
+        : trigger === "turn-ended"
+          ? [`Delegation: ${it.delegation}. Woken because: a turn the user (or you) started has ended. Act only if the approved plan needs a nudge; doing nothing is usually right.`]
+          : [`Delegation: ${it.delegation}. Woken because: the tab has been idle with its plan unfinished. A nudge must cite the plan step it advances; doing nothing is fine.`];
     out.push(
       "",
       `## Tab ${it.marvinSessionId}${it.title ? ` — ${it.title}` : ""}`,
-      `Delegation: ${it.delegation}. Pending question toolUseId: ${it.toolUseId}.`,
-      "",
-      "### The pending question (written by the tab)",
-      wrapUntrusted("question", it.marvinSessionId, JSON.stringify(it.question, null, 2)),
+      ...why,
       "",
       "### The user's brief (the tab's first message — the user's own words)",
       it.brief?.trim() ? it.brief.trim().slice(0, 4_000) : "(none recorded)",

@@ -12,10 +12,18 @@
  *                  function that could resolve a confirm.
  *
  * Milestone 2 adds `set_posture`; milestone 3 adds `send`, `cancel` and
- * `confirm` — evaluated and ledgered, performing nothing: no turn starts, no
- * turn is aborted, no confirm resolves. `confirm` refuses any confirm only the
- * user may answer (a supervisor-touched turn, ADR-0127 §5). The remaining
- * verbs (`worktrees`, `close_session`, `new_session`) arrive with milestone 5.
+ * `confirm` — evaluated and ledgered, performing nothing. `confirm` refuses
+ * any confirm only the user may answer (a supervisor-touched turn, ADR-0127
+ * §5). The remaining verbs (`worktrees`, `close_session`, `new_session`)
+ * arrive with milestone 5.
+ *
+ * Milestone 4 — a verb PERFORMS when the user switched its category to
+ * autonomous: `answer` (questions), `send` and `cancel` (nudges),
+ * `set_posture` (posture). `confirm` stays shadow until milestone 5. The
+ * performing functions are injected (`VerbDeps.perform`): this module still
+ * imports nothing that resolves a confirm, starts a turn or changes a
+ * posture. An act's ledger line is named before it is performed, so the
+ * transcript can cite it; a perform that fails is ledgered as a refusal.
  *
  * Registered only in the supervisor session; the executor gate denies the
  * server's tools everywhere else (`@marvin/tools/policy`).
@@ -27,7 +35,16 @@ import { z } from "zod";
 import type { getPendingConfirm } from "./confirm-registry";
 import { type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import type { SessionWatchRow } from "./session-watch";
-import { appendLedgerEntry, digestArgs, type LedgerDecision, type LedgerGround, readLedger } from "./supervisor-ledger";
+import {
+  appendLedgerEntry,
+  capAnswer,
+  digestArgs,
+  type LedgerDecision,
+  type LedgerEntryInput,
+  type LedgerGround,
+  newLedgerId,
+  readLedger,
+} from "./supervisor-ledger";
 import {
   type ActionLimiter,
   evaluateAnswer,
@@ -38,15 +55,41 @@ import {
   type GroundContext,
   type GroundRef,
   type PolicyOutcome,
+  questionHeuristic,
 } from "./supervisor-policy";
 import { wrapUntrusted } from "./supervisor-prompt";
 import { containsSecretShape } from "./session";
 import { classifyHumanOnlyAct } from "./supervisor-acts";
-import { getSupervisorState, isSupervisorSessionId } from "./supervisor-state";
+import { categoryMode, getSupervisorState, isSupervisorSessionId, overBudget } from "./supervisor-state";
 import { isUserOnlyConfirm } from "./supervisor-touch";
 
 export const SUPERVISE_SERVER_NAME = "marvin-supervise";
 export const SUPERVISE_TOOL_NAMES = ["sessions", "read", "answer", "set_posture", "send", "cancel", "confirm"] as const;
+
+type Performed = { ok: true } | { ok: false; code?: string; error: string };
+
+/**
+ * What an autonomous verb performs through (milestone 4). Injected so this
+ * module imports no function that resolves a confirm, starts a turn or
+ * changes a posture; the runtime wires the milestone 2 and 3 services.
+ */
+export interface VerbPerform {
+  /** `answerQuestion` with `answeredBy: "supervisor"` — it touches the turn. */
+  answer(a: {
+    turnId: string;
+    toolUseId: string;
+    answers: Record<string, string | string[]>;
+    other: Record<string, string>;
+    grounds: LedgerGround[];
+    ledgerId: string;
+  }): { ok: true } | { ok: false; error: string };
+  /** `sendAsSupervisor` — the turn it starts is the supervisor's and touched. */
+  send(m: { projectId: string; marvinSessionId: string; text: string; kind: "nudge" | "instruction"; grounds: LedgerGround[]; ledgerId: string }): Promise<{ ok: true; queued: boolean } | { ok: false; code: string; reason: string }>;
+  /** Stop the tab's live turn. False when there was none. */
+  cancel(marvinSessionId: string): boolean;
+  /** `applyPostureChange` with `actor: "supervisor"`; the verb ledgers, so the service does not. */
+  setPosture(a: { marvinSessionId: string; patch: PosturePatch; grounds: LedgerGround[] }): Promise<Performed>;
+}
 
 /** What the verbs read, injected so tests run on fixtures and the runtime on the real stores. */
 export interface VerbDeps {
@@ -60,6 +103,9 @@ export interface VerbDeps {
   modelLookup(): Promise<ModelLookup>;
   /** Why the tab cannot take a message now (stopped, waiting on its own job, busy shared checkout), or null (milestone 3). */
   sendRefusal(marvinSessionId: string): { code: string; reason: string } | null;
+  /** The tab closed its scope and nothing has reopened it (`scopeMetAt`, milestone 4). */
+  scopeMet(marvinSessionId: string): boolean;
+  perform: VerbPerform;
 }
 
 export interface VerbContext {
@@ -159,10 +205,22 @@ function validateAnswers(qs: Question[], answers: Record<string, string | string
   return null;
 }
 
+/** The labels an answer picks, per question in question order — exactly what `buildAnswerInput` will write, unannotated. */
+function answerValues(qs: Question[], answers: Record<string, string | string[]>, other: Record<string, string>): string[] {
+  return qs.map((q) => {
+    const raw = answers[q.question];
+    const picked = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+    const parts = q.options.map((o) => o.label).filter((l) => picked.includes(l));
+    const free = typeof other[q.question] === "string" ? (other[q.question] as string).trim() : "";
+    if (free) parts.push(free);
+    return parts.join(",");
+  });
+}
+
 const REPLY: Record<LedgerDecision, (reason: string) => string> = {
   propose: () =>
     "Recorded as a proposal (shadow mode). Nothing was answered — the question stays pending for the user, and your proposal is compared with their answer later.",
-  act: () => "Recorded. Performing answers arrives in a later milestone — nothing was answered; the question stays pending.",
+  act: () => "Answered (the questions category is autonomous). The tab reads the answer as yours, not the user's, and this turn is now supervisor-touched.",
   escalate: (r) => `Escalated to the user: ${r}. The question stays pending for them.`,
   refuse: (r) => `Refused: ${r}.`,
   drop: (r) => `Dropped: ${r}.`,
@@ -172,6 +230,23 @@ export function createSupervisorVerbs(ctx: VerbContext) {
   const { projectId } = ctx;
 
   const visible = (id: string) => !isSupervisorSessionId(id) && !!getSupervisorState(projectId).delegation[id];
+
+  /**
+   * Read again at the moment of acting: a pause, a kill or the budget cap
+   * reached during this wake stops every act that has not happened yet (§6).
+   * Null when the act may go ahead.
+   */
+  function actHold(): { reasonCode: string; reason: string } | null {
+    const now = getSupervisorState(projectId);
+    if (now.mode === "off") return { reasonCode: "off", reason: "the supervisor was turned off during this wake; nothing was performed" };
+    if (now.paused) {
+      return now.pause?.reason === "budget"
+        ? { reasonCode: "budget", reason: "the daily cap was reached during this wake; nothing was performed" }
+        : { reasonCode: "paused", reason: "the supervisor was paused during this wake; nothing was performed" };
+    }
+    if (overBudget(now)) return { reasonCode: "budget", reason: "the daily cap was reached during this wake; nothing was performed" };
+    return null;
+  }
 
   async function sessions(): Promise<string> {
     const st = getSupervisorState(projectId);
@@ -232,19 +307,23 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const tab = String(args.marvinSessionId ?? "").trim();
     const toolUseId = String(args.toolUseId ?? "").trim();
     const argsDigest = digestArgs({ toolUseId, answers: args.answers ?? {}, other: args.other ?? {}, escalate: args.escalate ?? null });
-    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string; reasonCode?: string } = {}) => {
+    const mode = categoryMode(st, "questions");
+    let target: Pick<LedgerEntryInput, "turnId" | "toolUseId" | "answer"> = {};
+    const log = (decision: LedgerDecision, reason: string, extra: { grounds?: LedgerGround[]; heuristic?: string; reasonCode?: string; id?: string } = {}) => {
       appendLedgerEntry(projectId, {
+        ...(extra.id ? { id: extra.id } : {}),
         kind: "verb",
         verb: "answer",
         ...(extra.reasonCode ? { reasonCode: extra.reasonCode } : {}),
         tab: tab || null,
         wakeId: ctx.wakeId,
-        mode: st.mode,
+        mode: mode === "off" ? st.mode : mode,
         decision,
         reason,
         argsDigest,
         grounds: extra.grounds ?? [],
         ...(extra.heuristic ? { heuristic: extra.heuristic } : {}),
+        ...target,
       });
       return REPLY[decision](reason);
     };
@@ -258,6 +337,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       return log("refuse", `no pending question ${toolUseId} on tab ${tab}${why}`);
     }
     const questions = parseQuestions(pending.originalInput);
+    target = { ...(row.turn ? { turnId: row.turn.turnId } : {}), toolUseId };
     if (!args.escalate) {
       const bad = validateAnswers(questions, args.answers ?? {}, args.other ?? {});
       if (bad) return log("refuse", bad);
@@ -265,6 +345,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       if (Object.values(args.other ?? {}).some((t) => typeof t === "string" && containsSecretShape(t))) {
         return log("refuse", "the answer carries a secret-shaped string (ADR-0127 §6)", { reasonCode: "secret" });
       }
+      target.answer = capAnswer(answerValues(questions, args.answers ?? {}, args.other ?? {}));
     }
     const key = `answer:${toolUseId}`;
     const gate = ctx.limiter.check(projectId, tab, key, ctx.wake.acts);
@@ -273,10 +354,14 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     ctx.limiter.record(projectId, tab, key);
 
     const outcome = evaluateAnswer({
-      mode: st.mode,
+      mode,
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
-      questionTexts: questions.flatMap((q) => [q.question, q.header ?? "", ...q.options.flatMap((o) => [o.label, o.description ?? ""])]),
+      // The supervisor's own "Other" text too: an answer can name a §4 act the question did not.
+      questionTexts: [
+        ...questions.flatMap((q) => [q.question, q.header ?? "", ...q.options.flatMap((o) => [o.label, o.description ?? ""])]),
+        ...Object.values(args.other ?? {}).filter((t): t is string => typeof t === "string"),
+      ],
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: {
         mainRoot: ctx.workDir,
@@ -290,6 +375,22 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       ...(args.escalate ? { escalate: { reason: String(args.escalate.reason ?? "").slice(0, 500) } } : {}),
     });
     const rec = args.escalate?.recommendation ? ` — recommendation: ${String(args.escalate.recommendation).slice(0, 500)}` : "";
+    if (outcome.decision === "act" && row.turn) {
+      const hold = actHold();
+      if (hold) return log("refuse", hold.reason, { grounds: outcome.grounds, reasonCode: hold.reasonCode });
+      // Named before it is performed, so the transcript's `confirm.decision` can cite it.
+      const id = newLedgerId();
+      const done = ctx.deps.perform.answer({
+        turnId: row.turn.turnId,
+        toolUseId,
+        answers: args.answers ?? {},
+        other: args.other ?? {},
+        grounds: outcome.grounds,
+        ledgerId: id,
+      });
+      if (!done.ok) return log("refuse", `could not answer: ${done.error}`, { grounds: outcome.grounds, reasonCode: "perform-failed", id });
+      return log("act", outcome.reason, { grounds: outcome.grounds, id });
+    }
     return log(outcome.decision, `${outcome.reason}${rec}`, {
       grounds: outcome.grounds,
       ...(outcome.heuristic ? { heuristic: outcome.heuristic } : {}),
@@ -301,11 +402,23 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const st = getSupervisorState(projectId);
     const tab = String(args.marvinSessionId ?? "").trim();
     const argsDigest = digestArgs({ posture: args.posture ?? {} });
-    const log = (decision: LedgerDecision, reason: string, grounds: LedgerGround[] = []) => {
-      appendLedgerEntry(projectId, { kind: "verb", verb: "set_posture", tab: tab || null, wakeId: ctx.wakeId, mode: st.mode, decision, reason, argsDigest, grounds });
-      return decision === "propose"
-        ? "Recorded as a proposal (shadow mode). The tab's posture is unchanged; your proposal is compared with what the user does later."
-        : REPLY[decision](reason);
+    const mode = categoryMode(st, "posture");
+    const log = (decision: LedgerDecision, reason: string, grounds: LedgerGround[] = [], reasonCode?: string) => {
+      appendLedgerEntry(projectId, {
+        kind: "verb",
+        verb: "set_posture",
+        tab: tab || null,
+        wakeId: ctx.wakeId,
+        mode: mode === "off" ? st.mode : mode,
+        decision,
+        reason,
+        ...(reasonCode ? { reasonCode } : {}),
+        argsDigest,
+        grounds,
+      });
+      if (decision === "propose") return "Recorded as a proposal (shadow mode). The tab's posture is unchanged; your proposal is compared with what the user does later.";
+      if (decision === "act") return "Narrowed (the posture category is autonomous). It applies from the tab's next tool call.";
+      return REPLY[decision](reason);
     };
     if (isSupervisorSessionId(tab)) return log("refuse", "a supervisor session is never a target (no recursion)");
     const row = (await ctx.deps.listRows()).find((r) => r.marvinSessionId === tab);
@@ -318,7 +431,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     ctx.wake.acts += 1;
     ctx.limiter.record(projectId, tab, key);
     const outcome = evaluateSetPosture({
-      mode: st.mode,
+      mode,
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       from: row.posture,
@@ -327,7 +440,15 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
-    return log(outcome.decision, outcome.reason, outcome.grounds);
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold) return log("refuse", hold.reason, outcome.grounds, hold.reasonCode);
+      // The service re-classifies against the stored posture, so a widening
+      // that slipped in since the row was read is refused there too.
+      const done = await ctx.deps.perform.setPosture({ marvinSessionId: tab, patch: valid.patch, grounds: outcome.grounds });
+      if (!done.ok) return log("refuse", `could not change posture: ${done.error}`, outcome.grounds, done.code ?? "perform-failed");
+    }
+    return log(outcome.decision, outcome.reason, outcome.grounds, outcome.reasonCode);
   }
 
   function groundContextFor(row: SessionWatchRow, charter: string): GroundContext {
@@ -342,22 +463,39 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     };
   }
 
-  /** Ledger a milestone 3 verb's outcome and reply to the model. Shadow: nothing is performed. */
-  function settle(verb: "send" | "cancel" | "confirm", tab: string, argsDigest: string, o: PolicyOutcome, extra: { planSignature?: string } = {}): string {
+  const CATEGORY = { send: "nudges", cancel: "nudges", confirm: "confirms" } as const;
+
+  /** Ledger a milestone 3 verb's outcome and reply to the model. */
+  function settle(
+    verb: "send" | "cancel" | "confirm",
+    tab: string,
+    argsDigest: string,
+    o: PolicyOutcome,
+    extra: { planSignature?: string; id?: string } & Pick<LedgerEntryInput, "turnId" | "toolUseId" | "answer"> = {},
+  ): string {
     const st = getSupervisorState(projectId);
+    const mode = categoryMode(st, CATEGORY[verb]);
+    const { planSignature, ...rest } = extra;
     appendLedgerEntry(projectId, {
+      ...rest,
       kind: "verb",
       verb,
       tab: tab || null,
       wakeId: ctx.wakeId,
-      mode: st.mode,
+      mode: mode === "off" ? st.mode : mode,
       decision: o.decision,
       reason: o.reason,
       ...(o.reasonCode ? { reasonCode: o.reasonCode } : {}),
       argsDigest,
       grounds: o.grounds,
-      ...(extra.planSignature ? { planSignature: extra.planSignature } : {}),
+      ...(o.heuristic ? { heuristic: o.heuristic } : {}),
+      ...(planSignature ? { planSignature } : {}),
     });
+    if (o.decision === "act") {
+      return verb === "send"
+        ? "Sent (the nudges category is autonomous). It reaches the tab marked as yours, after any live turn ends."
+        : "Cancelled the tab's running turn (the nudges category is autonomous).";
+    }
     if (o.decision !== "propose") return REPLY[o.decision](o.reason);
     const what = { send: "Nothing was sent", cancel: "Nothing was cancelled", confirm: "Nothing was answered — the confirm stays pending for the user" }[verb];
     return `Recorded as a proposal (shadow mode). ${what}; your proposal is compared with what the user does later.`;
@@ -397,17 +535,28 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       : 0;
     const st = getSupervisorState(projectId);
     const outcome = evaluateSend({
-      mode: st.mode,
+      mode: categoryMode(st, "nudges"),
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       kind,
       tabRefusal: ctx.deps.sendRefusal(tab),
+      scopeMet: ctx.deps.scopeMet(tab),
       secret: containsSecretShape(message),
+      heuristic: questionHeuristic([message]),
       priorNudgesAtStep,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
-    return settle("send", tab, argsDigest, outcome, planSignature ? { planSignature } : {});
+    const sig = planSignature ? { planSignature } : {};
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, sig);
+      const id = newLedgerId();
+      const sent = await ctx.deps.perform.send({ projectId, marvinSessionId: tab, text: message, kind, grounds: outcome.grounds, ledgerId: id });
+      if (!sent.ok) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: sent.code, reason: `could not send: ${sent.reason}` }, { ...sig, id });
+      return settle("send", tab, argsDigest, outcome, { ...sig, id });
+    }
+    return settle("send", tab, argsDigest, outcome, sig);
   }
 
   /** Milestone 3 — stop a runaway turn, proposed; in shadow nothing is cancelled. */
@@ -421,13 +570,21 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (drop) return settle("cancel", tab, argsDigest, drop);
     const st = getSupervisorState(projectId);
     const outcome = evaluateCancel({
-      mode: st.mode,
+      mode: categoryMode(st, "nudges"),
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       hasLiveTurn: !!row.turn,
+      turn: row.turn ? { kind: row.turn.kind, author: row.turn.author, mutated: row.turn.mutated } : null,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold) return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", ...hold });
+    }
+    if (outcome.decision === "act" && !ctx.deps.perform.cancel(tab)) {
+      return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "no-live-turn", reason: "the turn ended before it could be cancelled" });
+    }
     return settle("cancel", tab, argsDigest, outcome);
   }
 
@@ -446,7 +603,8 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (drop) return settle("confirm", tab, argsDigest, drop);
     const st = getSupervisorState(projectId);
     const outcome = evaluateConfirm({
-      mode: st.mode,
+      // Confirms cannot leave shadow before milestone 5; the state refuses the switch.
+      mode: categoryMode(st, "confirms"),
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
       raisedBy: pending.raisedBy,
@@ -455,7 +613,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
-    return settle("confirm", tab, argsDigest, outcome);
+    return settle("confirm", tab, argsDigest, outcome, { turnId, toolUseId, answer: [args.decision === "deny" ? "deny" : "allow"] });
   }
 
   return { sessions, read, answer, set_posture, send, cancel, confirm };
@@ -494,7 +652,7 @@ export function supervisorToolDefs(ctx: VerbContext) {
       "Answer a tab's pending AskUserQuestion, or escalate it to the user. `answers` maps the full question text to " +
         "the option label (an array for multi-select); `other` gives free text. Cite `grounds` — every answer needs " +
         "at least one the tab did not write itself. If you cannot ground it, pass `escalate: { reason, recommendation }` " +
-        "instead. In shadow mode nothing is answered: your answer is recorded as a proposal.",
+        "instead. In shadow mode your answer is recorded as a proposal; with the questions category autonomous it is given, marked as yours.",
       {
         marvinSessionId: z.string().min(1),
         toolUseId: z.string().min(1),
@@ -509,7 +667,7 @@ export function supervisorToolDefs(ctx: VerbContext) {
       "set_posture",
       "Propose a change to a tab's posture (model, thinkingMode, permissionStrategy, mode). You may only NARROW " +
         "(gated over auto over full; ask/plan over agent; lower effort; a model known to cost no more): any widening " +
-        "escalates to the user, Plan → Agent included. Cite `grounds`. In shadow mode nothing changes.",
+        "escalates to the user, Plan → Agent included. Cite `grounds`. In shadow mode nothing changes; with the posture category autonomous a narrowing is applied.",
       {
         marvinSessionId: z.string().min(1),
         posture: z.object({
@@ -527,7 +685,8 @@ export function supervisorToolDefs(ctx: VerbContext) {
       "Propose a message to a delegated tab: a `nudge` toward its approved plan, or an `instruction`. It reaches the tab " +
         "marked as yours, never as the user's, and it can authorise nothing on the human-only list. Cite `grounds`. " +
         "Refused for a tab the user stopped, one waiting on its own build or wakeup, or one sharing a busy checkout; a " +
-        "third nudge at the same plan step without progress escalates. In shadow mode nothing is sent.",
+        "third nudge at the same plan step without progress escalates, and a tab whose scope is met is not messaged. In shadow mode nothing is sent; " +
+        "with the nudges category autonomous it is sent.",
       {
         marvinSessionId: z.string().min(1),
         message: z.string().min(1).max(4_000),
@@ -539,7 +698,7 @@ export function supervisorToolDefs(ctx: VerbContext) {
     tool(
       "cancel",
       "Propose cancelling a delegated tab's running turn — a runaway loop. Give the `reason` and cite `grounds`. " +
-        "In shadow mode nothing is cancelled.",
+        "In shadow mode nothing is cancelled; with the nudges category autonomous the turn is stopped.",
       {
         marvinSessionId: z.string().min(1),
         reason: z.string().min(1).max(500),

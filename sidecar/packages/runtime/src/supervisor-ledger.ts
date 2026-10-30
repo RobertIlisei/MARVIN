@@ -12,8 +12,8 @@
  * attempted and why, and must not become a second copy of a tab's content.
  */
 
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, statSync, writeSync } from "node:fs";
 import path from "node:path";
 
 import { getMarvinDataDir } from "./paths";
@@ -28,9 +28,26 @@ export interface LedgerGround {
   provenance: GroundProvenance;
 }
 
+/** How a proposal compared with what actually answered it (brief §10.5). Written once, on `confirm.resolved`. */
+export interface LedgerPairing {
+  /** The answer that resolved it: option labels per question (question order), or the confirm's decision. */
+  actualAnswer: string[];
+  answeredBy: "user" | "supervisor";
+  agreement: "agree" | "disagree";
+  /** The user revealed the proposal before answering (`POST /api/supervisor/reveal`). */
+  proposalSeenBeforeAnswer: boolean;
+}
+
 export interface LedgerEntryInput {
-  /** `verb` — a supervisor proposal or act; `wake` / `rotation` — the loop; `control` — the user changed state. */
-  kind: "verb" | "wake" | "rotation" | "control";
+  /** Stable line id (brief `ledgerId`). Generated when absent; lines written before milestone 4 have none. */
+  id?: string;
+  /**
+   * `verb` — a supervisor proposal or act; `wake` / `rotation` — the loop;
+   * `control` — the user changed state; `pairing` / `reveal` — a proposal met
+   * its answer, or the user looked at it first; `heuristic-miss` — a question
+   * the heuristic passed led to a human-only confirm in the same turn.
+   */
+  kind: "verb" | "wake" | "rotation" | "control" | "pairing" | "reveal" | "heuristic-miss";
   verb: string;
   tab: string | null;
   wakeId: string | null;
@@ -47,11 +64,31 @@ export interface LedgerEntryInput {
   heuristic?: string;
   costUsd?: number;
   result?: string;
+  /** The question or confirm an `answer` / `confirm` line is about (milestone 4 — pairing). */
+  turnId?: string;
+  toolUseId?: string;
+  /** The supervisor's answer: option labels per question in question order, or `[allow|deny]`. Labels only, capped. */
+  answer?: string[];
+  /** `pairing` / `reveal` / `heuristic-miss` lines name the proposal line they are about. */
+  proposalId?: string;
+  pairing?: LedgerPairing;
+  /** Why a wake was raised (milestone 4): a question, a turn that ended, or an idle tab. */
+  trigger?: "question" | "turn-ended" | "idle";
+}
+
+/** Labels, not the tab's content: each capped, at most twenty. */
+export function capAnswer(values: readonly string[]): string[] {
+  return values.slice(0, 20).map((v) => String(v).slice(0, 200));
 }
 
 export interface LedgerEntry extends LedgerEntryInput {
   at: string;
   projectId: string;
+}
+
+/** A new line id. Exported so a verb can name its line before performing the act it records. */
+export function newLedgerId(): string {
+  return randomUUID();
 }
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
@@ -111,7 +148,7 @@ function stableStringify(v: unknown): string {
 
 export function appendLedgerEntry(projectId: string, input: LedgerEntryInput): LedgerEntry {
   ensureSupervisorDir(projectId);
-  const entry: LedgerEntry = { at: new Date().toISOString(), projectId, ...input };
+  const entry: LedgerEntry = { at: new Date().toISOString(), projectId, ...input, id: input.id ?? newLedgerId() };
   const fd = openSync(ledgerPath(projectId), "a", 0o600);
   try {
     writeSync(fd, `${JSON.stringify(entry)}\n`);
@@ -122,20 +159,35 @@ export function appendLedgerEntry(projectId: string, input: LedgerEntryInput): L
   return entry;
 }
 
-/** Ledger entries, oldest first; `limit` keeps the newest N. A torn line is skipped. */
-export function readLedger(projectId: string, opts: { limit?: number; tab?: string } = {}): LedgerEntry[] {
-  const p = ledgerPath(projectId);
-  if (!existsSync(p)) return [];
-  const out: LedgerEntry[] = [];
+/**
+ * The parsed file, keyed on its size and mtime. Milestone 4 reads the ledger
+ * from the polled watch route and on every `confirm.resolved`; an append-only
+ * file only grows, so an unchanged (size, mtime) is an unchanged ledger.
+ */
+const parsedCache = new Map<string, { size: number; mtimeMs: number; entries: LedgerEntry[] }>();
+
+function parseLedgerFile(p: string): LedgerEntry[] {
+  const st = statSync(p);
+  const hit = parsedCache.get(p);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.entries;
+  const entries: LedgerEntry[] = [];
   for (const line of readFileSync(p, "utf8").split("\n")) {
     if (!line.trim()) continue;
     try {
-      const e = JSON.parse(line) as LedgerEntry;
-      if (opts.tab !== undefined && e.tab !== opts.tab) continue;
-      out.push(e);
+      entries.push(JSON.parse(line) as LedgerEntry);
     } catch {
       /* torn final line — the next append starts a fresh one */
     }
   }
+  parsedCache.set(p, { size: st.size, mtimeMs: st.mtimeMs, entries });
+  return entries;
+}
+
+/** Ledger entries, oldest first; `limit` keeps the newest N. A torn line is skipped. Always a fresh array. */
+export function readLedger(projectId: string, opts: { limit?: number; tab?: string } = {}): LedgerEntry[] {
+  const p = ledgerPath(projectId);
+  if (!existsSync(p)) return [];
+  const all = parseLedgerFile(p);
+  const out = opts.tab !== undefined ? all.filter((e) => e.tab === opts.tab) : all.slice();
   return opts.limit !== undefined ? out.slice(-opts.limit) : out;
 }

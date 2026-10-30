@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SHADOW_PERFORM } from "./supervisor-shadow-perform";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,7 +64,7 @@ function row(id: string): SessionWatchRow {
     posture: null,
     postureRevision: null,
     postureSource: null,
-    supervisor: { delegation: "answer-questions", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false },
+    supervisor: { delegation: "answer-questions", sharedCheckout: true, touchedTurn: null, waitingOnOwn: null, stoppedByUser: false, lastActAt: null },
   } as SessionWatchRow;
 }
 
@@ -71,6 +72,8 @@ const verbDeps = (): VerbDeps => ({
   listRows: async () => [row("tab-1"), row("tab-2")],
   getPending: getPendingConfirm,
   sendRefusal: () => null,
+  scopeMet: () => false,
+  perform: SHADOW_PERFORM,
   readTranscriptTail: () => "",
   readBrief: () => "Build billing.",
   tabStartedAt: () => null,
@@ -125,6 +128,8 @@ function deps(overrides: Partial<LoopDeps> = {}): LoopDeps {
       if (holdWakes) await new Promise<void>((r) => release.push(r));
       return { ok: true, costUsd: 0 };
     },
+    tabFacts: async () => null,
+    pendingQuestions: () => [],
     ...overrides,
   };
 }

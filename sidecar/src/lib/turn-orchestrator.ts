@@ -42,7 +42,7 @@ import {
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
-import { readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
 import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
@@ -63,6 +63,7 @@ import {
   getLiveTurn,
   type LiveTurn,
   registerLiveTurn,
+  SUPERVISOR_CANCEL_MESSAGE,
 } from "@marvin/runtime/turn-registry";
 import {
   deferIfSessionBusy,
@@ -336,6 +337,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   };
   refreshTabGraph("turn-start");
 
+  // ADR-0127 milestone 4 — a turn a person or the supervisor started opens
+  // new scope; a machine turn (job completion, wakeup, resume) does not.
+  const scopeStart = nextScopeMetAt({ phase: "start", kind: liveTurn.kind, ...(liveTurn.author ? { author: liveTurn.author } : {}) });
+  if (scopeStart) updateSessionMeta(projectId, marvinSessionId, scopeStart);
+
   const result = await runAgent({
     message,
     inputChannel,
@@ -415,8 +421,11 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // is an interruption the user can resume, not a user stop and not an
     // error; only the abort signal tells the two apart.
     const failure = classifyTurnFailure(result.error ?? "Unknown error", liveTurn.abortController.signal.aborted);
+    // ADR-0127 milestone 4 — a supervisor cancel is recorded as the supervisor's, never as the user's Stop.
+    const bySupervisor = failure.cancelled && liveTurn.cancelledBy === "supervisor";
     const payload = {
-      error: failure.error,
+      error: bySupervisor ? SUPERVISOR_CANCEL_MESSAGE : failure.error,
+      ...(bySupervisor ? { cancelledBy: "supervisor" as const } : {}),
       ...(failure.interrupted ? { interrupted: true as const, code: "interrupted" } : {}),
       ...(failure.cancelled ? { cancelled: true as const, code: "stopped" } : {}),
     };
@@ -434,7 +443,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
     });
     // A turn the user stopped is never retried. `classifyTurnError` would not
     // call "Stopped." transient, but the intent must not rest on the wording.
@@ -482,6 +491,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
+    ...(nextScopeMetAt({ phase: "end", scopeMet: !!result.scopeMet }) ?? {}),
   });
   // ADR-0111 — the first turn that leaves a commit on the tab's branch names
   // the branch after that commit; the chip follows through `session.tree`.
