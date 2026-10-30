@@ -395,6 +395,7 @@ private func prettyJSON(_ value: ChatJSON) -> String {
     let onDeny: (String?) -> Void
     @State private var denyOpen = false
     @State private var denyMessage: String = ""
+    @FocusState private var reasonFocused: Bool
 
     private var isPlanApproval: Bool { request.toolName == "ExitPlanMode" }
 
@@ -418,15 +419,22 @@ private func prettyJSON(_ value: ChatJSON) -> String {
                         .help(request.toolName)
                 }
                 Spacer(minLength: 0)
+                // Deny acts on the first click; the reason is optional and opens
+                // beside it, not in front of it (audit C9).
                 Button(isPlanApproval ? "Keep planning" : "Deny") {
-                    if denyOpen || isPlanApproval { onDeny(denyMessage.isEmpty ? nil : denyMessage) } else { denyOpen = true }
+                    onDeny(denyOpen && !denyMessage.isEmpty ? denyMessage : nil)
                 }
                 .controlSize(.small)
                 .keyboardShortcut(.cancelAction)
+                .help(isPlanApproval ? "Keep planning (Esc)" : "Deny (Esc)")
+                // ⌘⏎, not bare Return: the composer owns Return, and a stray
+                // Return must never approve a tool call (audit C8; ADR-0112
+                // amendment 2026-10-30).
                 Button(isPlanApproval ? "Approve & execute" : "Allow") { onAllow() }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help(isPlanApproval ? "Approve & execute (⌘⏎)" : "Allow (⌘⏎)")
             }
             if let input = request.input, !isPlanApproval {
                 ConfirmToolInput(name: request.toolName, input: input)
@@ -443,10 +451,16 @@ private func prettyJSON(_ value: ChatJSON) -> String {
                     TextField("Why? Shown back to the model (optional)", text: $denyMessage)
                         .textFieldStyle(.roundedBorder)
                         .controlSize(.small)
+                        .focused($reasonFocused)
                         .onSubmit { onDeny(denyMessage.isEmpty ? nil : denyMessage) }
-                    Button("Send denial") { onDeny(denyMessage.isEmpty ? nil : denyMessage) }
+                    Button("Deny with this reason") { onDeny(denyMessage.isEmpty ? nil : denyMessage) }
                         .controlSize(.small)
                 }
+                .onAppear { reasonFocused = true }
+            } else if !isPlanApproval {
+                Button("Deny with reason…") { denyOpen = true }
+                    .buttonStyle(.link)
+                    .font(.caption)
             }
         }
         .padding(.horizontal, 12)
