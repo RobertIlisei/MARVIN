@@ -74,6 +74,20 @@ Use cases: "how does the chat input reach the Agent SDK?" — surface the interm
 - The server is **per-turn**: a fresh instance is created every time `runAgent()` runs. It picks up graph updates between turns automatically.
 - Graph queries write Q&A back into the graph on disk so future queries can cite them. See [Graphify — feedback loop](../concepts/graphify-integration.md).
 
+## `marvin-supervise` (the supervisor session only)
+
+The supervisor's only acting surface ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)). Built by [`supervisor-mcp.ts`](../../../sidecar/packages/runtime/src/supervisor-mcp.ts) and mounted by [`supervisor-dispatch.ts`](../../../sidecar/packages/runtime/src/supervisor-dispatch.ts) in the supervisor's own SDK session — **never** in an executor turn: `sdk-runner.ts` does not register it, and `mcpToolPolicy` denies `mcp__marvin-supervise__*` in every turn it classifies. Inside the supervisor session it is admitted only when the SDK reports the in-process server (`mcpServer.source === "sdk"`, ADR-0117). `alwaysLoad: true`, because the supervisor's closed tool set has no `ToolSearch`.
+
+Milestone 1 tools (shadow mode — nothing is performed):
+
+| Tool | What it does |
+|---|---|
+| `sessions` | The tabs the user delegated, with their pending questions and confirms (each with its raising rule), plan progress and last turn. Supervisor sessions and undelegated tabs are never listed. |
+| `read` | One delegated tab's pending question, transcript tail, plan, or the supervisor's ledger for it. Tab content is wrapped as untrusted data. |
+| `answer` | A proposed answer to a pending `AskUserQuestion` (chosen labels / "Other" text) with `grounds`, or an `escalate`. Evaluated by the policy (delegation, grounds with provenance, the question heuristic, rate limits, the per-wake breaker) and ledgered. Never resolves the confirm. |
+
+Because the executor never holds this server, `personality.ts` carries no "prefer `marvin-supervise`" line (step 5 below does not apply); the supervisor's own prompt is `supervisor-prompt.ts`.
+
 ## Browser automation
 
 The Playwright CLI (default) is not an MCP — MARVIN shells out via `Bash` (`npx playwright` is on PATH) for one-shot captures + full `npx playwright test` suites. See [browser tools in `personality.ts`](../../sidecar/packages/runtime/src/personality.ts).

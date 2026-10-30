@@ -86,6 +86,11 @@ export const ROLES = {
     description: "proposes project skills from the codebase",
     default: { kind: "tier", tier: "sonnet" },
   },
+  supervisor: {
+    label: "Supervisor",
+    description: "watches delegated tabs and answers their questions within your limits (ADR-0127)",
+    default: { kind: "tier", tier: "sonnet" },
+  },
 } as const satisfies Record<string, RoleSpec>;
 
 export type Role = keyof typeof ROLES;

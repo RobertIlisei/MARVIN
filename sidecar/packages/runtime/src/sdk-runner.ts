@@ -72,6 +72,7 @@ import {
   noteBashFailure,
   recordAllowedTool,
 } from "./design-hooks";
+import { makeSideDoorPreToolUseHook } from "./side-door-hook";
 import { buildOrientationQuery, formatOrientation } from "./graph-orientation";
 import { computeHoneycombTelemetryEnv } from "./honeycomb-telemetry";
 import { createMemoryMcpServer } from "./memory-mcp";
@@ -1442,7 +1443,7 @@ function maybeAskUserQuestion(args: {
     // user's pending answer and making a later "Send choice" click hit a
     // resolved/gone confirm (404 → "nothing happens"). It now waits for the
     // human; the turn's `finally` (clearTurnConfirms) + Stop are the escapes.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "AskUserQuestion" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "AskUserQuestion", raisedBy: "ask-user-question" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1549,7 +1550,7 @@ function maybeSharedTreeConfirm(args: {
     // No auto-deny timer, same reasoning as AskUserQuestion: this is a human
     // decision about their own two sessions, and a silent timeout would turn
     // into the mystery failure the confirm exists to replace.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash", raisedBy: "shared-tree" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1621,7 +1622,7 @@ function maybeMeteredCiConfirm(args: {
     // No auto-deny timer, same reasoning as the rest of the family: this is a
     // human decision about their own budget, and a silent timeout would be the
     // mystery failure the confirm exists to replace.
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash" });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName: "Bash", raisedBy: "metered-ci" });
     onConfirmRequest({
       turnId,
       toolUseId: toolUseID,
@@ -1670,7 +1671,7 @@ function maybeLaneConfirm(args: {
     } as PermissionResult);
   }
   return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "lane" });
     onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason });
   });
 }
@@ -1708,7 +1709,7 @@ function maybeSessionWorktreeGate(args: {
     } as PermissionResult);
   }
   return new Promise<PermissionResult>((resolve) => {
-    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName });
+    registerPendingConfirm(turnId, toolUseID, resolve, input, 0, { toolName, raisedBy: "session-worktree" });
     onConfirmRequest({ turnId, toolUseId: toolUseID, toolName, input, reason: verdict.reason });
   });
 }
@@ -1934,7 +1935,7 @@ export function makeGatedCanUseTool(args: {
     }
     // confirm — wait on the client.
     return new Promise<PermissionResult>((resolve) => {
-      registerPendingConfirm(turnId, toolUseID, resolve, safeInput, undefined, { toolName });
+      registerPendingConfirm(turnId, toolUseID, resolve, safeInput, undefined, { toolName, raisedBy: "gated" });
       onConfirmRequest({
         turnId,
         toolUseId: toolUseID,
@@ -2298,7 +2299,9 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     // without consulting it. The design hooks need to gate the read /
     // search side too (graphify-first), so they live here as PreToolUse.
     hooks: {
-      PreToolUse: [{ hooks: [designPreToolUseHook] }],
+      // ADR-0127 — the side-door rule (MARVIN's control API, the supervisor's
+      // data dir) first, for the read tools `toolPolicy` never sees.
+      PreToolUse: [{ hooks: [makeSideDoorPreToolUseHook(), designPreToolUseHook] }],
       PostToolUse: [
         {
           hooks: [

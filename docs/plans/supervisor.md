@@ -1,8 +1,21 @@
 # Supervisor — implementation plan
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
-- **Written:** 2026-10-30 (Phase A). Nothing below is implemented yet.
+- **Written:** 2026-10-30 (Phase A).
+- **Status:** milestone [1] built 2026-10-30 (shadow mode; see "What milestone 1 changed" below). Milestones [2]–[6] not started.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
+
+## What milestone 1 changed from the text below
+
+Found while building it, mostly from the advisor's review of the security surface:
+
+- **A tab's Read / Grep / Glob never reach `toolPolicy`.** The SDK auto-allows them. The side-door rule therefore also runs as an executor PreToolUse hook (`side-door-hook.ts`), registered ahead of the design hooks.
+- **The control-route rule matches any host.** The sidecar binds loopback only, so `127.1`, `0`, a decimal IP and `lvh.me` all reach it. The rule also URL-decodes and collapses slashes first, and covers a network tool in command position (`nc`, `socat`, `node -e`, …) that names the port and a control path anywhere. The port is the one requests actually arrive on (`noteSidecarPort`), with the environment as a fallback.
+- **The supervisor reads only inside the project.** Read / Grep / Glob paths resolve against the project root, symlinks are followed before the secret check, and only `marvin-graph`'s read verbs are admitted — `graph_save_result`, `graph_reflect`, `graph_export_callflow` and `graph_index_schema` write.
+- **A `marvin-supervise` call refused for provenance is ledgered.** Three in one wake pause the supervisor and escalate.
+- **The token is minted only at boot.** Verification fails closed before boot, and the GET routes need the token too.
+- **Deferred to milestone 4, with the idle trigger that needs them:** the `background-jobs.ts` / `wakeup-scheduler.ts` lookups. Milestone 1's only trigger is a pending question.
+- **Plan steps count as strong grounds only when the plan was seeded from the user's brief.** Plan approval is not recorded server-side yet (ADR-0127 §4 item 6), so a plan the tab presented is weak.
 
 ## Constraint that shapes the order
 

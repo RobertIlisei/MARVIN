@@ -76,6 +76,27 @@ The server looks up the pending resolver in [`confirm-registry`](../../../sideca
 
 For an **AskUserQuestion** decision (ADR-0040) the `allow` reply carries `updatedInput` (the `{ answers, questions }` the user chose) which becomes the tool result. Such confirms register with **no** auto-deny timeout — a decision waits for the human (fixed in v0.1.40; the 5-min default used to silently deny a slow decision).
 
+## Supervisor
+
+[ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md), milestone 1 — shadow mode only: the supervisor proposes answers to delegated tabs' questions and performs nothing. Every route needs the per-boot capability token in `x-marvin-supervisor-token`, read from `<MARVIN_DATA_DIR>/supervisor/token` (0600, minted at boot). Without it: `403`. A tab's model cannot reach these routes — the gate denies a tab tool call that names MARVIN's control API.
+
+### `GET /api/supervisor?projectId=…`
+
+**Response:** `{ state }` — `mode` (`off` | `shadow`), `paused`, `delegation` (`{ [marvinSessionId]: "observe" | "answer-questions" | "answer-confirms" }`), `charter`, `caps`, `supervisorSessionId`, `spend`.
+
+### `POST /api/supervisor`
+
+CSRF-guarded (`X-Marvin-Client: 1`) and token-gated.
+
+**Request body:** `{ projectId, action, … }` — `action` is one of `start` (shadow mode), `stop`, `pause`, `resume`, `kill` (abort the wake in flight, then pause), `mode` (`{ mode: "off" | "shadow" }`; `autonomous` answers `400` in milestone 1), `delegate` (`{ marvinSessionId, level }`, level `off` removes it; the supervisor's own session answers `400`), `charter` (`{ text }`, ≤ 4000 chars).
+**Response:** `{ state }`, or `{ error }` with `400` / `403` / `413`. Every accepted action is a `control` line in the ledger.
+
+### `GET /api/supervisor/ledger?projectId=…&tab=…&limit=…`
+
+Token-gated. **Response:** `{ entries }` — the append-only ledger (`<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`), oldest first; `limit` keeps the newest N (default 200, max 2000); `tab` filters to one session. Each entry: `at`, `kind` (`verb` | `wake` | `rotation` | `control`), `verb`, `tab`, `wakeId`, `mode`, `decision` (`propose` | `act` | `escalate` | `refuse` | `drop`), `reason`, `argsDigest`, `grounds` (with `provenance`), `heuristic`, `costUsd`.
+
+`POST /api/chat` answers `409 { error: "supervisor-session" }` for the supervisor's own `marvinSessionId`: it is never run as an ordinary tab.
+
 ## Backlog
 
 The project backlog (ADR-0044) — actionable deferred work parked under `<workDir>/.marvin/backlog/`. All verbs delegate to the shared `backlog.ts` store, the same code the `marvin-backlog` MCP tool writes through. Mutating verbs are CSRF-guarded and validate `workDir` against the registered-project set.

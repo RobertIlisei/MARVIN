@@ -32,6 +32,9 @@ import {
 import { createPreparedSessionWorktree } from "@marvin/runtime/worktree-setup";
 import { noteClaimBranch } from "@marvin/runtime/backlog";
 import { reconcileWorktreesAsync, reopenSessionWorktree, type WorktreeRecord } from "@marvin/runtime/worktrees";
+import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
+import { isSupervisorSessionId } from "@marvin/runtime/supervisor-state";
+import { noteSidecarPort } from "@marvin/tools/policy";
 import type { NextRequest } from "next/server";
 import { requireMarvinClient } from "@/lib/csrf";
 import { buildSessionContext, buildTurnSystemPrompt, runDetachedTurn } from "@/lib/turn-orchestrator";
@@ -161,6 +164,18 @@ export async function POST(req: NextRequest) {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // ADR-0127 — the side-door rule keys on the port requests really arrive on;
+  // the supervisor's loop subscribes in this module graph; and the supervisor's
+  // own session is never run as an ordinary tab, with a tab's tools.
+  noteSidecarPort(req.nextUrl.port);
+  ensureSupervisorLoop();
+  if (body.marvinSessionId && isSupervisorSessionId(body.marvinSessionId.trim())) {
+    return new Response(
+      JSON.stringify({ error: "supervisor-session", detail: "the supervisor's session is not a tab; talk to it through /api/supervisor (ADR-0127)" }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
   }
 
   const message = body.message?.trim();

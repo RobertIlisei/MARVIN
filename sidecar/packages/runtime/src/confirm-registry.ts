@@ -19,6 +19,20 @@ import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 
 type Resolver = (result: PermissionResult) => void;
 
+/**
+ * ADR-0127 — which gate rule raised a confirm, recorded at the source so a
+ * reader (the supervisor's policy) classifies the confirm by its kind rather
+ * than guessing from the tool name: a `Bash` card can be the ADR-0102
+ * shared-tree confirm, the ADR-0109 metered-CI confirm or an ordinary one.
+ */
+export type ConfirmRule =
+  | "ask-user-question"
+  | "shared-tree"
+  | "metered-ci"
+  | "lane"
+  | "session-worktree"
+  | "gated";
+
 interface PendingEntry {
   resolver: Resolver;
   /** Original tool input the SDK passed to canUseTool — always a record. */
@@ -28,6 +42,8 @@ interface PendingEntry {
   /** ADR-0107 — what is waiting, for the watch UI. */
   toolName: string;
   registeredAt: number;
+  /** ADR-0127 — the rule that raised it; absent only for a caller that predates the field. */
+  raisedBy?: ConfirmRule;
   /**
    * ADR-0107 addendum 2 — the exact `confirm.request` payload the turn bus
    * carried, kept so a client that attaches AFTER the confirm was raised
@@ -48,6 +64,8 @@ export interface PendingConfirmSummary {
   excerpt?: string | undefined;
   /** ADR-0112 — the gate's reason, when it gave one. */
   reason?: string | undefined;
+  /** ADR-0127 — the rule that raised it. */
+  raisedBy?: ConfirmRule | undefined;
 }
 
 /** One line a Needs-you row can show without the full payload. */
@@ -99,7 +117,7 @@ export function registerPendingConfirm(
   resolver: Resolver,
   originalInput: Record<string, unknown> = {},
   timeoutMs: number = DEFAULT_CONFIRM_TIMEOUT_MS,
-  meta: { toolName?: string } = {},
+  meta: { toolName?: string; raisedBy?: ConfirmRule } = {},
 ): void {
   let bucket = registry.get(turnId);
   if (!bucket) {
@@ -111,6 +129,7 @@ export function registerPendingConfirm(
     originalInput,
     toolName: meta.toolName ?? "tool",
     registeredAt: Date.now(),
+    ...(meta.raisedBy ? { raisedBy: meta.raisedBy } : {}),
   };
   bucket.set(toolUseId, entry);
   if (timeoutMs > 0) {
@@ -141,6 +160,7 @@ export function listPendingConfirms(turnId: string): PendingConfirmSummary[] {
         since: new Date(e.registeredAt).toISOString(),
         ...(e.payload !== undefined ? { excerpt: confirmExcerpt(e.payload) } : {}),
         ...(typeof reason === "string" && reason ? { reason } : {}),
+        ...(e.raisedBy ? { raisedBy: e.raisedBy } : {}),
       };
     })
     .sort((a, b) => a.since.localeCompare(b.since));
@@ -166,6 +186,15 @@ export function listPendingConfirmPayloads(turnId: string): unknown[] {
     .filter((e) => e.payload !== undefined)
     .sort((a, b) => a.registeredAt - b.registeredAt)
     .map((e) => e.payload);
+}
+
+/** ADR-0127 — one pending confirm, as a reader that must not resolve it sees it. */
+export function getPendingConfirm(
+  turnId: string,
+  toolUseId: string,
+): { toolName: string; originalInput: Record<string, unknown>; raisedBy: ConfirmRule | null } | null {
+  const entry = registry.get(turnId)?.get(toolUseId);
+  return entry ? { toolName: entry.toolName, originalInput: entry.originalInput, raisedBy: entry.raisedBy ?? null } : null;
 }
 
 export function getPendingOriginalInput(

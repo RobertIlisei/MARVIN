@@ -9,12 +9,18 @@
 
 import { getProject } from "@marvin/runtime/projects";
 import { buildSessionWatch } from "@marvin/runtime/session-watch";
+import { ensureSupervisorLoop } from "@marvin/runtime/supervisor-loop";
+import { noteSidecarPort } from "@marvin/tools/policy";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  // ADR-0127 — the app polls this route, so it is where the supervisor's loop
+  // starts soonest after a boot, in the routes' module graph.
+  noteSidecarPort(req.nextUrl.port);
+  ensureSupervisorLoop();
   const params = req.nextUrl.searchParams;
   const projectId = params.get("projectId")?.trim();
   if (!projectId) {
