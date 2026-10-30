@@ -41,7 +41,7 @@ Nothing survives a tab unless it holds a commit ([ADR-0111](../decisions/0111-no
 | an isolated tab with changes but no commits | **Keep** (commits them as work in progress) · Discard | yes |
 | an isolated tab with commits | **Keep for integration** · Merge into *your current branch* · Discard | yes |
 
-Keep is the default. It leaves the branch for the integration step below. Merge folds the tab into the branch you have checked out, locally, and the button names that branch. Discard is the only destructive option and is only ever taken on a click.
+Keep is the default. It leaves the branch for the integration step below. Merge folds the tab into the branch you have checked out, locally, and the button names that branch. Discard is the only destructive option and is only ever taken on a click. Even then, commits no other branch holds are not lost: before the branch is deleted its tip is pinned at `refs/marvin/archive/<branch>/<time>`, which the close message names (restore with `git branch <name> <that ref>`). A tab already closed elsewhere (by the supervisor, or another window) closes without asking again.
 
 Trees that are empty or already merged, and clean, are removed automatically: when MARVIN starts, and after every tab close. A tree with uncommitted work, unmerged commits, or a turn in flight is never touched by that sweep.
 
