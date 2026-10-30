@@ -62,6 +62,7 @@ function row(id: string): SessionWatchRow {
     updatedAt: new Date().toISOString(),
     posture: null,
     postureRevision: null,
+    postureSource: null,
   } as SessionWatchRow;
 }
 

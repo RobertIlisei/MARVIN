@@ -119,9 +119,11 @@ describe("the watch row carries the posture revision a client echoes", () => {
     upsertSessionMeta("proj", "tab-w", { workDir, tree: { mode: "shared" }, posture: base });
     let [row] = await buildSessionWatch({ projectId: "proj", workDir, sessionIds: ["tab-w"] });
     expect(row?.postureRevision).toBeNull();
+    expect(row?.postureSource).toBeNull();
     applyPostureChange({ projectId: "proj", marvinSessionId: "tab-w", patch: { mode: "ask" }, actor: "user", lookup: () => null });
     [row] = await buildSessionWatch({ projectId: "proj", workDir, sessionIds: ["tab-w"], fresh: true });
     expect(row?.postureRevision).toBe(1);
+    expect(row?.postureSource).toBe("user");
     expect(row?.posture?.mode).toBe("ask");
   });
 });
