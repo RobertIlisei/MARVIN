@@ -49,6 +49,9 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     /// list shows a skeleton, never the empty state.
     @State private var hasLoaded = false
     @State private var error: String?
+    /// A success is not an error: "Filed: url" used to go through the red
+    /// error text (audit K25).
+    @State private var filedNote: String?
     /// Possible-duplicate notice after a manual add (ADR-0044 addendum).
     /// Separate from `error` because the add SUCCEEDED — conflating the two
     /// would read as a rejection.
@@ -143,8 +146,9 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
 
     /// Grouped view of `visible`. `.none` collapses to a single untitled band.
-    private var groupedSections: [(title: String, items: [BacklogItem])] {
-        let v = visible
+    private var groupedSections: [(title: String, items: [BacklogItem])] { sections(of: visible) }
+
+    private func sections(of v: [BacklogItem]) -> [(title: String, items: [BacklogItem])] {
         switch group {
         case .none:
             return [("", v)]
@@ -182,6 +186,13 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.top, 8)
+            }
+            if let filedNote {
+                Text(filedNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 12).padding(.top, 8)
             }
             // Possible-duplicate hint (ADR-0044 addendum). Advisory, not an
@@ -382,6 +393,11 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     }
 
     @ViewBuilder private var content: some View {
+        // Filter + sort once per render and hand the result down: `visible` (a
+        // sort of every item) was evaluated twice here and again per group, and
+        // `provisional` four times (audit K16).
+        let vis = visible
+        let prov = provisional
         if items.isEmpty && (isLoading || !hasLoaded) {
             // First load in flight. The empty state below used to show here,
             // telling the user "No open backlog items" for the 10–15 s it took
@@ -390,7 +406,7 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                 SkeletonRows(count: 7, detailLines: 2, card: true).padding(12)
             }
             .scrollDisabled(true)
-        } else if visible.isEmpty && provisional.isEmpty {
+        } else if vis.isEmpty && prov.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
                 if hasControllable {
@@ -411,8 +427,8 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             let byId = Dictionary(grouping: findings, by: \.id)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    if !provisional.isEmpty { provisionalSection(byId) }
-                    ForEach(groupedSections, id: \.title) { section in
+                    if !prov.isEmpty { provisionalSection(byId) }
+                    ForEach(sections(of: vis), id: \.title) { section in
                         if !section.title.isEmpty {
                             groupHeader(section.title, count: section.items.count)
                         }
@@ -756,7 +772,7 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     private func exportIssue(_ item: BacklogItem) async {
         do {
             let url = try await BacklogService.shared.promoteIssue(workDir: workDir, id: item.id)
-            error = "Filed: \(url)"
+            filedNote = "Filed: \(url)"
             await refresh(); onChanged()
         } catch {
             self.error = "Export failed: \(error.localizedDescription)"
@@ -1066,6 +1082,8 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             )
             savedFlash = true
             onChanged()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            savedFlash = false
         } catch {
             self.error = error.localizedDescription
         }

@@ -85,10 +85,13 @@ struct FindFileResult: Identifiable {
                     Image(systemName: replaceExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 14)
+                        .frame(width: 18, height: 20)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Toggle replace")
+                .accessibilityLabel("Replace")
+                .accessibilityValue(replaceExpanded ? "shown" : "hidden")
 
                 // A field that looks like one. `.plain` on all three fields
                 // meant the search box read as a label until you clicked it

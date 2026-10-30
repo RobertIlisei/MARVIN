@@ -38,6 +38,10 @@ final class SlashCommandModel {
     /// The query the popup is CURRENTLY filtered on. Surfaced in the footer so
     /// a stale popup is visibly stale instead of silently wrong.
     private(set) var activeQuery: String = ""
+    /// The query last sent to the server; `nil` once the popup closes. Separate
+    /// from `activeQuery` because a bare "/" is the empty query, which is also
+    /// what a closed popup holds.
+    private var requestedQuery: String?
     private(set) var selected: Int = 0
     /// Full catalog, fetched once per project and filtered locally so
     /// keystrokes don't each cost a round-trip.
@@ -85,6 +89,11 @@ final class SlashCommandModel {
             close()
             return
         }
+        // The composer reports each edit twice (the text view's callback and the
+        // SwiftUI onChange); the second report asks the server the same thing
+        // (audit C21).
+        guard q != requestedQuery else { return }
+        requestedQuery = q
         activeQuery = q
         Task { await search(query: q, prime: false) }
     }
@@ -155,6 +164,7 @@ final class SlashCommandModel {
         matches = []
         selected = 0
         activeQuery = ""
+        requestedQuery = nil
     }
 
     /// The text the composer should hold after accepting the highlighted
@@ -194,6 +204,8 @@ final class SlashCommandModel {
                                 .id(cmd.id)
                                 .contentShape(Rectangle())
                                 .onTapGesture { onPick(idx) }
+                                .accessibilityAddTraits(idx == selected ? [.isButton, .isSelected] : .isButton)
+                                .accessibilityAction { onPick(idx) }
                         }
                     }
                 }

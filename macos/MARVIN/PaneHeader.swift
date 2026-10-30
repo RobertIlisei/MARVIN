@@ -45,10 +45,11 @@ import SwiftUI
                 .foregroundStyle(uppercase ? MarvinTheme.textMuted : MarvinTheme.textPrimary)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
             if let subtitle {
                 Text(subtitle)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(MarvinTheme.textMuted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }

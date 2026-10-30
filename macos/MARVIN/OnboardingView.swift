@@ -43,13 +43,13 @@ import SwiftUI
             HStack(spacing: 0) {
                 identityPanel
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .controlBackgroundColor))
+                    .background(MarvinTheme.background)
 
                 MarvinDivider()
 
                 stepContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .windowBackgroundColor))
+                    .background(MarvinTheme.panel)
             }
         }
         .frame(minWidth: 720, minHeight: 480)
@@ -203,7 +203,7 @@ import SwiftUI
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(MarvinTheme.elevated)
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
         case .detected(let label):
@@ -268,7 +268,7 @@ import SwiftUI
                     // be copyable (W3). UpdatePromptView does the same.
                     .textSelection(.enabled)
                     .padding(8)
-                    .background(Color(nsColor: .controlBackgroundColor))
+                    .background(MarvinTheme.elevated)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 Text("Once you've finished, click **Refresh** above.")
                     .font(.caption)

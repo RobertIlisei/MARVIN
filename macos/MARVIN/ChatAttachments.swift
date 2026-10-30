@@ -168,8 +168,11 @@ struct ChatAttachment: Identifiable, Equatable {
                 Image(systemName: "xmark")
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Remove \(att.label)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)

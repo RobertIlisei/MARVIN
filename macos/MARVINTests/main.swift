@@ -5165,6 +5165,37 @@ runner.suite("pane-empty-actions") {
     }
 }
 
+// MARK: - Tail triage, group G2 (audit K18, C12)
+
+runner.suite("tail-g2") {
+    runner.test("a directory reaches the shell as one literal word") {
+        runner.expect(ShellQuote.single("/tmp/a b"), equals: "'/tmp/a b'", "spaces stay inside the quotes")
+        runner.expect(ShellQuote.single("it's"), equals: "'it'\\''s'", "a single quote closes, escapes and reopens")
+        runner.expect(ShellQuote.single("$HOME/`id`; rm -rf ~"), equals: "'$HOME/`id`; rm -rf ~'", "expansions and separators are inert inside single quotes")
+        runner.expect(ShellQuote.single(""), equals: "''", "an empty string is still one word")
+    }
+    runner.test("a task command changes directory only when it has one") {
+        runner.expect(ShellQuote.cdPrefix(directory: nil), equals: "", "no directory, no cd")
+        runner.expect(ShellQuote.cdPrefix(directory: "/p/a b"), equals: "cd '/p/a b' && ", "cd with a quoted directory, chained")
+    }
+    runner.test("Revise keeps what the user already typed") {
+        runner.expect(ReviseDraft.compose(existing: ""), equals: "Revise the plan — ", "an empty draft gets the prompt")
+        runner.expect(ReviseDraft.compose(existing: "  \n"), equals: "Revise the plan — ", "a blank draft is treated as empty")
+        runner.expect(ReviseDraft.compose(existing: "fix the tests"), equals: "fix the tests\n\nRevise the plan — ", "a real draft is kept and the prompt follows it")
+    }
+}
+
+// MARK: - Tail triage, approved design calls (audit W8)
+
+runner.suite("tail-ctx-glyph") {
+    runner.test("pressure past climbing is marked by shape, not only by colour") {
+        runner.expect(ContextBand.healthy.needsWarningGlyph, equals: false, "healthy: no glyph")
+        runner.expect(ContextBand.climbing.needsWarningGlyph, equals: false, "climbing: no glyph")
+        runner.expect(ContextBand.high.needsWarningGlyph, equals: true, "high: warning glyph")
+        runner.expect(ContextBand.critical.needsWarningGlyph, equals: true, "critical: warning glyph")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

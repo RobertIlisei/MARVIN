@@ -22,6 +22,11 @@ import AppKit
     @State private var recentPaths: [String] = []
     @State private var loadError: String? = nil
     @State private var selection: String? = nil
+    /// The last `filtered` result. It is read three or more times per render
+    /// (rows, footer count, selection), each time lowercasing every path; a
+    /// reference type so filling it during `body` does not invalidate the view
+    /// (audit W13).
+    @State private var filterMemo = FilterMemo()
     @FocusState private var queryFocused: Bool
 
     var body: some View {
@@ -196,8 +201,24 @@ import AppKit
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    private final class FilterMemo {
+        var key: String?
+        var result: [String] = []
+    }
+
     private var filtered: [String] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Count + first/last path stand in for "the file list changed": the list
+        // is loaded once, so this is only ever re-keyed by a reload.
+        let key = "\(q)\u{1}\(allFiles.count)\u{1}\(allFiles.first ?? "")\u{1}\(allFiles.last ?? "")\u{1}\(recentPaths.joined(separator: "\u{2}"))"
+        if filterMemo.key == key { return filterMemo.result }
+        let computed = computeFiltered(q)
+        filterMemo.key = key
+        filterMemo.result = computed
+        return computed
+    }
+
+    private func computeFiltered(_ q: String) -> [String] {
         if q.isEmpty {
             // Recents first, then remaining files — drives moveSelection.
             let recent = validRecents

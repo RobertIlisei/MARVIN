@@ -81,6 +81,8 @@ final class StatusBarController {
         button?.action = #selector(handleClick(_:))
         button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         button?.toolTip = "MARVIN"
+        button?.setAccessibilityLabel("MARVIN")
+        button?.setAccessibilityValue("idle")
 
         // Resolve the idle image. NSImage(named:) walks the main
         // bundle Resources — that's where bin/marvin's SPM-fallback
@@ -123,6 +125,8 @@ final class StatusBarController {
     /// signal — a no-op when the active image didn't load.
     func setActive(_ active: Bool) {
         guard let button = item?.button else { return }
+        // The icon swap is the only visual cue; say it too (audit W24).
+        button.setAccessibilityValue(active ? "working" : "idle")
         if active, let img = activeImage {
             button.image = img
         } else if let img = idleImage {

@@ -94,7 +94,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     // MARK: Inputs (set by the SwiftUI bridge)
 
     var preferredColorScheme: ColorScheme? {
-        didSet { needsClear = true }
+        didSet { needsClear = true; thaw() }
     }
     var brainState: BrainState {
         didSet {
@@ -106,15 +106,21 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
                 // appearing. Every other transition stays at 700 ms
                 // — that's the cadence the lab tuned.
                 let isBootSettle = oldValue == .boot
-                let duration: Double = isBootSettle
-                    ? 1800
-                    : BrainTransition.defaultDurationMs
+                // Reduce Motion: the new state is shown, not travelled to
+                // (audit K20) — a one-frame lerp, then the rest cadence below.
+                let duration: Double = reduceMotion
+                    ? 16
+                    : (isBootSettle ? 1800 : BrainTransition.defaultDurationMs)
                 transition.transition(
                     to: brainState,
                     nowMs: nowMs,
                     durationMs: duration
                 )
+                idleSettled = false
+                restFrozen = false
+                applyVisibility()
                 applyFrameRate()
+                scheduleSettle(afterMs: reduceMotion ? Self.restSettleMs : duration)
             }
         }
     }
@@ -125,7 +131,13 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// the source; `BrainMetalView`'s `updateNSView` pushes it in.
     var reduceMotion: Bool = false {
         didSet {
-            if reduceMotion != oldValue { applyFrameRate() }
+            if reduceMotion != oldValue {
+                idleSettled = false
+                restFrozen = false
+                applyVisibility()
+                applyFrameRate()
+                scheduleSettle(afterMs: reduceMotion ? Self.restSettleMs : 800)
+            }
         }
     }
     /// Phase 4h — visibility gate. When true (window minimised /
@@ -146,7 +158,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// the duration; restore on end.
     var isLiveResizing: Bool = false {
         didSet {
-            if isLiveResizing != oldValue { applyFrameRate() }
+            if isLiveResizing != oldValue { applyFrameRate(); thaw() }
         }
     }
 
@@ -157,6 +169,17 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// view's `preferredFramesPerSecond` / `isPaused` without a
     /// retain cycle (MTKView retains the renderer as its delegate).
     private weak var weakView: MTKView?
+    /// Idle has stopped moving enough that 10 fps shows the same picture as 30.
+    private var idleSettled = false
+    /// Under Reduce Motion: the settled frame for the current state has been
+    /// drawn and the display link is stopped. A state change starts it again.
+    private var restFrozen = false
+    private var settleToken = 0
+    /// How long the simulation runs at 10 fps under Reduce Motion before the
+    /// still frame is kept. Not measured against the particle field (the
+    /// harness cannot mount the Metal view), so adjust if the frozen frame looks
+    /// half-formed.
+    private static let restSettleMs: Double = 1500
 
     // MARK: Init
 
@@ -236,6 +259,35 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
             layer.backgroundColor = NSColor.clear.cgColor
         }
         view.clearColor = backgroundClearColor()
+        scheduleSettle(afterMs: 1800)
+    }
+
+    /// A frozen Reduce Motion frame goes stale when something other than a state
+    /// change invalidates it (a theme change clears the accumulation texture, a
+    /// resize reallocates it). Run again for one settle, then freeze again.
+    private func thaw() {
+        guard restFrozen else { return }
+        restFrozen = false
+        applyVisibility()
+        scheduleSettle(afterMs: Self.restSettleMs)
+    }
+
+    /// After a state change has had time to play out, drop the cadence: idle to
+    /// 10 fps (audit K5), or stop altogether under Reduce Motion (audit K20).
+    /// A later change cancels the pending drop by bumping the token.
+    private func scheduleSettle(afterMs: Double) {
+        settleToken += 1
+        let token = settleToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + afterMs / 1000 + 0.3) { [weak self] in
+            guard let self, token == self.settleToken else { return }
+            if self.reduceMotion {
+                self.restFrozen = true
+                self.applyVisibility()
+            } else if self.brainState == .idle {
+                self.idleSettled = true
+                self.applyFrameRate()
+            }
+        }
     }
 
     /// Fully transparent clear. The accumulation texture is premultiplied
@@ -264,7 +316,8 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
         if reduceMotion || isLiveResizing {
             target = 10
         } else if brainState == .idle {
-            target = 30
+            // 30 fps while the transition into idle plays, 10 once it has settled.
+            target = idleSettled ? 10 : 30
         } else {
             target = 60
         }
@@ -280,7 +333,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     /// up; physics doesn't fast-forward thanks to the dt clamp).
     private func applyVisibility() {
         guard let view = weakView else { return }
-        view.isPaused = isOccluded
+        view.isPaused = isOccluded || restFrozen
     }
 
     private static func makeParticlePipeline(
@@ -341,6 +394,7 @@ final class BrainMetalRenderer: NSObject, MTKViewDelegate {
     // MARK: MTKViewDelegate
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        thaw()
         rebuildAccumulation(width: Int(size.width), height: Int(size.height))
         needsClear = true
     }

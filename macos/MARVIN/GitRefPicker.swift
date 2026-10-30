@@ -219,15 +219,22 @@ final class GitRefPickerModel {
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    actionRows
-                    if case .checkout = model.mode {
-                        refSections
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        actionRows
+                        if case .checkout = model.mode {
+                            refSections
+                        }
                     }
                 }
+                .frame(height: 400)
+                // ↑ ↓ move a selection the fixed 400 pt list may not show, and
+                // Return acts on it; keep it in view (audit L11).
+                .onChange(of: model.effectiveSelection) { _, name in
+                    if let name { proxy.scrollTo(name) }
+                }
             }
-            .frame(height: 400)
         }
     }
 
@@ -383,6 +390,7 @@ final class GitRefPickerModel {
         .buttonStyle(
             GitPickerRowStyle(selected: model.effectiveSelection == entry.name)
         )
+        .id(entry.name)
     }
 
     private func refRow(_ entry: GitRefEntry, icon: String) -> some View {
@@ -421,6 +429,7 @@ final class GitRefPickerModel {
         .buttonStyle(
             GitPickerRowStyle(selected: model.effectiveSelection == entry.name)
         )
+        .id(entry.name)
     }
 
     /// `Robert Ilisei · 6c8f907 · chore: backlog audit — 8 easy wins`.

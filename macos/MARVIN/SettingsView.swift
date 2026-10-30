@@ -57,7 +57,7 @@ import SwiftUI
 
     var body: some View {
         Form {
-            Section("Sidecar") {
+            Section("MARVIN server") {
                 LabeledContent("URL") {
                     Text(ServerConfig.baseURLString)
                         .font(.body.monospaced())
@@ -72,7 +72,7 @@ import SwiftUI
                     .help("On first cold launch with no sidecar running, MARVIN spawns `bin/marvin start` from the most likely repo clone path. Disable if you manage the sidecar via launchd or a separate Terminal.")
                 HStack {
                     Spacer()
-                    Button("Re-probe now") {
+                    Button("Check connection") {
                         Task { await health.refreshNow() }
                     }
                 }

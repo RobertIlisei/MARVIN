@@ -32,6 +32,11 @@ public enum ContextBand: Sendable {
     case high
     case critical
 
+    /// High and critical pressure break out of the bar's grey into orange and
+    /// red; the glyph says the same thing without colour, for the user who
+    /// cannot tell them apart (audit W8).
+    public var needsWarningGlyph: Bool { self == .high || self == .critical }
+
     /// Hint copy shown on hover. Kept here so the band → text
     /// mapping is single-source-of-truth.
     public var hint: String {

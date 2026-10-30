@@ -40,7 +40,7 @@ import SwiftUI
                 if let detail = notice.detail {
                     Text(detail)
                         .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(MarvinTheme.textMuted)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -52,12 +52,13 @@ import SwiftUI
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 14, height: 14)
+                    .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.tertiary)
             .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

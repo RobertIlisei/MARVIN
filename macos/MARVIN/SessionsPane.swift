@@ -25,10 +25,28 @@ import SwiftUI
     /// ADR-0112 — keyboard focus in the list: ↑ ↓ move, ⏎ switches.
     @State private var focusedId: String? = nil
     @FocusState private var listFocused: Bool
+    /// The kept branch a context-menu "Discard branch…" is asking about (audit L12).
+    @State private var discardCandidate: String? = nil
 
     var body: some View {
         content
             .modifier(PaneGeometryProbe(name: "SessionsPane"))
+            .confirmationDialog(
+                "Discard this branch?",
+                isPresented: Binding(
+                    get: { discardCandidate != nil },
+                    set: { if !$0 { discardCandidate = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Discard Branch", role: .destructive) {
+                    if let id = discardCandidate { Task { await registry.discardKept(id) } }
+                    discardCandidate = nil
+                }
+                Button("Cancel", role: .cancel) { discardCandidate = nil }
+            } message: {
+                Text("The branch and its worktree are deleted. Commits that are not merged anywhere else cannot be recovered from here.")
+            }
         // A pane absorbs compression and clips; it never negotiates for
         // width. All seven stay mounted in one ZStack, so the widest
         // intrinsic minimum among them becomes the sidebar's, and the
@@ -416,9 +434,12 @@ import SwiftUI
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 9, weight: .medium))
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Re-run the dry-run preview")
+                    .accessibilityLabel("Re-run the preview")
                 }
                 ForEach(items) { e in integrateRow(e) }
                 integrateFooter(items)
@@ -477,7 +498,7 @@ import SwiftUI
                 }
             }
             Divider()
-            Button("Discard branch", role: .destructive) { Task { await registry.discardKept(e.id) } }
+            Button("Discard branch…", role: .destructive) { discardCandidate = e.id }
         }
         .disabled(registry.integrationBusy)
     }
@@ -574,7 +595,7 @@ import SwiftUI
                         .truncationMode(.tail)
                     Text(subtitle(e, state: row.state))
                         .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(MarvinTheme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -607,11 +628,11 @@ import SwiftUI
         // The row is a tap gesture; give VoiceOver the same act (L24), and keep
         // the Allow / Deny chips inside it individually reachable.
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction(named: "Switch to tab") { focusedId = row.id; bridge.requestChatTab(.select(row.id)) }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(selected ? Color(nsColor: .textBackgroundColor) : Color.clear)
+                .fill(selected ? MarvinTheme.rowSelected : Color.clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(focused && listFocused ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1)

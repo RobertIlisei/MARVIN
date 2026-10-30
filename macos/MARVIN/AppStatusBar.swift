@@ -150,6 +150,7 @@ private let statusBarPopoverEdge: Edge = .top
                         .foregroundStyle(bridge.warningCount > 0 ? Color.orange : Color.secondary)
                 }
             }
+            .statusSegmentHitArea()
         }
         .buttonStyle(.plain)
         .help("\(bridge.errorCount) error\(bridge.errorCount == 1 ? "" : "s"), \(bridge.warningCount) warning\(bridge.warningCount == 1 ? "" : "s") · click to toggle Problems panel")
@@ -167,6 +168,7 @@ private let statusBarPopoverEdge: Edge = .top
                     .frame(width: 7, height: 7)
                 if detail != .minimal { Text(connectionLabel) }
             }
+            .statusSegmentHitArea()
         }
         .buttonStyle(.plain)
         .help("Sidecar — \(ServerConfig.baseURLString) · click to re-probe")
@@ -392,6 +394,7 @@ private let statusBarPopoverEdge: Edge = .top
                     .font(.system(size: 10))
                 if detail == .full { Text("activity") }
             }
+            .statusSegmentHitArea()
         }
         .buttonStyle(.plain)
         .help("Background jobs, scheduled wakeups, and recent auto-allowed mutations")
@@ -445,11 +448,14 @@ private let statusBarPopoverEdge: Edge = .top
                 contextPopoverOpen.toggle()
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "gauge.with.dots.needle.50percent")
+                    Image(systemName: band.needsWarningGlyph
+                          ? "exclamationmark.triangle.fill"
+                          : "gauge.with.dots.needle.50percent")
                         .font(.system(size: 10))
                     Text(detail == .full ? "ctx \(Int(kCtx))K" : "\(Int(kCtx))K")
                 }
                 .foregroundStyle(colour(for: band))
+                .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
             .help(hoverText(resident: resident, billable: billable, band: band))
@@ -528,6 +534,7 @@ private let statusBarPopoverEdge: Edge = .top
                          : (s.running > 0 ? "\(s.dispatched)·\(s.running)" : "\(s.dispatched)"))
                 }
                 .foregroundStyle(s.running > 0 ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
             .help("Subagents dispatched this session · click for the breakdown")
@@ -639,6 +646,7 @@ private let statusBarPopoverEdge: Edge = .top
                         .font(.system(size: 10))
                     Text(fmtCost(cost.today))
                 }
+                .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
             .help("Spend today (this project) · click for history")
@@ -658,9 +666,13 @@ private let statusBarPopoverEdge: Edge = .top
                     .font(.system(size: 11))
                     .foregroundStyle(bridge.unreadNotificationCount > 0 ? Color.blue : Color.secondary)
             }
+            .statusSegmentHitArea()
         }
         .buttonStyle(.plain)
         .help("Notifications (\(bridge.unreadNotificationCount) unread)")
+        // The unread state is otherwise a glyph swap and a tooltip (audit W7).
+        .accessibilityLabel("Notifications")
+        .accessibilityValue(bridge.unreadNotificationCount > 0 ? "\(bridge.unreadNotificationCount) unread" : "none unread")
         .popover(isPresented: $bellPopoverOpen, arrowEdge: statusBarPopoverEdge) {
             NotificationLogPopover(notifications: bridge.notifications)
         }
@@ -838,5 +850,17 @@ private let statusBarPopoverEdge: Edge = .top
         }
         .padding(16)
         .frame(width: 300)
+    }
+}
+
+private extension View {
+    /// Status-bar segments hit-test on their 10–11 pt glyph and text. A pointer
+    /// needs a target nearer 20 pt, and the bar is a fixed 22 pt tall, so the
+    /// padding goes inside the label where it adds area to the click, not height
+    /// to the bar (audit W7).
+    func statusSegmentHitArea() -> some View {
+        padding(.horizontal, 2)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
     }
 }

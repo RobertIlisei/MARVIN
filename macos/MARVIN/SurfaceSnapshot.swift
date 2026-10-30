@@ -225,15 +225,9 @@ enum SurfaceSnapshot {
             pair("topbar-layout-popover", "Top bar: layout popover", widths: [300, 420], empty: "default bridge") {
                 AnyView(LayoutPopoverContent())
             }
-            + pair("topbar-setup-popover", "Top bar: setup popover", widths: [340, 480], empty: "default bridge") {
-                AnyView(SetupPopoverContent(modelsDialogOpen: .constant(false)))
-            }
             + pair("topbar-models-dialog", "Top bar: models dialog", widths: [520, 720], height: 560,
                    empty: "default bridge; the live model list needs the sidecar") {
                 AnyView(ModelsDialog())
-            }
-            + pair("topbar-project-picker", "Top bar: project picker", widths: [260, 420], empty: "no project registered") {
-                AnyView(ProjectPickerToolbarItem().padding(8))
             }
             + [Surface("topbar-toolbar", "Top bar: the toolbar inside the window",
                        .notCovered("two buttons declared in ContentView's `.toolbar`; an NSToolbar only materialises in a titled window hosting the whole ContentView, so it needs the live window — not attempted offscreen"),

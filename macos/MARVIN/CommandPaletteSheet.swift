@@ -22,13 +22,20 @@ import SwiftUI
 
     private var results: [AppCommand] { CommandRegistry.filter(query) }
 
-    private var effectiveSelection: String? {
-        if let selection, results.contains(where: { $0.id == selection }) { return selection }
-        return results.first(where: { $0.isEnabled() })?.id ?? results.first?.id
+    private var effectiveSelection: String? { effectiveSelection(in: results) }
+
+    /// `results` rebuilds the whole command registry on every read, so a render
+    /// reads it once and hands the list down — it used to be read again per row
+    /// (audit W15).
+    private func effectiveSelection(in list: [AppCommand]) -> String? {
+        if let selection, list.contains(where: { $0.id == selection }) { return selection }
+        return list.first(where: { $0.isEnabled() })?.id ?? list.first?.id
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        let list = results
+        let selectedId = effectiveSelection(in: list)
+        return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
@@ -45,7 +52,7 @@ import SwiftUI
 
             MarvinDivider()
 
-            if results.isEmpty {
+            if list.isEmpty {
                 Text("No matching command")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
@@ -55,11 +62,11 @@ import SwiftUI
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            ForEach(results) { cmd in row(cmd).id(cmd.id) }
+                            ForEach(list) { cmd in row(cmd, selectedId: selectedId).id(cmd.id) }
                         }
                     }
                     .frame(height: 340)
-                    .onChange(of: effectiveSelection) { _, id in
+                    .onChange(of: selectedId) { _, id in
                         guard let id else { return }
                         proxy.scrollTo(id, anchor: .center)
                     }
@@ -68,7 +75,7 @@ import SwiftUI
 
             MarvinDivider()
             HStack {
-                Text("\(results.count) command\(results.count == 1 ? "" : "s")")
+                Text("\(list.count) command\(list.count == 1 ? "" : "s")")
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -88,9 +95,9 @@ import SwiftUI
         .onKeyPress(.downArrow) { move(1); return .handled }
     }
 
-    private func row(_ cmd: AppCommand) -> some View {
+    private func row(_ cmd: AppCommand, selectedId: String?) -> some View {
         let enabled = cmd.isEnabled()
-        let selected = effectiveSelection == cmd.id
+        let selected = selectedId == cmd.id
         return Button {
             guard enabled else { return }
             selection = cmd.id
@@ -116,10 +123,11 @@ import SwiftUI
                         .foregroundStyle(.tertiary)
                 }
             }
-            .contentShape(Rectangle())
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .background(selected ? MarvinTheme.rowSelected : Color.clear)
+            // After the padding, so the gaps between rows click too (audit W18).
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

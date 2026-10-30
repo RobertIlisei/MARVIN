@@ -34,6 +34,7 @@ import SwiftUI
                 .tracking(0.4)
                 .foregroundStyle(MarvinTheme.textMuted)
                 .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
             if let count, PaneBadge.shows(count) {
                 Text(PaneBadge.text(count))
                     .font(.system(size: 9.5, weight: .semibold).monospacedDigit())

@@ -18,14 +18,17 @@ import SwiftUI
 // MARK: - Parsed question model
 
 struct AskOption: Identifiable, Equatable {
-    let id = UUID()
+    /// Derived from position and label, not minted: the sheet re-parses on every
+    /// keystroke in the "Other" field, and fresh `UUID`s made every row a new
+    /// identity each time (audit C25).
+    let id: String
     let label: String
     let description: String
     let preview: String?
 }
 
 struct AskQuestion: Identifiable, Equatable {
-    let id = UUID()
+    let id: String
     let question: String
     let header: String
     let multiSelect: Bool
@@ -36,7 +39,7 @@ struct AskQuestion: Identifiable, Equatable {
     static func parse(_ input: ChatJSON?) -> [AskQuestion] {
         guard case let .object(root)? = input,
               case let .array(rawQuestions)? = root["questions"] else { return [] }
-        return rawQuestions.compactMap { q in
+        return rawQuestions.enumerated().compactMap { qi, q in
             guard case let .object(qo) = q,
                   case let .string(question)? = qo["question"],
                   case let .array(rawOpts)? = qo["options"] else { return nil }
@@ -48,15 +51,15 @@ struct AskQuestion: Identifiable, Equatable {
                 if case let .bool(b)? = qo["multiSelect"] { return b }
                 return false
             }()
-            let opts: [AskOption] = rawOpts.compactMap { o in
+            let opts: [AskOption] = rawOpts.enumerated().compactMap { oi, o in
                 guard case let .object(oo) = o,
                       case let .string(label)? = oo["label"] else { return nil }
                 let desc: String = { if case let .string(d)? = oo["description"] { return d }; return "" }()
                 let preview: String? = { if case let .string(p)? = oo["preview"] { return p }; return nil }()
-                return AskOption(label: label, description: desc, preview: preview)
+                return AskOption(id: "\(qi).\(oi)", label: label, description: desc, preview: preview)
             }
             guard !opts.isEmpty else { return nil }
-            return AskQuestion(question: question, header: header, multiSelect: multi, options: opts)
+            return AskQuestion(id: "\(qi)", question: question, header: header, multiSelect: multi, options: opts)
         }
     }
 }

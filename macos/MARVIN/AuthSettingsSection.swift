@@ -41,6 +41,7 @@ private struct AuthConfigStatus: Decodable {
     @State private var draftKey: String = ""          // SecureField draft
     @State private var inFlight: Bool = false
     @State private var lastError: String?
+    @State private var confirmReset = false
 
     var body: some View {
         Section("Authentication") {
@@ -72,6 +73,10 @@ private struct AuthConfigStatus: Decodable {
                         SecureField("sk-ant-…", text: $draftKey)
                             .textFieldStyle(.roundedBorder)
                             .disabled(inFlight)
+                            .onSubmit {
+                                guard !inFlight, !draftKey.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                                Task { await save(mode: "api-key", provider: draftProvider, key: draftKey) }
+                            }
                         Button("Save") {
                             Task { await save(mode: "api-key", provider: draftProvider, key: draftKey) }
                         }
@@ -81,7 +86,7 @@ private struct AuthConfigStatus: Decodable {
             }
 
             if let s = status {
-                LabeledContent("Effective") {
+                LabeledContent("In use") {
                     Text(effectiveLabel(s.effective))
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
@@ -97,9 +102,21 @@ private struct AuthConfigStatus: Decodable {
                         }
                         Spacer()
                         Button("Reset to default") {
-                            Task { await clear() }
+                            confirmReset = true
                         }
                         .disabled(inFlight)
+                        .confirmationDialog(
+                            "Remove the saved credentials?",
+                            isPresented: $confirmReset,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Remove and use host credentials", role: .destructive) {
+                                Task { await clear() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Deletes ~/.marvin/auth-config.json. MARVIN falls back to the credentials already on this Mac; a pasted API key is not recoverable.")
+                        }
                         .help("Removes ~/.marvin/auth-config.json and falls back to host-credentials.")
                     }
                 }

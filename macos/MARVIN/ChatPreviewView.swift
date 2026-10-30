@@ -2866,13 +2866,15 @@ final class ChatPreviewModel {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("New tab — click for the default, hold for shared chat or isolated worktree")
             .buttonStyle(.plain)
             // ⌘⇧N is owned by File ▸ New Session, which posts
             // .marvinRequestNewSession to the observer above — the same
             // action. Redeclaring it here made three buttons compete for
             // one key.
-            .help("New chat (⌘⇧N)")
+            // One tooltip: a second `.help` replaced the first, dropping the
+            // "hold for shared or worktree" hint (audit C27).
+            .help("New chat (⌘⇧N) — click for the default, hold for shared chat or isolated worktree")
+            .accessibilityLabel("New tab")
             .padding(.trailing, 8)
         }
         .frame(height: 32)
@@ -3108,7 +3110,8 @@ final class ChatPreviewModel {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Capsule().fill(Color.orange))
-                            .foregroundStyle(.white)
+                            // White on orange is ~2:1; dark text on the same fill is ~9:1 (audit C17).
+                            .foregroundStyle(Color.black.opacity(0.85))
                     } else if state == .interrupted {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 8, weight: .semibold))
@@ -3121,16 +3124,18 @@ final class ChatPreviewModel {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityAddTraits(active ? .isSelected : [])
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 20, height: 20)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Close tab")
+                .accessibilityLabel("Close tab \(title)")
             }
         }
         .padding(.leading, 9)
@@ -3539,7 +3544,7 @@ final class ChatPreviewModel {
                   : "Save this plan to a Markdown file so you can follow it outside the chat.")
             Button("Revise") {
                 // Stay in Plan mode; just nudge a revised plan.
-                model.draft = "Revise the plan — "
+                model.draft = ReviseDraft.compose(existing: model.draft)
             }
             .controlSize(.small)
             Button {
@@ -3679,7 +3684,11 @@ final class ChatPreviewModel {
                 request: head,
                 onAllow: { model.respond(to: head, decision: .allow) },
                 onDeny: { reason in model.respond(to: head, decision: .deny, denyMessage: reason) }
-            )))
+            )
+            // Tray rows are index-keyed, so the next confirm lands in the same
+            // slot; without an identity its half-typed deny reason carries
+            // over (audit C10).
+            .id(head.toolUseId)))
         } else if let note = model.externalAnswerNote {
             // ADR-0127 M6 — the card (or sheet) is gone; this says who answered it.
             rows.append(AnyView(ExternalAnswerNoteRow(note: note) { model.externalAnswerNote = nil }))
@@ -4258,10 +4267,22 @@ final class ChatPreviewModel {
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "workDir": cwd, "title": f.title, "body": body, "severity": severity,
         ])
-        _ = try? await URLSession.shared.data(for: req)
+        // Only a stored finding is a handled one; a failed request used to be
+        // greyed out as if it had worked (audit C13).
+        let stored: Bool
+        if let (_, response) = try? await URLSession.shared.data(for: req),
+           let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+            stored = true
+        } else {
+            stored = false
+        }
         await MainActor.run {
-            handledFindings.insert(f.id)
-            model.refreshBacklogCount()
+            if stored {
+                handledFindings.insert(f.id)
+                model.refreshBacklogCount()
+            } else {
+                auditError = "Couldn’t add the finding to the backlog. Check that the sidecar is running and try again."
+            }
         }
     }
 
@@ -4378,9 +4399,12 @@ final class ChatPreviewModel {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Remove from queue")
+                    .accessibilityLabel("Remove from queue")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)

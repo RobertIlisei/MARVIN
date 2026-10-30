@@ -102,6 +102,7 @@ import SwiftUI
                         .frame(width: 14)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(collapsed ? "Expand plan" : "Collapse plan")
                 Image(systemName: headerIcon)
                     .font(.system(size: 10))
                     .foregroundStyle(allDone ? .green : tint)

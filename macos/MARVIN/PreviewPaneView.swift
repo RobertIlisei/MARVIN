@@ -142,7 +142,7 @@ import WebKit
             }
             .buttonStyle(.borderless)
             .help("Close the preview (^⇧P)")
-            .help("Open in default browser")
+            .accessibilityLabel("Close preview")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

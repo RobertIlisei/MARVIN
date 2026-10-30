@@ -187,3 +187,13 @@ Fitting them was never the problem to solve. The row was wrong because it groupe
 
 The rule this leaves behind, for any future popover: give it a width first, decide its one action second, and let everything else be a link.
 
+
+## Amendment (2026-10-30) — a tool confirm is approved with ⌘⏎, and Deny is one step
+
+ADR-0112 moved the tool confirm from a sheet into a card in the tray and kept the sheet's key bindings: **Return approved, Esc denied**. In the tray that is no longer safe. The card is not modal, so it sits in the same window as the composer, whose Send is bound to Return; a pending confirm and an unsent message now compete for the same key, and a stray Return (focus outside the composer, a held key, an IME confirmation) could approve a tool call. The Impeccable audit rated this C8 and the supervisor approved the change on 2026-10-30.
+
+- **Allow / Approve & execute is ⌘⏎**, with the shortcut in the tooltip. Bare Return does nothing on the card. This is the same binding the AskUserQuestion form already used.
+- **Deny is one step.** It used to open an unfocused reason field and deny on a second click (audit C9). Deny now acts on the first click (Esc still denies); *Deny with reason…* opens the field, focused, beside it.
+- **Why it belongs here and not as a preference:** the audit's safe-default stance (a destructive or escalating act is never the default key), and ADR-0127's line that no Return or default binding ever stands in for the user's consent. A key that approves must be one the user chose to press.
+
+Nothing else on the card changed. `GitConfirmSheet` already defaulted to Cancel for `danger` (audit W2, `6ef2d7a`).

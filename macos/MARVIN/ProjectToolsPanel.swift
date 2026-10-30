@@ -30,6 +30,7 @@
 //     what language the file is.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 @MainActor
@@ -266,6 +267,7 @@ enum GraphOutline {
             .frame(height: 24)
         }
         .buttonStyle(.plain)
+        .accessibilityValue(isCollapsed ? "collapsed" : "expanded")
 
         if !isCollapsed {
             // A ScrollView, because it is what CLIPS as well as bounds: a
@@ -393,10 +395,10 @@ enum GraphOutline {
                         Button { run(task) } label: {
                             HStack(spacing: 6) {
                                 Text(task.kindLabel)
-                                    .font(.system(size: 8, weight: .medium))
+                                    .font(.system(size: 10, weight: .medium))
                                     .padding(.horizontal, 4)
                                     .background(Capsule().fill(MarvinTheme.elevated))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(MarvinTheme.textMuted)
                                 Text(task.name)
                                     .font(.system(size: 11))
                                     .lineLimit(1).truncationMode(.middle)
@@ -420,8 +422,7 @@ enum GraphOutline {
     /// output is the point, and a build that fails needs to be readable.
     private func run(_ task: BuildTask) {
         NativePrefs.shared.revealPane(.terminal)
-        let cd = task.directory.map { "cd \($0.replacingOccurrences(of: " ", with: "\\ ")) && " } ?? ""
-        bridge.triggerTerminalCommand(cd + task.command)
+        bridge.triggerTerminalCommand(ShellQuote.cdPrefix(directory: task.directory) + task.command)
     }
 }
 

@@ -99,6 +99,15 @@ final class DiffGutterBar: NSView {
                 path.closeSubpath()
                 ctx.addPath(path)
                 ctx.fillPath()
+            } else if status == .modified {
+                // Hatched, so a changed line differs from an added one by shape
+                // and not only by hue: 2pt on, 2pt off down the line (audit K6).
+                var cursor = y
+                let end = y + h
+                while cursor < end {
+                    ctx.fill(CGRect(x: 0, y: cursor, width: Self.barWidth, height: min(2, end - cursor)))
+                    cursor += 4
+                }
             } else {
                 // Solid bar spanning the line.
                 ctx.fill(CGRect(x: 0, y: y, width: Self.barWidth, height: h))
