@@ -130,6 +130,14 @@ MARVIN renames it `marvin/tab/<slug of the first commit subject>` (unique
 among live refs), keeps the directory as it is, updates the record and the
 session meta, and announces `session.tree` so the chip follows. Once.
 
+*Amended 2026-10-30.* "Its first commit" excludes every commit another
+MARVIN branch (or the archive below) already reaches: a tab that fast-forwarded
+onto a sibling tab's branch was named after the sibling's first commit, and
+took the sibling's name once that branch was discarded. And no deletion —
+Discard or sweep — drops commits no other ref holds: they are pinned at
+`refs/marvin/archive/<branch>/<time>` first, or the branch is not deleted. A
+tab the server has already closed closes in the app without being asked again.
+
 ### 6. Reopening an integrated tab starts fresh
 
 A message or wakeup into a closed tab whose branch is `merged` gets a new

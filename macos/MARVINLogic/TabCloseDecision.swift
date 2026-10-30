@@ -53,6 +53,10 @@ public enum TabCloseDecision {
     ) -> Outcome {
         if isLive { return .stopTurnFirst }
         guard mode == .worktree, let w = worktree else { return .closeNow }
+        // Closed server-side already (the supervisor's close, another window):
+        // the tree's fate was decided there. Asking again offered Discard on a
+        // branch that had just been kept, and it was taken (2026-10-30).
+        if w.closed == true { return .closeNow }
         let name = w.branch
         let onto = target ?? "your current branch"
         let hasCommits = w.commits > 0

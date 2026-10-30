@@ -403,8 +403,12 @@ export function nameSessionBranchFromCommit(workDir: string, sessionId: string):
   // the merge commit itself, and excluding the base branch's current tip
   // covers a catch-up that fast-forwarded (no merge commit to steer by).
   // Without this a tab was named after a sibling's commit (2026-09-28).
+  // Excluding every other MARVIN branch covers a fast-forward onto a SIBLING
+  // tab's branch, which is not the base: its commits land on the first-parent
+  // chain too, and a tab was named after a sibling's first commit that way
+  // (2026-10-30).
   const baseTip = rec.baseRef && gitOk(workDir, ["rev-parse", "--verify", "--quiet", `refs/heads/${rec.baseRef}`]) ? [`^refs/heads/${rec.baseRef}`] : [];
-  const own = gitOr(workDir, ["log", "--reverse", "--first-parent", "--no-merges", "--format=%s", rec.branch, `^${rec.base}`, ...baseTip], "")
+  const own = gitOr(workDir, ["log", "--reverse", "--first-parent", "--no-merges", "--format=%s", rec.branch, `^${rec.base}`, ...baseTip, ...notOtherMarvinRefs(workDir, `refs/heads/${rec.branch}`)], "")
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
@@ -432,7 +436,8 @@ export function nameSessionBranchFromCommit(workDir: string, sessionId: string):
 
 /**
  * ADR-0121 — what a session tree's OWN work touched: files in its own commits
- * (first-parent, no merges, not already on the base branch — the same "own"
+ * (first-parent, no merges, not already on the base branch or another MARVIN
+ * branch — the same "own"
  * as `nameSessionBranchFromCommit`) plus uncommitted changes, and the branch
  * it is on now. Best-effort: any git failure yields what it could read.
  */
@@ -442,9 +447,10 @@ export function sessionOwnChanges(tree: { path: string; base: string; baseRef?: 
       ? [`^refs/heads/${tree.baseRef}`]
       : [];
   const files = new Set<string>();
+  const ownRef = gitOr(tree.path, ["symbolic-ref", "-q", "HEAD"], "");
   const committed = gitOr(
     tree.path,
-    ["log", "--first-parent", "--no-merges", "--name-only", "--format=", "HEAD", `^${tree.base}`, ...baseTip],
+    ["log", "--first-parent", "--no-merges", "--name-only", "--format=", "HEAD", `^${tree.base}`, ...baseTip, ...notOtherMarvinRefs(tree.path, ownRef)],
     "",
   );
   for (const l of committed.split("\n")) if (l.trim()) files.add(l.trim());
@@ -498,9 +504,65 @@ export function discardWorktree(workDir: string, slug: string): { ok: boolean; m
   if (!rec.finishedAt) return { ok: false, message: `${slug} belongs to an open tab — close the tab first.` };
   gitOk(workDir, ["worktree", "remove", "--force", rec.path]);
   gitOk(workDir, ["worktree", "prune"]);
-  const deleted = gitOk(workDir, ["branch", "-D", rec.branch]);
+  const { deleted, archivedAs } = deleteBranchPreserving(workDir, rec.branch);
   saveWorktrees(workDir, listWorktrees(workDir).filter((w) => w.slug !== slug));
-  return { ok: true, message: deleted ? `Discarded ${rec.branch} and its checkout.` : `Removed the checkout; branch ${rec.branch} could not be deleted.` };
+  if (!deleted) return { ok: true, message: `Removed the checkout; branch ${rec.branch} could not be deleted.` };
+  return {
+    ok: true,
+    message: archivedAs
+      ? `Discarded ${rec.branch} and its checkout. Its commits no other branch held are kept at ${archivedAs} (restore: git branch <name> ${archivedAs}).`
+      : `Discarded ${rec.branch} and its checkout.`,
+  };
+}
+
+/**
+ * Where a deleted branch's otherwise-unreachable commits are pinned. Not under
+ * `refs/heads/`: no tab adopts it, no listing shows it, and the branch name it
+ * came from is free again.
+ */
+export const ARCHIVE_REF_PREFIX = "refs/marvin/archive/";
+
+/**
+ * `git branch -D`, except that a branch holding commits no other ref reaches
+ * is first pinned under `ARCHIVE_REF_PREFIX` — and if that pin cannot be
+ * written, or the question cannot be answered, the branch is not deleted.
+ *
+ * Every derived state is a guess about where work lives; this is the one
+ * check that does not guess. On 2026-10-30 a kept tab's branch was discarded
+ * and its last two commits went dangling. Callers remove the checkout FIRST:
+ * `--all` counts every worktree's HEAD, so the branch's own checkout would
+ * otherwise make its commits look reachable.
+ */
+function deleteBranchPreserving(workDir: string, branch: string): { deleted: boolean; archivedAs?: string } {
+  const ref = `refs/heads/${branch}`;
+  let tip: string;
+  let unique: string;
+  try {
+    tip = git(workDir, ["rev-parse", "--verify", "--quiet", ref]);
+    unique = git(workDir, ["rev-list", "-1", ref, "--not", `--exclude=${ref}`, "--all"]);
+  } catch {
+    return { deleted: false };
+  }
+  let archivedAs: string | undefined;
+  if (unique) {
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+    archivedAs = `${ARCHIVE_REF_PREFIX}${branch}/${stamp}`;
+    if (!gitOk(workDir, ["update-ref", archivedAs, tip, ""])) return { deleted: false };
+  }
+  return gitOk(workDir, ["branch", "-D", branch]) ? { deleted: true, ...(archivedAs ? { archivedAs } : {}) } : { deleted: false };
+}
+
+/**
+ * `^ref` for every MARVIN-made ref other than `ownRef` — the other tabs' and
+ * implementers' branches, and the archive. What they reach is theirs, not this
+ * tab's own work, even when it sits on this branch's first-parent chain.
+ */
+function notOtherMarvinRefs(cwd: string, ownRef: string): string[] {
+  return gitOr(cwd, ["for-each-ref", "--format=%(refname)", `refs/heads/${BRANCH_PREFIX}`, ARCHIVE_REF_PREFIX], "")
+    .split("\n")
+    .map((r) => r.trim())
+    .filter((r) => r && r !== ownRef)
+    .map((r) => `^${r}`);
 }
 
 /**
@@ -733,8 +795,11 @@ function* mergedIntoSteps(workDir: string, record: WorktreeRecord): GitSteps<str
 
 /** A slug no existing record and no live branch is already using. */
 function uniqueSlug(workDir: string, base: string, existing: readonly WorktreeRecord[], prefix = BRANCH_PREFIX): string {
+  // A record's branch counts as well as its slug: a renamed tab keeps its slug
+  // and changes its branch, so the two drift apart (ADR-0111).
   const taken = (s: string) =>
-    existing.some((w) => w.slug === s) || gitOk(workDir, ["rev-parse", "--verify", "--quiet", `${prefix}${s}`]);
+    existing.some((w) => w.slug === s || w.branch === `${prefix}${s}`) ||
+    gitOk(workDir, ["rev-parse", "--verify", "--quiet", `${prefix}${s}`]);
   if (!taken(base)) return base;
   for (let n = 2; n < 1000; n++) {
     const candidate = `${base}-${n}`;
@@ -1039,8 +1104,10 @@ function sweepReconciled(
     // ref. Never reached for `ready`, which is the state that holds real work.
     // Never for a branch MARVIN did not name: a tab may have switched its tree
     // to one of the user's, and that ref is theirs to keep.
+    // A content-proven merge (squash, rebase) leaves the branch's own commits in
+    // no other ref; `deleteBranchPreserving` pins them before the `-D`.
     const ours = w.branch.startsWith(BRANCH_PREFIX);
-    const deletedBranch = ours && gitOk(workDir, ["branch", "-D", w.branch]);
+    const deletedBranch = ours && deleteBranchPreserving(workDir, w.branch).deleted;
     if (deletedBranch || (!ours && (removedCheckout || !w.checkoutPresent))) {
       saveWorktrees(
         workDir,
