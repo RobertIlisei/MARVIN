@@ -120,6 +120,13 @@ struct ChatMessage: Identifiable, Equatable {
     /// Drives nothing visible in 2c; reserved for the timestamp
     /// gutter we'll add in 2d.
     let createdAt: Date
+    /// ADR-0127 brief §6.8 — a user-role line the supervisor wrote. It renders
+    /// as the outlined "SUPERVISOR" bubble, never with the "you" label.
+    var supervisor: SupervisorMessageMark? = nil
+    /// A meta row: "Supervisor touched this turn · …" (§6.8).
+    var isSupervisorTouchedDivider: Bool = false
+    /// Tool calls in this message the supervisor answered, by toolUseId.
+    var supervisorAnswers: [String: SupervisorAnswerMark] = [:]
 
     /// Convenience initializer for the local user-side echo —
     /// caller doesn't have to assemble the block array.
@@ -132,6 +139,19 @@ struct ChatMessage: Identifiable, Equatable {
             isStreaming: false,
             createdAt: Date()
         )
+    }
+
+    /// ADR-0127 — the supervisor's message, its body unwrapped from the envelope.
+    static func supervisorText(_ envelope: String, mark: SupervisorMessageMark) -> ChatMessage {
+        var m = userText(SupervisorEnvelope.body(envelope))
+        m.supervisor = mark
+        return m
+    }
+
+    static func supervisorTouchedDivider() -> ChatMessage {
+        var m = system(text: SupervisorEnvelope.touchedDivider)
+        m.isSupervisorTouchedDivider = true
+        return m
     }
 
     /// One-line system row. Used for soft inline annotations like
@@ -148,6 +168,22 @@ struct ChatMessage: Identifiable, Equatable {
             createdAt: Date()
         )
     }
+}
+
+/// The supervisor's authorship of a transcript line (`turn.user.supervisor`).
+struct SupervisorMessageMark: Equatable {
+    /// `nudge` | `instruction` | `first-message`.
+    let kind: String
+    let grounds: [SupervisorGround]
+    let editedByUser: Bool
+}
+
+/// A supervisor-given answer or decision on one tool call.
+struct SupervisorAnswerMark: Equatable {
+    /// `allow` | `deny`.
+    let decision: String
+    let isQuestion: Bool
+    let grounds: [SupervisorGround]
 }
 
 // MARK: - Stream-json reducer

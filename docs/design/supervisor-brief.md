@@ -539,3 +539,19 @@ A `supervisor` role row with `role`, `label`, `description`, `default: {kind: "t
 3. **Kill is a chip only during a wake.** It is in the ⋯ menu and the registry at all times.
 4. **The proposed shortcuts** (⌃⌥⌘P, ⌃⌥⌘K, ⌥⌘J) need a check against the system and app menus.
 5. **Not covered here:** a supervisor mark on the chat **tab strip** (the tab dots). The Sessions row and the transcript carry the information, and adding it is a separate call.
+
+**Departures in the milestone 6 build (2026-10-30), each with its reason:**
+
+1. **The budget meter is a fixed 56 pt, not "the strip width minus its text".** A width derived from the text needs a measurement view, which ADR-0114 / ADR-0062 rule out in the pane. A fixed bar is the same at 260 and 420 pt, which §4 asks for anyway.
+2. **A posture change is announced on the feed (`session.posture`).** §10 had no such event, and nothing refreshed the watch rows on a timer, so the toolbar had no "one watch refresh" to wait for. The event carries ids and the revision only.
+3. **Registry commands.** Pause / Resume (⌃⌥⌘P), Kill (⌃⌥⌘K), Go to Next Escalation (⌥⌘J), Show Log and Set Up… are registered; none collides with an existing binding. *Disable…* stays in the strip's ⋯ menu and settings block, because it needs the strip's confirmation dialog. *Set Delegation for Current Tab…* is not registered: the chip's `Menu` is the control, and a registry command cannot open a SwiftUI `Menu`. Go to Next Escalation expands the oldest item's card and announces it, rather than moving the row ring.
+4. **The keyboard walk.** Supervisor rows join ↑ ↓, and Space / Esc expand and collapse the focused row's card. The strip and the log header are not walk stops; they are reachable as VoiceOver headings and by Tab. Moving the walk onto them would need a focus model for non-row chrome, which the pane does not have.
+5. **The escalation card is one combined accessibility element** whose custom actions are exactly its visible chips (`SupervisorActChips.accessibilityActionNames`, pinned by a test). Its chips stay reachable by keyboard focus.
+6. **"Answered in tab".** The card leaves with an opacity fade and VoiceOver announces "Answered in tab: <tab>". There is no visual toast; a toast would be a second notice for a card the user is watching disappear.
+7. **A live supervisor message appears after the next hydrate, not in the live stream.** The sidecar puts `turn.started` on the live bus for a supervisor-started turn but no `turn.user` line, so a client attached live has nothing to render until it re-reads the transcript. The answered-by chip *is* live (from `confirm.resolved`).
+8. **The posture-pill badge sits on the mode pill** (`ChatModeToolbar`), the pill a supervisor narrowing most often changes; its time is when the app adopted the change.
+9. **The new-tab Edit… sheet narrows mode and strategy only.** Model and effort are shown read-only on the card. The server refuses any widening in either case.
+10. **Existing tab-row subtitles stay 9.5 pt tertiary** (audit L14 is out of this milestone's scope); supervisor rows and supervisor lines in a row use 10.5 pt `.secondary` as §6.3 asks.
+11. **The status strip has three lines, not two.** Beside Resume, ⋯ and the chevron, line 1 truncated the state to "⚠ …" at 260 pt (critique P1, 2026-10-30); the state now has its own line between the title and the budget line.
+12. **Notice strips inside the surface carry no inline verb.** A guardrail's or failed wake's verb chip sits on its own line under the notice; inline, it wrapped the detail one word per line at 260 pt. The failed-wake notice's ✕ hides that failure until a different one arrives.
+13. **An escalated tab always has a row.** A tab that is neither open nor live still appears in *Needs you* when it has open items, titled from the inbox's snapshot; otherwise its items were counted but never drawn.

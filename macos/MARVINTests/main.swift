@@ -3185,7 +3185,7 @@ runner.suite("session-feed-decode") {
         runner.expect(d("confirm.pending", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","toolUseId":"u","toolName":"Bash"}"#)
                       == .confirmPending(sessionId: "s", turnId: "t", toolUseId: "u", toolName: "Bash"), "pending")
         runner.expect(d("confirm.resolved", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","toolUseId":"u","decision":"allow"}"#)
-                      == .confirmResolved(sessionId: "s", turnId: "t", toolUseId: "u"), "resolved")
+                      == .confirmResolved(sessionId: "s", turnId: "t", toolUseId: "u", decision: "allow"), "resolved")
         let tree = d("session.tree", #"{"marvinSessionId":"s","projectId":"p","tree":{"mode":"worktree","slug":"x","path":"/w","branch":"marvin/tab/x","base":"abc"}}"#)
         runner.expect(tree == .tree(sessionId: "s", tree: SessionTreeWire(mode: .worktree, slug: "x", path: "/w", branch: "marvin/tab/x", base: "abc")), "tree")
     }
@@ -4590,6 +4590,394 @@ runner.suite("server-refusal-text") {
         runner.expect(ServerRefusalText.worktreeFailure(fromBody: "not json") == nil, "not JSON")
         runner.expect(ServerRefusalText.worktreeFailure(fromBody: nil) == nil, "no body")
         runner.expect(ServerRefusalText.worktreeFailure(fromBody: #"{"error":"","code":"worktree-failed"}"#) == nil, "empty error")
+    }
+}
+
+// MARK: - Supervisor (ADR-0127 milestone 6)
+
+private func supStatus(mode: String = "shadow", run: String = "idle", health: String = "ok",
+                       autonomy: [String: String] = [:], pause: SupervisorStatus.Pause? = nil,
+                       currentWake: SupervisorStatus.Wake? = nil, queued: Int = 0,
+                       lastWake: SupervisorStatus.LastWake? = SupervisorStatus.LastWake(at: "2026-10-30T13:58:00Z", outcome: "ok"),
+                       watched: Int = 4, open: Int = 0, spent: Double = 3.2, cap: Double = 10,
+                       level: String = "ok") -> SupervisorStatus {
+    SupervisorStatus(revision: 7, mode: mode, autonomy: autonomy, run: run, pause: pause, currentWake: currentWake,
+                     queuedEvents: queued, lastWake: lastWake, health: health, watchedTabs: watched,
+                     openEscalations: open,
+                     budget: .init(capUsd: cap, spentUsd: spent, resetsAt: "2026-10-31T00:00:00Z", level: level))
+}
+
+private let supNow = SessionLedger.parseISO("2026-10-30T14:00:00Z")!
+private let supUTC = TimeZone(identifier: "UTC")!
+
+runner.suite("supervisor-wire-decode") {
+    runner.test("status envelope decodes the brief §10.1 object") {
+        let json = #"{"state":{},"status":{"projectId":"p","revision":3,"mode":"shadow","autonomy":{"questions":"autonomous","nudges":"shadow","posture":"shadow","confirms":"shadow"},"run":"idle","pause":null,"currentWake":null,"queuedEvents":2,"lastWake":{"wakeId":"w1","at":"2026-10-30T13:00:00Z","outcome":"ok"},"health":"ok","healthSince":"x","watchedTabs":4,"openEscalations":1,"budget":{"capUsd":10,"spentUsd":3.2,"spentOwnUsd":1,"spentTabsUsd":2.2,"resetsAt":"2026-10-31T00:00:00Z","level":"ok"},"charter":{"text":"ship","updatedAt":null},"model":{"role":"supervisor","resolved":"claude-sonnet-5-5","label":"Sonnet 5.5"},"stats":{"questions":{"proposals":16,"agreed":15,"agreedBlind":14,"agreementRate":0.94,"humanOnlyProposedAsAct":0,"heuristicMisses":0}},"suggestedBar":{"minProposals":20,"minAgreement":0.9},"confirmsEligible":false,"caps":{"maxActionsPerWake":3}}}"#
+        let s = SupervisorStatus.decodeEnvelope(Data(json.utf8))
+        runner.expect(s?.revision, equals: 3, "revision")
+        runner.expect(s?.autonomousCategories ?? [], equals: ["questions"], "autonomous categories in brief order")
+        runner.expect(s?.budget.level, equals: "ok", "budget level")
+        runner.expect(s?.stats?["questions"]?.agreementRate, equals: 0.94, "stats")
+    }
+    runner.test("inbox items decode with server actions, raw act and display grounds") {
+        let json = #"{"items":[{"id":"i1","revision":2,"createdAt":"2026-10-30T13:59:00Z","wakeId":"w","sessionId":"s1","tabTitle":"fix-flags","ledgerId":"l1","kind":"integration","escalatedBecause":{"code":"human-only","label":"Only you can push","rule":"§4.1 push"},"heuristic":null,"rawAct":{"toolName":"Bash","input":{"command":"git push origin marvin/tab/fix-flags"},"digest":"abc","summary":"git push origin marvin/tab/fix-flags","outward":true,"destructive":false},"preview":null,"question":null,"linkedConfirm":{"sessionId":"s1","turnId":"t","toolUseId":"tu","raisingRule":"supervisor-touched"},"recommendation":{"actionId":"deny","text":"Not in the plan."},"grounds":[{"kind":"plan-step","ref":"plan:[3]","tree":"main","label":"Step 3 keeps it local","provenance":"strong","resolved":true,"excerpt":null,"openTarget":null}],"actions":[{"id":"deny","label":"Deny","role":"refuse","recommended":true,"requiresExpanded":false},{"id":"allow","label":"Allow push","role":"consent","recommended":false,"requiresExpanded":true}],"newTab":null,"postureChange":null,"guardrail":null,"modeAtCreation":"shadow","state":"open","resolvedBy":null,"resolvedAt":null,"burstRank":0}]}"#
+        let items = SupervisorInboxItem.decodeList(Data(json.utf8)) ?? []
+        runner.expect(items.count, equals: 1, "one item")
+        runner.expect(items.first?.rawAct?.outward, equals: true, "outward")
+        runner.expect(items.first?.rawAct?.input?.prettyText.contains("git push"), equals: true, "input kept verbatim")
+        runner.expect(items.first?.strongGroundCount, equals: 1, "strong grounds")
+        runner.expect(items.first?.grounds.first?.citation, equals: "plan [3]", "plan citation")
+        runner.expect(items.first?.actions.map(\.label) ?? [], equals: ["Deny", "Allow push"], "server act labels")
+    }
+    runner.test("a raw stored ground reads unresolved as not resolved and weak") {
+        let g = SupervisorGround(kind: "file", ref: "file:src/a.ts:42", provenance: "unresolved")
+        runner.expect(g.isResolved, equals: false, "unresolved")
+        runner.expect(g.isStrong, equals: false, "not strong")
+        runner.expect(g.citation, equals: "src/a.ts:42", "file citation")
+    }
+    runner.test("ledger page decodes `id` as lineId and keeps seq as identity") {
+        let json = #"{"entries":[{"seq":12,"id":"L12","at":"2026-10-30T13:00:00Z","wakeId":null,"actor":"supervisor","sessionId":"s1","tabTitle":"fix-flags","verb":"answer","decision":"propose","mode":"shadow","argDigest":"d","argSummary":"Option B","reason":{"code":"grounded","text":"plan step 3"},"grounds":[],"pairing":{"actualAnswer":["Option B"],"answeredBy":"user","agreement":"agree","proposalSeenBeforeAnswer":false},"inboxItemId":null,"costUsd":null}],"hasMore":true,"nextBefore":12,"todayCount":38}"#
+        let page = try? JSONDecoder().decode(SupervisorLedgerPage.self, from: Data(json.utf8))
+        runner.expect(page?.entries.first?.id, equals: 12, "seq identity")
+        runner.expect(page?.entries.first?.lineId, equals: "L12", "line id")
+        runner.expect(page?.todayCount, equals: 38, "today count")
+    }
+    runner.test("feed events: supervisor.* decode; unknown names do not") {
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.state", data: Data(#"{"projectId":"p","revision":9,"mode":"shadow","paused":false}"#.utf8)), equals: .state(revision: 9, mode: "shadow"), "state")
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.inbox", data: Data(#"{"projectId":"p","change":"resolved","id":"i1","revision":3,"sessionId":"s1","kind":"confirm","state":"resolved","resolvedBy":"tab"}"#.utf8)), equals: .inbox(change: "resolved", id: "i1", sessionId: "s1", state: "resolved", resolvedBy: "tab"), "inbox")
+        runner.expect(SupervisorFeedEvent.decode(name: "turn.ended", data: Data("{}".utf8)) == nil, "not ours")
+    }
+    runner.test("confirm.resolved carries answeredBy through the session feed") {
+        let e = SessionFeedEvent.decode(name: "confirm.resolved", data: Data(#"{"marvinSessionId":"s1","projectId":"p","turnId":"t","toolUseId":"q1","decision":"allow","answeredBy":"supervisor","ledgerId":"L1"}"#.utf8))
+        runner.expect(e, equals: .confirmResolved(sessionId: "s1", turnId: "t", toolUseId: "q1", answeredBy: "supervisor", decision: "allow"), "answeredBy decoded")
+    }
+    runner.test("session.posture announces an API-set posture by revision") {
+        runner.expect(SessionFeedEvent.decode(name: "session.posture", data: Data(#"{"marvinSessionId":"s1","projectId":"p","postureRevision":4,"postureSource":"user"}"#.utf8)),
+                      equals: .posture(sessionId: "s1", revision: 4, source: "user"), "decoded")
+    }
+    runner.test("the watch row's supervisor and proposal decode; an unknown level reads off") {
+        let json = #"{"rows":[{"marvinSessionId":"s1","state":"awaiting-you","pending":[{"turnId":"t","toolUseId":"q1","toolName":"AskUserQuestion","since":"x","userOnly":false,"supervisorProposal":{"ledgerId":"L1","actionId":"answer","grounds":[]},"proposalRevealed":false}],"supervisor":{"delegation":"answer-questions","sharedCheckout":false,"touchedTurn":null,"waitingOnOwn":null,"stoppedByUser":false,"lastActAt":null,"openEscalations":2},"postureRevision":3,"postureSource":"supervisor","posture":{"permissionStrategy":"gated","mode":"plan"}},{"marvinSessionId":"s2","state":"idle","supervisor":{"delegation":"answer-everything"}}]}"#
+        let rows = SessionWatchRowWire.decodeSnapshot(Data(json.utf8)) ?? []
+        runner.expect(rows.count, equals: 2, "both rows decode")
+        runner.expect(rows.first?.supervisor?.delegation, equals: .answerQuestions, "delegation")
+        runner.expect(rows.first?.supervisor?.openEscalations, equals: 2, "escalations")
+        runner.expect(rows.first?.pending?.first?.supervisorProposal?.ledgerId, equals: "L1", "blind proposal")
+        runner.expect(rows.first?.pending?.first?.proposalRevealed, equals: false, "not revealed")
+        runner.expect(rows.first?.postureRevision, equals: 3, "posture revision")
+        runner.expect(rows.first?.postureSource, equals: "supervisor", "posture source")
+        runner.expect(rows.last?.supervisor?.delegation, equals: .off, "unknown level → off")
+    }
+}
+
+runner.suite("supervisor-strip") {
+    runner.test("off, and no status yet") {
+        let off = SupervisorStrip.make(status: supStatus(mode: "off"), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(off.state, equals: .off, "off")
+        runner.expect(SupervisorStrip.make(status: nil, feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC).state, equals: .off, "no status reads off")
+    }
+    runner.test("shadow idle: budget first, then watching and last wake") {
+        let m = SupervisorStrip.make(status: supStatus(), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(m.state, equals: .shadow, "shadow")
+        runner.expect(m.modeLabel, equals: "Shadow", "label")
+        runner.expect(m.detail, equals: "$3.20 / $10 · watching 4 · nothing for you · woke 2m ago", "line 2")
+        runner.expect(m.showKill, equals: false, "no kill when idle")
+        runner.expect(m.primary, equals: .pause, "pause")
+        runner.expect(m.meter?.fraction, equals: 0.32, "meter fraction")
+        runner.expect(m.meterAccessibilityValue, equals: "32 percent of daily cap", "meter value")
+        runner.expect(m.accessibilityValue, equals: "Shadow. Watching 4 tabs. 3 dollars 20 of 10 dollars today. Last woke 2 minutes ago.", "strip value")
+    }
+    runner.test("a burst names the count on line 1") {
+        let m = SupervisorStrip.make(status: supStatus(open: 12), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(m.modeLabel, equals: "Shadow · 12 waiting", "count")
+        runner.expect(m.detail, equals: "$3.20 / $10 · watching 4 · woke 2m ago", "line 2 without nothing-for-you")
+    }
+    runner.test("waking shows Kill; autonomous counts categories") {
+        let w = SupervisorStrip.make(status: supStatus(run: "waking", currentWake: .init(wakeId: "w", itemCount: 3)), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(w.state, equals: .waking, "waking")
+        runner.expect(w.modeLabel, equals: "Waking · 3 items", "label")
+        runner.expect(w.showKill, equals: true, "kill chip")
+        let a = SupervisorStrip.make(status: supStatus(mode: "autonomous", autonomy: ["questions": "autonomous", "nudges": "autonomous", "posture": "shadow", "confirms": "shadow"]), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(a.modeLabel, equals: "Autonomous · 2 of 4", "autonomous label")
+        runner.expect(a.help, equals: "Autonomous: questions, nudges", "tooltip lists them")
+    }
+    runner.test("paused by user, killed, breaker") {
+        let u = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "user", at: "2026-10-30T14:02:00Z"), queued: 3), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(u.state, equals: .pausedByUser, "user pause")
+        runner.expect(u.detail, equals: "paused by you 14:02 · 3 events queued", "detail")
+        runner.expect(u.primary, equals: .resume(enabled: true), "resume")
+        let k = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "kill", at: "2026-10-30T14:02:00Z", detail: "aborted a wake with 2 items")), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(k.state, equals: .killed, "killed")
+        runner.expect(k.modeLabel, equals: "Paused — wake aborted", "kill label")
+        runner.expect(k.detail, equals: "Kill at 14:02 aborted a wake with 2 items", "kill detail")
+        let b = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "breaker", detail: "3 failed wakes in 10 minutes")), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(b.state, equals: .pausedByFault("breaker"), "breaker")
+        runner.expect(b.modeLabel, equals: "Paused — breaker", "breaker label")
+        runner.expect(b.tone, equals: .warning, "warning tone carries a glyph")
+        runner.expect(b.glyph, equals: "exclamationmark.triangle.fill", "glyph")
+        let r = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "refusals")), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(r.modeLabel, equals: "Paused — 3 refused calls", "refusals label")
+    }
+    runner.test("over budget: red meter, raise cap, resume disabled until the cap is above spend") {
+        let m = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "budget"), spent: 10, cap: 10, level: "reached"), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(m.state, equals: .overBudget, "over budget")
+        runner.expect(m.modeLabel, equals: "Paused — daily cap", "label")
+        runner.expect(m.detail, equals: "$10.00 / $10 · resets 00:00", "detail")
+        runner.expect(m.primary, equals: .resume(enabled: false), "resume disabled")
+        runner.expect(m.meter?.level, equals: "reached", "meter level")
+        let raised = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "budget"), spent: 10, cap: 15, level: "near"), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(raised.primary, equals: .resume(enabled: true), "resume once raised")
+    }
+    runner.test("near budget keeps the state and colours the meter") {
+        let m = SupervisorStrip.make(status: supStatus(spent: 8.4, level: "near"), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(m.state, equals: .shadow, "still shadow")
+        runner.expect(m.meter?.level, equals: "near", "near")
+    }
+    runner.test("stale and failed come from the server's health") {
+        let s = SupervisorStrip.make(status: supStatus(health: "stale", queued: 5, lastWake: .init(at: "2026-10-30T13:46:00Z", outcome: "ok")), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(s.state, equals: .stale, "stale")
+        runner.expect(s.modeLabel, equals: "Not waking", "label")
+        runner.expect(s.detail, equals: "last woke 14m ago · 5 events queued", "detail")
+        runner.expect(s.primary, equals: .restart, "restart")
+        let f = SupervisorStrip.make(status: supStatus(health: "failed", lastWake: .init(at: "2026-10-30T13:59:00Z", outcome: "failed", error: .init(message: "Wake failed: model overloaded", detail: "529 Overloaded"))), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(f.state, equals: .failed, "failed")
+        runner.expect(f.glyph, equals: "xmark.octagon.fill", "failed glyph")
+        runner.expect(f.failure?.headline, equals: "Wake failed: model overloaded", "error headline")
+        runner.expect(f.primary, equals: .retry, "retry")
+    }
+    runner.test("disconnected hides numbers; Pause and Kill stay enabled") {
+        let m = SupervisorStrip.make(status: supStatus(run: "waking"), feedConnected: false, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(m.state, equals: .disconnected, "disconnected")
+        runner.expect(m.detail, equals: "status unknown — reconnecting", "no stale numbers")
+        runner.expect(m.meter == nil, "meter hidden")
+        runner.expect(m.controlsEnabled, equals: true, "pause/kill enabled")
+        runner.expect(m.itemsEnabled, equals: false, "items disabled")
+    }
+    runner.test("token unavailable wins over everything") {
+        let m = SupervisorStrip.make(status: nil, feedConnected: true, tokenError: "/tmp/x/supervisor/token", now: supNow, timeZone: supUTC)
+        runner.expect(m.state, equals: .tokenUnavailable, "token")
+        runner.expect(m.modeLabel, equals: "Can't control supervisor", "label")
+        runner.expect(m.failure?.headline, equals: "MARVIN couldn't read the supervisor token", "notice")
+        runner.expect(m.failure?.detail, equals: "/tmp/x/supervisor/token", "path")
+        runner.expect(m.itemsEnabled, equals: false, "items read-only")
+    }
+    runner.test("state announcements are worded, not 'warning'") {
+        let a = SupervisorStrip.make(status: supStatus(), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        let b = SupervisorStrip.make(status: supStatus(run: "paused", pause: .init(reason: "budget"), spent: 10, cap: 10, level: "reached"), feedConnected: true, tokenError: nil, now: supNow, timeZone: supUTC)
+        runner.expect(SupervisorStrip.announcement(from: a.state, to: b.state), equals: "Supervisor paused: daily cap reached", "budget")
+        runner.expect(SupervisorStrip.announcement(from: a.state, to: .failed), equals: "Supervisor wake failed", "failed")
+        runner.expect(SupervisorStrip.announcement(from: a.state, to: a.state) == nil, "no change, no announcement")
+    }
+}
+
+private func supItem(_ id: String, session: String?, at: String, kind: String = "confirm", rank: Int = 0,
+                     title: String? = nil, actions: [SupervisorInboxItem.Action] = []) -> SupervisorInboxItem {
+    SupervisorInboxItem(id: id, createdAt: at, sessionId: session, tabTitle: title, kind: kind,
+                        escalatedBecause: .init(code: "human-only", label: "Only you can push"),
+                        actions: actions, burstRank: rank)
+}
+
+runner.suite("supervisor-inbox-layout") {
+    runner.test("per tab the oldest is a card and the rest collapse to +N more") {
+        let items = [
+            supItem("b", session: "s1", at: "2026-10-30T13:02:00Z", rank: 1),
+            supItem("a", session: "s1", at: "2026-10-30T13:01:00Z", rank: 0),
+            supItem("c", session: "s1", at: "2026-10-30T13:03:00Z", rank: 2),
+            supItem("d", session: "s2", at: "2026-10-30T13:00:00Z"),
+        ]
+        let l = SupervisorInboxLayout(items: items, expandedTabs: [])
+        runner.expect(l.byTab["s1"]?.shown.map(\.id) ?? [], equals: ["a"], "oldest shown")
+        runner.expect(l.byTab["s1"]?.hiddenCount, equals: 2, "+2 more")
+        runner.expect(l.byTab["s2"]?.hiddenCount, equals: 0, "single")
+        runner.expect(l.total, equals: 4, "header counts all items")
+        let open = SupervisorInboxLayout(items: items, expandedTabs: ["s1"])
+        runner.expect(open.byTab["s1"]?.shown.map(\.id) ?? [], equals: ["a", "b", "c"], "expanded in age order")
+    }
+    runner.test("tabless rows: guardrails first, then oldest") {
+        let items = [
+            supItem("n", session: nil, at: "2026-10-30T13:00:00Z", kind: "new-tab"),
+            supItem("g", session: nil, at: "2026-10-30T13:05:00Z", kind: "guardrail"),
+            supItem("x", session: "s1", at: "2026-10-30T13:01:00Z"),
+        ]
+        let l = SupervisorInboxLayout(items: items, expandedTabs: [])
+        runner.expect(l.tabless.map(\.id), equals: ["g", "n"], "guardrail sorts first")
+        runner.expect(l.sessionIds, equals: ["s1"], "tabs with items")
+    }
+    runner.test("only open items are laid out") {
+        var resolved = supItem("r", session: "s1", at: "2026-10-30T13:00:00Z")
+        resolved = SupervisorInboxItem(id: resolved.id, createdAt: resolved.createdAt, sessionId: "s1", kind: "confirm",
+                                       escalatedBecause: resolved.escalatedBecause, state: "resolved")
+        runner.expect(SupervisorInboxLayout(items: [resolved], expandedTabs: []).total, equals: 0, "resolved dropped")
+    }
+}
+
+runner.suite("supervisor-act-chips") {
+    let deny = SupervisorInboxItem.Action(id: "deny", label: "Deny", role: "refuse", recommended: true)
+    let push = SupervisorInboxItem.Action(id: "allow", label: "Allow push", role: "consent", requiresExpanded: true)
+    let dismiss = SupervisorInboxItem.Action(id: "dismiss", label: "Dismiss", role: "dismiss")
+    runner.test("collapsed outward act: its chip is replaced by Review act…") {
+        let c = SupervisorActChips(actions: [deny, push, dismiss], expanded: false)
+        runner.expect(c.chips.map(\.label), equals: ["Deny"], "only the safe chip")
+        runner.expect(c.showReviewAct, equals: true, "review gate")
+        runner.expect(c.menu.map(\.label), equals: ["Dismiss"], "dismiss in the menu")
+        runner.expect(c.primaryId, equals: "deny", "recommended is the one primary")
+    }
+    runner.test("expanded: the act chip appears; still never a default") {
+        let c = SupervisorActChips(actions: [deny, push], expanded: true)
+        runner.expect(c.chips.map(\.label), equals: ["Deny", "Allow push"], "recommended first")
+        runner.expect(c.showReviewAct, equals: false, "gate open")
+    }
+    runner.test("accessibility actions are exactly the visible chips") {
+        let collapsed = SupervisorActChips(actions: [deny, push], expanded: false)
+        runner.expect(collapsed.accessibilityActionNames, equals: ["Deny", "Show full act"], "no hidden act offered")
+        let expanded = SupervisorActChips(actions: [deny, push], expanded: true)
+        runner.expect(expanded.accessibilityActionNames, equals: ["Deny", "Allow push"], "both once shown")
+    }
+    runner.test("a recommended act is listed first even when the server lists it second") {
+        let open = SupervisorInboxItem.Action(id: "open", label: "Open tab", role: "consent", recommended: true)
+        let edit = SupervisorInboxItem.Action(id: "edit", label: "Edit…", role: "edit")
+        runner.expect(SupervisorActChips(actions: [edit, open], expanded: false).chips.map(\.id), equals: ["open", "edit"], "order")
+    }
+}
+
+runner.suite("supervisor-delegation-and-ledger-glyphs") {
+    runner.test("each level has a glyph and a one-line consequence") {
+        runner.expect(SupervisorDelegation.off.glyph, equals: "circle.dashed", "off")
+        runner.expect(SupervisorDelegation.observe.glyph, equals: "eye", "observe")
+        runner.expect(SupervisorDelegation.answerQuestions.glyph, equals: "questionmark.bubble", "questions")
+        runner.expect(SupervisorDelegation.answerConfirms.glyph, equals: "checkmark.shield", "confirms")
+        runner.expect(SupervisorDelegation.observe.consequence, equals: "Reads and escalates; never acts", "consequence")
+        runner.expect(SupervisorDelegation.answerQuestions.spoken, equals: "answer questions", "spoken value")
+    }
+    runner.test("ledger decisions never rely on colour alone") {
+        runner.expect(SupervisorLedgerGlyph.for(decision: "act", actor: "supervisor"), equals: "checkmark.circle.fill", "act")
+        runner.expect(SupervisorLedgerGlyph.for(decision: "escalate", actor: "supervisor"), equals: "hand.raised.fill", "escalate")
+        runner.expect(SupervisorLedgerGlyph.for(decision: nil, actor: "user"), equals: "person.fill", "user")
+        runner.expect(SupervisorLedgerGlyph.for(decision: nil, actor: "runtime"), equals: "gearshape", "runtime")
+    }
+}
+
+runner.suite("supervisor-announcer") {
+    runner.test("first load announces once; arrivals are coalesced with names") {
+        var a = SupervisorAnnouncer()
+        let first = [supItem("a", session: "s1", at: "x", title: "fix-flags"), supItem("b", session: "s2", at: "x", title: "docs-site")]
+        runner.expect(a.note(open: first), equals: "2 escalations waiting", "first load")
+        runner.expect(a.note(open: first) == nil, "nothing new")
+        let more = first + [supItem("c", session: "s3", at: "x", title: "billing"), supItem("d", session: nil, at: "x")]
+        runner.expect(a.note(open: more), equals: "2 new escalations: billing, supervisor", "coalesced with names")
+    }
+    runner.test("a burst is announced once by count") {
+        var a = SupervisorAnnouncer()
+        _ = a.note(open: [])
+        let burst = (0..<12).map { supItem("i\($0)", session: "s\($0)", at: "x", title: "t\($0)") }
+        runner.expect(a.note(open: burst), equals: "12 escalations waiting", "count not names")
+    }
+    runner.test("a resolved item leaving is not an arrival") {
+        var a = SupervisorAnnouncer()
+        _ = a.note(open: [supItem("a", session: "s1", at: "x", title: "fix-flags")])
+        runner.expect(a.note(open: []) == nil, "leaving is silent here")
+    }
+}
+
+runner.suite("external-answer-dismissal") {
+    runner.test("an answer from elsewhere closes the pending sheet with a note") {
+        let n = ExternalAnswer.note(toolUseId: "q1", pending: ["q1", "q2"], responding: [], answeredBy: "supervisor")
+        runner.expect(n?.text, equals: "Answered by the supervisor", "supervisor")
+        runner.expect(n?.bySupervisor, equals: true, "flag")
+        runner.expect(ExternalAnswer.note(toolUseId: "q1", pending: ["q1"], responding: [], answeredBy: "user")?.text, equals: "Answered elsewhere by you", "user elsewhere")
+        runner.expect(ExternalAnswer.note(toolUseId: "q1", pending: ["q1"], responding: [], answeredBy: nil)?.text, equals: "Answered elsewhere", "unknown")
+    }
+    runner.test("our own answer, or one not pending here, makes no note") {
+        runner.expect(ExternalAnswer.note(toolUseId: "q1", pending: ["q1"], responding: ["q1"], answeredBy: "user") == nil, "own answer in flight")
+        runner.expect(ExternalAnswer.note(toolUseId: "zz", pending: ["q1"], responding: [], answeredBy: "user") == nil, "not ours")
+    }
+    runner.test("after an external answer the item is gone, so answering it is impossible") {
+        var pending = ["q1", "q2"]
+        let note = ExternalAnswer.apply(toolUseId: "q1", pending: &pending, responding: [], answeredBy: "supervisor")
+        runner.expect(pending, equals: ["q2"], "removed in the same transition")
+        runner.expect(note?.text, equals: "Answered by the supervisor", "note")
+        runner.expect(ExternalAnswer.canAnswer("q1", pending: pending), equals: false, "no second answer")
+    }
+}
+
+runner.suite("posture-revision-sync") {
+    runner.test("adopt an API-set posture once, when its revision is newer than ours") {
+        var seen = PostureRevisionLedger()
+        runner.expect(seen.shouldAdopt(sessionId: "s1", revision: 3, source: "supervisor"), equals: true, "new revision")
+        seen.mark("s1", revision: 3)
+        runner.expect(seen.shouldAdopt(sessionId: "s1", revision: 3, source: "supervisor"), equals: false, "already adopted")
+        runner.expect(seen.shouldAdopt(sessionId: "s1", revision: 4, source: "user"), equals: true, "a later user API change too")
+        runner.expect(seen.shouldAdopt(sessionId: "s2", revision: nil, source: nil), equals: false, "never used the route")
+        runner.expect(seen.echo(for: "s1"), equals: 3, "echo what was adopted")
+        runner.expect(seen.echo(for: "s9") == nil, "nothing to echo")
+    }
+    runner.test("persists and survives a round trip; never goes backwards") {
+        var seen = PostureRevisionLedger()
+        seen.mark("s1", revision: 5)
+        seen.mark("s1", revision: 2)
+        let back = PostureRevisionLedger.decode(seen.jsonString)
+        runner.expect(back.echo(for: "s1"), equals: 5, "monotonic, persisted")
+    }
+    runner.test("the API posture is laid over the local one, keeping what the API does not set") {
+        let local = SessionPosture(personality: "ultron", executorModel: "claude-opus-5-5", advisorModel: "claude-fable-5-1",
+                                   permissionStrategy: "full", mode: "agent", thinkingMode: "max", advisorThinkingMode: "high")
+        let wire = SessionPostureWire(model: "claude-sonnet-5-5", permissionStrategy: "gated", thinkingMode: "medium", mode: "plan")
+        let p = PostureRevisionLedger.adopt(wire, over: local)
+        runner.expect(p.permissionStrategy, equals: "gated", "strategy")
+        runner.expect(p.mode, equals: "plan", "mode")
+        runner.expect(p.executorModel, equals: "claude-sonnet-5-5", "model")
+        runner.expect(p.advisorModel, equals: "claude-fable-5-1", "advisor kept")
+        runner.expect(p.advisorThinkingMode, equals: "high", "advisor effort kept")
+        runner.expect(p.personality, equals: "ultron", "voice kept")
+    }
+}
+
+runner.suite("supervisor-autonomy-stats") {
+    let bar = SupervisorStatus.Bar(minProposals: 20, minAgreement: 0.9)
+    runner.test("the bar is shown, never enforced") {
+        let below = SupervisorStatsLine(stats: .init(proposals: 16, agreed: 15, agreementRate: 0.9375), bar: bar)
+        runner.expect(below.text, equals: "16 proposals · 94 % agreed · bar 20 / 90 %", "line")
+        runner.expect(below.belowBar, equals: true, "below on count")
+        let above = SupervisorStatsLine(stats: .init(proposals: 24, agreed: 23, agreementRate: 0.958), bar: bar)
+        runner.expect(above.belowBar, equals: false, "above")
+        runner.expect(SupervisorStatsLine(stats: nil, bar: bar).text, equals: "0 proposals · bar 20 / 90 %", "none yet")
+    }
+    runner.test("a human-only act proposed as an act is flagged") {
+        let s = SupervisorStatsLine(stats: .init(proposals: 30, agreed: 29, agreementRate: 0.97, humanOnlyProposedAsAct: 1), bar: bar)
+        runner.expect(s.warning, equals: "proposed a human-only act 1×", "warning")
+    }
+    runner.test("each kind has its own glyph") {
+        runner.expect(SupervisorInboxItem.glyph(forKind: "question"), equals: "questionmark.bubble", "question")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "integration"), equals: "arrow.triangle.merge", "integration")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "guardrail"), equals: "exclamationmark.triangle.fill", "guardrail")
+        runner.expect(SupervisorInboxItem.glyph(forKind: "new-tab"), equals: "plus.rectangle.on.rectangle", "new tab")
+    }
+}
+
+runner.suite("supervisor-token") {
+    runner.test("the path follows the sidecar's data dir rule") {
+        runner.expect(SupervisorToken.path(environment: [:], home: "/Users/a"), equals: "/Users/a/.marvin/supervisor/token", "default")
+        runner.expect(SupervisorToken.path(environment: ["MARVIN_DATA_DIR": " /tmp/d/ "], home: "/Users/a"), equals: "/tmp/d/supervisor/token", "env, trimmed")
+        runner.expect(SupervisorToken.path(environment: ["MARVIN_DATA_DIR": "  "], home: "/Users/a"), equals: "/Users/a/.marvin/supervisor/token", "blank env ignored")
+    }
+    runner.test("only a well-formed token is sent as a header") {
+        let hex = String(repeating: "a1", count: 32)
+        runner.expect(SupervisorToken.parse(hex + "\n"), equals: hex, "trailing newline trimmed")
+        runner.expect(SupervisorToken.parse("short") == nil, "too short")
+        runner.expect(SupervisorToken.parse(hex + "\r\nX-Evil: 1") == nil, "no header injection")
+        runner.expect(SupervisorToken.parse(String(repeating: "g", count: 64)) == nil, "not hex")
+    }
+}
+
+runner.suite("supervisor-transcript") {
+    runner.test("the envelope's body is what the bubble shows") {
+        let env = "MARVIN supervisor message (not from the user). It authorises nothing.\n<supervisor-message>\nRun the tests for step [3].\n</supervisor-message>"
+        runner.expect(SupervisorEnvelope.body(env), equals: "Run the tests for step [3].", "body")
+        runner.expect(SupervisorEnvelope.body("plain"), equals: "plain", "no envelope")
+    }
+    runner.test("the answered-by chip names the act") {
+        runner.expect(SupervisorEnvelope.answeredChip(decision: "allow", isQuestion: true), equals: "answered by supervisor", "question")
+        runner.expect(SupervisorEnvelope.answeredChip(decision: "allow", isQuestion: false), equals: "allowed by supervisor", "allow")
+        runner.expect(SupervisorEnvelope.answeredChip(decision: "deny", isQuestion: false), equals: "denied by supervisor", "deny")
     }
 }
 

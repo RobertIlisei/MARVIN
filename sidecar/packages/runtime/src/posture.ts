@@ -9,13 +9,13 @@
  *     API-set fields over what the app posts until the app sends the revision
  *     back (`apiPostureHold`). A session that never used the route holds
  *     nothing and behaves exactly as before.
- *   - **The API only narrows.** Orders are explicit: strategy
+ *   - **The supervisor only narrows.** Orders are explicit: strategy
  *     full > auto > gated; mode agent > plan > ask; effort max > xhigh > high >
  *     medium > low; a model is narrower only when it is known to cost no more
  *     — a pricier or unpriced model is a widening. Any widening by the
  *     supervisor escalates and changes nothing (ADR-0127 §4 item 5). A
- *     user's widening is refused too, until the app shows an API-set posture
- *     (plan milestone 6) — before then it would be a hidden widening.
+ *     user's widening is accepted since milestone 6, when the app began
+ *     showing an API-set posture; it reaches the next turn, never a live one.
  *   - **A narrowing reaches a live turn.** Strategy and mode are enforced in
  *     the gate, chosen once per turn; the turn's gate consults
  *     `getLiveNarrowing` on every call, so a narrowing applies at the next
@@ -31,7 +31,7 @@ import { listModelsCached } from "./models";
 import { isValidModelId } from "./role-models";
 import { readSessionMeta, type SessionMeta, type SessionPosture, updateSessionMeta } from "./session-meta";
 import { appendLedgerEntry, digestArgs, isSafeProjectId, type LedgerGround } from "./supervisor-ledger";
-import { getLiveTurn } from "./turn-registry";
+import { announceProjectEvent, getLiveTurn } from "./turn-registry";
 
 export type Strategy = SessionPosture["permissionStrategy"];
 export type Mode = NonNullable<SessionPosture["mode"]>;
@@ -210,14 +210,11 @@ export function applyPostureChange(args: {
   const meta = readSessionMeta(projectId, marvinSessionId);
   if (!meta) return { ok: false, status: 404, error: "no such session (posture can only change on a session that has started)" };
   const changes = classifyPostureChange(meta.posture, patch, lookup);
-  // Milestone 4 — the user's way back from a supervisor narrowing: a field the
-  // supervisor narrowed may be restored by the user to exactly the value it had
-  // before, never anything wider. Until the app echoes revisions (milestone 6)
-  // this is the only widening the API accepts.
+  // What the supervisor narrowed away, per field (milestone 4). Milestone 4 let
+  // the user restore exactly these values and nothing wider; since milestone 6
+  // any user widening passes, so this only tracks what is still the supervisor's.
   const before = meta.postureBeforeSupervisor ?? {};
-  const isRestore = (c: FieldChange) =>
-    actor === "user" && c.field in before && (patch as Record<string, unknown>)[c.field] === (before as Record<string, unknown>)[c.field];
-  const widening = changes.filter((c) => c.direction === "widen" && !isRestore(c));
+  const widening = changes.filter((c) => c.direction === "widen");
   const ledger = (decision: "act" | "escalate", reason: string) => {
     if (actor !== "supervisor" || args.ledger === false || !isSafeProjectId(projectId)) return;
     appendLedgerEntry(projectId, {
@@ -232,16 +229,16 @@ export function applyPostureChange(args: {
       grounds: (args.ledger || undefined)?.grounds ?? [],
     });
   };
-  if (widening.length) {
+  // Widening is the user's act (ADR-0127 §4 item 5). Since milestone 6 the app
+  // adopts an API-set posture within one watch refresh and echoes its revision,
+  // so a user's widening here is no longer hidden from the toolbar; it is held
+  // over the app's next post like any API change, and reaches only the next
+  // turn (`liveApplied` carries narrowings alone). A tab cannot call this route
+  // itself: `sessions` is a control path the gate denies to tab tool calls.
+  if (widening.length && actor === "supervisor") {
     const what = widening.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ");
-    if (actor === "supervisor") {
-      ledger("escalate", `widening is the user's act (ADR-0127 §4): ${what}`);
-      return { ok: false, status: 409, error: `a supervisor may only narrow a posture; widening escalates to the user: ${what}`, changes };
-    }
-    // Until the app shows an API-set posture (plan milestone 6), a widening here
-    // would run the tab wider than its toolbar says — the hidden widening
-    // ADR-0127 §4 names as the worst case. Widen from the app.
-    return { ok: false, status: 409, error: `the API may only narrow a posture until the app shows API-set posture; widen it in the app: ${what}`, changes };
+    ledger("escalate", `widening is the user's act (ADR-0127 §4): ${what}`);
+    return { ok: false, status: 409, error: `a supervisor may only narrow a posture; widening escalates to the user: ${what}`, changes };
   }
 
   const revision = (meta.postureRevision ?? 0) + 1;
@@ -269,6 +266,8 @@ export function applyPostureChange(args: {
     postureBeforeSupervisor: Object.keys(nextBefore).length ? (nextBefore as PosturePatch) : undefined,
   });
   if (!next) return { ok: false, status: 400, error: "could not write the session meta" };
+  // Milestone 6 — the app adopts an API-set posture within one feed event.
+  announceProjectEvent({ event: "session.posture", data: { projectId, marvinSessionId, postureRevision: revision, postureSource: actor } });
 
   const liveApplied: string[] = [];
   const live = getLiveTurn(marvinSessionId);

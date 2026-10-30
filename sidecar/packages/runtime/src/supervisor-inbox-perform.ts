@@ -4,9 +4,9 @@
  * the raw act is the consent:
  *
  * - answers and confirms are recorded `answeredBy: "user"`;
- * - posture goes through `applyPostureChange` with `actor: "user"`, so the
- *   milestone 2 rule still holds: a widening the app cannot yet show is
- *   refused, the user's included (until milestone 6);
+ * - posture goes through `applyPostureChange` with `actor: "user"`: since
+ *   milestone 6 the app shows an API-set posture, so the user's consent to a
+ *   posture-widen item performs the widening, from the tab's next turn;
  * - merges stay local and never push (ADR-0103); Prepare MR pushes only when
  *   the act the user saw said so;
  * - a closed tab keeps its work: `keep` commits a dirty tree first (ADR-0111);

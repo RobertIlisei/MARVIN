@@ -28,6 +28,7 @@
 //   new fields to a payload without breaking the Swift client.
 
 import Foundation
+import MARVINLogic
 
 // MARK: - Outer SSE envelope
 
@@ -198,6 +199,10 @@ struct ChatRequest: Codable {
     let lane: [String]?
     /// ADR-0107 — a title for the tab's branch name on the first message.
     let sessionTitle: String?
+    /// ADR-0127 M6 — the newest API-set `postureRevision` this app adopted for
+    /// the session. Until it is echoed, the sidecar keeps the API-set fields
+    /// over the posture posted here; once it is, the posted posture wins.
+    let postureRevision: Int?
 
     init(
         message: String,
@@ -218,7 +223,8 @@ struct ChatRequest: Codable {
         resetSdkSession: Bool? = nil,
         tree: String? = nil,
         lane: [String]? = nil,
-        sessionTitle: String? = nil
+        sessionTitle: String? = nil,
+        postureRevision: Int? = nil
     ) {
         self.message = message
         self.cwd = cwd
@@ -239,6 +245,7 @@ struct ChatRequest: Codable {
         self.tree = tree
         self.lane = lane
         self.sessionTitle = sessionTitle
+        self.postureRevision = postureRevision
     }
 }
 
@@ -308,7 +315,10 @@ struct SessionRecord: Codable {
 /// (e.g. token usage on `turn.completed` could drive a footer but
 /// hydrate doesn't currently need it).
 enum SessionTurn: Codable {
-    case turnUser(at: String, message: String)
+    /// `author` / `supervisor`: ADR-0127 — a line the supervisor wrote.
+    case turnUser(at: String, message: String, supervisor: SupervisorMessageMark? = nil)
+    /// ADR-0127 §5 — the turn became supervisor-touched here.
+    case supervisorTouched(at: String, turnId: String, by: String)
     case turnStarted(at: String, marvinSessionId: String, turnId: String)
     /// Inner CLI event — preserved as ChatJSON so it can be re-encoded
     /// to Data and fed straight through `ChatStreamReducer.apply`,
@@ -317,7 +327,8 @@ enum SessionTurn: Codable {
     /// for both surfaces at once.
     case cliEvent(at: String, event: ChatJSON)
     case confirmRequest(at: String, payload: ConfirmRequest)
-    case confirmDecision(at: String, turnId: String, toolUseId: String, decision: String)
+    case confirmDecision(at: String, turnId: String, toolUseId: String, decision: String,
+                         answeredBy: String? = nil, grounds: [SupervisorGround] = [])
     case turnCompleted(at: String, durationMs: Int?, costUsd: Double?, sessionId: String?)
     case turnError(at: String, error: String, interrupted: Bool)
     case unknown(type: String, at: String?)
@@ -325,7 +336,13 @@ enum SessionTurn: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, at, message, marvinSessionId, turnId, event, payload,
              toolUseId, decision, durationMs, costUsd, sessionId, error, interrupted,
-             cancelled
+             cancelled, author, supervisor, answeredBy, grounds, by
+    }
+
+    private struct SupervisorWire: Decodable {
+        let kind: String?
+        let grounds: [SupervisorGround]?
+        let editedByUser: Bool?
     }
 
     init(from decoder: Decoder) throws {
@@ -335,7 +352,16 @@ enum SessionTurn: Codable {
         switch type {
         case "turn.user":
             let msg = try c.decode(String.self, forKey: .message)
-            self = .turnUser(at: at ?? "", message: msg)
+            let author = try c.decodeIfPresent(String.self, forKey: .author)
+            let sup = try? c.decodeIfPresent(SupervisorWire.self, forKey: .supervisor)
+            let mark = author == "supervisor"
+                ? SupervisorMessageMark(kind: sup?.kind ?? "instruction", grounds: sup?.grounds ?? [], editedByUser: sup?.editedByUser ?? false)
+                : nil
+            self = .turnUser(at: at ?? "", message: msg, supervisor: mark)
+        case "turn.supervisor-touched":
+            let tid = try c.decode(String.self, forKey: .turnId)
+            let by = try c.decodeIfPresent(String.self, forKey: .by) ?? "message"
+            self = .supervisorTouched(at: at ?? "", turnId: tid, by: by)
         case "turn.started":
             let sid = try c.decode(String.self, forKey: .marvinSessionId)
             let tid = try c.decode(String.self, forKey: .turnId)
@@ -350,7 +376,9 @@ enum SessionTurn: Codable {
             let tid = try c.decode(String.self, forKey: .turnId)
             let tuid = try c.decode(String.self, forKey: .toolUseId)
             let d = try c.decode(String.self, forKey: .decision)
-            self = .confirmDecision(at: at ?? "", turnId: tid, toolUseId: tuid, decision: d)
+            let by = try c.decodeIfPresent(String.self, forKey: .answeredBy)
+            let grounds = (try? c.decodeIfPresent([SupervisorGround].self, forKey: .grounds)) ?? []
+            self = .confirmDecision(at: at ?? "", turnId: tid, toolUseId: tuid, decision: d, answeredBy: by, grounds: grounds)
         case "turn.completed":
             let ms = try c.decodeIfPresent(Int.self, forKey: .durationMs)
             let cost = try c.decodeIfPresent(Double.self, forKey: .costUsd)
@@ -373,10 +401,16 @@ enum SessionTurn: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .turnUser(at, message):
+        case let .turnUser(at, message, supervisor):
             try c.encode("turn.user", forKey: .type)
             try c.encode(at, forKey: .at)
             try c.encode(message, forKey: .message)
+            if supervisor != nil { try c.encode("supervisor", forKey: .author) }
+        case let .supervisorTouched(at, turnId, by):
+            try c.encode("turn.supervisor-touched", forKey: .type)
+            try c.encode(at, forKey: .at)
+            try c.encode(turnId, forKey: .turnId)
+            try c.encode(by, forKey: .by)
         case let .turnStarted(at, sid, tid):
             try c.encode("turn.started", forKey: .type)
             try c.encode(at, forKey: .at)
@@ -390,12 +424,13 @@ enum SessionTurn: Codable {
             try c.encode("confirm.request", forKey: .type)
             try c.encode(at, forKey: .at)
             try c.encode(payload, forKey: .payload)
-        case let .confirmDecision(at, turnId, toolUseId, decision):
+        case let .confirmDecision(at, turnId, toolUseId, decision, answeredBy, _):
             try c.encode("confirm.decision", forKey: .type)
             try c.encode(at, forKey: .at)
             try c.encode(turnId, forKey: .turnId)
             try c.encode(toolUseId, forKey: .toolUseId)
             try c.encode(decision, forKey: .decision)
+            try c.encodeIfPresent(answeredBy, forKey: .answeredBy)
         case let .turnCompleted(at, ms, cost, sid):
             try c.encode("turn.completed", forKey: .type)
             try c.encode(at, forKey: .at)
