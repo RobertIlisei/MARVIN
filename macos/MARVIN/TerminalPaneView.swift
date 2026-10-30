@@ -176,6 +176,6 @@ import SwiftUI
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 }

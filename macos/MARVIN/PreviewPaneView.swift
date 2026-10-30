@@ -146,7 +146,7 @@ import WebKit
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     private func navButton(
@@ -245,7 +245,7 @@ import WebKit
         .font(.system(size: 10, design: .monospaced))
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     // MARK: - State helpers

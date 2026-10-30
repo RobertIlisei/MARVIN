@@ -33,7 +33,7 @@ import SwiftUI
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
 
             MarvinDivider()
 
@@ -68,7 +68,7 @@ import SwiftUI
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
         }
         .frame(width: 560)
         .onAppear {

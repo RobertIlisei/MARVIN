@@ -56,7 +56,7 @@ import SwiftUI
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .fill(MarvinTheme.elevated)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -129,7 +129,7 @@ import SwiftUI
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .fill(MarvinTheme.elevated)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -160,7 +160,7 @@ import SwiftUI
             .foregroundStyle(active == "neutral" ? Color.secondary : Color.accentColor)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .fill(MarvinTheme.elevated)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -206,7 +206,7 @@ import SwiftUI
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color(nsColor: .underPageBackgroundColor))
+                    .fill(MarvinTheme.elevated)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)

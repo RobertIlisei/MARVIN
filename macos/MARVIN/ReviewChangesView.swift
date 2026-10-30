@@ -493,7 +493,7 @@ final class ReviewWindowTarget {
                 .padding(.leading, 12)
         }
         .padding(.vertical, 4)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     // MARK: Flattened row model (fix 2 — virtualisable)
@@ -568,7 +568,7 @@ final class ReviewWindowTarget {
         .font(.system(size: 11))
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     /// Fix 3 — a large diff is held behind a click so it can't hang the window.
@@ -676,7 +676,7 @@ final class ReviewWindowTarget {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     private func statusGlyph(_ status: String) -> some View {

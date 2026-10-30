@@ -200,7 +200,7 @@ import MARVINLogic
                     .padding(10)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color(nsColor: .underPageBackgroundColor))
+                            .fill(MarvinTheme.elevated)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -297,7 +297,7 @@ import MARVINLogic
         }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
+                .fill(MarvinTheme.elevated)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)

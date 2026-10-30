@@ -95,7 +95,7 @@ import SwiftUI
                     .keyboardShortcut(.cancelAction)
             }
             .padding(20)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
             MarvinDivider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
@@ -114,7 +114,7 @@ import SwiftUI
                                         .padding(.vertical, 2)
                                         .background(
                                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                                .fill(Color(nsColor: .underPageBackgroundColor))
+                                                .fill(MarvinTheme.elevated)
                                                 .overlay(
                                                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                                                         .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)

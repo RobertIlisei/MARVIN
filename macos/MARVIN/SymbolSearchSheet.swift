@@ -57,7 +57,7 @@ struct GraphNode: Identifiable {
             .font(.system(size: 14))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
 
             MarvinDivider()
 
@@ -84,7 +84,7 @@ struct GraphNode: Identifiable {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
         }
         .frame(width: 640)
         .onAppear {

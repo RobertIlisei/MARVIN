@@ -211,7 +211,7 @@ struct ChatAttachment: Identifiable, Equatable {
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
+                .fill(MarvinTheme.elevated)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -274,7 +274,7 @@ enum AttachmentThumbnail {
                 .background(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(hovering
-                              ? Color(nsColor: .underPageBackgroundColor)
+                              ? MarvinTheme.elevated
                               : .clear)
                 )
         }
@@ -327,7 +327,7 @@ enum AttachmentThumbnail {
             .font(.system(size: 14))
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
             MarvinDivider()
             if let err = loadError {
                 Text("Failed to load tree: \(err)")
@@ -354,7 +354,7 @@ enum AttachmentThumbnail {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(MarvinTheme.background)
         }
         .frame(width: 560)
         .onAppear {

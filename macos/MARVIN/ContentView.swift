@@ -549,7 +549,7 @@ import SwiftUI
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     /// Native empty-state hint shown over the middle pane when no
