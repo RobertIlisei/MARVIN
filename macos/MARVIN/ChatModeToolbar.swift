@@ -165,19 +165,8 @@ import SwiftUI
             advisorEffortButton("xhigh", "XHigh", "brain.head.profile", advisorIsOpus: advisorIsOpus)
             advisorEffortButton("max", "Max", "bolt.fill", advisorIsOpus: advisorIsOpus)
         } label: {
-            HStack(spacing: 5) {
-                Text("adv")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .tracking(1)
-                Image(systemName: active.map(thinkingModeIcon) ?? "arrow.turn.down.left")
-                    .font(.system(size: 9))
-                Text(active.map(effortLabel) ?? "follow")
-                    .font(.system(size: 11, design: .monospaced))
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
+            // "adv" read as an abbreviation nobody could decode (U11).
+            advisorEffortLabel(active)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(active.map(thinkingModeColour) ?? .secondary)
@@ -189,9 +178,26 @@ import SwiftUI
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        .accessibilityLabel("Advisor effort")
+        .accessibilityValue(active.map(effortLabel) ?? "follows the executor")
         .help(active == nil
               ? "Advisor effort: follows the executor's effort. Click to set independently."
-              : "Advisor effort: \(effortLabel(active!)) — independent of the executor (ADR-0033).")
+              : "Advisor effort: \(effortLabel(active!)) — set independently of the executor.")
+    }
+
+    /// One `Text` on purpose: a borderless `Menu` draws its label as an icon
+    /// plus the FIRST text only, so the old separate "adv" and value texts
+    /// showed "adv" and dropped the value itself (U11).
+    private func advisorEffortLabel(_ active: String?) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: active.map(thinkingModeIcon) ?? "arrow.turn.down.left")
+                .font(.system(size: 9))
+            Text("advisor \(active.map(effortLabel) ?? "follow")")
+                .font(.system(size: 11, design: .monospaced))
+            Image(systemName: "chevron.up")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+        }
     }
 
     // MARK: - Effort helpers

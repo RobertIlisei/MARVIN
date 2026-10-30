@@ -500,19 +500,20 @@ import SwiftUI
     /// decision the tray card offers, from here.
     private func inlineConfirm(_ c: PendingConfirmInfo, sessionId: String) -> some View {
         let excerpt = c.excerpt ?? "wants to run"
-        let toolBadge = Text(c.toolName)
-            .font(.system(size: 9.5, design: .monospaced))
+        let toolBadge = Text(ToolLabel.plain(c.toolName))
+            .font(.system(size: 9.5))
+            .help(c.toolName)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.16)))
         let deny = Button("Deny") { Task { await registry.answer(c, in: sessionId, allow: false) } }
             .rowChip(.tinted(GitDecorationColor.deleted))
             .help("Refuse this tool call. The tab is told no and carries on.")
-            .accessibilityLabel("Deny \(c.toolName)")
+            .accessibilityLabel("Deny \(ToolLabel.plain(c.toolName))")
         let allow = Button("Allow") { Task { await registry.answer(c, in: sessionId, allow: true) } }
             .rowChip(.tinted(GitDecorationColor.added))
             .help("Let this tool call run, without switching to that tab.")
-            .accessibilityLabel("Allow \(c.toolName)")
+            .accessibilityLabel("Allow \(ToolLabel.plain(c.toolName))")
         return VStack(alignment: .leading, spacing: 3) {
             // What is being approved, in full where it fits (L7). This was one
             // line, middle-truncated, with the whole text only in a tooltip — a
@@ -621,7 +622,7 @@ import SwiftUI
         if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
-            parts.append("waiting: \(first.toolName)")
+            parts.append("waiting: \(ToolLabel.plain(first.toolName))")
         } else if e.isLive, let since = e.liveSince {
             parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
         } else if e.isLive, let label = e.activityLabel {

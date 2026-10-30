@@ -4593,6 +4593,36 @@ runner.suite("server-refusal-text") {
     }
 }
 
+// MARK: - Plain-word labels for the posture pill and confirm cards (critique U8, U12)
+
+runner.suite("plain-labels") {
+    runner.test("the posture pill says what each permission does") {
+        runner.expect(PermissionStrategyChoice.gated.pillLabel, equals: "asks first", "gated")
+        runner.expect(PermissionStrategyChoice.auto.pillLabel, equals: "auto-approve", "auto")
+        runner.expect(PermissionStrategyChoice.full.pillLabel, equals: "full auto", "full keeps its two words")
+    }
+    runner.test("a tool the user knows by function is named by it") {
+        runner.expect(ToolLabel.plain("Bash"), equals: "Shell command", "Bash")
+        runner.expect(ToolLabel.plain("Edit"), equals: "Edit file", "Edit")
+        runner.expect(ToolLabel.plain("MultiEdit"), equals: "Edit file", "MultiEdit")
+        runner.expect(ToolLabel.plain("Write"), equals: "Write file", "Write")
+        runner.expect(ToolLabel.plain("NotebookEdit"), equals: "Edit notebook", "NotebookEdit")
+        runner.expect(ToolLabel.plain("ExitPlanMode"), equals: "Plan", "ExitPlanMode is the plan, not a tool")
+        runner.expect(ToolLabel.plain("WebFetch"), equals: "Fetch web page", "WebFetch")
+        runner.expect(ToolLabel.plain("Agent"), equals: "Subagent", "Agent")
+        runner.expect(ToolLabel.plain("Task"), equals: "Subagent", "Task")
+    }
+    runner.test("an MCP tool reads server then tool, without the prefix") {
+        runner.expect(ToolLabel.plain("mcp__playwright__browser_click"), equals: "playwright · browser click", "server and tool")
+        runner.expect(ToolLabel.plain("mcp__marvin-backlog__backlog_add"), equals: "marvin-backlog · backlog add", "hyphenated server")
+        runner.expect(ToolLabel.plain("mcp__lonely"), equals: "lonely", "no tool segment")
+    }
+    runner.test("an unknown name is shown as given, never blank") {
+        runner.expect(ToolLabel.plain("SomethingNew"), equals: "SomethingNew", "unknown passes through")
+        runner.expect(ToolLabel.plain(""), equals: "Tool", "empty falls back")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

@@ -49,7 +49,7 @@ import SwiftUI
             )
         }
         .buttonStyle(.plain)
-        .help("Posture for this tab: executor · advisor · voice · permissions. Click to change.")
+        .help("This tab's posture: executor model, advisor model, voice, and what happens when a tool needs permission. Click to change.")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("This tab's posture")
@@ -103,7 +103,7 @@ import SwiftUI
             Circle()
                 .fill(Self.strategyTint(bridge.permissionStrategy))
                 .frame(width: 6, height: 6)
-            Text(PermissionStrategyChoice.parse(bridge.permissionStrategy).label)
+            Text(PermissionStrategyChoice.parse(bridge.permissionStrategy).pillLabel)
                 .foregroundStyle(.secondary)
             Image(systemName: "chevron.down")
                 .font(.system(size: 8))

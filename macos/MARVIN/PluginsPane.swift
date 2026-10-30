@@ -166,7 +166,7 @@ private struct UpdateResponse: Decodable {
                 PaneSectionHeader(title: "Project plugins", count: plugins.count, tint: Color.accentColor) {
                     paneActions
                 }
-                Text("Installed Claude Code plugins (from ~/.claude/plugins). Toggle one on to load its skills + commands + gated MCP + read-only agents for THIS project (ADR-0053/0054). Hooks are never loaded.")
+                Text("Installed Claude Code plugins (from ~/.claude/plugins). Switch one on to load its skills, commands, MCP servers (each call asks first) and read-only agents for this project. Hooks are never loaded.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -198,13 +198,13 @@ private struct UpdateResponse: Decodable {
             } label: {
                 Label("Install", systemImage: "arrow.down.circle")
             }
-            .help("Install — add a plugin from a marketplace or Git URL (ADR-0053)")
+            .help("Install — add a plugin from a marketplace or Git URL")
             Button { Task { await checkAllUpdates() } } label: {
                 Label("Check for updates", systemImage: "arrow.triangle.2.circlepath")
             }
             .help(updatableCount == 0
                   ? "Check for updates — nothing to check: no plugin here was installed by MARVIN (ones from the Claude Code /plugin UI have no recorded source)."
-                  : "Check for updates — re-fetch the \(updatableCount) plugin\(updatableCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing (ADR-0071).")
+                  : "Check for updates — re-fetch the \(updatableCount) plugin\(updatableCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
             .disabled(checkingUpdates || updatableCount == 0)
             Button { Task { await refresh() } } label: {
                 Label("Reload list", systemImage: "arrow.clockwise")
@@ -324,7 +324,7 @@ private struct UpdateResponse: Decodable {
     private func contributionChips(_ p: PluginSummary) -> some View {
         WrapLayout(spacing: 5, lineSpacing: 4) {
             if !p.skills.isEmpty { chip("\(p.skills.count) skill\(p.skills.count == 1 ? "" : "s")", loaded: true) }
-            if !p.commands.isEmpty { chip("\(p.commands.count) cmds", loaded: true) }
+            if !p.commands.isEmpty { chip("\(p.commands.count) command\(p.commands.count == 1 ? "" : "s")", loaded: true) }
             if p.hasMcp { chip("MCP · gated", loaded: true) }
             if !p.agents.isEmpty { chip("\(p.agents.count) agent\(p.agents.count == 1 ? "" : "s") · read-only", loaded: true) }
             // Not a count like the others: it is the one line that says what
