@@ -1705,6 +1705,13 @@ struct DiffSheetItem: Identifiable {
 
     @State private var hovering = false
 
+    /// Which control inside the row holds keyboard focus. The per-file actions
+    /// used to exist only while the pointer hovered (L1); they now also show
+    /// while any part of the row has focus, so Tab can reach them.
+    private enum FocusTarget: Hashable { case row, open, discard, stage }
+    @FocusState private var focus: FocusTarget?
+    private var showActions: Bool { hovering || focus != nil }
+
     private static let rowHeight: CGFloat = 22
 
     var body: some View {
@@ -1729,7 +1736,7 @@ struct DiffSheetItem: Identifiable {
             Spacer(minLength: 4)
             if isInFlight {
                 ProgressView().controlSize(.small).scaleEffect(0.6)
-            } else if hovering {
+            } else if showActions {
                 hoverActions
             }
             Text(badge.label)
@@ -1739,12 +1746,35 @@ struct DiffSheetItem: Identifiable {
         }
         .padding(.horizontal, 12)
         .frame(height: Self.rowHeight)
-        .background(hovering ? MarvinTheme.rowHover : Color.clear)
+        .background(showActions ? MarvinTheme.rowHover : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: onTap)
+        // Keyboard: the row takes focus; Return opens the diff, Space stages or
+        // unstages. Discard stays a visible, deliberate button (it confirms).
+        .focusable()
+        .focused($focus, equals: .row)
+        .focusEffectDisabled()
+        .onKeyPress(.return) { onTap(); return .handled }
+        .onKeyPress(.space) {
+            guard section != "conflicted", !isInFlight else { return .ignored }
+            if section == "staged" { onUnstage() } else { onStage() }
+            return .handled
+        }
         .help(relativePath)
         .contextMenu { menu }
+        // VoiceOver: one element per file, its status as the value, and the
+        // actions the hover buttons offered as custom actions (L1).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(fileName)
+        .accessibilityValue(badge.tooltip)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(.default, onTap)
+        .accessibilityAction(named: "Open changes", onTap)
+        .accessibilityAction(named: section == "staged" ? "Unstage" : "Stage") {
+            if section == "staged" { onUnstage() } else { onStage() }
+        }
+        .accessibilityAction(named: file.entryType == "untracked" ? "Delete file" : "Discard changes", onDiscard)
         .accessibilityIdentifier("scm-row:\(file.path)")
     }
 
@@ -1761,18 +1791,19 @@ struct DiffSheetItem: Identifiable {
     /// stage/unstage closest to the status letter.
     private var hoverActions: some View {
         HStack(spacing: 2) {
-            rowIcon("arrow.left.arrow.right", help: "Open changes", action: onTap)
+            rowIcon("arrow.left.arrow.right", help: "Open changes", target: .open, action: onTap)
             if section != "conflicted" {
                 rowIcon(
                     "arrow.uturn.backward",
                     help: file.entryType == "untracked"
                         ? "Delete file" : "Discard changes",
+                    target: .discard,
                     action: onDiscard
                 )
                 if section == "staged" {
-                    rowIcon("minus", help: "Unstage", action: onUnstage)
+                    rowIcon("minus", help: "Unstage", target: .stage, action: onUnstage)
                 } else {
-                    rowIcon("plus", help: "Stage", action: onStage)
+                    rowIcon("plus", help: "Stage", target: .stage, action: onStage)
                 }
             }
         }
@@ -1781,6 +1812,7 @@ struct DiffSheetItem: Identifiable {
     private func rowIcon(
         _ symbol: String,
         help: String,
+        target: FocusTarget,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1791,7 +1823,9 @@ struct DiffSheetItem: Identifiable {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .focused($focus, equals: target)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     @ViewBuilder

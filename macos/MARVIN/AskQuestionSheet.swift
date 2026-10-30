@@ -143,6 +143,10 @@ struct AskQuestion: Identifiable, Equatable {
             }
             otherRow(qi, q)
         }
+        // The options are the answer to this question: group them under it so
+        // VoiceOver reads "<question>, group" before the first choice (C5).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(q.question)
     }
 
     private func optionRow(_ qi: Int, _ q: AskQuestion, _ opt: AskOption) -> some View {
@@ -181,6 +185,10 @@ struct AskQuestion: Identifiable, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Selection was an SF Symbol and a tint; say it (C5). One element per
+        // option, announced as "<label>, <description>, selected".
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : [.isButton])
     }
 
     /// The "Other" free-text choice the harness adds automatically.

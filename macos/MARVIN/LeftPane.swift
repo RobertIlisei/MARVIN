@@ -418,6 +418,9 @@ private struct LeftPaneWidthKey: PreferenceKey {
                 selected || hovered ? MarvinTheme.textPrimary : MarvinTheme.textMuted
             )
             .frame(width: 44, height: 34)
+            // The glyph has no accessibility of its own: the AppKit layer
+            // below is the one element (button, labelled, selected, focusable).
+            .accessibilityHidden(true)
             .background(
                 selected ? MarvinTheme.rowSelected
                     : hovered ? MarvinTheme.rowHover : Color.clear
@@ -431,10 +434,8 @@ private struct LeftPaneWidthKey: PreferenceKey {
             // the tooltip. SwiftUI's `.help()` never surfaced on these rail
             // icons in practice (2026-08-29, twice), so the tooltip goes
             // through NSView.toolTip, which AppKit shows unconditionally.
-            .overlay(TooltipHitLayer(tooltip: tab.label, hovered: $hovered, onClick: action))
+            .overlay(TooltipHitLayer(tooltip: tab.label, selected: selected, hovered: $hovered, onClick: action))
             .animation(MarvinTheme.transition, value: hovered)
-            .accessibilityLabel(tab.label)
-            .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -442,6 +443,8 @@ private struct LeftPaneWidthKey: PreferenceKey {
 /// click callback for whatever SwiftUI content it's overlaid on.
 @MainActor struct TooltipHitLayer: NSViewRepresentable {
     let tooltip: String
+    /// The control is the current choice of a set (the open pane on the rail).
+    var selected: Bool = false
     @Binding var hovered: Bool
     /// Passed the hit view itself — callers that need to reach AppKit (the
     /// activity rail re-opening a collapsed split pane) have no other handle
@@ -464,6 +467,7 @@ private struct LeftPaneWidthKey: PreferenceKey {
         // ("sometimes I see them, sometimes I don't", 2026-08-29). HoverTooltip
         // owns the timing; assigning text mid-hover is harmless.
         v.tooltip = tooltip
+        v.isChosen = selected
         v.onClick = onClick
         v.onHover = { hovered = $0 }
     }
@@ -475,6 +479,7 @@ private struct LeftPaneWidthKey: PreferenceKey {
         /// to shorten it (registering `NSInitialToolTipDelay` was tried and
         /// did not change the first hover). `HoverTooltip` draws it instead.
         var tooltip: String = ""
+        var isChosen = false
         var onClick: (NSView) -> Void = { _ in }
         var onHover: (Bool) -> Void = { _ in }
         private var tracking: NSTrackingArea?
@@ -514,6 +519,38 @@ private struct LeftPaneWidthKey: PreferenceKey {
             super.viewDidMoveToWindow()
             if window == nil { HoverTooltip.shared.cancel() }
         }
-        override var acceptsFirstResponder: Bool { false }
+
+        // Keyboard and VoiceOver (L3). The rail was outside the key-view loop
+        // (`acceptsFirstResponder` false) and carried its name on a SwiftUI
+        // wrapper with no press action. It now takes focus with Tab under Full
+        // Keyboard Access, draws a focus ring on itself, activates on Space or
+        // Return, and answers VoiceOver as a labelled, selectable button.
+        // A mouse click still does not take focus (`mouseDown` never asks).
+        override var acceptsFirstResponder: Bool { true }
+        override var focusRingType: NSFocusRingType {
+            get { .exterior }
+            set {}
+        }
+        override func drawFocusRingMask() { NSBezierPath(rect: bounds).fill() }
+        override var focusRingMaskBounds: NSRect { bounds }
+
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 49, 36, 76: // space, return, keypad enter
+                HoverTooltip.shared.cancel()
+                onClick(self)
+            default:
+                super.keyDown(with: event)
+            }
+        }
+
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .button }
+        override func accessibilityLabel() -> String? { tooltip }
+        override func isAccessibilitySelected() -> Bool { isChosen }
+        override func accessibilityPerformPress() -> Bool {
+            onClick(self)
+            return true
+        }
     }
 }

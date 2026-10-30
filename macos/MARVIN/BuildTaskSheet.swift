@@ -2,6 +2,7 @@
 // from the project's package.json / Makefile / Package.swift / Cargo.toml.
 // Selecting a task opens the terminal pane and runs the command.
 
+import MARVINLogic
 import SwiftUI
 
 @MainActor struct BuildTaskSheet: View {
@@ -49,14 +50,24 @@ import SwiftUI
                 .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: 280)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filtered) { task in
-                            taskRow(task)
+                // Return runs a shell command, so the row it will run is drawn
+                // as selected from the first keystroke and scrolled into view (W1).
+                let list = filtered
+                let sel = effectiveSelection(in: list)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(list) { task in
+                                taskRow(task, selected: task.id == sel?.id).id(task.id)
+                            }
                         }
                     }
+                    .frame(height: 320)
+                    .onChange(of: sel?.id) { _, id in
+                        guard let id else { return }
+                        proxy.scrollTo(id, anchor: .center)
+                    }
                 }
-                .frame(height: 320)
             }
 
             HStack {
@@ -82,8 +93,7 @@ import SwiftUI
         .onKeyPress(.downArrow) { moveSelection(1); return .handled }
     }
 
-    private func taskRow(_ task: BuildTask) -> some View {
-        let isSelected = selection?.id == task.id
+    private func taskRow(_ task: BuildTask, selected isSelected: Bool) -> some View {
         return Button { run(task) } label: {
             HStack(spacing: 10) {
                 // Kind badge
@@ -122,6 +132,7 @@ import SwiftUI
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var filtered: [BuildTask] {
@@ -134,18 +145,20 @@ import SwiftUI
         }
     }
 
+    private func effectiveSelection(in list: [BuildTask]) -> BuildTask? {
+        let current = selection.flatMap { sel in list.firstIndex(where: { $0.id == sel.id }) }
+        return ListSelection.effective(current, count: list.count).map { list[$0] }
+    }
+
     private func moveSelection(_ delta: Int) {
-        let list = Array(filtered)
-        guard !list.isEmpty else { return }
-        if let current = selection, let i = list.firstIndex(where: { $0.id == current.id }) {
-            selection = list[max(0, min(list.count - 1, i + delta))]
-        } else {
-            selection = list[delta > 0 ? 0 : list.count - 1]
-        }
+        let list = filtered
+        let current = effectiveSelection(in: list).flatMap { sel in list.firstIndex(where: { $0.id == sel.id }) }
+        guard let next = ListSelection.step(current, by: delta, count: list.count) else { return }
+        selection = list[next]
     }
 
     private func runSelected() {
-        if let task = selection ?? filtered.first {
+        if let task = effectiveSelection(in: filtered) {
             run(task)
         }
     }

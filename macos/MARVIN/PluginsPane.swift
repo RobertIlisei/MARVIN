@@ -233,6 +233,7 @@ private struct UpdateResponse: Decodable {
             // into the model's tool surface (ADR-0114).
             PaneEnableToggle(
                 isOn: p.enabled,
+                name: p.name,
                 help: p.enabled ? "Enabled for this project — switch off to unload it here."
                                 : "Disabled here — switch on to load its skills, commands, gated MCP and read-only agents for this project."
             ) { _ in Task { await toggle(p) } }

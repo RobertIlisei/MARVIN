@@ -52,6 +52,19 @@ public enum PermissionStrategyChoice: String, CaseIterable, Sendable {
     /// True when this posture waives the containment confirms.
     public var skipsContainmentConfirms: Bool { self == .full }
 
+    /// Stepping INTO the posture that waives confirms is the one move that
+    /// removes protection the user has now, so it is the one that asks (audit
+    /// C2). Tightening, or staying put, never does.
+    public func needsConfirmation(from current: PermissionStrategyChoice) -> Bool {
+        skipsContainmentConfirms && !current.skipsContainmentConfirms
+    }
+
+    /// The sentence the confirmation shows. Empty for a posture that needs none.
+    public var entryWarning: String {
+        guard skipsContainmentConfirms else { return "" }
+        return "Nothing will ask before it runs, except a question from MARVIN itself and anything that spends CI minutes. An isolated tab will edit your shared checkout without asking."
+    }
+
     public var help: String {
         switch self {
         case .gated:

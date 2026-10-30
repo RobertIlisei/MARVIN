@@ -11,6 +11,7 @@
 // similar so a user who's seen the tool-confirm sheet recognizes
 // the SCM one without re-learning.
 
+import MARVINLogic
 import SwiftUI
 
 /// Severity drives the action-button colour and the icon. The web
@@ -153,16 +154,32 @@ private enum GitConfirmSeverity: String {
     }
 
     private var footer: some View {
-        HStack {
+        // Return on a `danger` sheet (discard, force-push) must not be the
+        // destructive action: macOS makes Cancel the default there (W2). Esc
+        // still cancels, through a button no one sees.
+        let cancelIsDefault = GitConfirmPolicy.defaultButton(severity: severity) == .cancel
+        return HStack {
             Spacer()
-            Button("Cancel") { onCancel() }
-                .keyboardShortcut(.cancelAction)
-            Button(sev.actionLabel(for: actionVerb)) { onConfirm() }
-                .keyboardShortcut(.defaultAction)
-                // The system-default action tint is fine for warn;
-                // bump to red for danger so the consequence is
-                // visually obvious before the click lands.
-                .tint(sev == .danger ? .red : nil)
+            if cancelIsDefault {
+                Button("Cancel") { onCancel() }
+                    .keyboardShortcut(.defaultAction)
+                    // Esc, via a button that takes no layout space (a sibling
+                    // would add stack spacing and shift the real buttons).
+                    .background(
+                        Button("") { onCancel() }
+                            .keyboardShortcut(.cancelAction)
+                            .opacity(0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    )
+                Button(sev.actionLabel(for: actionVerb)) { onConfirm() }
+                    .tint(.red)
+            } else {
+                Button("Cancel") { onCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Button(sev.actionLabel(for: actionVerb)) { onConfirm() }
+                    .keyboardShortcut(.defaultAction)
+            }
         }
     }
 }

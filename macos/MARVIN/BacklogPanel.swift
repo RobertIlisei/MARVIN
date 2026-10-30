@@ -4,6 +4,7 @@
 // add row. A PARKING LOT the user revisits — promotion to a turn is always a
 // user action (never auto-drained). Mirrors SkillsPane's sheet conventions.
 
+import MARVINLogic
 import SwiftUI
 
 /// How the active list is ordered. Persisted via @AppStorage.
@@ -864,6 +865,15 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
 
     private var bodyDirty: Bool { bodyText != item.body }
 
+    @State private var confirmingDiscard = false
+
+    private func requestClose() {
+        switch UnsavedCloseDecision.decide(isDirty: bodyDirty) {
+        case .close: onDismissSheet()
+        case .askDiscard: confirmingDiscard = true
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -881,6 +891,16 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             }
         }
         .frame(minWidth: 680, idealWidth: 820, minHeight: 520, idealHeight: 660)
+        .confirmationDialog(
+            "Discard your edits to this item?",
+            isPresented: $confirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Edits", role: .destructive) { onDismissSheet() }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("The body has changes that are not saved.")
+        }
     }
 
     private var header: some View {
@@ -892,7 +912,8 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                 .textSelection(.enabled)
                 .help("Titles are immutable — the item's id derives from the title.")
             Spacer()
-            Button("Close") { onDismissSheet() }
+            // Esc / Close used to drop an unsaved body edit without a word (K2).
+            Button("Close") { requestClose() }
                 .keyboardShortcut(.escape, modifiers: [])
         }
         .padding(12)

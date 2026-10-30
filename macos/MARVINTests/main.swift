@@ -3994,6 +3994,179 @@ runner.suite("permission-strategy-cycle") {
         runner.expect(h.contains("CI minutes"), "names what still asks")
         runner.expect(PermissionStrategyChoice.full.label, equals: "full auto", "two words, so it cannot be misread as auto")
     }
+
+    // Audit C2: one click on the pill escalated auto → full auto, waiving the
+    // containment confirms, with no question. Entering full asks; leaving never does.
+    runner.test("only a step INTO full auto asks first") {
+        runner.expect(PermissionStrategyChoice.full.needsConfirmation(from: .auto), equals: true, "auto → full asks")
+        runner.expect(PermissionStrategyChoice.full.needsConfirmation(from: .gated), equals: true, "gated → full asks")
+        runner.expect(PermissionStrategyChoice.full.needsConfirmation(from: .full), equals: false, "already there")
+        runner.expect(PermissionStrategyChoice.auto.needsConfirmation(from: .gated), equals: false, "gated → auto is the normal step")
+        runner.expect(PermissionStrategyChoice.gated.needsConfirmation(from: .full), equals: false, "tightening never asks")
+    }
+
+    runner.test("the confirmation names what full auto waives and what still asks") {
+        let m = PermissionStrategyChoice.full.entryWarning
+        runner.expect(m.contains("shared checkout"), "names what it will touch")
+        runner.expect(m.contains("CI minutes"), "names what still asks")
+        runner.expect(PermissionStrategyChoice.auto.entryWarning, equals: "", "no warning for a posture that waives nothing extra")
+    }
+}
+
+// MARK: - Destructive defaults and confirms (audit W2, K1, K2)
+
+runner.suite("confirm-policy") {
+    runner.test("Return cancels a danger git sheet and confirms the rest") {
+        runner.expect(GitConfirmPolicy.defaultButton(severity: "danger"), equals: ConfirmDefaultButton.cancel, "discard / force-push: Cancel is default")
+        runner.expect(GitConfirmPolicy.defaultButton(severity: "warn"), equals: ConfirmDefaultButton.confirm, "warn keeps Return = confirm")
+        runner.expect(GitConfirmPolicy.defaultButton(severity: "info"), equals: ConfirmDefaultButton.confirm, "info keeps Return = confirm")
+        runner.expect(GitConfirmPolicy.defaultButton(severity: nil), equals: ConfirmDefaultButton.confirm, "unknown severity is treated as warn")
+    }
+
+    runner.test("reject asks for a file or everything, not for one hunk") {
+        runner.expect(ReviewRejectScope.all(files: 4).needsConfirmation, equals: true, "reject all asks")
+        runner.expect(ReviewRejectScope.file(path: "a/b.swift").needsConfirmation, equals: true, "reject file asks")
+        runner.expect(ReviewRejectScope.hunk.needsConfirmation, equals: false, "one hunk does not")
+    }
+
+    runner.test("the reject prompt names its reach") {
+        runner.expect(ReviewRejectScope.all(files: 1).title, equals: "Reject changes in 1 file?", "singular")
+        runner.expect(ReviewRejectScope.all(files: 3).title, equals: "Reject changes in 3 files?", "plural")
+        runner.expect(ReviewRejectScope.file(path: "src/deep/Thing.swift").title, equals: "Reject changes to Thing.swift?", "file name, not the path")
+        runner.expect(ReviewRejectScope.file(path: "x").message.contains("uncommitted edits are kept"), "says whose edits survive")
+    }
+
+    runner.test("closing a dirty sheet asks; a clean one closes") {
+        runner.expect(UnsavedCloseDecision.decide(isDirty: true), equals: UnsavedCloseDecision.askDiscard, "unsaved body edit")
+        runner.expect(UnsavedCloseDecision.decide(isDirty: false), equals: UnsavedCloseDecision.close, "nothing to lose")
+    }
+}
+
+// MARK: - Replace All agrees with search (audit L6)
+
+runner.suite("replace-pattern") {
+    func replaced(_ text: String, _ q: String, _ r: String, regex: Bool = false, word: Bool = false, cs: Bool = false) -> String {
+        let p = ReplacePattern.make(query: q, replacement: r, useRegex: regex, wholeWord: word, caseSensitive: cs)
+        return (try? p.apply(to: text)) ?? "<error>"
+    }
+
+    runner.test("whole word leaves identifiers that merely contain the query") {
+        runner.expect(replaced("foo foobar food foo()", "foo", "bar", word: true), equals: "bar foobar food bar()", "only the standalone word")
+        runner.expect(replaced("foo foobar food", "foo", "bar", word: false), equals: "bar barbar bard", "without the flag substrings go too")
+    }
+
+    runner.test("whole word works for a query that starts or ends with a symbol") {
+        runner.expect(replaced("@foo x@foo", "@foo", "@bar", word: true), equals: "@bar x@foo", "no word boundary before @ is fine, a word char before it is not")
+    }
+
+    runner.test("a literal query is not a pattern") {
+        runner.expect(replaced("a.b axb", "a.b", "Z"), equals: "Z axb", "the dot is a dot")
+        runner.expect(replaced("price", "price", "$1"), equals: "$1", "a $ in the replacement stays a $")
+    }
+
+    runner.test("case follows the Aa toggle") {
+        runner.expect(replaced("Foo foo", "foo", "x", cs: true), equals: "Foo x", "case sensitive")
+        runner.expect(replaced("Foo foo", "foo", "x", cs: false), equals: "x x", "case insensitive")
+    }
+
+    runner.test("regex mode keeps the pattern and the template as typed") {
+        runner.expect(replaced("a1 b22", "[a-z](\\d+)", "<$1>", regex: true), equals: "<1> <22>", "capture groups")
+        runner.expect(replaced("a1 xa1", "[a-z]\\d", "Q", regex: true, word: true), equals: "Q xa1", "whole word wraps a regex too")
+    }
+
+    runner.test("an invalid regex throws instead of rewriting") {
+        let p = ReplacePattern.make(query: "(", replacement: "x", useRegex: true, wholeWord: false, caseSensitive: true)
+        var threw = false
+        do { _ = try p.apply(to: "(") } catch { threw = true }
+        runner.expect(threw, "no silent no-op that looks like success")
+    }
+}
+
+// MARK: - Files tree keyboard navigation (audit L2)
+
+runner.suite("file-tree-navigation") {
+    // /p/src (open) { a.swift, ui (open) { v.swift } , b.swift }, /p/z.txt
+    let tree = [
+        FileNode(name: "src", path: "/p/src", type: "dir", children: [
+            FileNode(name: "a.swift", path: "/p/src/a.swift", type: "file", children: nil),
+            FileNode(name: "ui", path: "/p/src/ui", type: "dir", children: [
+                FileNode(name: "v.swift", path: "/p/src/ui/v.swift", type: "file", children: nil),
+            ]),
+        ]),
+        FileNode(name: "z.txt", path: "/p/z.txt", type: "file", children: nil),
+    ]
+    let open: Set<String> = ["/p/src", "/p/src/ui"]
+    let rows = flattenFileTree(tree, expanded: open)
+    // rows: src, a.swift, ui, v.swift, z.txt
+    func nav(_ sel: String?, _ key: FileTreeKey, _ r: [FileTreeDisplayRow] = rows) -> FileTreeNavigation {
+        fileTreeNavigate(rows: r, selectedPath: sel, key: key)
+    }
+
+    runner.test("down and up walk the visible rows and stop at the ends") {
+        runner.expect(nav("/p/src", .down), equals: .select("/p/src/a.swift"), "down from a folder enters its first child row")
+        runner.expect(nav("/p/src/ui/v.swift", .down), equals: .select("/p/z.txt"), "down leaves a folder to the next row")
+        runner.expect(nav("/p/z.txt", .down), equals: .none, "no row past the last")
+        runner.expect(nav("/p/z.txt", .up), equals: .select("/p/src/ui/v.swift"), "up")
+        runner.expect(nav("/p/src", .up), equals: .none, "no row above the first")
+    }
+
+    runner.test("with nothing selected, down picks the first row and up the last") {
+        runner.expect(nav(nil, .down), equals: .select("/p/src"), "first")
+        runner.expect(nav(nil, .up), equals: .select("/p/z.txt"), "last")
+        runner.expect(nav("/gone", .down), equals: .select("/p/src"), "a selection no longer listed is treated as none")
+    }
+
+    runner.test("right opens a closed folder, then steps into it") {
+        let closed = flattenFileTree(tree, expanded: [])
+        runner.expect(nav("/p/src", .right, closed), equals: .expand("/p/src"), "closed folder opens")
+        runner.expect(nav("/p/src", .right), equals: .select("/p/src/a.swift"), "open folder: into the first child")
+        runner.expect(nav("/p/z.txt", .right), equals: .none, "a file has nothing to open")
+    }
+
+    runner.test("left closes an open folder, otherwise climbs to the parent") {
+        runner.expect(nav("/p/src/ui", .left), equals: .collapse("/p/src/ui"), "open folder closes")
+        runner.expect(nav("/p/src/ui/v.swift", .left), equals: .select("/p/src/ui"), "a file climbs to its folder")
+        runner.expect(nav("/p/src/a.swift", .left), equals: .select("/p/src"), "and so does its sibling")
+        runner.expect(nav("/p/z.txt", .left), equals: .none, "a root-level file has no parent")
+    }
+
+    runner.test("home and end jump to the ends") {
+        runner.expect(nav("/p/src/a.swift", .home), equals: .select("/p/src"), "home")
+        runner.expect(nav("/p/src/a.swift", .end), equals: .select("/p/z.txt"), "end")
+        runner.expect(nav(nil, .down, []), equals: .none, "an empty tree has nowhere to go")
+    }
+}
+
+// MARK: - Highlighted row of a filter list (audit W1)
+
+runner.suite("list-selection") {
+    runner.test("the first row is highlighted before any arrow key") {
+        runner.expect(ListSelection.effective(nil, count: 5), equals: 0, "default to the row Return would run")
+        runner.expect(ListSelection.effective(nil, count: 0), equals: nil, "nothing to select")
+    }
+
+    runner.test("a stored index follows the list when the filter narrows") {
+        runner.expect(ListSelection.effective(9, count: 3), equals: 2, "clamped to the last row")
+        runner.expect(ListSelection.effective(-1, count: 3), equals: 0, "clamped to the first row")
+    }
+
+    runner.test("arrows start from the highlighted row and stop at the ends") {
+        runner.expect(ListSelection.step(nil, by: 1, count: 4), equals: 1, "first arrow-down moves off row 0, not onto it")
+        runner.expect(ListSelection.step(3, by: 1, count: 4), equals: 3, "stops at the bottom")
+        runner.expect(ListSelection.step(0, by: -1, count: 4), equals: 0, "stops at the top")
+        runner.expect(ListSelection.step(2, by: 1, count: 0), equals: nil, "empty list")
+    }
+}
+
+// MARK: - Reduce Motion (audit S5, W11, K20)
+
+runner.suite("motion-policy") {
+    runner.test("movement stops under Reduce Motion; fades and colour changes stay") {
+        runner.expect(MotionPolicy.plays(.movement, reduceMotion: true), equals: false, "slides, scales and expansions are dropped")
+        runner.expect(MotionPolicy.plays(.movement, reduceMotion: false), equals: true, "normal motion otherwise")
+        runner.expect(MotionPolicy.plays(.fade, reduceMotion: true), equals: true, "a crossfade is the sanctioned alternative")
+        runner.expect(MotionPolicy.plays(.fade, reduceMotion: false), equals: true, "and plays normally")
+    }
 }
 
 // MARK: - PlanParser sectioning (ADR-0068 addendum 5 — what is NOT a step)

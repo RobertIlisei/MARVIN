@@ -268,6 +268,16 @@ final class FileTreeModel {
         // pane wasn't the right thing to outline anyway. Phase 5f.
         .focusable()
         .focusEffectDisabled()
+        // Keyboard navigation (L2): the tree answers arrows, Home/End and Return
+        // with Finder's semantics. `fileTreeNavigate` (MARVINLogic, asserted)
+        // decides; these only apply the verdict.
+        .onKeyPress(.upArrow) { navigate(.up) }
+        .onKeyPress(.downArrow) { navigate(.down) }
+        .onKeyPress(.leftArrow) { navigate(.left) }
+        .onKeyPress(.rightArrow) { navigate(.right) }
+        .onKeyPress(.home) { navigate(.home) }
+        .onKeyPress(.end) { navigate(.end) }
+        .onKeyPress(.return) { activateSelected() }
         .onKeyPress(.space) {
             guard let selected = model.selectedPath,
                   !selected.isEmpty else {
@@ -307,6 +317,27 @@ final class FileTreeModel {
         // WebView's Monaco still consumes the dispatchWebCommand
         // event; the native viewer reads from bridge.selectedFilePath.
         bridge.setSelectedFile(node.path)
+    }
+
+    private func navigate(_ key: FileTreeKey) -> KeyPress.Result {
+        guard let tree = model.response?.tree else { return .ignored }
+        switch fileTreeNavigate(rows: rows(of: tree), selectedPath: model.selectedPath, key: key) {
+        case .select(let path): model.selectedPath = path
+        case .expand(let path): expanded.insert(path)
+        case .collapse(let path): expanded.remove(path)
+        case .none: break
+        }
+        return .handled
+    }
+
+    /// Return: open the selected file, or open/close the selected folder.
+    private func activateSelected() -> KeyPress.Result {
+        guard let tree = model.response?.tree,
+              let path = model.selectedPath,
+              let row = rows(of: tree).first(where: { $0.node.path == path })
+        else { return .ignored }
+        if row.node.isDirectory { toggleExpanded(row.node) } else { selectRow(row.node) }
+        return .handled
     }
 
     /// Visible rows for the current tree + expansion state.
@@ -465,6 +496,7 @@ final class FileTreeModel {
                 // says (defaultMinListRowHeight only sets a floor), which is
                 // why the tree still fit far fewer entries than VS Code /
                 // Antigravity. A LazyVStack gives exact 22pt rows.
+                ScrollViewReader { proxy in
                 ScrollView {
                   LazyVStack(spacing: 0) {
                     ForEach(rows(of: response.tree)) { row in
@@ -494,9 +526,16 @@ final class FileTreeModel {
                             onTrash: { trashContext = row.node }
                         )
                         .padding(.horizontal, 4)
+                        .id(row.node.path)
                     }
                   }
                   .padding(.vertical, 4)
+                }
+                // An arrow key can step off screen; keep the selection visible.
+                .onChange(of: model.selectedPath) { _, path in
+                    guard let path else { return }
+                    proxy.scrollTo(path)
+                }
                 }
                 .background(MarvinTheme.background)
                 // The tree has no animation worth keeping — selection and the
@@ -848,6 +887,16 @@ final class FileTreeModel {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // VoiceOver: one element per row — name, kind, state — instead of a
+        // glyph, a chevron and a text run with no traits (L2).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(node.name)
+        .accessibilityValue(isExpandable ? (isExpanded ? "expanded" : "collapsed") : (node.isDirectory ? "folder" : ""))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction(.default, onTap)
+        .accessibilityActions {
+            if isExpandable { Button(isExpanded ? "Collapse" : "Expand", action: onToggle) }
+        }
         // Phase 3h — drag a file row into Finder to copy the file.
         // SwiftUI's `.draggable` with a URL transferable produces the
         // standard NSPasteboard fileURL type Finder accepts; the OS

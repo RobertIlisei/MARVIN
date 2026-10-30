@@ -6,6 +6,7 @@
 // If no graph exists, shows a one-line hint to run /graphify.
 // Mirrors VS Code ⌘T / Xcode ⌘O "Open Quickly" for symbols.
 
+import MARVINLogic
 import SwiftUI
 
 // MARK: - Node model
@@ -115,19 +116,28 @@ struct GraphNode: Identifiable {
             ProgressView("Loading graph…")
                 .frame(maxWidth: .infinity, maxHeight: 340)
         default:
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(filtered.prefix(200)) { node in
-                        nodeRow(node)
+            // The row Return opens is drawn as selected from the first
+            // keystroke and scrolled into view (W1).
+            let list = Array(filtered.prefix(200))
+            let sel = effectiveSelection(in: list)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(list) { node in
+                            nodeRow(node, selected: node.id == sel?.id).id(node.id)
+                        }
                     }
                 }
+                .frame(height: 380)
+                .onChange(of: sel?.id) { _, id in
+                    guard let id else { return }
+                    proxy.scrollTo(id, anchor: .center)
+                }
             }
-            .frame(height: 380)
         }
     }
 
-    private func nodeRow(_ node: GraphNode) -> some View {
-        let isSelected = selection?.id == node.id
+    private func nodeRow(_ node: GraphNode, selected isSelected: Bool) -> some View {
         return Button { open(node) } label: {
             HStack(spacing: 8) {
                 nodeIcon(node)
@@ -158,6 +168,7 @@ struct GraphNode: Identifiable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -207,19 +218,20 @@ struct GraphNode: Identifiable {
 
     // MARK: - Navigation
 
+    private func effectiveSelection(in list: [GraphNode]) -> GraphNode? {
+        let current = selection.flatMap { sel in list.firstIndex(where: { $0.id == sel.id }) }
+        return ListSelection.effective(current, count: list.count).map { list[$0] }
+    }
+
     private func moveSelection(_ delta: Int) {
         let list = Array(filtered.prefix(200))
-        guard !list.isEmpty else { return }
-        if let current = selection, let i = list.firstIndex(where: { $0.id == current.id }) {
-            let next = max(0, min(list.count - 1, i + delta))
-            selection = list[next]
-        } else {
-            selection = list[delta > 0 ? 0 : list.count - 1]
-        }
+        let current = effectiveSelection(in: list).flatMap { sel in list.firstIndex(where: { $0.id == sel.id }) }
+        guard let next = ListSelection.step(current, by: delta, count: list.count) else { return }
+        selection = list[next]
     }
 
     private func openSelected() {
-        if let node = selection ?? filtered.first {
+        if let node = effectiveSelection(in: Array(filtered.prefix(200))) {
             open(node)
         }
     }

@@ -2787,7 +2787,7 @@ final class ChatPreviewModel {
                     }
                     .onChange(of: model.loadedSessionId) { _, sid in
                         guard let sid else { return }
-                        withAnimation(MarvinTheme.transition) {
+                        MarvinMotion.with(MarvinTheme.transition) {
                             proxy.scrollTo(sid, anchor: .center)
                         }
                     }
@@ -4407,5 +4407,7 @@ final class ChatPreviewModel {
         }
         .padding(10)
         .background(Color.orange.opacity(0.08))
+        // An error replaces the status line silently for a VoiceOver user (C3).
+        .announced("Error: \(message)", when: message)
     }
 }

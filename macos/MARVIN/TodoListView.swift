@@ -95,7 +95,7 @@ import SwiftUI
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Button { withAnimation(.easeInOut(duration: 0.12)) { collapsed.toggle() } } label: {
+                Button { MarvinMotion.with(.easeInOut(duration: 0.12)) { collapsed.toggle() } } label: {
                     Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -196,7 +196,7 @@ import SwiftUI
         .padding(.vertical, 6)
         .background((allDone ? Color.green : tint).opacity(0.06))
         .onChange(of: allDone) { _, done in
-            if done { withAnimation(.easeInOut(duration: 0.15)) { collapsed = true } }
+            if done { MarvinMotion.with(.easeInOut(duration: 0.15)) { collapsed = true } }
         }
     }
 

@@ -104,7 +104,7 @@ enum PlanCard {
     private var header: some View {
         HStack(spacing: 7) {
             Button {
-                withAnimation(.easeInOut(duration: 0.12)) { collapsed.toggle() }
+                MarvinMotion.with(.easeInOut(duration: 0.12)) { collapsed.toggle() }
             } label: {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
