@@ -4,7 +4,7 @@ The supervisor is a MARVIN session that watches the other tabs of one project fo
 
 The decision behind it is [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md). The build plan is [`docs/plans/supervisor.md`](../plans/supervisor.md).
 
-> **Status.** The engine, the routes and the verbs are built (milestones 1–5). The native Sessions-pane surface is milestone 6. Until it ships, you drive the supervisor through its routes, for example from a Claude Code session in your terminal.
+> **Status.** The engine, the routes and the verbs are built, and so is the native surface (milestones 1–6). It lives in the Sessions pane: the supervisor strip, **Set up…** to start one, and the **…** menu for Charter, Settings and Show log. The routes stay available for driving it from a Claude Code session in your terminal.
 
 ## Starting it
 

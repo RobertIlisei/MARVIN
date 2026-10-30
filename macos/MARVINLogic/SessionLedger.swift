@@ -96,6 +96,7 @@ public struct SessionLedger: Equatable, Sendable {
     // MARK: - Live events
 
     public mutating func apply(_ event: SessionFeedEvent, now: Date = Date()) {
+        if case .attached = event { return }
         var e = ensure(event.sessionId)
         switch event {
         case .registered(_, let turnId, let kind, let startedAt):
@@ -143,6 +144,8 @@ public struct SessionLedger: Equatable, Sendable {
         case .posture:
             // The posture itself lives in NativePrefs; the registry re-reads the row.
             break
+        case .attached:
+            return
         }
         entries[event.sessionId] = e
     }

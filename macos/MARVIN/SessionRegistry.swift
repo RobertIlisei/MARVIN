@@ -188,7 +188,10 @@ final class SessionRegistry {
                 do {
                     for try await event in ChatService.shared.liveFeed(projectId: pid) {
                         guard self.projectId == pid else { return }
+                        // Connected on attach, not on the first tab event: with
+                        // every tab idle none arrives.
                         if !self.feedConnected { self.feedConnected = true; backoffMs = 1_500 }
+                        if case .attached = event { continue }
                         self.ledger.apply(event, now: Date())
                         if case .registered = event { self.promoteDraft(event.sessionId) }
                         // ADR-0107 addendum — the brain follows the SELECTED

@@ -3196,8 +3196,13 @@ runner.suite("session-feed-decode") {
                       == .activity(sessionId: "s", turnId: "t", state: .writing, tool: nil), "writing")
         runner.expect(d("session.activity", #"{"marvinSessionId":"s","projectId":"p","turnId":"t","state":"dancing"}"#) == nil, "unknown state → nil")
     }
+    runner.test("an attach with no tab events changes no ledger entry") {
+        var ledger = SessionLedger()
+        ledger.apply(.attached, now: Date())
+        runner.expect(ledger.entries.isEmpty, "attach invents no session")
+    }
     runner.test("unknown names, heartbeats and malformed data are nil, never a throw") {
-        runner.expect(d("announce.attached", #"{"projectId":"p"}"#) == nil, "attached ignored")
+        runner.expect(d("announce.attached", #"{"projectId":"p"}"#) == .attached, "attached is the connect signal, not an ignored frame")
         runner.expect(d("turn.registered", "{not json") == nil, "malformed → nil")
         runner.expect(d("something.else", "{}") == nil, "unknown → nil")
     }
