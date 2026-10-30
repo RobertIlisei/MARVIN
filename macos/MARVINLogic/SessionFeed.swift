@@ -48,7 +48,7 @@ public struct SessionTreeWire: Codable, Equatable, Sendable {
     }
 }
 
-public struct PendingConfirmInfo: Codable, Equatable, Sendable {
+public struct PendingConfirmInfo: Decodable, Equatable, Sendable {
     public let turnId: String
     public let toolUseId: String
     public let toolName: String
@@ -56,15 +56,25 @@ public struct PendingConfirmInfo: Codable, Equatable, Sendable {
     /// ADR-0112 — one line of what is asked, so a Needs-you row can answer inline.
     public let excerpt: String?
     public let reason: String?
+    /// ADR-0127 §5 — only the user may resolve it (a supervisor-touched turn).
+    public let userOnly: Bool?
+    /// ADR-0127 brief §6.4 — the supervisor's shadow proposal, blind until revealed.
+    /// Absent when the supervisor is off.
+    public let supervisorProposal: SupervisorProposalWire?
+    public let proposalRevealed: Bool?
 
     public init(turnId: String, toolUseId: String, toolName: String, since: String? = nil,
-                excerpt: String? = nil, reason: String? = nil) {
+                excerpt: String? = nil, reason: String? = nil, userOnly: Bool? = nil,
+                supervisorProposal: SupervisorProposalWire? = nil, proposalRevealed: Bool? = nil) {
         self.turnId = turnId
         self.toolUseId = toolUseId
         self.toolName = toolName
         self.since = since
         self.excerpt = excerpt
         self.reason = reason
+        self.userOnly = userOnly
+        self.supervisorProposal = supervisorProposal
+        self.proposalRevealed = proposalRevealed
     }
 }
 
@@ -134,9 +144,14 @@ public enum SessionFeedEvent: Equatable, Sendable {
     case registered(sessionId: String, turnId: String, kind: String?, startedAt: Double)
     case ended(sessionId: String, turnId: String, outcome: TurnOutcome, costUsd: Double?)
     case confirmPending(sessionId: String, turnId: String, toolUseId: String, toolName: String)
-    case confirmResolved(sessionId: String, turnId: String, toolUseId: String)
+    /// `answeredBy` (milestone 4 of ADR-0127): `user` or `supervisor`; nil on a
+    /// timeout, an unwind, or a sidecar that predates it.
+    case confirmResolved(sessionId: String, turnId: String, toolUseId: String, answeredBy: String? = nil, decision: String? = nil)
     case tree(sessionId: String, tree: SessionTreeWire)
     case activity(sessionId: String, turnId: String, state: SessionActivityState, tool: String?)
+    /// ADR-0127 M6 — the tab's posture changed through the API; re-read its
+    /// watch row and adopt it (ADR-0108 amendment).
+    case posture(sessionId: String, revision: Int, source: String)
 
     private struct Registered: Decodable {
         let marvinSessionId: String; let turnId: String; let kind: String?; let startedAt: Double
@@ -149,13 +164,16 @@ public enum SessionFeedEvent: Equatable, Sendable {
         let marvinSessionId: String; let turnId: String; let toolUseId: String; let toolName: String
     }
     private struct Resolved: Decodable {
-        let marvinSessionId: String; let turnId: String; let toolUseId: String
+        let marvinSessionId: String; let turnId: String; let toolUseId: String; let answeredBy: String?; let decision: String?
     }
     private struct Tree: Decodable {
         let marvinSessionId: String; let tree: SessionTreeWire
     }
     private struct Activity: Decodable {
         let marvinSessionId: String; let turnId: String; let state: SessionActivityState; let tool: String?
+    }
+    private struct Posture: Decodable {
+        let marvinSessionId: String; let postureRevision: Int; let postureSource: String
     }
 
     /// Decode one SSE frame. nil = not a feed event (`announce.attached`,
@@ -176,13 +194,16 @@ public enum SessionFeedEvent: Equatable, Sendable {
             return .confirmPending(sessionId: p.marvinSessionId, turnId: p.turnId, toolUseId: p.toolUseId, toolName: p.toolName)
         case "confirm.resolved":
             guard let r = try? d.decode(Resolved.self, from: data) else { return nil }
-            return .confirmResolved(sessionId: r.marvinSessionId, turnId: r.turnId, toolUseId: r.toolUseId)
+            return .confirmResolved(sessionId: r.marvinSessionId, turnId: r.turnId, toolUseId: r.toolUseId, answeredBy: r.answeredBy, decision: r.decision)
         case "session.tree":
             guard let t = try? d.decode(Tree.self, from: data) else { return nil }
             return .tree(sessionId: t.marvinSessionId, tree: t.tree)
         case "session.activity":
             guard let a = try? d.decode(Activity.self, from: data) else { return nil }
             return .activity(sessionId: a.marvinSessionId, turnId: a.turnId, state: a.state, tool: a.tool)
+        case "session.posture":
+            guard let p = try? d.decode(Posture.self, from: data) else { return nil }
+            return .posture(sessionId: p.marvinSessionId, revision: p.postureRevision, source: p.postureSource)
         default:
             return nil
         }
@@ -191,7 +212,8 @@ public enum SessionFeedEvent: Equatable, Sendable {
     public var sessionId: String {
         switch self {
         case .registered(let s, _, _, _), .ended(let s, _, _, _), .confirmPending(let s, _, _, _),
-             .confirmResolved(let s, _, _), .tree(let s, _), .activity(let s, _, _, _):
+             .confirmResolved(let s, _, _, _, _), .tree(let s, _), .activity(let s, _, _, _),
+             .posture(let s, _, _):
             return s
         }
     }
@@ -277,6 +299,15 @@ public struct SessionWatchRowWire: Decodable, Equatable, Sendable {
     /// restored from disk (or opened on another machine) comes back with the
     /// mode, models and gate it had rather than the app-wide defaults.
     public let posture: SessionPostureWire?
+    /// ADR-0127 milestone 2 — set when the posture was changed through
+    /// `PUT /api/sessions/posture`; the app echoes it on its next post and
+    /// adopts the API-set posture (milestone 6). nil for a session that never
+    /// used the route.
+    public let postureRevision: Int?
+    /// `user` | `supervisor` — who set it through the API.
+    public let postureSource: String?
+    /// ADR-0127 brief §10.4 — the tab's delegation and what the supervisor did to it.
+    public let supervisor: SessionSupervisorWire?
 
     public static func decodeSnapshot(_ data: Data) -> [SessionWatchRowWire]? {
         struct Envelope: Decodable { let rows: [SessionWatchRowWire] }

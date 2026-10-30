@@ -467,9 +467,14 @@ final class ChatService {
             throw ChatServiceError.transport(underlying: URLError(.badServerResponse))
         }
         try await pumpSSE(bytes) { frame in
-            guard let name = frame.name,
-                  let event = SessionFeedEvent.decode(name: name, data: Data(frame.data.utf8))
-            else { return }
+            guard let name = frame.name else { return }
+            // ADR-0127 — the supervisor's events say what moved; its model
+            // fetches the rest through the token-gated routes.
+            if let sup = SupervisorFeedEvent.decode(name: name, data: Data(frame.data.utf8)) {
+                Task { @MainActor in SupervisorModel.shared.apply(feed: sup) }
+                return
+            }
+            guard let event = SessionFeedEvent.decode(name: name, data: Data(frame.data.utf8)) else { return }
             continuation.yield(event)
         }
     }

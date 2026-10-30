@@ -41,6 +41,9 @@ public struct SessionEntry: Equatable, Identifiable, Sendable {
     public var closedAt: Date?
     /// ADR-0111 — the sidecar's derived worktree state, from the last snapshot.
     public var worktree: SessionWatchRowWire.Worktree?
+    /// ADR-0127 — the tab's delegation and the supervisor's marks on it, from
+    /// the last snapshot. nil from an older sidecar.
+    public var supervisor: SessionSupervisorWire?
 
     public init(id: String) { self.id = id }
 
@@ -120,7 +123,7 @@ public struct SessionLedger: Equatable, Sendable {
         case .confirmPending(_, let turnId, let toolUseId, let toolName):
             e.pendingConfirms[toolUseId] = PendingConfirmInfo(turnId: turnId, toolUseId: toolUseId, toolName: toolName)
             if e.liveTurnId == nil { e.liveTurnId = turnId }
-        case .confirmResolved(_, _, let toolUseId):
+        case .confirmResolved(_, _, let toolUseId, _, _):
             e.pendingConfirms[toolUseId] = nil
             // Remember it briefly. A snapshot already in flight still lists
             // this confirm as pending, and applying it verbatim put the
@@ -137,6 +140,9 @@ public struct SessionLedger: Equatable, Sendable {
             if e.liveTurnId == nil { e.liveTurnId = turnId; e.isDraft = false }
             e.activity = state
             e.activityTool = state == .tool ? tool : nil
+        case .posture:
+            // The posture itself lives in NativePrefs; the registry re-reads the row.
+            break
         }
         entries[event.sessionId] = e
     }
@@ -185,6 +191,7 @@ public struct SessionLedger: Equatable, Sendable {
                 e.mode = tree.mode
             }
             e.worktree = row.worktree
+            if let sup = row.supervisor { e.supervisor = sup }
             if let diff = row.diff { e.diff = diff }
             if let plan = row.plan { e.plan = plan }
             if let usage = row.graphUsage { e.graphUsage = usage }

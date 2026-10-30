@@ -146,6 +146,15 @@ export type ProjectEvent =
     }
   | { event: "session.tree"; data: { marvinSessionId: string; projectId: string; tree: unknown } }
   | {
+      /**
+       * ADR-0127 milestone 6 — a tab's posture changed through the API. The
+       * app re-reads the watch row and adopts it (ADR-0108 amendment). Ids and
+       * the revision only: this bus reaches the tokenless announce stream.
+       */
+      event: "session.posture";
+      data: { marvinSessionId: string; projectId: string; postureRevision: number; postureSource: "user" | "supervisor" };
+    }
+  | {
       /** ADR-0127 §5 — the supervisor touched a turn. */
       event: "turn.supervisor-touched";
       data: { marvinSessionId: string; projectId: string; turnId: string; at: string; by: "message" | "answer" | "confirm" };

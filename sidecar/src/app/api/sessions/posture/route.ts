@@ -10,10 +10,11 @@
  * back. A narrowing reaches a live turn at its next tool call; a model or
  * effort change applies from the next turn.
  *
- * Only narrowing is accepted, for either actor: a widening answers 409 with
- * `widened` naming the dimensions, and changes nothing. Until the app shows an
- * API-set posture (plan milestone 6) a widening here would run a tab wider
- * than its toolbar says.
+ * The supervisor may only narrow: its widening answers 409 with `widened`
+ * naming the dimensions, and changes nothing. A user's widening is accepted
+ * since milestone 6, when the app began adopting an API-set posture (the
+ * `session.posture` feed event) so the toolbar shows it; it reaches the next
+ * turn, never a live one.
  *
  * CSRF-guarded. `actor: "supervisor"` (the external prototype opting into the
  * supervisor's policy and ledger) also needs the per-boot capability token,

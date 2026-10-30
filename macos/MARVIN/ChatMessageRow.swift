@@ -50,7 +50,18 @@ import MARVINLogic
         // Everything else stays left-aligned with a 56pt role gutter
         // on the left and no bubble — matches the assistant /
         // system / result rendering on the web side.
-        if message.role == .user {
+        if message.isSupervisorTouchedDivider {
+            SupervisorTouchedDivider()
+        } else if message.role == .user, let mark = message.supervisor {
+            // ADR-0127 brief §6.8 — input to the tab, so right-aligned like the
+            // user's, but never drawn as the user: no fill, a dashed outline,
+            // and the SUPERVISOR label instead of "you".
+            HStack(alignment: .top, spacing: 0) {
+                Spacer(minLength: 40)
+                SupervisorBubble(mark: mark, blocks: message.blocks) { blockView(for: $0) }
+            }
+            .padding(.vertical, 6)
+        } else if message.role == .user {
             HStack(alignment: .top, spacing: 0) {
                 Spacer(minLength: 40)
                 userBubble
@@ -186,8 +197,15 @@ import MARVINLogic
             } else {
                 TextBlockView(text: text, role: message.role)
             }
-        case .toolCall(_, let name, let input, let result):
-            ToolCallBlockView(name: name, input: input, result: result)
+        case .toolCall(let id, let name, let input, let result):
+            if let mark = message.supervisorAnswers[id] {
+                VStack(alignment: .leading, spacing: 4) {
+                    ToolCallBlockView(name: name, input: input, result: result)
+                    SupervisorAnsweredChip(mark: mark)
+                }
+            } else {
+                ToolCallBlockView(name: name, input: input, result: result)
+            }
         case .orphanToolResult(_, let toolUseId, let output, let isError):
             OrphanToolResultBlockView(toolUseId: toolUseId, output: output, isError: isError)
         case .thinking(_, let text, let redacted):
@@ -722,4 +740,111 @@ private func prettyJSON(_ value: ChatJSON) -> String {
         return "\(value)"
     }
     return text
+}
+
+// MARK: - Supervisor marking (ADR-0127 brief §6.8)
+
+/// The supervisor's message: the user bubble's geometry (radius 12, 12 × 8
+/// padding) with no fill and a 1 pt dashed `textMuted` stroke — solid under
+/// Increase Contrast. Shape, label and glyph carry the difference; no hue.
+@MainActor struct SupervisorBubble<Block: View>: View {
+    let mark: SupervisorMessageMark
+    let blocks: [ChatBlock]
+    @ViewBuilder let block: (ChatBlock) -> Block
+    @Environment(\.colorSchemeContrast) private var contrast
+    @State private var groundsOpen = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: "binoculars").font(.caption2)
+                Text("supervisor")
+                    .font(.caption2.monospaced())
+                    .tracking(2)
+                    .textCase(.uppercase)
+            }
+            .foregroundStyle(MarvinTheme.textMuted)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(blocks) { block($0) }
+            }
+            HStack(spacing: 4) {
+                Text(footer).font(.caption).foregroundStyle(.secondary)
+                if !mark.grounds.isEmpty {
+                    Button("· grounds \(mark.grounds.count)") { groundsOpen.toggle() }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                        .accessibilityLabel("Show \(mark.grounds.count) grounds")
+                }
+            }
+            if groundsOpen { SupervisorGroundsList(grounds: mark.grounds) }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(MarvinTheme.textMuted.opacity(contrast == .increased ? 1 : 0.6),
+                        style: StrokeStyle(lineWidth: 1, dash: contrast == .increased ? [] : [4, 3]))
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Supervisor message, not from you: " + MessagePlainText.joined(blocks.map {
+            if case .text(_, let t) = $0 { return .text(t) }
+            return .unknown
+        }))
+    }
+
+    private var footer: String {
+        let kind = mark.kind == "first-message" ? "first message" : mark.kind
+        return mark.editedByUser ? "\(kind) · edited by you" : kind
+    }
+}
+
+/// "answered by supervisor" / "allowed by" / "denied by" — on a tool call the
+/// supervisor decided. A user's answer carries no chip: absence means the user.
+@MainActor struct SupervisorAnsweredChip: View {
+    let mark: SupervisorAnswerMark
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                if !mark.grounds.isEmpty { open.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "binoculars")
+                    Text(SupervisorEnvelope.answeredChip(decision: mark.decision, isQuestion: mark.isQuestion))
+                    if !mark.grounds.isEmpty {
+                        Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .semibold))
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(MarvinTheme.textMuted)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: MarvinTheme.Radius.chip).stroke(MarvinTheme.border, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(mark.isQuestion ? "Answered by the supervisor, not by you"
+                                : (mark.decision == "deny" ? "Denied by the supervisor, not by you" : "Allowed by the supervisor, not by you"))
+            if open { SupervisorGroundsList(grounds: mark.grounds).padding(.leading, 6) }
+        }
+    }
+}
+
+/// Full-width meta divider, once per turn: the stricter gate is on.
+@MainActor struct SupervisorTouchedDivider: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Rectangle().fill(MarvinTheme.border).frame(height: 1)
+            HStack(spacing: 4) {
+                Image(systemName: "binoculars").font(.caption)
+                Text(SupervisorEnvelope.touchedDivider).font(.caption)
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(SupervisorEnvelope.touchedDivider)
+    }
 }

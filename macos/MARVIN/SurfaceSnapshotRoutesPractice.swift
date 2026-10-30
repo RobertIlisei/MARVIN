@@ -150,6 +150,7 @@ extension SurfaceRoutesMore {
 
     static let modelRoles = #"""
     { "roles": [
+      { "role": "supervisor", "label": "Supervisor", "description": "Runs the project supervisor's wakes. Its spend counts against the supervisor's daily cap.", "default": { "kind": "tier", "tier": "sonnet" }, "anthropicOnly": false, "choice": null, "resolved": "claude-sonnet-5-5" },
       { "role": "scout", "label": "Scout", "description": "read-only research subagent", "default": { "kind": "inherit" }, "anthropicOnly": false, "choice": null, "resolved": "inherit" },
       { "role": "graphExtractor", "label": "Graph extractor", "description": "graphify semantic-pass subagent", "default": { "kind": "tier", "tier": "haiku" }, "anthropicOnly": false, "choice": null, "resolved": "claude-haiku-4-5" },
       { "role": "backgroundModel", "label": "Background", "description": "Claude Code's own small-model calls (the `haiku` alias)", "default": { "kind": "inherit" }, "anthropicOnly": false, "choice": "claude-haiku-4-5", "resolved": "claude-haiku-4-5" },

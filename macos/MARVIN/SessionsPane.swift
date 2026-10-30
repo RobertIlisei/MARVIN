@@ -17,7 +17,11 @@ import SwiftUI
 @MainActor struct SessionsPane: View {
     @Environment(MarvinBridge.self) private var bridge
     private let registry = SessionRegistry.shared
+    /// ADR-0127 M6 — the supervisor's state; `fixture` lets the snapshot
+    /// harness mount the pane with a model it filled itself.
+    var supervisor: SupervisorModel = .shared
     @State private var expandedIdle = false
+    @Namespace private var escalationRotor
     /// ADR-0112 — keyboard focus in the list: ↑ ↓ move, ⏎ switches.
     @State private var focusedId: String? = nil
     @FocusState private var listFocused: Bool
@@ -56,7 +60,10 @@ import SwiftUI
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 header
-                if rows.isEmpty {
+                if bridge.activeProjectId != nil, supervisor.isEnabled || supervisor.tokenError != nil {
+                    SupervisorStatusStrip(model: supervisor, strip: supervisorStrip, onShowLog: { supervisor.logExpanded = true })
+                }
+                if rows.isEmpty && supervisorLayout.tabless.isEmpty {
                     if bridge.activeProjectId == nil {
                         PaneEmptyView(state: .noProject("sessions"))
                     } else {
@@ -74,15 +81,13 @@ import SwiftUI
                     // ADR-0112 — five sections. Interrupted and Failed fold into
                     // Needs you: both mean a human is required, and each keeps
                     // its own glyph.
-                    section("Needs you", rows(where: { s in
-                        if case .needsYou = s { return true }
-                        return s == .interrupted || s == .failed
-                    }), tint: .orange)
+                    needsYouSection
                     section("Working", rows(where: { $0 == .working }), tint: GitDecorationColor.modified)
                     integrateSection
                     idleSection
                     recentSection
                 }
+                supervisorFooter
             }
             .layoutOscillationProbe("sessions-stack")
             .padding(.horizontal, 12)
@@ -98,9 +103,51 @@ import SwiftUI
         .onKeyPress(.upArrow) { moveFocus(-1); return .handled }
         .onKeyPress(.downArrow) { moveFocus(1); return .handled }
         .onKeyPress(.return) {
-            guard let id = focusedId else { return .ignored }
+            guard let id = focusedId, !id.hasPrefix("sup:") else { return .ignored }
             bridge.requestChatTab(.select(id))
             return .handled
+        }
+        // Space expands or collapses the focused row's escalation card — how an
+        // outward act's chip becomes available. Never a consent (§9.1).
+        .onKeyPress(.space) {
+            guard let item = focusedEscalation else { return .ignored }
+            toggleCard(item.id)
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            guard let item = focusedEscalation, supervisor.expandedCards.contains(item.id) else { return .ignored }
+            toggleCard(item.id)
+            return .handled
+        }
+        .accessibilityRotor("Escalations") {
+            ForEach(supervisorLayout.tabless + supervisorLayout.sessionIds.flatMap { supervisorLayout.items(for: $0) }) { item in
+                AccessibilityRotorEntry(item.tabTitle.map { "\($0): \(item.escalatedBecause.label)" } ?? "Supervisor: \(item.escalatedBecause.label)",
+                                        id: item.id, in: escalationRotor)
+            }
+        }
+        .sheet(isPresented: Binding(get: { supervisor.setUpOpen }, set: { supervisor.setUpOpen = $0 })) {
+            SupervisorSetUpSheet(model: supervisor,
+                                 tabs: registry.openTabs.compactMap { id in
+                                     guard !registry.isDraft(id) else { return nil }
+                                     return (id, title(registry.entry(id) ?? SessionEntry(id: id)))
+                                 },
+                                 modelLabel: supervisor.status?.model?.label,
+                                 onClose: { supervisor.setUpOpen = false })
+        }
+        .sheet(item: Binding(get: { supervisor.answerSheetItem }, set: { supervisor.answerSheetItem = $0 })) { item in
+            if let req = item.asQuestionConfirm {
+                AskQuestionSheet(request: req, onSubmit: { updated in
+                    let answers = updated["answers"] ?? [:]
+                    supervisor.answerSheetItem = nil
+                    Task { await supervisor.act(item, actionId: "answer-edit", edits: ["answers": answers]) }
+                }, onSkip: { supervisor.answerSheetItem = nil })
+            }
+        }
+        .sheet(item: Binding(get: { supervisor.newTabEditItem }, set: { supervisor.newTabEditItem = $0 })) { item in
+            SupervisorNewTabEditSheet(model: supervisor, item: item, onClose: { supervisor.newTabEditItem = nil })
+        }
+        .sheet(item: Binding(get: { supervisor.raiseCapItem }, set: { supervisor.raiseCapItem = $0 })) { item in
+            SupervisorRaiseCapSheet(model: supervisor, item: item, onClose: { supervisor.raiseCapItem = nil })
         }
         .task {
             registry.refreshSnapshot()
@@ -122,6 +169,12 @@ import SwiftUI
         for (id, e) in registry.ledger.entries where e.isLive && !ids.contains(id) && e.closedAt == nil {
             ids.append(id)
         }
+        // ADR-0127 M6 — an escalation about a tab that is neither open nor
+        // live still needs its row: the header counted it, and an item the
+        // user cannot see is the one failure this inbox must not have.
+        for id in supervisor.layout.sessionIds where !ids.contains(id) {
+            ids.append(id)
+        }
         return ids.compactMap { id -> Row? in
             let entry = registry.entry(id) ?? SessionEntry(id: id)
             return Row(id: id, entry: entry, state: registry.rowState(id))
@@ -129,11 +182,15 @@ import SwiftUI
     }
 
     private func rows(where match: (SessionRowState) -> Bool) -> [Row] {
-        rows.filter { match($0.state) }
+        // ADR-0127 M6 — a tab with an open escalation lives in Needs you.
+        let escalated = Set(supervisorLayout.sessionIds)
+        return rows.filter { match($0.state) && !escalated.contains($0.id) }
     }
     /// ADR-0112 — the order the keyboard walks: as displayed.
     private var keyboardOrder: [String] {
-        rows.sorted { $0.state.sortRank < $1.state.sortRank }.map(\.id)
+        supervisorLayout.tabless.map { "sup:" + $0.id } + needsYouRows.map(\.id)
+            + rows.filter { r in !needsYouRows.contains { $0.id == r.id } }
+                .sorted { $0.state.sortRank < $1.state.sortRank }.map(\.id)
     }
     private func moveFocus(_ delta: Int) {
         let ids = keyboardOrder
@@ -151,6 +208,95 @@ import SwiftUI
             .sorted { ($0.closedAt ?? .distantPast) > ($1.closedAt ?? .distantPast) }
             .prefix(8)
             .map { $0 }
+    }
+
+    // MARK: - Supervisor (ADR-0127 M6)
+
+    private var supervisorStrip: SupervisorStrip {
+        supervisor.strip(feedConnected: supervisor.fixtureFeedConnected ?? registry.feedConnected, now: registry.now)
+    }
+    private var supervisorLayout: SupervisorInboxLayout { supervisor.layout }
+    /// Items stay readable but not actionable while the state is unknown (§7).
+    private var itemsEnabled: Bool { supervisorStrip.itemsEnabled }
+
+    private var needsYouRows: [Row] {
+        let escalated = Set(supervisorLayout.sessionIds)
+        return rows.filter { r in
+            if escalated.contains(r.id) { return true }
+            if case .needsYou = r.state { return true }
+            return r.state == .interrupted || r.state == .failed
+        }
+    }
+
+    /// Needs you is the inbox (brief §3): supervisor rows first (guardrails
+    /// sort first among them), then tab rows that grow their escalations.
+    /// The header counts every item, not only the rows.
+    @ViewBuilder
+    private var needsYouSection: some View {
+        let tabRows = needsYouRows
+        let tabless = supervisorLayout.tabless
+        if !tabRows.isEmpty || !tabless.isEmpty {
+            let plain = tabRows.filter { supervisorLayout.byTab[$0.id] == nil }.count
+            VStack(alignment: .leading, spacing: 4) {
+                sectionHeader("Needs you", count: supervisorLayout.total + plain, tint: .orange)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(tabless) { item in
+                    SupervisorInboxRow(model: supervisor, item: item, enabled: itemsEnabled,
+                                       focused: focusedId == "sup:" + item.id && listFocused)
+                        .accessibilityRotorEntry(id: item.id, in: escalationRotor)
+                        .onTapGesture { focusedId = "sup:" + item.id }
+                }
+                ForEach(tabRows.sorted { $0.state.sortRank < $1.state.sortRank }) { row in
+                    sessionRow(row)
+                }
+            }
+        }
+    }
+
+    /// The off line, or the log, at the bottom of the pane (§5).
+    @ViewBuilder
+    private var supervisorFooter: some View {
+        if bridge.activeProjectId != nil {
+            if supervisor.isEnabled {
+                SupervisorLogSection(model: supervisor, tabTitle: { id in title(registry.entry(id) ?? SessionEntry(id: id)) })
+            } else if supervisor.tokenError == nil {
+                SupervisorOffLine(model: supervisor)
+            }
+        }
+    }
+
+    private var focusedEscalation: SupervisorInboxItem? {
+        guard let id = focusedId else { return nil }
+        if id.hasPrefix("sup:") { return supervisorLayout.tabless.first { "sup:" + $0.id == id } }
+        return supervisorLayout.byTab[id]?.shown.first
+    }
+
+    private func toggleCard(_ id: String) {
+        if supervisor.expandedCards.contains(id) { supervisor.expandedCards.remove(id) }
+        else { supervisor.expandedCards.insert(id); supervisor.fullActShown.insert(id) }
+    }
+
+    /// The tab's escalations under its row: the oldest as a card, the rest
+    /// behind "+N more for this tab" (§7 Burst). No batch accept, ever.
+    @ViewBuilder
+    private func escalations(for row: Row) -> some View {
+        if let group = supervisorLayout.byTab[row.id] {
+            ForEach(group.shown) { item in
+                SupervisorEscalationCard(model: supervisor, item: item, enabled: itemsEnabled)
+                    .accessibilityRotorEntry(id: item.id, in: escalationRotor)
+                    .padding(.leading, 16)
+            }
+            if group.hiddenCount > 0 {
+                Button("+\(group.hiddenCount) more for this tab") { supervisor.expandedTabs.insert(row.id) }
+                    .rowChip(.neutral)
+                    .padding(.leading, 16)
+                    .accessibilityLabel("\(group.hiddenCount) more escalations for this tab")
+            } else if supervisor.expandedTabs.contains(row.id), group.all.count > 1 {
+                Button("Show only the oldest") { supervisor.expandedTabs.remove(row.id) }
+                    .rowChip(.neutral)
+                    .padding(.leading, 16)
+            }
+        }
     }
 
     // MARK: - Sections
@@ -454,14 +600,26 @@ import SwiftUI
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 4)
+                if supervisor.isEnabled, let sup = e.supervisor {
+                    SupervisorDelegationChip(model: supervisor, sessionId: row.id, tabTitle: title(e),
+                                             level: sup.delegation, sharedCheckout: sup.sharedCheckout ?? (e.mode == .shared),
+                                             lastActAt: sup.lastActAt)
+                }
                 action(for: row)
             }
             // ADR-0112 — answer a waiting tab here, without switching to it.
             // A question (AskUserQuestion) is a form and still opens the tab.
-            if case .needsYou = row.state, let c = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first,
-               c.toolName != "AskUserQuestion" {
+            // ADR-0127 M6 — an escalation card replaces the inline confirm it
+            // concerns, so the pending item is never shown twice.
+            let covered = Set(supervisorLayout.items(for: row.id).compactMap { $0.linkedConfirm?.toolUseId })
+            let head = e.pendingConfirms.values.sorted(by: { ($0.since ?? "") < ($1.since ?? "") }).first
+            if case .needsYou = row.state, let c = head, !covered.contains(c.toolUseId), c.toolName != "AskUserQuestion" {
                 inlineConfirm(c, sessionId: row.id)
             }
+            if supervisor.isEnabled, let c = head, !covered.contains(c.toolUseId), let p = c.supervisorProposal {
+                SupervisorProposalLine(model: supervisor, proposal: p, revealedOnServer: c.proposalRevealed ?? false)
+            }
+            escalations(for: row)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 3)
@@ -619,6 +777,8 @@ import SwiftUI
         if let t = e.title?.replacingOccurrences(of: "\n", with: " "), !t.trimmingCharacters(in: .whitespaces).isEmpty {
             return t.count > 40 ? String(t.prefix(38)) + "…" : t
         }
+        // The inbox snapshots a tab's title, so a tab this pane never loaded keeps its name.
+        if let t = supervisor.inbox.first(where: { $0.sessionId == e.id })?.tabTitle, !t.isEmpty { return t }
         return String(e.id.prefix(8))
     }
 
@@ -644,6 +804,10 @@ import SwiftUI
         if let p = e.plan, p.total > 0 { parts.append(planLabel(p, e)) }
         if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
+        if supervisor.isEnabled, let sup = e.supervisor, sup.delegation != .off {
+            if sup.stoppedByUser == true { parts.append("stopped — supervisor waits for you") }
+            else if let w = sup.waitingOnOwn { parts.append("supervisor waits — tab waiting on its \(w == "job" ? "build" : "wakeup")") }
+        }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
             parts.append("waiting: \(ToolLabel.plain(first.toolName))")
         } else if e.isLive, let since = e.liveSince {

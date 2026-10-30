@@ -322,7 +322,32 @@ enum SurfaceSnapshot {
             },
         ]
 
-        return chat + topBar + statusBar + panes + editor + backlog + settings + live
+        // ADR-0127 M6 — one surface per design-brief §7 state, plus the
+        // set-up sheet, transcript marking and the external-answer note.
+        let supervisor: [Surface] = SurfaceSupervisorFixtures.states.map { st in
+            Surface(st.id, st.title, .populated, widths: paneWidths, height: 1100, prepare: seedSessions) {
+                AnyView(SessionsPane(supervisor: st.model()))
+            }
+        } + [
+            Surface("sup-setup-sheet", "Supervisor §6.7 set-up sheet (Cancel is the default; Start in shadow)", .fixture, widths: [460]) {
+                AnyView(SupervisorSetUpSheet(model: SurfaceSupervisorFixtures.model(nil),
+                                             tabs: [(SurfaceRoutesMore.openIds[0], "Add retry with backoff to the HTTP client"),
+                                                    (SurfaceRoutesMore.openIds[3], "Fix the flaky cache test")],
+                                             modelLabel: "Sonnet 5.5", onClose: {}))
+            },
+            Surface("chat-supervisor-marking", "Chat: supervisor message bubble, answered-by chip, touched-turn divider", .fixture,
+                    widths: [520, 900]) {
+                AnyView(VStack(alignment: .leading, spacing: 10) {
+                    ForEach(SurfaceSupervisorFixtures.transcript) { ChatMessageRow(message: $0) }
+                }.padding(16))
+            },
+            Surface("chat-external-answer-note", "Chat tray: the note that replaces a sheet or card answered elsewhere", .fixture,
+                    widths: [520, 900]) {
+                AnyView(ExternalAnswerNoteFixture())
+            },
+        ]
+
+        return chat + topBar + statusBar + panes + editor + backlog + settings + live + supervisor
     }
 
     // MARK: - Per-surface preparation
@@ -447,6 +472,10 @@ enum SurfaceSnapshot {
             if let priorAutoStart { UserDefaults.standard.set(priorAutoStart, forKey: autoStartKey) }
             else { UserDefaults.standard.removeObject(forKey: autoStartKey) }
         }
+
+        // ADR-0127 — the shared supervisor model must never read the user's real
+        // token or call the stand-in for it; fixtures fill their own models.
+        SupervisorModel.shared.offline = true
 
         let all = surfaces
         if which == "list" {

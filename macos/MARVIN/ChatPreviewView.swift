@@ -133,6 +133,48 @@ final class ChatPreviewModel {
     /// without choosing").
     var respondingToolUseIds: Set<String> = []
 
+    /// ADR-0127 M6 — a pending question or confirm that was answered outside
+    /// this chat (the API, the supervisor, the Sessions pane). It replaces the
+    /// sheet or the tray card with one line saying who answered, until the next
+    /// turn or a dismiss. A stale sheet invited a second answer to a question
+    /// already settled (plan "Required fix").
+    var externalAnswerNote: ExternalAnswer.Note? = nil
+    /// While set, the sheet's dismiss-driven binding setter must not auto-deny:
+    /// the head it would deny is the NEXT confirm, not the one that left.
+    private(set) var suppressAutoDenyUntil: Date? = nil
+
+    /// Called from the project feed's `confirm.resolved` (SessionRegistry).
+    /// Our own answers are filtered by `respondingToolUseIds`; anything else
+    /// for a confirm pending here is an answer from elsewhere.
+    func noteExternalResolution(sessionId: String, toolUseId: String, answeredBy: String?, decision: String = "allow") {
+        guard sessionId == (marvinSessionId ?? loadedSessionId) else { return }
+        if answeredBy == "supervisor" {
+            Self.markSupervisorAnswer(in: &messages, toolUseId: toolUseId, decision: decision, grounds: [])
+        }
+        var ids = pendingConfirms.map(\.toolUseId)
+        guard let note = ExternalAnswer.apply(toolUseId: toolUseId, pending: &ids, responding: respondingToolUseIds,
+                                              answeredBy: answeredBy) else { return }
+        suppressAutoDenyUntil = Date().addingTimeInterval(1.5)
+        pendingConfirms.removeAll { $0.toolUseId == toolUseId }
+        externalAnswerNote = note
+        VoiceOver.announce(note.text)
+    }
+
+    var autoDenySuppressed: Bool { (suppressAutoDenyUntil ?? .distantPast) > Date() }
+
+    /// Put the "answered by supervisor" mark on the message holding this tool call.
+    static func markSupervisorAnswer(in messages: inout [ChatMessage], toolUseId: String, decision: String,
+                                     grounds: [SupervisorGround]) {
+        guard let i = messages.lastIndex(where: { m in
+            m.blocks.contains { if case .toolCall(let id, _, _, _) = $0 { return id == toolUseId }; return false }
+        }) else { return }
+        let isQuestion = messages[i].blocks.contains {
+            if case .toolCall(let id, let name, _, _) = $0 { return id == toolUseId && name == "AskUserQuestion" }
+            return false
+        }
+        messages[i].supervisorAnswers[toolUseId] = SupervisorAnswerMark(decision: decision, isQuestion: isQuestion, grounds: grounds)
+    }
+
     /// The active marvinSessionId, captured from the most-recent
     /// turn.started event. Cancel uses this to address /api/chat/
     /// cancel — that endpoint keys on marvinSessionId, not turnId.
@@ -940,7 +982,8 @@ final class ChatPreviewModel {
             thinkingMode: posture.thinkingMode,
             advisorThinkingMode: posture.advisorThinkingMode,
             resetSdkSession: nil,
-            lane: fields.lane
+            lane: fields.lane,
+            postureRevision: NativePrefs.shared.postureRevisionEcho(for: sessionPostureKey)
         )
     }
 
@@ -1035,7 +1078,8 @@ final class ChatPreviewModel {
             resetSdkSession: resetThisTurn ? true : nil,
             tree: fields.tree,
             lane: fields.lane,
-            sessionTitle: fields.title
+            sessionTitle: fields.title,
+            postureRevision: NativePrefs.shared.postureRevisionEcho(for: sessionPostureKey)
         )
         activeTask = Task { @MainActor in
             defer {
@@ -1521,15 +1565,28 @@ final class ChatPreviewModel {
         var replayResident: Int? = nil
         var replayBillable: Int? = nil
         var replayWindow: Int? = nil
+        var replaySupervisorAnswers: [String: (String, [SupervisorGround])] = [:]
 
         for turn in record.turns {
             switch turn {
-            case let .turnUser(_, message):
+            case let .turnUser(_, message, supervisor):
                 // The optimistic-echo we mint locally on send isn't
                 // in the wire, so the JSONL is the only place a
                 // user-side row exists for replay. Reuse the same
                 // factory `send` uses for visual parity.
-                rebuilt.append(.userText(message))
+                // ADR-0127 — a supervisor-authored line is never the "you" bubble.
+                if let supervisor {
+                    rebuilt.append(.supervisorText(message, mark: supervisor))
+                } else {
+                    rebuilt.append(.userText(message))
+                }
+            case .supervisorTouched:
+                // Once per turn (§6.8): the stricter gate is on from here.
+                if rebuilt.last?.isSupervisorTouchedDivider != true {
+                    rebuilt.append(.supervisorTouchedDivider())
+                }
+            case let .confirmDecision(_, _, toolUseId, decision, answeredBy, grounds) where answeredBy == "supervisor":
+                replaySupervisorAnswers[toolUseId] = (decision, grounds)
             case let .cliEvent(at, event):
                 // Re-encode the inner event to Data and feed the
                 // reducer the same bytes a live cli.event would
@@ -1598,6 +1655,10 @@ final class ChatPreviewModel {
 
         for i in rebuilt.indices where rebuilt[i].isStreaming {
             rebuilt[i].isStreaming = false
+        }
+        // ADR-0127 — chip the tool calls the supervisor answered.
+        for (toolUseId, mark) in replaySupervisorAnswers {
+            Self.markSupervisorAnswer(in: &rebuilt, toolUseId: toolUseId, decision: mark.0, grounds: mark.1)
         }
 
         messages = rebuilt
@@ -1863,6 +1924,7 @@ final class ChatPreviewModel {
             // turn's error banner (the replayed "SIGTERM" of a restart sat
             // above a streaming reply and read as a live failure).
             lastError = nil
+            externalAnswerNote = nil
             // Phase 2f — capture the marvinSessionId so cancel can
             // address /api/chat/cancel (which keys on it, not turnId).
             marvinSessionId = s.marvinSessionId
@@ -3238,7 +3300,10 @@ final class ChatPreviewModel {
                       // synchronously while the explicit response is
                       // still POSTing, and a second deny would race
                       // (and usually beat) the in-flight allow.
-                      !model.respondingToolUseIds.contains(head.toolUseId)
+                      !model.respondingToolUseIds.contains(head.toolUseId),
+                      // ADR-0127 M6 — an answer from elsewhere closed the
+                      // sheet; the head now is a different confirm.
+                      !model.autoDenySuppressed
                 else { return }
                 model.respond(to: head, decision: .deny)
             }
@@ -3624,6 +3689,9 @@ final class ChatPreviewModel {
             // slot; without an identity its half-typed deny reason carries
             // over (audit C10).
             .id(head.toolUseId)))
+        } else if let note = model.externalAnswerNote {
+            // ADR-0127 M6 — the card (or sheet) is gone; this says who answered it.
+            rows.append(AnyView(ExternalAnswerNoteRow(note: note) { model.externalAnswerNote = nil }))
         }
         // ADR-0107 — a turn a restart cut off, with the way back.
         if let sid = model.loadedSessionId, !model.isSending,

@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6], the native surface, built 2026-10-30 (see "What milestone 6 changed"). Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -106,6 +106,14 @@ Mostly from the advisor's review of the consent gate (go-with-caveats):
   - *A second lock in `resolveConfirm`.* For the supervisor it classifies the act against the human-only list again, so a gated card carrying a push is refused even if a caller skips the verb.
   - *The auditor's prompt* now wraps the inbox summaries as untrusted, because they can quote tool input.
 - **Deferred, stated:** the brief's `burstRank` is computed per tab among open items; the "+N more" grouping is the app's. `heuristic-miss` is not wired for confirms the supervisor answered. Charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes, stay parked from [4].
+
+## What milestone 6 changed from the text below
+
+- **A posture change is announced.** Nothing told the app that `PUT /api/sessions/posture` had run, and nothing refreshed the watch rows on a timer, so "the toolbar shows an API-set posture within one watch refresh" had no refresh to ride on. The route now emits `session.posture {marvinSessionId, postureRevision, postureSource}` (ids only — the feed holds no token); the app re-reads the rows on it and adopts.
+- **User widening re-allowed, the restore rule folded in.** With the app adopting API-set posture, `applyPostureChange` accepts any user widening. Milestone 4's "restore exactly the prior value" exception is subsumed and removed; `postureBeforeSupervisor` still tracks what the supervisor narrowed. A user widening reaches the next turn only.
+- **`confirm.resolved` carries `decision` through to the app,** so a supervisor's deny is chipped "denied by", not "allowed by".
+- **The app's token handling.** The token is read from `<MARVIN_DATA_DIR>/supervisor/token` (the sidecar's own rule), sent only to the loopback sidecar, re-read once after a 403, and refused unless it is exactly 64 hex characters — a file carrying a CR/LF never reaches a header. The snapshot harness never reads it.
+- **Departures from the brief** are recorded in the brief's §11.
 
 ## Constraint that shapes the order
 

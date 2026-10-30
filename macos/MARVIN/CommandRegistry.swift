@@ -266,6 +266,51 @@ enum CommandRegistry {
             slot: .view, keywords: ["tabs", "worktrees", "watch", "multi-session"],
             isEnabled: { hasProject }
         ) { MarvinBridge.shared.revealLeftTab("sessions") })
+        // ADR-0127 M6 (brief §9.1) — Pause and Kill are one action away at all
+        // times, from the pane and from here. Checked against every binding in
+        // this registry; ⌃⌥⌘ combinations carry no system meaning on macOS 14.
+        let sup = SupervisorModel.shared
+        c.append(AppCommand(
+            id: "supervisor.pauseResume", title: "Supervisor: Pause / Resume",
+            slot: .view, shortcut: "^⌥⌘P", keywords: ["supervisor", "stop", "pause", "resume"],
+            isEnabled: { sup.isEnabled }
+        ) {
+            Task { if sup.status?.run == "paused" { await sup.resume() } else { await sup.pause() } }
+        })
+        c.append(AppCommand(
+            id: "supervisor.kill", title: "Supervisor: Kill",
+            slot: .view, shortcut: "^⌥⌘K", keywords: ["supervisor", "stop", "abort", "wake"],
+            isEnabled: { sup.isEnabled }
+        ) { Task { await sup.kill() } })
+        c.append(AppCommand(
+            id: "supervisor.nextEscalation", title: "Supervisor: Go to Next Escalation",
+            slot: .go, shortcut: "⌥⌘J", keywords: ["supervisor", "inbox", "needs you", "escalation"],
+            isEnabled: { !sup.inbox.isEmpty }
+        ) {
+            MarvinBridge.shared.revealLeftTab("sessions")
+            let layout = sup.layout
+            if let first = layout.tabless.first ?? layout.sessionIds.first.flatMap({ layout.byTab[$0]?.shown.first }) {
+                sup.expandedCards.insert(first.id)
+                VoiceOver.announce("Escalation: \(first.escalatedBecause.label)")
+            }
+        })
+        c.append(AppCommand(
+            id: "supervisor.showLog", title: "Supervisor: Show Log",
+            slot: .view, keywords: ["supervisor", "ledger", "audit"],
+            isEnabled: { sup.isEnabled }
+        ) {
+            MarvinBridge.shared.revealLeftTab("sessions")
+            sup.logExpanded = true
+            Task { await sup.refreshLedger() }
+        })
+        c.append(AppCommand(
+            id: "supervisor.setUp", title: "Supervisor: Set Up…",
+            slot: .view, keywords: ["supervisor", "start", "shadow"],
+            isEnabled: { hasProject && !sup.isEnabled }
+        ) {
+            MarvinBridge.shared.revealLeftTab("sessions")
+            sup.setUpOpen = true
+        })
         c.append(AppCommand(
             id: "view.skills", title: "Skills",
             slot: .view, keywords: ["catalog"], isEnabled: { hasProject }

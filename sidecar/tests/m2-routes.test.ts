@@ -131,9 +131,21 @@ describe("PUT /api/sessions/posture — posture without a turn", () => {
     expect(loadSession("proj", "tab-p")?.turns ?? []).toEqual([]);
   });
 
-  it("refuses a user widening until the app shows API-set posture (milestone 6), naming the widened dimensions", async () => {
+  it("accepts a user widening now that the app shows API-set posture (milestone 6), with a revision the app echoes", async () => {
     upsertSessionMeta("proj", "tab-p", { workDir: dataDir, tree: { mode: "shared" }, posture: POSTURE });
     const r = await put({ projectId: "proj", marvinSessionId: "tab-p", posture: { permissionStrategy: "full", mode: "ask" } });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { postureRevision: number; postureSource: string; changes: { field: string; direction: string }[] };
+    expect(body.postureRevision).toBe(1);
+    expect(body.postureSource).toBe("user");
+    expect(body.changes.find((c) => c.field === "permissionStrategy")?.direction).toBe("widen");
+    expect(readSessionMeta("proj", "tab-p")?.posture).toMatchObject({ permissionStrategy: "full", mode: "ask" });
+  });
+
+  it("a supervisor widening is still refused with the widened dimensions named", async () => {
+    upsertSessionMeta("proj", "tab-p", { workDir: dataDir, tree: { mode: "shared" }, posture: POSTURE });
+    const token = { "x-marvin-client": "1", "x-marvin-supervisor-token": currentSupervisorToken() as string };
+    const r = await put({ projectId: "proj", marvinSessionId: "tab-p", actor: "supervisor", posture: { permissionStrategy: "full", mode: "ask" } }, token);
     expect(r.status).toBe(409);
     const body = (await r.json()) as { error: string; widened: string[] };
     expect(body.widened).toEqual(["permissionStrategy"]);

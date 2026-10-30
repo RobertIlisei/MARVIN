@@ -55,6 +55,7 @@ final class SessionRegistry {
         refreshSnapshot()
         ensureFeed(projectId: pid)
         ensureClock()
+        SupervisorModel.shared.start(projectId: pid)
     }
 
     func stop() {
@@ -154,7 +155,12 @@ final class SessionRegistry {
             // than in the app-wide defaults.
             for row in rows {
                 guard let wire = row.posture else { continue }
-                NativePrefs.shared.adoptPosture(wire, for: row.marvinSessionId)
+                // ADR-0127 M6 — an API-set posture newer than ours is adopted
+                // over the local record; otherwise the server only seeds.
+                if !NativePrefs.shared.adoptAPIPosture(wire, revision: row.postureRevision, source: row.postureSource,
+                                                       for: row.marvinSessionId) {
+                    NativePrefs.shared.adoptPosture(wire, for: row.marvinSessionId)
+                }
             }
         }
         // ADR-0113 — what each tab holds in the backlog, for the row subtitle.
@@ -189,6 +195,16 @@ final class SessionRegistry {
                         // session's activity from the feed, so switching to a
                         // tab that is mid-tool shows "tool", not a generic busy.
                         if case .activity = event { self.pushBrainState(for: event.sessionId) }
+                        // ADR-0127 M6 — a posture set through the API: re-read the
+                        // rows now, so the toolbar shows it within this one event.
+                        if case .posture = event { self.refreshSnapshot() }
+                        // ADR-0127 M6 — an answer from elsewhere (the API, the
+                        // supervisor, this pane) closes the chat's sheet or card
+                        // on this one event, with who answered.
+                        if case let .confirmResolved(sid, _, toolUseId, answeredBy, decision) = event {
+                            ChatPreviewModel.shared.noteExternalResolution(sessionId: sid, toolUseId: toolUseId,
+                                                                           answeredBy: answeredBy, decision: decision ?? "allow")
+                        }
                     }
                 } catch {
                     /* fall through to the reconnect wait */

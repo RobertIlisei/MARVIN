@@ -352,9 +352,9 @@ private func popoverSectionLabel(_ title: String) -> some View {
             }
             .pickerStyle(.menu)
             .labelsHidden()
-            // The visible label sits beside the picker, not on it; VoiceOver
-            // needs the name on the control itself (audit W4).
-            .accessibilityLabel(label)
+            // Hidden visually, but the control's accessible name (audit W4):
+            // "Supervisor model", not an unnamed pop-up.
+            .accessibilityLabel("\(label) model")
         }
     }
 
