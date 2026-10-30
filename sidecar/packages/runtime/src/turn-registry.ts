@@ -148,8 +148,23 @@ export type ProjectEvent =
   | {
       /** ADR-0127 §5 — the supervisor touched a turn. */
       event: "turn.supervisor-touched";
-      data: { marvinSessionId: string; projectId: string; turnId: string; at: string; by: "message" | "answer" };
+      data: { marvinSessionId: string; projectId: string; turnId: string; at: string; by: "message" | "answer" | "confirm" };
     }
+  /*
+   * ADR-0127 milestone 5 — the supervisor's feed (brief §10.1, §10.2, §10.5).
+   * They carry ids and states only: this bus reaches `/api/chat/announce`,
+   * which holds no token, and the items, lines and state behind them are
+   * token-gated. A client fetches the body from the supervisor routes.
+   */
+  | {
+      event: "supervisor.inbox";
+      data: { projectId: string; change: "added" | "updated" | "resolved"; id: string; revision: number; sessionId: string | null; kind: string; state: string; resolvedBy: string | null };
+    }
+  | {
+      event: "supervisor.ledger";
+      data: { projectId: string; seq: number; id: string; sessionId: string | null; verb: string; decision: string | null; inboxItemId: string | null };
+    }
+  | { event: "supervisor.state"; data: { projectId: string; revision: number; mode: string; paused: boolean } }
   | {
       /** ADR-0107 addendum — what the session's live turn is doing now. */
       event: "session.activity";

@@ -129,7 +129,7 @@ export interface SessionMeta {
    * in memory, so a resume after a restart inherits the touch instead of
    * laundering it, and the watch row reads it without the live turn.
    */
-  supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" };
+  supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" | "confirm" };
 }
 
 /**

@@ -200,7 +200,11 @@ cd macos && xcodebuild -scheme MARVIN -configuration Debug build && open build/.
   coding tasks shows multi-agent autonomy degrades quality up to ~70 % and
   amplifies error rates 17× in flat-topology setups. MARVIN is one assistant
   moving through an 8-phase workflow in one conversation, with the user as
-  continuous overwatch.
+  continuous overwatch. An optional per-project **supervisor** (ADR-0127)
+  can answer what your tabs' plans already decide. It writes nothing, starts
+  in shadow, and brings every merge, push, discard, wider posture or new tab
+  to your inbox as the raw act for you to approve; it never approves anything
+  for you.
 - **Plan-first, execute-second, verify-third.** Sketch the approach, ship,
   then verify. In-flight + shipped work tracked in [`docs/roadmap.md`](./docs/roadmap.md).
 - **Per-project isolation.** MARVIN holds zero cross-session knowledge about

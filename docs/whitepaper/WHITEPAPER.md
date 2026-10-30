@@ -135,6 +135,20 @@ each carries its own autonomy mode, models, effort, voice and permission
 posture, so a tab planning a refactor at maximum effort sits beside one
 answering questions read-only and cheaply.
 
+Since ADR-0127 a person may also start a **supervisor** for a project: a
+session that watches their tabs and answers what is already decided — a
+question the plan answers, a nudge inside an approved plan, an ordinary
+permission card. It is the one place a model steers another, and it is bounded
+in code rather than in its prompt. It holds no write tools, and each category
+it acts in starts in shadow until the user switches it on. Everything on the
+human-only list becomes an item in an escalation inbox showing the raw act,
+which the user's click performs as theirs: integration, discarding work,
+boundary paths, a wider posture, scope, a new tab. Inside any turn it touched,
+those acts ask the user even in full auto. It opens a tab only on the user's
+request, in a fresh worktree; one request is one tab. Its append-only ledger
+is reviewed by the session auditor, whose report goes to the user and never
+to the supervisor.
+
 Two things fall out of that which are worth stating plainly, because both were
 learned by being wrong about them.
 

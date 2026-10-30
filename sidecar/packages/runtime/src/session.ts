@@ -19,9 +19,12 @@ import { marvinPaths } from "./paths";
 
 /** ADR-0127 §5 — what a supervisor-authored message carries beside its text (brief §10.7). */
 export interface SupervisorMessageTag {
-  kind: "nudge" | "instruction";
+  /** `first-message` — the opening message of a tab the user confirmed from the inbox (ADR-0127 §4 item 7). */
+  kind: "nudge" | "instruction" | "first-message";
   ledgerId: string | null;
   grounds: Array<{ kind: string; ref: string; provenance: string }>;
+  /** The user edited the first message before opening the tab (brief open decision 2: it stays the supervisor's). */
+  editedByUser?: boolean;
 }
 
 export type SessionTurn =
@@ -71,7 +74,7 @@ export type SessionTurn =
       type: "turn.supervisor-touched";
       at: string;
       turnId: string;
-      by: "message" | "answer";
+      by: "message" | "answer" | "confirm";
     }
   | { type: "cli.event"; at: string; event: ClaudeStreamEvent | Record<string, unknown> }
   | {

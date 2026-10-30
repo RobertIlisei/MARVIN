@@ -39,6 +39,17 @@ What MARVIN will *not* do:
 
 See [`personality.ts` → CORE_BEHAVIOR → "Subagent delegation"](../../sidecar/packages/runtime/src/personality.ts) for the exact rules encoded in MARVIN's system prompt.
 
+## The supervisor — oversight, not a team
+
+Since [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md), a project can have a **supervisor**: a session you start that watches your other tabs and answers what is already decided. It is not a lead that splits work across agents, and it is not a second writer. What keeps the rule above intact is enforced in code, not in its prompt:
+
+- **It writes nothing.** Its only tools are the policy-checked `marvin-supervise` verbs and the read-only graph. It answers grounded questions, nudges a tab inside its approved plan, narrows a posture and answers ordinary permission cards, and only in the categories you switched from shadow to autonomous.
+- **It never stands in for your consent.** Merging, pushing, requests, CI, discarding work, boundary paths, widening a posture, approving a plan, changing scope and opening a tab become items in an escalation inbox. Each shows the raw act, with the supervisor's recommendation beside it, and your click performs it as you. Inside a turn the supervisor touched, those acts ask you even in full auto.
+- **It opens a tab only when you asked**, in a fresh worktree and at no more than the posture you confirmed. One request is one tab, never a decomposition.
+- **It is reviewed.** Every proposal, act and escalation is in an append-only ledger, and the session auditor can review it for you.
+
+So the topology is still one human steering one or more single-assistant loops. The supervisor sits beside them and holds less authority than you do. See the [supervisor guide](../guides/supervisor.md).
+
 ## What this looks like in practice
 
 **Good (single-assistant):**

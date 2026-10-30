@@ -410,9 +410,17 @@ export function evaluateConfirm(input: {
   if (delegationRank(input.delegation) < delegationRank("answer-confirms")) {
     return done("refuse", "delegation", `delegation "${input.delegation ?? "off"}" does not allow answering confirms`);
   }
+  // Milestone 5 — only the gated strategy's own card is ordinary (ADR-0127 §3).
+  // A confirm raised by any other rule, or by none the registry recorded, is
+  // not the supervisor's to answer.
+  if (input.raisedBy !== "gated") {
+    return done("escalate", "human-only", `a confirm raised by the ${input.raisedBy ?? "unknown"} rule is not an ordinary permission confirm`);
+  }
   const g = groundsVerdict(resolved, done, "confirm");
   if (g) return g;
-  return done("propose", "grounded", "grounded; shadow mode records the proposal and answers nothing");
+  return input.mode === "autonomous"
+    ? done("act", "grounded", "grounded; the confirms category is autonomous")
+    : done("propose", "grounded", "grounded; shadow mode records the proposal and answers nothing");
 }
 
 // ── Stopping conditions (§6) ─────────────────────────────────────────────────

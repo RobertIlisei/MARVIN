@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1]–[4] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 4 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous. Milestones [5]–[6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6] not started. Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -76,6 +76,36 @@ Mostly from the advisor's review of the consent gate (go-with-caveats):
 - **From the pre-landing review:** the polled watch route and every `confirm.resolved` now read the ledger. `readLedger` caches the parsed file on its (size, mtime); the file is append-only.
   - *Not done here, stated:* the act's ledger line is written after the act, so a crash between them loses the line while the transcript cites its id. ADR-0127 §2 trigger 4 (wake on a scope-met handoff and read the claim against the evidence) is deferred to [5]; until then a scope-met tab is the one the supervisor does not look at. Parked: charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes (§6).
 - **A test-harness trap, recorded for the next milestone.** This worktree had no `node_modules`, so `@marvin/*` resolved to the main checkout's packages, and sidecar tests ran against main's runtime. With `isolate: false`, the global supervisor loop can also be subscribed to a `turn-registry` that another file reset. A route test that needs the loop starts its own.
+
+## What milestone 5 changed from the text below
+
+- **The inbox is event-sourced.** Each change writes the whole item again as a new line in `inbox.jsonl` beside the ledger (0600, the data dir). The newest line per id is the item. Settling is once. `dedupeKey` holds across every state, so a dismissed close item is not raised again for the same scope-met close.
+- **The ledger line and the item name each other.** Both ids are chosen before either is written: `inboxItemId` on the line, `ledgerId` on the item.
+- **Actions come from the server** (`actionsFor`), from the item's stored act: `answer` / `answer-edit`, `allow` / `deny`, `perform`, `open` / `edit`, `raise-cap` / `resume`, plus `dismiss`. Consent replays the stored act with the user's authority (`supervisor-inbox-actions.ts`); the performers are injected, as the verbs' are. While a consent is in flight its own `confirm.resolved` does not settle the item as the tab's.
+- **The feed carries ids and states only.** `/api/chat/announce` holds no token, and the items, lines and state are token-gated. The `supervisor.inbox`, `supervisor.ledger` and `supervisor.state` events say what moved, and a client fetches the rest.
+- **An item expires on read** when its confirm or question is no longer pending: a turn that unwinds clears its confirms without a `confirm.resolved`.
+- **A refusal is not an item.** Refusals are the supervisor's mistakes. Escalations are the user's decisions.
+- **Confirms autonomy acts only on the gated strategy's card** (`raisedBy: "gated"`). Any other rule, or none recorded, escalates. `resolveConfirm` checks it again, so the verb and the service each hold a lock.
+- **`worktrees sweep` is performed in shadow too.** It reclaims exactly what `worktree_sweep` reclaims, which every tab close already does silently (ADR-0111), and §4 item 3 says it is not discarding. It is ledgered `act` with `reasonCode: "safe-sweep"`.
+- **A new verb, `review_scope`,** answers the scope-met wake (§2 trigger 4). `send` refuses a scope-met tab ([4]), so the supervisor's answer is an item: `ready` is the same close-with-keep item the idle path raises, sharing its key; `missing` proposes sending the tab what is missing, on the user's click.
+- **`reply`** is the supervisor's side of the conversation (`messages.jsonl`). It is not ledgered, because it is not an act.
+- **`new_session`'s request is a user message** from `POST /api/supervisor/message`, cited by id. `requestedBy.kind: "approved-proposal"` is declared by the brief, but nothing writes it: approving a suggestion is the user replying in the conversation. One request is one tab: a request with an open or opened item refuses a second. The base posture is the user's most recently updated open tab, and `wider` is measured against it. When no posture is given, the base is used as it is.
+- **The idle close item is deterministic**: no wake and no model. The loop arms the idle timer for every watched tab, `observe` included. A finished tab is offered for closing whatever its level. Its ledger line is the runtime's (`kind: "wake"`, `verb: "propose-close"`).
+- **Consent with `keep` commits a dirty tree first** (`commitFirst`), so nothing kept can be lost to a sweep (ADR-0111). Close with `merge` does not: a dirty tree answers `worktree-dirty`.
+- **A posture-widen item's consent goes through `actor: "user"`,** so until [6] it answers the [2] refusal like any API widening. This item is the one consent the inbox cannot perform yet.
+- **The close route's logic moved to `session-close.ts`** unchanged, so the route and the inbox share one close.
+- **Guardrail items** come from `pauseSupervisorForFault`. Raise-cap and resume perform through `applySupervisorAction` with the token, and any user action that lifts the pause supersedes the item.
+- **The audit's report lives under the data dir** (`supervisor/<projectId>/audits/`, 0600), not the project's `.marvin/audits/`, for the reason the ledger does. The route needs the token. Its runner is injectable, and a test pins its options: the graph only, the auditor's disallowed list, no `resume`.
+- **From the pre-landing review:**
+  - *Two clicks on one item performed twice.* For a new-tab item that meant two tabs for one request. A consent is now refused while another on the same item is in flight (`code: "in-flight"`).
+  - *A declared value nothing wrote.* `requestedBy.kind: "approved-proposal"` was dropped from the type. Round-trip tests were added for `supervisor.state`, the ledger's `message` line, `by: "confirm"` and `editedByUser`.
+  - *Re-parsing.* Each ledger and inbox append made the next read re-parse the whole file. The caches now extend in place on our own appends.
+  - *Pre-existing, left alone:* milestone 4 declared the ledger's `trigger` field, and nothing writes it.
+- **From the security audit:**
+  - *A symlinked secret.* A ground citing a link in the repository to a key outside it would have been excerpted. Symlinks are now resolved before the root and secret checks.
+  - *A second lock in `resolveConfirm`.* For the supervisor it classifies the act against the human-only list again, so a gated card carrying a push is refused even if a caller skips the verb.
+  - *The auditor's prompt* now wraps the inbox summaries as untrusted, because they can quote tool input.
+- **Deferred, stated:** the brief's `burstRank` is computed per tab among open items; the "+N more" grouping is the app's. `heuristic-miss` is not wired for confirms the supervisor answered. Charging cancelled or failed supervisor-started turns to the cap, and escalating repeated failed outcomes, stay parked from [4].
 
 ## Constraint that shapes the order
 

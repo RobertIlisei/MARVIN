@@ -21,13 +21,16 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { addInboxItem, supersedeInbox } from "./supervisor-inbox";
 import {
   appendLedgerEntry,
   ensureSupervisorDir,
   ensureSupervisorRoot,
   isSafeProjectId,
+  newLedgerId,
   supervisorRoot,
 } from "./supervisor-ledger";
+import { announceProjectEvent } from "./turn-registry";
 
 export { supervisorDir } from "./supervisor-ledger";
 
@@ -41,15 +44,16 @@ export function delegationRank(level: Delegation | undefined): number {
 
 /**
  * Milestone 4 — the user switches autonomy per category (brief §10.1). Each
- * starts in shadow; `confirms` stays in shadow until milestone 5.
+ * starts in shadow. `confirms` may leave shadow from milestone 5, when the
+ * escalation inbox exists to take what it may not answer.
  */
 export const AUTONOMY_CATEGORIES = ["questions", "nudges", "posture", "confirms"] as const;
 export type AutonomyCategory = (typeof AUTONOMY_CATEGORIES)[number];
 export type CategoryMode = "shadow" | "autonomous";
 export type Autonomy = Record<AutonomyCategory, CategoryMode>;
 const SHADOW_ALL = (): Autonomy => ({ questions: "shadow", nudges: "shadow", posture: "shadow", confirms: "shadow" });
-/** Categories that cannot leave shadow yet. */
-const NOT_YET_AUTONOMOUS: ReadonlySet<AutonomyCategory> = new Set(["confirms"]);
+/** Categories that cannot leave shadow yet. None since milestone 5; kept so a future category can ship shadow-only. */
+const NOT_YET_AUTONOMOUS: ReadonlySet<AutonomyCategory> = new Set();
 
 /** How one category runs: off when the supervisor is off, else the user's switch. */
 export function categoryMode(s: SupervisorState, category: AutonomyCategory): SupervisorMode {
@@ -207,6 +211,12 @@ function commit(s: SupervisorState): SupervisorState {
   s.updatedAt = new Date().toISOString();
   store().states.set(s.projectId, s);
   persist(s);
+  // Milestone 5 — the feed says the state moved; the state itself is token-gated.
+  try {
+    announceProjectEvent({ event: "supervisor.state", data: { projectId: s.projectId, revision: s.revision, mode: s.mode, paused: s.paused } });
+  } catch {
+    /* the state stands; only the notification is lost */
+  }
   return clone(s);
 }
 
@@ -216,7 +226,7 @@ function sanitize(raw: unknown, projectId: string): SupervisorState {
   if (!raw || typeof raw !== "object") return base;
   const r = raw as Record<string, unknown>;
   // The user's per-category switches persist. A category that cannot leave
-  // shadow yet (confirms) stays there whatever the file says.
+  // shadow yet stays there whatever the file says.
   const autonomy = r.autonomy as Record<string, unknown> | undefined;
   if (autonomy && typeof autonomy === "object") {
     for (const c of AUTONOMY_CATEGORIES) {
@@ -460,7 +470,7 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
       if (!(AUTONOMY_CATEGORIES as readonly string[]).includes(String(a.category))) return fail(400, `category must be one of ${AUTONOMY_CATEGORIES.join(", ")}`);
       if (a.value !== "shadow" && a.value !== "autonomous") return fail(400, "value must be shadow or autonomous");
       if (s.mode === "off") return fail(409, "the supervisor is off — start it first");
-      if (a.value === "autonomous" && NOT_YET_AUTONOMOUS.has(category)) return fail(409, "confirms autonomy arrives with the escalation inbox (plan milestone 5)");
+      if (a.value === "autonomous" && NOT_YET_AUTONOMOUS.has(category)) return fail(409, `${category} cannot leave shadow yet`);
       s.autonomy[category] = a.value;
       detail = `${category}=${a.value}`;
       break;
@@ -496,6 +506,14 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
   }
 
   const state = commit(s);
+  // Milestone 5 — the user lifting a pause settles the guardrail item it raised.
+  if (!state.paused || state.mode === "off") {
+    try {
+      supersedeInbox(projectId, (i) => i.kind === "guardrail", "user");
+    } catch {
+      /* the action stands */
+    }
+  }
   appendLedgerEntry(projectId, {
     kind: "control",
     verb: String(a.action),
@@ -531,7 +549,25 @@ export function pauseSupervisorForFault(projectId: string, reason: string, code:
   s.paused = true;
   s.pause = { reason: code, at: new Date().toISOString(), detail: reason.slice(0, 500) };
   const state = commit(s);
-  appendLedgerEntry(projectId, { kind: "control", verb: "auto-pause", tab: null, wakeId: null, mode: state.mode, decision: "escalate", reason, reasonCode: code });
+  // Milestone 5 — a pause is a tabless guardrail item (brief §6.3): raise the cap, or resume.
+  const ledgerId = newLedgerId();
+  let inboxItemId: string | undefined;
+  try {
+    inboxItemId = addInboxItem(projectId, {
+      sessionId: null,
+      kind: "guardrail",
+      escalatedBecause: { code, label: code === "budget" ? "Daily cap reached" : code === "breaker" ? "Too many acts in one wake" : code === "refusals" ? "Paused after refused calls" : "Paused after repeated failures" },
+      guardrail: { kind: code, detail: reason.slice(0, 500), verb: code === "budget" ? "raise-cap" : "resume" },
+      act: { type: "guardrail", pause: code },
+      modeAtCreation: state.mode === "autonomous" ? "autonomous" : "shadow",
+      wakeId: null,
+      ledgerId,
+      dedupeKey: `guardrail:${code}:${state.pause?.at ?? ledgerId}`,
+    }).id;
+  } catch {
+    /* the pause stands; only the item is lost */
+  }
+  appendLedgerEntry(projectId, { id: ledgerId, kind: "control", verb: "auto-pause", tab: null, wakeId: null, mode: state.mode, decision: "escalate", reason, reasonCode: code, ...(inboxItemId ? { inboxItemId } : {}) });
   for (const l of store().listeners) {
     try {
       l({ projectId, action: "pause" });

@@ -12,4 +12,5 @@ export const SHADOW_PERFORM: VerbPerform = {
   send: never("send"),
   cancel: never("cancel"),
   setPosture: never("setPosture"),
+  confirm: never("confirm"),
 };

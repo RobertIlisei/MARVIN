@@ -34,24 +34,29 @@
  * EventEmitter — a loop subscribed from there would hear nothing.
  */
 
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 
-import { answerQuestion } from "./confirm-answer";
+import { answerQuestion, resolveConfirm } from "./confirm-answer";
 import { getPendingConfirm, listPendingConfirms } from "./confirm-registry";
+import { previewIntegration } from "./integration";
+import { listModelsCached } from "./models";
 import { marvinPaths } from "./paths";
 import { readPlanState } from "./plan-state";
 import { activeModelLookup, applyPostureChange } from "./posture";
 import { getProject } from "./projects";
 import { loadSessionTail } from "./session";
-import { readSessionMeta } from "./session-meta";
+import { listSessionMetas, readSessionMeta, type SessionPosture } from "./session-meta";
 import { buildSessionWatch, planProgress } from "./session-watch";
 import { runSupervisorWake, type WakeResult } from "./supervisor-dispatch";
-import { sendAsSupervisor, tabSendRefusal } from "./supervisor-send";
-import { appendLedgerEntry, readLedger } from "./supervisor-ledger";
+import { addInboxItem, buildRawAct, type MergePreview, resolveInboxForConfirm, supersedeInbox } from "./supervisor-inbox";
+import { appendLedgerEntry, newLedgerId, readLedger } from "./supervisor-ledger";
 import type { VerbContext, VerbDeps, VerbPerform } from "./supervisor-mcp";
+import { addSupervisorReply, getUserMessage } from "./supervisor-messages";
 import { ActionLimiter } from "./supervisor-policy";
 import type { WakeItem } from "./supervisor-prompt";
+import { sendAsSupervisor, tabSendRefusal } from "./supervisor-send";
 import {
   delegationRank,
   getSupervisorState,
@@ -63,7 +68,8 @@ import {
   updateSupervisorRuntime,
 } from "./supervisor-state";
 import { type LoopSnapshot, noteHeuristicMiss, pairOnResolved } from "./supervisor-status";
-import { cancelLiveTurn, listLiveTurns, type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
+import { cancelLiveTurn, getLiveTurn, listLiveTurns, type ProjectEvent, subscribeProjectEvents } from "./turn-registry";
+import { reconcileWorktreesAsync, sweepWorktreesAsync } from "./worktrees";
 
 /** Bookkeeping must never break the loop: a failed pairing or ledger write is lost, the wake is not. */
 function guarded(fn: () => unknown): void {
@@ -74,14 +80,17 @@ function guarded(fn: () => unknown): void {
   }
 }
 
-/** Why a wake was raised. A question ref names it; the others name the turn that ended. */
-export type WakeTrigger = "question" | "turn-ended" | "idle";
+/**
+ * Why a wake was raised. A question or confirm ref names it; turn-ended, idle
+ * and scope-met name the turn that ended; a message ref names the user's message.
+ */
+export type WakeTrigger = "question" | "turn-ended" | "idle" | "confirm" | "scope-met" | "message";
 
 export interface PendingRef {
   trigger?: WakeTrigger;
   marvinSessionId: string;
   turnId: string;
-  /** Set for a question; a turn-ended or idle ref carries no confirm. */
+  /** Set for a question or confirm (a message ref carries its message id here); a turn-ended or idle ref carries none. */
   toolUseId: string;
   /** An idle ref's plan signature — the idle trigger fires once per signature. */
   planSignature?: string;
@@ -98,6 +107,8 @@ export interface TabFacts {
   /** The last turn was stopped — by the user, or cancelled by the supervisor. Either way the user decides next. */
   stopped: boolean;
   waitingOnOwn: boolean;
+  /** Milestone 5 — when the tab closed its scope, or null. One scope-met wake and one close item per value. */
+  scopeMetAt?: string | null;
 }
 
 export interface LoopDeps {
@@ -110,9 +121,28 @@ export interface LoopDeps {
   tabFacts(projectId: string, marvinSessionId: string): Promise<TabFacts | null>;
   /** Milestone 4 — pending questions in delegated tabs, for `wakeNow`'s re-scan. */
   pendingQuestions(projectId: string): PendingRef[];
+  /**
+   * Milestone 5 — a finished tab idle past the threshold gets one inbox item
+   * proposing to close it with its branch kept. Deterministic: no wake, no
+   * model. Optional so earlier fixtures build; the default writes the item.
+   */
+  proposeClose?(projectId: string, marvinSessionId: string, scopeMetAt: string): void;
 }
 
-const refKey = (r: PendingRef) => (r.trigger === "turn-ended" ? `ended:${r.marvinSessionId}` : r.trigger === "idle" ? `idle:${r.marvinSessionId}` : r.toolUseId);
+const refKey = (r: PendingRef) => {
+  switch (r.trigger) {
+    case "turn-ended":
+      return `ended:${r.marvinSessionId}`;
+    case "idle":
+      return `idle:${r.marvinSessionId}`;
+    case "scope-met":
+      return `scope:${r.marvinSessionId}`;
+    case "message":
+      return `message:${r.toolUseId}`;
+    default:
+      return r.toolUseId;
+  }
+};
 
 export class SupervisorLoop {
   private readonly queues = new Map<string, Map<string, PendingRef>>();
@@ -125,6 +155,8 @@ export class SupervisorLoop {
   private readonly idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** `projectId:sessionId` → the plan signature an idle wake was last raised for. */
   private readonly idleWoken = new Map<string, string>();
+  /** `projectId:sessionId` → the scope-met close a review wake was last raised for (milestone 5). */
+  private readonly scopeWoken = new Map<string, string>();
   private unsubscribers: Array<() => void> = [];
 
   constructor(private readonly deps: LoopDeps) {}
@@ -159,6 +191,16 @@ export class SupervisorLoop {
       queuedEvents: q?.size ?? 0,
       oldestQueuedAt: q?.size ? (this.queuedAt.get(projectId) ?? null) : null,
     };
+  }
+
+  /**
+   * Milestone 5 — the user wrote to the supervisor (`POST /api/supervisor/message`).
+   * The message wakes it; nothing about it is consent.
+   */
+  noteUserMessage(projectId: string, messageId: string): void {
+    if (getSupervisorState(projectId).mode === "off") return;
+    this.enqueue(projectId, { trigger: "message", marvinSessionId: "", turnId: "", toolUseId: messageId });
+    this.schedule(projectId);
   }
 
   /** The user's Restart (brief §10.1 `wakeNow`): re-scan pending questions and wake without the debounce. */
@@ -203,6 +245,11 @@ export class SupervisorLoop {
       const rule = getPendingConfirm(turnId, toolUseId)?.raisedBy;
       if (rule && rule !== "ask-user-question") {
         guarded(() => noteHeuristicMiss(projectId, { marvinSessionId, turnId, rule }));
+        // Milestone 5 — an ordinary confirm wakes it for an `answer-confirms` tab. Any other is the user's.
+        if (rule === "gated" && delegationRank(getSupervisorState(projectId).delegation[marvinSessionId]) >= delegationRank("answer-confirms")) {
+          this.enqueue(projectId, { trigger: "confirm", marvinSessionId, turnId, toolUseId });
+          this.schedule(projectId);
+        }
         return;
       }
       if (rule !== "ask-user-question") return;
@@ -211,18 +258,38 @@ export class SupervisorLoop {
     } else if (e.event === "confirm.resolved") {
       const d = e.data;
       this.queues.get(d.projectId)?.delete(d.toolUseId);
+      // Milestone 5 — an item about this confirm resolves on its own, wherever it was answered.
+      guarded(() => resolveInboxForConfirm(d.projectId, { toolUseId: d.toolUseId, answeredBy: d.answeredBy }));
       if (getSupervisorState(d.projectId).mode !== "off") guarded(() => pairOnResolved(d.projectId, d));
     } else if (e.event === "turn.registered") {
-      this.clearIdle(e.data.projectId, e.data.marvinSessionId);
-      this.queues.get(e.data.projectId)?.delete(`idle:${e.data.marvinSessionId}`);
+      const d = e.data;
+      this.clearIdle(d.projectId, d.marvinSessionId);
+      this.queues.get(d.projectId)?.delete(`idle:${d.marvinSessionId}`);
+      // A user or supervisor turn opens new scope (milestone 4's `scopeMetAt` rule): the close
+      // proposal for the old scope is moot, and so is a review of its claim.
+      if (d.kind === "human" || d.author === "supervisor") {
+        this.queues.get(d.projectId)?.delete(`scope:${d.marvinSessionId}`);
+        guarded(() => supersedeInbox(d.projectId, (i) => i.sessionId === d.marvinSessionId && i.act?.type === "close" && i.act.worktree === "keep"));
+      }
     } else if (e.event === "turn.ended") {
       const d = e.data;
-      if (!this.actionableTab(d.projectId, d.marvinSessionId) || d.cancelled) return;
+      if (!this.eligibleTab(d.projectId, d.marvinSessionId) || d.cancelled) return;
+      // Armed for every watched tab: a finished one is offered for closing even at `observe`.
       this.armIdle(d.projectId, d.marvinSessionId, d.turnId);
+      if (!this.actionableTab(d.projectId, d.marvinSessionId)) return;
       // Only a turn a person or the supervisor started (see the header).
       if (d.kind !== "human" && d.author !== "supervisor") return;
       void this.deps.tabFacts(d.projectId, d.marvinSessionId).then((f) => {
-        if (!f || f.scopeMet || f.stopped || f.live) return;
+        if (!f || f.stopped || f.live) return;
+        if (f.scopeMet) {
+          // ADR-0127 §2 trigger 4 — read the scope-met claim, once per close.
+          const k = this.idleKey(d.projectId, d.marvinSessionId);
+          if (!f.scopeMetAt || this.scopeWoken.get(k) === f.scopeMetAt) return;
+          this.scopeWoken.set(k, f.scopeMetAt);
+          this.enqueue(d.projectId, { trigger: "scope-met", marvinSessionId: d.marvinSessionId, turnId: d.turnId, toolUseId: "" });
+          this.schedule(d.projectId);
+          return;
+        }
         this.enqueue(d.projectId, { trigger: "turn-ended", marvinSessionId: d.marvinSessionId, turnId: d.turnId, toolUseId: "" });
         this.schedule(d.projectId);
       }, () => {});
@@ -250,9 +317,15 @@ export class SupervisorLoop {
   }
 
   private async onIdle(projectId: string, id: string, turnId: string): Promise<void> {
-    if (!this.actionableTab(projectId, id)) return;
+    if (!this.eligibleTab(projectId, id)) return;
     const f = await this.deps.tabFacts(projectId, id).catch(() => null);
-    if (!f || f.live || f.pending > 0 || f.scopeMet || f.stopped || f.waitingOnOwn) return;
+    if (!f || f.live || f.pending > 0 || f.stopped || f.waitingOnOwn) return;
+    if (f.scopeMet) {
+      // Milestone 5 — a finished tab idle past the threshold: one close-with-keep item per scope-met close.
+      if (f.scopeMetAt) guarded(() => (this.deps.proposeClose ?? proposeCloseKeep)(projectId, id, f.scopeMetAt as string));
+      return;
+    }
+    if (!this.actionableTab(projectId, id)) return;
     if (!f.planSignature || f.planOpen <= 0) return;
     const k = this.idleKey(projectId, id);
     if (this.idleWoken.get(k) === f.planSignature) return; // once per plan signature
@@ -296,14 +369,20 @@ export class SupervisorLoop {
     this.queuedAt.delete(projectId);
     const refs: PendingRef[] = [];
     for (const r of candidates) {
+      const trigger = r.trigger ?? "question";
+      if (trigger === "message") {
+        refs.push(r); // the user's own message; the supervisor is on (checked above)
+        continue;
+      }
       if (!this.eligibleTab(projectId, r.marvinSessionId)) continue;
-      if ((r.trigger ?? "question") === "question") {
+      if (trigger === "question" || trigger === "confirm") {
         if (getPendingConfirm(r.turnId, r.toolUseId) !== null) refs.push(r);
         continue;
       }
-      // A turn-ended or idle ref is checked again: the tab may have moved on.
+      // A turn-ended, idle or scope-met ref is checked again: the tab may have moved on.
       const f = await this.deps.tabFacts(projectId, r.marvinSessionId).catch(() => null);
-      if (f && !f.live && !f.scopeMet && !f.stopped) refs.push(r);
+      if (!f || f.live || f.stopped) continue;
+      if (trigger === "scope-met" ? f.scopeMet : !f.scopeMet) refs.push(r);
     }
     if (!refs.length) return;
     const workDir = this.deps.workDirOf(projectId);
@@ -431,8 +510,118 @@ export function defaultVerbDeps(projectId: string, workDir: string): VerbDeps {
     modelLookup: activeModelLookup,
     sendRefusal: (id) => tabSendRefusal(projectId, id),
     scopeMet: (id) => !!readSessionMeta(projectId, id)?.scopeMetAt,
+    scopeMetAt: (id) => readSessionMeta(projectId, id)?.scopeMetAt ?? null,
+    modelLabel: async (id) => {
+      try {
+        return (await listModelsCached()).models.find((m) => m.id === id)?.displayName ?? id;
+      } catch {
+        return id;
+      }
+    },
+    worktrees: defaultWorktrees(projectId, workDir),
+    userRequest: (id) => {
+      const m = getUserMessage(projectId, id);
+      return m ? { id: m.id, at: m.at, text: m.text } : null;
+    },
+    newTabBase: () => newTabBase(projectId, workDir),
+    postReply: (text) => {
+      addSupervisorReply(projectId, text);
+    },
     perform: defaultPerform(projectId),
   };
+}
+
+const isSessionBusy = (id: string) => {
+  const t = getLiveTurn(id);
+  return !!t && !t.ended;
+};
+
+/** Milestone 5 — the project's worktrees, read live; the sweep reclaims only what `worktree_sweep` does. */
+function defaultWorktrees(_projectId: string, workDir: string): NonNullable<VerbDeps["worktrees"]> {
+  return {
+    list: async () =>
+      (await reconcileWorktreesAsync(workDir)).map((w) => ({ slug: w.slug, branch: w.branch, state: w.state, sessionId: w.sessionId, commits: w.commits, dirty: w.dirty })),
+    preview: async (slugs) => {
+      const p = await previewIntegration(workDir, slugs ? { slugs } : {});
+      if (!p.previewAvailable || !p.rows.length) return null;
+      const conflict = p.rows.some((r) => r.verdict === "conflict");
+      const unknown = p.rows.some((r) => r.verdict === "unknown");
+      const behind = Math.max(0, ...p.rows.map((r) => r.behind));
+      const verdict: MergePreview["verdict"] = conflict ? "conflict" : unknown ? "unknown" : behind > 0 ? "behind" : "clean";
+      return {
+        kind: "merge-tree",
+        verdict,
+        ...(behind > 0 ? { behind } : {}),
+        added: p.rows.reduce((n, r) => n + r.added, 0),
+        removed: p.rows.reduce((n, r) => n + r.removed, 0),
+        conflictFiles: [...new Set(p.rows.flatMap((r) => r.conflicts))],
+      };
+    },
+    sweep: async () => (await sweepWorktreesAsync(workDir, Date.now(), { isSessionBusy })).map((o) => ({ slug: o.slug, branch: o.branch, deletedBranch: o.deletedBranch, reason: o.reason })),
+  };
+}
+
+function git(cwd: string, args: string[]): Promise<string> {
+  return new Promise((done) => {
+    execFile("git", args, { cwd, encoding: "utf-8", timeout: 10_000 }, (err, stdout) => done(err ? "" : (stdout ?? "").trim()));
+  });
+}
+
+/**
+ * What a new tab would start from: the posture of the user's most recently
+ * updated open tab (the brief's "requesting tab" — the card marks what is
+ * wider than it), and the main checkout's HEAD, where the worktree is cut.
+ */
+async function newTabBase(projectId: string, workDir: string): Promise<{ posture: SessionPosture; baseRef: string | null; baseSha: string | null } | null> {
+  const recent = listSessionMetas(projectId)
+    .filter((m) => !m.closedAt && !isSupervisorSessionId(m.marvinSessionId) && m.posture)
+    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))[0];
+  if (!recent) return null;
+  const baseRef = (await git(workDir, ["symbolic-ref", "--quiet", "--short", "HEAD"])) || null;
+  const baseSha = (await git(workDir, ["rev-parse", "HEAD"])) || null;
+  return { posture: recent.posture, baseRef, baseSha };
+}
+
+/**
+ * Milestone 5 — the idle finished tab's close item. Closing with `keep` is
+ * reversible (ADR-0111: the branch and its commits stay), so it is one
+ * consent chip. Keyed on the scope-met close: a second pass adds nothing,
+ * and a dismissed item is not offered again for the same close.
+ */
+export function proposeCloseKeep(projectId: string, marvinSessionId: string, scopeMetAt: string): void {
+  const st = getSupervisorState(projectId);
+  if (st.mode === "off") return;
+  const dedupeKey = `close:${marvinSessionId}:${scopeMetAt}`;
+  const ledgerId = newLedgerId();
+  const title = readSessionMeta(projectId, marvinSessionId)?.title ?? null;
+  const item = addInboxItem(projectId, {
+    sessionId: marvinSessionId,
+    tabTitle: title,
+    kind: "scope",
+    escalatedBecause: { code: "human-only", label: "Closing a tab is the user's act", rule: "§4.3 discard" },
+    rawAct: buildRawAct("close_session", { marvinSessionId, worktree: "keep" }),
+    recommendation: { actionId: "perform", text: "The tab met its scope and has been idle since. Closing keeps its branch for integration." },
+    grounds: [],
+    act: { type: "close", sessionId: marvinSessionId, worktree: "keep" },
+    modeAtCreation: st.mode === "autonomous" ? "autonomous" : "shadow",
+    wakeId: null,
+    ledgerId,
+    dedupeKey,
+  });
+  if (item.ledgerId !== ledgerId) return; // already proposed for this close
+  appendLedgerEntry(projectId, {
+    id: ledgerId,
+    kind: "wake",
+    verb: "propose-close",
+    tab: marvinSessionId,
+    wakeId: null,
+    mode: st.mode,
+    decision: "escalate",
+    reason: "the tab met its scope and has been idle past the threshold — proposed closing it with its branch kept",
+    reasonCode: "scope-met-idle",
+    inboxItemId: item.id,
+    argSummary: "close keep",
+  });
 }
 
 /** The milestone 2 and 3 services an autonomous verb performs through. */
@@ -447,6 +636,10 @@ function defaultPerform(projectId: string): VerbPerform {
       return r.ok ? r : { ok: false, code: r.code, reason: r.reason };
     },
     cancel: (id) => cancelLiveTurn(id, "supervisor"),
+    confirm: (a) => {
+      const r = resolveConfirm({ ...a, answeredBy: "supervisor" });
+      return r.ok ? { ok: true } : { ok: false, error: r.error };
+    },
     setPosture: async (a) => {
       const r = applyPostureChange({ projectId, marvinSessionId: a.marvinSessionId, patch: a.patch, actor: "supervisor", lookup: await activeModelLookup(), ledger: false });
       return r.ok ? { ok: true } : { ok: false, code: r.status === 409 ? "widening" : "perform-failed", error: r.error };
@@ -468,6 +661,7 @@ async function defaultTabFacts(projectId: string, marvinSessionId: string): Prom
     scopeMet: !!meta.scopeMetAt,
     stopped: meta.lastTurn?.outcome === "stopped",
     waitingOnOwn: refusal?.code === "waiting-on-own",
+    scopeMetAt: meta.scopeMetAt ?? null,
   };
 }
 
@@ -488,16 +682,35 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
   const st = getSupervisorState(projectId);
   const rows = await buildSessionWatch({ projectId, workDir, sessionIds: [...new Set(refs.map((r) => r.marvinSessionId))] });
   return refs.map((r) => {
-    const row = rows.find((x) => x.marvinSessionId === r.marvinSessionId);
     const trigger = r.trigger ?? "question";
+    if (trigger === "message") {
+      const m = getUserMessage(projectId, r.toolUseId);
+      return {
+        trigger,
+        marvinSessionId: "",
+        title: null,
+        delegation: "",
+        turnId: "",
+        toolUseId: r.toolUseId,
+        question: null,
+        message: m ? { id: m.id, text: m.text } : { id: r.toolUseId, text: "(the message could not be read)" },
+        brief: null,
+        plan: null,
+        transcriptTail: "",
+        ledgerTail: [],
+      };
+    }
+    const row = rows.find((x) => x.marvinSessionId === r.marvinSessionId);
+    const pending = trigger === "question" || trigger === "confirm" ? getPendingConfirm(r.turnId, r.toolUseId) : null;
     return {
+      ...(trigger === "confirm" && pending ? { confirm: { toolName: pending.toolName, input: pending.originalInput } } : {}),
       trigger,
       marvinSessionId: r.marvinSessionId,
       title: row?.title ?? null,
       delegation: st.delegation[r.marvinSessionId] ?? "off",
       turnId: r.turnId,
       toolUseId: r.toolUseId,
-      question: trigger === "question" ? (getPendingConfirm(r.turnId, r.toolUseId)?.originalInput ?? null) : null,
+      question: trigger === "question" ? (pending?.originalInput ?? null) : null,
       brief: readBrief(projectId, r.marvinSessionId),
       plan: row?.plan ? { total: row.plan.total, seeded: row.plan.seeded } : null,
       transcriptTail: renderTail(projectId, r.marvinSessionId),
