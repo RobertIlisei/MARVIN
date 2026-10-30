@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · October 2026 · v0.1.118 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · October 2026 · v0.1.119 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -160,6 +160,24 @@ that drop tables in setup corrupted each other. MARVIN ships no knowledge of
 any specific tool, so the remedy is a lever rather than a rule: a project
 declares the environment that makes its per-session runs independent, and
 MARVIN applies it to that tab's turns.
+
+**Removing a branch is only safe if something else holds its commits.** On
+2026-10-30 a tab's branch was deleted while its last two commits were reachable
+from nothing else. The supervisor had closed the tab with *keep*; the app, still
+showing it, asked a second time and sent *discard*; and a second tab, which had
+fast-forwarded onto the first and been named after its commit, took the freed
+name. Three small facts, each defensible alone. The fix is structural rather
+than a rule to be careful: any delete of a branch first pins the commits no
+other ref reaches under `refs/marvin/archive/` and refuses to delete if it
+cannot, a tab is never named after a sibling's commits, and a tree the server
+has already closed closes without asking.
+
+**An interface can be audited like a codebase.** The native app was audited from
+source against a written product and design brief (9/20, 104 findings; then a
+critique, 25/40). The worst result was the least visible: five VoiceOver labels
+in fifty thousand lines. Every P1 was fixed, every P2 fixed or deferred with a
+reason, and the confirm that matters most now has one default behaviour — Allow
+is ⌘⏎, Return consents to nothing.
 
 **Parallelism has a bill, and it is not the model's.** On a metered CI runner,
 five tabs each opening their own merge request costs five full pipeline runs.
@@ -751,7 +769,7 @@ Honest positioning, category by category:
   your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
-  125 ADRs are public; so are the audits that found real flaws — including
+  127 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -893,4 +911,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.118; the repository is the authoritative, current reference.*
+v0.1.119; the repository is the authoritative, current reference.*
