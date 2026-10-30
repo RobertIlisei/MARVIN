@@ -2,8 +2,8 @@
 
 *The exhaustive companion to the [white paper](./WHITEPAPER.md): every
 subsystem, its logic, the decision record behind it, and pointers into the
-code. Written for contributors and deep evaluators. Covers v0.1.118
-(2026-10-14). Where this document and the repository disagree, the
+code. Written for contributors and deep evaluators. Covers v0.1.119
+(2026-10-30). Where this document and the repository disagree, the
 repository wins.*
 
 > **Since v0.1.55.** Subsystems added after this document's original scope,
@@ -72,6 +72,20 @@ repository wins.*
 > and a Helpers section in the Models dialog. **Claude's server-side advisor**
 > (ADR-0125) is a role too: off by default, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`
 > when off, `settings.advisorModel` when on.
+> v0.1.119 (2026-10-30): **the in-app Supervisor** (ADR-0127, milestones 1–6;
+> §5), with the native surface in the Sessions pane, transcript
+> marking and `session.posture` announced to the app. **Impeccable across the
+> native UI** — `PRODUCT.md`, `DESIGN.md`, a source audit (9/20, 104 findings)
+> and a critique (25/40, 27); VoiceOver layer, keyboard paths, Reduce Motion,
+> one diff renderer, Allow is ⌘⏎; the offscreen snapshot harness
+> (`macos/MARVIN/SurfaceSnapshot.swift`). **Worktree data-loss fix** —
+> `deleteBranchPreserving` (`runtime/src/worktrees.ts`) pins unreachable
+> commits at `refs/marvin/archive/<branch>/<time>` before any `branch -D`,
+> "own" commits exclude sibling `marvin/*` branches, `uniqueSlug` treats a
+> record's branch name as taken, `TabCloseDecision` closes an already-closed
+> tree without asking. App icon on Apple's 824 px grid; the macOS app compiles
+> against the 14.4 SDK (explicit `@MainActor`, `LegacySDKShims.swift` under
+> `-DMARVIN_LEGACY_SDK`).
 
 Paths are relative to the repo root. `runtime/` abbreviates
 `sidecar/packages/runtime/src/`. ADRs for **this repo** live at
@@ -738,7 +752,7 @@ A standing pattern rather than a type: after drafting an ADR, an advisor
 unanswered; gaps are closed before the user sees it.
 
 **The supervisor** ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md),
-plan milestones 1–5; the native surface is milestone 6) is not a subagent:
+plan milestones 1–6) is not a subagent:
 it is a session the user starts per project and the runtime wakes. A
 deterministic loop (`supervisor-loop.ts`) wakes it on a pending question or
 ordinary confirm, a user- or supervisor-started turn ending, an idle tab with
@@ -761,7 +775,15 @@ posture, with a supervisor-authored, touched first turn. Every act lands in
 an append-only ledger. `POST /api/audit {target:"supervisor"}` has the
 session auditor review a window of it for `ungrounded`, `overreach`, `loop`
 and `consent`, and the report goes to the user only. The routes need a
-per-boot token, and the gate denies a tab any tool call naming them.
+per-boot token, and the gate denies a tab any tool call naming them. Milestone 6 is the native
+surface in the Sessions pane (strip, per-tab delegation menu, inbox, log, kill
+and pause); a supervisor-authored message is marked in the transcript, an
+answer given elsewhere closes the sheet, `PUT /api/sessions/posture` emits
+`session.posture {marvinSessionId, postureRevision, postureSource}` so the app
+shows an API-set posture, and a user widening through that route is accepted
+again — a supervisor widening stays an escalation. The app reads the token
+from `<MARVIN_DATA_DIR>/supervisor/token`, sends it only to the loopback
+sidecar and refuses anything but 64 hex characters.
 
 ---
 
@@ -1197,7 +1219,7 @@ repo:
   `main`; a gitleaks pre-commit hook is installed from
   `scripts/hooks/pre-commit`; CI is `.github/workflows/release.yml`
   (tag-triggered).
-- **Understanding why** — read `docs/decisions/` (the 125 ADRs) before
+- **Understanding why** — read `docs/decisions/` (the 127 ADRs) before
   proposing structural changes, `docs/roadmap.md` for what's in flight,
   and `AGENTS.md` (which `CLAUDE.md` imports) for the golden rules any agentic session in this repo
   is bound by. Material changes should arrive with an ADR of their own.
@@ -1205,5 +1227,5 @@ repo:
 ---
 
 *Compiled against the 2026-07-02 full feature inventory (51 ADRs,
-v0.1.55) and brought forward to v0.1.118 (125 ADRs, 2026-10-14). Corrections welcome — the ADRs are the authoritative record,
+v0.1.55) and brought forward to v0.1.119 (127 ADRs, 2026-10-30). Corrections welcome — the ADRs are the authoritative record,
 and this document cites them everywhere it can.*

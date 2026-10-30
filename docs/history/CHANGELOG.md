@@ -8,6 +8,78 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
+- **2026-10-30 — v0.1.119: the in-app Supervisor, an interface audited and repaired, and a data-loss fix (ADR-0127; 68 commits since v0.1.118).**
+
+  *The Supervisor* ([ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md),
+  [plan](../plans/supervisor.md), [guide](../guides/supervisor.md)). The
+  2026-07-24 rejection of a standing supervisor rested on "no model ever
+  commands another model"; the supervision was nonetheless already happening
+  from an external session with no policy and no ledger. The decision moved
+  it inside the gate. Six milestones, each landed behind its own checks:
+  (1) the shadow spine — a wake loop on pending questions, `marvin-supervise`
+  `sessions` / `read` / `answer` as proposals only, a capability token, a gate
+  rule keeping tabs off MARVIN's control routes and the supervisor's data
+  directory; (2) `POST /api/confirm/answer` and `PUT /api/sessions/posture`
+  (no turn sent, versioned, narrowing reaches a live turn); (3) authorship and
+  the consent line — a supervisor message is never the user's consent, and a
+  turn it touched asks even in full auto; (4) autonomy for questions, nudges
+  and narrowing; (5) the escalation inbox (raw act beside the recommendation,
+  consent performs it as the user), the remaining verbs, a tab opened only
+  from a confirmed item in a fresh worktree, the ledger's read shape and the
+  session auditor's `supervisor` target; (6) the native surface in the
+  Sessions pane, transcript marking, an answer given elsewhere closes the
+  sheet, `session.posture` announced so the app shows an API-set posture, and
+  a user widening through the API allowed again once it does (between 2 and 6
+  the route refused every widening, because a hidden widening is the worst
+  case §4 names). Golden Rule 1 was amended. The Impeccable critique of the
+  surface scored 30/40 on first renders; its P1s and P2s were fixed in the
+  polish pass.
+
+  *Impeccable across the native UI.* `PRODUCT.md` and `DESIGN.md` ("The Quiet
+  Instrument", derived from source) were written first. An audit of the macOS
+  app from source (`.impeccable/audit-macos-2026-10-30.md`) scored 9/20 with
+  104 findings — accessibility 1/4, with 5 `accessibilityLabel`s in 50,623
+  lines — and a critique 25/40 with 27. All P1s are fixed; every P2 is fixed or
+  deferred with a reason; the tail is triaged in `.impeccable/tail-triage.md`
+  (the 11 pt type floor is a backlog item, unchanged). What changed: a
+  VoiceOver layer (named, stateful controls; confirms and errors announced),
+  keyboard paths for hover- and tap-only controls, Reduce Motion honoured in
+  the Brain, git-status colours at 4.5:1 in light mode, the editor and Brain
+  following the system appearance, plain-language copy for posture, advisor
+  effort and tool names, tool kind as a glyph rather than a hue, a modified
+  line hatched in the gutter, and one diff renderer for the confirm sheet and
+  Review Changes. **Allow is ⌘⏎** and Deny is one step; Return consents to
+  nothing (ADR-0112 amendment). Decisions live in `MARVINLogic` and are
+  asserted. The offscreen surface-snapshot harness (`SurfaceSnapshot.swift`)
+  renders the app's states without a window; it first shipped marked
+  UNVERIFIED, was then built and run, and the populated-state snapshots use a
+  stand-in sidecar.
+
+  *Worktrees: a data-loss fix.* On 2026-10-30 tab B fast-forwarded onto tab
+  A's branch and was named after A's first commit (only the base branch was
+  excluded from "own" commits). The supervisor closed A with *keep*; the app,
+  still showing A's tab, asked again and sent `discard`, and `discardWorktree`
+  ran `branch -D` on a branch whose last two commits no other ref held. Now
+  `deleteBranchPreserving` pins commits no other ref reaches at
+  `refs/marvin/archive/<branch>/<time>` before any `-D` (discard and sweep) and
+  refuses the delete if the pin cannot be written; "own" commits exclude every
+  other `marvin/*` branch and the archive; `uniqueSlug` treats a record's
+  branch name as taken; and `TabCloseDecision` closes a tree the server
+  already closed without asking.
+
+  *The app icon* sits on Apple's 824 px grid with a 100 px margin.
+  *macOS 14.4 SDK build-compat.* On the macOS 15 SDK, `View` and friends are
+  implicitly `@MainActor`; on 14.4 they are not. The annotation is now
+  explicit on 104 `View` / `NSViewRepresentable` types, 7 `ViewModifier` /
+  `Commands` types and every `extension View`; `LegacySDKShims.swift` supplies
+  an `onGeometryChange` stand-in compiled only under
+  `-Xswiftc -DMARVIN_LEGACY_SDK`. Redundant on the 15 SDK, so CI behaviour is
+  unchanged.
+
+  *Verification.* The release commit changes docs and the version only. The
+  last asserted figure on `main` before it was 1,056 MARVINLogic assertions
+  (commit `6ef2d7a`); no test run was repeated for this commit.
+
 - **2026-10-14 — v0.1.118: a model for every helper role, and Claude's server-side advisor (ADR-0126, ADR-0125; built 2026-10-12).**
 
   Every model MARVIN runs besides the executor and the advisor used to pin a
