@@ -381,14 +381,19 @@ import SwiftUI
                     .disabled(registry.integrationBusy)
                     .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request (ADR-0109).")
                 Spacer()
-                if conflicts > 0 {
-                    Text("\(conflicts) would conflict — Sync first")
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.orange)
-                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 2)
+            // Its own line: beside the buttons it got the width they left over
+            // and wrapped one word per line at a 260 pt sidebar (U4). A status
+            // colour carries a glyph (DESIGN.md Outcome Color Rule).
+            if conflicts > 0 {
+                Label("\(conflicts) would conflict — Sync first", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 14)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // No `.textSelection(.enabled)` anywhere below: SwiftUI's
             // selection overlay is an AppKit view that re-lays out during
             // layout, and inside this ScrollView it looped the window into the

@@ -61,6 +61,10 @@ final class NotificationManager {
     }
 
     private func postConfirmNotification(count: Int) async {
+        // A bare SPM binary (the surface-snapshot harness) has no bundle, and
+        // UNUserNotificationCenter raises an uncatchable exception without one.
+        // The shipped app always has a bundle identifier, so this is a no-op there.
+        guard Bundle.main.bundleIdentifier != nil else { return }
         await requestAuthorizationIfNeeded()
 
         let content = UNMutableNotificationContent()

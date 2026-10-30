@@ -249,7 +249,9 @@ import MARVINLogic
             }
         } else {
             MarkdownView(
-                text: text,
+                // The scope-met sentinel is a signal for the chip strip, not
+                // part of the message (U1: it printed as visible text).
+                text: ScopeMetDetector.displayText(text),
                 fillWidth: true,
                 baseFont: role == .system || role == .result ? .caption : .body,
                 baseColor: role == .system || role == .result ? .secondary : .primary,

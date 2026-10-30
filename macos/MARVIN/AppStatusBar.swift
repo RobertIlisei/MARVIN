@@ -63,11 +63,17 @@ private let statusBarPopoverEdge: Edge = .top
     /// even be the visible tab).
     @State private var statusBarRunner = GitOpRunner()
 
+    /// How much each segment says. The bar picks the richest level whose
+    /// natural width fits, so the numbers that matter (context, cost, branch)
+    /// are never cut mid-word: detail falls away first, values last (U2 — at
+    /// 700 and 1200 pt every label past the project name was truncated).
+    enum Detail { case full, compact, minimal }
+
     var body: some View {
-        HStack(spacing: 0) {
-            leftCluster
-            Spacer(minLength: 12)
-            rightCluster
+        ViewThatFits(in: .horizontal) {
+            bar(.full)
+            bar(.compact)
+            bar(.minimal)
         }
         .padding(.horizontal, 10)
         .frame(height: 22)
@@ -96,14 +102,23 @@ private let statusBarPopoverEdge: Edge = .top
         }
     }
 
+    private func bar(_ detail: Detail) -> some View {
+        HStack(spacing: 0) {
+            leftCluster(detail).fixedSize()
+            Spacer(minLength: 12)
+            rightCluster(detail).fixedSize()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     // MARK: - Left cluster
 
-    private var leftCluster: some View {
+    private func leftCluster(_ detail: Detail) -> some View {
         HStack(spacing: 10) {
-            connectionPip
+            connectionPip(detail)
             if let branch = bridge.branch, !branch.isEmpty {
                 MarvinDivider().frame(height: 10)
-                branchSegment(branch: branch)
+                branchSegment(branch: branch, detail: detail)
                 syncSegment
             }
             MarvinDivider().frame(height: 10)
@@ -142,7 +157,7 @@ private let statusBarPopoverEdge: Edge = .top
 
     /// Connection status — clicking re-probes /api/health (replaces
     /// the toolbar's old refresh-on-click button).
-    private var connectionPip: some View {
+    private func connectionPip(_ detail: Detail) -> some View {
         Button {
             Task { await health.refreshNow() }
         } label: {
@@ -150,7 +165,7 @@ private let statusBarPopoverEdge: Edge = .top
                 Circle()
                     .fill(connectionColor)
                     .frame(width: 7, height: 7)
-                Text(connectionLabel)
+                if detail != .minimal { Text(connectionLabel) }
             }
         }
         .buttonStyle(.plain)
@@ -199,8 +214,10 @@ private let statusBarPopoverEdge: Edge = .top
                 Image(systemName: "folder")
                     .font(.system(size: 10))
                 Text(bridge.projectName ?? "no project")
+                    .font(.system(size: 11, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .frame(maxWidth: 160, alignment: .leading)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8))
                     .foregroundStyle(.tertiary)
@@ -208,6 +225,7 @@ private let statusBarPopoverEdge: Edge = .top
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .controlSize(.small)
         .fixedSize()
         .help("Switch project · ⌘O to open another")
     }
@@ -234,7 +252,7 @@ private let statusBarPopoverEdge: Edge = .top
     /// nothing: `/api/git/branch`, `/branch/create`, `/branch/switch`
     /// and `/branch/delete` had all shipped with ADR-0012 M2 and no
     /// Swift caller ever reached them.
-    private func branchSegment(branch: String) -> some View {
+    private func branchSegment(branch: String, detail: Detail) -> some View {
         Button {
             branchPickerOpen = true
         } label: {
@@ -244,6 +262,7 @@ private let statusBarPopoverEdge: Edge = .top
                 Text(branch)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .frame(maxWidth: detail == .full ? 240 : 130, alignment: .leading)
                 // `*` for a dirty tree, matching the reference's
                 // "chore/backlog-audit-and-easy-wins*". The old dot
                 // sat in the same place and meant the same thing.
@@ -332,24 +351,30 @@ private let statusBarPopoverEdge: Edge = .top
 
     // MARK: - Right cluster
 
-    private var rightCluster: some View {
+    private func rightCluster(_ detail: Detail) -> some View {
         HStack(spacing: 10) {
-            if bridge.selectedFilePath != nil {
-                cursorSegment
+            // File facts come first to go: they describe the file, not the
+            // session, and the editor already shows it.
+            if bridge.selectedFilePath != nil, detail != .minimal {
+                cursorSegment(detail)
                 MarvinDivider().frame(height: 10)
-                indentSegment
+                indentSegment(detail)
                 MarvinDivider().frame(height: 10)
-                segment(icon: "doc.plaintext", text: "UTF-8")
-                MarvinDivider().frame(height: 10)
-                segment(icon: "return", text: "LF")
-                MarvinDivider().frame(height: 10)
-                fileTypeSegment
-                MarvinDivider().frame(height: 10)
+                if detail == .full {
+                    segment(icon: "doc.plaintext", text: "UTF-8")
+                    MarvinDivider().frame(height: 10)
+                    segment(icon: "return", text: "LF")
+                    MarvinDivider().frame(height: 10)
+                    fileTypeSegment
+                    MarvinDivider().frame(height: 10)
+                }
             }
-            activitySegment
-            contextSegment
-            toolUseSegment
-            subagentSegment
+            activitySegment(detail)
+            contextSegment(detail)
+            if detail != .minimal {
+                toolUseSegment(detail)
+                subagentSegment(detail)
+            }
             costSegment
             bellSegment
         }
@@ -358,14 +383,14 @@ private let statusBarPopoverEdge: Edge = .top
     /// Background activity — scheduled wakeups + running jobs + the
     /// auto-audit tail, with cancel affordances (routes added 2026-07-03;
     /// previously model-only state the UI couldn't see).
-    private var activitySegment: some View {
+    private func activitySegment(_ detail: Detail) -> some View {
         Button {
             activityPopoverOpen.toggle()
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "clock.arrow.2.circlepath")
                     .font(.system(size: 10))
-                Text("activity")
+                if detail == .full { Text("activity") }
             }
         }
         .buttonStyle(.plain)
@@ -407,7 +432,7 @@ private let statusBarPopoverEdge: Edge = .top
     }
 
     @ViewBuilder
-    private var contextSegment: some View {
+    private func contextSegment(_ detail: Detail) -> some View {
         if let resident = bridge.residentContextTokens {
             // Prefer what the SDK reported for the running model over an
             // estimate derived from the model id (ADR-0087).
@@ -422,7 +447,7 @@ private let statusBarPopoverEdge: Edge = .top
                 HStack(spacing: 4) {
                     Image(systemName: "gauge.with.dots.needle.50percent")
                         .font(.system(size: 10))
-                    Text("ctx \(Int(kCtx))K")
+                    Text(detail == .full ? "ctx \(Int(kCtx))K" : "\(Int(kCtx))K")
                 }
                 .foregroundStyle(colour(for: band))
             }
@@ -463,7 +488,7 @@ private let statusBarPopoverEdge: Edge = .top
     /// Hidden until at least 5 total tool calls have landed so we don't
     /// distract on idle / trivial turns.
     @ViewBuilder
-    private var toolUseSegment: some View {
+    private func toolUseSegment(_ detail: Detail) -> some View {
         let counts = ToolUseCounts(
             graphCalls: bridge.sessionGraphCalls,
             fileReadCalls: bridge.sessionFileReadCalls,
@@ -474,7 +499,9 @@ private let statusBarPopoverEdge: Edge = .top
             HStack(spacing: 4) {
                 Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.system(size: 10))
-                Text("graph \(bridge.sessionGraphCalls) · reads \(bridge.sessionFileReadCalls)")
+                Text(detail == .full
+                     ? "graph \(bridge.sessionGraphCalls) · reads \(bridge.sessionFileReadCalls)"
+                     : "\(bridge.sessionGraphCalls)·\(bridge.sessionFileReadCalls)")
             }
             .foregroundStyle(toolUseColour(for: band))
             .help(toolUseHover(band: band, counts: counts))
@@ -487,7 +514,7 @@ private let statusBarPopoverEdge: Edge = .top
     /// first dispatch. The user asked to SEE how subagents are used; before
     /// this the only trace was a telemetry line in the sidecar log.
     @ViewBuilder
-    private var subagentSegment: some View {
+    private func subagentSegment(_ detail: Detail) -> some View {
         let s = bridge.subagents.summary
         if s.dispatched > 0 {
             Button {
@@ -496,7 +523,9 @@ private let statusBarPopoverEdge: Edge = .top
                 HStack(spacing: 4) {
                     Image(systemName: "person.2.wave.2")
                         .font(.system(size: 10))
-                    Text(s.running > 0 ? "agents \(s.dispatched) · \(s.running) running" : "agents \(s.dispatched)")
+                    Text(detail == .full
+                         ? (s.running > 0 ? "agents \(s.dispatched) · \(s.running) running" : "agents \(s.dispatched)")
+                         : (s.running > 0 ? "\(s.dispatched)·\(s.running)" : "\(s.dispatched)"))
                 }
                 .foregroundStyle(s.running > 0 ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
             }
@@ -539,7 +568,7 @@ private let statusBarPopoverEdge: Edge = .top
 
     /// Indent picker — clicking cycles through 2 / 4 / 8 spaces / Tab.
     /// Persisted via NativePrefs → UserDefaults.
-    private var indentSegment: some View {
+    private func indentSegment(_ detail: Detail) -> some View {
         Menu {
             Button("2 Spaces")  { NativePrefs.shared.setIndentSize(2) }
             Button("4 Spaces")  { NativePrefs.shared.setIndentSize(4) }
@@ -550,27 +579,32 @@ private let statusBarPopoverEdge: Edge = .top
             HStack(spacing: 4) {
                 Image(systemName: "arrow.right.to.line")
                     .font(.system(size: 10))
-                Text(bridge.indentSize == 0 ? "Tab" : "Spaces: \(bridge.indentSize)")
+                Text(bridge.indentSize == 0 ? "Tab"
+                     : detail == .full ? "Spaces: \(bridge.indentSize)" : "\(bridge.indentSize)")
+                    // A borderless Menu label ignores the bar's font and drew
+                    // "Spaces: 4" visibly larger than its neighbours.
+                    .font(.system(size: 11, design: .monospaced))
             }
         }
         .menuStyle(.borderlessButton)
+        .controlSize(.small)
         .fixedSize()
         .help("Indent style — click to change")
     }
 
-    private var cursorSegment: some View {
+    private func cursorSegment(_ detail: Detail) -> some View {
         let row = bridge.cursorRow
         let col = bridge.cursorCol
         let sel = bridge.cursorSelectionLength
         let lines = bridge.cursorTotalLines
-        let cursorText = sel > 0
-            ? "Ln \(row), Col \(col) (\(sel) sel)"
-            : "Ln \(row), Col \(col)"
+        let cursorText = detail == .full
+            ? (sel > 0 ? "Ln \(row), Col \(col) (\(sel) sel)" : "Ln \(row), Col \(col)")
+            : (sel > 0 ? "\(row):\(col) (\(sel))" : "\(row):\(col)")
         return HStack(spacing: 4) {
             Image(systemName: "text.cursor")
                 .font(.system(size: 10))
             Text(cursorText)
-            if lines > 0 {
+            if lines > 0, detail == .full {
                 Text("· \(lines) line\(lines == 1 ? "" : "s")")
                     .foregroundStyle(.tertiary)
             }

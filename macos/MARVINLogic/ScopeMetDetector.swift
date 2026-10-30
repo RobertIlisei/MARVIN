@@ -38,6 +38,19 @@ public enum ScopeMetDetector {
         return text.contains(sentinel) && !statesNotMet(text)
     }
 
+    /// The text to show the user: the sentinel is a machine signal and is not
+    /// part of the message, so the closing marker is removed (with the
+    /// whitespace that set it off). Only a TRAILING sentinel is the marker —
+    /// the personality emits it last — so one quoted mid-prose, as when the
+    /// assistant explains the marker, is left alone. The transcript keeps the
+    /// original; only the rendering drops it.
+    public static func displayText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(sentinel) else { return text }
+        return String(trimmed.dropLast(sentinel.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Same rule as the sidecar's `statesScopeNotMet` (workflow-guard.ts):
     /// a turn that says the scope is not met handed off unfinished work even
     /// if it appended the sentinel (observed 2026-09-29).

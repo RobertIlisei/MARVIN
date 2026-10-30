@@ -941,6 +941,7 @@ final class MarvinEditorTextView: STTextView {
 /// detection. ⌘W closes the active tab.
 @MainActor struct FileViewerView: View {
     @Environment(MarvinBridge.self) private var bridge
+    @Environment(\.colorScheme) private var colorScheme
     @State private var model = FileViewerModel()
     /// M5: per-file diff markers. Refreshed on file open and save.
     @State private var diffLines: [Int: DiffLineStatus] = [:]
@@ -1171,7 +1172,7 @@ final class MarvinEditorTextView: STTextView {
             }
         }
         .frame(height: 30)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     /// True when the tabs are wider than the space they have. The 1pt slack
@@ -1409,7 +1410,7 @@ final class MarvinEditorTextView: STTextView {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(MarvinTheme.background)
     }
 
     // MARK: - Content area
@@ -1464,7 +1465,10 @@ final class MarvinEditorTextView: STTextView {
                         path: path,
                         content: buffer.content,
                         fileExtension: (path as NSString).pathExtension,
-                        isDark: bridge.preferredColorScheme != .light,
+                        // A user who follows the system has no explicit scheme
+                        // (`preferredColorScheme == nil`); that used to count as
+                        // dark, so a light window got the dark syntax palette.
+                        isDark: (bridge.preferredColorScheme ?? colorScheme) == .dark,
                         isEditable: buffer.canEdit && !buffer.isSaving,
                         wordWrap: bridge.wordWrap,
                         diffLines: diffLines,

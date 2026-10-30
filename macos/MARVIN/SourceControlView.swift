@@ -1710,16 +1710,22 @@ struct DiffSheetItem: Identifiable {
     var body: some View {
         HStack(spacing: 6) {
             icon
-            Text(fileName)
-                .font(.system(size: 12))
-                .foregroundStyle(nameColor)
-                .lineLimit(1)
-                .strikethrough(badge == .deleted, color: nameColor)
-            Text(directory)
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.head)
+            // The file name is what the row is for. The directory is shown
+            // whole or not at all: head-truncated to a fragment ("…es/App/
+            // Services") it was noise that also pushed the name into an
+            // ellipsis (U3). A name that still cannot fit truncates in the
+            // middle, which keeps the extension.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    nameText
+                    Text(directory)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                nameText
+            }
             Spacer(minLength: 4)
             if isInFlight {
                 ProgressView().controlSize(.small).scaleEffect(0.6)
@@ -1740,6 +1746,15 @@ struct DiffSheetItem: Identifiable {
         .help(relativePath)
         .contextMenu { menu }
         .accessibilityIdentifier("scm-row:\(file.path)")
+    }
+
+    private var nameText: some View {
+        Text(fileName)
+            .font(.system(size: 12))
+            .foregroundStyle(nameColor)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .strikethrough(badge == .deleted, color: nameColor)
     }
 
     /// Actions in the reference's order: open diff, discard, then

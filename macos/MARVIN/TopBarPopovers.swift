@@ -200,7 +200,7 @@ import MARVINLogic
                     .padding(10)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color(nsColor: .underPageBackgroundColor))
+                            .fill(MarvinTheme.elevated)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
@@ -214,13 +214,13 @@ import MARVINLogic
 
             MarvinDivider()
 
-            // Voice (= personality)
-            HStack(spacing: 8) {
+            // Voice (= personality). The label sits above its control, like
+            // MODELS: three options beside a label did not fit the popover.
+            VStack(alignment: .leading, spacing: 6) {
                 Text("VOICE")
                     .font(.system(size: 10, design: .monospaced))
                     .tracking(2)
                     .foregroundStyle(.tertiary)
-                Spacer(minLength: 8)
                 segmented(
                     options: [("ultron", "ultron"), ("marvin", "marvin"), ("neutral", "neutral")],
                     active: bridge.personality ?? "ultron",
@@ -277,6 +277,10 @@ import MARVINLogic
                 } label: {
                     Text(opt.label)
                         .font(.system(size: 11, design: .monospaced))
+                        // An option never wraps: "ultron" broke into "ultro/n"
+                        // at 340 pt (U4).
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
                         .foregroundStyle(isActive ? Color.accentColor : .secondary)
@@ -293,7 +297,7 @@ import MARVINLogic
         }
         .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
+                .fill(MarvinTheme.elevated)
                 .overlay(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)

@@ -11,7 +11,7 @@ import MARVINLogic
 import SwiftUI
 
 enum SurfaceFixtures {
-    static let project = "/tmp/example-project"
+    static let project = "/tmp/demo/Atlas"
     private static let epoch = Date(timeIntervalSince1970: 1_700_000_000)
 
     // MARK: - Chat transcript
@@ -32,6 +32,13 @@ enum SurfaceFixtures {
     <!-- marvin:scope-met -->
     """
 
+    /// The scope-met handoff on its own: a hand-written closing line followed by
+    /// the hidden marker `<!-- marvin:scope-met -->`, which the transcript
+    /// renders as visible text (a known bug — see COVERAGE.md).
+    static var handoffMessage: ChatMessage {
+        message("a2", .assistant, [.text(id: "a2t", text: handoffText)])
+    }
+
     static var transcript: [ChatMessage] {
         [
             message("u1", .user, [.text(id: "u1t", text: "Add a retry with backoff to the HTTP client, and cover it with a test.")]),
@@ -50,8 +57,8 @@ enum SurfaceFixtures {
                           input: json(#"{"command":"npm test -- --run client","description":"Run the client tests"}"#),
                           result: ChatToolResult(output: "✓ client.test.ts (6 tests) 41ms\n\nTest Files  1 passed (1)\n     Tests  6 passed (6)", isError: false)),
                 .toolCall(id: "tc2", name: "Edit",
-                          input: json(#"{"file_path":"/tmp/example-project/src/client.ts","old_string":"return fetch(url, init)","new_string":"return retrying(() => fetch(url, init), policy)"}"#),
-                          result: ChatToolResult(output: "The file /tmp/example-project/src/client.ts has been updated.", isError: false)),
+                          input: json(#"{"file_path":"\#(project)/src/client.ts","old_string":"return fetch(url, init)","new_string":"return retrying(() => fetch(url, init), policy)"}"#),
+                          result: ChatToolResult(output: "The file \(project)/src/client.ts has been updated.", isError: false)),
                 .toolCall(id: "tc3", name: "Bash",
                           input: json(#"{"command":"npm run typecheck","description":"Typecheck the workspace"}"#),
                           result: ChatToolResult(output: "src/client.ts(58,12): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.", isError: true)),
@@ -129,5 +136,80 @@ enum SurfaceFixtures {
             queuedCount: isSending ? 1 : 0,
             attachments: $attachments
         )
+    }
+}
+
+
+// MARK: - Bridge state for the populated surfaces
+
+extension SurfaceFixtures {
+    static let openFiles = [
+        "Sources/App/ContentView.swift",
+        "Sources/App/Services/SyncService.swift",
+        "Sources/App/Models/UsageLedger.swift",
+    ]
+
+    /// Put the shared bridge in the state of a session in use: three projects
+    /// with one active, a branch that is ahead and behind, files open, a
+    /// context that is filling, a cost and a graph-to-reads ratio. These are
+    /// plain stored properties the live services write; the harness writes them
+    /// directly instead of waiting for polls that need an active app.
+    @MainActor static func populateBridge(_ b: MarvinBridge) {
+        // Files are opened while no project is active so the bridge does not
+        // persist this fixture's tabs into the user's real preferences.
+        b.applyProjectsLoad(projects: [], activeId: nil)
+        for f in openFiles { b.setSelectedFile("\(project)/\(f)") }
+        b.applyProjectsLoad(projects: [
+            BridgeProject(id: "prj_atlas", name: "Atlas", workDir: project),
+            BridgeProject(id: "prj_harbor", name: "Harbor", workDir: "/tmp/demo/Harbor"),
+            BridgeProject(id: "prj_notes", name: "Field Notes", workDir: "/tmp/demo/Notes"),
+        ], activeId: "prj_atlas")
+        b.setCursor(row: 42, col: 9, selectionLength: 0)
+        b.setCursorTotalLines(68)
+
+        b.branch = "feature/usage-ledger"
+        b.branchDirtyCount = 12
+        b.branchUpstream = "origin/feature/usage-ledger"
+        b.branchAhead = 3
+        b.branchBehind = 1
+        b.dirtyStatus = [
+            "Sources/App/Services/SyncService.swift": "MM", "Sources/App/Models/Project.swift": "A",
+            "docs/architecture.md": "M", "Tests/AtlasTests/LegacyTests.swift": "D",
+            "Sources/App/Services/ApiClient.swift": "R", "Sources/App/Models/UsageLedger.swift": "M",
+            "web/src/legacy.ts": "D", "web/src/router.ts": "M", "Sources/App/ContentView.swift": "M",
+            "scripts/seed.sh": "??", ".env.local": "??", "notes/todo.md": "??",
+        ].reduce(into: [:]) { $0["\(project)/\($1.key)"] = $1.value }
+
+        b.errorCount = 2
+        b.warningCount = 7
+        b.residentContextTokens = 118_000
+        b.billableThisTurn = 9_400
+        b.reportedContextWindow = 200_000
+        b.sessionGraphCalls = 31
+        b.sessionFileReadCalls = 74
+        b.sessionGraphSummaryCalls = 2
+
+        b.costSummary = CostSummary(
+            today: 1.84, week: 9.62, lifetime: 47.3, turns: 402, inputTokens: 5_402_100, outputTokens: 690_300,
+            daily: [
+                .init(day: "2026-10-30", costUsd: 1.84, turns: 12), .init(day: "2026-10-29", costUsd: 1.55, turns: 14),
+                .init(day: "2026-10-28", costUsd: 1.78, turns: 13), .init(day: "2026-10-27", costUsd: 1.15, turns: 9),
+            ],
+            openRouter: nil,
+            claudeWindows: [
+                .init(type: "five_hour", status: "allowed", utilization: 0.35, resetsAt: 1_793_329_200, isUsingOverage: false),
+                .init(type: "seven_day", status: "allowed_warning", utilization: 0.55, resetsAt: 1_793_491_200, isUsingOverage: false),
+            ])
+        b.executorModel = "claude-opus-5"
+        b.advisorModel = "claude-sonnet-5"
+        b.appendNotification("Backlog item claimed by a tab")
+
+        for event in [
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"scout"}}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent","input":{"subagent_type":"implementer"}}]}}"#,
+            #"{"type":"system","subtype":"task_started","task_type":"local_agent","task_id":"t1","subagent_type":"implementer","is_backgrounded":true}"#,
+            #"{"type":"system","subtype":"task_started","task_type":"local_agent","task_id":"t2","subagent_type":"scout","is_backgrounded":false}"#,
+            #"{"type":"system","subtype":"task_notification","task_id":"t2","status":"completed"}"#,
+        ] { _ = b.subagents.apply(cliEventData: Data(event.utf8)) }
     }
 }
