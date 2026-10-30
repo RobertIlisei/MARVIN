@@ -152,6 +152,10 @@ public enum SessionFeedEvent: Equatable, Sendable {
     /// ADR-0127 M6 — the tab's posture changed through the API; re-read its
     /// watch row and adopt it (ADR-0108 amendment).
     case posture(sessionId: String, revision: Int, source: String)
+    /// The stream attached (`announce.attached`, sent first on connect). Says
+    /// nothing about any session: the registry reads it as "the feed is up",
+    /// so an all-idle project is not shown as reconnecting; the ledger ignores it.
+    case attached
 
     private struct Registered: Decodable {
         let marvinSessionId: String; let turnId: String; let kind: String?; let startedAt: Double
@@ -176,12 +180,13 @@ public enum SessionFeedEvent: Equatable, Sendable {
         let marvinSessionId: String; let postureRevision: Int; let postureSource: String
     }
 
-    /// Decode one SSE frame. nil = not a feed event (`announce.attached`,
-    /// heartbeats, an unknown name) or malformed data. Never throws: a bad
+    /// Decode one SSE frame. nil = not a feed event (heartbeats, an unknown name) or malformed data. Never throws: a bad
     /// frame must not tear down a stream that every other tab depends on.
     public static func decode(name: String, data: Data) -> SessionFeedEvent? {
         let d = JSONDecoder()
         switch name {
+        case "announce.attached":
+            return .attached
         case "turn.registered":
             guard let r = try? d.decode(Registered.self, from: data) else { return nil }
             return .registered(sessionId: r.marvinSessionId, turnId: r.turnId, kind: r.kind, startedAt: r.startedAt)
@@ -209,8 +214,11 @@ public enum SessionFeedEvent: Equatable, Sendable {
         }
     }
 
+    /// "" for `.attached`, which belongs to no session.
     public var sessionId: String {
         switch self {
+        case .attached:
+            return ""
         case .registered(let s, _, _, _), .ended(let s, _, _, _), .confirmPending(let s, _, _, _),
              .confirmResolved(let s, _, _, _, _), .tree(let s, _), .activity(let s, _, _, _),
              .posture(let s, _, _):
