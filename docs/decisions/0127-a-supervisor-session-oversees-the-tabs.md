@@ -1,6 +1,7 @@
 # ADR-0127 — A supervisor session oversees a project's tabs, within limits the user sets, and never stands in for the user's consent
 
 - **Status:** Accepted — 2026-10-30 (decision, Phase A). Implementation follows [`docs/plans/supervisor.md`](../plans/supervisor.md); nothing in this ADR is shipped yet.
+- **Revised:** 2026-10-30, on review — Robert's decision that **the supervisor may open tabs**: always in a fresh worktree, only when the user asks for it directly or approves the supervisor's proposal, always escalation-gated, never on its own initiative, one request one tab (§1, §4 item 7, §6).
 - **Date:** 2026-10-30
 - **Supersedes, in part:**
   - Golden Rule 1 (`AGENTS.md`): the 2026-07-24 rejection of a standing supervisor, "No model ever commands another model", and "Two sessions must still never be *dispatched* by a model".
@@ -98,7 +99,7 @@ The failure modes. Parallel writers on shared state still corrupt each other. A 
 
 ## Decision
 
-**A user-started Supervisor session per project, woken by a deterministic runtime loop, may watch every tab, answer its questions and — where the user allows — its ordinary confirms, steer it with messages tagged as the supervisor's, narrow its posture and prepare its integration. It acts only through a policy-checked `marvin-supervise` MCP server and records every act in an append-only ledger the session auditor reviews. Every consent-shaped decision goes to the user. Every turn it starts or steers is held to a stricter gate than the user's own.**
+**A user-started Supervisor session per project, woken by a deterministic runtime loop, may watch every tab, answer its questions and — where the user allows — its ordinary confirms, steer it with messages tagged as the supervisor's, narrow its posture and prepare its integration — and, when the user asks for it or approves its proposal and then confirms the brief, open one new tab in a fresh worktree. It acts only through a policy-checked `marvin-supervise` MCP server and records every act in an append-only ledger the session auditor reviews. Every consent-shaped decision goes to the user. Every turn it starts or steers is held to a stricter gate than the user's own.**
 
 ### 1. Golden Rule 1 — what is superseded and what remains
 
@@ -106,7 +107,7 @@ The failure modes. Parallel writers on shared state still corrupt each other. A 
 
 - the 2026-07-24 rejection of a standing supervisor;
 - "No model ever commands another model";
-- "Two sessions must still never be dispatched by a model". It is replaced by: *a model never creates a session; the supervisor steers sessions the user opened, within limits the user set.*
+- "Two sessions must still never be dispatched by a model". It is replaced by: *a model never opens a session on its own initiative; the supervisor steers the sessions the user opened, within limits the user set, and opens a new one only in a fresh worktree, only when the user asks for it or approves its proposal, and only after the user confirms the brief (§4 item 7).*
 
 **Remains, each enforced in code rather than in the supervisor's prompt:**
 
@@ -114,7 +115,7 @@ The failure modes. Parallel writers on shared state still corrupt each other. A 
 - **Every tab stays behind the same gates, and a supervisor-started or supervisor-steered turn behind stricter ones** (§5).
 - **A supervisor message is never the user's consent** (§4, §5).
 - **The subagent invariants are unchanged** (ADR-0007, 0014, 0030, 0054, 0081). The supervisor is not a subagent: no executor can spawn it, brief it, message it, or read its ledger, whether by tool or through MARVIN's own API (§5).
-- **No role decomposition, task assignment or handoff pipelines.** The supervisor never splits a task across tabs or assigns work between them. Each tab's task stays the one the user gave it. That is the part of camp 2 ADR-0001 measured, and it stays rejected; what is superseded is camp 2's rejection of any supervising model at all.
+- **No role decomposition, task assignment or handoff pipelines.** The supervisor never splits a task across tabs or assigns work between them. Each tab's task stays the one the user gave it. A tab the supervisor opens carries one request the user asked for or approved — **one request, one tab**; the supervisor never turns one request into several tabs by itself. That is the part of camp 2 ADR-0001 measured, and it stays rejected; what is superseded is camp 2's rejection of any supervising model at all.
 - **New authority needs a new ADR.** Any new subagent type, and any widening of the supervisor's authority beyond this ADR, requires one.
 
 ### 2. Shape — a session the user starts, woken by the runtime
@@ -197,7 +198,13 @@ The supervisor never performs an act on this list. Its verb turns the act into a
    - ADR-0036's plan approval is the user's consent to a scope.
    - Today approval exists only in the client: `approvePlan` switches the tab to Agent and sends ordinary chat text (`ChatPreviewView.swift:3528-3541`), and the server-side `maybePlanApproval` is a no-op (`sdk-runner.ts:1386-1400`).
    - So approval is caught mechanically, as item 5's Plan → Agent, never by recognising the text.
-7. **Topology.** Creating a tab (`new_session` is only a proposal to the user), and anything that targets a supervisor session.
+7. **Topology.** Opening a tab, and anything that targets a supervisor session. Opening a tab is the one topology act the supervisor may *propose*, and it is gated end to end:
+   - **Only on the user's word.** The supervisor proposes `new_session` only when the user asked for a tab directly, or as a proposal the user then approves. It never opens a tab on its own initiative, and a wake never produces one.
+   - **Always an escalation.** The inbox item shows the proposed **first message**, the **tree** and the **posture**. The tab opens only when the user confirms that item; the confirmation is the user's act (`actor: "user"`), like any accepted escalation.
+   - **Always a fresh worktree.** The tree is never the shared checkout and never an existing tab's worktree. The tab is created through ADR-0122's atomic path, disk floor included; a creation failure refuses the tab rather than falling back.
+   - **At most the approved posture.** The new tab starts with the posture the user confirmed on the item, never wider. A later widening is item 5.
+   - **Still the supervisor's words.** The first message is the supervisor's text adopted by the user's confirmation, so the first turn is recorded `author: "supervisor"` and is supervisor-touched (§5): confirming the brief is consent to open the tab with it, not to every act the brief leads to.
+   - **One request, one tab** (§1). Every opening counts against the rate limits and the spend cap (§6).
 
 **How the list is applied.**
 
@@ -256,7 +263,7 @@ The supervisor never performs an act on this list. Its verb turns the act into a
   - Repeated failed outcomes escalate rather than retry.
 - **A daily spend cap** counts the supervisor's own tokens *and* the tab turns it started, because a nudge spends the tab's money too. At the cap the loop pauses and escalates.
 - **Per-wake caps.** A max-actions-per-wake breaker and a `maxTurns` cap per wake.
-- **No recursion.** A supervisor session is never watched or targeted. It cannot create sessions or spawn agents. There is one per project.
+- **No recursion.** A supervisor session is never watched or targeted. It cannot spawn agents, cannot open a supervisor session, and opens an ordinary tab only through §4 item 7's confirmed escalation. There is one per project.
 - **Secret hygiene.** The text of `send` and `answer` is scanned for secret-shaped strings (API keys, tokens, private keys) and refused on a match. This backs up the secret-path read deny in §2.
 - **Pause and Kill are available at all times.** Pause stops waking; Kill aborts the in-flight wake, then pauses.
 - **The ledger.** Append-only JSONL at `<MARVIN_DATA_DIR>/supervisor/<projectId>/ledger.jsonl`.
@@ -351,6 +358,7 @@ This machine has no Swift 6.1 toolchain, so the work is sequenced **sidecar firs
 - **An agent-teams lead that decomposes work into tabs.** Rejected. Sequential coding loses 39–70 % under that split, and Anthropic does not recommend teams for sequential or same-file work.
 - **Delegation stored in the project's `.marvin/`.** Rejected: project-controlled input could grant itself authority.
 - **Authenticating the whole loopback API.** Deferred. The capability token covers the routes that carry supervisor authority, and the gate's control-route deny covers a tab's model. Authenticating the app's own routes is a separate decision.
+- **A supervisor that opens tabs on its own initiative, or splits one request into several tabs.** Rejected. The first is a model creating work nobody asked for; the second is the task decomposition ADR-0001 measured. Opening a tab is kept, behind the user's request and a confirmed escalation (§4 item 7).
 - **Automatic graduation from shadow to autonomy.** Rejected. Widening the supervisor's authority is a widening like any other, and widening is the user's act.
 
 ## Scope of Done
@@ -370,6 +378,7 @@ This machine has no Swift 6.1 toolchain, so the work is sequenced **sidecar firs
   - Every proposal, act, refusal, drop and escalation is in the append-only ledger, and the auditor can review it.
   - The supervisor ships off, and shadow precedes autonomy per category.
   - `PUT /api/sessions/posture` and `POST /api/confirm/answer` exist.
+  - `new_session` opens a tab only from a user-confirmed inbox item, always in a fresh worktree, at no more than the confirmed posture.
 
 ## Related
 

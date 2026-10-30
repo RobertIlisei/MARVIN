@@ -45,8 +45,11 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    raises a confirm naming the other live session, in `auto` mode as well as
    `gated`. Anthropic's own agent teams run several sessions in one directory
    on the same basis — partitioned file ownership, not separate checkouts.
-   A model never *creates* a session; since ADR-0127 a supervisor may steer
-   the sessions the user opened, within limits the user set (below).
+   A model never opens a session *on its own initiative*; since ADR-0127 a
+   supervisor may steer the sessions the user opened, within limits the user
+   set, and may open a new tab — always in a fresh worktree, only when the
+   user asks for it or approves its proposal, and only after the user confirms
+   the first message, tree and posture (below).
    **Since [ADR-0107](./docs/decisions/0107-one-worktree-per-tab-and-a-multi-session-watch.md)
    (2026-09-09) a new chat tab runs in its own git worktree by default** —
    `marvin/tab/<slug>` under `.marvin/worktrees/tab-<slug>`, cut from the
@@ -106,9 +109,11 @@ diagnostic trail per change, see [`docs/history/CHANGELOG.md`](./docs/history/CH
    and metered CI (ADR-0109), the containment confirms (ADR-0102 / ADR-0107),
    discarding work, auth / credential / CI / `.env` / migration paths,
    widening a posture, approving a plan and changing scope stay human-only and
-   reach the user as escalations showing the raw act. It cannot spawn agents,
-   create tabs or supervise a supervisor, and a tab cannot reach its routes or
-   data. The *mechanical* supervisor (gate + ADR-0055/0057 guards) still
+   reach the user as escalations showing the raw act. It cannot spawn agents
+   or supervise a supervisor; it opens a tab only through a confirmed
+   escalation — fresh worktree, at most the approved posture, one request one
+   tab, never split into several on its own — and a tab cannot reach its
+   routes or data. The *mechanical* supervisor (gate + ADR-0055/0057 guards) still
    screens every tab, the supervisor's turns included. Every supervisor act
    lands in an append-only ledger the **session auditor**
    ([ADR-0059](./docs/decisions/0059-session-auditor-runtime-dispatched-read-only.md))

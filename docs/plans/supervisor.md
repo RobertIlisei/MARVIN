@@ -39,6 +39,7 @@ This machine has no Swift 6.1 toolchain. It has Command Line Tools 15.3 and Swif
   - The supervisor ships off.
   - Shadow precedes autonomy, per category.
 - **API gaps:** `PUT /api/sessions/posture` and `POST /api/confirm/answer` exist and serve both the external prototype and the supervisor.
+- **Tabs:** the supervisor opens a tab only from a user-confirmed escalation, always in a fresh worktree, at no more than the confirmed posture — one request, one tab.
 
 ## Milestones
 
@@ -260,7 +261,14 @@ The first time the supervisor performs anything. Each category is switched by th
   - list and preview, live;
   - sweep, performed — exactly what `worktree_sweep` reclaims, never a `session` tree of an open tab;
   - merge, merge-all, Prepare MR and drop-with-work, escalated.
-- **`close_session` and `new_session`**, both escalated.
+- **`close_session`**, escalated.
+- **`new_session`** (ADR-0127 §4 item 7):
+  - proposed only on the user's direct request (through `POST /api/supervisor/message`) or as a proposal the user approves — never from a wake on its own initiative;
+  - always an inbox item showing the proposed first message, tree and posture;
+  - on `accept`, the tab is created with `actor: "user"` through ADR-0122's atomic worktree path — a fresh worktree, never the shared checkout or an existing tree, no fallback on failure;
+  - the new tab's posture is at most the one confirmed on the item;
+  - its first turn is recorded `author: "supervisor"` and is supervisor-touched;
+  - one request, one tab: a proposal carries exactly one tab; openings count against the rate limits and the spend cap.
 - **The wake trigger on scope-met handoffs.**
 
 **Touchpoints — the auditor and docs.**
@@ -273,6 +281,11 @@ The first time the supervisor performs anything. Each category is switched by th
 - **Escalations become inbox items.** Every §4 act the supervisor recommends appears as an inbox item showing the raw act, with the recommendation separate.
   - `accept` performs the act as the user and resolves the item.
   - An item whose confirm the user answered in the tab resolves on its own.
+- **A tab opens only from a confirmed item.**
+  - `new_session` without the user's request or approval is refused.
+  - An accepted `new_session` item opens exactly one tab, in a fresh worktree, with a posture no wider than the one confirmed. An item naming the shared checkout or an existing tree is refused.
+  - The new tab's first turn reads `author: "supervisor"` and is supervisor-touched.
+  - A worktree creation failure answers the ADR-0122 refusal, with nothing opened.
 - **Confirm autonomy respects the level.** With confirms autonomous:
   - an ordinary Edit confirm in a gated `answer-confirms` tab is answered by the supervisor;
   - the same confirm in an `answer-questions` tab is not;
@@ -317,8 +330,8 @@ The first time the supervisor performs anything. Each category is switched by th
 
 - **New authority.** Each of these would need a new ADR:
   - any write capability for the supervisor;
-  - any task decomposition across tabs;
-  - a supervisor that creates tabs on its own.
+  - any task decomposition across tabs — one request stays one tab;
+  - a supervisor that opens tabs on its own initiative, in the shared checkout, or without the user confirming the brief, tree and posture. Opening a tab through a confirmed escalation is in milestone 5 (ADR-0127 §4 item 7).
 - **Whole-API authentication.** Authenticating the app's own loopback routes is out of scope. The capability token covers only supervisor-authority routes (ADR-0127 §5).
 - **OS-level isolation** from code a tab executes. Same-user code execution is out of scope (ADR-0127 §5).
 - **Automatic graduation** from shadow to autonomy.
