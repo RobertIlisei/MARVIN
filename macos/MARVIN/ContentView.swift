@@ -342,7 +342,9 @@ import SwiftUI
             }
             // ⌘P is owned by Window ▸ Quick Open File….
             .disabled(bridge.projectWorkDir == nil)
-            .help("Quick Open file (⌘P)")
+            .help(bridge.projectWorkDir == nil
+                  ? "Open a project to use Quick Open (⌘P)"
+                  : "Quick Open file (⌘P)")
         }
     }
 

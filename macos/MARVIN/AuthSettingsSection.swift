@@ -86,7 +86,7 @@ private struct AuthConfigStatus: Decodable {
             }
 
             if let s = status {
-                LabeledContent("Effective") {
+                LabeledContent("In use") {
                     Text(effectiveLabel(s.effective))
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)

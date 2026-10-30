@@ -176,14 +176,17 @@ import SwiftUI
 
     @ViewBuilder
     private var content: some View {
+        // Filtered once per render, then grouped from that list; both used to be
+        // recomputed (lowercasing every item) several times each (audit K15).
+        let list = filtered
         if bridge.projectWorkDir == nil {
             empty("checkmark.seal", "No project active", nil)
-        } else if filtered.isEmpty {
+        } else if list.isEmpty {
             emptyState
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(grouped, id: \.file) { group in
+                    ForEach(group(list), id: \.file) { group in
                         fileHeader(group)
                         if !collapsedFiles.contains(group.file) {
                             ForEach(group.items) { row($0) }
@@ -285,9 +288,11 @@ import SwiftUI
 
     /// Grouped by file, files ordered by their worst severity then by path —
     /// the file with errors sorts above the file with only warnings.
-    private var grouped: [FileGroup] {
+    private var grouped: [FileGroup] { group(filtered) }
+
+    private func group(_ list: [DiagnosticItem]) -> [FileGroup] {
         var buckets: [String: [DiagnosticItem]] = [:]
-        for item in filtered { buckets[item.filePath, default: []].append(item) }
+        for item in list { buckets[item.filePath, default: []].append(item) }
         return buckets
             .map { FileGroup(file: $0.key, items: $0.value) }
             .sorted { a, b in

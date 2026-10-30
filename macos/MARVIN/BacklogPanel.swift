@@ -146,8 +146,9 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     private var flaggedIds: Set<String> { Set(findings.map(\.id)) }
 
     /// Grouped view of `visible`. `.none` collapses to a single untitled band.
-    private var groupedSections: [(title: String, items: [BacklogItem])] {
-        let v = visible
+    private var groupedSections: [(title: String, items: [BacklogItem])] { sections(of: visible) }
+
+    private func sections(of v: [BacklogItem]) -> [(title: String, items: [BacklogItem])] {
         switch group {
         case .none:
             return [("", v)]
@@ -392,6 +393,11 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     }
 
     @ViewBuilder private var content: some View {
+        // Filter + sort once per render and hand the result down: `visible` (a
+        // sort of every item) was evaluated twice here and again per group, and
+        // `provisional` four times (audit K16).
+        let vis = visible
+        let prov = provisional
         if items.isEmpty && (isLoading || !hasLoaded) {
             // First load in flight. The empty state below used to show here,
             // telling the user "No open backlog items" for the 10–15 s it took
@@ -400,7 +406,7 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                 SkeletonRows(count: 7, detailLines: 2, card: true).padding(12)
             }
             .scrollDisabled(true)
-        } else if visible.isEmpty && provisional.isEmpty {
+        } else if vis.isEmpty && prov.isEmpty {
             VStack(spacing: 6) {
                 Image(systemName: "checkmark.circle").font(.title2).foregroundStyle(.secondary)
                 if hasControllable {
@@ -421,8 +427,8 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             let byId = Dictionary(grouping: findings, by: \.id)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    if !provisional.isEmpty { provisionalSection(byId) }
-                    ForEach(groupedSections, id: \.title) { section in
+                    if !prov.isEmpty { provisionalSection(byId) }
+                    ForEach(sections(of: vis), id: \.title) { section in
                         if !section.title.isEmpty {
                             groupHeader(section.title, count: section.items.count)
                         }

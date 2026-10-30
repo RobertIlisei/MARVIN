@@ -1467,9 +1467,8 @@ final class MarvinEditorTextView: STTextView {
             if let buffer = model.buffer(for: path) {
                 if buffer.isBinary {
                     let ext = (path as NSString).pathExtension.lowercased()
-                    if Self.imageExtensions.contains(ext),
-                       let nsImage = NSImage(contentsOfFile: path) {
-                        ImageFilePreview(image: nsImage, filename: (path as NSString).lastPathComponent)
+                    if Self.imageExtensions.contains(ext) {
+                        ImageFilePreview(path: path, filename: (path as NSString).lastPathComponent)
                     } else {
                         placeholder(
                             "Binary file (\(formattedBytes(buffer.size))) — preview not available."
@@ -1722,12 +1721,42 @@ final class MarvinEditorTextView: STTextView {
 /// Replaces the "Binary file — preview not available" placeholder
 /// when the selected file has an image extension (png/jpg/webp/etc).
 @MainActor private struct ImageFilePreview: View {
-    let image: NSImage
+    let path: String
     let filename: String
 
+    @State private var image: NSImage?
+    @State private var failed = false
     @State private var scale: CGFloat = 1.0
 
+    /// Decoded off the main thread, once per path: it used to run inside the
+    /// parent's `content` builder, so every body pass re-read the file on main
+    /// (audit K7).
     var body: some View {
+        Group {
+            if let image {
+                loaded(image)
+            } else if failed {
+                Text("Couldn’t read this image.")
+                    .font(.callout)
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: path) {
+            image = nil
+            failed = false
+            let decoded = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOfFile: path)
+            }.value
+            image = decoded
+            failed = decoded == nil
+        }
+    }
+
+    @ViewBuilder
+    private func loaded(_ image: NSImage) -> some View {
         GeometryReader { geo in
             ScrollView([.horizontal, .vertical]) {
                 Image(nsImage: image)

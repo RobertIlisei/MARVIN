@@ -83,8 +83,13 @@ import WebKit
         } else if let url = graphURL, availability == .ready {
             GraphWebView(url: url, reloadKey: reloadKey)
         } else {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 8) {
+                ProgressView()
+                Text("Loading the graph…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MarvinTheme.textMuted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
