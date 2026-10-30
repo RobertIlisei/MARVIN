@@ -356,6 +356,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if TodoStripSnapshot.runIfRequested() {
             exit(0)
         }
+        // Dev-only: `MARVIN_SNAPSHOT_VIEW=<surface|all|list>` with
+        // `MARVIN_SNAPSHOT_OUT=<dir>` rasterises the UI surfaces (light and
+        // dark, two widths) and exits. Inert unless set. See SurfaceSnapshot.swift.
+        if SurfaceSnapshot.runIfRequested() {
+            exit(0)
+        }
 
         // Spawn the bundled sidecar FIRST — Process.run() returns the
         // moment the child is forked, well before Next.js binds to
