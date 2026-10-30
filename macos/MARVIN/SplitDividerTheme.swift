@@ -50,7 +50,12 @@ enum SplitDividerTheme {
         // `class_getInstanceMethod` walks the superclass chain, and exchanging
         // an inherited `NSView.layout` would repoint layout for every view in
         // the app. Verified against the class's own method list.
-        guard implementsItself(dividerClass, #selector(NSView.layout)),
+        // The restyle reads and writes a private `backgroundColor` through KVC,
+        // which raises an uncatchable exception if a future macOS drops it, so
+        // refuse to install unless both accessors are still there (audit L21).
+        guard dividerClass.instancesRespond(to: NSSelectorFromString("backgroundColor")),
+              dividerClass.instancesRespond(to: NSSelectorFromString("setBackgroundColor:")),
+              implementsItself(dividerClass, #selector(NSView.layout)),
               let original = class_getInstanceMethod(dividerClass, #selector(NSView.layout)),
               let replacement = class_getInstanceMethod(
                   NSView.self, #selector(NSView.marvin_dividerLayout)

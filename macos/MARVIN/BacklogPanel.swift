@@ -49,6 +49,9 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     /// list shows a skeleton, never the empty state.
     @State private var hasLoaded = false
     @State private var error: String?
+    /// A success is not an error: "Filed: url" used to go through the red
+    /// error text (audit K25).
+    @State private var filedNote: String?
     /// Possible-duplicate notice after a manual add (ADR-0044 addendum).
     /// Separate from `error` because the add SUCCEEDED — conflating the two
     /// would read as a rejection.
@@ -182,6 +185,13 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .padding(.horizontal, 12).padding(.top, 8)
+            }
+            if let filedNote {
+                Text(filedNote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 12).padding(.top, 8)
             }
             // Possible-duplicate hint (ADR-0044 addendum). Advisory, not an
@@ -756,7 +766,7 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
     private func exportIssue(_ item: BacklogItem) async {
         do {
             let url = try await BacklogService.shared.promoteIssue(workDir: workDir, id: item.id)
-            error = "Filed: \(url)"
+            filedNote = "Filed: \(url)"
             await refresh(); onChanged()
         } catch {
             self.error = "Export failed: \(error.localizedDescription)"
@@ -1066,6 +1076,8 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
             )
             savedFlash = true
             onChanged()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            savedFlash = false
         } catch {
             self.error = error.localizedDescription
         }

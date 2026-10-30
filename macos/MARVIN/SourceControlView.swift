@@ -56,6 +56,9 @@ final class SourceControlModel {
     private(set) var lastError: String? = nil
     private(set) var loadedCwd: String? = nil
 
+    /// The status banner's ×; it used to be an empty closure (audit L18).
+    func dismissStatusError() { lastError = nil }
+
     /// Worktrees of the open repo — the main checkout first.
     private(set) var repos: [GitRepoEntry] = []
     private(set) var stashes: [GitStashEntry] = []
@@ -1586,7 +1589,7 @@ final class SourceControlModel {
         }
         if let err = model.lastError {
             MarvinDivider()
-            banner("Status fetch error: \(err)", isError: true) {}
+            banner("Status fetch error: \(err)", isError: true) { model.dismissStatusError() }
         }
     }
 

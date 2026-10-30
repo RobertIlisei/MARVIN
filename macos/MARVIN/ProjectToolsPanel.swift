@@ -30,6 +30,7 @@
 //     what language the file is.
 
 import AppKit
+import MARVINLogic
 import SwiftUI
 
 @MainActor
@@ -421,8 +422,7 @@ enum GraphOutline {
     /// output is the point, and a build that fails needs to be readable.
     private func run(_ task: BuildTask) {
         NativePrefs.shared.revealPane(.terminal)
-        let cd = task.directory.map { "cd \($0.replacingOccurrences(of: " ", with: "\\ ")) && " } ?? ""
-        bridge.triggerTerminalCommand(cd + task.command)
+        bridge.triggerTerminalCommand(ShellQuote.cdPrefix(directory: task.directory) + task.command)
     }
 }
 

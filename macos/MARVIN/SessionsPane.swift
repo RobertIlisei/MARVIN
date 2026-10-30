@@ -21,10 +21,28 @@ import SwiftUI
     /// ADR-0112 — keyboard focus in the list: ↑ ↓ move, ⏎ switches.
     @State private var focusedId: String? = nil
     @FocusState private var listFocused: Bool
+    /// The kept branch a context-menu "Discard branch…" is asking about (audit L12).
+    @State private var discardCandidate: String? = nil
 
     var body: some View {
         content
             .modifier(PaneGeometryProbe(name: "SessionsPane"))
+            .confirmationDialog(
+                "Discard this branch?",
+                isPresented: Binding(
+                    get: { discardCandidate != nil },
+                    set: { if !$0 { discardCandidate = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Discard Branch", role: .destructive) {
+                    if let id = discardCandidate { Task { await registry.discardKept(id) } }
+                    discardCandidate = nil
+                }
+                Button("Cancel", role: .cancel) { discardCandidate = nil }
+            } message: {
+                Text("The branch and its worktree are deleted. Commits that are not merged anywhere else cannot be recovered from here.")
+            }
         // A pane absorbs compression and clips; it never negotiates for
         // width. All seven stay mounted in one ZStack, so the widest
         // intrinsic minimum among them becomes the sidebar's, and the
@@ -334,7 +352,7 @@ import SwiftUI
                 }
             }
             Divider()
-            Button("Discard branch", role: .destructive) { Task { await registry.discardKept(e.id) } }
+            Button("Discard branch…", role: .destructive) { discardCandidate = e.id }
         }
         .disabled(registry.integrationBusy)
     }

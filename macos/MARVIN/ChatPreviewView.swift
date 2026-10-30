@@ -3478,7 +3478,7 @@ final class ChatPreviewModel {
                   : "Save this plan to a Markdown file so you can follow it outside the chat.")
             Button("Revise") {
                 // Stay in Plan mode; just nudge a revised plan.
-                model.draft = "Revise the plan — "
+                model.draft = ReviseDraft.compose(existing: model.draft)
             }
             .controlSize(.small)
             Button {
@@ -3618,7 +3618,11 @@ final class ChatPreviewModel {
                 request: head,
                 onAllow: { model.respond(to: head, decision: .allow) },
                 onDeny: { reason in model.respond(to: head, decision: .deny, denyMessage: reason) }
-            )))
+            )
+            // Tray rows are index-keyed, so the next confirm lands in the same
+            // slot; without an identity its half-typed deny reason carries
+            // over (audit C10).
+            .id(head.toolUseId)))
         }
         // ADR-0107 — a turn a restart cut off, with the way back.
         if let sid = model.loadedSessionId, !model.isSending,
@@ -4194,10 +4198,22 @@ final class ChatPreviewModel {
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "workDir": cwd, "title": f.title, "body": body, "severity": severity,
         ])
-        _ = try? await URLSession.shared.data(for: req)
+        // Only a stored finding is a handled one; a failed request used to be
+        // greyed out as if it had worked (audit C13).
+        let stored: Bool
+        if let (_, response) = try? await URLSession.shared.data(for: req),
+           let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+            stored = true
+        } else {
+            stored = false
+        }
         await MainActor.run {
-            handledFindings.insert(f.id)
-            model.refreshBacklogCount()
+            if stored {
+                handledFindings.insert(f.id)
+                model.refreshBacklogCount()
+            } else {
+                auditError = "Couldn’t add the finding to the backlog. Check that the sidecar is running and try again."
+            }
         }
     }
 
