@@ -242,7 +242,11 @@ The supervisor never performs an act on this list. Its verb turns the act into a
     This also closes the pre-existing self-answer hole described in Context.
   - **What a declared downgrade can do.** A caller with the token may act as the supervisor. The external prototype opts into the same policy and ledger that way.
   - **The app's routes keep the user's authority.** `/api/confirm`, `/api/chat` without an author, and the rest are the app's hand.
-- **What this does not defend against, stated plainly.** Code a tab *executes* — a repository's test script, a build step — runs as the user. It can defeat any same-user measure, the same way it can read `~/.ssh` today. The defences above stop a tab's *model* from using MARVIN's own API or data as a side door. They do not stop arbitrary code execution, which needs OS-level isolation this ADR does not add.
+- **What this does not defend against, stated plainly.**
+  - **Code a tab executes.** A repository's test script or a build step runs as the user. It can defeat any same-user measure, the same way it can read `~/.ssh` today.
+  - **A model that hides what it names.** The gate classifies tool calls by what they name. A tab's model that deliberately obscures the path or URL — a glob, a variable, a decoded string — can slip past any string-matching rule, this one included.
+
+  The defences above stop a tab's model from *naming* MARVIN's own API or data, and keep the token out of the turn's environment. Neither arbitrary code execution nor deliberate obfuscation is stopped; both need OS-level isolation this ADR does not add. The token and the ledger's provenance make such a bypass *detectable* — an act with no matching supervisor wake in the ledger — which is what the auditor's `overreach` and `consent` classes look for.
 
 ### 6. Guardrails — stopping conditions in code
 
