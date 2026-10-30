@@ -217,6 +217,50 @@ final class NativePrefs {
         if sessionId == activeSessionId { MarvinBridge.shared.applyPosture(posture(for: sessionId)) }
     }
 
+    // MARK: - API-set posture (ADR-0127 M6; ADR-0108 hydration amendment)
+
+    /// The newest `postureRevision` adopted per session — echoed on every chat
+    /// post so the sidecar stops holding the API-set fields over ours.
+    private var revisions = PostureRevisionLedger.decode(UserDefaults.standard.string(forKey: "marvin.postureRevisions"))
+    /// Who last set each session's posture through the API (`user` |
+    /// `supervisor`) and when we adopted it — the posture pill's badge. In
+    /// memory: the watch row re-supplies it on every launch.
+    private(set) var apiPostureSource: [String: (source: String, at: Date)] = [:]
+
+    /// When the selected tab's posture was last narrowed by the supervisor
+    /// (brief §6.8 posture-pill badge); nil once the user changes it here.
+    var activeSupervisorPostureAt: Date? {
+        guard let id = activeSessionId, let s = apiPostureSource[id], s.source == "supervisor" else { return nil }
+        return s.at
+    }
+
+    func postureRevisionEcho(for sessionId: String?) -> Int? {
+        sessionId.flatMap { revisions.echo(for: $0) }
+    }
+
+    /// ADR-0108 amended: the local record still outranks the server's history,
+    /// EXCEPT for a posture set through `PUT /api/sessions/posture` that this
+    /// install has not seen — a newer `postureRevision`. That one is adopted
+    /// over the local record, so the toolbar shows what the tab will run with
+    /// (a supervisor narrowing, or a user's change from outside the app).
+    /// Returns true when it adopted.
+    @discardableResult
+    func adoptAPIPosture(_ wire: SessionPostureWire, revision: Int?, source: String?, for sessionId: String) -> Bool {
+        // The badge comes only from an adoption: a revision we already hold may
+        // have been changed in the app since, and must not re-badge on relaunch.
+        guard let revision, let source, revisions.shouldAdopt(sessionId: sessionId, revision: revision, source: source) else {
+            return false
+        }
+        let next = PostureRevisionLedger.adopt(wire, over: posture(for: sessionId))
+        postures.set(next, for: sessionId)
+        revisions.mark(sessionId, revision: revision)
+        apiPostureSource[sessionId] = (source, Date())
+        savePostures()
+        if let json = revisions.jsonString { UserDefaults.standard.set(json, forKey: "marvin.postureRevisions") }
+        if sessionId == activeSessionId { MarvinBridge.shared.applyPosture(next) }
+        return true
+    }
+
     /// Apply one field change to the active session's posture and push it to
     /// the bridge. The caller has already moved the matching default, so a
     /// new tab inherits the change.
@@ -226,6 +270,8 @@ final class NativePrefs {
         if let id = activeSessionId {
             postures.set(next, for: id)
             savePostures()
+            // The user took it back in the app: the badge goes.
+            apiPostureSource[id] = nil
         }
         MarvinBridge.shared.applyPosture(next)
     }

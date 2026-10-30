@@ -45,6 +45,13 @@ import SwiftUI
                     .font(.system(size: 10))
                 Text(autonomyModeLabel(active))
                     .font(.system(size: 11, design: .monospaced))
+                // ADR-0127 brief §6.8 — the supervisor narrowed this tab's posture.
+                if NativePrefs.shared.activeSupervisorPostureAt != nil {
+                    Image(systemName: "binoculars")
+                        .font(.system(size: 9))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .accessibilityLabel("set by the supervisor")
+                }
                 Image(systemName: "chevron.up")
                     .font(.system(size: 8))
                     .foregroundStyle(.tertiary)
@@ -60,7 +67,14 @@ import SwiftUI
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(autonomyModeHelp(active))
+        .help(supervisorPostureHelp ?? autonomyModeHelp(active))
+    }
+
+    private var supervisorPostureHelp: String? {
+        guard let at = NativePrefs.shared.activeSupervisorPostureAt else { return nil }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return "Narrowed by the supervisor at \(f.string(from: at)) — click to change"
     }
 
     private func autonomyModeLabel(_ m: String) -> String {
