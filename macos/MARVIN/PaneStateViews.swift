@@ -31,7 +31,7 @@ import SwiftUI
             if let hint = state.hint {
                 Text(hint)
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(MarvinTheme.textMuted)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }

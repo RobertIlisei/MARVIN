@@ -278,14 +278,14 @@ import SwiftUI
                 .foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    diffBlock(prefix: "-", text: oldStr, color: .red)
-                    diffBlock(prefix: "+", text: newStr, color: .green)
+                    diffBlock(prefix: "-", text: oldStr, color: GitDecorationColor.deleted)
+                    diffBlock(prefix: "+", text: newStr, color: GitDecorationColor.added)
                 }
             }
             .frame(maxHeight: 240)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.black.opacity(0.18))
+                    .fill(MarvinTheme.elevated)
             )
         }
     }
@@ -326,7 +326,7 @@ import SwiftUI
             ScrollView {
                 Text(content)
                     .font(.system(size: 11).monospaced())
-                    .foregroundStyle(.green)
+                    .foregroundStyle(GitDecorationColor.added)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                     .textSelection(.enabled)
@@ -334,7 +334,7 @@ import SwiftUI
             .frame(maxHeight: 240)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.green.opacity(0.06))
+                    .fill(GitDecorationColor.added.opacity(0.08))
             )
         }
     }

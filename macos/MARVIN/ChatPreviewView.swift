@@ -3048,7 +3048,8 @@ final class ChatPreviewModel {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Capsule().fill(Color.orange))
-                            .foregroundStyle(.white)
+                            // White on orange is ~2:1; dark text on the same fill is ~9:1 (audit C17).
+                            .foregroundStyle(Color.black.opacity(0.85))
                     } else if state == .interrupted {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 8, weight: .semibold))

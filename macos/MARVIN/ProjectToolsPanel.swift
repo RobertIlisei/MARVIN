@@ -395,10 +395,10 @@ enum GraphOutline {
                         Button { run(task) } label: {
                             HStack(spacing: 6) {
                                 Text(task.kindLabel)
-                                    .font(.system(size: 8, weight: .medium))
+                                    .font(.system(size: 10, weight: .medium))
                                     .padding(.horizontal, 4)
                                     .background(Capsule().fill(MarvinTheme.elevated))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(MarvinTheme.textMuted)
                                 Text(task.name)
                                     .font(.system(size: 11))
                                     .lineLimit(1).truncationMode(.middle)

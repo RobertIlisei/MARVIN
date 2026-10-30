@@ -83,6 +83,18 @@ final class HoverTooltip {
         let (panel, label) = ensurePanel()
         label.stringValue = text
 
+        // The layer colours below are CGColors, which freeze whatever the
+        // dynamic NSColor resolved to when they were set. Follow the window the
+        // tooltip belongs to (a forced appearance included) and re-resolve on
+        // every show, so a theme toggle is not stale until relaunch (audit W20).
+        panel.appearance = window.effectiveAppearance
+        if let content = panel.contentView {
+            content.effectiveAppearance.performAsCurrentDrawingAppearance {
+                content.layer?.backgroundColor = MarvinTheme.elevatedNSColor.cgColor
+                content.layer?.borderColor = MarvinTheme.borderNSColor.cgColor
+            }
+        }
+
         // Size to the text, then place to the RIGHT of the hovered view and
         // vertically centred on it — VS Code's rail convention.
         let size = label.intrinsicContentSize

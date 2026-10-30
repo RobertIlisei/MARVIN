@@ -20,14 +20,14 @@ import SwiftUI
             // Left: identity panel
             identityPanel
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .controlBackgroundColor))
+                .background(MarvinTheme.background)
 
             MarvinDivider()
 
             // Right: actions + recent projects
             actionsPanel
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(MarvinTheme.panel)
         }
         .frame(minWidth: 560, minHeight: 360)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -135,7 +135,7 @@ import SwiftUI
                         .contentShape(Rectangle())
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(Color(nsColor: .controlBackgroundColor))
+                        .background(MarvinTheme.elevated)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)

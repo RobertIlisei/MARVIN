@@ -40,7 +40,7 @@ import SwiftUI
                 if let detail = notice.detail {
                     Text(detail)
                         .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(MarvinTheme.textMuted)
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
                 }

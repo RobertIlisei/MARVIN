@@ -449,7 +449,7 @@ import SwiftUI
                         .truncationMode(.tail)
                     Text(subtitle(e, state: row.state))
                         .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(MarvinTheme.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }

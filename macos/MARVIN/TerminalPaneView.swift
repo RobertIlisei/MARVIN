@@ -113,9 +113,9 @@ import SwiftUI
     private var header: some View {
         HStack(spacing: 8) {
             Text("TERMINAL")
-                .font(.system(size: 9, design: .monospaced))
+                .font(.system(size: 10, design: .monospaced))
                 .tracking(2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(MarvinTheme.textMuted)
             if let cwd = bridge.projectWorkDir {
                 tabStrip(cwd)
                 // `layoutPriority(-1)` is load-bearing, not cosmetic.
