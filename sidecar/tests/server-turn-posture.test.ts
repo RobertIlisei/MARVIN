@@ -125,3 +125,58 @@ describe("server-started turns keep the tab's posture", () => {
     expect(captured[1]).toMatchObject({ permissionStrategy: "gated", mode: "ask" });
   });
 });
+
+describe("POST /api/chat honours a posture set without a turn", () => {
+  async function setup(id: string) {
+    const { addProject } = await import("@marvin/runtime/projects");
+    const { upsertSessionMeta } = await import("@marvin/runtime/session-meta");
+    const project = addProject({ name: "p", workDir });
+    upsertSessionMeta(project.id, id, { workDir, tree: { mode: "shared" }, posture: base });
+    return project.id;
+  }
+  async function chat(projectId: string, id: string, extra: Record<string, unknown> = {}) {
+    const { NextRequest } = await import("next/server");
+    const { POST } = await import("../src/app/api/chat/route");
+    const res = await POST(
+      new NextRequest("http://localhost:3030/api/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-marvin-client": "1" },
+        body: JSON.stringify({ message: "go", cwd: workDir, projectId, marvinSessionId: id, permissionStrategy: "auto", mode: "agent", ...extra }),
+      }),
+    );
+    expect(res.status).toBeLessThan(300);
+  }
+  async function turnEnded(id: string) {
+    const { getLiveTurn } = await import("@marvin/runtime/turn-registry");
+    await vi.waitFor(() => expect(getLiveTurn(id)?.ended ?? true).toBe(true), { timeout: 5_000 });
+  }
+
+  it("the next user-sent turn runs under the API-set posture until the client echoes its revision, and the hold is on turn.started", async () => {
+    const projectId = await setup("tab-c");
+    const { applyPostureChange } = await import("@marvin/runtime/posture");
+    const { loadSession } = await import("@marvin/runtime/session");
+    const { readSessionMeta } = await import("@marvin/runtime/session-meta");
+    expect(applyPostureChange({ projectId, marvinSessionId: "tab-c", patch: { mode: "plan", permissionStrategy: "gated" }, actor: "user", lookup: () => null }).ok).toBe(true);
+
+    await chat(projectId, "tab-c"); // the app posts auto / agent and has not seen revision 1
+    await vi.waitFor(() => expect(captured).toHaveLength(1), { timeout: 5_000 });
+    expect(captured[0]).toMatchObject({ mode: "plan", permissionStrategy: "gated" });
+    const started = loadSession(projectId, "tab-c")?.turns.find((t) => t.type === "turn.started");
+    expect(started).toMatchObject({ postureHeld: { mode: "plan", permissionStrategy: "gated" }, postureSource: "user" });
+    await turnEnded("tab-c");
+
+    await chat(projectId, "tab-c", { postureRevision: 999 }); // clamped to the issued revision
+    await vi.waitFor(() => expect(captured).toHaveLength(2), { timeout: 5_000 });
+    expect(captured[1]).toMatchObject({ mode: "agent", permissionStrategy: "auto" });
+    expect(readSessionMeta(projectId, "tab-c")?.postureAck).toBe(1);
+    await turnEnded("tab-c");
+  });
+
+  it("a session that never used the posture route runs exactly the posture the client posts", async () => {
+    const projectId = await setup("tab-n");
+    await chat(projectId, "tab-n", { permissionStrategy: "gated", mode: "ask" });
+    await vi.waitFor(() => expect(captured).toHaveLength(1), { timeout: 5_000 });
+    expect(captured[0]).toMatchObject({ mode: "ask", permissionStrategy: "gated" });
+    await turnEnded("tab-n");
+  });
+});

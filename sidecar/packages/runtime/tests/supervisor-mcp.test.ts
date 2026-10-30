@@ -60,6 +60,7 @@ function row(id: string, overrides: Partial<SessionWatchRow> = {}): SessionWatch
     updatedAt: new Date().toISOString(),
     posture: null,
     postureRevision: null,
+    postureSource: null,
     ...overrides,
   } as SessionWatchRow;
 }

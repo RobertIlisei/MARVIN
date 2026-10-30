@@ -102,6 +102,8 @@ export interface SessionWatchRow {
   posture: SessionPosture | null;
   /** ADR-0127 §9 — the posture revision a client echoes on its next turn; null when the posture route was never used. */
   postureRevision: number | null;
+  /** ADR-0127 §9 — who set the API posture (`user` or `supervisor`); null when the route was never used. */
+  postureSource: "user" | "supervisor" | null;
   /** ADR-0127 / design brief §10.4 — what the delegation chip and the tab row read. */
   supervisor: SessionWatchSupervisor;
 }
@@ -423,6 +425,7 @@ export async function buildSessionWatch(input: BuildSessionWatchInput): Promise<
       updatedAt: meta?.updatedAt ?? summary?.updatedAt ?? new Date(now).toISOString(),
       posture: meta?.posture ?? null,
       postureRevision: meta?.postureRevision ?? null,
+      postureSource: meta?.postureSource ?? null,
       supervisor: {
         delegation: delegations[id] ?? "off",
         sharedCheckout: tree.mode !== "worktree",

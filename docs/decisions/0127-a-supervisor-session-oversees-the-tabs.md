@@ -368,7 +368,7 @@ This machine has no Swift 6.1 toolchain, so the work is sequenced **sidecar firs
   - Golden Rule 1 in `AGENTS.md`, the `personality.ts` subagents section and the firm-surfaces table say the same thing;
   - amendment notes on ADR-0001, 0040, 0059, 0067, 0077, 0107, 0108 and 0115;
   - the milestone plan is committed.
-- [ ] **Containment.**
+- [x] **Containment.** *(Milestone 1, `b255daa` — within the limits §5 states: string-level gate rules do not stop deliberate obfuscation or code a tab executes.)*
   - A user-started supervisor, woken only by the runtime loop, runs with the SDK-level disallowed list plus the `canUseTool` read deny, and acts only through `marvin-supervise`.
   - No executor tool, and no tab tool call against MARVIN's own API or data directory, can start, brief, message or reconfigure it.
   - Tests pin the tool set, the gate deny and the token requirement.
