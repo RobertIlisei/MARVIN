@@ -302,10 +302,10 @@ import SwiftUI
             }
             Spacer(minLength: 4)
             if needsSync {
-                smallAction("Sync", role: .tinted(.orange)) { Task { await registry.sync(e.id) } }
+                smallAction("Sync", role: .neutral) { Task { await registry.sync(e.id) } }
                     .help("Ask this tab to merge \(registry.integrationTarget ?? "the current branch") into its branch in its own worktree, resolve conflicts, test, and commit. Never pushes.")
             }
-            smallAction("Merge", role: .tinted(GitDecorationColor.added)) { Task { await registry.mergeKept(e.id) } }
+            smallAction("Merge", role: .neutral) { Task { await registry.mergeKept(e.id) } }
                 .help("Merge \(w?.branch ?? "this branch") into \(registry.integrationTarget ?? "the current branch"), locally. Never pushes.")
         }
         .padding(.horizontal, 14)
@@ -372,14 +372,16 @@ import SwiftUI
             HStack(spacing: 10) {
                 if items.count > 1 {
                     Button("Merge all") { Task { await registry.mergeAllKept() } }
-                        .chip(.neutral)
+                        .chip(.primary)
                         .disabled(registry.integrationBusy)
                         .help("Fold all \(items.count) branches into \(registry.integrationTarget ?? "the current branch"), oldest first, locally. Stops at the first conflict. Never pushes.")
                 }
+                // Neutral, and the tooltip says why: this is the one that spends
+                // CI minutes, so it must not read as the default action (U22).
                 Button("Prepare MR…") { bridge.requestSourceControl(.prepareMR) }
-                    .chip(.primary)
+                    .chip(.neutral)
                     .disabled(registry.integrationBusy)
-                    .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request (ADR-0109).")
+                    .help("Squash the branches you pick into one commit on a new mr/… branch, then push and open one merge request. Spends CI minutes; Merge all stays local.")
                 Spacer()
             }
             .padding(.horizontal, 14)
@@ -500,19 +502,20 @@ import SwiftUI
     /// decision the tray card offers, from here.
     private func inlineConfirm(_ c: PendingConfirmInfo, sessionId: String) -> some View {
         let excerpt = c.excerpt ?? "wants to run"
-        let toolBadge = Text(c.toolName)
-            .font(.system(size: 9.5, design: .monospaced))
+        let toolBadge = Text(ToolLabel.plain(c.toolName))
+            .font(.system(size: 9.5))
+            .help(c.toolName)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 3).fill(Color.orange.opacity(0.16)))
         let deny = Button("Deny") { Task { await registry.answer(c, in: sessionId, allow: false) } }
             .rowChip(.tinted(GitDecorationColor.deleted))
             .help("Refuse this tool call. The tab is told no and carries on.")
-            .accessibilityLabel("Deny \(c.toolName)")
+            .accessibilityLabel("Deny \(ToolLabel.plain(c.toolName))")
         let allow = Button("Allow") { Task { await registry.answer(c, in: sessionId, allow: true) } }
             .rowChip(.tinted(GitDecorationColor.added))
             .help("Let this tool call run, without switching to that tab.")
-            .accessibilityLabel("Allow \(c.toolName)")
+            .accessibilityLabel("Allow \(ToolLabel.plain(c.toolName))")
         return VStack(alignment: .leading, spacing: 3) {
             // What is being approved, in full where it fits (L7). This was one
             // line, middle-truncated, with the whole text only in a tooltip — a
@@ -560,11 +563,11 @@ import SwiftUI
     private func action(for row: Row) -> some View {
         switch row.state {
         case .needsYou:
-            smallAction("Answer", role: .tinted(.orange)) { bridge.requestChatTab(.select(row.id)) }
+            smallAction("Answer", role: .primary) { bridge.requestChatTab(.select(row.id)) }
         case .working:
-            smallAction("Stop", role: .tinted(GitDecorationColor.deleted)) { Task { await registry.stop(row.id) } }
+            smallAction("Stop", role: .neutral) { Task { await registry.stop(row.id) } }
         case .interrupted:
-            smallAction("Resume", role: .tinted(.orange)) { Task { await registry.resume(row.id) } }
+            smallAction("Resume", role: .neutral) { Task { await registry.resume(row.id) } }
         case .failed:
             smallAction("Open", role: .neutral) { bridge.requestChatTab(.select(row.id)) }
         case .idle, .draft:
@@ -621,7 +624,7 @@ import SwiftUI
         if let u = e.graphUsage { parts.append(graphUsageLabel(u)) }
         if let c = e.costUsd, c > 0 { parts.append(String(format: "$%.2f", c)) }
         if case .needsYou = state, let first = e.pendingConfirms.values.first {
-            parts.append("waiting: \(first.toolName)")
+            parts.append("waiting: \(ToolLabel.plain(first.toolName))")
         } else if e.isLive, let since = e.liveSince {
             parts.append("\(e.activityLabel ?? "running") \(elapsed(since))")
         } else if e.isLive, let label = e.activityLabel {

@@ -586,9 +586,10 @@ final class ChatNSTextView: NSTextView {
                 // down to the minimum when the window is short, instead of
                 // pushing the transcript and the Send row off the bottom (C6).
                 .frame(minHeight: 60, idealHeight: editorHeight, maxHeight: editorHeight)
+                .help("⏎ send · ⇧⏎ new line · paste or drop an image or file")
 
                 if text.isEmpty && attachments.isEmpty {
-                    Text("Message MARVIN — ⏎ send · ⇧⏎ newline · / commands · @ mention · paste image / file")
+                    Text("Message MARVIN — / commands · @ files")
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 10)
@@ -670,6 +671,14 @@ final class ChatNSTextView: NSTextView {
                 // effort — in the same row as Send, the way Cursor lays out
                 // `∞ Agent ⌄  Auto ⌄` beneath the textarea.
                 ChatModeToolbar()
+                IconBarButton(icon: "paperclip", help: "Attach file (or type @ in the message)") {
+                    atPickerOpen = true
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(bridge.projectWorkDir == nil)
+                // What the turn is doing and what is queued yield to the
+                // controls: negative priority, so a narrow pane shortens or
+                // drops them before it clips Stop and Queue (U11).
                 if isSending {
                     ProgressView()
                         .controlSize(.small)
@@ -678,13 +687,16 @@ final class ChatNSTextView: NSTextView {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .layoutPriority(-1)
                 }
                 if queuedCount > 0 {
                     Text(isSending ? "· \(queuedCount) queued" : "\(queuedCount) queued")
                         .font(.callout)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .layoutPriority(-1)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if isSending, let onStop {
                     Button(role: .destructive) {
                         onStop()
@@ -695,15 +707,20 @@ final class ChatNSTextView: NSTextView {
                     .keyboardShortcut(".", modifiers: [.command])
                     .help("Cancel the in-flight turn. ⌘.")
                 }
+                // Stop All is the rarer, wider act (the turn plus its
+                // background jobs and wakeups), so it is an icon: it used to
+                // be a bordered button that outweighed Send while idle and
+                // clipped "Sto…" / "Qu…" beside Stop at 520 pt (U11).
                 if let onStopAll {
                     Button(role: .destructive) {
                         onStopAll()
                     } label: {
-                        Label("Stop All", systemImage: "stop.circle")
-                            .labelStyle(.titleAndIcon)
+                        Image(systemName: "stop.circle")
                     }
+                    .buttonStyle(.borderless)
                     .keyboardShortcut(".", modifiers: [.command, .shift])
-                    .help("Stop this session: the turn, its background jobs and its scheduled wakeups. ⇧⌘.")
+                    .help("Stop All — this session's turn, its background jobs and its scheduled wakeups. ⇧⌘.")
+                    .accessibilityLabel("Stop All")
                 }
                 Button(isSending ? "Queue" : "Send") {
                     onSubmit()
@@ -758,6 +775,18 @@ final class ChatNSTextView: NSTextView {
                         dragStartHeight = nil
                     }
             )
+            // The grip is a drag and nothing else (audit C16). VoiceOver can
+            // now step it, so the input's height is not pointer-only.
+            .accessibilityElement()
+            .accessibilityLabel("Resize the message box")
+            .accessibilityValue("\(Int(editorHeight)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: editorHeight = min(600, editorHeight + 24)
+                case .decrement: editorHeight = max(60, editorHeight - 24)
+                @unknown default: break
+                }
+            }
     }
 }
 

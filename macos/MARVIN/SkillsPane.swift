@@ -757,7 +757,7 @@ private struct SkillsIndexResponse: Decodable {
                 addSheetOpen = true
             }
             .rowChip(.primary)
-            .help("Add from GitHub — fetch a skill from a Git repo or marketplace URL (ADR-0039)")
+            .help("Add from GitHub — fetch a skill from a Git repo or marketplace URL")
 
             Button { Task { await checkAllSkillUpdates() } } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
@@ -765,7 +765,7 @@ private struct SkillsIndexResponse: Decodable {
             .paneIconButton()
             .help(updatableSkillCount == 0
                   ? "Check for updates — nothing to check: no installed skill has a recorded source yet. Use “Set source” on a row first."
-                  : "Check for updates — re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing (ADR-0071).")
+                  : "Check for updates — re-fetch the \(updatableSkillCount) skill\(updatableSkillCount == 1 ? "" : "s") MARVIN installed and report which changed upstream. Installs nothing.")
             .disabled(checkingUpdates || updatableSkillCount == 0)
 
             Button { Task { await refresh() } } label: {
@@ -811,7 +811,7 @@ private struct SkillsIndexResponse: Decodable {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("checkmark.seal.fill", .green, "Active in this project",
                           count: active.count + loadable.count)
-            Text("What MARVIN uses here — the fingerprint picks these automatically; toggle to change. Skills that aren't active aren't offered to MARVIN for this project (ADR-0037).")
+            Text("What MARVIN uses here — the fingerprint picks these automatically; toggle to change. Skills that aren't active aren't offered to MARVIN for this project.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if active.isEmpty && idx.projectLocal.isEmpty {

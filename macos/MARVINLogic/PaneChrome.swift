@@ -31,11 +31,15 @@ public struct PaneEmptyState: Equatable, Sendable {
     public let headline: String
     public let hint: String?
     public let symbol: String?
+    /// The way out of this state is opening a project, so the view draws the
+    /// action. Every pane said "Open a project…" and none had a button (U18).
+    public let offersOpenProject: Bool
 
-    public init(headline: String, hint: String? = nil, symbol: String? = nil) {
+    public init(headline: String, hint: String? = nil, symbol: String? = nil, offersOpenProject: Bool = false) {
         self.headline = headline
         self.hint = hint
         self.symbol = symbol
+        self.offersOpenProject = offersOpenProject
     }
 
     /// No project is open. `noun` names what the pane would show — "skills",
@@ -45,7 +49,8 @@ public struct PaneEmptyState: Equatable, Sendable {
         PaneEmptyState(
             headline: "No project open",
             hint: "Open a project to see its \(noun).",
-            symbol: "folder"
+            symbol: "folder",
+            offersOpenProject: true
         )
     }
 
