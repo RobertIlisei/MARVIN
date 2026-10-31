@@ -12,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // that has finished (stale completions cost $12–57 a turn on 2026-10-30).
 
 let results: Array<{ ok: true; costUsd: number; scopeMet?: boolean }>;
+// One mock registration per test: re-registering `sdk-runner` inside a test body
+// raced the beforeEach factory under load, so a test swaps this instead.
+let runAgentOverride: ((input: { signal?: AbortSignal }) => Promise<unknown>) | null;
 let dataDir: string;
 let workDir: string;
 const prev = process.env.MARVIN_DATA_DIR;
@@ -23,9 +26,10 @@ beforeEach(() => {
   workDir = realpathSync(mkdtempSync(path.join(tmpdir(), "marvin-scope-work-")));
   process.env.MARVIN_DATA_DIR = dataDir;
   results = [];
+  runAgentOverride = null;
   vi.doMock("@marvin/runtime/sdk-runner", async (importOriginal) => {
     const orig = await importOriginal<typeof import("@marvin/runtime/sdk-runner")>();
-    return { ...orig, runAgent: async () => results.shift() ?? { ok: true, costUsd: 0 } };
+    return { ...orig, runAgent: async (input: { signal?: AbortSignal }) => (runAgentOverride ? runAgentOverride(input) : (results.shift() ?? { ok: true, costUsd: 0 })) };
   });
 });
 afterEach(() => {
@@ -95,16 +99,13 @@ describe("a scope-met claim the ADR-0057 guard rejects is not scope met", () => 
 // record, and parks the tab for the user rather than reading as their Stop.
 describe("a supervisor cancel is the supervisor's, never the user's Stop", () => {
   it("transcript, meta, watch row and send refusal all say so", async () => {
-    vi.doMock("@marvin/runtime/sdk-runner", async (importOriginal) => {
-      const orig = await importOriginal<typeof import("@marvin/runtime/sdk-runner")>();
-      return {
-        ...orig,
-        runAgent: async (input: { signal?: AbortSignal }) => {
-          await new Promise<void>((r) => (input.signal?.aborted ? r() : input.signal?.addEventListener("abort", () => r())));
-          return { ok: false, error: "Claude Code process aborted by user" };
-        },
-      };
-    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((r) => (markStarted = r));
+    runAgentOverride = async (input) => {
+      markStarted();
+      await new Promise<void>((r) => (input.signal?.aborted ? r() : input.signal?.addEventListener("abort", () => r())));
+      return { ok: false, error: "Claude Code process aborted by user" };
+    };
     const { upsertSessionMeta, readSessionMeta } = await import("@marvin/runtime/session-meta");
     const { registerLiveTurn, cancelLiveTurn, SUPERVISOR_CANCEL_MESSAGE } = await import("@marvin/runtime/turn-registry");
     const { runDetachedTurn } = await import("../src/lib/turn-orchestrator");
@@ -115,7 +116,10 @@ describe("a supervisor cancel is the supervisor's, never the user's Stop", () =>
     upsertSessionMeta("proj", "tab-s", { workDir, tree: { mode: "shared" }, posture: base });
     const liveTurn = registerLiveTurn({ turnId: "tc", marvinSessionId: "tab-s", projectId: "proj", kind: "machine" });
     const running = runDetachedTurn({ liveTurn, projectId: "proj", marvinSessionId: "tab-s", turnId: "tc", message: "m", cwd: workDir, workDir, model: base.model, permissionStrategy: "auto", mode: "agent", thinkingMode: "high", appendSystemPrompt: "", personality: "ultron" });
-    await new Promise((r) => setTimeout(r, 20));
+    await Promise.race([
+      started,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("runAgent was never reached: the turn did not start")), 4_000)),
+    ]);
     expect(cancelLiveTurn("tab-s", "supervisor")).toBe(true);
     await running;
 
