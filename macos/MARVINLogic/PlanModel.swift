@@ -1057,3 +1057,63 @@ public extension PlanFile {
         return out
     }
 }
+
+// MARK: - Paused, or waiting on a job (2026-10-31)
+
+/// A background job the session started that is still running
+/// (`GET /api/background-jobs?sessionId=…`, ADR-0038).
+public struct BackgroundJobWait: Codable, Equatable, Sendable {
+    public let id: String
+    public let command: String
+    public let reason: String
+    public let startedAt: String
+
+    public init(id: String, command: String, reason: String, startedAt: String) {
+        self.id = id; self.command = command; self.reason = reason; self.startedAt = startedAt
+    }
+}
+
+/// What the plan banner says while the turn is idle with steps left.
+///
+/// A running job's exit starts a turn that resumes the tab (ADR-0038). Until it
+/// does, "Paused" with a Continue button read as stuck (2026-10-31), and
+/// Continue would start a second turn on top of that wake.
+public enum PlanPauseBanner: Equatable, Sendable {
+    /// Nothing will resume the tab but the user: "Paused — N/M steps done", Continue.
+    case paused
+    /// A job will wake the tab. No Continue. `name` is the job's reason (its
+    /// command when it gave none); `detail` the elapsed time and what follows.
+    case waitingOnJob(name: String, detail: String)
+
+    public static func make(jobs: [BackgroundJobWait], now: Date) -> PlanPauseBanner {
+        guard let job = jobs.min(by: { $0.startedAt < $1.startedAt }) else { return .paused }
+        let reason = job.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = reason.isEmpty ? String(job.command.prefix(60)) : reason
+        var parts: [String] = []
+        if let started = parseISO(job.startedAt) {
+            parts.append("Running for \(elapsed(now.timeIntervalSince(started)))")
+        }
+        if jobs.count > 1 { parts.append("+\(jobs.count - 1) more job\(jobs.count == 2 ? "" : "s")") }
+        parts.append("the tab resumes when it finishes")
+        var detail = parts.joined(separator: " · ")
+        detail = detail.prefix(1).uppercased() + detail.dropFirst()
+        return .waitingOnJob(name: name, detail: detail)
+    }
+
+    /// Coarse on purpose: the banner refreshes every few seconds, not every one.
+    public static func elapsed(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds))
+        if s < 60 { return "under a minute" }
+        if s < 3600 { return "\(s / 60) min" }
+        return "\(s / 3600) h \(s % 3600 / 60) min"
+    }
+
+    /// The sidecar writes `toISOString()` (fractional seconds); accept both shapes.
+    static func parseISO(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
+    }
+}

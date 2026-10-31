@@ -5409,6 +5409,46 @@ runner.suite("cost-display") {
     }
 }
 
+runner.suite("supervisor-rail-and-pause-banner") {
+    runner.test("the rail entry follows the pinned tab's rule and counts open items") {
+        runner.expect(SupervisorRailEntry.make(mode: nil, openItems: 3) == nil, "no status, no icon")
+        runner.expect(SupervisorRailEntry.make(mode: "off", openItems: 3) == nil, "off, no icon")
+        let shadow = SupervisorRailEntry.make(mode: "shadow", openItems: 0)
+        runner.expect(shadow?.badgeText == nil, "nothing open, no badge")
+        runner.expect(shadow?.label ?? "", equals: "Supervisor", "plain label")
+        let busy = SupervisorRailEntry.make(mode: "autonomous", openItems: 2)
+        runner.expect(busy?.badgeText ?? "", equals: "2", "badge")
+        runner.expect(busy?.label ?? "", equals: "Supervisor — 2 waiting for you", "spoken count")
+        runner.expect(SupervisorRailEntry.make(mode: "shadow", openItems: 140)?.badgeText ?? "", equals: "99+", "clamped to the rail")
+    }
+    runner.test("the badge is the Needs you count of supervisor items") {
+        func item(_ id: String, _ state: String) -> SupervisorInboxItem {
+            SupervisorInboxItem(id: id, createdAt: "2026-10-31T10:00:00Z", sessionId: id == "t" ? nil : "s1", kind: "confirm",
+                                escalatedBecause: .init(code: "human-only", label: "Only you can push"), state: state)
+        }
+        let items = [item("a", "open"), item("b", "open"), item("t", "open"), item("c", "resolved"), item("d", "dismissed")]
+        let open = SupervisorInboxLayout(items: items, expandedTabs: []).total
+        runner.expect(SupervisorRailEntry.make(mode: "shadow", openItems: open)?.badge ?? -1, equals: 3, "settled cards are not counted")
+    }
+    runner.test("no running job is Paused; a running job is waiting, named, with elapsed time") {
+        let now = ISO8601DateFormatter().date(from: "2026-10-31T12:00:00Z")!
+        runner.expect(PlanPauseBanner.make(jobs: [], now: now), equals: .paused, "no job")
+        let build = BackgroundJobWait(id: "j1", command: "pnpm build", reason: "production build", startedAt: "2026-10-31T11:57:30.123Z")
+        runner.expect(PlanPauseBanner.make(jobs: [build], now: now),
+                      equals: .waitingOnJob(name: "production build", detail: "Running for 2 min · the tab resumes when it finishes"),
+                      "named by its reason")
+        let bare = BackgroundJobWait(id: "j2", command: "npx playwright test", reason: " ", startedAt: "not a date")
+        runner.expect(PlanPauseBanner.make(jobs: [bare], now: now),
+                      equals: .waitingOnJob(name: "npx playwright test", detail: "The tab resumes when it finishes"),
+                      "no reason: the command; no parseable start: no elapsed time")
+        runner.expect(PlanPauseBanner.make(jobs: [bare, build], now: now),
+                      equals: .waitingOnJob(name: "production build", detail: "Running for 2 min · +1 more job · the tab resumes when it finishes"),
+                      "the oldest job leads")
+        runner.expect(PlanPauseBanner.elapsed(20), equals: "under a minute", "seconds")
+        runner.expect(PlanPauseBanner.elapsed(3_900), equals: "1 h 5 min", "hours")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

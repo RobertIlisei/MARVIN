@@ -545,6 +545,38 @@ final class ChatPreviewModel {
     /// next server-initiated turn completes.
     private(set) var backgroundJobRunning: Bool = false
 
+    /// This session's running background jobs, from the sidecar's registry
+    /// rather than the stream: a turn that ended before you switched to the
+    /// tab never streamed its `run_background_job` here. Fetched only while
+    /// the plan banner is up (`refreshRunningJobs`), so it can say "waiting on
+    /// the job" instead of "Paused" (2026-10-31).
+    private var runningJobs: [BackgroundJobWait] = []
+    /// The session `runningJobs` was read for — a list never outlives a tab switch.
+    private var runningJobsSessionId: String?
+    /// When `runningJobs` was read; the banner's elapsed time is measured to it.
+    private(set) var runningJobsCheckedAt = Date()
+    var runningJobsHere: [BackgroundJobWait] {
+        runningJobsSessionId != nil && runningJobsSessionId == (marvinSessionId ?? loadedSessionId) ? runningJobs : []
+    }
+
+    func refreshRunningJobs() async {
+        struct Wire: Decodable { let jobs: [BackgroundJobWait] }
+        guard let sid = marvinSessionId ?? loadedSessionId,
+              let q = sid.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(ServerConfig.baseURLString)/api/background-jobs?sessionId=\(q)")
+        else { runningJobs = []; return }
+        // A failed read keeps the last answer: dropping to "Paused" on a slow
+        // poll would offer the Continue this exists to withhold.
+        guard let (data, resp) = try? await URLSession.shared.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let wire = try? JSONDecoder().decode(Wire.self, from: data),
+              (marvinSessionId ?? loadedSessionId) == sid
+        else { return }
+        runningJobs = wire.jobs
+        runningJobsSessionId = sid
+        runningJobsCheckedAt = Date()
+    }
+
     /// ADR-0044 — count of open+doing backlog items; drives the tray chip.
     /// Refreshed on session load + turn completion (cheap GET).
     private(set) var backlogOpenCount: Int = 0
@@ -1217,6 +1249,7 @@ final class ChatPreviewModel {
         announceProjectId = nil
         tailingServerTurn = false
         backgroundJobRunning = false
+        runningJobs = []
         backlogOpenCount = 0  // ADR-0044
         messages.removeAll()
         pendingConfirms.removeAll()
@@ -3386,42 +3419,29 @@ final class ChatPreviewModel {
         let done = items.filter { $0.status == "completed" }.count
         let next = items.first { $0.status == "in_progress" }
             ?? items.first { $0.status == "pending" }
-        return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "pause.circle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.purple)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Paused — \(done)/\(items.count) steps done")
-                    .font(.system(size: 11, weight: .semibold))
-                if let next {
-                    Text("Next: \(next.status == "in_progress" ? (next.activeForm ?? next.content) : next.content)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let detail = pauseReviewDetail {
-                    Text(detail)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        return PlanPauseBannerView(
+            state: pauseBanner,
+            done: done,
+            total: items.count,
+            next: next.map { $0.status == "in_progress" ? ($0.activeForm ?? $0.content) : $0.content },
+            reviewDetail: pauseReviewDetail,
+            continueDisabled: model.isSending,
+            onContinue: { continuePlan() }
+        )
+        // Polled only while this row is up: the job's exit starts a turn, which
+        // takes the row down; an exit with no wake (a cancelled job) brings
+        // "Paused" back on the next read.
+        .task(id: model.marvinSessionId ?? model.loadedSessionId) {
+            while !Task.isCancelled {
+                await model.refreshRunningJobs()
+                try? await Task.sleep(for: .seconds(10))
             }
-            Spacer()
-            Button {
-                continuePlan()
-            } label: {
-                Label("Continue", systemImage: "arrow.right.circle.fill")
-                    .font(.system(size: 11))
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(model.isSending)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.purple.opacity(0.07))
+    }
+
+    /// Paused, or waiting on a job that will resume the tab.
+    private var pauseBanner: PlanPauseBanner {
+        PlanPauseBanner.make(jobs: model.runningJobsHere, now: model.runningJobsCheckedAt)
     }
 
     /// What there is to review while paused, concretely. Error beats
@@ -3734,7 +3754,10 @@ final class ChatPreviewModel {
             rows.append(AnyView(interruptedChip(sid)))
         }
         if scopeMetVisible { rows.append(AnyView(scopeMetChipStrip)) }
-        if model.backgroundJobRunning { rows.append(AnyView(backgroundJobChip)) }
+        // The waiting banner names the job; the generic chip would say it twice.
+        if model.backgroundJobRunning && !(planPausedWaiting && pauseBanner != .paused) {
+            rows.append(AnyView(backgroundJobChip))
+        }
         if model.backlogOpenCount > 0 { rows.append(AnyView(backlogChip)) }
         if model.resetSdkOnNextSend { rows.append(AnyView(resetArmedChip)) }
         if let plan = model.activePlan {

@@ -369,7 +369,43 @@ enum SurfaceSnapshot {
             }
         }
 
-        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor
+        // 2026-10-31 — the Supervisor's rail entry, and the plan banner while a
+        // background job will resume the tab.
+        let railAndBanner: [Surface] = [
+            Surface("rail-supervisor-off", "Activity rail — supervisor off: no Supervisor icon", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(nil)))
+            },
+            Surface("rail-supervisor-on", "Activity rail — supervisor in shadow, nothing open: binoculars, no badge", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(SurfaceSupervisorFixtures.status())))
+            },
+            Surface("rail-supervisor-badge", "Activity rail — two open cards, conversation shown: badge 2, selected without an accent bar", .fixture,
+                    widths: paneWidths, height: 420) {
+                AnyView(LeftPane(supervisor: SurfaceSupervisorFixtures.model(
+                    SurfaceSupervisorFixtures.status(open: 2),
+                    items: [SurfaceSupervisorFixtures.pushItem, SurfaceSupervisorFixtures.questionItem]) { $0.chatSelected = true }))
+            },
+            Surface("plan-banner-waiting", "Plan banner — a background job will resume the tab: named, elapsed, no Continue", .fixture,
+                    widths: paneWidths) {
+                AnyView(PlanPauseBannerView(
+                    state: PlanPauseBanner.make(
+                        jobs: [BackgroundJobWait(id: "j1", command: "pnpm build", reason: "production build",
+                                                 startedAt: "2026-10-31T11:57:30.000Z")],
+                        now: ISO8601DateFormatter().date(from: "2026-10-31T12:00:00Z")!),
+                    done: 0, total: 4, next: "Run the integration suite against the build",
+                    reviewDetail: nil, continueDisabled: false, onContinue: {}))
+            },
+            Surface("plan-banner-paused", "Plan banner — paused, nothing will resume it: Continue", .fixture,
+                    widths: paneWidths) {
+                AnyView(PlanPauseBannerView(
+                    state: .paused, done: 1, total: 4, next: "Run the integration suite against the build",
+                    reviewDetail: "2 files changed so far — inspect via Review below, or just continue.",
+                    continueDisabled: false, onContinue: {}))
+            },
+        ]
+
+        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor + railAndBanner
     }
 
     // MARK: - Per-surface preparation

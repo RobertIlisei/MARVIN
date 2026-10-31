@@ -551,3 +551,31 @@ public enum SupervisorEnvelope {
     public static let touchedDivider =
         "Supervisor touched this turn · pushes, merges and boundary edits now ask you, even in full auto"
 }
+
+// MARK: - Activity rail entry (2026-10-31)
+
+/// The Supervisor's icon in the left activity rail: a second way to the pinned
+/// tab, for when many chat tabs push it out of sight. Present on the same rule
+/// as the tab; its badge counts what Needs you counts for the supervisor —
+/// every open inbox item (`SupervisorInboxLayout.total`).
+public struct SupervisorRailEntry: Equatable, Sendable {
+    public let badge: Int
+
+    /// nil while the supervisor is off: no icon, as there is no tab.
+    public static func make(mode: String?, openItems: Int) -> SupervisorRailEntry? {
+        guard SupervisorChat.tabVisible(mode: mode) else { return nil }
+        return SupervisorRailEntry(badge: max(0, openItems))
+    }
+
+    /// The rail is 44 pt wide; a badge past two digits would cover the glyph.
+    public var badgeText: String? {
+        guard PaneBadge.shows(badge) else { return nil }
+        return badge > 99 ? "99+" : String(badge)
+    }
+
+    /// Tooltip and VoiceOver label in one.
+    public var label: String {
+        guard badge > 0 else { return "Supervisor" }
+        return "Supervisor — \(badge) waiting for you"
+    }
+}
