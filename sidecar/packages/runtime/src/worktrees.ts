@@ -30,6 +30,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { toolPolicy } from "@marvin/tools/policy";
+import { type VcsInvocation, vcsInvocations } from "@marvin/tools/vcs-command";
 
 import { finishIntegrationJob, getIntegrationJob, noteIntegrationProgress, startIntegrationJob } from "./integration-job";
 import { autoTickSpine } from "./plan-seed";
@@ -2294,7 +2295,12 @@ async function prepareMergeRequestInner(
 // ── Tab and implementer branches are integrated locally, never published alone ──
 
 const PUBLISH_CMD = /\bgit\s+push\b/;
-const OPEN_OR_MERGE_REQUEST = /\b(?:glab\s+mr\s+(?:create|new|merge)|gh\s+pr\s+(?:create|merge))\b|merge_request\.create/;
+const OPEN_OR_MERGE_REQUEST = /\b(?:glab\s+mr\s+(?:create|new|merge|accept)|gh\s+pr\s+(?:create|new|merge))\b|merge_request\.create/;
+
+/** `git push`, however it is reached — `git -C <tree> push`, `/usr/bin/git
+ *  push`, `bash -c '…'` (vcs-command.ts) — and `git subtree push`. */
+const pushes = (i: VcsInvocation): boolean =>
+  i.tool === "git" && (i.args[0] === "push" || (i.args[0] === "subtree" && i.args.includes("push")));
 /** A `marvin/…` ref anywhere in the command: a tab or implementer branch by name. */
 const MARVIN_REF = new RegExp(`(?:^|[\\s:'"=,])${BRANCH_PREFIX}[\\w./-]+`);
 
@@ -2320,8 +2326,23 @@ export function localOnlyIntegrationPolicy(
   if (name !== "Bash") return null;
   const cmd = typeof input.command === "string" ? input.command : "";
   if (!cmd) return null;
-  const publishes = PUBLISH_CMD.test(cmd);
-  const requests = OPEN_OR_MERGE_REQUEST.test(cmd);
+  // The raw patterns, plus every git / gh / glab invocation read with its
+  // global options out of the way: `git -C . push` is `git push`.
+  const invocations = vcsInvocations(cmd);
+  const publishes = PUBLISH_CMD.test(cmd) || invocations.some(pushes);
+  const requests = OPEN_OR_MERGE_REQUEST.test(cmd) || invocations.some((i) => OPEN_OR_MERGE_REQUEST.test(i.line));
+  // In a worktree tab the answer to a push is always no, so a form that cannot
+  // be read (`git -c alias.p=push p`) gets the same answer, not a question.
+  const unclear = invocations.find((i) => i.unclear);
+  if (unclear && sessionTree?.mode === "worktree") {
+    return {
+      decision: "deny",
+      reason:
+        `This tab runs on its own branch (${sessionTree.branch}); \`${unclear.line}\` ` +
+        `could not be read with confidence (${unclear.unclear}), and a push or request from a tab branch is not MARVIN's ` +
+        "to do (ADR-0109). Spell the command out plainly — a plain `git status`, `git log` or `glab mr list` runs as usual.",
+    };
+  }
   if (!publishes && !requests) return null;
   const remedy =
     "Tab branches are integrated locally, never published one by one (ADR-0109): each branch pushed as its own " +

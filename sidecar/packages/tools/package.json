@@ -12,7 +12,9 @@
     "./fs-write-policy": "./src/fs-write-policy.ts",
     "./shared-tree": "./src/shared-tree.ts",
     "./lanes": "./src/lanes.ts",
-    "./metered-ci": "./src/metered-ci.ts"
+    "./metered-ci": "./src/metered-ci.ts",
+    "./shell-words": "./src/shell-words.ts",
+    "./vcs-command": "./src/vcs-command.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -43,6 +43,24 @@ describe("classifyHumanOnlyAct — git's global options do not hide the subcomma
     expect(bash(cmd, worktree)?.item).toBe(item);
   });
 
+  // 2026-10-31: the regex normaliser missed quoting, paths and wrappers.
+  it.each([
+    ['git -C "dir with space" push', "integration"],
+    ["/usr/bin/git push origin x", "integration"],
+    ["bash -c 'git -C /repo push'", "integration"],
+    ["gh -R o/r pr create --fill", "integration"],
+    ["glab --repo o/r mr merge 3", "integration"],
+    ['git -C "dir with space" reset --hard', "discard"],
+  ])("%s", (cmd, item) => {
+    expect(bash(cmd, worktree)?.item).toBe(item);
+  });
+
+  it("a form that cannot be read is the user's call, and the label says why", () => {
+    const act = bash("git -c alias.p=push p", worktree);
+    expect(act?.item).toBe("integration");
+    expect(act?.label).toMatch(/inline alias/);
+  });
+
   it("and in a shared tab the HEAD-moving rule still sees through them", () => {
     expect(bash("git -C /repo checkout main")?.item).toBe("containment");
   });
