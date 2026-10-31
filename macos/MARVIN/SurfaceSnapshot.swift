@@ -284,6 +284,12 @@ enum SurfaceSnapshot {
             pair("backlog-panel", "Backlog panel", widths: [420, 640], height: 640, empty: "the list loads from the sidecar") {
                 AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
             }
+            // At the panel's real width (its minimum is 720), with a description
+            // longer than the row's three-line preview.
+            + [Surface("backlog-panel-long", "Backlog panel — long description, at its real width",
+                       .populated, widths: [720, 920], height: 640) {
+                AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
+            }]
             + [Surface("backlog-detail", "Backlog item detail", .fixture, widths: [460, 640], height: 560) {
                 guard let item = SurfaceFixtures.backlogItem else { return nil }
                 return AnyView(BacklogDetailView(workDir: SurfaceFixtures.project, item: item,
