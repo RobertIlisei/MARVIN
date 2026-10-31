@@ -150,14 +150,19 @@ enum SupervisorCardSheet: Identifiable {
                         .font(.system(size: 10.5, design: .monospaced))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
-                        .background(RoundedRectangle(cornerRadius: MarvinTheme.Radius.badge).fill(Color.orange.opacity(0.16)))
+                        // Neutral: a warning hue on every act said nothing (a reversible merge wore it too);
+                        // "leaves this Mac" / "destroys work" carry the warning beside it.
+                        .background(RoundedRectangle(cornerRadius: MarvinTheme.Radius.badge).fill(MarvinTheme.border))
                         .fixedSize()
                     if act.outward || act.destructive {
-                        Label(act.destructive ? "destroys work" : "leaves this Mac",
-                              systemImage: act.destructive ? "trash" : "arrow.up.forward.app")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.orange)
-                            .lineLimit(1)
+                        // The glyph carries the hue; the words stay legible (orange text is ~2:1 on light chrome).
+                        Label {
+                            Text(act.destructive ? "destroys work" : "leaves this Mac").foregroundStyle(MarvinTheme.textPrimary)
+                        } icon: {
+                            Image(systemName: act.destructive ? "trash" : "arrow.up.forward.app").foregroundStyle(.orange)
+                        }
+                        .font(.system(size: 10.5))
+                        .lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -270,9 +275,10 @@ enum SupervisorCardSheet: Identifiable {
         }
     }
 
-    // 5. Act chips, on their own line, at every width.
+    // 5. Act chips, on their own line, at every width. They wrap rather than widen the
+    // card: in the Supervisor tab's 170 pt column at 260, one row pushed it off the edge.
     private var chipRow: some View {
-        HStack(spacing: 6) {
+        WrapLayout(spacing: 6, lineSpacing: 4) {
             ForEach(chips.chips) { a in
                 Button(a.label) { perform(a) }
                     .rowChip(a.id == chips.primaryId ? .primary : .neutral)
@@ -285,8 +291,8 @@ enum SupervisorCardSheet: Identifiable {
             }
             if busy { ProgressView().controlSize(.mini) }
             moreMenu
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var moreMenu: some View {
@@ -409,16 +415,8 @@ enum SupervisorCardSheet: Identifiable {
                 }
                 Spacer(minLength: 0)
             }
-            Group {
-                if item.kind == "new-tab", let nt = item.newTab {
-                    SupervisorNewTabCard(model: model, item: item, newTab: nt, enabled: enabled)
-                } else if item.kind == "guardrail" {
-                    guardrailStrip
-                } else {
-                    SupervisorEscalationCard(model: model, item: item, enabled: enabled)
-                }
-            }
-            .padding(.leading, 16)
+            SupervisorItemCard(model: model, item: item, enabled: enabled)
+                .padding(.leading, 16)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 3)
@@ -435,8 +433,35 @@ enum SupervisorCardSheet: Identifiable {
         default: return item.escalatedBecause.label
         }
     }
+}
 
-    private var guardrailStrip: some View {
+/// One inbox item, drawn by its kind: the same element, with the same actions, in
+/// *Needs you* and under a reply in the Supervisor tab (ADR-0128 §3 — one item, two views).
+@MainActor struct SupervisorItemCard: View {
+    let model: SupervisorModel
+    let item: SupervisorInboxItem
+    let enabled: Bool
+    var surface: SupervisorCardSurface = .pane
+
+    var body: some View {
+        if item.kind == "new-tab", let nt = item.newTab {
+            SupervisorNewTabCard(model: model, item: item, newTab: nt, enabled: enabled, surface: surface)
+        } else if item.kind == "guardrail" {
+            SupervisorGuardrailStrip(model: model, item: item, enabled: enabled, surface: surface)
+        } else {
+            SupervisorEscalationCard(model: model, item: item, enabled: enabled, surface: surface)
+        }
+    }
+}
+
+/// A guardrail (budget, breaker, refusals, nudge cap): its notice, and its verb on its own line.
+@MainActor struct SupervisorGuardrailStrip: View {
+    let model: SupervisorModel
+    let item: SupervisorInboxItem
+    let enabled: Bool
+    var surface: SupervisorCardSurface = .pane
+
+    var body: some View {
         let verb = item.guardrail?.verb
         let title: String
         switch verb {
@@ -457,7 +482,10 @@ enum SupervisorCardSheet: Identifiable {
             )
             .padding(.horizontal, -10)
             Button(title) {
-                if verb == "raise-cap" { model.raiseCapItem = item; return }
+                if verb == "raise-cap" {
+                    if surface == .chat { model.chatSheet = .raiseCap(item) } else { model.raiseCapItem = item }
+                    return
+                }
                 if let a = item.actions.first(where: { $0.role == "consent" }) ?? item.actions.first {
                     Task { await model.act(item, actionId: a.id) }
                 } else {
@@ -477,6 +505,7 @@ enum SupervisorCardSheet: Identifiable {
     let item: SupervisorInboxItem
     let newTab: SupervisorInboxItem.NewTab
     let enabled: Bool
+    var surface: SupervisorCardSurface = .pane
     @State private var showAll = false
 
     var body: some View {
@@ -509,7 +538,9 @@ enum SupervisorCardSheet: Identifiable {
             HStack(spacing: 6) {
                 ForEach(chips.chips) { a in
                     Button(a.label) {
-                        if a.id == "edit" { model.newTabEditItem = item } else { Task { await model.act(item, actionId: a.id) } }
+                        if a.id == "edit" {
+                            if surface == .chat { model.chatSheet = .newTabEdit(item) } else { model.newTabEditItem = item }
+                        } else { Task { await model.act(item, actionId: a.id) } }
                     }
                     .rowChip(a.id == chips.primaryId ? .primary : .neutral)
                 }

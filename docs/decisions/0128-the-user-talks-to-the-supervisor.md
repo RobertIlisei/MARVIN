@@ -276,7 +276,7 @@ The external Claude Code session can keep working through the routes with the to
 - [x] **Consent is a click.** A message asking for a human-only act ("merge tab X") produces exactly one inbox item, shown in the chat and in *Needs you*. Nothing is performed until its consent chip is clicked. A click in either place settles both. No message text resolves any confirm or act. *(Milestone [7.2].)*
 - [x] **Cards, not refusals.** In a message wake, a requested `send` becomes a card when its category is in shadow or the act is above the tab's delegation. It sends as `author: "supervisor"`, with `editedByUser` when edited, only on the user's click. The same act in a tab-event wake is refused. An `off` tab gets nothing. A `message:` ground cited in a later wake is weak. *(Milestone [7.2].)*
 - [x] **Follow and report.** A tab opened from the chat is followed, and its scope-met review is reported in the chat. A merge card appears only for `until: "merge-ready"`. `refs` and `items` the server cannot resolve to this wake are dropped. *(Milestone [7.3].)*
-- [ ] **The native tab** is built from the extended brief and rendered in every brief state at 260 and 420 pt, light and dark, and critique and polish ran on it. *(Milestone [7.1] builds it; milestone [7.4] finishes it.)*
+- [x] **The native tab** is built from the extended brief and rendered in every brief state at 260 and 420 pt, light and dark, and critique and polish ran on it. *(Milestone [7.1] builds it; milestone [7.4] finishes it.)*
 
 ## Related
 

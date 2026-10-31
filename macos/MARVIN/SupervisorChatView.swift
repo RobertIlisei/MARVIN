@@ -13,11 +13,20 @@ import SwiftUI
         VStack(spacing: 0) {
             conversation
                 .frame(minHeight: 140, idealHeight: 140, maxHeight: .infinity)
-            if let notice = pausedNotice {
-                // No ✕: the notice goes when the supervisor resumes.
-                PaneNoticeStrip(notice: notice, onDismiss: {})
-                    .padding(.horizontal, 12)
-                    .padding(.top, 6)
+            if let paused = SupervisorChat.pausedNotice(model.status, budgetCard: budgetItem != nil) {
+                // No ✕: the notice goes when the supervisor resumes. Its verb sits on its own line (§11, departure 12).
+                VStack(alignment: .leading, spacing: 4) {
+                    PaneNoticeStrip(notice: PaneNotice(kind: .warning, headline: paused.headline))
+                        .padding(.horizontal, -10)
+                    if paused.resume {
+                        Button("Resume") { Task { await model.resume() } }
+                            .rowChip(.neutral)
+                            .disabled(model.tokenError != nil)
+                            .help("The supervisor wakes again and answers the messages waiting for it")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
             }
             if !SupervisorChat.openFollows(model.follows).isEmpty {
                 followStrip
@@ -26,7 +35,7 @@ import SwiftUI
             }
             if let err = model.chatError {
                 PaneNoticeStrip(notice: PaneNotice(kind: .error, headline: err), onDismiss: { model.chatError = nil })
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 2)
                     .padding(.top, 6)
             }
             composer
@@ -62,8 +71,11 @@ import SwiftUI
 
     private var waiting: Set<String> { Set(SupervisorChat.waiting(model.chat)) }
 
+    /// ADR-0128 §7 — the budget guardrail, drawn at the foot of the conversation.
+    private var budgetItem: SupervisorInboxItem? { SupervisorChat.budgetGuardrail(model.inbox) }
+
     @ViewBuilder private var conversation: some View {
-        if model.chat.isEmpty {
+        if model.chat.isEmpty && model.chatPending == nil && budgetItem == nil {
             emptyState
         } else {
             ScrollViewReader { proxy in
@@ -72,8 +84,19 @@ import SwiftUI
                         ForEach(model.chat) { m in
                             row(m).id(m.id)
                         }
+                        // §12.6 — the bubble shows at once, before the route answers.
+                        if let pending = model.chatPending {
+                            row(SupervisorChatMessage(id: "pending", at: "", from: "user", text: pending)).id("pending")
+                        }
                         if working {
                             workingRow.id("working")
+                        }
+                        if let budget = budgetItem {
+                            // The conversation's foot, not a reply's card: the full column, so its
+                            // detail is not cut at 260 (it truncated at the reply indent).
+                            SupervisorItemCard(model: model, item: budget, enabled: model.tokenError == nil, surface: .chat)
+                                .padding(.vertical, 6)
+                                .id("budget")
                         }
                     }
                     .padding(.horizontal, 12)
@@ -96,17 +119,21 @@ import SwiftUI
                 ChatMessageRow(message: ChatMessage(id: "sup-\(m.id)", role: .user,
                                                     blocks: [.text(id: m.id, text: m.text)],
                                                     isStreaming: false, createdAt: Date()))
-                if let state = SupervisorChat.unanswered(m.id, retry: model.status?.messageRetry) {
+                if m.id == "pending" {
+                    Text("Sending…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let state = SupervisorChat.unanswered(m.id, retry: model.status?.messageRetry) {
                     unansweredLine(state)
                 } else if waiting.contains(m.id) && !working {
-                    Text("Waiting for the next wake")
+                    Text(SupervisorChat.waitingLine(paused: model.status?.run == "paused"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("You: \(m.text)")
+            .accessibilityLabel(SupervisorChat.accessibilityLabel(m, reportTab: nil))
         }
     }
 
@@ -119,9 +146,13 @@ import SwiftUI
                 .foregroundStyle(.secondary)
         case .failed:
             VStack(alignment: .trailing, spacing: 4) {
-                Label("The supervisor couldn't answer this", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                // The glyph carries the hue; the words stay legible (orange text is ~2:1 on light chrome).
+                Label {
+                    Text("The supervisor couldn't answer this").foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                }
+                .font(.caption)
                 // Restart re-queues every unanswered message (the strip's own verb).
                 Button("Retry") { Task { await model.wakeNow() } }
                     .rowChip(.neutral)
@@ -138,7 +169,7 @@ import SwiftUI
                 ForEach(ids, id: \.self) { id in
                     switch SupervisorChat.card(id, items: model.chatItems) {
                     case .open(let item):
-                        SupervisorEscalationCard(model: model, item: item, enabled: model.tokenError == nil, surface: .chat)
+                        SupervisorItemCard(model: model, item: item, enabled: model.tokenError == nil, surface: .chat)
                     case .settled(_, let line):
                         Label(line, systemImage: "checkmark.circle")
                             .font(.caption)
@@ -193,20 +224,24 @@ import SwiftUI
     private var followStrip: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(SupervisorChat.openFollows(model.follows)) { f in
-                HStack(spacing: 6) {
-                    Image(systemName: "eye").font(.system(size: 10))
-                        .foregroundStyle(MarvinTheme.textMuted)
-                        .accessibilityHidden(true)
-                    Text(SupervisorChat.followLabel(f))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
+                // The label keeps its full lines and the chip sits under it (§11, departure 12):
+                // beside it at 260 the label lost "until it is ready to merge" to an ellipsis.
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "eye").font(.system(size: 10))
+                            .foregroundStyle(MarvinTheme.textMuted)
+                            .accessibilityHidden(true)
+                        Text(SupervisorChat.followLabel(f))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
                     Button("Stop following") { Task { await model.stopFollowing(f) } }
                         .rowChip(.neutral)
                         .disabled(model.tokenError != nil)
                         .help("The supervisor stops reporting on this tab. Nothing else changes.")
+                        .padding(.leading, 16)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(SupervisorChat.followLabel(f))
@@ -217,15 +252,21 @@ import SwiftUI
 
     private func replyText(_ m: SupervisorChatMessage) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            HStack(spacing: 3) {
-                // [7.3] — a report is the one reply no message of yours asked for: its gutter says so.
-                Image(systemName: m.isReport ? "eye" : "binoculars").font(.system(size: 9))
-                Text(m.isReport ? "REPORT" : "SUPERVISOR").font(.caption2.monospaced()).tracking(1)
-            }
-            .foregroundStyle(MarvinTheme.textMuted)
-            .frame(width: 56, alignment: .topTrailing)
-            .accessibilityHidden(true)
+            // The 56 pt gutter keeps the text column; the label heads it, as §6.8's does
+            // above a bubble — in the gutter it wrapped to SU-PER-VISOR (§11, departure 14).
+            Color.clear.frame(width: 56, height: 1)
             VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    // [7.3] — a report is the one reply no message of yours asked for: its label says so.
+                    Image(systemName: m.isReport ? "eye" : "binoculars").font(.caption2)
+                    Text(m.isReport ? "report" : "supervisor")
+                        .font(.caption2.monospaced())
+                        .tracking(2)
+                        .textCase(.uppercase)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(MarvinTheme.textMuted)
+                .accessibilityHidden(true)
                 if let tab = SupervisorChat.reportTab(m, follows: model.follows) {
                     Text("On \(tab), which you asked it to follow")
                         .font(.caption)
@@ -245,9 +286,7 @@ import SwiftUI
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(m.isReport
-            ? "Supervisor report\(SupervisorChat.reportTab(m, follows: model.follows).map { " on \($0)" } ?? ""), not from you: \(m.text)"
-            : "Supervisor reply, not from you: \(m.text)")
+        .accessibilityLabel(SupervisorChat.accessibilityLabel(m, reportTab: SupervisorChat.reportTab(m, follows: model.follows)))
     }
 
     // MARK: - The working indicator (§12.4)
@@ -267,11 +306,6 @@ import SwiftUI
         .padding(.leading, 66)
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
-    }
-
-    private var pausedNotice: PaneNotice? {
-        guard model.status?.run == "paused" else { return nil }
-        return PaneNotice(kind: .warning, headline: "Paused — your message waits until you resume")
     }
 
     // MARK: - The empty conversation (§12.5)
@@ -296,33 +330,41 @@ import SwiftUI
     // MARK: - The composer (§12.3)
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 4) {
             ZStack(alignment: .topLeading) {
+                // Return sends and never reaches anything else (ADR-0128 §1); ⇧Return is a newline.
+                // Transparent, and two lines tall: the editor's own fill drew an opaque 120 pt
+                // block over the placeholder (backlog, [7.3] renders).
+                ChatTextEditor(text: $draft, onSubmit: submit, isDisabled: model.chatSending, transparent: true)
+                    .frame(height: 64)
+                    .accessibilityLabel("Message the supervisor")
                 if draft.isEmpty {
+                    // Drawn over the editor, inset to its text (6 pt container + 5 pt line padding, 8 pt top).
                     Text("Message the supervisor — it can propose, never consent for you")
                         .font(.body)
+                        // .secondary, not the chat's .tertiary: this placeholder carries the consent rule (~2:1 → ~4.5:1).
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 5)
-                        .padding(.top, 1)
+                        .lineLimit(3)
+                        .padding(.leading, 11)
+                        .padding(.trailing, 4)
+                        .padding(.top, 8)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
-                // Return sends and never reaches anything else (ADR-0128 §1); ⇧Return is a newline.
-                ChatTextEditor(text: $draft, onSubmit: submit, isDisabled: model.chatSending)
-                    .frame(minHeight: 22, maxHeight: 120)
-                    .accessibilityLabel("Message the supervisor")
             }
+            .opacity(model.chatSending ? 0.55 : 1)
             Button(action: submit) {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 20))
             }
             .buttonStyle(.plain)
             .disabled(SupervisorChat.sendable(draft) == nil || model.chatSending)
+            .padding(.trailing, 6)
+            .padding(.bottom, 6)
             .accessibilityLabel("Send to the supervisor")
         }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(MarvinTheme.border, lineWidth: 1)
-        )
+        // The chat composer's box: elevated fill, radius 10, a hairline border.
+        .background(MarvinTheme.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(MarvinTheme.border, lineWidth: 1))
     }
 
     private func submit() {

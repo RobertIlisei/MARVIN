@@ -5319,6 +5319,43 @@ runner.suite("supervisor-chat") {
         let json = #"{"revision":1,"mode":"shadow","autonomy":{},"run":"idle","queuedEvents":0,"health":"ok","watchedTabs":0,"openEscalations":0,"budget":{"capUsd":20,"spentUsd":0,"resetsAt":"t","level":"ok"},"messageRetry":{"state":"failed","messageIds":["m1"],"attempts":4,"nextRetryAt":null}}"#
         runner.expect(try? JSONDecoder().decode(SupervisorStatus.self, from: Data(json.utf8)).messageRetry?.state, equals: "failed", "decodes from status")
     }
+    // [7.4] — the brief's remaining states and VoiceOver.
+    runner.test("at the cap the conversation draws the open budget guardrail, and only it") {
+        let guardItem = { (code: String, state: String) in
+            SupervisorInboxItem(id: "g-\(code)", createdAt: "t", sessionId: nil, kind: "guardrail",
+                                escalatedBecause: .init(code: code, label: "L"),
+                                actions: [.init(id: "raise-cap", label: "Raise cap…", role: "consent", recommended: true)],
+                                guardrail: .init(kind: code, detail: "d", verb: code == "budget" ? "raise-cap" : "resume"),
+                                state: state)
+        }
+        let inbox = [supItem("c1", session: "s1", at: "t"), guardItem("breaker", "open"), guardItem("budget", "open")]
+        runner.expect(SupervisorChat.budgetGuardrail(inbox)?.id, equals: "g-budget", "the budget item")
+        runner.expect(SupervisorChat.budgetGuardrail([guardItem("breaker", "open")])?.id, equals: nil, "a breaker is the pane's, not the chat's")
+        runner.expect(SupervisorChat.budgetGuardrail([guardItem("budget", "resolved")])?.id, equals: nil, "a settled one is gone")
+    }
+    runner.test("the paused notice carries Resume, except at the cap where Raise cap… is the verb") {
+        runner.expect(SupervisorChat.pausedNotice(supStatus(), budgetCard: false)?.headline, equals: nil, "not paused: no notice")
+        runner.expect(SupervisorChat.pausedNotice(supStatus(run: "paused", pause: .init(reason: "user")), budgetCard: false)?.resume, equals: true, "user pause: Resume")
+        runner.expect(SupervisorChat.pausedNotice(supStatus(run: "paused", pause: .init(reason: "kill")), budgetCard: false)?.resume, equals: true, "kill: Resume")
+        let cap = supStatus(run: "paused", pause: .init(reason: "budget"))
+        runner.expect(SupervisorChat.pausedNotice(cap, budgetCard: false)?.resume, equals: false, "cap without its card: a notice, no Resume")
+        runner.expect(SupervisorChat.pausedNotice(cap, budgetCard: true)?.headline, equals: nil, "cap with its card: the card is the notice")
+        runner.expect(SupervisorChat.waitingLine(paused: true), equals: "Waiting — the supervisor is paused", "paused")
+        runner.expect(SupervisorChat.waitingLine(paused: false), equals: "Waiting for the next wake", "between wakes")
+    }
+    runner.test("VoiceOver reads the user's line as You and never reads the supervisor's as the user's") {
+        let mine = SupervisorChatMessage(id: "m1", at: "a", from: "user", text: "merge flags")
+        let reply = SupervisorChatMessage(id: "r1", at: "b", from: "supervisor", text: "That is your click.", wakeId: "w", origin: .init(messageIds: ["m1"]))
+        let report = SupervisorChatMessage(id: "r2", at: "c", from: "supervisor", text: "flags is done.", kind: "report", wakeId: "w2", origin: .init(followId: "f1"))
+        runner.expect(SupervisorChat.accessibilityLabel(mine, reportTab: nil), equals: "You: merge flags", "the user's")
+        for (m, tab) in [(reply, nil as String?), (report, "flags")] {
+            let label = SupervisorChat.accessibilityLabel(m, reportTab: tab)
+            runner.expect(label.hasPrefix("Supervisor"), equals: true, "names the supervisor first: \(label)")
+            runner.expect(label.hasPrefix("You"), equals: false, "never read as the user's: \(label)")
+            runner.expect(label.contains("not from you"), equals: true, "says whose it is not: \(label)")
+        }
+        runner.expect(SupervisorChat.accessibilityLabel(report, reportTab: "flags"), equals: "Supervisor report on flags, not from you: flags is done.", "report")
+    }
 }
 
 // MARK: - Cost popover: auth modes, plan-window clock, token breakdown (2026-10-31)
