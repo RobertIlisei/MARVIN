@@ -182,7 +182,6 @@ enum SupervisorMark {
 @MainActor struct SupervisorSettingsBlock: View {
     let model: SupervisorModel
     @Binding var charterOpen: Bool
-    @Binding var modelsOpen: Bool
     @Binding var confirmDisable: Bool
     /// The strip drew a rule above the block; the inspector has its own.
     var leadingDivider = true
@@ -224,23 +223,47 @@ enum SupervisorMark {
                     .labelsHidden()
                     .accessibilityLabel("Daily cap")
             }
-            HStack(spacing: 6) {
-                Text("Model").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
-                Text(s?.model?.label ?? s?.model?.resolved ?? "default")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                Button("Change…") { modelsOpen = true }.rowChip(.neutral)
-                    .help("Opens the Models dialog; the supervisor's row is under Helpers.")
-            }
+            modelPicker(s)
             HStack {
                 Button("Disable supervisor…") { confirmDisable = true }.rowChip(.neutral)
                 Spacer(minLength: 0)
             }
         }
         .padding(.top, 2)
+    }
+
+    // MARK: Model (the user's own pick; no verb of the supervisor's reaches it)
+
+    private func modelPicker(_ s: SupervisorStatus?) -> some View {
+        let open = model.modelPickerOpen
+        let current = s?.model?.label ?? s?.model?.resolved ?? "default"
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Model").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
+                Spacer(minLength: 0)
+                Button {
+                    if open { model.modelPickerOpen = false } else { model.openModelPicker() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(current).font(.system(size: 11, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                        Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .accessibilityHidden(true)
+                    }
+                }
+                .rowChip(.neutral)
+                .help(SupervisorModelPicker.help)
+                .accessibilityLabel(SupervisorModelPicker.accessibilityLabel)
+                .accessibilityValue(current)
+                .accessibilityHint(open ? "Closes the list" : "Opens the list of models")
+            }
+            if open {
+                SupervisorModelList(model: model, status: s)
+                Text(SupervisorModelPicker.help)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func autonomyRow(_ cat: String, _ s: SupervisorStatus?) -> some View {
@@ -269,6 +292,95 @@ enum SupervisorMark {
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// The open model list: Default, then the active provider's live models by
+/// tier. Arrow keys move a cursor, Return picks, Escape closes; each row is
+/// also a button for the pointer and for VoiceOver.
+@MainActor struct SupervisorModelList: View {
+    let model: SupervisorModel
+    let status: SupervisorStatus?
+    @FocusState private var focused: Bool
+
+    private var rows: [SupervisorModelPicker.Entry] {
+        var all = model.modelChoices
+        if let stale = SupervisorModelPicker.staleEntry(choice: SupervisorModelPicker.selection(status?.model), in: all) { all.append(stale) }
+        return all
+    }
+
+    var body: some View {
+        let choice = SupervisorModelPicker.selection(status?.model)
+        let all = rows
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SupervisorModelOption(title: SupervisorModelPicker.defaultTitle(status?.model), selected: choice == nil,
+                                      cursor: model.modelCursor == "") { Task { await model.setModel(nil) } }
+                if all.isEmpty {
+                    Text(model.modelListFailed ? "The model list didn't load." : "Loading the model list…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                }
+                ForEach(SupervisorModelPicker.groups(all)) { group in
+                    Text(group.title)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 6)
+                        .accessibilityAddTraits(.isHeader)
+                    ForEach(group.entries) { entry in
+                        SupervisorModelOption(title: entry.displayName, selected: choice == entry.id,
+                                              cursor: model.modelCursor == entry.id) { Task { await model.setModel(entry.id) } }
+                    }
+                }
+            }
+            .padding(.vertical, 3)
+        }
+        .frame(maxHeight: 220)
+        .background(RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous).fill(MarvinTheme.panel))
+        .overlay(RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous).stroke(MarvinTheme.border, lineWidth: 1))
+        .focusable()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.upArrow) { model.modelCursor = SupervisorModelPicker.step(from: model.modelCursor, by: -1, in: SupervisorModelPicker.keys(all)); return .handled }
+        .onKeyPress(.downArrow) { model.modelCursor = SupervisorModelPicker.step(from: model.modelCursor, by: 1, in: SupervisorModelPicker.keys(all)); return .handled }
+        .onKeyPress(.return) { let id = SupervisorModelPicker.modelID(forKey: model.modelCursor); Task { await model.setModel(id) }; return .handled }
+        .onKeyPress(.escape) { model.modelPickerOpen = false; return .handled }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Supervisor models")
+    }
+}
+
+@MainActor private struct SupervisorModelOption: View {
+    let title: String
+    let selected: Bool
+    let cursor: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .frame(width: 10)
+                    .opacity(selected ? 1 : 0)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.system(size: 11, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .paneRow(selected: cursor, hovering: hovering)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("Sets the supervisor's model from the next wake")
     }
 }
 

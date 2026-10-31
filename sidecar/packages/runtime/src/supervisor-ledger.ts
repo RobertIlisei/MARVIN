@@ -67,6 +67,12 @@ export interface LedgerEntryInput {
   /** The question heuristic's matched term, when it fired (ADR-0127 §4 — measured in shadow). */
   heuristic?: string;
   costUsd?: number;
+  /**
+   * The model a wake was ASKED to run on, resolved by the runtime from the
+   * supervisor role before the call and written on the wake's `start` line.
+   * Never the supervisor's own output; the provider may substitute.
+   */
+  model?: string;
   result?: string;
   /** The question or confirm an `answer` / `confirm` line is about (milestone 4 — pairing). */
   turnId?: string;

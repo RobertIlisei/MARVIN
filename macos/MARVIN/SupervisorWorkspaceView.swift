@@ -314,7 +314,6 @@ extension SupervisorWorkspace {
     let showsStateLine: Bool
     @State private var confirmDisable = false
     @State private var charterOpen = false
-    @State private var modelsOpen = false
     private let registry = SessionRegistry.shared
 
     var body: some View {
@@ -343,7 +342,7 @@ extension SupervisorWorkspace {
                             SupervisorTabTitle.text(registry.entry(id) ?? SessionEntry(id: id), inbox: model.inbox)
                         })
                     case .settings:
-                        SupervisorSettingsBlock(model: model, charterOpen: $charterOpen, modelsOpen: $modelsOpen,
+                        SupervisorSettingsBlock(model: model, charterOpen: $charterOpen,
                                                 confirmDisable: $confirmDisable, leadingDivider: false)
                     }
                 }
@@ -365,9 +364,6 @@ extension SupervisorWorkspace {
         }
         .sheet(isPresented: $charterOpen) {
             SupervisorCharterSheet(model: model, onClose: { charterOpen = false })
-        }
-        .sheet(isPresented: $modelsOpen) {
-            ModelsDialog()
         }
     }
 }

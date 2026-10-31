@@ -16,7 +16,7 @@
 
 import { type ConfirmRule } from "./confirm-registry";
 import { listModelsCached } from "./models";
-import { resolveRoleModel } from "./role-models";
+import { readRoleModels, resolveRoleModel } from "./role-models";
 import { HUMAN_ONLY_CONFIRM_RULES } from "./supervisor-acts";
 import { appendLedgerEntry, type LedgerEntry, type LedgerGround, readLedger } from "./supervisor-ledger";
 import { AUTONOMY_CATEGORIES, type AutonomyCategory, overBudget, type SupervisorState } from "./supervisor-state";
@@ -218,6 +218,8 @@ export interface SupervisorModelInfo {
   role: "supervisor";
   resolved: string | null;
   label: string | null;
+  /** What the user stored for the role; null = the default. `resolved` alone cannot tell the two apart. */
+  choice: string | null;
 }
 
 /** Every field the brief's §10.1 table names; a route test reads each one. */
@@ -322,12 +324,13 @@ export type SupervisorStatus = ReturnType<typeof buildSupervisorStatus>;
 
 /** The supervisor role's model as the expanded block shows it. Never throws: an unreachable catalogue reads as unresolved. */
 export async function supervisorModelInfo(): Promise<SupervisorModelInfo> {
+  const choice = readRoleModels().supervisor ?? null;
   try {
     const resolved = await resolveRoleModel("supervisor");
-    if (!resolved || resolved === "inherit") return { role: "supervisor", resolved: null, label: null };
+    if (!resolved || resolved === "inherit") return { role: "supervisor", resolved: null, label: null, choice };
     const known = (await listModelsCached()).models.find((m) => m.id === resolved);
-    return { role: "supervisor", resolved, label: known?.displayName ?? resolved };
+    return { role: "supervisor", resolved, label: known?.displayName ?? resolved, choice };
   } catch {
-    return { role: "supervisor", resolved: null, label: null };
+    return { role: "supervisor", resolved: null, label: null, choice };
   }
 }

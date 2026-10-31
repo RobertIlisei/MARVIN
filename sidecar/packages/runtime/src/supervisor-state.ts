@@ -541,6 +541,28 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
   return { ok: true, state };
 }
 
+/**
+ * The user changed the supervisor role's model (ADR-0126's store, which is
+ * app-wide, not per project). Every enabled supervisor ledgers it and moves its
+ * revision, so a Settings block that cached the status refetches; without this
+ * a successful pick left the block saying the old model. A project whose
+ * supervisor is off is left alone. Takes effect on the next wake.
+ */
+export function noteSupervisorModelChange(model: string | null): void {
+  for (const enabled of listEnabledSupervisors()) {
+    const state = commit(getSupervisorState(enabled.projectId));
+    appendLedgerEntry(state.projectId, {
+      kind: "control",
+      verb: "model",
+      tab: null,
+      wakeId: null,
+      mode: state.mode,
+      reason: `user: model ${model ?? "default"}, from the next wake`,
+      ...(model ? { model } : {}),
+    });
+  }
+}
+
 /** The loop's hook for pause / kill / delegate changes. Returns an unsubscribe fn. */
 export function onSupervisorControl(listener: (e: SupervisorControlEvent) => void): () => void {
   store().listeners.add(listener);
