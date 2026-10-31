@@ -30,7 +30,7 @@ import type { PosturePatch } from "./posture";
 import type { SessionPosture } from "./session-meta";
 import { shellWriteTargets, withoutGitGlobalOptions } from "./supervisor-acts";
 import { digestArgs, ensureSupervisorDir, type LedgerGround, supervisorDir, wakeOriginOf } from "./supervisor-ledger";
-import type { MessageOrigin } from "./supervisor-messages";
+import type { ReplyOrigin } from "./supervisor-messages";
 import { type Ground, type GroundViewContext, projectGround } from "./supervisor-view";
 import { announceProjectEvent } from "./turn-registry";
 
@@ -84,7 +84,17 @@ export interface NewTabProposal {
   wider: string[];
   /** The brief also names `approved-proposal`; nothing writes it — approving a suggestion is the user's message (plan, milestone 5). */
   requestedBy: { kind: "user-message"; ref: string; at: string };
+  /**
+   * ADR-0128 §5 — what the tab is delegated at on the user's accept:
+   * `answer-questions` by default, lowerable to `observe` or `off` on the card.
+   */
+  delegation?: NewTabDelegation;
+  /** A tab opened from the conversation is followed, citing the request; `merge-ready` when the user asked for the merge. */
+  follow?: { until: "scope-met" | "merge-ready" };
 }
+
+export const NEW_TAB_DELEGATIONS = ["answer-questions", "observe", "off"] as const;
+export type NewTabDelegation = (typeof NEW_TAB_DELEGATIONS)[number];
 
 /** What consent replays. Server-side only: never built from the supervisor's description of the act. */
 export type InboxAct =
@@ -96,7 +106,7 @@ export type InboxAct =
   | { type: "cancel"; sessionId: string }
   | { type: "worktrees"; op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean; openMergeRequest?: boolean }
   | { type: "close"; sessionId: string; worktree: "keep" | "merge" | "discard" }
-  | { type: "new-tab"; requestId: string; title?: string; posture: SessionPosture; grounds: LedgerGround[] }
+  | { type: "new-tab"; requestId: string; title?: string; posture: SessionPosture; grounds: LedgerGround[]; delegation?: NewTabDelegation; follow?: { until: "scope-met" | "merge-ready" } }
   | { type: "guardrail"; pause: string };
 
 export interface InboxDraft {
@@ -122,11 +132,13 @@ export interface InboxDraft {
   act?: InboxAct | null;
   /** One item per key, across every state: a dismissed item is not raised again for the same cause. */
   dedupeKey?: string;
+  /** ADR-0128 §5 — a follow wake's item, assigned by the runtime from the follows the wake carries. A message wake's comes from the wake. */
+  origin?: ReplyOrigin | null;
 }
 
-export interface InboxRecord extends Required<Omit<InboxDraft, "id" | "dedupeKey">> {
-  /** ADR-0128 §3 — the messages of the conversation wake that raised it; assigned by the runtime from the wake, never by the model. */
-  origin: MessageOrigin | null;
+export interface InboxRecord extends Required<Omit<InboxDraft, "id" | "dedupeKey" | "origin">> {
+  /** ADR-0128 §3/§5 — the messages of the conversation wake, or the follow, that raised it; assigned by the runtime, never by the model. */
+  origin: ReplyOrigin | null;
   id: string;
   revision: number;
   createdAt: string;
@@ -325,7 +337,7 @@ export function addInboxItem(projectId: string, draft: InboxDraft): InboxRecord 
     guardrail: draft.guardrail ?? null,
     modeAtCreation: draft.modeAtCreation,
     wakeId: draft.wakeId ?? null,
-    origin: wakeOriginOf(draft.wakeId),
+    origin: wakeOriginOf(draft.wakeId) ?? draft.origin ?? null,
     ledgerId: draft.ledgerId ?? null,
     tabTitle: draft.tabTitle ?? null,
     act: draft.act ?? null,
@@ -407,6 +419,17 @@ export function itemsForConversation(projectId: string, ids: readonly unknown[],
     if (typeof id !== "string" || out.includes(id) || out.length >= MAX_REPLY_ITEMS) continue;
     const o = getInboxItem(projectId, id)?.origin;
     if (o?.kind === "message" && [...new Set(o.messageIds)].sort().join("\n") === want) out.push(id);
+  }
+  return out;
+}
+
+/** ADR-0128 §5 — the items a report may list: ones raised for exactly this follow. */
+export function itemsForFollow(projectId: string, ids: readonly unknown[], followId: string): string[] {
+  const out: string[] = [];
+  for (const id of ids) {
+    if (typeof id !== "string" || out.includes(id) || out.length >= MAX_REPLY_ITEMS) continue;
+    const o = getInboxItem(projectId, id)?.origin;
+    if (o?.kind === "follow" && o.followId === followId) out.push(id);
   }
   return out;
 }
@@ -511,7 +534,7 @@ export interface InboxItemView {
   resolvedAt: string | null;
   burstRank: number;
   ledgerId: string | null;
-  origin: MessageOrigin | null;
+  origin: ReplyOrigin | null;
 }
 
 /** The brief's item. `all` is the project's items, for `burstRank` (age order among the tab's open items). */

@@ -19,6 +19,7 @@
  */
 
 import { readSessionMeta, updateSessionMeta } from "./session-meta";
+import { endFollows } from "./supervisor-follows";
 import { logTelemetry } from "./telemetry";
 import { getLiveTurn } from "./turn-registry";
 import { readWorktreeSetupConfig } from "./worktree-setup";
@@ -38,6 +39,15 @@ import {
 
 export type CloseAction = "merge" | "keep" | "discard";
 
+/** ADR-0128 §5 — a follow ends at its tab's close. Best-effort: the close stands either way. */
+function endFollowsOf(projectId: string, sessionId: string): void {
+  try {
+    endFollows(projectId, (f) => f.sessionId === sessionId, "closed");
+  } catch {
+    /* an unreadable follows file must not fail a close */
+  }
+}
+
 export interface CloseResult {
   status: number;
   body: Record<string, unknown>;
@@ -55,6 +65,7 @@ export async function closeSession(args: { projectId: string; workDir: string; s
 
   if (!rec) {
     if (meta) updateSessionMeta(projectId, sessionId, { closedAt });
+    endFollowsOf(projectId, sessionId);
     return { status: 200, body: { ok: true, worktree: null, message: "closed" } };
   }
 
@@ -114,5 +125,6 @@ export async function closeSession(args: { projectId: string; workDir: string; s
     .catch(() => {
       /* best-effort */
     });
+  endFollowsOf(projectId, sessionId);
   return { status: 200, body: { ok: true, worktree: { slug: rec.slug, branch: rec.branch, action }, message } };
 }

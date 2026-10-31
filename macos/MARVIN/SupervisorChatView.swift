@@ -19,6 +19,11 @@ import SwiftUI
                     .padding(.horizontal, 12)
                     .padding(.top, 6)
             }
+            if !SupervisorChat.openFollows(model.follows).isEmpty {
+                followStrip
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+            }
             if let err = model.chatError {
                 PaneNoticeStrip(notice: PaneNotice(kind: .error, headline: err), onDismiss: { model.chatError = nil })
                     .padding(.horizontal, 12)
@@ -154,20 +159,78 @@ import SwiftUI
     private func replyRow(_ m: SupervisorChatMessage) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             replyText(m)
+            refLinks(m)
             cards(m)
+        }
+    }
+
+    /// [7.3] — the reply's server-resolved refs, as links. The only links in a reply:
+    /// its own text stays inert (ADR-0128 §3), and each label is the server's.
+    @ViewBuilder private func refLinks(_ m: SupervisorChatMessage) -> some View {
+        let refs = (m.refs ?? []).filter { SupervisorChat.refTarget($0) != nil }
+        if !refs.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(refs, id: \.self) { ref in
+                    Button { model.open(ref: ref) } label: {
+                        Label(ref.label, systemImage: SupervisorChat.refSymbol(ref))
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .buttonStyle(.link)
+                    .help(ref.kind == "tab" ? "Open this tab" : ref.kind == "item" ? "Show this card in Needs you" : "Show the supervisor's log")
+                    .accessibilityLabel("\(ref.kind == "tab" ? "Tab" : ref.kind == "item" ? "Card" : "Log line"): \(ref.label)")
+                }
+            }
+            .padding(.leading, 66)
+            .padding(.bottom, 6)
+        }
+    }
+
+    // MARK: - [7.3] Follows
+
+    /// One chip per open follow: what it waits for, and the user's Stop following.
+    private var followStrip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(SupervisorChat.openFollows(model.follows)) { f in
+                HStack(spacing: 6) {
+                    Image(systemName: "eye").font(.system(size: 10))
+                        .foregroundStyle(MarvinTheme.textMuted)
+                        .accessibilityHidden(true)
+                    Text(SupervisorChat.followLabel(f))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Stop following") { Task { await model.stopFollowing(f) } }
+                        .rowChip(.neutral)
+                        .disabled(model.tokenError != nil)
+                        .help("The supervisor stops reporting on this tab. Nothing else changes.")
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(SupervisorChat.followLabel(f))
+                .accessibilityAction(named: "Stop following") { Task { await model.stopFollowing(f) } }
+            }
         }
     }
 
     private func replyText(_ m: SupervisorChatMessage) -> some View {
         HStack(alignment: .top, spacing: 10) {
             HStack(spacing: 3) {
-                Image(systemName: "binoculars").font(.system(size: 9))
-                Text("SUPERVISOR").font(.caption2.monospaced()).tracking(1)
+                // [7.3] — a report is the one reply no message of yours asked for: its gutter says so.
+                Image(systemName: m.isReport ? "eye" : "binoculars").font(.system(size: 9))
+                Text(m.isReport ? "REPORT" : "SUPERVISOR").font(.caption2.monospaced()).tracking(1)
             }
             .foregroundStyle(MarvinTheme.textMuted)
             .frame(width: 56, alignment: .topTrailing)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
+                if let tab = SupervisorChat.reportTab(m, follows: model.follows) {
+                    Text("On \(tab), which you asked it to follow")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 // Every link removed (ADR-0128 §3): plain `Text` over an AttributedString with no
                 // `.link` run, so nothing in a reply is clickable — `RichText` would autolink.
                 Text(SupervisorChat.neutralisedReply(m.text))
@@ -182,7 +245,9 @@ import SwiftUI
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Supervisor reply, not from you: \(m.text)")
+        .accessibilityLabel(m.isReport
+            ? "Supervisor report\(SupervisorChat.reportTab(m, follows: model.follows).map { " on \($0)" } ?? ""), not from you: \(m.text)"
+            : "Supervisor reply, not from you: \(m.text)")
     }
 
     // MARK: - The working indicator (§12.4)

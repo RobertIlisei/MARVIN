@@ -63,7 +63,7 @@ async function main(): Promise<void> {
       }
       const st = getSupervisorState(projectId);
       const end = readLedger(projectId).filter((e) => e.kind === "wake" && e.verb === "end").at(-1);
-      const replied = listMessages(projectId).some((x) => x.from === "supervisor" && x.origin?.messageIds.includes(m.id));
+      const replied = listMessages(projectId).some((x) => x.from === "supervisor" && x.origin?.kind === "message" && x.origin.messageIds.includes(m.id));
       const row = {
         wake: i + 1,
         outcome: st.lastWake?.outcome,

@@ -5222,6 +5222,36 @@ runner.suite("supervisor-chat") {
         ]
         runner.expect(SupervisorChat.waiting(m), equals: ["m2"], "m2 waits")
     }
+    // [7.3] — following and reporting.
+    runner.test("a report decodes with its follow origin and refs, and leaves the conversation decodable") {
+        let json = #"{"messages":[{"id":"m1","at":"2026-10-31T10:00:00Z","from":"user","text":"tell me when flags is done"},{"id":"r2","at":"2026-10-31T11:00:00Z","from":"supervisor","text":"flags met its scope.","kind":"report","wakeId":"w2","origin":{"kind":"follow","followId":"f1"},"items":["i1"],"refs":[{"kind":"tab","id":"s1","label":"flags"},{"kind":"item","id":"i1","label":"Merge flags"}]}]}"#
+        let page = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(page?.messages.count, equals: 2, "both lines decode")
+        let r = page?.messages.last
+        runner.expect(r?.isReport, equals: true, "a report")
+        runner.expect(r?.origin?.followId, equals: "f1", "its follow")
+        runner.expect(r?.origin?.messageIds, equals: [], "it names no message")
+        runner.expect(r?.refs?.map(\.label), equals: ["flags", "Merge flags"], "refs")
+        // A report answers no user message: m1 still waits for its reply.
+        runner.expect(SupervisorChat.waiting(page?.messages ?? []), equals: ["m1"], "m1 still waits")
+    }
+    runner.test("refs go only where the server resolved them") {
+        let ref = { (k: String) in SupervisorChatMessage.Ref(kind: k, id: "x", label: "L") }
+        runner.expect(SupervisorChat.refTarget(ref("tab")), equals: .tab("x"), "tab")
+        runner.expect(SupervisorChat.refTarget(ref("item")), equals: .item("x"), "item")
+        runner.expect(SupervisorChat.refTarget(ref("ledger")), equals: .ledger("x"), "ledger")
+        runner.expect(SupervisorChat.refTarget(ref("url")) == nil, "an unknown kind draws nothing")
+    }
+    runner.test("follow chips: open follows only, labelled with what they wait for") {
+        let f = [SupervisorFollow(id: "f1", sessionId: "s1", tabTitle: "flags", until: "merge-ready"),
+                 SupervisorFollow(id: "f2", sessionId: "s2", tabTitle: nil, until: "scope-met", state: "ended", endedBy: "user")]
+        runner.expect(SupervisorChat.openFollows(f).map(\.id), equals: ["f1"], "only open")
+        runner.expect(SupervisorChat.followLabel(f[0]), equals: "Following flags · until it is ready to merge", "merge-ready label")
+        let report = SupervisorChatMessage(id: "r", at: "a", from: "supervisor", text: "t", kind: "report", origin: .init(followId: "f2"))
+        runner.expect(SupervisorChat.reportTab(report, follows: f), equals: "s2", "an ended follow still names its tab")
+        runner.expect(SupervisorFeedEvent.decode(name: "supervisor.follow", data: Data(#"{"projectId":"p","id":"f1","sessionId":"s1","state":"ended"}"#.utf8)),
+                      equals: .follow(id: "f1", sessionId: "s1", state: "ended"), "follow event")
+    }
     runner.test("a reply renders with every link removed, the URL text kept") {
         let a = SupervisorChat.neutralisedReply("See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run.")
         var links = 0

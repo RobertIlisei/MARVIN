@@ -6,26 +6,71 @@ import Foundation
 
 /// One line of `GET /api/supervisor/message`.
 public struct SupervisorChatMessage: Decodable, Equatable, Identifiable, Sendable {
+    /// A reply's origin: the user messages its wake carried (`message`), or — [7.3] —
+    /// the follow a report is about (`follow`). A report answers no user message.
     public struct Origin: Decodable, Equatable, Sendable {
+        public let kind: String
         public let messageIds: [String]
-        public init(messageIds: [String]) { self.messageIds = messageIds }
+        public let followId: String?
+        public init(messageIds: [String]) { self.kind = "message"; self.messageIds = messageIds; self.followId = nil }
+        public init(followId: String) { self.kind = "follow"; self.messageIds = []; self.followId = followId }
+        enum CodingKeys: String, CodingKey { case kind, messageIds, followId }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "message"
+            messageIds = try c.decodeIfPresent([String].self, forKey: .messageIds) ?? []
+            followId = try c.decodeIfPresent(String.self, forKey: .followId)
+        }
+    }
+    /// [7.3] — a tab, ledger line or inbox item a reply mentions, resolved by the server.
+    /// `label` is the server's (a tab's title, a line's verb, an item's raw act), never the reply's prose.
+    public struct Ref: Decodable, Equatable, Hashable, Sendable {
+        public let kind: String
+        public let id: String
+        public let label: String
+        public init(kind: String, id: String, label: String) { self.kind = kind; self.id = id; self.label = label }
     }
     public let id: String
     public let at: String
     /// `user` or `supervisor`.
     public let from: String
     public let text: String
+    /// [7.3] — `report`: a follow's report, the one reply no user message asked for.
+    public let kind: String?
     /// A reply's wake and the user messages it answers.
     public let wakeId: String?
     public let origin: Origin?
     /// [7.2] — the inbox items this reply's wake raised for its messages (server-filtered): the cards under it.
     public let items: [String]?
+    /// [7.3] — the links under it.
+    public let refs: [Ref]?
 
-    public init(id: String, at: String, from: String, text: String, wakeId: String? = nil, origin: Origin? = nil, items: [String]? = nil) {
-        self.id = id; self.at = at; self.from = from; self.text = text; self.wakeId = wakeId; self.origin = origin; self.items = items
+    public init(id: String, at: String, from: String, text: String, kind: String? = nil, wakeId: String? = nil, origin: Origin? = nil, items: [String]? = nil, refs: [Ref]? = nil) {
+        self.id = id; self.at = at; self.from = from; self.text = text; self.kind = kind; self.wakeId = wakeId; self.origin = origin; self.items = items; self.refs = refs
     }
 
     public var isReply: Bool { from == "supervisor" }
+    public var isReport: Bool { isReply && kind == "report" }
+}
+
+/// [7.3] — one line of `GET /api/supervisor/follows`.
+public struct SupervisorFollow: Decodable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let sessionId: String
+    public let tabTitle: String?
+    /// `scope-met` or `merge-ready`.
+    public let until: String
+    /// `open` or `ended`.
+    public let state: String
+    public let endedBy: String?
+    public init(id: String, sessionId: String, tabTitle: String?, until: String, state: String = "open", endedBy: String? = nil) {
+        self.id = id; self.sessionId = sessionId; self.tabTitle = tabTitle; self.until = until; self.state = state; self.endedBy = endedBy
+    }
+    public var isOpen: Bool { state == "open" }
+}
+
+public struct SupervisorFollows: Decodable, Equatable, Sendable {
+    public let follows: [SupervisorFollow]
 }
 
 /// The GET's body.
@@ -126,6 +171,50 @@ public enum SupervisorChat {
     public static func needsReload(after event: SupervisorFeedEvent) -> Bool {
         if case .message = event { return true }
         return false
+    }
+
+    // MARK: - [7.3] Following and reporting
+
+    /// The follow chips: open follows, oldest first, as the server lists them.
+    public static func openFollows(_ follows: [SupervisorFollow]) -> [SupervisorFollow] {
+        follows.filter(\.isOpen)
+    }
+
+    /// "Following fix-flags · until merged" — what the chip says it waits for.
+    public static func followLabel(_ f: SupervisorFollow) -> String {
+        let tab = f.tabTitle?.isEmpty == false ? f.tabTitle! : String(f.sessionId.prefix(8))
+        return "Following \(tab) · \(f.until == "merge-ready" ? "until it is ready to merge" : "until its scope is met")"
+    }
+
+    /// The tab a report is about, by its follow; nil for any other reply.
+    public static func reportTab(_ m: SupervisorChatMessage, follows: [SupervisorFollow]) -> String? {
+        guard m.isReport, let fid = m.origin?.followId, let f = follows.first(where: { $0.id == fid }) else { return nil }
+        return f.tabTitle?.isEmpty == false ? f.tabTitle : String(f.sessionId.prefix(8))
+    }
+
+    /// Where a ref goes. Only kinds the server resolves; anything else draws nothing.
+    public enum RefTarget: Equatable, Sendable {
+        case tab(String)
+        case item(String)
+        case ledger(String)
+    }
+
+    public static func refTarget(_ r: SupervisorChatMessage.Ref) -> RefTarget? {
+        switch r.kind {
+        case "tab": return .tab(r.id)
+        case "item": return .item(r.id)
+        case "ledger": return .ledger(r.id)
+        default: return nil
+        }
+    }
+
+    /// The SF Symbol a ref's link carries.
+    public static func refSymbol(_ r: SupervisorChatMessage.Ref) -> String {
+        switch r.kind {
+        case "tab": return "rectangle.on.rectangle"
+        case "item": return "tray"
+        default: return "list.bullet.rectangle"
+        }
     }
 
     /// Brief §12.2 — a reply is Markdown with no actionable element (ADR-0128 §3):
