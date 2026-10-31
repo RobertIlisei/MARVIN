@@ -358,6 +358,19 @@ enum SurfaceSnapshot {
                 AnyView(SupervisorSendEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.sendItem, onClose: {}))
             },
             // ADR-0129 — an image chip in the composer, and a Markdown reply under a message that carried an image.
+            // The sheet at the size it opens in a narrow (900×640) and a typical (1440×900) window.
+            Surface("sup-new-tab-edit-sheet-narrow", "Supervisor — new-tab Edit… sheet, long brief, 900×640 window (opens at its minimum)", .fixture,
+                    widths: [SupervisorNewTabEdit.sheetSize(window: CGSize(width: 900, height: 640), remembered: nil).width],
+                    height: SupervisorNewTabEdit.sheetSize(window: CGSize(width: 900, height: 640), remembered: nil).height) {
+                AnyView(SupervisorNewTabEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.longBriefNewTabItem,
+                                                  onClose: {}, catalog: SurfaceSupervisorFixtures.modelCatalog, window: CGSize(width: 900, height: 640)))
+            },
+            Surface("sup-new-tab-edit-sheet-typical", "Supervisor — new-tab Edit… sheet, long brief, 1440×900 window (70 %)", .fixture,
+                    widths: [SupervisorNewTabEdit.sheetSize(window: CGSize(width: 1440, height: 900), remembered: nil).width],
+                    height: SupervisorNewTabEdit.sheetSize(window: CGSize(width: 1440, height: 900), remembered: nil).height) {
+                AnyView(SupervisorNewTabEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.longBriefNewTabItem,
+                                                  onClose: {}, catalog: SurfaceSupervisorFixtures.modelCatalog, window: CGSize(width: 1440, height: 900)))
+            },
             Surface("sup-chat-composer-image", "Supervisor tab ADR-0129 — the composer with a pasted image chip and a file chip", .fixture, widths: [260, 420], height: 640) {
                 AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: nil),
                                            draft: "Why does the retry tab's test fail like this?",
