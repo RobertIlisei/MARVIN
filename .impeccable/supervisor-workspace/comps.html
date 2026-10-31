@@ -1,0 +1,435 @@
+<!doctype html>
+<!--
+  Supervisor workspace comps (supervisor brief §13). Static mockups, not product code.
+  Tokens are DESIGN.md's ("The Quiet Instrument"); the orb is cropped from docs/assets/marvin-ide.png.
+  Render: npx playwright screenshot "file://…/comps.html#<comp>" out.png  (see render.sh)
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+:root, .dark {
+  --chrome:#181818; --content:#1F1F1F; --inset:#262626; --hair:#2B2B2B;
+  --text:#D4D4D4; --muted:#9D9D9D; --sel:#37373D; --hover:#2A2D2E;
+  --accent:#3B82F6; --accent-text:#6AAEFF; --chip-stroke:#666666;
+  --orange:#FF9F0A; --red:#D95440; --green:#6BD18F; --secondary:rgba(235,235,245,.62); --tertiary:rgba(235,235,245,.38);
+  --orb:url(assets/orb-dark.png);
+}
+.light {
+  --chrome:#F3F3F3; --content:#FFFFFF; --inset:#F7F7F7; --hair:#E5E5E5;
+  --text:#1F1F1F; --muted:#6E6E6E; --sel:#E4E6F1; --hover:#F0F0F0;
+  --accent:#0A64D8; --accent-text:#0A58C2; --chip-stroke:#8A8A8A;
+  --orange:#C46A00; --red:#BC3925; --green:#257641; --secondary:rgba(60,60,67,.66); --tertiary:rgba(60,60,67,.42);
+  --orb:url(assets/orb-light.png);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:-apple-system, system-ui, "SF Pro Text", sans-serif; color:var(--text); background:#000; -webkit-font-smoothing:antialiased; }
+.mono { font-family:ui-monospace, "SF Mono", Menlo, monospace; }
+.win, .light, .dark { color:var(--text); }
+.win { display:flex; flex-direction:column; background:var(--chrome); overflow:hidden; }
+.titlebar { height:38px; display:flex; align-items:center; gap:8px; padding:0 14px; border-bottom:1px solid var(--hair); font-size:12px; font-weight:600; }
+.lights { display:flex; gap:8px; margin-right:14px; } .lights i { width:12px; height:12px; border-radius:50%; display:block; }
+.lights i:nth-child(1){background:#FF5F57}.lights i:nth-child(2){background:#FEBC2E}.lights i:nth-child(3){background:#28C840}
+.titlebar .sub { font-weight:400; color:var(--muted); font-size:11px; }
+.body { flex:1; display:flex; min-height:0; }
+.rail { width:44px; border-right:1px solid var(--hair); display:flex; flex-direction:column; align-items:center; padding-top:2px; flex:none; }
+.rail b { width:44px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--muted); position:relative; }
+.rail b.sel { color:var(--text); background:var(--sel); }
+.rail b.sel::before { content:""; position:absolute; left:0; top:6px; bottom:6px; width:2px; background:var(--accent); }
+.rail b.on { color:var(--text); background:var(--sel); }
+.rail b .badge { position:absolute; right:7px; top:5px; min-width:13px; height:13px; border-radius:7px; background:var(--orange); color:#fff; font-size:8.5px; font-weight:700; display:flex; align-items:center; justify-content:center; padding:0 3px; }
+.side { width:260px; border-right:1px solid var(--hair); flex:none; overflow:hidden; display:flex; flex-direction:column; }
+.center { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--content); border-right:1px solid var(--hair); }
+.right { width:480px; flex:none; display:flex; flex-direction:column; background:var(--chrome); }
+.statusbar { height:22px; border-top:1px solid var(--hair); display:flex; align-items:center; gap:14px; padding:0 10px; font-size:10.5px; color:var(--muted); }
+
+/* pane vocabulary */
+.ph { height:38px; display:flex; align-items:center; padding:0 10px; gap:6px; }
+.ph .t { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--muted); flex:1; }
+.ib { width:22px; height:22px; border-radius:5px; display:inline-flex; align-items:center; justify-content:center; color:var(--muted); flex:none; }
+.sh { display:flex; align-items:center; gap:6px; padding:10px 12px 4px; font-size:9.5px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--muted); }
+.cnt { font-size:9.5px; padding:0 5px; border-radius:7px; background:color-mix(in srgb, var(--muted) 18%, transparent); color:var(--text); font-variant-numeric:tabular-nums; }
+.cnt.warn { background:color-mix(in srgb, var(--orange) 22%, transparent); }
+.row { display:flex; align-items:flex-start; gap:8px; padding:4px 12px; margin:0 2px; border-radius:5px; }
+.row.sel { background:var(--sel); }
+.row .g { width:14px; flex:none; text-align:center; font-size:11px; line-height:16px; color:var(--muted); }
+.row .m { flex:1; min-width:0; }
+.row .tt { font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:16px; }
+.row .st { font-size:10px; color:var(--secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:500; padding:3px 8px; border-radius:5px; border:.5px solid var(--chip-stroke); background:var(--inset); color:var(--text); white-space:nowrap; flex:none; }
+.chip.primary { color:var(--accent-text); background:color-mix(in srgb, var(--accent) 15%, transparent); border-color:color-mix(in srgb, var(--accent) 45%, transparent); }
+.chip.red { color:var(--red); background:color-mix(in srgb, var(--red) 15%, transparent); border-color:color-mix(in srgb, var(--red) 40%, transparent); }
+.chip.dis { opacity:.45; }
+.chip.c { font-size:10px; padding:2px 7px; }
+.notice { margin:6px 12px; padding:6px 10px; border-radius:6px; font-size:10.5px; display:flex; gap:7px; align-items:flex-start; }
+.notice.warn { background:color-mix(in srgb, var(--orange) 8%, transparent); }
+.notice.err { background:color-mix(in srgb, var(--red) 8%, transparent); }
+.notice .d { font-family:ui-monospace,monospace; font-size:10px; color:var(--secondary); margin-top:2px; }
+.meter { width:56px; height:4px; border-radius:3px; background:color-mix(in srgb, var(--muted) 22%, transparent); overflow:hidden; flex:none; }
+.meter i { display:block; height:100%; background:var(--muted); }
+.meter.o i { background:var(--orange); } .meter.r i { background:var(--red); }
+svg.ic { width:12px; height:12px; flex:none; vertical-align:-2px; }
+svg.ic.s { width:11px; height:11px; }
+
+/* sessions-pane supervisor line (§13.6) */
+.supline { display:flex; align-items:center; gap:6px; margin:0 8px 2px; padding:5px 8px; border-radius:5px; font-size:11px; border:1px solid var(--hair); background:var(--inset); }
+.supline .s { color:var(--secondary); font-size:10.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
+
+/* card (§6.2) */
+.card { background:var(--inset); border:1px solid var(--hair); border-radius:6px; padding:8px; font-size:11px; }
+.card .why { font-weight:600; font-size:10.5px; display:flex; gap:5px; align-items:center; margin-bottom:5px; }
+.card .act { display:flex; gap:6px; align-items:center; margin-bottom:3px; }
+.badge-t { font-family:ui-monospace,monospace; font-size:10.5px; padding:1px 5px; border-radius:3px; background:color-mix(in srgb, var(--muted) 18%, transparent); }
+.card .raw { font-family:ui-monospace,monospace; font-size:11px; margin-bottom:3px; }
+.link { color:var(--accent-text); }
+.card .rec { color:var(--secondary); margin:6px 0 3px; display:flex; gap:5px; }
+.card .rec b { color:var(--text); font-weight:600; }
+.card .why2 { color:var(--secondary); padding-left:17px; margin-bottom:5px; }
+.card .gr { color:var(--secondary); margin-bottom:7px; }
+.card .chips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.settled { font-size:11px; color:var(--secondary); display:flex; gap:6px; align-items:center; padding:6px 8px; border:1px solid var(--hair); border-radius:6px; }
+
+/* center workspace */
+.wh { height:38px; display:flex; align-items:center; gap:8px; padding:0 10px 0 12px; background:var(--chrome); border-bottom:1px solid var(--hair); flex:none; }
+.wh .title { font-size:12px; font-weight:600; }
+.wh .mode { font-size:11px; color:var(--secondary); white-space:nowrap; }
+.wh .money { font-family:ui-monospace,monospace; font-size:10.5px; color:var(--secondary); white-space:nowrap; font-variant-numeric:tabular-nums; }
+.wh .sp { flex:1; min-width:0; }
+.conv { flex:1; min-height:0; overflow:hidden; display:flex; justify-content:center; }
+.col { width:100%; max-width:760px; padding:18px 16px 0; display:flex; flex-direction:column; gap:14px; }
+.ub { align-self:flex-end; max-width:78%; background:var(--inset); border:1px solid var(--hair); border-radius:12px; padding:8px 12px; font-size:13px; line-height:18px; }
+.ub .who { font-family:ui-monospace,monospace; font-size:9.5px; letter-spacing:2px; color:var(--accent-text); opacity:.8; text-align:right; margin-bottom:2px; }
+.rep { padding-left:66px; font-size:13px; line-height:19px; }
+.rep .who { font-family:ui-monospace,monospace; font-size:9.5px; letter-spacing:2px; color:var(--muted); margin-bottom:3px; display:flex; gap:5px; align-items:center; }
+.rep .time { font-size:10.5px; color:var(--secondary); margin-top:2px; font-family:ui-monospace,monospace; }
+.rep .card { margin-top:8px; }
+.meta { padding-left:66px; font-size:11px; color:var(--secondary); display:flex; gap:6px; align-items:center; }
+.composer-wrap { display:flex; justify-content:center; padding:10px 16px 12px; flex:none; }
+.composer { width:100%; max-width:760px; height:64px; border-radius:10px; background:var(--inset); border:1px solid var(--hair); padding:8px 12px; font-size:13px; color:var(--secondary); position:relative; }
+.composer .send { position:absolute; right:8px; bottom:8px; width:22px; height:22px; border-radius:11px; background:color-mix(in srgb, var(--muted) 40%, transparent); color:var(--content); display:flex; align-items:center; justify-content:center; font-size:12px; }
+
+/* right column */
+.brain { height:250px; display:flex; flex-direction:column; align-items:center; padding-top:10px; border-bottom:1px solid var(--hair); flex:none; }
+.orb { width:180px; height:150px; background:var(--orb) center/contain no-repeat; }
+.orb.still { opacity:.45; }
+.cap1 { font-family:ui-monospace,monospace; font-size:9px; letter-spacing:2.5px; color:var(--tertiary); display:flex; gap:5px; align-items:center; margin-top:4px; }
+.cap2 { font-family:ui-monospace,monospace; font-size:12px; color:var(--secondary); margin-top:1px; display:flex; gap:5px; align-items:center; }
+.cap3 { font-size:10.5px; color:var(--secondary); margin-top:6px; padding:0 14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.seg { margin:10px 12px 6px; display:flex; border:.5px solid var(--chip-stroke); border-radius:5px; overflow:hidden; flex:none; }
+.seg span { flex:1; text-align:center; font-size:11px; padding:3px 0; border-left:.5px solid var(--chip-stroke); }
+.seg span:first-child { border-left:none; }
+.seg span.on { background:var(--sel); font-weight:600; }
+.insp { flex:1; min-height:0; overflow:hidden; }
+.trow { display:flex; gap:8px; padding:6px 12px; align-items:flex-start; border-bottom:1px solid color-mix(in srgb, var(--hair) 60%, transparent); }
+.trow .m { flex:1; min-width:0; }
+.trow .tt { font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trow .st { font-size:10.5px; color:var(--secondary); margin-top:1px; }
+.deleg { display:inline-flex; gap:4px; align-items:center; font-size:10.5px; padding:2px 6px; border-radius:5px; border:.5px solid var(--chip-stroke); background:var(--inset); white-space:nowrap; flex:none; }
+.lrow { padding:5px 12px; border-bottom:1px solid color-mix(in srgb, var(--hair) 60%, transparent); }
+.lrow .l1 { display:flex; gap:6px; align-items:center; font-size:11px; }
+.lrow .l1 .v { font-family:ui-monospace,monospace; }
+.lrow .l1 .tm { margin-left:auto; font-family:ui-monospace,monospace; font-size:10.5px; color:var(--muted); }
+.lrow .l2 { font-size:11px; color:var(--secondary); padding-left:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.set { padding:4px 12px; font-size:11px; }
+.set h4 { font-size:11px; font-weight:500; color:var(--muted); margin:10px 0 6px; display:flex; align-items:center; }
+.tg { display:flex; gap:8px; margin-bottom:8px; }
+.sw { width:26px; height:15px; border-radius:8px; background:color-mix(in srgb, var(--muted) 35%, transparent); position:relative; flex:none; margin-top:1px; }
+.sw::after { content:""; position:absolute; top:1.5px; left:1.5px; width:12px; height:12px; border-radius:6px; background:#fff; }
+.sw.on { background:var(--accent); } .sw.on::after { left:12.5px; }
+.sw.dis { opacity:.4; }
+.tg .st { color:var(--secondary); font-size:11px; }
+.stepper { display:inline-flex; align-items:center; gap:4px; }
+.stepper .f { width:54px; height:20px; border-radius:4px; border:.5px solid var(--chip-stroke); background:var(--content); font-size:11px; display:flex; align-items:center; padding:0 6px; font-family:ui-monospace,monospace; }
+
+/* editor-ish file placeholder in off comp */
+.tabstrip { height:30px; display:flex; align-items:center; gap:4px; padding:0 8px; border-bottom:1px solid var(--hair); background:var(--chrome); font-size:11px; color:var(--secondary); }
+.tabstrip .tab { padding:4px 10px; border-radius:5px; }
+.tabstrip .tab.on { background:var(--content); color:var(--text); border:1px solid var(--hair); }
+.form { width:100%; max-width:520px; padding:26px 20px; display:flex; flex-direction:column; gap:12px; font-size:12px; }
+.form .lead { color:var(--secondary); line-height:17px; }
+.form label { font-size:11px; color:var(--muted); font-weight:500; display:block; margin-bottom:4px; }
+.ta { height:64px; border-radius:6px; border:.5px solid var(--chip-stroke); background:var(--inset); padding:6px 8px; color:var(--tertiary); font-size:12px; }
+.picker { font-size:11px; padding:2px 8px; border-radius:5px; border:.5px solid var(--chip-stroke); background:var(--inset); }
+.btn { font-size:12px; padding:4px 12px; border-radius:6px; border:.5px solid var(--chip-stroke); background:var(--inset); display:inline-block; }
+
+/* state sheet */
+.sheet { padding:24px; display:grid; grid-template-columns:repeat(2, 640px); gap:18px 24px; background:var(--chrome); }
+.cell { border:1px solid var(--hair); border-radius:6px; overflow:hidden; background:var(--chrome); }
+.cell .lab { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:1px; color:var(--muted); padding:6px 10px; border-bottom:1px solid var(--hair); text-transform:uppercase; }
+.cell .inner { display:flex; }
+.cell .inner .l { width:260px; border-right:1px solid var(--hair); padding:6px 0; }
+.cell .inner .r { flex:1; display:flex; flex-direction:column; align-items:center; padding:8px 0; }
+.cell .inner .r .orb { width:120px; height:96px; }
+.cell .whwrap { border-bottom:1px solid var(--hair); }
+.annot { font-size:10.5px; color:var(--secondary); padding:6px 10px; border-top:1px solid var(--hair); line-height:15px; }
+.h1 { grid-column:1 / -1; font-size:15px; font-weight:600; }
+.h1 .sub { display:block; font-size:11px; font-weight:400; color:var(--secondary); margin-top:3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ---------- icons (SF Symbols stand-ins) ----------
+const I = {
+  bino:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4.2" cy="10.5" r="3"/><circle cx="11.8" cy="10.5" r="3"/><path d="M7.2 10.5h1.6M2.2 8.5 4 3h2.3l.9 4.6M13.8 8.5 12 3H9.7l-.9 4.6"/></svg>`,
+  pause:`<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3" width="3" height="10" rx=".8"/><rect x="9.5" y="3" width="3" height="10" rx=".8"/></svg>`,
+  play:`<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2.8v10.4l8.6-5.2z"/></svg>`,
+  stop:`<svg class="ic s" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>`,
+  more:`<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>`,
+  x:`<svg class="ic s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
+  chev:`<svg class="ic s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5 10.5 8 6 12.5"/></svg>`,
+  down:`<svg class="ic s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3.5 6 8 10.5 12.5 6"/></svg>`,
+  warn:`<svg class="ic" viewBox="0 0 16 16"><path d="M8 1.8 15 14H1z" fill="var(--orange)"/><path d="M8 6v4M8 11.6v.6" stroke="#fff" stroke-width="1.5"/></svg>`,
+  err:`<svg class="ic" viewBox="0 0 16 16"><path d="M5 1.5h6L14.5 5v6L11 14.5H5L1.5 11V5z" fill="var(--red)"/><path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.5"/></svg>`,
+  hand:`<svg class="ic" viewBox="0 0 16 16" fill="var(--orange)"><path d="M5 7V3a1 1 0 0 1 2 0v4-5a1 1 0 0 1 2 0v5-4a1 1 0 0 1 2 0v5-2a1 1 0 0 1 2 0v4c0 3-2 5-5 5s-4.5-1.5-6-4L1.6 8.3a1 1 0 0 1 1.6-1.1L5 9z"/></svg>`,
+  eye:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.6-4.5 7-4.5S15 8 15 8s-2.6 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg>`,
+  qb:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 3.5h12v8H7l-3 2.5v-2.5H2z"/><path d="M6.6 6a1.5 1.5 0 1 1 2 1.4c-.4.2-.6.5-.6.9M8 10v.4"/></svg>`,
+  shield:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 1.5 13.5 3.5v4c0 3.3-2.4 5.8-5.5 7-3.1-1.2-5.5-3.7-5.5-7v-4z"/><path d="M5.5 8l1.8 1.8 3.4-3.6"/></svg>`,
+  dash:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2 2"><circle cx="8" cy="8" r="5.5"/></svg>`,
+  check:`<svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="var(--green)"/><path d="M5 8.2l2 2 4-4.2" stroke="#fff" stroke-width="1.5" fill="none"/></svg>`,
+  out:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="var(--orange)" stroke-width="1.3"><rect x="2" y="2" width="12" height="12" rx="2.5"/><path d="M6 10l4-4M6.5 6H10v3.5"/></svg>`,
+  push:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 13V4M4.5 7 8 3.5 11.5 7M3 14h10"/></svg>`,
+  plus:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>`,
+  reload:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/></svg>`,
+  spin:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="var(--muted)" stroke-width="1.6"><path d="M8 2a6 6 0 1 1-6 6" /></svg>`,
+  person:`<svg class="ic" viewBox="0 0 16 16" fill="var(--muted)"><circle cx="8" cy="5" r="3"/><path d="M2.5 14c.6-3 2.8-4.5 5.5-4.5s4.9 1.5 5.5 4.5z"/></svg>`,
+  octo:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M5 1.5h6L14.5 5v6L11 14.5H5L1.5 11V5z"/><path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8"/></svg>`,
+  wifi:`<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="var(--orange)" stroke-width="1.4"><path d="M1.5 6.5a9.5 9.5 0 0 1 13 0M4 9a6 6 0 0 1 8 0M6.5 11.5a2.5 2.5 0 0 1 3 0"/></svg>`,
+};
+const rail = (supOn, badge) => `<div class="rail">
+  <b>${svgFiles()}</b><b>${svgSearch()}</b><b>${svgBranch()}</b>
+  <b class="sel">${svgSessions()}</b>
+  <b class="${supOn?'on':''}">${I.bino}${badge?`<span class="badge">${badge}</span>`:''}</b>
+  <b>${svgSkills()}</b><b>${svgPlug()}</b><b>${svgPractice()}</b></div>`;
+function svgFiles(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M4 1.5h5l3.5 3.5v9.5H4z"/><path d="M9 1.5V5h3.5"/></svg>`}
+function svgSearch(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>`}
+function svgBranch(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="4.5" cy="3.5" r="1.8"/><circle cx="4.5" cy="12.5" r="1.8"/><circle cx="11.5" cy="5.5" r="1.8"/><path d="M4.5 5.3v5.4M11.5 7.3c0 3-7 2.2-7 3.4"/></svg>`}
+function svgSessions(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="4.5" width="12" height="9" rx="1.5"/><path d="M3.5 2.5h9"/></svg>`}
+function svgSkills(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 1.5l1.8 4.2 4.7.4-3.6 3 1.1 4.6L8 11.3l-4 2.4 1.1-4.6-3.6-3 4.7-.4z"/></svg>`}
+function svgPlug(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="5" width="10" height="6" rx="1.5"/><path d="M6 5V2M10 5V2M8 11v3"/></svg>`}
+function svgPractice(){return `<svg class="ic" style="width:15px;height:15px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>`}
+
+// ---------- sessions pane (§13.6) ----------
+function supLine(k){
+  const L = {
+    shadow:  `${I.bino}<b>Supervisor</b><span class="s">· Shadow</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    waking:  `${I.spin}<b>Supervisor</b><span class="s"></span><span class="chip red c">${I.stop} Kill</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    auto:    `${I.bino}<b>Supervisor</b><span class="s">· Autonomous</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    paused:  `${I.pause}<b>Supervisor</b><span class="s"></span><span class="chip primary c">Resume</span><span class="ib">${I.chev}</span>`,
+    cap:     `${I.warn}<b>Supervisor</b><span class="s">· At daily cap</span><span class="ib">${I.chev}</span>`,
+    near:    `${I.bino}<b>Supervisor</b><span class="s" style="flex:none">·</span><span class="meter o"><i style="width:84%"></i></span><span class="s"></span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    failed:  `${I.err}<b>Supervisor</b><span class="s">· Wake failed</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    killed:  `${I.stop}<b>Supervisor</b><span class="s"></span><span class="chip primary c">Resume</span><span class="ib">${I.chev}</span>`,
+    disc:    `${I.wifi}<b>Supervisor</b><span class="s">· Reconnecting</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    token:   `${I.err}<b>Supervisor</b><span class="s">· No control</span><span class="ib">${I.chev}</span>`,
+    stale:   `${I.warn}<b>Supervisor</b><span class="s">· Not waking</span><span class="ib">${I.pause}</span><span class="ib">${I.chev}</span>`,
+    off:     `<span style="color:var(--muted)">${I.bino}</span><span class="s" style="flex:1">Supervisor · off</span><span class="chip c">Set up…</span>`,
+  };
+  return `<div class="supline">${L[k]}</div>`;
+}
+function paneCard(){ return `<div class="card" style="margin:4px 0 2px 0">
+  <div class="why">${I.push} Only you can push</div>
+  <div class="act"><span class="badge-t">Bash</span>${I.out}<span style="font-size:10.5px">leaves this Mac</span></div>
+  <div class="raw">git push origin feature/retry</div>
+  <div class="rec">${I.bino}<span>Recommends <b>Deny</b></span></div>
+  <div class="chips"><span class="chip primary">Deny</span><span class="chip">Review act…</span><span class="ib">${I.more}</span></div></div>`; }
+function sessionsPane(o){
+  o = Object.assign({line:'shadow', n:2, tabless:true, card:true}, o||{});
+  const off = o.line==='off';
+  return `<div class="side">
+   <div class="ph"><span style="color:var(--muted)">${svgSessions()}</span><span class="t">Sessions</span><span class="ib">${I.plus}</span><span class="ib">${I.reload}</span></div>
+   ${off?'':supLine(o.line)}
+   ${o.n? `<div class="sh">Needs you <span class="cnt warn">${o.n}</span></div>
+   ${o.tabless? `<div class="row"><span class="g" style="color:var(--text)">${I.bino}</span><div class="m"><div class="tt">Supervisor</div><div class="st" style="font-size:10.5px">${o.line==='cap'?'Daily cap reached':'Open a new tab'}</div>
+     ${o.line==='cap'? `<div class="notice warn" style="margin:5px 0 0">${I.warn}<div>Daily cap reached<div class="d">$10.00 / $10 · resets 00:00</div></div></div><div style="margin-top:5px"><span class="chip">Raise cap…</span></div>`
+       : `<div style="margin-top:5px"><span class="chip primary">Open tab</span> <span class="chip">Edit…</span></div>`}</div></div>`:''}
+   <div class="row sel"><span class="g">${I.hand}</span><div class="m"><div style="display:flex;gap:6px;align-items:center"><div class="tt" style="flex:1">Publish the release branch</div><span class="ib" title="delegation">${I.qb}</span></div>
+     <div class="st">shared · $0.17 · waiting: Shell command</div>${o.card?paneCard():''}</div></div>` : ''}
+   <div class="sh">Working <span class="cnt">2</span></div>
+   <div class="row"><span class="g">${I.spin}</span><div class="m"><div style="display:flex;gap:6px"><div class="tt" style="flex:1">Add retry with backoff to the HTTP client</div><span class="ib">${off?'':I.eye}</span></div><div class="st">fix-flags · $0.42 · using Bash 2m</div></div></div>
+   <div class="row"><span class="g">${I.spin}</span><div class="m"><div style="display:flex;gap:6px"><div class="tt" style="flex:1">Draft the quickstart section</div><span class="ib">${off?'':I.qb}</span></div><div class="st">docs-site · +9 −3 · writing 54s</div></div></div>
+   <div class="sh">Ready to integrate <span class="cnt">1</span></div>
+   <div class="row"><span class="g" style="color:var(--green)">●</span><div class="m"><div class="tt">rate-limit-headers</div><div class="st">3 commits · +120 −18 · clean</div></div></div>
+   <div class="sh">Idle <span class="cnt">2</span></div>
+   <div class="row"><span class="g">●</span><div class="m"><div class="tt">Fix the flaky cache test</div><div class="st">behind by 3 · 24m ago</div></div></div>
+   ${off? `<div style="margin-top:12px">${supLine('off')}</div>`:''}
+  </div>`;
+}
+
+// ---------- center workspace ----------
+function header(k, w){
+  // count-based yield (§13.3): w = 'narrow' drops mode text; budget meter + $ survive.
+  const narrow = w==='narrow';
+  const S = {
+    shadow:{mode:'Shadow', meter:'<span class="meter"><i style="width:32%"></i></span>', money:'$3.20 / $10', ctl:`<span class="ib">${I.pause}</span>`},
+    waking:{mode:'Shadow · waking', meter:'<span class="meter"><i style="width:34%"></i></span>', money:'$3.40 / $10', ctl:`<span class="chip red c">${I.stop} Kill</span><span class="ib">${I.pause}</span>`},
+    auto:{mode:'Autonomous · 2 of 4', meter:'<span class="meter"><i style="width:41%"></i></span>', money:'$8.20 / $20', ctl:`<span class="ib">${I.pause}</span>`},
+    killed:{mode:'Paused — wake aborted', meter:'<span class="meter"><i style="width:32%"></i></span>', money:'$3.20 / $10', ctl:`<span class="chip primary c">${I.play} Resume</span>`},
+    paused:{mode:'Paused by you 14:02', meter:'<span class="meter"><i style="width:32%"></i></span>', money:'$3.20 / $10', ctl:`<span class="chip primary c">${I.play} Resume</span>`},
+    cap:{mode:'Paused — daily cap', meter:'<span class="meter r"><i style="width:100%"></i></span>'+I.warn, money:'$10.00 / $10', ctl:`<span class="chip c dis">${I.play} Resume</span>`},
+    off:{mode:'off', meter:'', money:'', ctl:''},
+    disc:{mode:'status unknown — reconnecting', meter:'', money:'', ctl:`<span class="ib">${I.pause}</span>`},
+    failed:{mode:'Wake failed', meter:'<span class="meter"><i style="width:32%"></i></span>', money:'$3.20 / $10', ctl:`<span class="ib">${I.pause}</span>`},
+    stale:{mode:'Not waking', meter:'<span class="meter"><i style="width:32%"></i></span>', money:'$3.20 / $10', ctl:`<span class="chip c">${I.reload} Restart</span><span class="ib">${I.pause}</span>`},
+    near:{mode:'Shadow', meter:'<span class="meter o"><i style="width:84%"></i></span>', money:'$8.40 / $10', ctl:`<span class="ib">${I.pause}</span>`},
+  }[k];
+  // narrow = tier 4: mode text, $ text and the close × have yielded; "N for you" is a count chip.
+  const hand = I.hand.replace('class="ic"','class="ic s"');
+  const forYou = (k==="off"||narrow)?"":(false?"":`<span class="chip c">${hand} 2 for you</span>`);
+  return `<div class="wh"><span style="color:var(--muted)">${I.bino}</span><span class="title">Supervisor</span>
+    ${narrow?'':`<span class="mode">· ${S.mode}</span>`}
+    <span class="sp"></span>${S.meter}${narrow?'':(S.money?`<span class="money">${S.money}</span>`:'')}
+    ${forYou}${S.ctl}${k==='off'?'':`<span class="ib">${I.more}</span>`}${narrow?'':`<span class="ib">${I.x}</span>`}</div>`;
+}
+function conversation(state){
+  const working = state==='waking';
+  return `<div class="conv"><div class="col">
+    <div class="ub"><div class="who">YOU</div>What's blocking the release? Push it if the plan is done.</div>
+    <div class="rep"><div class="who">${I.bino} SUPERVISOR</div>
+      Step [4] of <i>Publish the release branch</i> is done and its checks passed. Pushing leaves this Mac, so it is your click — review the act first. I'd hold it: the charter keeps releases local until review.
+      <div class="time">14:06</div>
+      <div class="card"><div class="why">${I.push} Only you can push</div>
+        <div class="act"><span class="badge-t">Bash</span>${I.out}<span style="font-size:10.5px">leaves this Mac</span></div>
+        <div class="raw">git push origin feature/retry</div><div class="link" style="font-size:11px">Show full act</div>
+        <div class="rec">${I.bino}<span>Supervisor recommends <b>Deny</b></span></div>
+        <div class="why2">The plan's step [4] keeps the release local until review, and the charter says the same.</div>
+        <div class="gr">› Grounds · 2 (1 strong)</div>
+        <div class="chips"><span class="chip primary">Deny</span><span class="chip">Review act…</span><span class="ib">${I.more}</span></div></div></div>
+    <div class="meta">${I.chev} Woke for 3 items: answered a question in <i>fix-flags</i>, escalated a merge</div>
+    <div class="ub"><div class="who">YOU</div>Open a tab to write the migration notes.</div>
+    <div class="rep"><div class="who">${I.bino} SUPERVISOR</div>Proposed — it opens in a fresh worktree from development, gated, Plan mode.
+      <div class="time">14:09</div>
+      <div class="settled" style="margin-top:8px">${I.check} Done — Open tab <span class="mono" style="font-size:10.5px">marvin/tab/migration-notes</span></div></div>
+    ${working?`<div class="meta">${I.spin} Supervisor is reading…</div>`:''}
+    ${state==='cap'?`<div class="notice warn" style="margin:0 0 0 66px">${I.warn}<div><b>Daily cap reached</b> — your messages wait until you raise it or it resets<div class="d">$10.00 / $10 · resets 00:00</div></div></div><div style="padding-left:66px"><span class="chip">Raise cap…</span></div>`:''}
+  </div></div>
+  <div class="composer-wrap"><div class="composer">Message the supervisor — it can propose, never consent for you<span class="send">↑</span></div></div>`;
+}
+
+// ---------- right column ----------
+function brain(k, opts){
+  opts = opts||{};
+  const C = {
+    shadow:['idle','watching 4 of 6 · following fix-flags · woke 2m ago',''],
+    waking:['waking · 3 items','watching 4 of 6 · following fix-flags',''],
+    auto:['idle','autonomous: questions, nudges · watching 5 of 6',''],
+    paused:['paused · by you 14:02','3 events queued · watching 4 of 6','still'],
+    cap:['paused · daily cap','$10.00 / $10 · resets 00:00','still'],
+    killed:['paused · wake aborted','kill at 14:02 aborted a wake with 2 items','still'],
+    failed:['wake failed','last wake 14:02 · see log',''],
+    stale:['not waking','last woke 14m ago · 5 events queued',''],
+    disc:['unknown','reconnecting…','still'],
+    token:['unknown',"MARVIN can't read the supervisor token",'still'],
+  }[k];
+  const glyph = {cap:I.warn, failed:I.err, stale:I.warn, paused:I.pause, killed:I.stop, disc:I.wifi, token:I.err}[k]||'';
+  return `<div class="brain" ${opts.h?`style="height:${opts.h}px"`:''}><div class="orb ${C[2]}"></div>
+    <div class="cap1">${I.bino.replace('class="ic"','class="ic s"')} SUPERVISOR</div>
+    <div class="cap2">${glyph}${C[0]}</div><div class="cap3">${C[1]}</div></div>`;
+}
+function seg(on){ return `<div class="seg">${['Tabs','Log','Settings'].map(s=>`<span class="${s===on?'on':''}">${s}</span>`).join('')}</div>`; }
+function tabsInsp(){
+  const r = (t,s,g,lvl,extra='') => `<div class="trow"><div class="m"><div class="tt">${t}</div><div class="st">${s}</div>${extra}</div><span class="deleg">${g} ${lvl} ${I.down}</span></div>`;
+  return `<div class="insp">
+    <div class="sh" style="padding-top:2px">Watching <span class="cnt">4</span></div>
+    ${r('Publish the release branch','escalated a push 14:06 · waiting on you',I.qb,'Answers questions')}
+    ${r('Add retry with backoff','fix-flags · answered a question 14:01',I.eye,'Observes',
+      `<div style="display:flex;gap:6px;align-items:center;margin-top:4px;font-size:10.5px;color:var(--secondary)">${I.bino.replace('class="ic"','class="ic s"')} Following until it is ready to merge</div><div style="margin-top:4px"><span class="chip c">Stop following</span></div>`)}
+    ${r('Draft the quickstart section','docs-site · nudged on step [2] 13:40',I.qb,'Answers questions')}
+    ${r('Fix the flaky cache test','shared checkout · sends wait while another session works',I.shield,'Also confirms')}
+    <div class="sh">Not watched <span class="cnt">2</span></div>
+    ${r('Explore pagination options','idle 39m',I.dash,'Not watched')}
+    ${r('rate-limit-headers','ready to integrate',I.dash,'Not watched')}
+  </div>`;
+}
+function logInsp(){
+  const r=(g,v,t,tm,why)=>`<div class="lrow"><div class="l1">${g}<span class="v">${v}</span><span style="color:var(--secondary)">· ${t}</span><span class="tm">${tm}</span></div><div class="l2">${why}</div></div>`;
+  return `<div class="insp"><div style="display:flex;gap:5px;padding:2px 12px 8px;flex-wrap:wrap"><span class="chip c primary">All</span><span class="chip c">Acts</span><span class="chip c">Escalations</span><span class="chip c">Refusals</span><span class="chip c">Proposals</span></div>
+   ${r(I.hand,'escalate','release','14:06','push leaves this Mac — only you can push')}
+   ${r(I.check,'answer','fix-flags','14:01','question named plan [3]; grounded in plan and charter')}
+   ${r(I.dash,'propose','docs-site','13:52','would answer "Option B" · you answered B ✓')}
+   ${r(I.octo,'refuse','release','13:47','merge into development is human-only')}
+   ${r(I.person,'pause','—','13:30','paused by you')}
+   ${r(I.dash,'propose','fix-flags','13:22','would allow Read src/http.ts · you allowed ✓')}
+   <div style="padding:8px 12px"><span class="chip c">Show 50 earlier</span></div></div>`;
+}
+function settingsInsp(auto){
+  const t=(on,name,st,extra='')=>`<div class="tg"><span class="sw ${on}"></span><div><div>${name}</div><div class="st">${st}</div>${extra}</div></div>`;
+  return `<div class="insp set">
+    <h4>Autonomy</h4>
+    ${t(auto?'on':'','Questions','24 proposals · 96 % agreed · bar 20 / 90 %')}
+    ${t(auto?'on':'','Nudges','21 proposals · 95 % agreed · bar 20 / 90 %')}
+    ${t('','Posture','3 proposals · 100 % agreed · below suggested bar',`<div class="st" style="display:flex;gap:4px;align-items:center;margin-top:2px">${I.warn} proposed a human-only act 1×</div>`)}
+    ${t('dis','Confirms','Needs a tab at "also confirms" · 0 proposals')}
+    <h4 style="justify-content:space-between">Charter <span class="chip c">Edit…</span></h4>
+    <div style="color:var(--text);line-height:15px">Ship the retry work this week. Keep releases local until review; never touch billing.</div>
+    <h4>Daily cap</h4>
+    <div style="display:flex;align-items:center;gap:8px"><span class="stepper"><span class="f">20</span>${I.down}</span><span class="mono" style="color:var(--secondary);font-size:10.5px">$8.20 today · own $2.10 · tabs $6.10</span></div>
+    <h4 style="justify-content:space-between">Model <span class="chip c">Change…</span></h4><div class="mono">Sonnet 5.5</div>
+    <div style="margin-top:14px"><span class="chip">Disable supervisor…</span></div></div>`;
+}
+
+// ---------- whole window ----------
+function window_(o){
+  const W=o.w, H=o.h, rightW=o.rightW||480, sideW=o.sideW===0?0:260;
+  const t = o.theme;
+  const right = o.off ? `<div class="right" style="width:${rightW}px">
+       <div class="brain" style="height:200px"><div class="orb" style="width:150px;height:120px"></div><div class="cap1">STATE</div><div class="cap2">idle</div></div>
+       <div class="tabstrip"><span class="tab on">Publish the release branch</span><span class="tab">Add retry…</span></div>
+       <div style="padding:14px 16px;font-size:12px;color:var(--secondary)">The selected tab's chat stays here while the supervisor is off.</div></div>`
+    : `<div class="right" style="width:${rightW}px">${brain(o.state,{h:o.brainH})}${seg(o.seg)}${o.seg==='Tabs'?tabsInsp():o.seg==='Log'?logInsp():settingsInsp(o.state==='auto')}</div>`;
+  const center = o.off ? `<div class="center">${header('off')}<div class="conv"><div class="form">
+       <div style="font-size:15px;font-weight:600;display:flex;gap:8px;align-items:center">${I.bino} Set up the supervisor</div>
+       <div class="lead">It watches the tabs you delegate and starts in shadow, where it only proposes. Merges, pushes and anything that leaves this Mac always come back to you.</div>
+       <div><label>Charter</label><div class="ta">What should it know about your goals?</div></div>
+       <div><label>Daily cap</label><span class="stepper"><span class="f">20</span>${I.down}</span> <span style="color:var(--secondary);font-size:11px">USD, resets at midnight</span></div>
+       <div><label>Delegate tabs</label>
+         ${['Publish the release branch','Add retry with backoff','Draft the quickstart section'].map(n=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--hair)"><span>${n}</span><span class="picker">${I.qb} Answers questions ${I.down}</span></div>`).join('')}</div>
+       <div><label>Model</label><span class="mono">Sonnet 5.5</span></div>
+       <div style="display:flex;gap:10px;align-items:center"><span class="btn">Start in shadow</span><span style="font-size:11px;color:var(--secondary)">No default button — Return does nothing here.</span></div>
+     </div></div></div>`
+    : `<div class="center">${header(o.state, o.size)}${o.notice||''}${conversation(o.state)}</div>`;
+  return `<div class="win ${t}" style="width:${W}px;height:${H}px">
+    <div class="titlebar"><span class="lights"><i></i><i></i><i></i></span>MARVIN <span class="sub">MARVIN dev · development</span></div>
+    <div class="body">${rail(true, o.badge)}${sideW?sessionsPane(o.pane):''}${center}${right}</div>
+    <div class="statusbar"><span>● online</span><span>development</span><span style="margin-left:auto">$11.40</span></div></div>`;
+}
+
+// ---------- state sheet ----------
+function stateCell(k, label, note, t){
+  return `<div class="cell"><div class="lab">${label}</div>
+    <div class="whwrap">${header({token:'shadow'}[k]||k)}${k==='failed'?`<div class="notice err" style="margin:6px 10px">${I.err}<div><b>Wake failed</b> — the model call returned an error<div class="d">overloaded_error · wake w-0412 · 14:02</div></div></div><div style="padding:0 10px 6px"><span class="chip c">Retry</span> <span class="chip c">Open log</span></div>`:''}</div>
+    <div class="inner"><div class="l">${supLine(k)}</div><div class="r">${brainMini(k)}</div></div>
+    <div class="annot">${note}</div></div>`;
+}
+function brainMini(k){ return brain(k==='near'?'shadow':k).replace('class="brain"','class="brain" style="height:auto;border:none;padding:0"'); }
+
+const comps = {
+  'typical-dark': () => window_({w:1440,h:900,theme:'dark',state:'waking',seg:'Tabs',badge:2,pane:{line:'waking',n:2}}),
+  'typical-light': () => window_({w:1440,h:900,theme:'light',state:'shadow',seg:'Log',badge:2,pane:{line:'shadow',n:2}}),
+  'narrow-dark-cap': () => window_({w:960,h:720,theme:'dark',state:'cap',seg:'Settings',rightW:320,size:'narrow',brainH:200,badge:2,pane:{line:'cap',n:2,card:false}}),
+  'wide-light-auto': () => window_({w:1920,h:1080,theme:'light',state:'auto',seg:'Settings',badge:1,pane:{line:'auto',n:1,tabless:false}}),
+  'wide-dark-paused': () => window_({w:1920,h:1080,theme:'dark',state:'paused',seg:'Tabs',badge:2,pane:{line:'paused',n:2}}),
+  'off-light': () => window_({w:1440,h:900,theme:'light',off:true,pane:{line:'off',n:0}}),
+  'off-dark-narrow': () => window_({w:960,h:720,theme:'dark',off:true,rightW:320,pane:{line:'off',n:0}}),
+  'states-dark': () => sheet('dark'), 'states-light': () => sheet('light'),
+};
+function sheet(t){
+  return `<div class="${t}"><div class="sheet">
+   <div class="h1">Supervisor states — workspace header · Sessions pane line · supervisor Brain<span class="sub">Header at the center's full width; the pane line at 260 pt; the orb is the existing Brain, re-targeted. Still = drawn through the Reduce Motion path.</span></div>
+   ${stateCell('shadow','Shadow · idle','Kill lives in ⋯ and ⌃⌥⌘K while idle (Pause and Kill do the same then).',t)}
+   ${stateCell('waking','Waking','Kill chip appears in the header AND on the pane line while a wake is in flight.',t)}
+   ${stateCell('auto','Autonomous · 2 of 4','Autonomous acts go to the log and the tab transcript; nothing new in Needs you.',t)}
+   ${stateCell('paused','Paused by you','Resume is the one primary chip. Escalations stay actionable: consent never needs the supervisor running.',t)}
+   ${stateCell('killed','Killed','Already-ledgered items from the aborted wake stay.',t)}
+   ${stateCell('cap','At the daily cap','Resume disabled until the cap is above spend; the guardrail row in Needs you and the budget card in the conversation carry Raise cap….',t)}
+   ${stateCell('near','Near the cap (≥ 80 %)','From 80 % the pane line\'s state word is replaced by the 56 pt meter (orange); the $ figure lives in the header and the orb caption.',t)}
+   ${stateCell('failed','Wake failed','A persistent error notice sits under the workspace header with Retry · Open log (§7).',t)}
+   ${stateCell('stale','Not waking','Header gains a Restart chip (resume + wake now); items stay actionable.',t)}
+   ${stateCell('disc','Feed disconnected','Numbers hidden, not stale. Pause and Kill stay enabled — the route is a separate connection.',t)}
+  </div></div>`;
+}
+const key = location.hash.slice(1) || 'typical-dark';
+document.getElementById('root').innerHTML = comps[key]();
+</script>
+</body>
+</html>
