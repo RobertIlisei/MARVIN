@@ -129,6 +129,23 @@ export interface SessionMeta {
    * laundering it, and the watch row reads it without the live turn.
    */
   supervisorTouched?: { turnId: string; at: string; by: "message" | "answer" | "confirm" };
+  /**
+   * ADR-0127 §6 — turns in a row that ended in `error`; absent after a
+   * completed turn. The supervisor escalates instead of messaging a tab whose
+   * turns keep failing (`FAILED_TURNS_BEFORE_ESCALATION`).
+   */
+  failedTurnsInARow?: number;
+}
+
+/**
+ * The `failedTurnsInARow` transition: an error adds one, a completed turn
+ * clears it. An interruption (the app quit) or a Stop says nothing about
+ * whether the work fails, so it leaves the count where it was.
+ */
+export function nextFailedTurnsInARow(prev: number | undefined, outcome: NonNullable<SessionLastTurn["outcome"]>): number | undefined {
+  if (outcome === "completed") return undefined;
+  if (outcome === "error") return (prev ?? 0) + 1;
+  return prev;
 }
 
 /**

@@ -150,6 +150,8 @@ export interface VerbDeps {
   sendRefusal(marvinSessionId: string): { code: string; reason: string } | null;
   /** The tab closed its scope and nothing has reopened it (`scopeMetAt`, milestone 4). */
   scopeMet(marvinSessionId: string): boolean;
+  /** The tab's turns in a row that ended in error (`failedTurnsInARow`, §6). Optional: absent reads as none. */
+  failedTurnsInARow?(marvinSessionId: string): number;
   /*
    * Milestone 5. Optional so a fixture that predates them still builds; an
    * absent one makes its verb refuse, never act.
@@ -334,6 +336,7 @@ function escalationCode(reasonCode: string | undefined): EscalationCode {
   switch (reasonCode) {
     case "heuristic":
     case "nudge-cap":
+    case "repeated-failures":
     case "weak-grounds-only":
     case "ungrounded":
     case "unresolvable-citation":
@@ -768,6 +771,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       secret: containsSecretShape(message),
       heuristic: questionHeuristic([message]),
       priorNudgesAtStep,
+      failedTurnsInARow: ctx.deps.failedTurnsInARow?.(tab) ?? 0,
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });

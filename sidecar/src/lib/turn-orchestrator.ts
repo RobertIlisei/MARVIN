@@ -42,7 +42,7 @@ import {
   rememberSdkSessionId,
 } from "@marvin/runtime/session";
 import { clearActivity, noteActivityEvent, setActivity } from "@marvin/runtime/session-activity";
-import { nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
+import { nextFailedTurnsInARow, nextScopeMetAt, readSessionMeta, resolveSessionCwd, type SessionTree, updateSessionMeta } from "@marvin/runtime/session-meta";
 import { classifyTurnFailure } from "@marvin/runtime/session-recovery";
 import { ledgerDroppedSend, supervisorFireRefusal } from "@marvin/runtime/supervisor-send";
 import { noteSupervisorTabSpend } from "@marvin/runtime/supervisor-state";
@@ -288,6 +288,54 @@ function logAutoContinue(fields: Record<string, string>): void {
 }
 
 /**
+ * Record a turn's cost and return the figure that counts (null when the turn
+ * could not be priced). The SDK's total_cost_usd prices every model off the
+ * Claude rate card — for an OpenRouter BYOK model it is fiction (measured ~10×
+ * over: a 4.3M-token glm turn recorded $4.21 against ~$0.33 actual). On
+ * OpenRouter the turn is priced from OpenRouter's own model list instead; an
+ * unpriceable turn records no cost and keeps its tokens — the OpenRouter
+ * account block carries the authoritative spend.
+ *
+ * The SDK's total and modelUsage are CUMULATIVE across a resumed session; the
+ * tracker turns them into this turn's share (2026-10-31: read as per-turn, one
+ * session's five turns summed to $93 against a true $32). A failed turn is
+ * recorded only when the supervisor started it (ADR-0127 §6); otherwise its
+ * spend lands in the next completed turn of the session — counted once, on
+ * the later turn's day and author.
+ */
+async function recordTurnSpend(args: {
+  projectId: string;
+  marvinSessionId: string;
+  model: string;
+  advisorModel: string | null | undefined;
+  result: Awaited<ReturnType<typeof runAgent>>;
+}): Promise<number | null> {
+  const { projectId, marvinSessionId, model, advisorModel, result } = args;
+  const authMode = result.authMode ?? (readAuthConfig()?.provider === "openrouter" ? "openrouter" : undefined);
+  const estimateUsd = authMode === "openrouter" ? await calculateEstimatedCost(model, result.tokenUsage) : undefined;
+  let costEntry: ReturnType<typeof recordTurnCost> = null;
+  try {
+    costEntry = recordTurnCost({
+      projectId,
+      marvinSessionId,
+      tokenUsage: result.tokenUsage ?? null,
+      model,
+      advisorModel: advisorModel ?? null,
+      ...(authMode ? { authMode } : {}),
+      ...(estimateUsd !== undefined ? { estimateUsd } : {}),
+      sdk: {
+        sessionId: result.sessionId ?? null,
+        totalCostUsd: result.costUsd ?? null,
+        modelUsage: result.modelUsage ?? null,
+      },
+    });
+  } catch (err) {
+    console.warn("[marvin.cost] could not record turn cost:", err instanceof Error ? err.message : err);
+  }
+  return costEntry && costEntry.costKind !== "unknown" ? costEntry.costUsd : null;
+}
+
+/**
  * Run a turn to completion, decoupled from any HTTP request. Pumps events to
  * the transcript + the live-turn bus, records cost, ends the turn. Never
  * throws — failures land as a `turn.error` terminal event.
@@ -442,11 +490,19 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     // through the EXISTING wakeup scheduler rather than a bespoke retry loop,
     // so ADR-0031's rails (pending cap, depth caps, same permission posture)
     // apply unchanged.
+    const outcome = failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error";
     updateSessionMeta(projectId, marvinSessionId, {
-      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: failure.cancelled ? "stopped" : failure.interrupted ? "interrupted" : "error", ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
+      lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome, ...(bySupervisor ? { stoppedBy: "supervisor" as const } : {}), error: payload.error.slice(0, 200) },
+      failedTurnsInARow: nextFailedTurnsInARow(readSessionMeta(projectId, marvinSessionId)?.failedTurnsInARow, outcome),
     });
     // A turn the user stopped is never retried. `classifyTurnError` would not
     // call "Stopped." transient, but the intent must not rest on the wording.
+    // ADR-0127 §6 — a supervisor-started turn spends against the cap even when
+    // it errors or is cancelled. Recorded here, it also becomes the session's
+    // cost baseline, so the next completed turn does not count it again.
+    if (liveTurn.author === "supervisor") {
+      noteSupervisorTabSpend(projectId, await recordTurnSpend({ projectId, marvinSessionId, model, advisorModel, result }));
+    }
     if (!failure.cancelled) maybeAutoContinue({
       error: payload.error,
       projectId,
@@ -467,39 +523,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     return;
   }
 
-  // The SDK's total_cost_usd prices every model off the Claude rate card —
-  // for an OpenRouter BYOK model it is fiction (measured ~10× over: a
-  // 4.3M-token glm turn recorded $4.21 against ~$0.33 actual). On OpenRouter
-  // the turn is priced from OpenRouter's own model list instead; an
-  // unpriceable turn records no cost and keeps its tokens — the OpenRouter
-  // account block carries the authoritative spend.
-  const authMode = result.authMode ?? (readAuthConfig()?.provider === "openrouter" ? "openrouter" : undefined);
-  const estimateUsd = authMode === "openrouter" ? await calculateEstimatedCost(model, result.tokenUsage) : undefined;
-  // The SDK's total and modelUsage are CUMULATIVE across a resumed session;
-  // the tracker turns them into this turn's share (2026-10-31: read as
-  // per-turn, one session's five turns summed to $93 against a true $32).
-  // A failed turn is not recorded, so its spend lands in the next completed
-  // turn of the session — counted once, on the later turn's day and author.
-  let costEntry: ReturnType<typeof recordTurnCost> = null;
-  try {
-    costEntry = recordTurnCost({
-      projectId,
-      marvinSessionId,
-      tokenUsage: result.tokenUsage ?? null,
-      model,
-      advisorModel: advisorModel ?? null,
-      ...(authMode ? { authMode } : {}),
-      ...(estimateUsd !== undefined ? { estimateUsd } : {}),
-      sdk: {
-        sessionId: result.sessionId ?? null,
-        totalCostUsd: result.costUsd ?? null,
-        modelUsage: result.modelUsage ?? null,
-      },
-    });
-  } catch (err) {
-    console.warn("[marvin.cost] could not record turn cost:", err instanceof Error ? err.message : err);
-  }
-  const finalCostUsd = costEntry && costEntry.costKind !== "unknown" ? costEntry.costUsd : null;
+  const finalCostUsd = await recordTurnSpend({ projectId, marvinSessionId, model, advisorModel, result });
 
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.completed",
@@ -514,6 +538,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   }
   updateSessionMeta(projectId, marvinSessionId, {
     lastTurn: { turnId, startedAt: liveTurn.startedAt ? new Date(liveTurn.startedAt).toISOString() : new Date().toISOString(), endedAt: new Date().toISOString(), outcome: "completed" },
+    failedTurnsInARow: undefined,
     ...(nextScopeMetAt({ phase: "end", scopeMet: !!result.scopeMet }) ?? {}),
   });
   // ADR-0111 — the first turn that leaves a commit on the tab's branch names
@@ -533,7 +558,7 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     /* naming is cosmetic; never fail a completed turn on it */
   }
   // ADR-0127 §6 — a tab turn the supervisor started spends against its cap.
-  // Counted for turns that complete; a failed turn's cost is not reported here.
+  // A failed one is charged on the failure path above.
   if (liveTurn.author === "supervisor") noteSupervisorTabSpend(projectId, finalCostUsd);
   // Fire and forget balance poll (ADR-0071: OpenRouter native balance tracking)
   pollOpenRouterBalance().catch(() => {});

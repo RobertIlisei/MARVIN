@@ -23,6 +23,7 @@ import {
   remapGraphExtractionDispatch,
   writesUnderGraphOut,
 } from "../src/sdk-runner";
+import { _resetSubagentRegistry, IMPLEMENTER_TYPE, registerSubagent } from "../src/subagent-registry";
 
 // What the SDK passes `canUseTool` for a call that reached an in-process
 // server MARVIN registered (verified live on 0.3.278, ADR-0117).
@@ -732,4 +733,71 @@ describe("unknown dispatch tool is gated, not blanket-allowed (ADR-0088)", () =>
     expect(r.decision).toBe("allow");
     expect(r.reason).toContain("not in the gated set");
   });
+});
+
+// The subagent invariant decides first (ADR-0030 / ADR-0081 / ADR-0109). A
+// subagent has no confirm UI of its own, so a call it may not make is a deny,
+// never a card on the user's screen — and it never publishes a branch or
+// spends CI minutes, implementer or not.
+describe("subagent calls: the invariant decides before the confirms", () => {
+  let seenCards: ConfirmRequestPayload[] = [];
+  const gates = {
+    auto: () => makeAutoModeLogger({ cwd: tmpRoot, turnId: TURN_ID, onConfirmRequest: (r) => seenCards.push(r) }),
+    gated: () => makeGatedCanUseTool({ cwd: tmpRoot, turnId: TURN_ID, onConfirmRequest: (r) => seenCards.push(r) }),
+  };
+  beforeEach(() => {
+    seenCards = [];
+    _resetSubagentRegistry();
+  });
+  afterEach(() => {
+    clearTurnConfirms(TURN_ID);
+    _resetSubagentRegistry();
+  });
+
+  function bindImplementer(): string {
+    registerSubagent({ turnId: TURN_ID, taskId: "impl-1", subagentType: IMPLEMENTER_TYPE, prompt: `work in ${tmpRoot}`, worktrees: [tmpRoot] });
+    return "impl-1";
+  }
+
+  for (const [mode, make] of Object.entries(gates)) {
+    it(`${mode}: a scout's pipeline command is denied, with no card`, async () => {
+      const r = must(await make()("Bash", { command: "glab ci run" }, { ...SDK_CTX, agentID: "scout-1" }));
+      expect(r.behavior).toBe("deny");
+      expect(seenCards).toEqual([]);
+    });
+
+    it(`${mode}: a scout's merge-request command is denied, with no card`, async () => {
+      const r = must(await make()("Bash", { command: "glab mr create --fill" }, { ...SDK_CTX, agentID: "scout-1" }));
+      expect(r.behavior).toBe("deny");
+      expect(seenCards).toEqual([]);
+    });
+
+    it(`${mode}: an implementer's plain branch push is denied`, async () => {
+      const id = bindImplementer();
+      const r = must(await make()("Bash", { command: "git push origin HEAD" }, { ...SDK_CTX, agentID: id }));
+      expect(r.behavior).toBe("deny");
+      expect(seenCards).toEqual([]);
+    });
+
+    it(`${mode}: an implementer's pipeline command is denied, with no card`, async () => {
+      const id = bindImplementer();
+      const r = must(await make()("Bash", { command: "gh workflow run smoke.yml" }, { ...SDK_CTX, agentID: id }));
+      expect(r.behavior).toBe("deny");
+      expect(seenCards).toEqual([]);
+    });
+
+    it(`${mode}: an implementer's ordinary shell still runs, pinned to its worktree`, async () => {
+      const id = bindImplementer();
+      const r = must(await make()("Bash", { command: "pnpm test" }, { ...SDK_CTX, agentID: id }));
+      expect(r.behavior).toBe("allow");
+    });
+
+    it(`${mode}: the main loop's pipeline command still reaches the user`, async () => {
+      const pending = make()("Bash", { command: "glab ci run" }, SDK_CTX);
+      await Promise.resolve();
+      expect(seenCards).toHaveLength(1);
+      clearTurnConfirms(TURN_ID);
+      await pending;
+    });
+  }
 });

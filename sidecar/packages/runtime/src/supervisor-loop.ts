@@ -573,6 +573,7 @@ export function defaultVerbDeps(projectId: string, workDir: string, conversation
     sendRefusal: (id) => tabSendRefusal(projectId, id),
     scopeMet: (id) => !!readSessionMeta(projectId, id)?.scopeMetAt,
     scopeMetAt: (id) => readSessionMeta(projectId, id)?.scopeMetAt ?? null,
+    failedTurnsInARow: (id) => readSessionMeta(projectId, id)?.failedTurnsInARow ?? 0,
     modelLabel: async (id) => {
       try {
         return (await listModelsCached()).models.find((m) => m.id === id)?.displayName ?? id;

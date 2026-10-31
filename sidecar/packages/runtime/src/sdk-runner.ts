@@ -1749,6 +1749,46 @@ function maybeSessionWorktreeGate(args: {
 }
 
 /**
+ * The subagent invariant decides first (ADR-0030 / ADR-0081). The lane,
+ * shared-tree and metered-CI confirms below are questions for the user, and a
+ * subagent has no confirm UI of its own: a scout's pipeline command used to
+ * reach the user as a card instead of being denied. So, before any of them:
+ * a call the read-only collapse (or an implementer's worktree policy) denies
+ * is denied, and no subagent — implementer included — pushes a branch, opens
+ * or merges a request, or spends CI minutes. Main-loop calls return null.
+ */
+function subagentDecidesFirst(args: {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  input: Record<string, unknown>;
+  agentID: string | undefined;
+  readOnly: boolean | undefined;
+  mcpServer: Parameters<CanUseTool>[2]["mcpServer"];
+  cwd: string;
+  turnId: string;
+  sessionTree: SessionTree | undefined;
+}): PermissionResult | null {
+  const { toolName, input, agentID, turnId } = args;
+  if (!agentID) return null;
+  const binding = lookupSubagent(agentID);
+  const cls = classifyToolCall(toolName, args.toolInput, {
+    agentID,
+    readOnly: args.readOnly,
+    mcpServer: args.mcpServer,
+    ...(binding?.worktree ? { worktree: binding.worktree, workDir: args.cwd } : {}),
+  });
+  let reason = cls.decision === "deny" ? cls.reason || "tool use denied" : null;
+  reason ??= localOnlyIntegrationPolicy(toolName, input, args.sessionTree, agentID)?.reason ?? null;
+  if (!reason && toolName === "Bash" && typeof input.command === "string") {
+    const ci = classifyMeteredCiRisk(input.command);
+    if (ci) reason = `Sub-agent (${agentID}) may not run \`${ci.verb}\`, which ${describeMeteredCiRisk(ci.risk)} — spending CI minutes is the user's call, and a subagent has no way to ask (ADR-0109).`;
+  }
+  if (!reason) return null;
+  logSubagentGate({ turnId, agentID, binding, toolName, decision: "deny", reason });
+  return { behavior: "deny", message: reason, interrupt: false } as PermissionResult;
+}
+
+/**
  * Build the `auto` mode `canUseTool` callback. Hard-denies hit the
  * single safety floor; everything else logs to the auto-audit JSONL
  * and allows. Never blocks on UI — that's the user-experience contract
@@ -1787,6 +1827,11 @@ export function makeAutoModeLogger(args: {
     // AskUserQuestion always reaches the user, even in auto mode (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest, session: checkpoint });
     if (ask) return ask;
+    const subagentDeny = subagentDecidesFirst({
+      toolName, toolInput: toolInput as Record<string, unknown>, input: safeInput, agentID, readOnly, mcpServer,
+      cwd, turnId, sessionTree: args.sessionTree,
+    });
+    if (subagentDeny) return subagentDeny;
     // Two sessions, one checkout: a HEAD-moving command reaches the user in
     // every mode. `checkpoint` is where this callback already carries the
     // session's identity; the gate is a no-op without it, and without a second
@@ -1972,6 +2017,11 @@ export function makeGatedCanUseTool(args: {
     // AskUserQuestion routes to the same confirm channel (ADR-0040).
     const ask = maybeAskUserQuestion({ toolName, turnId, toolUseID, input: safeInput, onConfirmRequest, session: checkpoint });
     if (ask) return ask;
+    const subagentDeny = subagentDecidesFirst({
+      toolName, toolInput: toolInput as Record<string, unknown>, input: safeInput, agentID, readOnly, mcpServer,
+      cwd, turnId, sessionTree: args.sessionTree,
+    });
+    if (subagentDeny) return subagentDeny;
     // Two sessions, one checkout. Ahead of `classifyToolCall` because the
     // conflict is about WHO ELSE is in the tree, not about the command's own
     // risk class — several of these commands auto-allow on their own merits.

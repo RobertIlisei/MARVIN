@@ -2310,12 +2310,15 @@ const MARVIN_REF = new RegExp(`(?:^|[\\s:'"=,])${BRANCH_PREFIX}[\\w./-]+`);
  *   - shared tab: a push or MR that names a `marvin/…` branch → deny. Pushing
  *     the user's own branch stays on the normal ladder (and MR creation on
  *     the metered-CI confirm).
- *   - subagents: not this rule's business — an implementer has ADR-0081.
+ *   - subagent (`agentID` set): any push or request → deny. A scout is
+ *     read-only and an implementer's deliverable is a branch the user merges
+ *     (ADR-0081); neither publishes anything, whatever tree the tab is on.
  */
 export function localOnlyIntegrationPolicy(
   name: string,
   input: Record<string, unknown>,
   sessionTree: { mode: "worktree"; branch: string } | { mode: "shared" } | undefined,
+  agentID?: string,
 ): { decision: "deny"; reason: string } | null {
   if (name !== "Bash") return null;
   const cmd = typeof input.command === "string" ? input.command : "";
@@ -2327,6 +2330,9 @@ export function localOnlyIntegrationPolicy(
     "Tab branches are integrated locally, never published one by one (ADR-0109): each branch pushed as its own " +
     "merge request costs a full pipeline. Close the tab with Merge, or use Source Control ▸ Worktrees ▸ Merge all / " +
     "Prepare MR — the user squashes the finished tabs into one commit and opens one request from there.";
+  if (agentID) {
+    return { decision: "deny", reason: `Sub-agent (${agentID}) may not push a branch or open a request — a subagent's work reaches the remote only through the user (ADR-0081). ${remedy}` };
+  }
   if (sessionTree?.mode === "worktree") {
     const act = requests ? "opening or merging a request from" : "pushing";
     return { decision: "deny", reason: `This tab runs on its own branch (${sessionTree.branch}); ${act} it is not MARVIN's to do. ${remedy}` };

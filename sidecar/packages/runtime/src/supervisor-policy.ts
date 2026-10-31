@@ -318,11 +318,16 @@ function common(input: { mode: SupervisorMode; targetIsSupervisor: boolean }, do
 /** Nudges a tab may get at one plan step with no spine progress; the next one escalates (§6). */
 export const NUDGES_PER_PLAN_STEP = 2;
 
+/** Turns in a row a tab may end in error before a message to it escalates instead (§6). */
+export const FAILED_TURNS_BEFORE_ESCALATION = 2;
+
 /**
  * `send` — a follow-up or nudge inside the tab's approved plan (ADR-0127 §3,
  * `answer-questions` and up). Refused for a tab the user stopped, one waiting
  * on its own job or wakeup, a busy shared checkout and secret-shaped text; a
- * third nudge at one plan step without spine progress escalates.
+ * third nudge at one plan step without spine progress escalates, and so does
+ * any message to a tab whose last turns kept failing — repeated failures
+ * escalate rather than retry.
  */
 export function evaluateSend(input: {
   mode: SupervisorMode;
@@ -342,6 +347,8 @@ export function evaluateSend(input: {
   heuristic?: string | null;
   /** Nudges already proposed or sent at this plan step with no spine progress. */
   priorNudgesAtStep: number;
+  /** The tab's turns in a row that ended in error (`failedTurnsInARow`). */
+  failedTurnsInARow?: number;
   grounds: GroundRef[];
   groundCtx: GroundContext;
 }): PolicyOutcome {
@@ -358,6 +365,10 @@ export function evaluateSend(input: {
   }
   if (input.heuristic) {
     return { ...done("escalate", "heuristic", `the message names a human-only act ("${input.heuristic}", heuristic)`), heuristic: input.heuristic };
+  }
+  const failed = input.failedTurnsInARow ?? 0;
+  if (failed >= FAILED_TURNS_BEFORE_ESCALATION) {
+    return done("escalate", "repeated-failures", `the tab's last ${failed} turns ended in an error — another message would retry the failure; the user decides what happens next`);
   }
   if (input.kind === "nudge" && input.priorNudgesAtStep >= NUDGES_PER_PLAN_STEP) {
     return done("escalate", "nudge-cap", `${input.priorNudgesAtStep} nudges at this plan step without spine progress — the user decides what happens next`);
