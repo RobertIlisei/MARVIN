@@ -1,6 +1,7 @@
 import { areasOfTitle, type ProjectAreas } from "@marvin/graphify-bridge";
 
 import { bashSearchTarget, classifyBashSourceAccess, isInsideCwd, isSourceFile } from "./bash-search";
+import { matchShipBoundary } from "./design-hooks";
 import { hasScopeMet, statesScopeNotMet } from "./workflow-guard";
 
 /**
@@ -305,8 +306,6 @@ export function parseSessionTranscript(sessionId: string, raw: string): ParsedSe
 const READ_SHAPED_BASH = /^\s*(cat|sed\s+-n|head|tail|grep|rg|find|awk|less|bat)\b/;
 const REVIEW_SKILL = /(^|:)(pr-review|security-audit)$/;
 const COMMIT_CMD = /\bgit\b[^|;&\n]*\bcommit\b/;
-const SHIP_BOUNDARY =
-  /(^|\/)(auth|login|session|credentials?|migrations?|schema|policy|permission|secrets?)(\/|\.|$)|(^|\/)\.gitlab-ci\.ya?ml$|(^|\/)\.github\/workflows\/|(^|\/)(Jenkinsfile|sudoers|Dockerfile|docker-compose|compose\.[a-z0-9.-]*ya?ml)|(^|\/)\.env(\.|$)|\.(sh|bash|zsh|sql)$|(token|password|passwd|keychain|sandbox|tool-policy)/i;
 const HOOK_DENY_PREFIXES: Array<{ rule: string; regex: RegExp }> = [
   { rule: "graphify-first", regex: /graphify-first/ },
   { rule: "graph-drift", regex: /graph-drift|drift deny/ },
@@ -457,7 +456,8 @@ function shipCommits(s: ParsedSession): Occurrence[] {
         continue;
       }
       const named = cmd.match(/[\w./-]+\.[a-z]{1,5}\b|\.gitlab-ci\.ya?ml|Dockerfile|sudoers/gi) ?? [];
-      const boundary = named.filter((p) => SHIP_BOUNDARY.test(p));
+      // The gate's own list (ADR-0104): measured against what is enforced.
+      const boundary = named.filter((p) => matchShipBoundary(p) !== null);
       if (boundary.length === 0) continue;
       out.push({
         fingerprint: reviewed ? "ship.reviewed" : "ship.unreviewed",
@@ -1093,7 +1093,9 @@ export const EXTRACTORS: Record<FingerprintKind, Extractor> = {
 /** Bump when an extractor's definition changes; the ledger records it per
  *  finding so a count produced by an older definition is never compared
  *  against one from a newer definition as if they were the same measurement. */
-export const EXTRACTOR_VERSION = 7;
+export const EXTRACTOR_VERSION = 8;
+// v8 (2026-10-31): ship.* judges a commit's paths by the ship-review gate's own list
+//   (matchShipBoundary) — CI directories and secrets/ count, a test or spec file no longer does
 // v7 (2026-09-09): a call a gate refused is not a read, a failed command or a commit; a
 //   commit allowed after ship-review refusals with no review in between IS unreviewed; a
 //   wakeup turn is not judged graph-first; a turn that armed a wakeup / background job

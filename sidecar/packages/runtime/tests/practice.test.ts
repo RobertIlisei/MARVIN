@@ -189,6 +189,20 @@ describe("practice extractors (ADR-0105 §1)", () => {
     expect(names).toEqual(["graph.first.followed", "scope.met.present", "ship.reviewed", "skill.invoked:security-audit", "turn.continued"]);
   });
 
+  // One list (ADR-0104): the practice loop measures unreviewed boundary commits
+  // against the paths the ship-review gate enforces, not a list of its own.
+  it("judges a commit's boundary paths by the ship-review gate's own list", () => {
+    const commit = (command: string) =>
+      extractAll(parseSessionTranscript("s-ship", jsonl(turn({ at: "2026-09-01T10:00:00Z", message: "commit it", tools: [{ name: "Bash", input: { command } }], text: "Committed. Anything else?" }))))
+        .filter((o) => o.fingerprint.startsWith("ship."));
+    // The gate guards these; the extractor's old list did not.
+    expect(commit("git add .circleci/config.yml && git commit -m ci")).toHaveLength(1);
+    expect(commit("git add deploy/secrets/prod.yaml && git commit -m s")).toHaveLength(1);
+    // The extractor's old list counted a test file; the gate exempts it.
+    expect(commit("git add src/auth.test.ts && git commit -m t")).toHaveLength(0);
+    expect(commit("git add src/session.ts && git commit -m s")).toHaveLength(1);
+  });
+
   it("ignores subagent calls entirely", () => {
     const scouting = jsonl(
       turn({
