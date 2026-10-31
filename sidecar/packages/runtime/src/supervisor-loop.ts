@@ -51,9 +51,9 @@ import { listSessionMetas, readSessionMeta, type SessionPosture } from "./sessio
 import { buildSessionWatch, planProgress } from "./session-watch";
 import { runSupervisorWake, type WakeResult } from "./supervisor-dispatch";
 import { addInboxItem, buildRawAct, type MergePreview, resolveInboxForConfirm, supersedeInbox } from "./supervisor-inbox";
-import { appendLedgerEntry, newLedgerId, readLedger } from "./supervisor-ledger";
+import { appendLedgerEntry, newLedgerId, readLedger, setWakeOrigin } from "./supervisor-ledger";
 import type { VerbContext, VerbDeps, VerbPerform } from "./supervisor-mcp";
-import { addSupervisorReply, getUserMessage } from "./supervisor-messages";
+import { addSupervisorReply, getUserMessage, unansweredUserMessages } from "./supervisor-messages";
 import { ActionLimiter } from "./supervisor-policy";
 import type { WakeItem } from "./supervisor-prompt";
 import { sendAsSupervisor, tabSendRefusal } from "./supervisor-send";
@@ -61,6 +61,7 @@ import {
   delegationRank,
   getSupervisorState,
   isSupervisorSessionId,
+  listEnabledSupervisors,
   onSupervisorControl,
   overBudget,
   pauseSupervisorForFault,
@@ -114,7 +115,8 @@ export interface TabFacts {
 export interface LoopDeps {
   subscribe(listener: (e: ProjectEvent) => void): () => void;
   workDirOf(projectId: string): string | null;
-  verbDeps(projectId: string, workDir: string): VerbDeps;
+  /** `conversation` is set only for a wake a user message started: it is what wires `reply` (ADR-0128 §5). */
+  verbDeps(projectId: string, workDir: string, conversation?: Conversation | null): VerbDeps;
   buildItems(projectId: string, workDir: string, refs: PendingRef[]): Promise<WakeItem[]>;
   runWake(args: { projectId: string; workDir: string; items: WakeItem[]; verbCtx: VerbContext; abortController: AbortController }): Promise<WakeResult>;
   /** Milestone 4 — a tab's facts for the idle and turn-ended rules; null when it is gone. */
@@ -127,6 +129,12 @@ export interface LoopDeps {
    * model. Optional so earlier fixtures build; the default writes the item.
    */
   proposeClose?(projectId: string, marvinSessionId: string, scopeMetAt: string): void;
+}
+
+/** The user messages a message wake carries, and the wake. */
+export interface Conversation {
+  wakeId: string;
+  messageIds: string[];
 }
 
 const refKey = (r: PendingRef) => {
@@ -150,6 +158,8 @@ export class SupervisorLoop {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly running = new Map<string, AbortController>();
   private readonly current = new Map<string, { wakeId: string; startedAt: string; itemCount: number }>();
+  /** The running wake's verb context and the messages it carries — what a mid-wake message holds (ADR-0128 §6). */
+  private readonly runningWake = new Map<string, { verbCtx: VerbContext; messageIds: string[] }>();
   private readonly limiters = new Map<string, ActionLimiter>();
   /** `projectId:sessionId` → the tab's idle timer. */
   private readonly idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -169,9 +179,17 @@ export class SupervisorLoop {
         if (action === "kill" || action === "stop" || action === "disable") this.kill(projectId);
         else if (action === "pause") this.clearTimer(projectId);
         else if (action === "wakeNow") this.wakeNow(projectId);
-        else if (action === "resume" || action === "start" || action === "delegate") this.schedule(projectId);
+        else if (action === "resume" || action === "start" || action === "delegate") {
+          if (action !== "delegate") this.requeueUnanswered(projectId);
+          this.schedule(projectId);
+        }
       }),
     );
+    // A restart lost the in-memory queue; the conversation on disk did not (ADR-0128 §6).
+    for (const s of listEnabledSupervisors()) {
+      this.requeueUnanswered(s.projectId);
+      this.schedule(s.projectId);
+    }
   }
 
   stop(): void {
@@ -194,17 +212,41 @@ export class SupervisorLoop {
   }
 
   /**
-   * Milestone 5 — the user wrote to the supervisor (`POST /api/supervisor/message`).
-   * The message wakes it; nothing about it is consent.
+   * The user wrote to the supervisor (`POST /api/supervisor/message`). The
+   * message wakes it at once, with no debounce, in a wake of its own (ADR-0128
+   * §6). Arriving mid-wake, it holds that wake's remaining acts and waits for
+   * the next one. Nothing about it is consent.
    */
   noteUserMessage(projectId: string, messageId: string): void {
     if (getSupervisorState(projectId).mode === "off") return;
     this.enqueue(projectId, { trigger: "message", marvinSessionId: "", turnId: "", toolUseId: messageId });
+    const running = this.runningWake.get(projectId);
+    if (running) running.verbCtx.wake.messageHold = true;
     this.schedule(projectId);
+  }
+
+  /**
+   * ADR-0128 §6 — no user message is ever dropped. Kill clears the queue and a
+   * restart loses it, so on resume, on start and at boot every user message no
+   * reply answers is queued again (one the running wake carries excepted).
+   */
+  private requeueUnanswered(projectId: string): void {
+    if (getSupervisorState(projectId).mode === "off") return;
+    let pending: ReturnType<typeof unansweredUserMessages>;
+    try {
+      pending = unansweredUserMessages(projectId);
+    } catch {
+      return; // an unreadable conversation must not break the loop
+    }
+    const carried = new Set(this.runningWake.get(projectId)?.messageIds ?? []);
+    for (const m of pending) {
+      if (!carried.has(m.id)) this.enqueue(projectId, { trigger: "message", marvinSessionId: "", turnId: "", toolUseId: m.id });
+    }
   }
 
   /** The user's Restart (brief §10.1 `wakeNow`): re-scan pending questions and wake without the debounce. */
   wakeNow(projectId: string): void {
+    this.requeueUnanswered(projectId);
     for (const r of this.deps.pendingQuestions(projectId)) {
       if (this.eligibleTab(projectId, r.marvinSessionId)) this.enqueue(projectId, { ...r, trigger: "question" });
     }
@@ -341,8 +383,14 @@ export class SupervisorLoop {
   }
 
   private schedule(projectId: string): void {
-    if (!this.queues.get(projectId)?.size) return;
+    const q = this.queues.get(projectId);
+    if (!q?.size) return;
     this.clearTimer(projectId);
+    // A user message skips the debounce (ADR-0128 §6); a running wake flushes it on exit.
+    if ([...q.values()].some((r) => r.trigger === "message")) {
+      void this.flush(projectId);
+      return;
+    }
     const st = getSupervisorState(projectId);
     this.timers.set(
       projectId,
@@ -364,37 +412,46 @@ export class SupervisorLoop {
       pauseSupervisorForFault(projectId, `over the daily budget ($${st.spend.usd.toFixed(2)} of $${st.caps.dailyBudgetUsd})`, "budget");
       return;
     }
-    const candidates = [...queue.values()];
-    queue.clear();
-    this.queuedAt.delete(projectId);
-    const refs: PendingRef[] = [];
-    for (const r of candidates) {
-      const trigger = r.trigger ?? "question";
-      if (trigger === "message") {
-        refs.push(r); // the user's own message; the supervisor is on (checked above)
-        continue;
-      }
-      if (!this.eligibleTab(projectId, r.marvinSessionId)) continue;
-      if (trigger === "question" || trigger === "confirm") {
-        if (getPendingConfirm(r.turnId, r.toolUseId) !== null) refs.push(r);
-        continue;
-      }
-      // A turn-ended, idle or scope-met ref is checked again: the tab may have moved on.
-      const f = await this.deps.tabFacts(projectId, r.marvinSessionId).catch(() => null);
-      if (!f || f.live || f.stopped) continue;
-      if (trigger === "scope-met" ? f.scopeMet : !f.scopeMet) refs.push(r);
-    }
-    if (!refs.length) return;
-    const workDir = this.deps.workDirOf(projectId);
-    if (!workDir) return;
-
+    // The slot is claimed before the first await: a message flushes at once, and two flushes must not both wake.
     const abortController = new AbortController();
     this.running.set(projectId, abortController);
+    // ADR-0128 §6 — message wakes run alone: the runtime, not the model, then knows every line is for the message.
+    const messageRefs = [...queue.entries()].filter(([, r]) => r.trigger === "message");
+    const taken = messageRefs.length ? messageRefs : [...queue.entries()];
+    for (const [k] of taken) queue.delete(k);
+    if (queue.size === 0) this.queuedAt.delete(projectId);
+    const candidates = taken.map(([, r]) => r);
+    const messageIds = messageRefs.map(([, r]) => r.toolUseId);
     const wakeId = randomUUID();
-    this.current.set(projectId, { wakeId, startedAt: new Date().toISOString(), itemCount: refs.length });
+    let ran = false;
     let outcome: SupervisorLastWake["outcome"] = "ok";
     let error: SupervisorLastWake["error"];
     try {
+      const refs: PendingRef[] = [];
+      for (const r of candidates) {
+        const trigger = r.trigger ?? "question";
+        if (trigger === "message") {
+          refs.push(r); // the user's own message; the supervisor is on (checked above)
+          continue;
+        }
+        if (!this.eligibleTab(projectId, r.marvinSessionId)) continue;
+        if (trigger === "question" || trigger === "confirm") {
+          if (getPendingConfirm(r.turnId, r.toolUseId) !== null) refs.push(r);
+          continue;
+        }
+        // A turn-ended, idle or scope-met ref is checked again: the tab may have moved on.
+        const f = await this.deps.tabFacts(projectId, r.marvinSessionId).catch(() => null);
+        if (!f || f.live || f.stopped) continue;
+        if (trigger === "scope-met" ? f.scopeMet : !f.scopeMet) refs.push(r);
+      }
+      if (!refs.length || abortController.signal.aborted) return;
+      const workDir = this.deps.workDirOf(projectId);
+      if (!workDir) return;
+
+      ran = true;
+      this.current.set(projectId, { wakeId, startedAt: new Date().toISOString(), itemCount: refs.length });
+      const conversation: Conversation | null = messageIds.length ? { wakeId, messageIds } : null;
+      if (conversation) setWakeOrigin(wakeId, { kind: "message", messageIds });
       const items = await this.deps.buildItems(projectId, workDir, refs);
       if (abortController.signal.aborted) {
         outcome = "aborted";
@@ -406,8 +463,10 @@ export class SupervisorLoop {
         wakeId,
         wake: { acts: 0 },
         limiter: this.limiterFor(projectId),
-        deps: this.deps.verbDeps(projectId, workDir),
+        deps: this.deps.verbDeps(projectId, workDir, conversation),
+        conversation: conversation ? { messageIds } : null,
       };
+      this.runningWake.set(projectId, { verbCtx, messageIds });
       const result = await this.deps.runWake({ projectId, workDir, items, verbCtx, abortController });
       if (abortController.signal.aborted) outcome = "aborted";
       else if (verbCtx.wake.acts >= st.caps.maxActionsPerWake) outcome = "breaker";
@@ -422,7 +481,9 @@ export class SupervisorLoop {
     } finally {
       this.running.delete(projectId);
       this.current.delete(projectId);
-      guarded(() => updateSupervisorRuntime(projectId, { lastWake: { wakeId, at: new Date().toISOString(), outcome, ...(error ? { error } : {}) } }));
+      this.runningWake.delete(projectId);
+      setWakeOrigin(wakeId, null);
+      if (ran) guarded(() => updateSupervisorRuntime(projectId, { lastWake: { wakeId, at: new Date().toISOString(), outcome, ...(error ? { error } : {}) } }));
       if (!abortController.signal.aborted) this.schedule(projectId);
     }
   }
@@ -433,6 +494,7 @@ export class SupervisorLoop {
     return l;
   }
 
+  /** Aborts the wake and clears the queue. A user message survives on disk and is queued again on resume (ADR-0128 §6). */
   kill(projectId: string): void {
     this.clearTimer(projectId);
     this.running.get(projectId)?.abort();
@@ -495,7 +557,7 @@ function readPlanText(projectId: string, marvinSessionId: string): string {
   return text.length > 4_000 ? `${text.slice(0, 4_000)}…` : text;
 }
 
-export function defaultVerbDeps(projectId: string, workDir: string): VerbDeps {
+export function defaultVerbDeps(projectId: string, workDir: string, conversation: Conversation | null = null): VerbDeps {
   return {
     listRows: () => buildSessionWatch({ projectId, workDir, sessionIds: Object.keys(getSupervisorState(projectId).delegation) }),
     getPending: getPendingConfirm,
@@ -524,9 +586,10 @@ export function defaultVerbDeps(projectId: string, workDir: string): VerbDeps {
       return m ? { id: m.id, at: m.at, text: m.text } : null;
     },
     newTabBase: () => newTabBase(projectId, workDir),
-    postReply: (text) => {
-      addSupervisorReply(projectId, text);
-    },
+    // Only a wake the user's message started can speak in the Supervisor tab (ADR-0128 §5).
+    ...(conversation
+      ? { postReply: (text: string) => addSupervisorReply(projectId, text, { wakeId: conversation.wakeId, origin: { kind: "message", messageIds: conversation.messageIds } }) }
+      : {}),
     perform: defaultPerform(projectId),
   };
 }
