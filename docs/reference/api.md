@@ -273,18 +273,37 @@ The chat-stream hook (`useChatStream.hydrateFromSession`) consumes this to rebui
 ### `GET /api/cost?projectId=…`
 
 Aggregated spend for a project. Each request also refreshes the cached
-OpenRouter account balance (3 s bounded, best-effort) when the configured
-provider is `openrouter`.
+OpenRouter account balance and key usage (`/api/v1/credits` + `/api/v1/key`,
+3 s bounded each, best-effort) when the configured provider is `openrouter`.
+
+Every figure is **per turn**: the SDK's `total_cost_usd` / `modelUsage` are
+cumulative across a resumed session, and the tracker records each turn's
+delta. Entries recorded before 2026-10-31 stored the cumulative total and are
+reported only in `legacy`, never added into the periods.
 
 **Response:**
 
 ```ts
+type AuthMode = "subscription" | "anthropic-api" | "openrouter" | "gateway" | "cloud-provider" | "other" | "unknown";
+type Aggregate = {
+  costUsd, turns,
+  inputTokens /* uncached only */, cacheReadTokens, cacheCreationTokens,
+  cacheWrite5mTokens, cacheWrite1hTokens, outputTokens,
+  estimatedTurns, unpricedTurns,
+};
 {
-  today:    { costUsd, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, turns };
+  today:    Aggregate & { byAuthMode: Partial<Record<AuthMode, Aggregate>> };  // costUsd sums modes: never show it unlabelled
   week:     { /* same shape */ };
   lifetime: { /* same shape */ };
   daily:    Array<{ day: string /* YYYY-MM-DD */, costUsd, turns }>;  // last N active days
-  openRouter: { totalCredits, totalUsage } | null;  // present when provider is openrouter
+  byModel:  { today: ModelRow[], week: ModelRow[] };  // { authMode, model ("unknown model" for old entries), costUsd, turns, tokens…, estimated }
+  legacy:   { costUsd, turns, from, to } | null;      // pre-2026-10-31 entries; overstated, not comparable
+  openRouter:    { totalCredits, totalUsage } | null;
+  openRouterKey: { usage, usageDaily?, usageWeekly?, usageMonthly?, limitRemaining?, fetchedAt } | null;  // OpenRouter's own billed figures, key-wide
+  account:  { subscriptionType?, tokenSource?, apiKeySource?, apiProvider?, at } | null;  // SDK accountInfo(); never email or organization
+  claudeRateLimits: Array<{ type, status, utilization?, resetsAt?, at /* last reported */, label, inLatestReport: boolean | null }>;
+    // a window whose resetsAt passed with no report since is omitted;
+    // inLatestReport=false: absent from the newest report that sized windows (shown dimmed)
 }
 ```
 

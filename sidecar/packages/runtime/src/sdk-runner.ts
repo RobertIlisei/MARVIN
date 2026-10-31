@@ -38,7 +38,7 @@ import { classifyMeteredCiRisk, describeMeteredCiRisk, meteredCiAlternative } fr
 import { isSubagentDispatch, isTrustedMcpName, KNOWN_TOOL_NAMES, looksLikeSubagentDispatch, type McpProvenance, mcpToolPolicy, PLAYWRIGHT_SERVER_KEY, type ToolName, toolPolicy } from "@marvin/tools/policy";
 import { classifySharedTreeRisk, describeSharedTreeRisk } from "@marvin/tools/shared-tree";
 import { makeAdvisorVerdictPostToolUse } from "./advisor-verdict";
-import { buildSubprocessEnv } from "./auth";
+import { buildSubprocessEnv, getAnthropicAuth } from "./auth";
 import {
   type AutoAuditEntryKind,
   appendAutoAuditEntry,
@@ -60,7 +60,7 @@ import {
 } from "./confirm-registry";
 import { CONTEXT_BASELINE_SUBTYPE, contextBaseline } from "./context-baseline";
 import { coreSkillsPluginConfig } from "./core-skills";
-import { rateLimitPayload, recordClaudeRateLimit } from "./cost-tracker";
+import { accountSignals, classifyAuthMode, rateLimitPayload, recordAccountInfo, recordClaudeRateLimit, type AccountSignals, type CostAuthMode, type SdkModelUsageInput } from "./cost-tracker";
 import { readRoleModels, resolveRoleModel, roleTurnOverrides } from "./role-models";
 import {
   ADVISOR_SUBAGENT_TYPE,
@@ -467,6 +467,20 @@ export interface ConfirmRequestPayload {
   displayName?: string;
 }
 
+/**
+ * The SDK's account signals per SDK session (`query.accountInfo()`), so a
+ * resumed session asks once, not every turn. Bounded: oldest dropped first.
+ */
+const accountBySdkSession = new Map<string, AccountSignals>();
+function rememberAccount(sdkSessionId: string, sig: AccountSignals): void {
+  accountBySdkSession.delete(sdkSessionId);
+  accountBySdkSession.set(sdkSessionId, sig);
+  if (accountBySdkSession.size > 200) {
+    const oldest = accountBySdkSession.keys().next().value;
+    if (oldest !== undefined) accountBySdkSession.delete(oldest);
+  }
+}
+
 export interface RunAgentResult {
   ok: boolean;
   error?: string;
@@ -478,7 +492,13 @@ export interface RunAgentResult {
     output_tokens?: number;
     cache_creation_input_tokens?: number;
     cache_read_input_tokens?: number;
+    /** Cache writes by TTL, when the SDK reports them. */
+    cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
   };
+  /** The SDK's `modelUsage` — CUMULATIVE across a resumed session, like `costUsd`. */
+  modelUsage?: Record<string, SdkModelUsageInput>;
+  /** Who pays for this turn — taken when the turn started, refined by the CLI's `apiKeySource`. */
+  authMode?: CostAuthMode;
   permissionDenials?: number;
   /** ADR-0127 milestone 4 — the turn closed its scope with the scope-met marker (the orchestrator records `scopeMetAt`). */
   scopeMet?: boolean;
@@ -2093,6 +2113,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const workDir = input.workDir ?? cwd;
   const { env: honeycombEnv } = computeHoneycombTelemetryEnv(workDir);
   const authEnv = buildSubprocessEnv();
+  // Who pays, as of THIS turn's start — a settings change mid-turn must not
+  // relabel what the turn cost.
+  const authAtStart = getAnthropicAuth();
+  let apiKeySource: string | undefined;
+  /** Settles with the SDK's account signals once init has run; read when the turn ends. */
+  let accountPromise: Promise<AccountSignals> | undefined;
   const turnEnv: Record<string, string | undefined> = {
     // ADR-0110 — a session worktree isolates the FILESYSTEM, never the
     // machine. Docker, host ports, databases and anything keyed on $HOME are
@@ -2530,6 +2556,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let durationMs: number | undefined;
   let costUsd: number | undefined;
   let tokenUsage: RunAgentResult["tokenUsage"];
+  let modelUsage: RunAgentResult["modelUsage"];
   let permissionDenials = 0;
   let resultError: string | undefined;
   /** ADR-0100 — advisor conditions captured before the design context is torn
@@ -2830,6 +2857,33 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
       if (ev.type === "system" && "subtype" in ev && ev.subtype === "init") {
         lastSessionId = ev.session_id;
+        const src = (ev as { apiKeySource?: unknown }).apiKeySource;
+        if (typeof src === "string") apiKeySource = src;
+        // Who the account is — the plan's own name and the backend — from the
+        // SDK, once per SDK session. A control request, so after init. Email
+        // and organization are dropped at `accountSignals`.
+        if (!accountPromise) {
+          const sid = ev.session_id;
+          const cached = sid ? accountBySdkSession.get(sid) : undefined;
+          const pid = input.projectId;
+          accountPromise = cached
+            ? Promise.resolve(cached)
+            : Promise.resolve().then(() => q.accountInfo()).then(
+                (info) => {
+                  const sig = accountSignals(info);
+                  if (sid) rememberAccount(sid, sig);
+                  if (pid) {
+                    try {
+                      recordAccountInfo(pid, info);
+                    } catch {
+                      /* the panel heading is cosmetic; never fail a turn on it */
+                    }
+                  }
+                  return sig;
+                },
+                () => ({}) as AccountSignals,
+              );
+        }
         // Agent SDK 0.3.283 — a staged plugin (ADR-0053) that did not load.
         // The chat shows it (`SystemNotice`); the log keeps the category.
         const pluginErrors = (ev as { plugin_errors?: { plugin: string; type: string; path?: string }[] }).plugin_errors;
@@ -2912,7 +2966,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             ...(typeof u.cache_read_input_tokens === "number"
               ? { cache_read_input_tokens: u.cache_read_input_tokens }
               : {}),
+            ...(u.cache_creation && typeof u.cache_creation === "object"
+              ? { cache_creation: u.cache_creation as NonNullable<RunAgentResult["tokenUsage"]>["cache_creation"] }
+              : {}),
           };
+        }
+        if ("modelUsage" in ev && ev.modelUsage && typeof ev.modelUsage === "object") {
+          modelUsage = ev.modelUsage as Record<string, SdkModelUsageInput>;
         }
         if ("permission_denials" in ev && Array.isArray(ev.permission_denials)) {
           permissionDenials = ev.permission_denials.length;
@@ -3279,6 +3339,14 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
   }
 
+  // The account signals, bounded: a slow control request must not hold the
+  // turn's result. The init event's `apiKeySource` fills in if the SDK's is absent.
+  const settledAccount = async (): Promise<AccountSignals> => {
+    const sig = accountPromise
+      ? await Promise.race([accountPromise, new Promise<AccountSignals>((r) => setTimeout(() => r({}), 1500))])
+      : {};
+    return { ...(apiKeySource ? { apiKeySource } : {}), ...sig };
+  };
   if (resultError) {
     return {
       ok: false,
@@ -3287,6 +3355,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ...(durationMs != null ? { durationMs } : {}),
       ...(costUsd != null ? { costUsd } : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
+      ...(modelUsage ? { modelUsage } : {}),
+      authMode: classifyAuthMode(authAtStart, await settledAccount()),
       permissionDenials,
     };
   }
@@ -3296,6 +3366,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     ...(durationMs != null ? { durationMs } : {}),
     ...(costUsd != null ? { costUsd } : {}),
     ...(tokenUsage ? { tokenUsage } : {}),
+    ...(modelUsage ? { modelUsage } : {}),
+    authMode: classifyAuthMode(authAtStart, await settledAccount()),
     permissionDenials,
     ...(reportsScopeMet(finalAssistantText, scopeClaimRejected) ? { scopeMet: true } : {}),
   };

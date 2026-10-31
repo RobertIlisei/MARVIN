@@ -5201,6 +5201,57 @@ runner.suite("tail-ctx-glyph") {
     }
 }
 
+// MARK: - Cost popover: auth modes, plan-window clock, token breakdown (2026-10-31)
+
+runner.suite("cost-display") {
+    let now = Date(timeIntervalSince1970: 1_793_400_000)
+    runner.test("a window past its refill time and not reported since is expired") {
+        runner.expect(PlanWindowClock.isExpired(resetsAt: now.timeIntervalSince1970 - 60, lastReportedAt: now.addingTimeInterval(-3600), now: now), equals: true, "reset passed, last report before it")
+        runner.expect(PlanWindowClock.isExpired(resetsAt: now.timeIntervalSince1970 - 60, lastReportedAt: now.addingTimeInterval(-10), now: now), equals: false, "re-reported after the reset")
+        runner.expect(PlanWindowClock.isExpired(resetsAt: now.timeIntervalSince1970 + 60, lastReportedAt: now.addingTimeInterval(-3600), now: now), equals: false, "reset still ahead")
+        runner.expect(PlanWindowClock.isExpired(resetsAt: nil, lastReportedAt: nil, now: now), equals: false, "no reset time: never expires on the clock")
+    }
+    runner.test("last reported reads as a short relative time") {
+        runner.expect(PlanWindowClock.lastReported(now.addingTimeInterval(-20), now: now), equals: "last reported just now", "seconds")
+        runner.expect(PlanWindowClock.lastReported(now.addingTimeInterval(-12 * 60), now: now), equals: "last reported 12m ago", "minutes")
+        runner.expect(PlanWindowClock.lastReported(now.addingTimeInterval(-3 * 3600 - 60), now: now), equals: "last reported 3h ago", "hours")
+        runner.expect(PlanWindowClock.lastReported(now.addingTimeInterval(-2 * 86_400), now: now), equals: "last reported 2d ago", "days")
+    }
+    runner.test("each auth mode says what its dollars are") {
+        runner.expect(CostModeDisplay(key: "subscription").title, equals: "Claude plan · API-equivalent", "subscription")
+        runner.expect(CostModeDisplay(key: "subscription").isBill, equals: false, "subscription is not a bill")
+        runner.expect(CostModeDisplay(key: "anthropic-api").title, equals: "Anthropic API · billed", "API key")
+        runner.expect(CostModeDisplay(key: "anthropic-api").isBill, equals: true, "API key is a bill")
+        runner.expect(CostModeDisplay(key: "openrouter").title, equals: "OpenRouter · estimate", "OpenRouter")
+        runner.expect(CostModeDisplay(key: "unknown").title, equals: "mode not recorded", "old entries")
+        runner.expect(CostModeDisplay(key: "something-new").title, equals: "something-new", "an unrecognised mode is shown as sent")
+    }
+    runner.test("the plan's name comes from the SDK, shown as given, never from a list") {
+        runner.expect(CostModeDisplay(key: "subscription", plan: "ultra").title, equals: "Claude plan · Ultra", "ultra")
+        runner.expect(CostModeDisplay(key: "subscription", plan: "max").title, equals: "Claude plan · Max", "max")
+        runner.expect(CostModeDisplay(key: "subscription", plan: "team_premium").title, equals: "Claude plan · Team Premium", "an unseen plan, title-cased")
+        runner.expect(CostModeDisplay(key: "subscription", plan: "").title, equals: "Claude plan · API-equivalent", "empty plan name")
+        runner.expect(CostModeDisplay(key: "anthropic-api", plan: "ultra").title, equals: "Anthropic API · billed", "a plan name never relabels a key")
+    }
+    runner.test("gateway and cloud-provider accounts are labelled, not billed") {
+        runner.expect(CostModeDisplay(key: "gateway").title, equals: "Gateway · estimate", "gateway")
+        runner.expect(CostModeDisplay(key: "cloud-provider").title, equals: "Cloud provider · estimate", "cloud")
+        runner.expect(CostModeDisplay(key: "gateway").isBill, equals: false, "gateway is not MARVIN's bill to state")
+        runner.expect(CostModeDisplay(key: "gateway").chip(0.5), equals: "~$0.50", "estimate prefix")
+    }
+    runner.test("the chip prefixes anything that is not a bill") {
+        runner.expect(CostModeDisplay(key: "subscription").chip(1.84), equals: "≈$1.84", "api-equivalent")
+        runner.expect(CostModeDisplay(key: "anthropic-api").chip(1.84), equals: "$1.84", "billed")
+        runner.expect(CostModeDisplay(key: "openrouter").chip(0.004), equals: "~$0.0040", "estimate, sub-cent")
+    }
+    runner.test("input tokens are uncached + cache read + cache write, never just the first") {
+        let t = TokenBreakdown(uncached: 46, cacheRead: 3_363_298, cacheWrite: 79_837, output: 12_058)
+        runner.expect(t.totalInput, equals: 3_443_181, "total input")
+        runner.expect(t.inputParts, equals: "46 new · 3.36M cache read · 79.8K cache write", "the split")
+        runner.expect(TokenBreakdown.compact(1_353), equals: "1.4K", "no locale grouping that reads as a decimal")
+    }
+}
+
 if runner.failures.isEmpty {
     print("MARVINTests · \(runner.passedAssertions) assertions passed across all suites")
     exit(0)

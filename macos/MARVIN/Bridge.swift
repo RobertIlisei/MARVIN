@@ -22,6 +22,9 @@ struct BridgeProject: Identifiable, Equatable {
 /// its history popover. Mirrors the web `CostSummary` shape so the
 /// same fields render in both places without translation.
 struct CostSummary: Equatable {
+    /// Every period's sum across auth modes. Never shown unlabelled when
+    /// `modes` holds more than one: a plan's API-equivalent gauge, an API
+    /// bill and an OpenRouter estimate are different things.
     let today: Double
     let week: Double
     let lifetime: Double
@@ -29,6 +32,16 @@ struct CostSummary: Equatable {
     let inputTokens: Int
     let outputTokens: Int
     let daily: [DailyEntry]
+
+    /// Defaults keep the older call sites (and fixtures) compiling.
+    var todayPeriod: Period = .zero
+    var weekPeriod: Period = .zero
+    var lifetimePeriod: Period = .zero
+    var modelsToday: [ModelRow] = []
+    var modelsWeek: [ModelRow] = []
+    var legacy: Legacy? = nil
+    var openRouterKey: OpenRouterKeyUsage? = nil
+    var account: Account? = nil
 
     struct DailyEntry: Equatable, Identifiable {
         let day: String          // "YYYY-MM-DD"
@@ -38,13 +51,74 @@ struct CostSummary: Equatable {
         var id: String { day }
     }
 
+    struct Aggregate: Equatable, Codable {
+        var costUsd: Double = 0
+        var turns: Int = 0
+        var inputTokens: Int = 0
+        var outputTokens: Int = 0
+        var cacheCreationTokens: Int? = 0
+        var cacheReadTokens: Int? = 0
+        var estimatedTurns: Int? = 0
+        var unpricedTurns: Int? = 0
+    }
+
+    /// One period, with its split by auth mode (sidecar key → aggregate).
+    struct Period: Equatable {
+        var total: Aggregate
+        var byAuthMode: [String: Aggregate]
+        static let zero = Period(total: Aggregate(), byAuthMode: [:])
+
+        /// Modes present in the period, the one that spent most first.
+        var modes: [(key: String, value: Aggregate)] {
+            byAuthMode.map { ($0.key, $0.value) }.sorted { $0.value.costUsd > $1.value.costUsd || ($0.value.costUsd == $1.value.costUsd && $0.key < $1.key) }
+        }
+    }
+
+    struct ModelRow: Equatable, Codable, Identifiable {
+        let authMode: String
+        let model: String
+        let costUsd: Double
+        let turns: Int
+        let inputTokens: Int
+        let outputTokens: Int
+        let cacheReadTokens: Int
+        let cacheCreationTokens: Int
+        let estimated: Bool
+        var id: String { authMode + "|" + model }
+    }
+
+    /// Entries recorded before 2026-10-31 stored the SDK's cumulative session
+    /// total as each turn's cost; their sum is shown apart and not added in.
+    struct Legacy: Equatable, Codable {
+        let costUsd: Double
+        let turns: Int
+        let from: String
+        let to: String
+    }
+
+    /// The SDK's `accountInfo()` for this project — no email, no organization.
+    /// `subscriptionType` is the plan's own name, shown as given.
+    struct Account: Equatable, Codable {
+        let subscriptionType: String?
+        let apiProvider: String?
+    }
+
     struct OpenRouterBalance: Equatable, Codable {
         let totalCredits: Double
         let totalUsage: Double
     }
 
-    /// One Claude plan window (5-hour / weekly), as last reported by the
-    /// SDK's `rate_limit_event` (ADR-0082). A subscription has no dollar
+    /// What OpenRouter itself billed the configured key (`/api/v1/key`) —
+    /// every app using the key counts, so it is the account's figure.
+    struct OpenRouterKeyUsage: Equatable, Codable {
+        let usage: Double
+        let usageDaily: Double?
+        let usageWeekly: Double?
+        let usageMonthly: Double?
+    }
+
+    /// One Claude plan window, as last reported by the SDK's
+    /// `rate_limit_event` (ADR-0082). A subscription has no dollar
     /// balance — this is its usage.
     struct ClaudeWindow: Equatable, Codable, Identifiable {
         let type: String
@@ -52,29 +126,17 @@ struct CostSummary: Equatable {
         let utilization: Double?
         let resetsAt: Double?
         let isUsingOverage: Bool?
+        /// Readable name, derived by the sidecar from `type` (any type, no list).
+        var label: String? = nil
+        /// ISO time of the last report that mentioned this window.
+        var at: String? = nil
+        /// False when the newest report that sized windows left this one out —
+        /// shown dimmed as last-known, not current. Nil before any such report.
+        var inLatestReport: Bool? = nil
         var id: String { type }
 
-        /// Same wording as the Claude CLI's Usage tab and the desktop app,
-        /// so the three surfaces read as one.
-        var label: String {
-            switch type {
-            case "five_hour": return "current session"
-            case "seven_day": return "current week (all models)"
-            case "seven_day_overage_included": return "current week (incl. overage)"
-            case "overage": return "overage"
-            default:
-                if type.hasPrefix("seven_day_") {
-                    // Per-model weekly windows (`seven_day_fable`,
-                    // `seven_day_opus`, …). They appear in `unifiedWindows`
-                    // only once that model has been used against the plan, so
-                    // a row missing here means the API has not reported it —
-                    // not that MARVIN dropped it.
-                    let model = String(type.dropFirst("seven_day_".count))
-                    return "current week (\(model.prefix(1).uppercased() + model.dropFirst()))"
-                }
-                return type.replacingOccurrences(of: "_", with: " ")
-            }
-        }
+        var displayLabel: String { label ?? type.replacingOccurrences(of: "_", with: " ") }
+        var lastReportedAt: Date? { at.flatMap(PlanWindowClock.parse) }
     }
 
     let openRouter: OpenRouterBalance?

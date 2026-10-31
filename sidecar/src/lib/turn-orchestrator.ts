@@ -467,16 +467,39 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
     return;
   }
 
-  const estimatedCost = await calculateEstimatedCost(model, result.tokenUsage);
   // The SDK's total_cost_usd prices every model off the Claude rate card —
   // for an OpenRouter BYOK model it is fiction (measured ~10× over: a
-  // 4.3M-token glm turn recorded $4.21 against ~$0.33 actual). Only fall
-  // back to it when Anthropic is the provider; an unpriceable OpenRouter
-  // turn records 0 and keeps its tokens — the OpenRouter account block
-  // carries the authoritative spend.
-  const provider = readAuthConfig()?.provider ?? "anthropic";
-  const finalCostUsd =
-    estimatedCost ?? (provider === "openrouter" ? null : (result.costUsd ?? null));
+  // 4.3M-token glm turn recorded $4.21 against ~$0.33 actual). On OpenRouter
+  // the turn is priced from OpenRouter's own model list instead; an
+  // unpriceable turn records no cost and keeps its tokens — the OpenRouter
+  // account block carries the authoritative spend.
+  const authMode = result.authMode ?? (readAuthConfig()?.provider === "openrouter" ? "openrouter" : undefined);
+  const estimateUsd = authMode === "openrouter" ? await calculateEstimatedCost(model, result.tokenUsage) : undefined;
+  // The SDK's total and modelUsage are CUMULATIVE across a resumed session;
+  // the tracker turns them into this turn's share (2026-10-31: read as
+  // per-turn, one session's five turns summed to $93 against a true $32).
+  // A failed turn is not recorded, so its spend lands in the next completed
+  // turn of the session — counted once, on the later turn's day and author.
+  let costEntry: ReturnType<typeof recordTurnCost> = null;
+  try {
+    costEntry = recordTurnCost({
+      projectId,
+      marvinSessionId,
+      tokenUsage: result.tokenUsage ?? null,
+      model,
+      advisorModel: advisorModel ?? null,
+      ...(authMode ? { authMode } : {}),
+      ...(estimateUsd !== undefined ? { estimateUsd } : {}),
+      sdk: {
+        sessionId: result.sessionId ?? null,
+        totalCostUsd: result.costUsd ?? null,
+        modelUsage: result.modelUsage ?? null,
+      },
+    });
+  } catch (err) {
+    console.warn("[marvin.cost] could not record turn cost:", err instanceof Error ? err.message : err);
+  }
+  const finalCostUsd = costEntry && costEntry.costKind !== "unknown" ? costEntry.costUsd : null;
 
   appendSessionTurn(projectId, marvinSessionId, {
     type: "turn.completed",
@@ -509,12 +532,6 @@ export async function runDetachedTurn(params: DetachedTurnParams): Promise<void>
   } catch {
     /* naming is cosmetic; never fail a completed turn on it */
   }
-  recordTurnCost({
-    projectId,
-    marvinSessionId,
-    costUsd: finalCostUsd,
-    tokenUsage: result.tokenUsage ?? null,
-  });
   // ADR-0127 §6 — a tab turn the supervisor started spends against its cap.
   // Counted for turns that complete; a failed turn's cost is not reported here.
   if (liveTurn.author === "supervisor") noteSupervisorTabSpend(projectId, finalCostUsd);

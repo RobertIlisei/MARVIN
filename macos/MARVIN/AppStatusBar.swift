@@ -421,14 +421,6 @@ private let statusBarPopoverEdge: Edge = .top
     /// at least one assistant turn has reported usage.
     /// The resolved running model id, preferring what the sidecar actually
     /// reports (carries the `[1m]` marker) over the user's picker selection.
-    /// True when Claude runs on the user's own Claude login (a Max / Pro
-    /// plan) rather than an API key — then the dollar figures are API-rate
-    /// estimates, not a bill, and the plan windows are the real usage.
-    private var onSubscription: Bool {
-        if case .online(let h) = health.state { return h.auth?.mode == "host-credentials" }
-        return false
-    }
-
     private var currentModelId: String? {
         if case .online(let h) = health.state, let m = h.model { return m }
         return bridge.executorModel
@@ -644,14 +636,14 @@ private let statusBarPopoverEdge: Edge = .top
                 HStack(spacing: 4) {
                     Image(systemName: "dollarsign.circle")
                         .font(.system(size: 10))
-                    Text(fmtCost(cost.today))
+                    Text(costChipText(cost))
                 }
                 .statusSegmentHitArea()
             }
             .buttonStyle(.plain)
-            .help("Spend today (this project) · click for history")
+            .help(costChipHelp(cost))
             .popover(isPresented: $costPopoverOpen, arrowEdge: statusBarPopoverEdge) {
-                CostHistoryPopover(summary: cost, subscription: onSubscription)
+                CostHistoryPopover(summary: cost)
             }
         }
     }
@@ -694,6 +686,23 @@ private let statusBarPopoverEdge: Edge = .top
     }
 
     // MARK: - Formatting
+
+    /// Today's figure for the mode that spent most, marked `≈` (a plan's
+    /// API-equivalent) or `~` (an estimate); `+N` when other modes spent too.
+    /// Never one sum across modes.
+    private func costChipText(_ cost: CostSummary) -> String {
+        let modes = cost.todayPeriod.modes
+        guard let first = modes.first else { return fmtCost(cost.today) }
+        let text = CostModeDisplay(key: first.key).chip(first.value.costUsd)
+        return modes.count > 1 ? "\(text) +\(modes.count - 1)" : text
+    }
+
+    private func costChipHelp(_ cost: CostSummary) -> String {
+        let plan = cost.account?.subscriptionType
+        let parts = cost.todayPeriod.modes.map { "\(CostModeDisplay(key: $0.key, plan: plan).title): \(CostModeDisplay(key: $0.key).chip($0.value.costUsd))" }
+        let today = parts.isEmpty ? "No turns today" : "Today (this project) — " + parts.joined(separator: "; ")
+        return today + " · click for history"
+    }
 
     private func fmtCost(_ v: Double) -> String {
         if v < 0.01 { return String(format: "$%.4f", v) }
