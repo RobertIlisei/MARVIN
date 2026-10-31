@@ -362,6 +362,16 @@ enum SurfaceSnapshot {
             Surface("sup-chat-send-edit-sheet", "Supervisor tab [7.2] — a send card's Edit… sheet (text only; no default action)", .fixture, widths: [460]) {
                 AnyView(SupervisorSendEditSheet(model: SurfaceSupervisorFixtures.model(nil), item: SurfaceSupervisorFixtures.sendItem, onClose: {}))
             },
+            // ADR-0129 — an image chip in the composer, and a Markdown reply under a message that carried an image.
+            Surface("sup-chat-composer-image", "Supervisor tab ADR-0129 — the composer with a pasted image chip and a file chip", .fixture, widths: [260, 420], height: 640) {
+                AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: nil),
+                                           draft: "Why does the retry tab's test fail like this?",
+                                           attachments: [ChatAttachment(kind: .image(absPath: SurfaceSupervisorFixtures.sampleImagePath)),
+                                                         ChatAttachment(kind: .file(absPath: "/tmp/project/src/http/retry.ts"))]))
+            },
+            Surface("sup-chat-reply-markdown", "Supervisor tab ADR-0129 — a sent image in the bubble; the reply as inert Markdown (list, code, a link shown as text)", .fixture, widths: [260, 420], height: 640) {
+                AnyView(SupervisorChatView(model: SurfaceSupervisorFixtures.imageChatModel(reply: SurfaceSupervisorFixtures.markdownReply)))
+            },
         ] + SurfaceSupervisorFixtures.chatStates.map { st in
             // ADR-0128 [7.2] — the cards in the Supervisor tab, at the chat column widths the brief names.
             Surface(st.id, st.title, .fixture, widths: [260, 420], height: 640) {

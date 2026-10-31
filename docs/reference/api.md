@@ -165,6 +165,16 @@ Milestone 5. The user's conversation with the supervisor. CSRF-guarded (POST) an
 
 **Milestone 7.3 (ADR-0128 §5):** a supervisor reply may be a follow's **report** — `kind: "report"`, `origin: { kind: "follow", followId }`, written only in a wake one of the followed tab's existing triggers started (a human or supervisor turn ended, a scope-met handoff, an escalation on the tab; never a machine turn or the idle timer). A reply may carry `refs` — `[{ kind: tab | ledger | item, id, label }]`, resolved by the server (unknown ids are dropped; `label` is the server's: a tab's title, a ledger line's verb, an item's raw-act summary). A report answers no user message. A new-tab item's `newTab` gains `delegation` (`answer-questions` by default) and `follow` (`{ until: scope-met | merge-ready }`); on the accept `edits.delegation` may lower it to `observe` or `off` (raising it answers `409 widening`), the tab is delegated before its first message is sent, and — unless `off` — followed. A `merge-ready` follow's merge card is an integration item with the follow's `origin`; settling or dismissing it ends the follow.
 
+**ADR-0129 — images.** The body may carry `images: [{ mediaType: image/png | image/jpeg, data: <base64> }]`:
+- At most 4 per message, each at most 3.75 MB decoded. The decoded bytes must match `mediaType`. The body limit is counted in bytes.
+- `text` may be empty when an image is present.
+- `imageText: [string]` is the app's on-device recognition of the images. It is scanned for secrets and then dropped; a match answers `400`.
+- Images are stored at mode 0600 under the data dir, and the record holds `attachments: [{ id, mediaType, bytes }]` with no path.
+- `GET` adds an absolute `path` to each attachment for the app (same machine, same user).
+- A wake sends its own messages' images to the model as image content, at most 8 per wake; the packet names any it left out.
+- An image is never consent and never a ground: a `message:` ground quotes the text.
+- Files are pruned once none of the last 100 messages names them.
+
 **Milestone 7.4 — the native client.** The app's pinned Supervisor tab is a client of these routes and adds none: it posts the composer to `POST /api/supervisor/message`, re-reads the `GET` on each `supervisor.message` event, fetches each reply's `items` from `GET /api/supervisor/inbox` and settles them through `POST /api/supervisor/inbox` (one item, two views: the chat and *Needs you*), lists `GET /api/supervisor/follows` with *Stop following* as the `stop` action, and, while the open inbox holds the budget `guardrail` item, shows it at the foot of the conversation with its `raise-cap` action (ADR-0128 §7). The reply's own text is drawn with every link removed; only `refs` are links.
 
 ### `GET /api/supervisor/follows?projectId=…` · `POST /api/supervisor/follows`

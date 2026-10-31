@@ -453,10 +453,6 @@ final class ChatNSTextView: NSTextView {
     /// user gave it across launches. The handle above the editor
     /// drives this; clamping happens in the drag gesture.
     @AppStorage("marvin.chat.editorHeight") private var editorHeight: Double = 120
-    /// Captured at drag start so the gesture's accumulated
-    /// translation lands on a stable baseline (DragGesture's
-    /// `translation` is total-since-start, not per-frame delta).
-    @State private var dragStartHeight: Double? = nil
 
     /// True while a Finder/Desktop drag is hovering over the input.
     /// Drives a visible drop-target outline so the user knows the
@@ -740,13 +736,26 @@ final class ChatNSTextView: NSTextView {
         }
     }
 
-    /// Drag handle above the editor — three pixels of grabber over
-    /// six pixels of hit area, vertical-resize cursor on hover.
-    /// Drag UP grows the editor (text area gets taller); drag DOWN
-    /// shrinks it. Clamped between 60 and 600 pt so a slip of the
-    /// mouse can't completely collapse the input or cover the whole
-    /// chat.
     private var resizeHandle: some View {
+        ComposerResizeHandle(height: $editorHeight, range: 60...600)
+    }
+}
+
+
+/// Drag handle above a composer's editor — three pixels of grabber over
+/// six pixels of hit area, vertical-resize cursor on hover. Drag UP grows the
+/// editor; drag DOWN shrinks it, clamped to `range` so a slip of the mouse
+/// can't collapse the input or cover the whole chat. Shared by the chat and
+/// the Supervisor tab (ADR-0129), so the two cannot drift.
+@MainActor struct ComposerResizeHandle: View {
+    @Binding var height: Double
+    let range: ClosedRange<Double>
+    /// Captured at drag start so the gesture's accumulated
+    /// translation lands on a stable baseline (DragGesture's
+    /// `translation` is total-since-start, not per-frame delta).
+    @State private var dragStartHeight: Double? = nil
+
+    var body: some View {
         Color.clear
             .frame(height: 6)
             .contentShape(Rectangle())
@@ -767,15 +776,15 @@ final class ChatNSTextView: NSTextView {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         if dragStartHeight == nil {
-                            dragStartHeight = editorHeight
+                            dragStartHeight = height
                         }
                         // Shared rule for bottom-anchored panes — see
                         // MARVINLogic.DragResize.
-                        editorHeight = DragResize.height(
-                            start: dragStartHeight ?? editorHeight,
+                        height = DragResize.height(
+                            start: dragStartHeight ?? height,
                             translation: Double(value.translation.height),
-                            min: 60,
-                            max: 600
+                            min: range.lowerBound,
+                            max: range.upperBound
                         )
                     }
                     .onEnded { _ in
@@ -786,14 +795,13 @@ final class ChatNSTextView: NSTextView {
             // now step it, so the input's height is not pointer-only.
             .accessibilityElement()
             .accessibilityLabel("Resize the message box")
-            .accessibilityValue("\(Int(editorHeight)) points")
+            .accessibilityValue("\(Int(height)) points")
             .accessibilityAdjustableAction { direction in
                 switch direction {
-                case .increment: editorHeight = min(600, editorHeight + 24)
-                case .decrement: editorHeight = max(60, editorHeight - 24)
+                case .increment: height = min(range.upperBound, height + 24)
+                case .decrement: height = max(range.lowerBound, height - 24)
                 @unknown default: break
                 }
             }
     }
 }
-

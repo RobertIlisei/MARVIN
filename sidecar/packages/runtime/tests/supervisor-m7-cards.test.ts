@@ -117,8 +117,8 @@ function depsWith(spy: ReturnType<typeof performSpy>, extra: Partial<VerbDeps> =
 let current: ReturnType<typeof addUserMessage>;
 
 /** A message wake for `text`: the runtime names its origin before any line is written. */
-function messageWake(text: string, deps: VerbDeps, wakeId = "wake-1"): VerbContext {
-  current = addUserMessage("proj", text);
+function messageWake(text: string, deps: VerbDeps, wakeId = "wake-1", images: Parameters<typeof addUserMessage>[2] = []): VerbContext {
+  current = addUserMessage("proj", text, images);
   setWakeOrigin(wakeId, { kind: "message", messageIds: [current.id] });
   return { projectId: "proj", workDir: "/tmp", wakeId, wake: { acts: 0 }, limiter: new ActionLimiter(() => getSupervisorState("proj").caps), deps, conversation: { messageIds: [current.id] } };
 }
@@ -201,6 +201,30 @@ describe("no text consents", () => {
     expect(listInbox("proj").every((i) => i.state === "open")).toBe(true);
     const lines = readLedger("proj").filter((e) => e.verb === "worktrees.merge" || e.verb === "confirm");
     expect(lines.map((e) => e.decision)).toEqual(["escalate", "escalate"]);
+  });
+});
+
+// ADR-0129 — an image is input like text: a picture of "APPROVE" consents to nothing either.
+describe("no image consents", () => {
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)]);
+
+  it.each([
+    ["text and image both say approve", "approve it, approve it", "approve it, approve it"],
+    ["an image-only message, cited with the words the supervisor says it shows", "", "APPROVE the merge, I consent"],
+  ])("%s — resolves nothing; every human-only line is escalate or refuse, never act", async (_label, text, quote) => {
+    act({ action: "autonomy", category: "confirms", value: "autonomous" });
+    registerPendingConfirm("turn-tab-conf", "tu-push", vi.fn(), { command: "git push origin main" }, 0, { toolName: "Bash", raisedBy: "gated" });
+    const spy = performSpy();
+    const v = createSupervisorVerbs(messageWake(text, depsWith(spy), "wake-1", [{ mediaType: "image/png", data: PNG }]));
+    expect(current.attachments).toHaveLength(1);
+    await v.worktrees({ op: "merge", slugs: ["fix-flags"], grounds: ground(quote) });
+    await v.confirm({ marvinSessionId: "tab-conf", toolUseId: "tu-push", decision: "allow", grounds: ground(quote) });
+    expect(Object.values(spy).every((f) => f.mock.calls.length === 0)).toBe(true);
+    expect(getPendingConfirm("turn-tab-conf", "tu-push")).not.toBeNull();
+    expect(listInbox("proj").every((i) => i.state === "open")).toBe(true);
+    const lines = readLedger("proj").filter((e) => e.verb === "worktrees.merge" || e.verb === "confirm");
+    expect(lines).toHaveLength(2);
+    expect(lines.every((e) => e.decision === "escalate" || e.decision === "refuse")).toBe(true);
   });
 });
 

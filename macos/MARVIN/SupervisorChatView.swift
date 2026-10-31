@@ -7,7 +7,22 @@ import SwiftUI
 /// control: from [7.2] the only buttons here are the inbox's own cards.
 @MainActor struct SupervisorChatView: View {
     @Bindable var model: SupervisorModel
+    @Environment(MarvinBridge.self) private var bridge
     @State private var draft = ""
+    /// ADR-0129 — the chips: images go as image content, other files as backticked paths.
+    @State private var attachments: [ChatAttachment] = []
+    /// Images the composer saved from the clipboard; removed once the server holds its own copy.
+    @State private var ownedImages: Set<String> = []
+    @State private var atPickerOpen = false
+    @State private var isDropTargeted = false
+    @AppStorage("marvin.supervisor.editorHeight") private var editorHeight: Double = 64
+
+    /// `draft` and `attachments` seed the composer (the surface snapshots); the tab opens empty.
+    init(model: SupervisorModel, draft: String = "", attachments: [ChatAttachment] = []) {
+        _model = Bindable(model)
+        _draft = State(initialValue: draft)
+        _attachments = State(initialValue: attachments)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,7 +101,7 @@ import SwiftUI
                         }
                         // §12.6 — the bubble shows at once, before the route answers.
                         if let pending = model.chatPending {
-                            row(SupervisorChatMessage(id: "pending", at: "", from: "user", text: pending)).id("pending")
+                            row(SupervisorChatMessage(id: "pending", at: "", from: "user", text: pending), pendingImages: model.chatPendingImages).id("pending")
                         }
                         if working {
                             workingRow.id("working")
@@ -110,14 +125,16 @@ import SwiftUI
         }
     }
 
-    @ViewBuilder private func row(_ m: SupervisorChatMessage) -> some View {
+    @ViewBuilder private func row(_ m: SupervisorChatMessage, pendingImages: [String] = []) -> some View {
         if m.isReply {
             replyRow(m)
         } else {
             VStack(alignment: .trailing, spacing: 2) {
-                // The user's words are drawn as the user's: the transcript's own bubble.
+                // The user's words are drawn as the user's: the transcript's own bubble, which
+                // renders each `@/path` image token as the picture (ADR-0129).
+                let images = pendingImages + (m.attachments ?? []).compactMap(\.path)
                 ChatMessageRow(message: ChatMessage(id: "sup-\(m.id)", role: .user,
-                                                    blocks: [.text(id: m.id, text: m.text)],
+                                                    blocks: [.text(id: m.id, text: SupervisorComposer.bubbleText(m.text, imagePaths: images))],
                                                     isStreaming: false, createdAt: Date()))
                 if m.id == "pending" {
                     Text("Sending…")
@@ -272,12 +289,9 @@ import SwiftUI
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                // Every link removed (ADR-0128 §3): plain `Text` over an AttributedString with no
-                // `.link` run, so nothing in a reply is clickable — `RichText` would autolink.
-                Text(SupervisorChat.neutralisedReply(m.text))
-                    .font(.body)
-                    .foregroundStyle(MarvinTheme.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // ADR-0128 §3 — Markdown with no actionable element: `inert` strips every link,
+                // detected ones included, and shows a hidden URL as text. Code blocks keep Copy.
+                MarkdownView(text: m.text, fillWidth: true, inert: true)
                 Text(Self.time(m.at))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -287,6 +301,13 @@ import SwiftUI
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(SupervisorChat.accessibilityLabel(m, reportTab: SupervisorChat.reportTab(m, follows: model.follows)))
+        // The transcript's own command: the whole reply, from the record, not from the rendered view.
+        .contextMenu {
+            Button("Copy Message") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(m.text, forType: .string)
+            }
+        }
     }
 
     // MARK: - The working indicator (§12.4)
@@ -329,50 +350,134 @@ import SwiftUI
 
     // MARK: - The composer (§12.3)
 
+    private var imagePaths: [String] {
+        attachments.compactMap { if case .image(let p) = $0.kind { return p } else { return nil } }
+    }
+
+    private var filePaths: [String] {
+        attachments.compactMap { if case .file(let p) = $0.kind { return p } else { return nil } }
+    }
+
+    private var composed: String { SupervisorComposer.compose(draft, files: filePaths, workDir: bridge.projectWorkDir) }
+
+    private var canSend: Bool {
+        SupervisorComposer.sendable(composed, images: imagePaths.count) != nil && !model.chatSending
+    }
+
+    /// ADR-0129 — a pasted or dropped file becomes a chip, the main chat's way: images as images.
+    private func attach(_ url: URL) {
+        let att = FileTypeIcon.kind(for: url.path) == .image
+            ? ChatAttachment(kind: .image(absPath: url.path))
+            : ChatAttachment(kind: .file(absPath: url.path))
+        attachments.append(att)
+    }
+
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 4) {
-            ZStack(alignment: .topLeading) {
-                // Return sends and never reaches anything else (ADR-0128 §1); ⇧Return is a newline.
-                // Transparent, and two lines tall: the editor's own fill drew an opaque 120 pt
-                // block over the placeholder (backlog, [7.3] renders).
-                ChatTextEditor(text: $draft, onSubmit: submit, isDisabled: model.chatSending, transparent: true)
-                    .frame(height: 64)
+        VStack(spacing: 4) {
+            ChatAttachmentsBar(attachments: $attachments)
+                // Inside the box's rounded border: flush, the first chip was cut at its edge (snapshot, 260 pt).
+                .padding(.horizontal, 8)
+                .padding(.top, attachments.isEmpty ? 0 : 6)
+            ComposerResizeHandle(height: $editorHeight, range: 44...400)
+            HStack(alignment: .bottom, spacing: 4) {
+                ZStack(alignment: .topLeading) {
+                    // Return sends and never reaches anything else (ADR-0128 §1); ⇧Return is a newline.
+                    // Transparent: the editor's own fill drew an opaque block over the placeholder
+                    // (backlog, [7.3] renders).
+                    ChatTextEditor(
+                        text: $draft, onSubmit: submit, isDisabled: model.chatSending,
+                        onImagePaste: { image in
+                            guard let url = ClipboardImage.savePNG(image) else { return false }
+                            ownedImages.insert(url.path)
+                            attachments.append(ChatAttachment(kind: .image(absPath: url.path)))
+                            return true
+                        },
+                        onFilePaste: { urls in
+                            urls.forEach(attach)
+                            return true
+                        },
+                        onAtTrigger: {
+                            guard bridge.projectWorkDir != nil else { return false }
+                            atPickerOpen = true
+                            return true
+                        },
+                        transparent: true
+                    )
+                    .frame(minHeight: 44, idealHeight: editorHeight, maxHeight: editorHeight)
                     .accessibilityLabel("Message the supervisor")
-                if draft.isEmpty {
-                    // Drawn over the editor, inset to its text (6 pt container + 5 pt line padding, 8 pt top).
-                    Text("Message the supervisor — it can propose, never consent for you")
-                        .font(.body)
-                        // .secondary, not the chat's .tertiary: this placeholder carries the consent rule (~2:1 → ~4.5:1).
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .padding(.leading, 11)
-                        .padding(.trailing, 4)
-                        .padding(.top, 8)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+                    .help("⏎ send · ⇧⏎ new line · paste or drop an image or file · @ a project file")
+                    if draft.isEmpty && attachments.isEmpty {
+                        // Drawn over the editor, inset to its text (6 pt container + 5 pt line padding, 8 pt top).
+                        Text("Message the supervisor — it can propose, never consent for you")
+                            .font(.body)
+                            // .secondary, not the chat's .tertiary: this placeholder carries the consent rule (~2:1 → ~4.5:1).
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .padding(.leading, 11)
+                            .padding(.trailing, 4)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .opacity(model.chatSending ? 0.55 : 1)
+                VStack(spacing: 6) {
+                    Button { atPickerOpen = true } label: {
+                        Image(systemName: "paperclip").font(.system(size: 13))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(bridge.projectWorkDir == nil || model.chatSending)
+                    .help("Attach a project file (or type @)")
+                    .accessibilityLabel("Attach a project file")
+                    Button(action: submit) {
+                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 20))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .accessibilityLabel("Send to the supervisor")
+                }
+                .padding(.trailing, 6)
+                .padding(.bottom, 6)
+            }
+        }
+        // The chat composer's box: elevated fill, radius 10, a hairline border — the accent while a file hovers.
+        .background(MarvinTheme.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isDropTargeted ? Color.accentColor : MarvinTheme.border, lineWidth: isDropTargeted ? 2 : 1)
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            var accepted = false
+            for provider in providers where provider.canLoadObject(ofClass: URL.self) {
+                accepted = true
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.isFileURL else { return }
+                    Task { @MainActor in attach(url) }
                 }
             }
-            .opacity(model.chatSending ? 0.55 : 1)
-            Button(action: submit) {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 20))
-            }
-            .buttonStyle(.plain)
-            .disabled(SupervisorChat.sendable(draft) == nil || model.chatSending)
-            .padding(.trailing, 6)
-            .padding(.bottom, 6)
-            .accessibilityLabel("Send to the supervisor")
+            return accepted
         }
-        // The chat composer's box: elevated fill, radius 10, a hairline border.
-        .background(MarvinTheme.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(MarvinTheme.border, lineWidth: 1))
+        .sheet(isPresented: $atPickerOpen) {
+            FileMentionPicker { picked in
+                if let picked { attachments.append(ChatAttachment(kind: .file(absPath: picked))) }
+                atPickerOpen = false
+            }
+        }
     }
 
     private func submit() {
-        let text = draft
-        guard SupervisorChat.sendable(text) != nil else { return }
+        let text = composed
+        let images = imagePaths
+        guard SupervisorComposer.sendable(text, images: images.count) != nil else { return }
         Task {
-            // A refused send keeps the text: nothing the user typed is lost (§12.3).
-            if await model.sendChat(text) { draft = "" }
+            // A refused send keeps the text and the chips: nothing the user gave is lost (§12.3).
+            guard await model.sendChat(text, imagePaths: images) else { return }
+            draft = ""
+            attachments = []
+            // The server holds its own copy now; the clipboard copies the composer made are spent.
+            for p in images where ownedImages.contains(p) { try? FileManager.default.removeItem(atPath: p) }
+            ownedImages.subtract(images)
         }
     }
 

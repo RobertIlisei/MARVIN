@@ -81,11 +81,14 @@ The pinned **Supervisor** tab is a conversation with the supervisor. Ask it how 
 
 **The chat card is the inbox item.** It is not a copy. The same item is in *Needs you* in the Sessions pane, and settling it in either place settles both: the card collapses to one line ("Done — you merged …", or that it was settled elsewhere), and a second click is refused. A card that sends a message into a tab can be edited first, and what arrives is still the supervisor's message, marked as edited by you. A tab at `observe` gets a card instead of a refusal, and the card names the level. A tab you set to `off` gets nothing; the reply says so.
 
+**Images and files.** Paste a screenshot (⌘V), drop an image or a file on the composer, type `@` or click the paperclip to pick a project file. Images appear as chips, are scaled to 1568 px on their long edge and sent as images the supervisor can see: up to four per message, PNG or JPEG. They are stored under MARVIN's data directory (never your repository) while one of the last 100 messages shows them. Before sending, MARVIN reads any text in the images on your Mac and refuses the message if it looks like a key or token. Other files go as their project path, which the supervisor can read only if it is inside the project. The supervisor's replies render as Markdown, with code blocks you can copy and **Copy Message** on right-click.
+
 **Follow.** Ask for a tab to be opened "and merged when it's done", and the new-tab card opens it at the posture and delegation you confirm, then **follows** it. While it follows, the supervisor reports in the chat when the tab hits its scope-met handoff, with links to the tab and the card, and for a merge, raises the merge card when the tab is ready. Nothing merges before your click. A chip above the composer lists each open follow with **Stop following**. At most five run at once, and a follow ends when its merge is settled or dismissed, its tab closes, or you stop it.
 
 **What is never consent:**
 
 - anything you type, in this tab or any other;
+- an image you attach. An image, even a picture of "approve", is input like your words, and the supervisor cannot cite it as grounds for anything ([ADR-0129](../decisions/0129-images-in-the-supervisor-conversation.md));
 - anything the supervisor writes, including a message it sends into a tab: a tab reads it as the supervisor's, never as yours;
 - a recommendation on a card;
 - a link in a reply. A reply's own text carries no links: a URL in it is inert text, and only the links the server resolved (a tab, a log line, a card) are clickable.
