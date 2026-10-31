@@ -625,8 +625,12 @@ enum BacklogGroup: String, CaseIterable, Identifiable {
                         .help("Open details")
                 }
                 if !item.body.isEmpty {
+                    // Not selectable: a click on selectable text draws all of it
+                    // while its frame stays three lines tall, so lines 4+ were
+                    // drawn under the actions. The click opens Details instead,
+                    // where the whole body is shown and can be selected.
                     Text(item.body).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(3).textSelection(.enabled)
+                        .lineLimit(3)
                 }
                 findingAnnotations(itemFindings)
                 // Two actions in the row, the rest behind "…": five buttons of one
