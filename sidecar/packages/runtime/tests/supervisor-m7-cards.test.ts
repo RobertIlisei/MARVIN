@@ -272,7 +272,7 @@ describe("a reply lists only its own wake's items", () => {
     const ctx = messageWake("Merge tab fix-flags into development please", depsWith(performSpy()));
     const v = createSupervisorVerbs(ctx);
     await v.worktrees({ op: "merge", slugs: ["fix-flags"], grounds: ground("Merge tab fix-flags") });
-    const own = listInbox("proj").find((i) => i.origin?.messageIds[0] === current.id)!;
+    const own = listInbox("proj").find((i) => i.origin?.kind === "message" && i.origin.messageIds[0] === current.id)!;
     expect(await v.reply({ text: "Here is the merge you asked for.", items: [own.id, foreign.id, tabItem.id, "made-up", own.id] })).toBe("Sent to the user.");
     const reply = listMessages("proj").find((m) => m.from === "supervisor");
     expect(reply?.items).toEqual([own.id]);

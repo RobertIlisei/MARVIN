@@ -86,6 +86,6 @@ describe("one message, one reply, end to end", () => {
     expect(got.messages[1]).toMatchObject({ text: "Read you: What is tab-1 doing?", origin: { messageIds: [id] } });
     const wakeLines = readLedger(P).filter((e) => e.wakeId);
     expect(wakeLines.length).toBeGreaterThan(0);
-    expect(wakeLines.every((e) => JSON.stringify(e.origin?.messageIds) === JSON.stringify([id]))).toBe(true);
+    expect(wakeLines.every((e) => e.origin?.kind === "message" && JSON.stringify(e.origin.messageIds) === JSON.stringify([id]))).toBe(true);
   });
 });

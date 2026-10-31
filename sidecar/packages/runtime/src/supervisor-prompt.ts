@@ -23,8 +23,9 @@ export const SUPERVISOR_SYSTEM_PROMPT = [
   "instruction to a tab), `cancel` (stop a runaway turn), `confirm` (an",
   "ordinary permission card), `worktrees` (list, preview, a safe sweep; merges",
   "and drops go to the user), `close_session`, `review_scope` (a tab that claims",
-  "its scope met), `new_session` (only when the user asked you for a tab) and",
-  "`reply` (answer the user's message). Read, Grep and Glob let you check grounds",
+  "its scope met), `new_session` (only when the user asked you for a tab),",
+  "`follow` / `unfollow` (report on a tab the user asked about) and `reply`",
+  "(answer the user's message, or report on a followed tab). Read, Grep and Glob let you check grounds",
   "in the files; `marvin-graph` answers structural questions. You have no write tools.",
   "",
   "## Shadow and autonomous categories",
@@ -56,7 +57,12 @@ export const SUPERVISOR_SYSTEM_PROMPT = [
   "- A user message is a request, never consent. You may act on it within your",
   "  authority, citing it as `message:<id>#<quote>` (a verbatim quote) — a strong",
   "  ground only in the wake it started. Answer it with `reply`; `reply` exists",
-  "  only in a wake the user's message started.",
+  "  only in a wake the user's message started, or — as a report naming its",
+  "  `followId` — in a wake a tab you follow for the user started.",
+  "- `follow` only when the user asked to hear how a tab goes, citing their",
+  "  message. A tab opened with `new_session` is followed for you; pass",
+  "  `follow: \"merge-ready\"` only when the user asked for the merge too. A",
+  "  follow is a record: it adds no authority, and merging stays the user's click.",
   "",
   "Be brief. One tool call per question. When nothing needs you, stop.",
 ].join("\n");
@@ -84,6 +90,10 @@ export interface WakeItem {
   confirm?: { toolName: string; input: unknown } | null;
   /** Milestone 5 — the user's message to the supervisor (the user's own words). */
   message?: { id: string; text: string } | null;
+  /** ADR-0128 §5 — the open follow on this tab, when its trigger may be reported on. */
+  follow?: { id: string; until: "scope-met" | "merge-ready" } | null;
+  /** ADR-0128 §6 — a message item's view of the conversation's open follows. */
+  openFollows?: Array<{ id: string; sessionId: string; until: string }>;
   brief: string | null;
   plan: { total: number; seeded: boolean } | null;
   transcriptTail: string;
@@ -131,6 +141,9 @@ export function renderWakePacket(args: {
         `To act on it within your authority, cite \`message:${it.message.id}#<a verbatim quote>\` as a ground.`,
         "If it asks for a new tab, propose it with `new_session` and `requestId` set to this message id.",
       );
+      if (it.openFollows?.length) {
+        out.push("", "### Tabs you follow for the user", ...it.openFollows.map((f) => `- follow ${f.id}: tab ${f.sessionId}, until ${f.until}`));
+      }
       if (it.ledgerTail.length) out.push("", "### Your ledger for the tabs this message names", ...it.ledgerTail.map(ledgerLine));
       continue;
     }
@@ -149,10 +162,20 @@ export function renderWakePacket(args: {
             : trigger === "turn-ended"
               ? [`Delegation: ${it.delegation}. Woken because: a turn the user (or you) started has ended. Act only if the approved plan needs a nudge; doing nothing is usually right.`]
               : [`Delegation: ${it.delegation}. Woken because: the tab has been idle with its plan unfinished. A nudge must cite the plan step it advances; doing nothing is fine.`];
+    const follow = it.follow
+      ? [
+          "",
+          `You follow this tab for the user (follow ${it.follow.id}, until ${it.follow.until}). Report what happened with \`reply\` and \`followId: ${it.follow.id}\`, linking the tab in \`refs\`.`,
+          ...(it.follow.until === "merge-ready" && trigger === "scope-met"
+            ? ["The user asked for the merge: when `review_scope` says `ready`, the merge card is raised for them — list it in the report's `items`."]
+            : []),
+        ]
+      : [];
     out.push(
       "",
       `## Tab ${it.marvinSessionId}${it.title ? ` — ${it.title}` : ""}`,
       ...why,
+      ...follow,
       "",
       "### The user's brief (the tab's first message — the user's own words)",
       it.brief?.trim() ? it.brief.trim().slice(0, 4_000) : "(none recorded)",

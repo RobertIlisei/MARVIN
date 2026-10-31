@@ -325,6 +325,21 @@ import SwiftUI
                 chatModel(ask: "Push the release branch.", reply: "Pushing leaves this Mac, so it's your click — review the act first:",
                           item: settled(pushItem, state: "resolved", by: "tab"))
             }),
+            ("sup-chat-report-follow", "Supervisor tab [7.3] — a follow's report with refs and its merge card, and the follow chip with Stop following", {
+                chatModel(ask: "Open a tab to add retry with backoff, and merge it when it's done.", reply: "It's open and I'm following it. I'll report back when it's done.", item: nil) { m in
+                    m.chat = [SupervisorChatMessage(id: "m-9", at: iso(30), from: "user", text: "Open a tab to add retry with backoff, and merge it when it's done."),
+                              SupervisorChatMessage(id: "r-9", at: iso(29.5), from: "supervisor", text: "It's open and I'm following it. I'll report back when it's done.",
+                                                    wakeId: "w-50", origin: .init(messageIds: ["m-9"])),
+                              SupervisorChatMessage(id: "r-10", at: iso(1), from: "supervisor",
+                                                    text: "The retry tab met its scope: every plan step is done and the tests pass. The merge you asked for is ready for your click.",
+                                                    kind: "report", wakeId: "w-61", origin: .init(followId: "f-1"), items: [mergeItem.id],
+                                                    refs: [.init(kind: "tab", id: SurfaceRoutesMore.openIds[0], label: "Add retry with backoff to the HTTP client"),
+                                                           .init(kind: "item", id: mergeItem.id, label: mergeItem.rawAct?.summary ?? "Merge")])]
+                    m.chatItems = [mergeItem.id: mergeItem]
+                    m.follows = [SupervisorFollow(id: "f-1", sessionId: SurfaceRoutesMore.openIds[0], tabTitle: "Add retry with backoff to the HTTP client", until: "merge-ready"),
+                                 SupervisorFollow(id: "f-2", sessionId: SurfaceRoutesMore.openIds[3], tabTitle: "Fix the flaky cache test", until: "scope-met")]
+                }
+            }),
             ("sup-chat-couldnt-answer", "Supervisor tab ADR-0128 §6 — a message the supervisor could not answer: Retry", {
                 chatModel(ask: "How far along is the retry tab?", reply: "", item: nil,
                           retry: .init(state: "failed", messageIds: ["m-9"], attempts: 4))

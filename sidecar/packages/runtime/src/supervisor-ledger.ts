@@ -87,9 +87,11 @@ export interface LedgerEntryInput {
   /**
    * ADR-0128 §7 — the user messages a message wake carried. Stamped by
    * `appendLedgerEntry` on every line of that wake, from `setWakeOrigin`: the
-   * runtime knows which wake a line is for, the model never labels it.
+   * runtime knows which wake a line is for, the model never labels it. A
+   * follow's report, its follow and the items raised for it carry
+   * `{kind: "follow", followId}` (ADR-0128 §7), also assigned by the runtime.
    */
-  origin?: { kind: "message"; messageIds: string[] };
+  origin?: { kind: "message"; messageIds: string[] } | { kind: "follow"; followId: string };
   /** ADR-0128 §4 — an inbox send the user edited before consenting. */
   editedByUser?: boolean;
 }
@@ -175,16 +177,17 @@ function titleOf(projectId: string, tab: string | null): string | null {
 }
 
 /** wakeId → the origin every line of that wake carries. Set by the loop for a message wake's lifetime. */
-const wakeOrigins = new Map<string, NonNullable<LedgerEntryInput["origin"]>>();
+type WakeOrigin = { kind: "message"; messageIds: string[] };
+const wakeOrigins = new Map<string, WakeOrigin>();
 
 /** The loop names a message wake's messages before the wake runs, and clears them after its last line. */
-export function setWakeOrigin(wakeId: string, origin: LedgerEntryInput["origin"] | null): void {
+export function setWakeOrigin(wakeId: string, origin: WakeOrigin | null): void {
   if (origin) wakeOrigins.set(wakeId, { kind: "message", messageIds: [...origin.messageIds] });
   else wakeOrigins.delete(wakeId);
 }
 
 /** The origin a running message wake's lines and inbox items carry, or null for any other wake. */
-export function wakeOriginOf(wakeId: string | null | undefined): NonNullable<LedgerEntryInput["origin"]> | null {
+export function wakeOriginOf(wakeId: string | null | undefined): WakeOrigin | null {
   const o = wakeId ? wakeOrigins.get(wakeId) : undefined;
   return o ? { kind: "message", messageIds: [...o.messageIds] } : null;
 }

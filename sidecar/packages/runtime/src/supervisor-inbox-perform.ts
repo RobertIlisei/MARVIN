@@ -22,6 +22,8 @@ import { answerQuestion, resolveConfirm } from "./confirm-answer";
 import { activeModelLookup, applyPostureChange } from "./posture";
 import { closeSession } from "./session-close";
 import { readSessionMeta, type SessionPosture, type SessionTree, upsertSessionMeta } from "./session-meta";
+import { openFollow } from "./supervisor-follows";
+import type { NewTabDelegation } from "./supervisor-inbox";
 import type { InboxPerform } from "./supervisor-inbox-actions";
 import type { LedgerGround } from "./supervisor-ledger";
 import { sendAsSupervisor } from "./supervisor-send";
@@ -45,8 +47,19 @@ const isSessionBusy = (id: string) => {
 export async function openSupervisorTab(
   projectId: string,
   workDir: string,
-  a: { firstMessage: string; title?: string | undefined; posture: SessionPosture; grounds: LedgerGround[]; ledgerId: string | null; editedByUser: boolean },
-): Promise<{ ok: true; marvinSessionId: string } | Failed> {
+  a: {
+    firstMessage: string;
+    title?: string | undefined;
+    posture: SessionPosture;
+    grounds: LedgerGround[];
+    ledgerId: string | null;
+    editedByUser: boolean;
+    /** ADR-0128 §5 — the delegation the user confirmed on the card, and the follow it opens. */
+    delegation?: NewTabDelegation | undefined;
+    follow?: { until: "scope-met" | "merge-ready"; requestId: string } | null | undefined;
+  },
+  token: string | null = null,
+): Promise<{ ok: true; marvinSessionId: string; message?: string } | Failed> {
   // Every opening counts against the spend cap (§6).
   if (overBudget(getSupervisorState(projectId))) return { ok: false, status: 409, code: "budget", error: "the supervisor's daily cap is reached — raise it first" };
   const marvinSessionId = randomUUID();
@@ -64,6 +77,16 @@ export async function openSupervisorTab(
     return { ok: false, status: 500, code: "meta-failed", error: "the tab's record could not be written; nothing was opened" };
   }
   announceProjectEvent({ event: "session.tree", data: { marvinSessionId, projectId, tree } });
+  // Delegated and followed before the first message is sent, so the turn it starts is already watched (ADR-0128 §5).
+  let note: string | undefined;
+  if (a.delegation && a.delegation !== "off") {
+    const d = applySupervisorAction({ projectId, action: "delegate", marvinSessionId, level: a.delegation }, token);
+    if (!d.ok) note = `not delegated: ${d.error}`;
+    else if (a.follow) {
+      const f = openFollow(projectId, { sessionId: marvinSessionId, until: a.follow.until, requestId: a.follow.requestId });
+      if (!f.ok) note = `not followed: ${f.open.length} follows are already open — stop one to follow this tab`;
+    }
+  }
   const sent = await sendAsSupervisor({
     projectId,
     marvinSessionId,
@@ -74,7 +97,7 @@ export async function openSupervisorTab(
     ...(a.editedByUser ? { editedByUser: true } : {}),
   });
   if (!sent.ok) return { ok: false, status: 409, code: sent.code, error: `the tab opened, but its first message was refused: ${sent.reason}` };
-  return { ok: true, marvinSessionId };
+  return { ok: true, marvinSessionId, ...(note ? { message: note } : {}) };
 }
 
 export function defaultInboxPerform(projectId: string, workDir: string, token: string | null): InboxPerform {
@@ -128,7 +151,7 @@ export function defaultInboxPerform(projectId: string, workDir: string, token: s
         ? { ok: true, message: String(out.body.message ?? "closed") }
         : { ok: false, status: out.status, error: String(out.body.error ?? "could not close"), ...(typeof out.body.code === "string" ? { code: out.body.code } : {}) };
     },
-    openTab: (a) => openSupervisorTab(projectId, workDir, a),
+    openTab: (a) => openSupervisorTab(projectId, workDir, a, token),
     supervisor: (a) => applySupervisorAction({ projectId, ...a }, token),
     modelLookup: activeModelLookup,
   };

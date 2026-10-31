@@ -25,23 +25,44 @@ import { announceProjectEvent } from "./turn-registry";
 
 export const MAX_USER_MESSAGE_CHARS = 4_000;
 
-/** Which messages a wake was for. Milestone [7.3] adds `{kind: "follow", followId}`. */
+/** Which messages a wake was for. */
 export interface MessageOrigin {
   kind: "message";
   messageIds: string[];
 }
+
+/** ADR-0128 §5 — a report's origin: the follow whose tab's trigger started the wake. */
+export interface FollowOrigin {
+  kind: "follow";
+  followId: string;
+}
+
+export type ReplyOrigin = MessageOrigin | FollowOrigin;
+
+/** ADR-0128 §5 — what a reply links to, resolved by the server. `label` is server-built, never the supervisor's prose. */
+export interface MessageRef {
+  kind: "tab" | "ledger" | "item";
+  id: string;
+  label: string;
+}
+
+export const MAX_REPLY_REFS = 10;
 
 export interface SupervisorMessage {
   id: string;
   at: string;
   from: "user" | "supervisor";
   text: string;
+  /** `report`: a follow's report — the one reply with no user message before it (ADR-0128 §5). */
+  kind?: "report";
   /** A reply's wake (ADR-0128 §5). */
   wakeId?: string;
-  /** A reply's origin: the user messages its wake carried. */
-  origin?: MessageOrigin;
-  /** ADR-0128 §3 — the inbox items this reply's wake raised for its messages, filtered by the server. Rendered as cards under it. */
+  /** A reply's origin: the user messages its wake carried, or the follow it reports on. */
+  origin?: ReplyOrigin;
+  /** ADR-0128 §3 — the inbox items this reply's wake raised for its messages or follow, filtered by the server. Rendered as cards under it. */
   items?: string[];
+  /** ADR-0128 §5 — tabs, ledger lines and inbox items the reply mentions; only the ones the server resolved. */
+  refs?: MessageRef[];
 }
 
 export function messagesPath(projectId: string): string {
@@ -62,8 +83,21 @@ function append(projectId: string, m: SupervisorMessage): SupervisorMessage {
   return m;
 }
 
-const validOrigin = (o: unknown): o is MessageOrigin =>
-  !!o && typeof o === "object" && (o as MessageOrigin).kind === "message" && Array.isArray((o as MessageOrigin).messageIds) && (o as MessageOrigin).messageIds.every((x) => typeof x === "string");
+function readOrigin(o: unknown): ReplyOrigin | null {
+  if (!o || typeof o !== "object") return null;
+  const r = o as Record<string, unknown>;
+  if (r.kind === "message" && Array.isArray(r.messageIds) && r.messageIds.every((x) => typeof x === "string")) return { kind: "message", messageIds: [...(r.messageIds as string[])] };
+  if (r.kind === "follow" && typeof r.followId === "string" && r.followId) return { kind: "follow", followId: r.followId };
+  return null;
+}
+
+function readRefs(v: unknown): MessageRef[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((r): r is MessageRef => !!r && typeof r === "object" && ["tab", "ledger", "item"].includes((r as MessageRef).kind) && typeof (r as MessageRef).id === "string" && typeof (r as MessageRef).label === "string")
+    .slice(0, MAX_REPLY_REFS)
+    .map((r) => ({ kind: r.kind, id: r.id, label: r.label }));
+}
 
 export function listMessages(projectId: string, opts: { limit?: number } = {}): SupervisorMessage[] {
   const p = messagesPath(projectId);
@@ -74,14 +108,18 @@ export function listMessages(projectId: string, opts: { limit?: number } = {}): 
     try {
       const m = JSON.parse(line) as SupervisorMessage;
       if (!m?.id || (m.from !== "user" && m.from !== "supervisor") || typeof m.text !== "string") continue;
+      const origin = readOrigin(m.origin);
+      const refs = readRefs(m.refs);
       out.push({
         id: m.id,
         at: m.at,
         from: m.from,
         text: m.text,
+        ...(m.from === "supervisor" && m.kind === "report" ? { kind: "report" as const } : {}),
         ...(typeof m.wakeId === "string" ? { wakeId: m.wakeId } : {}),
-        ...(validOrigin(m.origin) ? { origin: { kind: "message", messageIds: [...m.origin.messageIds] } } : {}),
+        ...(origin ? { origin } : {}),
         ...(Array.isArray(m.items) && m.items.length && m.items.every((x) => typeof x === "string") ? { items: [...m.items] } : {}),
+        ...(refs.length ? { refs } : {}),
       });
     } catch {
       /* a torn final line */
@@ -94,14 +132,23 @@ export function addUserMessage(projectId: string, text: string): SupervisorMessa
   return append(projectId, { id: randomUUID(), at: new Date().toISOString(), from: "user", text: text.slice(0, MAX_USER_MESSAGE_CHARS) });
 }
 
-export function addSupervisorReply(projectId: string, text: string, wake?: { wakeId: string; origin: MessageOrigin; items?: readonly string[] | undefined }): SupervisorMessage {
+export function addSupervisorReply(
+  projectId: string,
+  text: string,
+  wake?: { wakeId: string; origin: ReplyOrigin; items?: readonly string[] | undefined; refs?: readonly MessageRef[] | undefined },
+): SupervisorMessage {
+  const origin = wake ? readOrigin(wake.origin) : null;
+  const refs = readRefs(wake?.refs);
   return append(projectId, {
     id: randomUUID(),
     at: new Date().toISOString(),
     from: "supervisor",
     text: text.slice(0, MAX_USER_MESSAGE_CHARS),
-    ...(wake ? { wakeId: wake.wakeId, origin: { kind: "message", messageIds: [...wake.origin.messageIds] } } : {}),
+    ...(origin?.kind === "follow" ? { kind: "report" as const } : {}),
+    ...(wake ? { wakeId: wake.wakeId } : {}),
+    ...(origin ? { origin } : {}),
     ...(wake?.items?.length ? { items: [...wake.items] } : {}),
+    ...(refs.length ? { refs } : {}),
   });
 }
 
@@ -121,8 +168,9 @@ export function unansweredUserMessages(projectId: string): SupervisorMessage[] {
   let legacyCut = -1;
   all.forEach((m, i) => {
     if (m.from !== "supervisor") return;
-    if (m.origin) for (const id of m.origin.messageIds) answered.add(id);
-    else legacyCut = i;
+    // A follow's report answers no user message.
+    if (m.origin?.kind === "message") for (const id of m.origin.messageIds) answered.add(id);
+    else if (!m.origin) legacyCut = i;
   });
   return all.filter((m, i) => m.from === "user" && i > legacyCut && !answered.has(m.id));
 }

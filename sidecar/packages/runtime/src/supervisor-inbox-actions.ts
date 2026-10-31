@@ -21,7 +21,8 @@
 import { classifyPostureChange, type ModelLookup, type PosturePatch, validatePosturePatch } from "./posture";
 import { containsSecretShape } from "./session";
 import type { SessionPosture } from "./session-meta";
-import { actionsFor, getInboxItem, type InboxAction, type InboxRecord, isInboxInFlight, listInbox, markInboxInFlight, settleInboxItem } from "./supervisor-inbox";
+import { endFollows } from "./supervisor-follows";
+import { actionsFor, getInboxItem, type InboxAction, type InboxRecord, isInboxInFlight, listInbox, markInboxInFlight, NEW_TAB_DELEGATIONS, type NewTabDelegation, settleInboxItem } from "./supervisor-inbox";
 import { appendLedgerEntry, type LedgerGround } from "./supervisor-ledger";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import type { SupervisorActionResult } from "./supervisor-state";
@@ -47,7 +48,17 @@ export interface InboxPerform {
   worktrees(a: { op: "merge" | "merge-all" | "prepare-mr" | "drop"; slugs: string[]; push?: boolean | undefined; openMergeRequest?: boolean | undefined }): Promise<Done>;
   close(a: { sessionId: string; worktree: "keep" | "merge" | "discard" }): Promise<Done>;
   /** ADR-0122's atomic path: a fresh worktree or a refusal, nothing in between. */
-  openTab(a: { firstMessage: string; title?: string | undefined; posture: SessionPosture; grounds: LedgerGround[]; ledgerId: string | null; editedByUser: boolean }): Promise<{ ok: true; marvinSessionId: string } | Failed>;
+  openTab(a: {
+    firstMessage: string;
+    title?: string | undefined;
+    posture: SessionPosture;
+    grounds: LedgerGround[];
+    ledgerId: string | null;
+    editedByUser: boolean;
+    /** ADR-0128 §5 — set as the user's act on the accept, before the first message. */
+    delegation?: NewTabDelegation | undefined;
+    follow?: { until: "scope-met" | "merge-ready"; requestId: string } | null | undefined;
+  }): Promise<{ ok: true; marvinSessionId: string; message?: string } | Failed>;
   /** The supervisor's own controls a guardrail item offers: resume, raise the cap. */
   supervisor(a: { action: "resume" } | { action: "cap"; capUsd: number }): SupervisorActionResult;
   modelLookup(): Promise<ModelLookup>;
@@ -144,8 +155,17 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
           return fail(409, `an edit may only narrow the posture shown: ${widened.map((c) => `${c.field} ${c.from ?? "?"} → ${c.to}`).join("; ")}`, "widening");
         }
         posture = { ...posture, ...valid.patch } as SessionPosture;
-      } else if (action.id === "edit" && edits.firstMessage === undefined && edits.title === undefined) {
-        return fail(400, "an edit changes the first message, the title or the posture");
+      } else if (action.id === "edit" && edits.firstMessage === undefined && edits.title === undefined && edits.delegation === undefined) {
+        return fail(400, "an edit changes the first message, the title, the posture or the delegation");
+      }
+      // ADR-0128 §5 — the card's delegation may only be lowered: answer-questions → observe → off.
+      const shown: NewTabDelegation = act.delegation ?? "off";
+      let delegation = shown;
+      if (edits.delegation !== undefined) {
+        const want = NEW_TAB_DELEGATIONS.indexOf(edits.delegation as NewTabDelegation);
+        if (want === -1) return fail(400, `edits.delegation must be one of ${NEW_TAB_DELEGATIONS.join(", ")}`);
+        if (want < NEW_TAB_DELEGATIONS.indexOf(shown)) return fail(409, `an edit may only lower the delegation shown (${shown})`, "widening");
+        delegation = NEW_TAB_DELEGATIONS[want] as NewTabDelegation;
       }
       const proposed = item.newTab?.firstMessage ?? "";
       let firstMessage = proposed;
@@ -158,8 +178,18 @@ async function perform(projectId: string, item: InboxRecord, action: InboxAction
       if (!firstMessage) return fail(409, "the item has no first message");
       if (containsSecretShape(firstMessage)) return fail(400, "the first message carries a secret-shaped string (ADR-0127 §6)");
       const title = typeof edits.title === "string" ? edits.title.trim().slice(0, 120) : act.title;
-      const opened = await p.openTab({ firstMessage, ...(title ? { title } : {}), posture, grounds: act.grounds, ledgerId: item.ledgerId, editedByUser: firstMessage !== proposed });
-      return opened.ok ? { ok: true, marvinSessionId: opened.marvinSessionId } : opened;
+      const opened = await p.openTab({
+        firstMessage,
+        ...(title ? { title } : {}),
+        posture,
+        grounds: act.grounds,
+        ledgerId: item.ledgerId,
+        editedByUser: firstMessage !== proposed,
+        delegation,
+        // An off tab cannot be read, so it is not followed (ADR-0128 §4).
+        follow: act.follow && delegation !== "off" ? { until: act.follow.until, requestId: act.requestId } : null,
+      });
+      return opened.ok ? { ok: true, marvinSessionId: opened.marvinSessionId, ...(opened.message ? { message: opened.message } : {}) } : opened;
     }
     default:
       return fail(409, "unknown act");
@@ -180,6 +210,7 @@ export async function actOnInboxItem(projectId: string, req: InboxActionRequest,
   if (action.role === "dismiss") {
     const settled = settleInboxItem(projectId, item.id, { state: "dismissed", resolvedBy: "user" });
     if (!settled) return fail(409, "the item was settled a moment ago");
+    endFollowFor(projectId, item, "merge-dismissed");
     note(projectId, item, action);
     return { ok: true, item: settled, outcome: {} };
   }
@@ -190,10 +221,22 @@ export async function actOnInboxItem(projectId: string, req: InboxActionRequest,
     const done = await perform(projectId, item, action, edits, p);
     if (!done.ok) return done;
     const settled = settleInboxItem(projectId, item.id, { state: "resolved", resolvedBy: "user" }) ?? getInboxItem(projectId, item.id) ?? item;
+    endFollowFor(projectId, item, "merge-settled");
     note(projectId, item, action, done.marvinSessionId, done.editedByUser === true);
     return { ok: true, item: settled, outcome: { ...(done.message ? { message: done.message } : {}), ...(done.marvinSessionId ? { marvinSessionId: done.marvinSessionId } : {}) } };
   } finally {
     markInboxInFlight(item.id, false);
+  }
+}
+
+/** ADR-0128 §5 — a `merge-ready` follow ends when its merge card is settled or dismissed. */
+function endFollowFor(projectId: string, item: InboxRecord, how: "merge-settled" | "merge-dismissed"): void {
+  const o = item.origin;
+  if (o?.kind !== "follow" || item.act?.type !== "worktrees") return;
+  try {
+    endFollows(projectId, (f) => f.id === o.followId && f.until === "merge-ready", how);
+  } catch {
+    /* the act happened; the follow ends at the tab's close at the latest */
   }
 }
 

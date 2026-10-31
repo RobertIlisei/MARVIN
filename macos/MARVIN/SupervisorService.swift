@@ -164,6 +164,17 @@ final class SupervisorService {
     func sendMessage(projectId: String, text: String) async throws {
         _ = try await call("api/supervisor/message", method: "POST", body: ["projectId": projectId, "text": text])
     }
+
+    // [7.3] — what the supervisor follows for the user, and the user's Stop following.
+    func follows(projectId: String) async throws -> [SupervisorFollow] {
+        let data = try await call("api/supervisor/follows", query: [URLQueryItem(name: "projectId", value: projectId)])
+        do { return try JSONDecoder().decode(SupervisorFollows.self, from: data).follows }
+        catch { throw SupervisorServiceError.transport("unreadable follows") }
+    }
+
+    func stopFollow(projectId: String, id: String) async throws {
+        _ = try await call("api/supervisor/follows", method: "POST", body: ["projectId": projectId, "id": id, "action": "stop"])
+    }
 }
 
 /// What the Sessions pane draws for the supervisor, in one observable place.
@@ -241,6 +252,8 @@ final class SupervisorModel {
     var chatSelected = false
     /// [7.2] — the inbox items replies list, by id, in any state: open ones are cards, settled ones one line.
     var chatItems: [String: SupervisorInboxItem] = [:]
+    /// [7.3] — `GET /api/supervisor/follows`: open follows first, then recently ended.
+    var follows: [SupervisorFollow] = []
 
     /// Brief §12.1 — the pinned tab exists only while the supervisor is on.
     var chatTabVisible: Bool { SupervisorChat.tabVisible(mode: status?.mode) }
@@ -252,10 +265,55 @@ final class SupervisorModel {
             guard projectId == pid else { return }
             chat = lines
             await refreshChatItems()
+            await refreshFollows()
         } catch SupervisorServiceError.token(let path) {
             tokenError = path
         } catch {
             NSLog("[SupervisorModel] conversation failed: \(error)")
+        }
+    }
+
+    /// [7.3] — the follow chips. Ended ones stay listed so a report can still name its tab.
+    func refreshFollows() async {
+        guard !offline, let pid = projectId, chatTabVisible else { return }
+        do {
+            let all = try await SupervisorService.shared.follows(projectId: pid)
+            guard projectId == pid else { return }
+            follows = all
+        } catch {
+            NSLog("[SupervisorModel] follows failed: \(error)")
+        }
+    }
+
+    /// The user's *Stop following* — a record ends; no confirm, nothing else changes.
+    func stopFollowing(_ f: SupervisorFollow) async {
+        guard let pid = projectId else { return }
+        do {
+            try await SupervisorService.shared.stopFollow(projectId: pid, id: f.id)
+            chatError = nil
+            VoiceOver.announce("Stopped following \(f.tabTitle ?? "the tab")")
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            chatError = message
+        } catch {
+            chatError = "Could not stop following — the sidecar did not answer."
+        }
+        await refreshFollows()
+    }
+
+    /// [7.3] — a ref under a reply: a tab opens; a card or a log line is shown in the Sessions pane.
+    func open(ref: SupervisorChatMessage.Ref) {
+        switch SupervisorChat.refTarget(ref) {
+        case .tab(let id):
+            MarvinBridge.shared.requestChatTab(.select(id))
+        case .item(let id):
+            expandedCards.insert(id)
+            MarvinBridge.shared.revealLeftTab("sessions")
+        case .ledger:
+            logExpanded = true
+            Task { await refreshLedger() }
+            MarvinBridge.shared.revealLeftTab("sessions")
+        case nil:
+            break
         }
     }
 
@@ -305,6 +363,7 @@ final class SupervisorModel {
         chatError = nil
         chatSelected = false
         chatItems = [:]
+        follows = []
         chatSheet = nil
         announcer = SupervisorAnnouncer()
         expandedCards = []
@@ -386,6 +445,8 @@ final class SupervisorModel {
                 Task { await refreshChat() }
                 if from == "supervisor" { VoiceOver.announce("Supervisor replied") }
             }
+        case .follow:
+            Task { await refreshFollows() }
         }
     }
 

@@ -47,13 +47,16 @@ import { containsSecretShape } from "./session";
 import type { SessionPosture } from "./session-meta";
 import type { SessionWatchRow } from "./session-watch";
 import { classifyHumanOnlyAct } from "./supervisor-acts";
+import { endFollow, type FollowUntil, listFollows, openFollow, REQUEST_WINDOW_MS } from "./supervisor-follows";
 import {
   addInboxItem,
   buildRawAct,
   type EscalationCode,
   type InboxDraft,
   type InboxKind,
+  getInboxItem,
   itemsForConversation,
+  itemsForFollow,
   listInbox,
   type MergePreview,
 } from "./supervisor-inbox";
@@ -79,6 +82,7 @@ import {
   type PolicyOutcome,
   questionHeuristic,resolveGround 
 } from "./supervisor-policy";
+import { MAX_REPLY_REFS, type MessageRef } from "./supervisor-messages";
 import { wrapUntrusted } from "./supervisor-prompt";
 import { MAX_SUPERVISOR_MESSAGE_CHARS } from "./supervisor-send";
 import { categoryMode, getSupervisorState, isSupervisorSessionId, overBudget, type SupervisorMode } from "./supervisor-state";
@@ -98,6 +102,8 @@ export const SUPERVISE_TOOL_NAMES = [
   "review_scope",
   "new_session",
   "reply",
+  "follow",
+  "unfollow",
 ] as const;
 
 type Performed = { ok: true } | { ok: false; code?: string; error: string };
@@ -176,7 +182,7 @@ export interface VerbDeps {
    * wake a user message started (ADR-0128 §5); any other wake has no one to
    * talk to, and `reply` is refused there.
    */
-  postReply?(text: string, items?: readonly string[]): { id: string };
+  postReply?(text: string, items?: readonly string[], extra?: { refs?: readonly MessageRef[]; followId?: string; wakeId?: string | null }): { id: string };
   /**
    * ADR-0128 §4 — the project's open tabs, id and title only. `sessions` lists
    * a tab not delegated as `{id, title, delegation: "off"}` and nothing more, so
@@ -199,6 +205,12 @@ export interface VerbContext {
   wake: { acts: number; messageHold?: boolean };
   /** ADR-0128 — the user messages this wake carries; null or absent in a wake a tab started. */
   conversation?: { messageIds: string[] } | null;
+  /**
+   * ADR-0128 §5 — the open follows whose tab's existing trigger started this
+   * wake, captured when it started. Only these may be reported on, and only in
+   * a wake a tab started (a message wake runs alone).
+   */
+  follows?: ReadonlyArray<{ id: string; sessionId: string; until: FollowUntil }>;
   limiter: ActionLimiter;
   deps: VerbDeps;
 }
@@ -266,6 +278,8 @@ export interface ReviewScopeArgs {
 
 export interface NewSessionArgs {
   requestId: string;
+  /** ADR-0128 §5 — the tab is followed; `merge-ready` only when the user asked for the merge too. */
+  follow?: FollowUntil;
   firstMessage: string;
   title?: string;
   posture?: PosturePatch;
@@ -273,6 +287,21 @@ export interface NewSessionArgs {
   tree?: string;
   recommendation?: string;
   grounds?: GroundRef[];
+}
+
+export interface FollowArgs {
+  marvinSessionId: string;
+  until: FollowUntil;
+  grounds?: GroundRef[];
+}
+
+export interface ReplyArgs {
+  text: string;
+  items?: unknown[];
+  refs?: unknown[];
+  /** A follow's report; set in a wake a followed tab started. */
+  kind?: "report";
+  followId?: string;
 }
 
 export interface ReadArgs {
@@ -384,7 +413,10 @@ export function createSupervisorVerbs(ctx: VerbContext) {
    * for the same cause (its `dedupeKey`) is cited rather than duplicated.
    */
   function raise(draft: ItemDraft, mode: SupervisorMode, ledgerId: string): string {
-    return addInboxItem(projectId, { ...draft, modeAtCreation: mode === "autonomous" ? "autonomous" : "shadow", wakeId: ctx.wakeId, ledgerId }).id;
+    // ADR-0128 §5 — in a wake a followed tab started, the items about that tab are the follow's (the runtime's label, never the model's).
+    const f = !ctx.conversation?.messageIds.length && draft.sessionId ? ctx.follows?.find((x) => x.sessionId === draft.sessionId) : undefined;
+    const origin = draft.origin ?? (f ? { kind: "follow" as const, followId: f.id } : null);
+    return addInboxItem(projectId, { ...draft, ...(origin ? { origin } : {}), modeAtCreation: mode === "autonomous" ? "autonomous" : "shadow", wakeId: ctx.wakeId, ledgerId }).id;
   }
 
   /**
@@ -1108,7 +1140,53 @@ export function createSupervisorVerbs(ctx: VerbContext) {
             st.mode,
             id,
           );
-    return note("review_scope", tab, "escalate", "human-only", `scope review (${verdict}) — it is in the user's inbox`, { id, inboxItemId, argsDigest, grounds, argSummary: `scope ${verdict}` });
+    const after = verdict === "ready" ? await followOnReady(tab, grounds, st.mode) : "";
+    return `${note("review_scope", tab, "escalate", "human-only", `scope review (${verdict}) — it is in the user's inbox`, { id, inboxItemId, argsDigest, grounds, argSummary: `scope ${verdict}` })}${after}`;
+  }
+
+  /**
+   * ADR-0128 §5 — the scope-met review of a followed tab. `scope-met`: the
+   * follow ends here. `merge-ready`: the user asked for the merge, so the
+   * runtime raises the `worktrees merge` card for this tab's branch with the
+   * follow's origin. It is a card: nothing merges before the user's click.
+   */
+  async function followOnReady(tab: string, grounds: LedgerGround[], mode: SupervisorMode): Promise<string> {
+    const f = listFollows(projectId, { state: "open", sessionId: tab })[0];
+    if (!f) return "";
+    if (f.until === "scope-met") {
+      endFollow(projectId, f.id, "scope-met");
+      return ` The follow on this tab ends with this review — report it to the user with \`reply\` and \`followId: ${f.id}\`.`;
+    }
+    const wt = ctx.deps.worktrees;
+    const w = wt ? (await wt.list()).find((x) => x.sessionId === tab) : undefined;
+    if (!wt || !w) return " The tab has no worktree of its own, so there is no branch to merge — say so in your report.";
+    const slugs = [w.slug];
+    const rawAct = buildRawAct("worktrees.merge", { slugs });
+    const id = newLedgerId();
+    const inboxItemId = raise(
+      {
+        sessionId: null,
+        kind: "integration",
+        escalatedBecause: { code: "human-only", label: "Integration is the user's act", rule: "§4.1 integration" },
+        rawAct,
+        preview: await wt.preview(slugs),
+        recommendation: { actionId: "perform", text: "You asked for this merge when the tab was done; its scope review says it is ready." },
+        grounds,
+        act: { type: "worktrees", op: "merge", slugs },
+        origin: { kind: "follow", followId: f.id },
+        dedupeKey: `follow-merge:${f.id}:${ctx.deps.scopeMetAt?.(tab) ?? ""}`,
+      },
+      mode,
+      id,
+    );
+    note("worktrees.merge", tab, "escalate", "human-only", "the user asked for this merge when the tab was done (ADR-0127 §4) — it is in their inbox with a preview", {
+      id,
+      inboxItemId,
+      grounds,
+      argSummary: rawAct.summary,
+      origin: { kind: "follow", followId: f.id },
+    });
+    return ` The merge the user asked for is card ${inboxItemId} — list it in your report's \`items\` (\`followId: ${f.id}\`).`;
   }
 
   /**
@@ -1121,7 +1199,8 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     const requestId = String(args.requestId ?? "").trim();
     const firstMessage = String(args.firstMessage ?? "").trim();
     const title = typeof args.title === "string" ? args.title.trim().slice(0, 120) : "";
-    const argsDigest = digestArgs({ requestId, firstMessage, posture: args.posture ?? {}, tree: args.tree ?? null, title });
+    const until: FollowUntil = args.follow === "merge-ready" ? "merge-ready" : "scope-met";
+    const argsDigest = digestArgs({ requestId, firstMessage, posture: args.posture ?? {}, tree: args.tree ?? null, title, until });
     const refuse = (code: string, reason: string) => note("new_session", null, "refuse", code, reason, { argsDigest });
     const st = getSupervisorState(projectId);
     if (st.mode === "off") return refuse("off", "the supervisor is off");
@@ -1178,10 +1257,12 @@ export function createSupervisorVerbs(ctx: VerbContext) {
           },
           wider,
           requestedBy: { kind: "user-message", ref: requestId, at: request.at },
+          delegation: "answer-questions",
+          follow: { until },
         },
         recommendation: { actionId: "open", text: String(args.recommendation ?? "").slice(0, 500) || "You asked for a tab for this" },
         grounds,
-        act: { type: "new-tab", requestId, ...(title ? { title } : {}), posture, grounds },
+        act: { type: "new-tab", requestId, ...(title ? { title } : {}), posture, grounds, delegation: "answer-questions", follow: { until } },
       },
       st.mode,
       id,
@@ -1189,24 +1270,123 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     return note("new_session", null, "escalate", "human-only", "opening a tab is the user's act — the proposal is in their inbox (ADR-0127 §4 item 7)", { id, inboxItemId, argsDigest, grounds, argSummary: rawAct.summary });
   }
 
-  /** Milestone 5 — answer the user in the supervisor's conversation. A reply authorises nothing. */
-  async function reply(args: { text: string; items?: unknown[] }): Promise<string> {
-    // ADR-0128 §5 — only a wake a user message started has someone to talk to. Anywhere else a
-    // reply would be a tab's content speaking in the supervisor's voice, so it is refused first.
-    if (!ctx.deps.postReply || !ctx.conversation?.messageIds.length) {
-      return note("reply", null, "refuse", "no-conversation", "no conversation is open this wake — only a wake the user's message started can reply");
+  /** ADR-0128 §5 — what a reply links to: the ids the server can resolve, labelled from its own records. */
+  function resolveRefs(raw: unknown[]): MessageRef[] {
+    const out: MessageRef[] = [];
+    const tabs = ctx.deps.listTabs?.() ?? [];
+    for (const r of raw) {
+      if (out.length >= MAX_REPLY_REFS || !r || typeof r !== "object") continue;
+      const { kind, id } = r as { kind?: unknown; id?: unknown };
+      if (typeof id !== "string" || !id || id.length > 200 || out.some((x) => x.kind === kind && x.id === id)) continue;
+      if (kind === "tab") {
+        const t = isSupervisorSessionId(id) ? undefined : tabs.find((x) => x.id === id);
+        if (t) out.push({ kind, id, label: (t.title ?? id).slice(0, 120) });
+      } else if (kind === "ledger") {
+        const e = readLedger(projectId).find((x) => x.id === id);
+        if (e) out.push({ kind, id, label: `${e.verb}${e.decision ? ` → ${e.decision}` : ""}`.slice(0, 120) });
+      } else if (kind === "item") {
+        const i = getInboxItem(projectId, id);
+        if (i) out.push({ kind, id, label: (i.rawAct?.summary ?? i.kind).slice(0, 120) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Answer the user in the supervisor's conversation, or report on a followed
+   * tab (ADR-0128 §5). A reply authorises nothing.
+   */
+  async function reply(args: ReplyArgs): Promise<string> {
+    // Only a wake a user message started, or one a followed tab's own trigger started, has someone to talk to.
+    // Anywhere else a reply would be a tab's content speaking in the supervisor's voice, so it is refused first.
+    const conversation = !!ctx.conversation?.messageIds.length;
+    const follows = conversation ? [] : (ctx.follows ?? []);
+    if (!ctx.deps.postReply || (!conversation && !follows.length)) {
+      return note("reply", null, "refuse", "no-conversation", "no conversation is open this wake — only a wake the user's message started, or a followed tab's trigger, can reply");
+    }
+    let followId: string | undefined;
+    if (!conversation) {
+      const f = args.followId ? follows.find((x) => x.id === args.followId) : follows.length === 1 ? follows[0] : undefined;
+      if (!f) return note("reply", null, "refuse", "follow", `a report names the follow it is about: ${follows.map((x) => `${x.id} (tab ${x.sessionId})`).join(", ")}`);
+      followId = f.id;
     }
     const text = String(args.text ?? "").trim();
     if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return note("reply", null, "refuse", "text", `a reply needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`);
     if (containsSecretShape(text)) return note("reply", null, "refuse", "secret", "the reply carries a secret-shaped string (ADR-0127 §6)");
-    // ADR-0128 §3 — only the items this wake raised for these messages; the rest are dropped, never rendered.
-    const items = itemsForConversation(projectId, Array.isArray(args.items) ? args.items : [], ctx.conversation.messageIds);
-    const m = ctx.deps.postReply(text, items);
-    appendLedgerEntry(projectId, { kind: "message", verb: "reply", tab: null, wakeId: ctx.wakeId, reason: "supervisor: replied to the user", reasonCode: "reply", argSummary: `message ${m.id}${items.length ? `; cards ${items.join(", ")}` : ""}` });
-    return "Sent to the user.";
+    // ADR-0128 §3 — only the items this wake raised for these messages or this follow; the rest are dropped, never rendered.
+    const rawItems = Array.isArray(args.items) ? args.items : [];
+    const items = followId ? itemsForFollow(projectId, rawItems, followId) : itemsForConversation(projectId, rawItems, ctx.conversation?.messageIds ?? []);
+    const refs = resolveRefs(Array.isArray(args.refs) ? args.refs : []);
+    const m = ctx.deps.postReply(text, items, { refs, wakeId: ctx.wakeId, ...(followId ? { followId } : {}) });
+    appendLedgerEntry(projectId, {
+      kind: "message",
+      verb: followId ? "report" : "reply",
+      tab: followId ? (follows.find((x) => x.id === followId)?.sessionId ?? null) : null,
+      wakeId: ctx.wakeId,
+      reason: followId ? "supervisor: reported on a followed tab" : "supervisor: replied to the user",
+      reasonCode: followId ? "report" : "reply",
+      argSummary: `message ${m.id}${items.length ? `; cards ${items.join(", ")}` : ""}${refs.length ? `; refs ${refs.length}` : ""}`,
+      ...(followId ? { origin: { kind: "follow" as const, followId } } : {}),
+    });
+    return followId ? "Reported to the user." : "Sent to the user.";
   }
 
-  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply };
+  /**
+   * ADR-0128 §5 — follow a tab for the user: a record, not authority. It needs
+   * the user's request (a `message:` ground within the request window), a tab
+   * delegated at `observe` or above, and room under the cap.
+   */
+  async function follow(args: FollowArgs): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const until: FollowUntil = args.until === "merge-ready" ? "merge-ready" : "scope-met";
+    const argsDigest = digestArgs({ until });
+    const refuse = (code: string, reason: string) => note("follow", tab || null, "refuse", code, reason, { argsDigest });
+    if (getSupervisorState(projectId).mode === "off") return refuse("off", "the supervisor is off");
+    if (isSupervisorSessionId(tab)) return refuse("supervisor-session", "a supervisor session is never a target (no recursion)");
+    if (!visible(tab)) return refuse("delegation", `tab ${tab} is not delegated to you — the user sets its delegation first`);
+    if (!(ctx.deps.listTabs?.() ?? []).some((t) => t.id === tab)) return refuse("no-tab", `no open tab ${tab}`);
+    const gctx: GroundContext = { mainRoot: ctx.workDir, tabRoot: null, charter: "", brief: null, planStepCount: 0, planSeeded: false, tabStartedAt: null, messages: conversationGrounds() };
+    let requestId: string | null = null;
+    for (const g of (Array.isArray(args.grounds) ? args.grounds : []).slice(0, 10)) {
+      if (g?.kind !== "message") continue;
+      if (resolveGround(g, gctx).provenance === "unresolved") continue;
+      const id = String(g.ref).slice(0, String(g.ref).indexOf("#")).trim();
+      const at = Date.parse(ctx.deps.userRequest?.(id)?.at ?? "");
+      if (Number.isFinite(at) && Date.now() - at <= REQUEST_WINDOW_MS) {
+        requestId = id;
+        break;
+      }
+    }
+    if (!requestId) return refuse("no-request", "a follow is opened only on the user's request — cite their message as `message:<id>#<a verbatim quote>`, from the last 24 hours");
+    const r = openFollow(projectId, { sessionId: tab, until, requestId });
+    if (!r.ok) {
+      const open = r.open.map((f) => `${f.id} (tab ${f.sessionId}, until ${f.until})`).join("; ");
+      return refuse("follow-cap", `${r.open.length} follows are open, the most a project keeps — tell the user, and list them so they can stop one: ${open}`);
+    }
+    appendLedgerEntry(projectId, {
+      kind: "verb",
+      verb: "follow",
+      tab,
+      wakeId: ctx.wakeId,
+      reason: `following the tab until ${until}, at the user's request`,
+      reasonCode: r.created ? "follow" : "follow-updated",
+      argsDigest,
+      argSummary: `follow ${r.follow.id} until ${until}; request ${requestId}`,
+    });
+    return `Following tab ${tab} until ${until} (follow ${r.follow.id}). Its own triggers may now be reported to the user; nothing else changes.`;
+  }
+
+  /** ADR-0128 §5 — stop following a tab. Allowed in any wake: it only removes. */
+  async function unfollow(args: { marvinSessionId: string }): Promise<string> {
+    const tab = String(args.marvinSessionId ?? "").trim();
+    const open = listFollows(projectId, { state: "open", sessionId: tab });
+    if (!open.length) return note("unfollow", tab || null, "refuse", "no-follow", `no open follow on tab ${tab}`);
+    for (const f of open) endFollow(projectId, f.id, "unfollow");
+    appendLedgerEntry(projectId, { kind: "verb", verb: "unfollow", tab, wakeId: ctx.wakeId, reason: "stopped following the tab", reasonCode: "unfollow", argSummary: `follow ${open.map((f) => f.id).join(", ")}` });
+    return `Stopped following tab ${tab}.`;
+  }
+
+  return { sessions, read, answer, set_posture, send, cancel, confirm, worktrees, close_session, review_scope, new_session, reply, follow, unfollow };
 }
 
 const groundSchema = z.object({
@@ -1354,7 +1534,8 @@ export function supervisorToolDefs(ctx: VerbContext) {
       "new_session",
       "Propose opening ONE new tab, only when the user asked you for one: cite the id of their message as `requestId`. " +
         "Give the `firstMessage`, an optional `title` and `posture`. The tab always gets a fresh worktree. The user confirms " +
-        "it from the inbox; you never open a tab yourself, and one request is one tab.",
+        "it from the inbox; you never open a tab yourself, and one request is one tab. The tab is followed for the user: " +
+        "`follow: \"merge-ready\"` only when they asked for the merge too, otherwise until its scope is met.",
       {
         requestId: z.string().min(1).max(100),
         firstMessage: z.string().min(1).max(4_000),
@@ -1368,6 +1549,7 @@ export function supervisorToolDefs(ctx: VerbContext) {
           })
           .optional(),
         tree: z.string().max(200).optional(),
+        follow: z.enum(["scope-met", "merge-ready"]).optional(),
         recommendation: z.string().max(500).optional(),
         grounds: z.array(groundSchema).max(10).optional(),
       },
@@ -1375,12 +1557,31 @@ export function supervisorToolDefs(ctx: VerbContext) {
     ),
     tool(
       "reply",
-      "Answer the user in your conversation with them (their messages reach you as `message` items). A reply authorises nothing. " +
-        "List in `items` the inbox item ids this wake raised for their request (an escalation's reply names its item): each shows under " +
-        "your reply as the card the user clicks. Ids from another wake or another tab are dropped.",
-      { text: z.string().min(1).max(4_000), items: z.array(z.string().min(1).max(100)).max(10).optional() },
-      async (args) => text(await v.reply(args)),
+      "Answer the user in your conversation with them (their messages reach you as `message` items), or — in a wake a tab you " +
+        "follow for them started — report on it with `followId`. A reply authorises nothing. List in `items` the inbox item ids " +
+        "this wake raised for their request or that follow: each shows under your reply as the card the user clicks. Link tabs, " +
+        "ledger lines and inbox items in `refs`. Ids from another wake, another follow or that do not exist are dropped.",
+      {
+        text: z.string().min(1).max(4_000),
+        items: z.array(z.string().min(1).max(100)).max(10).optional(),
+        refs: z.array(z.object({ kind: z.enum(["tab", "ledger", "item"]), id: z.string().min(1).max(200) })).max(10).optional(),
+        followId: z.string().min(1).max(100).optional(),
+      },
+      async (args) => text(await v.reply(args as ReplyArgs)),
     ),
+    tool(
+      "follow",
+      "Follow a delegated tab for the user — only when they asked to hear how it goes. Cite their message as a `message:` ground. " +
+        "`until: scope-met` reports its scope-met review; `merge-ready` (they asked for the merge too) also raises the merge card when " +
+        "the review says ready. A follow adds no authority and no wakes: the tab's own triggers may be reported. At most 5 per project.",
+      {
+        marvinSessionId: z.string().min(1),
+        until: z.enum(["scope-met", "merge-ready"]),
+        grounds: z.array(groundSchema).max(10).optional(),
+      },
+      async (args) => text(await v.follow(args as FollowArgs)),
+    ),
+    tool("unfollow", "Stop following a tab: no more reports on it.", { marvinSessionId: z.string().min(1) }, async (args) => text(await v.unfollow(args))),
   ];
 }
 

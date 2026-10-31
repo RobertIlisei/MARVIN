@@ -50,10 +50,11 @@ import { loadSessionTail } from "./session";
 import { listSessionMetas, readSessionMeta, type SessionPosture } from "./session-meta";
 import { buildSessionWatch, planProgress } from "./session-watch";
 import { runSupervisorWake, type WakeResult } from "./supervisor-dispatch";
+import { type FollowUntil, listFollows } from "./supervisor-follows";
 import { addInboxItem, buildRawAct, type MergePreview, resolveInboxForConfirm, supersedeInbox } from "./supervisor-inbox";
 import { appendLedgerEntry, newLedgerId, readLedger, setWakeOrigin } from "./supervisor-ledger";
 import type { VerbContext, VerbDeps, VerbPerform } from "./supervisor-mcp";
-import { addSupervisorReply, getUserMessage, unansweredUserMessages } from "./supervisor-messages";
+import { addSupervisorReply, getUserMessage, type MessageRef, type ReplyOrigin, unansweredUserMessages } from "./supervisor-messages";
 import { ActionLimiter } from "./supervisor-policy";
 import type { WakeItem } from "./supervisor-prompt";
 import { sendAsSupervisor, tabSendRefusal } from "./supervisor-send";
@@ -115,8 +116,11 @@ export interface TabFacts {
 export interface LoopDeps {
   subscribe(listener: (e: ProjectEvent) => void): () => void;
   workDirOf(projectId: string): string | null;
-  /** `conversation` is set only for a wake a user message started: it is what wires `reply` (ADR-0128 §5). */
-  verbDeps(projectId: string, workDir: string, conversation?: Conversation | null): VerbDeps;
+  /**
+   * `conversation` is set only for a wake a user message started, `follows` only
+   * for one a followed tab's own trigger started: they are what wires `reply` (ADR-0128 §5).
+   */
+  verbDeps(projectId: string, workDir: string, conversation?: Conversation | null, follows?: readonly WakeFollow[]): VerbDeps;
   buildItems(projectId: string, workDir: string, refs: PendingRef[]): Promise<WakeItem[]>;
   runWake(args: { projectId: string; workDir: string; items: WakeItem[]; verbCtx: VerbContext; abortController: AbortController }): Promise<WakeResult>;
   /** Milestone 4 — a tab's facts for the idle and turn-ended rules; null when it is gone. */
@@ -135,6 +139,34 @@ export interface LoopDeps {
 export interface Conversation {
   wakeId: string;
   messageIds: string[];
+}
+
+/** ADR-0128 §5 — an open follow a wake may report on. */
+export interface WakeFollow {
+  id: string;
+  sessionId: string;
+  until: FollowUntil;
+}
+
+/**
+ * ADR-0128 §5 — the existing triggers a follow may be reported on: a turn the
+ * user or the supervisor started ended, a scope-met handoff, an escalation on
+ * the tab. No new trigger: idle is the runtime's own timer, not something that
+ * happened in the tab, and a machine turn never wakes the supervisor at all.
+ */
+const FOLLOW_TRIGGERS: ReadonlySet<WakeTrigger> = new Set(["turn-ended", "scope-met", "question", "confirm"]);
+
+/** The open follows on the tabs whose qualifying trigger is in this wake. */
+export function followsForWake(projectId: string, refs: readonly PendingRef[]): WakeFollow[] {
+  const tabs = new Set(refs.filter((r) => FOLLOW_TRIGGERS.has(r.trigger ?? "question")).map((r) => r.marvinSessionId));
+  if (!tabs.size) return [];
+  try {
+    return listFollows(projectId, { state: "open" })
+      .filter((f) => tabs.has(f.sessionId))
+      .map((f) => ({ id: f.id, sessionId: f.sessionId, until: f.until }));
+  } catch {
+    return []; // an unreadable follows file reports nothing; the wake still runs
+  }
 }
 
 /** ADR-0128 §6 — waits before each retry of an unanswered message wake; one wake plus this many retries, then failed. */
@@ -510,6 +542,8 @@ export class SupervisorLoop {
       this.current.set(projectId, { wakeId, startedAt: new Date().toISOString(), itemCount: refs.length });
       const conversation: Conversation | null = messageIds.length ? { wakeId, messageIds } : null;
       if (conversation) setWakeOrigin(wakeId, { kind: "message", messageIds });
+      // Message wakes run alone, so a wake either carries the conversation or may carry follows — never both.
+      const follows = conversation ? [] : followsForWake(projectId, refs);
       const items = await this.deps.buildItems(projectId, workDir, refs);
       if (abortController.signal.aborted) {
         outcome = "aborted";
@@ -521,8 +555,9 @@ export class SupervisorLoop {
         wakeId,
         wake: { acts: 0 },
         limiter: this.limiterFor(projectId),
-        deps: this.deps.verbDeps(projectId, workDir, conversation),
+        deps: this.deps.verbDeps(projectId, workDir, conversation, follows),
         conversation: conversation ? { messageIds } : null,
+        follows,
       };
       this.runningWake.set(projectId, { verbCtx, messageIds });
       const result = await this.deps.runWake({ projectId, workDir, items, verbCtx, abortController });
@@ -618,7 +653,7 @@ function readPlanText(projectId: string, marvinSessionId: string): string {
   return text.length > 4_000 ? `${text.slice(0, 4_000)}…` : text;
 }
 
-export function defaultVerbDeps(projectId: string, workDir: string, conversation: Conversation | null = null): VerbDeps {
+export function defaultVerbDeps(projectId: string, workDir: string, conversation: Conversation | null = null, follows: readonly WakeFollow[] = []): VerbDeps {
   return {
     listRows: () => buildSessionWatch({ projectId, workDir, sessionIds: Object.keys(getSupervisorState(projectId).delegation) }),
     getPending: getPendingConfirm,
@@ -648,11 +683,15 @@ export function defaultVerbDeps(projectId: string, workDir: string, conversation
       return m ? { id: m.id, at: m.at, text: m.text } : null;
     },
     newTabBase: () => newTabBase(projectId, workDir),
-    // Only a wake the user's message started can speak in the Supervisor tab (ADR-0128 §5).
-    ...(conversation
+    // Only a wake the user's message started, or one a followed tab's trigger started, can speak in the Supervisor tab (ADR-0128 §5).
+    ...(conversation || follows.length
       ? {
-          postReply: (text: string, items?: readonly string[]) =>
-            addSupervisorReply(projectId, text, { wakeId: conversation.wakeId, origin: { kind: "message", messageIds: conversation.messageIds }, items }),
+          postReply: (text: string, items?: readonly string[], extra?: { refs?: readonly MessageRef[]; followId?: string; wakeId?: string | null }) => {
+            const f = extra?.followId ? follows.find((x) => x.id === extra.followId) : undefined;
+            const origin: ReplyOrigin | null = conversation ? { kind: "message", messageIds: conversation.messageIds } : f ? { kind: "follow", followId: f.id } : null;
+            if (!origin) throw new Error("a report names one of this wake's follows");
+            return addSupervisorReply(projectId, text, { wakeId: conversation?.wakeId ?? extra?.wakeId ?? "", origin, items, refs: extra?.refs });
+          },
         }
       : {}),
     listTabs: () =>
@@ -822,6 +861,13 @@ export function tabsNamedIn(text: string, tabs: ReadonlyArray<{ id: string; titl
 async function defaultBuildItems(projectId: string, workDir: string, refs: PendingRef[]): Promise<WakeItem[]> {
   const st = getSupervisorState(projectId);
   const rows = await buildSessionWatch({ projectId, workDir, sessionIds: [...new Set(refs.map((r) => r.marvinSessionId))] });
+  const follows = followsForWake(projectId, refs);
+  let open: WakeFollow[] = [];
+  try {
+    open = listFollows(projectId, { state: "open" }).map((f) => ({ id: f.id, sessionId: f.sessionId, until: f.until }));
+  } catch {
+    /* an unreadable follows file lists none */
+  }
   return refs.map((r) => {
     const trigger = r.trigger ?? "question";
     if (trigger === "message") {
@@ -838,6 +884,7 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
         toolUseId: r.toolUseId,
         question: null,
         message: m ? { id: m.id, text: m.text } : { id: r.toolUseId, text: "(the message could not be read)" },
+        openFollows: open,
         brief: null,
         plan: null,
         transcriptTail: "",
@@ -855,6 +902,10 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
       turnId: r.turnId,
       toolUseId: r.toolUseId,
       question: trigger === "question" ? (pending?.originalInput ?? null) : null,
+      follow: (() => {
+        const f = follows.find((x) => x.sessionId === r.marvinSessionId);
+        return f ? { id: f.id, until: f.until } : null;
+      })(),
       brief: readBrief(projectId, r.marvinSessionId),
       plan: row?.plan ? { total: row.plan.total, seeded: row.plan.seeded } : null,
       transcriptTail: renderTail(projectId, r.marvinSessionId),
