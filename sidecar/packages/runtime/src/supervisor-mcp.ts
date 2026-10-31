@@ -170,8 +170,12 @@ export interface VerbDeps {
   userRequest?(id: string): { id: string; at: string; text: string } | null;
   /** The posture and base a new tab would start from: the user's most recent tab, and the main checkout's HEAD. */
   newTabBase?(): Promise<{ posture: SessionPosture; baseRef: string | null; baseSha: string | null } | null>;
-  /** The supervisor's reply in its conversation with the user (milestone 5). Optional: a wake with no conversation has none. */
-  postReply?(text: string): void;
+  /**
+   * The supervisor's reply in its conversation with the user. Wired only for a
+   * wake a user message started (ADR-0128 §5); any other wake has no one to
+   * talk to, and `reply` is refused there.
+   */
+  postReply?(text: string): { id: string };
   perform: VerbPerform;
 }
 
@@ -180,8 +184,14 @@ export interface VerbContext {
   /** The project root — the main checkout grounds resolve against. */
   workDir: string;
   wakeId: string | null;
-  /** Act verbs invoked in this wake, for the per-wake breaker. */
-  wake: { acts: number };
+  /**
+   * Act verbs invoked in this wake, for the per-wake breaker. `messageHold` is
+   * set by the loop when a user message arrives mid-wake: from then on every
+   * act escalates (ADR-0128 §6, the newest human word wins).
+   */
+  wake: { acts: number; messageHold?: boolean };
+  /** ADR-0128 — the user messages this wake carries; null or absent in a wake a tab started. */
+  conversation?: { messageIds: string[] } | null;
   limiter: ActionLimiter;
   deps: VerbDeps;
 }
@@ -330,6 +340,7 @@ function escalationCode(reasonCode: string | undefined): EscalationCode {
     case "weak-grounds-only":
     case "ungrounded":
     case "unresolvable-citation":
+    case "message-hold":
       return reasonCode;
     default:
       return "human-only";
@@ -372,7 +383,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
    * reached during this wake stops every act that has not happened yet (§6).
    * Null when the act may go ahead.
    */
-  function actHold(): { reasonCode: string; reason: string } | null {
+  function actHold(): { reasonCode: string; reason: string; escalate?: true } | null {
     const now = getSupervisorState(projectId);
     if (now.mode === "off") return { reasonCode: "off", reason: "the supervisor was turned off during this wake; nothing was performed" };
     if (now.paused) {
@@ -381,8 +392,15 @@ export function createSupervisorVerbs(ctx: VerbContext) {
         : { reasonCode: "paused", reason: "the supervisor was paused during this wake; nothing was performed" };
     }
     if (overBudget(now)) return { reasonCode: "budget", reason: "the daily cap was reached during this wake; nothing was performed" };
+    if (ctx.wake.messageHold) return { reasonCode: "message-hold", reason: "the user wrote to you during this wake — the act waits for their decision", escalate: true };
     return null;
   }
+
+  /** ADR-0128 §2 — what a `message:` ground resolves against: the user's messages, and this wake's. */
+  const conversationGrounds = (): NonNullable<GroundContext["messages"]> => ({
+    lookup: (id) => ctx.deps.userRequest?.(id) ?? null,
+    wakeMessageIds: ctx.conversation?.messageIds ?? [],
+  });
 
   async function sessions(): Promise<string> {
     const st = getSupervisorState(projectId);
@@ -490,7 +508,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     ctx.wake.acts += 1;
     ctx.limiter.record(projectId, tab, key);
 
-    const outcome = evaluateAnswer({
+    let outcome = evaluateAnswer({
       mode,
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
@@ -508,12 +526,14 @@ export function createSupervisorVerbs(ctx: VerbContext) {
         planStepCount: row.plan?.total ?? 0,
         planSeeded: row.plan?.seeded ?? false,
         tabStartedAt: ctx.deps.tabStartedAt(tab),
+        messages: conversationGrounds(),
       },
       ...(args.escalate ? { escalate: { reason: String(args.escalate.reason ?? "").slice(0, 500) } } : {}),
     });
     const rec = args.escalate?.recommendation ? ` — recommendation: ${String(args.escalate.recommendation).slice(0, 500)}` : "";
+    const hold = outcome.decision === "act" && row.turn ? actHold() : null;
+    if (hold?.escalate) outcome = { ...outcome, decision: "escalate", reason: hold.reason, reasonCode: hold.reasonCode };
     if (outcome.decision === "act" && row.turn) {
-      const hold = actHold();
       if (hold) return log("refuse", hold.reason, { grounds: outcome.grounds, reasonCode: hold.reasonCode });
       // Named before it is performed, so the transcript's `confirm.decision` can cite it.
       const id = newLedgerId();
@@ -531,7 +551,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     if (outcome.decision === "escalate" && row.turn) {
       // Milestone 5 — the question waits for the user as an inbox item, with the proposed answer beside it.
       const id = newLedgerId();
-      const code: EscalationCode = outcome.heuristic ? "heuristic" : args.escalate ? "ungrounded" : "weak-grounds-only";
+      const code: EscalationCode = hold?.escalate ? "message-hold" : outcome.heuristic ? "heuristic" : args.escalate ? "ungrounded" : "weak-grounds-only";
       const proposed = args.escalate ? undefined : args.answers;
       const inboxItemId = raise(
         {
@@ -553,7 +573,13 @@ export function createSupervisorVerbs(ctx: VerbContext) {
         mode,
         id,
       );
-      return log("escalate", `${outcome.reason}${rec}`, { grounds: outcome.grounds, ...(outcome.heuristic ? { heuristic: outcome.heuristic } : {}), id, inboxItemId });
+      return log("escalate", `${outcome.reason}${rec}`, {
+        grounds: outcome.grounds,
+        ...(outcome.heuristic ? { heuristic: outcome.heuristic } : {}),
+        ...(outcome.reasonCode ? { reasonCode: outcome.reasonCode } : {}),
+        id,
+        inboxItemId,
+      });
     }
     return log(outcome.decision, `${outcome.reason}${rec}`, {
       grounds: outcome.grounds,
@@ -596,7 +622,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     ctx.wake.acts += 1;
     ctx.limiter.record(projectId, tab, key);
     const lookup = await ctx.deps.modelLookup();
-    const outcome = evaluateSetPosture({
+    let outcome = evaluateSetPosture({
       mode,
       delegation: st.delegation[tab],
       targetIsSupervisor: false,
@@ -606,8 +632,9 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
+    const hold = outcome.decision === "act" ? actHold() : null;
+    if (hold?.escalate) outcome = { ...outcome, decision: "escalate", reason: hold.reason, reasonCode: hold.reasonCode };
     if (outcome.decision === "act") {
-      const hold = actHold();
       if (hold) return log("refuse", hold.reason, outcome.grounds, hold.reasonCode);
       // The service re-classifies against the stored posture, so a widening
       // that slipped in since the row was read is refused there too.
@@ -626,7 +653,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
           kind: widened.length ? "posture-widen" : "scope",
           escalatedBecause: widened.length
             ? { code: "human-only", label: "Widening a tab's posture is the user's act", rule: "§4.5 posture" }
-            : { code: "weak-grounds-only", label: outcome.reason.slice(0, 200) },
+            : { code: hold?.escalate ? "message-hold" : "weak-grounds-only", label: outcome.reason.slice(0, 200) },
           rawAct: buildRawAct("set_posture", { marvinSessionId: tab, posture: valid.patch }),
           postureChange: { from: pick("from"), to: pick("to"), widenedDimensions: widened },
           recommendation: { actionId: "perform", text: outcome.reason },
@@ -643,6 +670,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
 
   function groundContextFor(row: SessionWatchRow, charter: string): GroundContext {
     return {
+      messages: conversationGrounds(),
       mainRoot: ctx.workDir,
       tabRoot: row.tree.mode === "worktree" ? row.tree.path : null,
       charter,
@@ -748,26 +776,30 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       groundCtx: groundContextFor(row, st.charter),
     });
     const sig = planSignature ? { planSignature } : {};
-    const sendItem = (): ItemDraft => ({
+    const sendItem = (o: PolicyOutcome) => (): ItemDraft => ({
       sessionId: tab,
       tabTitle: row.title ?? null,
       kind: "scope",
-      escalatedBecause: { code: escalationCode(outcome.reasonCode), label: outcome.reason.slice(0, 200) },
-      heuristic: outcome.heuristic ? { matched: outcome.heuristic } : null,
+      escalatedBecause: { code: escalationCode(o.reasonCode), label: o.reason.slice(0, 200) },
+      heuristic: o.heuristic ? { matched: o.heuristic } : null,
       rawAct: buildRawAct("send", { marvinSessionId: tab, message, kind }),
-      recommendation: { actionId: "perform", text: outcome.reason },
-      grounds: outcome.grounds,
-      act: { type: "send", sessionId: tab, text: message, kind, grounds: outcome.grounds },
+      recommendation: { actionId: "perform", text: o.reason },
+      grounds: o.grounds,
+      act: { type: "send", sessionId: tab, text: message, kind, grounds: o.grounds },
     });
     if (outcome.decision === "act") {
       const hold = actHold();
+      if (hold?.escalate) {
+        const held: PolicyOutcome = { ...outcome, decision: "escalate", reasonCode: hold.reasonCode, reason: hold.reason };
+        return settle("send", tab, argsDigest, held, sig, sendItem(held));
+      }
       if (hold) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, sig);
       const id = newLedgerId();
       const sent = await ctx.deps.perform.send({ projectId, marvinSessionId: tab, text: message, kind, grounds: outcome.grounds, ledgerId: id });
       if (!sent.ok) return settle("send", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: sent.code, reason: `could not send: ${sent.reason}` }, { ...sig, id });
       return settle("send", tab, argsDigest, outcome, { ...sig, id });
     }
-    return settle("send", tab, argsDigest, outcome, sig, sendItem);
+    return settle("send", tab, argsDigest, outcome, sig, sendItem(outcome));
   }
 
   /** Milestone 3 — stop a runaway turn, proposed; in shadow nothing is cancelled. */
@@ -789,18 +821,20 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       grounds: Array.isArray(args.grounds) ? args.grounds : [],
       groundCtx: groundContextFor(row, st.charter),
     });
+    let cancelOutcome = outcome;
     if (outcome.decision === "act") {
       const hold = actHold();
-      if (hold) return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", ...hold });
+      if (hold?.escalate) cancelOutcome = { ...outcome, decision: "escalate", reasonCode: hold.reasonCode, reason: hold.reason };
+      else if (hold) return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", ...hold });
     }
-    if (outcome.decision === "act" && !ctx.deps.perform.cancel(tab)) {
+    if (cancelOutcome.decision === "act" && !ctx.deps.perform.cancel(tab)) {
       return settle("cancel", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "no-live-turn", reason: "the turn ended before it could be cancelled" });
     }
-    return settle("cancel", tab, argsDigest, outcome, {}, () => ({
+    return settle("cancel", tab, argsDigest, cancelOutcome, {}, () => ({
       sessionId: tab,
       tabTitle: row.title ?? null,
       kind: "scope",
-      escalatedBecause: { code: escalationCode(outcome.reasonCode), label: outcome.reason.slice(0, 200) },
+      escalatedBecause: { code: escalationCode(cancelOutcome.reasonCode), label: cancelOutcome.reason.slice(0, 200) },
       rawAct: buildRawAct("cancel", { marvinSessionId: tab }),
       recommendation: { actionId: "perform", text: String(args.reason ?? "").slice(0, 500) },
       grounds: outcome.grounds,
@@ -835,39 +869,53 @@ export function createSupervisorVerbs(ctx: VerbContext) {
     });
     const decision = args.decision === "deny" ? "deny" : "allow";
     const target = { turnId, toolUseId, answer: [decision] };
-    if (outcome.decision === "act") {
-      const hold = actHold();
-      if (hold) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, target);
-      const id = newLedgerId();
-      const done = ctx.deps.perform.confirm({ turnId, toolUseId, decision, message: args.message, grounds: outcome.grounds, ledgerId: id });
-      if (!done.ok) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "perform-failed", reason: `could not answer: ${done.error}` }, { ...target, id });
-      return settle("confirm", tab, argsDigest, outcome, { ...target, id });
-    }
-    return settle("confirm", tab, argsDigest, outcome, target, () => {
+    const confirmItem = (o: PolicyOutcome) => (): ItemDraft => {
       const kind = confirmKind(pending.raisedBy, humanAct);
       return {
         sessionId: tab,
         tabTitle: row.title ?? null,
         kind,
         escalatedBecause: {
-          code: escalationCode(outcome.reasonCode),
-          label: outcome.reason.slice(0, 200),
+          code: escalationCode(o.reasonCode),
+          label: o.reason.slice(0, 200),
           ...(humanAct ? { rule: `§4 ${humanAct.item}: ${humanAct.label}`.slice(0, 120) } : pending.raisedBy && kind !== "confirm" ? { rule: `§4 ${pending.raisedBy}` } : {}),
         },
         rawAct: buildRawAct(pending.toolName, pending.originalInput),
         linkedConfirm: { sessionId: tab, turnId, toolUseId, raisingRule: pending.raisedBy },
-        recommendation: { actionId: decision, text: String(args.message ?? outcome.reason).slice(0, 500) },
-        grounds: outcome.grounds,
+        recommendation: { actionId: decision, text: String(args.message ?? o.reason).slice(0, 500) },
+        grounds: o.grounds,
         act: { type: "confirm", turnId, toolUseId },
       };
-    });
+    };
+    if (outcome.decision === "act") {
+      const hold = actHold();
+      if (hold?.escalate) {
+        const held: PolicyOutcome = { ...outcome, decision: "escalate", reasonCode: hold.reasonCode, reason: hold.reason };
+        return settle("confirm", tab, argsDigest, held, target, confirmItem(held));
+      }
+      if (hold) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", ...hold }, target);
+      const id = newLedgerId();
+      const done = ctx.deps.perform.confirm({ turnId, toolUseId, decision, message: args.message, grounds: outcome.grounds, ledgerId: id });
+      if (!done.ok) return settle("confirm", tab, argsDigest, { ...outcome, decision: "refuse", reasonCode: "perform-failed", reason: `could not answer: ${done.error}` }, { ...target, id });
+      return settle("confirm", tab, argsDigest, outcome, { ...target, id });
+    }
+    return settle("confirm", tab, argsDigest, outcome, target, confirmItem(outcome));
   }
 
   // ── Milestone 5: worktrees, close_session, review_scope, new_session, reply ──
 
   /** Project-level grounds (a worktree or a new tab has no tab of its own to cite). */
   function projectGrounds(refs: GroundRef[] | undefined): LedgerGround[] {
-    const gctx: GroundContext = { mainRoot: ctx.workDir, tabRoot: null, charter: getSupervisorState(projectId).charter, brief: null, planStepCount: 0, planSeeded: false, tabStartedAt: null };
+    const gctx: GroundContext = {
+      mainRoot: ctx.workDir,
+      tabRoot: null,
+      charter: getSupervisorState(projectId).charter,
+      brief: null,
+      planStepCount: 0,
+      planSeeded: false,
+      tabStartedAt: null,
+      messages: conversationGrounds(),
+    };
     return (Array.isArray(refs) ? refs : []).slice(0, 10).map((g) => {
       const { kind, ref, provenance } = resolveGround(g, gctx);
       return { kind, ref, provenance };
@@ -903,7 +951,8 @@ export function createSupervisorVerbs(ctx: VerbContext) {
       // Not discarding (ADR-0127 §4 item 3): exactly what `worktree_sweep` reclaims — empty or
       // merged, clean, never an open tab's tree. MARVIN already sweeps on every tab close.
       const hold = actHold();
-      if (hold) return note(verb, null, "refuse", hold.reasonCode, hold.reason, { argsDigest });
+      // A held sweep is not performed; the next wake can sweep again, so there is no item to raise.
+      if (hold) return note(verb, null, hold.escalate ? "escalate" : "refuse", hold.reasonCode, hold.reason, { argsDigest });
       const out = await wt.sweep();
       const reclaimed = out.filter((o) => o.deletedBranch);
       const summary = reclaimed.length ? `reclaimed ${reclaimed.map((o) => o.slug).join(", ")}` : "nothing spent to reclaim";
@@ -1113,11 +1162,16 @@ export function createSupervisorVerbs(ctx: VerbContext) {
 
   /** Milestone 5 — answer the user in the supervisor's conversation. A reply authorises nothing. */
   async function reply(args: { text: string }): Promise<string> {
+    // ADR-0128 §5 — only a wake a user message started has someone to talk to. Anywhere else a
+    // reply would be a tab's content speaking in the supervisor's voice, so it is refused first.
+    if (!ctx.deps.postReply || !ctx.conversation?.messageIds.length) {
+      return note("reply", null, "refuse", "no-conversation", "no conversation is open this wake — only a wake the user's message started can reply");
+    }
     const text = String(args.text ?? "").trim();
-    if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return `Refused: a reply needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters.`;
-    if (containsSecretShape(text)) return "Refused: the reply carries a secret-shaped string (ADR-0127 §6).";
-    if (!ctx.deps.postReply) return "Refused: no conversation is open this wake.";
-    ctx.deps.postReply(text);
+    if (!text || text.length > MAX_SUPERVISOR_MESSAGE_CHARS) return note("reply", null, "refuse", "text", `a reply needs 1–${MAX_SUPERVISOR_MESSAGE_CHARS} characters`);
+    if (containsSecretShape(text)) return note("reply", null, "refuse", "secret", "the reply carries a secret-shaped string (ADR-0127 §6)");
+    const m = ctx.deps.postReply(text);
+    appendLedgerEntry(projectId, { kind: "message", verb: "reply", tab: null, wakeId: ctx.wakeId, reason: "supervisor: replied to the user", reasonCode: "reply", argSummary: `message ${m.id}` });
     return "Sent to the user.";
   }
 
@@ -1125,7 +1179,7 @@ export function createSupervisorVerbs(ctx: VerbContext) {
 }
 
 const groundSchema = z.object({
-  kind: z.enum(["plan", "dod", "adr", "memory", "charter", "file"]),
+  kind: z.enum(["plan", "dod", "adr", "memory", "charter", "file", "message"]),
   ref: z.string().min(1).max(500),
 });
 

@@ -174,6 +174,8 @@ export type ProjectEvent =
       data: { projectId: string; seq: number; id: string; sessionId: string | null; verb: string; decision: string | null; inboxItemId: string | null };
     }
   | { event: "supervisor.state"; data: { projectId: string; revision: number; mode: string; paused: boolean } }
+  /** ADR-0128 §6 — a line was added to the conversation; the app re-reads it through the token-gated GET. */
+  | { event: "supervisor.message"; data: { projectId: string; id: string; from: "user" | "supervisor" } }
   | {
       /** ADR-0107 addendum — what the session's live turn is doing now. */
       event: "session.activity";

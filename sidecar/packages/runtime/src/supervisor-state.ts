@@ -73,7 +73,10 @@ export interface SupervisorCaps {
 }
 
 export const DEFAULT_CAPS: SupervisorCaps = {
-  dailyBudgetUsd: 10,
+  // Measured in plan [7.1]: a conversation wake costs ~$0.08 fresh, ~$0.13 on
+  // average at the 45K rotation; fifty messages plus an afternoon's watching
+  // and the tab turns it starts passed $10 (ADR-0128 §7). Existing states keep their cap.
+  dailyBudgetUsd: 20,
   maxActionsPerWake: 5,
   perTabActsPer10Min: 6,
   globalActsPer10Min: 20,
@@ -115,8 +118,12 @@ export interface SupervisorState {
   sdkSessionId: string | null;
   sdkSessionStartedAt: string | null;
   lastInputTokens: number;
-  /** Today's spend: `usd` is the total the cap reads; `ownUsd` the supervisor's own turns, `tabsUsd` the tab turns it started (ADR-0127 §6). */
-  spend: { day: string; usd: number; ownUsd: number; tabsUsd: number };
+  /**
+   * Today's spend: `usd` is the total the cap reads; `ownUsd` the supervisor's own turns, `tabsUsd` the tab turns it
+   * started (ADR-0127 §6). `conversationUsd` is the part of `ownUsd` spent in wakes the user's messages started
+   * (ADR-0128 §7); watching is `ownUsd - conversationUsd`.
+   */
+  spend: { day: string; usd: number; ownUsd: number; tabsUsd: number; conversationUsd: number };
   /** Why it is paused, when it is (brief §10.1). Null while running. */
   pause: SupervisorPause | null;
   updatedAt: string;
@@ -162,7 +169,7 @@ function defaultState(projectId: string): SupervisorState {
     sdkSessionId: null,
     sdkSessionStartedAt: null,
     lastInputTokens: 0,
-    spend: { day: today(), usd: 0, ownUsd: 0, tabsUsd: 0 },
+    spend: { day: today(), usd: 0, ownUsd: 0, tabsUsd: 0, conversationUsd: 0 },
     pause: null,
     updatedAt: new Date().toISOString(),
   };
@@ -273,13 +280,15 @@ function sanitize(raw: unknown, projectId: string): SupervisorState {
   }
   if (typeof r.sdkSessionId === "string" && r.sdkSessionId.length <= 200) base.sdkSessionId = r.sdkSessionId;
   if (typeof r.sdkSessionStartedAt === "string") base.sdkSessionStartedAt = r.sdkSessionStartedAt;
-  const spend = r.spend as { day?: unknown; usd?: unknown; ownUsd?: unknown; tabsUsd?: unknown } | undefined;
+  const spend = r.spend as { day?: unknown; usd?: unknown; ownUsd?: unknown; tabsUsd?: unknown; conversationUsd?: unknown } | undefined;
   if (spend && typeof spend.day === "string" && typeof spend.usd === "number" && Number.isFinite(spend.usd)) {
     const part = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, v) : 0);
     const usd = Math.max(0, spend.usd);
     // A file from before the split: everything spent so far was the supervisor's own.
     const tabsUsd = part(spend.tabsUsd);
-    base.spend = { day: spend.day, usd, tabsUsd, ownUsd: spend.ownUsd === undefined ? usd - tabsUsd : part(spend.ownUsd) };
+    const ownUsd = spend.ownUsd === undefined ? usd - tabsUsd : part(spend.ownUsd);
+    // A file from before ADR-0128: none of it was conversation.
+    base.spend = { day: spend.day, usd, tabsUsd, ownUsd, conversationUsd: Math.min(ownUsd, part(spend.conversationUsd)) };
   }
   const pause = r.pause as { reason?: unknown; at?: unknown; detail?: unknown } | null | undefined;
   if (base.paused) {
@@ -581,7 +590,11 @@ export function pauseSupervisorForFault(projectId: string, reason: string, code:
 /** Runtime bookkeeping the loop owns (session rotation, spend) — not user authority. */
 export function updateSupervisorRuntime(
   projectId: string,
-  patch: Partial<Pick<SupervisorState, "sdkSessionId" | "sdkSessionStartedAt" | "lastInputTokens" | "lastWake">> & { addSpendUsd?: number },
+  patch: Partial<Pick<SupervisorState, "sdkSessionId" | "sdkSessionStartedAt" | "lastInputTokens" | "lastWake">> & {
+    addSpendUsd?: number;
+    /** Which part of the supervisor's own spend this is (ADR-0128 §7). Absent: watching. */
+    spendKind?: "watching" | "conversation";
+  },
 ): SupervisorState {
   const s = getSupervisorState(projectId);
   if (patch.lastWake !== undefined) s.lastWake = patch.lastWake;
@@ -590,9 +603,10 @@ export function updateSupervisorRuntime(
   if (patch.lastInputTokens !== undefined) s.lastInputTokens = patch.lastInputTokens;
   if (patch.addSpendUsd !== undefined && Number.isFinite(patch.addSpendUsd)) {
     const day = today();
-    if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0 };
+    if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0, conversationUsd: 0 };
     s.spend.usd += Math.max(0, patch.addSpendUsd);
     s.spend.ownUsd += Math.max(0, patch.addSpendUsd);
+    if (patch.spendKind === "conversation") s.spend.conversationUsd += Math.max(0, patch.addSpendUsd);
   }
   return commit(s);
 }
@@ -607,7 +621,7 @@ export function noteSupervisorTabSpend(projectId: string, costUsd: number | null
   const s = getSupervisorState(projectId);
   const add = typeof costUsd === "number" && Number.isFinite(costUsd) ? Math.max(0, costUsd) : 0;
   const day = today();
-  if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0 };
+  if (s.spend.day !== day) s.spend = { day, usd: 0, ownUsd: 0, tabsUsd: 0, conversationUsd: 0 };
   s.spend.usd += add;
   s.spend.tabsUsd += add;
   const state = commit(s);

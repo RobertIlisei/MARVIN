@@ -286,6 +286,9 @@ export function buildSupervisorStatus(
       spentUsd,
       spentOwnUsd: current ? st.spend.ownUsd : 0,
       spentTabsUsd: current ? st.spend.tabsUsd : 0,
+      // ADR-0128 §7 — the supervisor's own spend, split; one cap still stops everything.
+      spentConversationUsd: current ? st.spend.conversationUsd : 0,
+      spentWatchingUsd: current ? Math.max(0, st.spend.ownUsd - st.spend.conversationUsd) : 0,
       resetsAt: nextUtcMidnight(today),
       level,
     },
