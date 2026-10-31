@@ -164,7 +164,8 @@ export type ScheduleResult =
   | { ok: true; record: WakeupRecord }
   | { ok: false; error: string };
 
-type FireHandler = (record: WakeupRecord) => void | Promise<void>;
+/** Starts the turn and resolves once it has STARTED, never when it ends — `fireNow`'s callers wait on it. */
+type FireHandler = (record: WakeupRecord) => void | Promise<unknown>;
 
 // ── Module state (single-process, GLOBAL singleton) ────────────────────
 // CRITICAL: this state MUST be shared across every copy of this module in
@@ -510,6 +511,7 @@ async function fire(record: WakeupRecord): Promise<void> {
  * persistence. Event-driven wakeups (background-job completion, ADR-0038)
  * reuse the same shared fire handler / turn-dispatch path as time-based
  * wakeups — they just trigger on a process exit instead of a clock.
+ * Resolves once the turn has started (or was deferred), not when it ends.
  */
 export async function fireNow(record: WakeupRecord): Promise<void> {
   // Same yield-to-live-turn guard as the timed `fire` path: an event-driven

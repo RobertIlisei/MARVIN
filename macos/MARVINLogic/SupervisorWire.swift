@@ -196,7 +196,11 @@ public struct SupervisorStatus: Decodable, Equatable, Sendable {
     public struct Model: Decodable, Equatable, Sendable {
         public let resolved: String?
         public let label: String?
-        public init(resolved: String? = nil, label: String? = nil) { self.resolved = resolved; self.label = label }
+        /// What the user stored for the role; nil = the default. `resolved` alone cannot tell the two apart.
+        public let choice: String?
+        public init(resolved: String? = nil, label: String? = nil, choice: String? = nil) {
+            self.resolved = resolved; self.label = label; self.choice = choice
+        }
     }
     public struct CategoryStats: Decodable, Equatable, Sendable {
         public let proposals: Int

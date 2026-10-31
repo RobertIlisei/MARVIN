@@ -218,6 +218,18 @@ describe("runSupervisorWake — one bounded turn, its cost, its session", () => 
     expect(readLedger("proj").filter((e) => e.kind === "wake").map((e) => e.verb)).toEqual(["start", "end"]);
   });
 
+  it("names the model the wake was asked to run on, on its start line and in the reason the log shows", async () => {
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    await runSupervisorWake(
+      { projectId: "proj", workDir, items: [], verbCtx: verbCtx() },
+      { query: stubQuery(events("sdk-1", 0, 10), calls), resolveModel: async () => "claude-opus-5-5" },
+    );
+    expect(calls[0]?.options.model).toBe("claude-opus-5-5");
+    const start = readLedger("proj").find((e) => e.kind === "wake" && e.verb === "start");
+    expect(start?.model).toBe("claude-opus-5-5");
+    expect(start?.reason).toMatch(/claude-opus-5-5/);
+  });
+
   it("resumes the session across wakes, and rotates once the context passes half the window", async () => {
     updateSupervisorRuntime("proj", { sdkSessionId: "sdk-old", sdkSessionStartedAt: new Date().toISOString(), lastInputTokens: 10 });
     const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];

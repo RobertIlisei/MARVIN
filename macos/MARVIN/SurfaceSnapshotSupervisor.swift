@@ -21,7 +21,8 @@ import SwiftUI
                        autonomy: [String: String] = [:], pause: SupervisorStatus.Pause? = nil,
                        wake: SupervisorStatus.Wake? = nil, queued: Int = 0,
                        lastWake: SupervisorStatus.LastWake? = nil, open: Int = 0,
-                       spent: Double = 3.2, cap: Double = 10, level: String = "ok") -> SupervisorStatus {
+                       spent: Double = 3.2, cap: Double = 10, level: String = "ok",
+                       model: SupervisorStatus.Model = .init(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5")) -> SupervisorStatus {
         let cats = ["questions", "nudges", "posture", "confirms"]
         var auto = Dictionary(uniqueKeysWithValues: cats.map { ($0, "shadow") })
         for (k, v) in autonomy { auto[k] = v }
@@ -33,7 +34,7 @@ import SwiftUI
             budget: .init(capUsd: cap, spentUsd: spent, spentOwnUsd: spent * 0.4, spentTabsUsd: spent * 0.6,
                           resetsAt: midnight, level: level),
             charter: .init(text: "Ship the retry work this week. Keep releases local until review; never touch billing.", updatedAt: iso(300)),
-            model: .init(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5"),
+            model: model,
             stats: [
                 "questions": .init(proposals: 24, agreed: 23, agreedBlind: 21, agreementRate: 0.958, humanOnlyProposedAsAct: 0),
                 "nudges": .init(proposals: 9, agreed: 8, agreementRate: 0.889),
@@ -287,6 +288,13 @@ import SwiftUI
         }
     }
 
+    /// The Settings block's model list: invented, neutral ids (Golden Rule 6).
+    static let modelChoices: [SupervisorModelPicker.Entry] = [
+        .init(id: "claude-opus-5-5", displayName: "Opus 5.5", tier: "opus"),
+        .init(id: "claude-sonnet-5-5", displayName: "Sonnet 5.5", tier: "sonnet"),
+        .init(id: "claude-haiku-5-5", displayName: "Haiku 5.5", tier: "haiku"),
+    ]
+
     @MainActor
     static var workspaceStates: [(id: String, title: String, brain: Bool, model: () -> SupervisorModel)] {
         let waking = SupervisorStatus.Wake(wakeId: "w-50", startedAt: iso(0.2), itemCount: 3)
@@ -306,6 +314,21 @@ import SwiftUI
             ("sup-ws-autonomous", "Workspace §13.10 — autonomous · 2 of 4; Settings with two categories on", true, {
                 workspaceModel(status(mode: "autonomous", autonomy: ["questions": "autonomous", "nudges": "autonomous"], open: 2),
                                segment: .settings)
+            }),
+            ("sup-ws-model-picker", "Workspace — Settings, Model list open on the default: Default selected, live models by tier", true, {
+                workspaceModel(status(open: 2), segment: .settings) { m in
+                    m.modelChoices = modelChoices
+                    m.modelPickerOpen = true
+                    m.modelCursor = ""
+                }
+            }),
+            ("sup-ws-model-picked", "Workspace — Settings, Model list open after a pick: Opus 5.5 selected and under the cursor; Default no longer names a model", true, {
+                workspaceModel(status(open: 2, model: .init(resolved: "claude-opus-5-5", label: "Opus 5.5", choice: "claude-opus-5-5")),
+                               segment: .settings) { m in
+                    m.modelChoices = modelChoices
+                    m.modelPickerOpen = true
+                    m.modelCursor = "claude-opus-5-5"
+                }
             }),
             ("sup-ws-paused", "Workspace §13.10 — paused by you: Resume primary; the orb still; Log", true, {
                 workspaceModel(status(run: "paused", pause: .init(reason: "user", at: iso(4)), queued: 3, open: 2), segment: .log)

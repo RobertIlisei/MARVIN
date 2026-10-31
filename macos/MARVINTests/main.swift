@@ -5346,6 +5346,18 @@ runner.suite("supervisor-chat") {
         runner.expect(SupervisorChat.card("i1", items: ["i1": open]), equals: .open(open), "open: the inbox card")
         runner.expect(SupervisorChat.card("i2", items: ["i1": open]), equals: .missing, "unknown: nothing drawn")
     }
+    // 2026-10-31 — the server now attaches the items a wake raised, so a reply the model wrote without `items` still carries its new-tab card.
+    runner.test("a reply carrying a server-attached new-tab item draws it as that inbox card") {
+        let json = #"{"messages":[{"id":"r1","at":"t","from":"supervisor","text":"It's in your inbox now.","wakeId":"w","origin":{"kind":"message","messageIds":["m1"]},"items":["nt1"]}]}"#
+        let page = try? JSONDecoder().decode(SupervisorConversation.self, from: Data(json.utf8))
+        runner.expect(SupervisorChat.cardIds(page?.messages ?? []), equals: ["nt1"], "the new-tab id is fetched")
+        let newTab = SupervisorInboxItem(id: "nt1", createdAt: "t", sessionId: nil, tabTitle: nil, kind: "new-tab",
+                                         escalatedBecause: .init(code: "human-only", label: "Opening a tab is yours"),
+                                         rawAct: nil,
+                                         actions: [.init(id: "open", label: "Open tab", role: "consent", recommended: true, requiresExpanded: false)],
+                                         state: "open", resolvedBy: nil)
+        runner.expect(SupervisorChat.card("nt1", items: ["nt1": newTab]), equals: .open(newTab), "open: the same card as Needs you")
+    }
     runner.test("a settled card collapses to one line, with the server's summary, wherever it was settled") {
         runner.expect(SupervisorChat.settledLine(sendItem("resolved", "user", "shadow")), equals: "Done — Send to tab tab-obs: Run the tests first.", "done by you")
         runner.expect(SupervisorChat.settledLine(sendItem("dismissed", "user", "shadow")), equals: "Dismissed — Send to tab tab-obs: Run the tests first.", "dismissed")
@@ -5584,6 +5596,70 @@ runner.suite("supervisor-workspace") {
         runner.expect(disc.state, equals: "unknown", "numbers hidden while disconnected")
         runner.expect(disc.summary.contains("$"), equals: false, "no stale money")
         runner.expect(idle.accessibilityValue.hasPrefix("idle."), "spoken in words")
+    }
+}
+
+// MARK: - Supervisor model picker (the Settings block's inline pick)
+
+runner.suite("supervisor-model-picker") {
+    let live: [SupervisorModelPicker.Entry] = [
+        .init(id: "claude-haiku-5-5", displayName: "Haiku 5.5", tier: "haiku"),
+        .init(id: "claude-opus-5-5", displayName: "Opus 5.5", tier: "opus"),
+        .init(id: "claude-sonnet-5-5", displayName: "Sonnet 5.5", tier: "sonnet"),
+        .init(id: "qwen/qwen3-coder", displayName: "Qwen3 Coder", tier: "other"),
+    ]
+    func status(_ model: String) -> SupervisorStatus? {
+        let json = #"{"state":{},"status":{"projectId":"p","revision":3,"mode":"shadow","autonomy":{"questions":"shadow","nudges":"shadow","posture":"shadow","confirms":"shadow"},"run":"idle","pause":null,"currentWake":null,"queuedEvents":0,"lastWake":null,"health":"ok","watchedTabs":1,"openEscalations":0,"budget":{"capUsd":10,"spentUsd":0,"resetsAt":"2026-10-31T00:00:00Z","level":"ok"},"model":\#(model)}}"#
+        return SupervisorStatus.decodeEnvelope(Data(json.utf8))
+    }
+    runner.test("the status carries the stored choice, null on the default") {
+        runner.expect(status(#"{"role":"supervisor","resolved":"claude-sonnet-5-5","label":"Sonnet 5.5","choice":null}"#)?.model?.choice,
+                      equals: nil, "default")
+        runner.expect(status(#"{"role":"supervisor","resolved":"claude-opus-5-5","label":"Opus 5.5","choice":"claude-opus-5-5"}"#)?.model?.choice,
+                      equals: "claude-opus-5-5", "picked")
+        runner.expect(status(#"{"role":"supervisor","resolved":"claude-opus-5-5","label":"Opus 5.5"}"#)?.model?.choice,
+                      equals: nil, "an older sidecar sends no choice")
+    }
+    runner.test("rows group by tier in the Models dialog's order, and skip empty tiers") {
+        let groups = SupervisorModelPicker.groups(live)
+        runner.expect(groups.map(\.tier), equals: ["opus", "sonnet", "haiku", "other"], "order")
+        runner.expect(SupervisorModelPicker.groups(live.filter { $0.tier == "sonnet" }).map(\.tier), equals: ["sonnet"], "only what exists")
+    }
+    runner.test("the default row names what it resolves to only while the default is in force") {
+        let onDefault = SupervisorStatus.Model(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5", choice: nil)
+        let picked = SupervisorStatus.Model(resolved: "claude-opus-5-5", label: "Opus 5.5", choice: "claude-opus-5-5")
+        runner.expect(SupervisorModelPicker.defaultTitle(onDefault), equals: "Default · Sonnet 5.5", "on the default")
+        runner.expect(SupervisorModelPicker.defaultTitle(picked), equals: "Default", "a pick is not the default")
+        runner.expect(SupervisorModelPicker.defaultTitle(nil), equals: "Default", "unknown")
+    }
+    runner.test("selection is the stored choice, so Default can be selected while a tier row shares its model") {
+        runner.expect(SupervisorModelPicker.selection(SupervisorStatus.Model(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5", choice: nil)),
+                      equals: nil, "default selects the default row")
+        runner.expect(SupervisorModelPicker.selection(SupervisorStatus.Model(resolved: "claude-sonnet-5-5", label: "Sonnet 5.5", choice: "claude-sonnet-5-5")),
+                      equals: "claude-sonnet-5-5", "an explicit pick of the same model selects its own row")
+    }
+    runner.test("a stored choice the provider no longer lists is kept visible, not silently dropped") {
+        let stale = SupervisorModelPicker.staleEntry(choice: "claude-opus-4-1", in: live)
+        runner.expect(stale?.id, equals: "claude-opus-4-1", "kept")
+        runner.expect(stale?.displayName, equals: "claude-opus-4-1 · not in this provider's list", "named as stale")
+        runner.expect(SupervisorModelPicker.staleEntry(choice: "claude-opus-5-5", in: live) == nil, "listed: nothing extra")
+        runner.expect(SupervisorModelPicker.staleEntry(choice: nil, in: live) == nil, "default: nothing extra")
+    }
+    runner.test("arrow keys walk the rows in the order they are drawn, and stop at the ends") {
+        let keys = SupervisorModelPicker.keys(live)
+        runner.expect(keys, equals: ["", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "qwen/qwen3-coder"], "Default first, then tier order")
+        runner.expect(SupervisorModelPicker.step(from: "", by: 1, in: keys), equals: "claude-opus-5-5", "down")
+        runner.expect(SupervisorModelPicker.step(from: "claude-haiku-5-5", by: -1, in: keys), equals: "claude-sonnet-5-5", "up")
+        runner.expect(SupervisorModelPicker.step(from: "", by: -1, in: keys), equals: "", "top stops")
+        runner.expect(SupervisorModelPicker.step(from: "qwen/qwen3-coder", by: 1, in: keys), equals: "qwen/qwen3-coder", "bottom stops")
+        runner.expect(SupervisorModelPicker.step(from: nil, by: 1, in: keys), equals: "", "no cursor starts at Default")
+        runner.expect(SupervisorModelPicker.cursorKey(choice: nil), equals: "", "Default is the empty key")
+        runner.expect(SupervisorModelPicker.modelID(forKey: ""), equals: nil, "empty key picks the default")
+        runner.expect(SupervisorModelPicker.modelID(forKey: "claude-opus-5-5"), equals: "claude-opus-5-5", "an id picks itself")
+    }
+    runner.test("what VoiceOver reads, and the help the pick carries") {
+        runner.expect(SupervisorModelPicker.accessibilityLabel, equals: "Supervisor model", "label")
+        runner.expect(SupervisorModelPicker.help, equals: "Applies from the next wake. Every project's supervisor uses it.", "help")
     }
 }
 

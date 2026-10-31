@@ -113,6 +113,40 @@ final class SupervisorService {
         return s
     }
 
+    /// GET /api/models → the live list for the active provider. No supervisor
+    /// token: the list is not the supervisor's, and neither is the role store.
+    func modelEntries() async throws -> [SupervisorModelPicker.Entry] {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/models"))
+        req.timeoutInterval = 15
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        let (data, status) = try await send(req)
+        guard (200..<300).contains(status) else { throw SupervisorServiceError.refused(status: status, message: "HTTP \(status)", code: nil) }
+        struct Wire: Decodable {
+            struct Model: Decodable { let id: String; let displayName: String; let tier: String }
+            let models: [Model]
+        }
+        let wire = try JSONDecoder().decode(Wire.self, from: data)
+        return wire.models.map { .init(id: $0.id, displayName: $0.displayName, tier: $0.tier) }
+    }
+
+    /// PATCH /api/models/roles `{role: "supervisor", model}` — one role, one
+    /// key; nil puts it back on the default. The user's click, never a verb.
+    func setSupervisorModel(_ id: String?) async throws {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/models/roles"))
+        req.httpMethod = "PATCH"
+        req.timeoutInterval = 15
+        req.setValue("1", forHTTPHeaderField: "x-marvin-client")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = ["role": "supervisor", "model": id.map { $0 as Any } ?? NSNull()]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let (data, status) = try await send(req)
+        guard (200..<300).contains(status) else {
+            struct Err: Decodable { let error: String? }
+            let message = (try? JSONDecoder().decode(Err.self, from: data))?.error ?? "HTTP \(status)"
+            throw SupervisorServiceError.refused(status: status, message: message, code: nil)
+        }
+    }
+
     /// POST /api/supervisor `{projectId, action, …}` → the new status.
     func control(projectId: String, action: String, extra: [String: Any] = [:]) async throws -> SupervisorStatus {
         var body = extra
@@ -210,6 +244,12 @@ final class SupervisorModel {
     var inFlight: Set<String> = []
     /// A refusal from the server, shown in the card; the card stays.
     var itemErrors: [String: String] = [:]
+    /// The Settings block's model list (GET /api/models); empty until it loads.
+    var modelChoices: [SupervisorModelPicker.Entry] = []
+    var modelListFailed = false
+    /// The list is open, and which row the arrow keys are on ("" = Default).
+    var modelPickerOpen = false
+    var modelCursor: String = ""
     /// UI state that the keyboard, VoiceOver and the snapshot fixtures all
     /// need to reach, so it lives here rather than in view `@State`.
     var expandedCards: Set<String> = []
@@ -549,6 +589,40 @@ final class SupervisorModel {
         } catch {
             controlNotice = PaneNotice(kind: .error,
                                        headline: "\(failureVerb) didn't reach the sidecar — the supervisor may still be running",
+                                       detail: error.localizedDescription)
+        }
+    }
+
+    func openModelPicker() {
+        modelCursor = SupervisorModelPicker.cursorKey(choice: SupervisorModelPicker.selection(status?.model))
+        modelPickerOpen = true
+        Task { await loadModelChoices() }
+    }
+
+    func loadModelChoices() async {
+        guard !offline else { return }
+        do {
+            modelChoices = try await SupervisorService.shared.modelEntries()
+            modelListFailed = false
+        } catch {
+            modelListFailed = true
+            NSLog("[SupervisorModel] model list failed: \(error)")
+        }
+    }
+
+    /// The user's pick (nil = Default). Takes effect on the next wake; the
+    /// status is refetched so the block shows what the server now holds.
+    func setModel(_ id: String?) async {
+        modelPickerOpen = false
+        do {
+            try await SupervisorService.shared.setSupervisorModel(id)
+            controlNotice = nil
+            await refreshStatus()
+        } catch SupervisorServiceError.refused(_, let message, _) {
+            controlNotice = PaneNotice(kind: .error, headline: "Changing the model was refused", detail: message)
+        } catch {
+            controlNotice = PaneNotice(kind: .error,
+                                       headline: "Changing the model didn't reach the sidecar — the supervisor keeps its current one",
                                        detail: error.localizedDescription)
         }
     }
