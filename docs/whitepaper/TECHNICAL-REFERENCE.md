@@ -84,8 +84,17 @@ repository wins.*
 > once `resetsAt` has passed with no report since. **Left-pane fix** — Search,
 > Files and Practice roots give up their height claim (`minHeight: 0`);
 > `MARVIN_SNAPSHOT_VIEW=window-left-pane` measures the rail. **Sessions feed**
-> — `announce.attached` decodes to `SessionFeedEvent.attached`. **ADR-0128**
-> (talk to the supervisor in its own tab) is decided and planned for 1.1.
+> — `announce.attached` decodes to `SessionFeedEvent.attached`. **ADR-0128,
+> the supervisor conversation** (milestone 7): a pinned Supervisor tab; the
+> message wake and reply gating; a reply's cards *are* inbox items, settled
+> once by a click and never by text; `follow` / `unfollow` over a 0600
+> `follows.jsonl` (≤5 per project), reports admitted only in a wake the
+> followed tab's own triggers started, the merge card raised at `ready`;
+> server-resolved `refs`. **Close** recovers a lost worktree record from the
+> tab's meta or answers 409 `worktree-lost`, and the async reconcile re-reads
+> before it writes. **Gate**: `vcs-command.ts` strips git / gh / glab global
+> options before the push / CI / force-push checks; unreadable forms are
+> `unclear`.
 > v0.1.119 (2026-10-30): **the in-app Supervisor** (ADR-0127, milestones 1–6;
 > §5), with the native surface in the Sessions pane, transcript
 > marking and `session.posture` announced to the app. **Impeccable across the

@@ -8,10 +8,10 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
 
 ---
 
-- **2026-10-31 — v1.0.0: MARVIN's first 1.0 — cost and plan accounting corrected, three interface faults fixed, the Supervisor settled (ADR-0127, ADR-0128; 5 commits since v0.1.119).**
+- **2026-10-31 — v1.0.0: MARVIN's first 1.0 — talk to the supervisor, cost and plan accounting corrected, interface and gate faults fixed (ADR-0127, ADR-0128).**
 
   Robert chose to call this release 1.0 rather than v0.1.120. The functional
-  changes since v0.1.119 are the five commits below; 1.0 is also the
+  changes since v0.1.119 are the commits below; 1.0 is also the
   culmination of what v0.1.119 introduced (the in-app Supervisor, Impeccable
   across the native UI, the accessibility layer, the app icon, the worktree
   data-loss fix), none of which is repeated in detail here.
@@ -74,22 +74,77 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   Reconnect/backoff are unchanged. The stale Status note in the supervisor
   guide (M6 had shipped) was corrected in the same commit.
 
-  *Decided, not built: the user talks to the supervisor* (`4193451`,
-  [ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)). A pinned
-  Supervisor tab per project is an input channel, not new authority: same
-  runtime-dispatched read-only wakes, verbs, policy, delegation and ledger. The
-  user's words there may ground a request but are never consent; every act the
-  supervisor may not perform on its own appears as a card that is the inbox
-  item, and the click on its raw act is the consent. This is planned for 1.1
-  and is **not** in 1.0.
+  *Talk to the supervisor* ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md),
+  plan milestone 7: `cfd163b` `23ab262` `430b8c0` `4553bf4` [7.1], `8781e47`
+  [7.2], `70dfe5d` [7.3], `aee604c` [7.4]). A pinned Supervisor tab per project
+  is an input channel, not new authority: the same runtime-dispatched
+  read-only wakes, verbs, policy, delegation, budget and ledger as ADR-0127.
+  - *[7.1]* the message wake, reply gating (a reply is admitted only in a wake
+    a message started) and the `message:` ground; measured conversation
+    rotation with a packet that carries the open items forward; a $20 default
+    cap.
+  - *[7.2] the card is the inbox item.* A request the supervisor may not
+    perform on its own, a shadow-category act, and a send to an `observe` tab
+    each become one card in the reply, the same item as in *Needs you*; one
+    click settles it once (`in-flight` / `settled` after). No text consents:
+    "approve it", "yes, merge" and "I consent" resolve nothing, and every
+    human-only ledger line stays `escalate`. A send card can be edited; what
+    arrives is still the supervisor's, marked `editedByUser`.
+  - *[7.3] following and reporting.* `follow` / `unfollow` over an
+    event-sourced `follows.jsonl` (0600, the data dir), at most five per
+    project; a tab opened from a message is followed automatically at the
+    delegation the user's accept sets. A report is admitted only in a wake one
+    of the followed tab's existing triggers started — no new wake trigger,
+    machine turns stay silent. `until: "merge-ready"` raises the merge card
+    when `review_scope` returns `ready`; nothing merges before the click.
+    `refs` are resolved by the server; unknown ids are dropped.
+  - *[7.4] the native surface, finished.* Every brief §12 state is a snapshot
+    fixture at 260 and 420 pt, light and dark (148 PNGs, each read). The
+    renders found and fixed: an opaque composer hiding its placeholder (the
+    backlog item), a missing at-cap budget card, a sent message invisible until
+    the server answered, no *Resume* on the paused notice, overflow at 260 pt,
+    a dead ✕, a duplicated cap notice, a new-tab proposal drawn without its
+    first message (chat and *Needs you* now share one card), and orange
+    warning text at ~2:1 in light mode. Impeccable critique 31/40, then polish.
+    The guide gained "Talking to the supervisor".
+
+  *Gate and supervisor fixes from the backlog review.* The subagent read-only
+  invariant decides before the user-facing confirms (`47f5ee9`); failed and
+  cancelled supervisor-started turns count against the daily cap (`6230eb2`);
+  repeated failed outcomes escalate instead of being re-nudged (`24095b5`);
+  the Practice loop measures unreviewed boundary commits against the ship
+  gate's own list (`5d48cc9`). The gate now reads `git` / `gh` / `glab` the way
+  the binary does (`35e6e16`): global options (`-C`, `-c`, `--git-dir`,
+  `-R owner/repo`) are stripped before the push, CI-minutes, force/tag-push and
+  supervisor checks match, the old raw-text patterns still run, and forms it
+  cannot read (an inline alias, `$(which git)`, a verb from `xargs`) are
+  `unclear`: denied in a worktree tab and for subagents, confirmed elsewhere.
+
+  *Close never reports a merge it did not do* (`fcf389d`). An async reconcile
+  read `worktrees.json` once, yielded on each git call, and wrote back a
+  registry rebuilt from that copy, so a tab created in the window lost its
+  record and was re-adopted with no `sessionId`; closing it with *merge* then
+  answered `ok, "closed"` and merged nothing (seen live; the branch was merged
+  by hand). The reconcile now re-reads and merges at write time, close
+  recovers the record from the tab's meta or answers 409 `worktree-lost`, and
+  an unbound record whose branch is merged is reclaimable. Each has a
+  regression test that failed first.
+
+  *Interface and persona.* Backlog rows no longer draw their actions over a
+  clicked description (`99ff34c`). Tool badges are tinted by kind again —
+  teal, blue, indigo, purple, never the outcome hues — reversing critique U10
+  at the user's request (`f0f43e9`). The Ultron personality is rewritten as
+  *VisionQuest* (2026) plays him: patient, conversational, cold on the turn,
+  visible every turn rather than in one opening line, and explicitly forbidden
+  to steer the user's decisions; the rules are identical across personas
+  (`5334cca`).
 
   *Stable and in flight at 1.0.* Stable: the single-assistant loop and its
   enforced gates, the graph-first rail, the plan spine, per-tab worktrees and
   batched integration, the Practice loop, the in-app Supervisor (ADR-0127,
-  milestones 1–6) and the cost accounting above. In flight: the supervisor
-  conversation (1.1) and the items on the roadmap. Release artefacts are
+  milestones 1–6), the supervisor conversation (ADR-0128, milestone 7) and
+  the cost accounting above. In flight: the items on the roadmap. Release artefacts are
   unchanged in shape: ad-hoc signed, minisign-signed zip built by `release.yml`.
-  This commit changes documentation and the version only.
 
 - **2026-10-30 — v0.1.119: the in-app Supervisor, an interface audited and repaired, and a data-loss fix (ADR-0127; 68 commits since v0.1.118).**
 

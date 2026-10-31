@@ -779,8 +779,8 @@ Honest positioning, category by category:
 - **Not finished.** MARVIN is a young, opinionated, actively developed
   project (1.0 as of 2026-10-31 after the v0.1.x line; macOS/Apple Silicon
   only, ad-hoc signed, releases frequent). The 1.0 label marks the stability
-  of the core loop and its gates, not a finished roadmap: the supervisor
-  conversation (ADR-0128) is planned for 1.1. The
+  of the core loop and its gates, not a finished roadmap; it includes the
+  supervisor conversation (ADR-0128), where no text is ever consent. The
   128 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
