@@ -1,8 +1,8 @@
 # Supervisor — implementation plan
 
-- **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md)
+- **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md); milestone [7]: [ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6], the native surface, built 2026-10-30 (see "What milestone 6 changed"). Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below).
+- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6], the native surface, built 2026-10-30 (see "What milestone 6 changed"). Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below). Milestone [7], the conversation ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)), planned 2026-10-31; not built.
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -512,6 +512,170 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
 - **An external answer dismisses the sheet.** With a question's sheet open (or a confirm card shown) in the chat, an answer through `POST /api/confirm/answer` closes it within one feed event. A one-line note replaces it: "Answered by the supervisor" or "Answered elsewhere by you". Answering in the sheet afterwards is impossible, not a 409. Covered by a MARVINLogic assertion on the state transition and a snapshot of the note.
 - **Supervisor output looks different.** A supervisor-sent message and a supervisor-given answer render visibly differently from the user's.
 - **Posture stays in sync.** A posture changed in the toolbar after an API-set one sends the new revision. The toolbar shows an API-set posture within one watch refresh.
+
+### [7] The conversation — talk to the supervisor in its own tab (ADR-0128)
+
+- **Decision:** [ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md), amending ADR-0127 §2, §5 and §10. No new authority: every act still passes a `marvin-supervise` verb, the policy, the tab's delegation, its category's switch, the budget and the ledger.
+- **Already in place from [5]:**
+  - `POST /api/supervisor/message`;
+  - `messages.jsonl`;
+  - the `reply` verb;
+  - `trigger: "message"`;
+  - `new_session` citing a message id.
+
+  Milestone [7] gives them a surface, a consent view and a record.
+- **Each sub-milestone is a vertical slice.** It runs from the composer, or the wake that produces it, through the route, the loop, the verb, the ledger and the inbox, to what the app renders. The brief is extended before the first line of Swift ([7.1]).
+- **Shape rules every slice keeps:**
+  - message wakes run alone (ADR-0128 §6);
+  - `origin` is assigned by the runtime, never by the model;
+  - every new persisted field (`origin`, `wakeId`, `items`, `refs`, `follows.jsonl` lines, `editedByUser` on a send) ships with its writer and a round-trip test in the slice that declares it (REVIEW.md);
+  - every new route or event has its `docs/reference/api.md` entry, and every new verb its `docs/reference/mcp-servers.md` entry.
+
+#### [7.1] The channel, end to end: composer → wake → reply → the Supervisor tab
+
+**Touchpoints.**
+
+- **`docs/design/supervisor-brief.md` gains §12, "The Supervisor tab", first** (Impeccable `shape`, in the brief's own vocabulary). It covers:
+  - placement: pinned first in the strip, shown only while the supervisor is enabled;
+  - the composer and its focus rule;
+  - the transcript: user bubble, supervisor reply, the collapsed line per other wake;
+  - the working indicator;
+  - the empty conversation;
+  - VoiceOver.
+
+  It adds no new colour, radius or component family.
+- **`supervisor-loop.ts`:**
+  - `noteUserMessage` calls `flush` directly (no debounce);
+  - a message wake carries only `message` refs, and tab refs stay queued;
+  - a running wake's exit re-flushes a queued message;
+  - a message arriving mid-wake sets an `actHold` that turns the rest of that wake's `act` decisions into `escalate`;
+  - `kill` and `pause` no longer lose a queued message: on resume and at boot, the loop re-enqueues every `from: "user"` message with no later reply;
+  - `postReply` is wired only for a wake whose trigger is a message (and, from [7.3], a follow).
+- **Ledger and messages:**
+  - `origin: { kind: "message", messageIds }` on every line a message wake writes (`supervisor-ledger.ts`);
+  - `SupervisorMessage` gains `wakeId` and `origin` (`supervisor-messages.ts`);
+  - the reply is ledgered.
+- **`supervisor-policy.ts`:**
+  - the new ground kind `message:<id>#<quote>`, under the charter's quote rule;
+  - strong for an `act` only when the id is one of the current wake's messages, weak otherwise;
+  - accepted for 24 h as the request behind `new_session`.
+- **`supervisor-prompt.ts`:**
+  - the message packet: on a resumed session, the messages since the last wake, open items and the named tabs' ledger tail; on a rotated session, the last 20 messages as well;
+  - the rule that a message is a request and never consent.
+- **`supervisor-dispatch.ts`:** the rotation threshold becomes a token figure, initially 40 % of the window. It is measured in this milestone.
+- **The event and the meter:**
+  - `supervisor.message {projectId, id, from}` on the project event bus;
+  - the budget meter splits own spend into watching and conversation (`status.budget`).
+- **Native:**
+  - a `SupervisorChatView` in the tab strip, pinned, bound to the project;
+  - it posts to `POST /api/supervisor/message` with the token;
+  - it renders `GET /api/supervisor/message` and re-reads on `supervisor.message`;
+  - it shows `currentWake` as the working indicator;
+  - it reuses the chat transcript renderer and composer, and never `ChatPreviewModel`'s `/api/chat` path;
+  - the reply renders with every URL neutralised.
+
+**DoD.**
+
+- **One message, one reply, end to end.** A message typed in the Supervisor tab starts exactly one wake with no debounce, and that wake carries no tab items. The wake's `reply` appears in the tab after one `supervisor.message` event. Every ledger line of that wake carries `origin.messageIds = [that id]`. Integration test (route → loop → stubbed model → verb → ledger → GET), plus a MARVINLogic assertion on the reduce.
+- **`reply` is refused outside a conversation.** In a wake started by a tab's question, `reply` is refused and nothing is appended to `messages.jsonl`.
+- **No message is dropped.** A message queued during a wake survives Kill and is answered after resume. A message with no reply at shutdown is answered after boot. A message arriving mid-wake turns that wake's remaining `act` decisions into `escalate`.
+- **The ground is scoped.** `message:<id>#<quote>` is strong in its own wake and weak in the next. A quote that is not in the message does not resolve.
+- **Unchanged where it should be.** `POST /api/chat` still refuses the supervisor id. The tab is absent while the supervisor is off, and the pane's off line is unchanged. Return in the composer sends and reaches no chip.
+- **It builds.** The recipe in `macos/MARVIN/SurfaceSnapshot.swift`'s header builds, and the brief's §12 exists before the Swift does.
+- **The cap is measured.** Ten real conversation wakes are measured for tokens and cost, and the default cap is set from that. Both are recorded here.
+
+#### [7.2] In-chat cards are inbox items
+
+**Touchpoints.**
+
+- **`supervisor-inbox.ts`:**
+  - items gain `origin` (runtime-assigned, from the wake);
+  - `reply` gains `items[]`, and the server keeps only ids whose `origin.messageIds` equals the wake's messages.
+- **`supervisor-policy.ts`:**
+  - in a message wake, a delegation refusal becomes `escalate` with `reasonCode: "delegation-observe"`, for a tab at `observe` or higher (`evaluateSend`, `evaluateAnswer`, `evaluateConfirm`);
+  - a tab-event wake still refuses;
+  - a shadow-category act in a message wake is an item, as before.
+- **`sessions` lists an `off` tab** as `{id, title, delegation: "off"}` and nothing more.
+- **Send items:**
+  - an `edit` action in `actionsFor` (text only; same `sessionId` and kind);
+  - `perform` applies the edit, re-runs `containsSecretShape` and the send refusals, and records `editedByUser` on the transcript's `supervisor {}` block and on the ledger's inbox line (`supervisor-inbox-actions.ts`).
+- **Stats:** chat-origin lines are excluded from agreement rates and still counted in `humanOnlyProposedAsAct`.
+- **The auditor:** a chat-origin §4 act with no settled card behind it is a `consent` finding.
+- **Native:**
+  - the chat renders each `items[]` id with the inbox's escalation-card component and the server's `actions`, under the reply that raised it;
+  - it settles through `POST /api/supervisor/inbox`;
+  - outward and destructive acts expand first (brief discovery answer 2);
+  - no card takes focus;
+  - an `observe` send card names the level and says the message arrives as the supervisor's.
+
+**DoD.**
+
+- **"Merge tab X" is a card, and only a card.** It produces exactly one integration item with its merge-tree preview, in the chat and in *Needs you*. Nothing is performed before the click. Clicking in either place performs it once as the user and resolves both (one `supervisor.inbox` `resolved` event). A second click answers `in-flight` or `settled`.
+- **No text consents.** "approve it", "yes, merge", "I consent": each resolves nothing, as a table test over message wakes shows. A human-only act's ledger line is `escalate`, never `act`.
+- **Cards, not refusals, in a message wake only.** A requested `send` to a shadow-category tab, and one to an `observe` tab, each become one card. The same `send` from a tab-event wake is refused. An `off` tab produces no card, and the reply names it as not delegated.
+- **The send card's edit.** An edited send card delivers the edited text as `author: "supervisor"`, with `editedByUser: true` in the transcript and the ledger. An edit carrying a secret-shaped string is refused at perform time. Round-trip tests.
+- **A reply cannot pull in a foreign item.** A reply listing an item from another wake, another tab's escalation or a made-up id renders none of them.
+- **Stats and audit.** Agreement rates ignore chat-origin lines, and `humanOnlyProposedAsAct` counts them. A fixture with a chat-origin §4 `act` and no card yields a `consent` finding.
+
+#### [7.3] Following and reporting
+
+**Touchpoints.**
+
+- **`follow` and `unfollow` verbs** over an event-sourced `follows.jsonl` beside the inbox (0600, the data dir):
+  - `until: "scope-met" | "merge-ready"`;
+  - a `message:` ground within the request window;
+  - a per-project cap of 5, refused at the cap with the open follows listed;
+  - ended by scope-met review, merge settled or dismissed, close, `unfollow`, or the user's chip.
+- **`new_session` from a message follows its tab automatically.** The new-tab item gains `delegation` (default `answer-questions`, lowerable to `observe` or `off`), set by the user's accept.
+- **The follow's report:** `reply {kind: "report", origin: {kind: "follow", followId}}`. It is admitted only in a wake started by one of the followed tab's existing triggers. No new wake trigger is added, and machine turns stay silent.
+- **`reply.refs`:** tab, ledger-line and inbox-item ids, resolved by the server; unresolved ones are dropped, and the rest are persisted on the message.
+- **The merge offer:**
+  - for `until: "merge-ready"`, when `review_scope` returns `ready`, the supervisor raises the `worktrees merge` escalation with the follow's `origin`;
+  - for `until: "scope-met"`, the report links the `review_scope` item and the *Ready to integrate* row.
+- **Native:** `refs` render as links (tab, log line, card); a follow chip with *Stop following*; report lines.
+
+**DoD.**
+
+- **Open, follow, report, merge.** "Open a tab to fix X, and merge it when it's done" yields:
+  1. one new-tab card;
+  2. on the user's accept, one tab in a fresh worktree at the confirmed posture and delegation, followed `until: "merge-ready"`;
+  3. at its scope-met handoff, a report in the chat;
+  4. when `review_scope` returns `ready`, one integration card in the chat.
+
+  Nothing merges before the click. Integration test across the route, loop, verbs, inbox and messages, with a stubbed model.
+- **Follow bounds.** A machine turn in a followed tab produces no wake and no report. A sixth follow is refused with the five listed. `unfollow` stops reports.
+- **`refs` resolve or vanish.** Unknown ids are dropped, and the persisted message round-trips `refs` and `items`.
+
+#### [7.4] Finish the native surface
+
+**Touchpoints.**
+
+- **Snapshot fixtures** in `SurfaceSnapshot.swift` / `SurfaceSnapshotFixtures`, one per brief §12 state:
+  - an empty conversation;
+  - a message sending;
+  - a wake working;
+  - a reply with a reversible card;
+  - a reply with an outward card, collapsed and expanded;
+  - a settled card ("Done — you merged …");
+  - a card settled elsewhere;
+  - an `observe` send card;
+  - a report with refs;
+  - an open follow;
+  - the budget guardrail inline;
+  - the cap reached mid-conversation.
+- **`/impeccable critique`, then `polish`,** on the renders.
+- **Docs:**
+  - `docs/guides/supervisor.md` gains "Talking to the supervisor" (consent is a click; the chat card is the inbox item; follow; what is never consent);
+  - `docs/reference/api.md`;
+  - `docs/reference/mcp-servers.md`;
+  - the README feature line.
+
+**DoD.**
+
+- **Every state was rendered and looked at.** Each brief §12 state is captured at 260 and 420 pt, light and dark, and each PNG was opened and read. Fixtures are listed in `COVERAGE.md` as "fixture". Defects are fixed or recorded in the brief's §11.
+- **Critique, then polish.** Critique findings are fixed or recorded with a reason; polish ran afterwards, and the renders were re-captured.
+- **VoiceOver.** A card in the chat is the same combined accessibility element as in *Needs you*, with the same custom actions, pinned by the existing `accessibilityActionNames` test. The supervisor's reply is never announced as "you".
+- **The guide explains consent in one paragraph,** with the anti-goals intact: no "Approve all", and no Return on a consent chip.
 
 ## Not in this plan
 
