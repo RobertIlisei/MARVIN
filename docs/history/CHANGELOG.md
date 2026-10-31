@@ -108,6 +108,29 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
     warning text at ~2:1 in light mode. Impeccable critique 31/40, then polish.
     The guide gained "Talking to the supervisor".
 
+  *The conversation reaches parity with a chat tab* (`236ae4a`,
+  [ADR-0129](../decisions/0129-images-in-the-supervisor-conversation.md)). The
+  first version had a bare text composer; the user could not paste a
+  screenshot. Images can now be pasted or dropped, show as chips, and reach the
+  supervisor model as image blocks in the message wake; files and `@` mentions
+  work as in a chat tab; replies render as Markdown with Copy Message. The
+  route checks type and size and stores images under the data directory, never
+  the repository, pruning those the last 100 messages no longer show. Before
+  sending, the app reads the text in each image locally and the server refuses
+  a message whose text looks like a key or token — a client-side check, so a
+  holder of the token can skip it (accepted in ADR-0129). An attachment is
+  never consent: an image reading "approve" settles nothing, pinned by two
+  tests. Open: whether the CLI expands `@path` in a supervisor prompt by itself
+  (parked to verify).
+
+  *The supervisor in the activity rail, and a banner that waits* (`2bc5cfa`).
+  A binoculars rail item, shown while the supervisor is enabled, brings it to
+  the front, with a badge counting its open cards. A tab whose turn ended while
+  its background job runs used to show "Paused — 0/4 · Continue", which read as
+  stuck and offered a second turn on top of the job's wake; it now reads
+  "Waiting on a background job", names the job and its elapsed time, and has
+  no Continue.
+
   *Gate and supervisor fixes from the backlog review.* The subagent read-only
   invariant decides before the user-facing confirms (`47f5ee9`); failed and
   cancelled supervisor-started turns count against the daily cap (`6230eb2`);
@@ -129,6 +152,13 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   recovers the record from the tab's meta or answers 409 `worktree-lost`, and
   an unbound record whose branch is merged is reclaimable. Each has a
   regression test that failed first.
+
+  *The flaky supervisor cancel test* (`486d66f`). It registered its
+  `sdk-runner` mock twice and, under load, the second registration sometimes
+  lost; the test now registers once, and a lost start fails in 4 s with a
+  message instead of hanging. 59/60 under ten CPU burners, the one miss a
+  vitest worker lost under load (an unrelated test showed the same 1 in 60).
+  Production unaffected: `runDetachedTurn` reaches `runAgent` synchronously.
 
   *Interface and persona.* Backlog rows no longer draw their actions over a
   clicked description (`99ff34c`). Tool badges are tinted by kind again —
