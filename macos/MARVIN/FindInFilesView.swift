@@ -69,7 +69,15 @@ struct FindFileResult: Identifiable {
         // "other buttons disappear from the side bar" report of 2026-09-11,
         // and the same regression as 2026-08-29. A pane absorbs compression
         // and clips; it never negotiates for width (ADR-0114).
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        //
+        // Nor for height. With `minWidth: 0`, AppKit asks for this pane's
+        // minimum height at ~0pt wide, where the empty state's fixed-size
+        // text wraps a character per line: measured 1013pt. The window cannot
+        // grow past its screen, so the whole column (rail included) overflowed
+        // and was pushed up under the title bar whenever Search was showing
+        // (2026-10-31). `minHeight: 0` drops the claim; top alignment keeps the
+        // search field in view if content is ever taller than the pane.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
     }
 

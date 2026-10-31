@@ -238,6 +238,13 @@ enum SurfaceSnapshot {
                 AnyView(AppStatusBar())
             }
 
+        let cost: [Surface] = SurfaceCostFixtures.cases.map { c in
+            Surface("cost-popover-\(c.id)", c.title, .fixture, widths: [360]) {
+                guard let summary = c.summary else { return nil }
+                return AnyView(CostHistoryPopover(summary: summary, now: SurfaceCostFixtures.now))
+            }
+        }
+
         let panes: [Surface] =
             pair("pane-files", "Left pane: Files", widths: paneWidths, height: paneHeight) { AnyView(FileTreeView()) }
             + pair("pane-search", "Left pane: Search", widths: paneWidths, height: paneHeight,
@@ -277,6 +284,12 @@ enum SurfaceSnapshot {
             pair("backlog-panel", "Backlog panel", widths: [420, 640], height: 640, empty: "the list loads from the sidecar") {
                 AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
             }
+            // At the panel's real width (its minimum is 720), with a description
+            // longer than the row's three-line preview.
+            + [Surface("backlog-panel-long", "Backlog panel — long description, at its real width",
+                       .populated, widths: [720, 920], height: 640) {
+                AnyView(BacklogPanel(workDir: SurfaceFixtures.project, onPromote: { _ in }, onClose: {}, onChanged: {}))
+            }]
             + [Surface("backlog-detail", "Backlog item detail", .fixture, widths: [460, 640], height: 560) {
                 guard let item = SurfaceFixtures.backlogItem else { return nil }
                 return AnyView(BacklogDetailView(workDir: SurfaceFixtures.project, item: item,
@@ -347,7 +360,7 @@ enum SurfaceSnapshot {
             },
         ]
 
-        return chat + topBar + statusBar + panes + editor + backlog + settings + live + supervisor
+        return chat + topBar + statusBar + cost + panes + editor + backlog + settings + live + supervisor
     }
 
     // MARK: - Per-surface preparation
@@ -477,6 +490,15 @@ enum SurfaceSnapshot {
         // token or call the stand-in for it; fixtures fill their own models.
         SupervisorModel.shared.offline = true
 
+        if which == "window-left-pane" {
+            guard let outPath = env["MARVIN_SNAPSHOT_OUT"], !outPath.isEmpty else {
+                fail("MARVIN_SNAPSHOT_OUT=<directory> is required")
+                return true
+            }
+            renderLeftPaneWindows(out: URL(fileURLWithPath: outPath, isDirectory: true))
+            return true
+        }
+
         let all = surfaces
         if which == "list" {
             for s in all { print("\(s.id)\t\(s.coverage.label)\t\(s.title)") }
@@ -596,6 +618,100 @@ enum SurfaceSnapshot {
 
     private static func fail(_ message: String) {
         FileHandle.standardError.write(Data("surface snapshot: \(message)\n".utf8))
+    }
+
+    // MARK: - Left pane in a titled window
+
+    /// The left pane as the app hosts it: inside an `HSplitView`, in a titled,
+    /// full-size-content window with a unified toolbar, so the title bar and
+    /// its safe-area inset are real. The borderless `render` has neither,
+    /// which is why a pane drawn under the title bar cannot show up there.
+    /// One PNG per tab and width, plus each hosting view's frame and safe area
+    /// (top-down window coordinates) on stdout.
+    @MainActor
+    private static func renderLeftPaneWindows(out: URL) {
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        for tab in ["files", "search", "sourceControl", "sessions", "skills", "plugins", "practice"] {
+            for width: CGFloat in [260, 420] {
+                let bridge = MarvinBridge()
+                let health = HealthMonitor()
+                let root = HSplitView {
+                    LeftPane()
+                        .frame(minWidth: 45, idealWidth: width)
+                    Color.clear.frame(minWidth: 320)
+                }
+                .environment(bridge)
+                .environment(health)
+
+                let host = NSHostingView(rootView: root)
+                // A real window is bounded by its screen. Offscreen, the
+                // hosting view's minimum-size constraint would grow the window
+                // to fit instead, hiding a pane whose minimum height is too
+                // big. Without it the window stays 700pt and overflow shows.
+                host.sizingOptions = []
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: width + 500, height: 700),
+                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                    backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.toolbar = NSToolbar(identifier: "snapshot.left-pane")
+                window.toolbarStyle = .unified
+                window.contentView = host
+                window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+                window.orderFront(nil)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.6))
+                bridge.requestedLeftTab = tab
+                RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+
+                let h = window.frame.height
+                func top(_ v: NSView) -> NSRect {
+                    let r = v.convert(v.bounds, to: nil)
+                    return NSRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
+                }
+                print("[window-left-pane] tab=\(tab) width=\(Int(width)) window=\(window.frame.size) "
+                      + "titlebar=\(h - window.contentLayoutRect.height)")
+                func walk(_ v: NSView, depth: Int) {
+                    let name = String(describing: type(of: v))
+                    if name.contains("Hosting") || name.contains("SplitView") {
+                        print("[window-left-pane]   \(String(repeating: "  ", count: depth))\(name.prefix(60)) "
+                              + "frame=\(top(v)) safeTop=\(v.safeAreaInsets.top)")
+                    }
+                    for s in v.subviews where depth < 8 { walk(s, depth: depth + 1) }
+                }
+                walk(host, depth: 0)
+
+                // The rail's first button (Files) is the one the bug hides.
+                // It sits 2pt below the rail's top edge, which must be the
+                // title bar's bottom edge.
+                func filesButton(_ v: NSView) -> TooltipHitLayer.HitView? {
+                    if let hit = v as? TooltipHitLayer.HitView, hit.tooltip == "Files" { return hit }
+                    for s in v.subviews { if let f = filesButton(s) { return f } }
+                    return nil
+                }
+                if let files = filesButton(host) {
+                    let f = top(files)
+                    let titlebar = h - window.contentLayoutRect.height
+                    let railTop = f.minY - (MarvinTheme.paneHeaderHeight - 34) / 2
+                    print("[window-left-pane] RAIL tab=\(tab) width=\(Int(width)) filesButton=\(f) "
+                          + "railTop=\(railTop) \(railTop == titlebar ? "OK" : "SHIFTED by \(titlebar - railTop)")")
+                } else {
+                    print("[window-left-pane] RAIL tab=\(tab) width=\(Int(width)) filesButton=NOT FOUND")
+                }
+
+                let frameView = window.contentView?.superview ?? host
+                if let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) {
+                    frameView.cacheDisplay(in: frameView.bounds, to: rep)
+                    let name = "window-left-pane--\(tab)--\(Int(width)).png"
+                    try? rep.representation(using: .png, properties: [:])?
+                        .write(to: out.appendingPathComponent(name))
+                }
+                window.orderOut(nil)
+            }
+        }
+        print("wrote window-left-pane PNGs to \(out.path)")
     }
 
     // MARK: - Rendering

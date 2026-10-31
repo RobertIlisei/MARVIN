@@ -2,7 +2,7 @@
 
 ## One assistant, enforced discipline: a design for AI pair-programming that survives real projects
 
-**Robert Ilisei** · October 2026 · v0.1.119 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
+**Robert Ilisei** · October 2026 · v1.0.0 · [github.com/RobertIlisei/MARVIN](https://github.com/RobertIlisei/MARVIN)
 
 *M.A.R.V.I.N. — Moderately Advanced Robotic Virtual Intelligence Network. A
 pair-programming AI IDE for macOS.*
@@ -178,6 +178,15 @@ critique, 25/40). The worst result was the least visible: five VoiceOver labels
 in fifty thousand lines. Every P1 was fixed, every P2 fixed or deferred with a
 reason, and the confirm that matters most now has one default behaviour — Allow
 is ⌘⏎, Return consents to nothing.
+
+**A cost number is only as good as what it counts.** Until 1.0 the cost panel
+overstated spend about 3.8×: the SDK's `total_cost_usd` is a running total for a
+resumed session and the tracker recorded it as one turn's cost (one real
+session: $93 recorded against a true $32). Each turn now records its own
+increase, and each figure is labelled by billing source — a plan's
+API-equivalent is not a bill, an API key is, an OpenRouter figure is an
+estimate. The plan name and usage windows come from the SDK's `accountInfo()`,
+and a window that has expired is not drawn, so no plan rule lives in the code.
 
 **Parallelism has a bill, and it is not the model's.** On a metered CI runner,
 five tabs each opening their own merge request costs five full pipeline runs.
@@ -768,8 +777,11 @@ Honest positioning, category by category:
   the spend back; whether the trade nets out for you depends on how long
   your projects live. Short-lived scripts don't need MARVIN.
 - **Not finished.** MARVIN is a young, opinionated, actively developed
-  project (v0.1.x line, macOS/Apple Silicon only, releases weekly). The
-  127 ADRs are public; so are the audits that found real flaws — including
+  project (1.0 as of 2026-10-31 after the v0.1.x line; macOS/Apple Silicon
+  only, ad-hoc signed, releases frequent). The 1.0 label marks the stability
+  of the core loop and its gates, not a finished roadmap: the supervisor
+  conversation (ADR-0128) is planned for 1.1. The
+  128 ADRs are public; so are the audits that found real flaws — including
   the ones MARVIN's own tooling caught in its own repository.
 
 The through-line: where the field bets on *more autonomy*, MARVIN bets on
@@ -911,4 +923,4 @@ Anthropic Console key, or an OpenRouter key.
 ---
 
 *© 2026 Robert Ilisei. MARVIN is open source (MIT). This paper describes
-v0.1.119; the repository is the authoritative, current reference.*
+v1.0.0; the repository is the authoritative, current reference.*

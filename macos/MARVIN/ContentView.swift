@@ -778,54 +778,58 @@ import SwiftUI
 /// phase as part of de-duplicating top + bottom chrome.
 @MainActor struct CostHistoryPopover: View {
     let summary: CostSummary
-    /// ADR-0082 — on a Claude subscription the `$` figures are what the
-    /// tokens WOULD cost at API rates (the SDK's `total_cost_usd`); nothing
-    /// is billed per token. Say so, or "$31,125 lifetime" reads as a bill.
-    var subscription: Bool = false
+    /// The clock the plan-window expiry reads; injectable for the snapshot harness.
+    var now: Date = Date()
     @State private var hoveredDay: String? = nil
+    @State private var modelPeriod: ModelPeriod = .today
+
+    enum ModelPeriod: String, CaseIterable, Identifiable {
+        case today = "today", week = "7 days"
+        var id: String { rawValue }
+    }
+
+    /// Modes seen this week or today, the costliest first. Each gets its own
+    /// figures — they are never one total.
+    private var modes: [String] {
+        var seen: [String] = []
+        for (k, _) in summary.weekPeriod.modes + summary.lifetimePeriod.modes where !seen.contains(k) { seen.append(k) }
+        return seen
+    }
+
+    private var visibleWindows: [CostSummary.ClaudeWindow] {
+        summary.claudeWindows.filter {
+            !PlanWindowClock.isExpired(resetsAt: $0.resetsAt, lastReportedAt: $0.lastReportedAt, now: now)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(subscription ? "api-equivalent cost · this project" : "cost for this project")
-                .font(.caption.monospaced())
-                .tracking(2)
-                .textCase(.uppercase)
-                .foregroundStyle(.tertiary)
-            if subscription {
-                Text("You are on a Claude plan, not an API key: these are what the tokens would cost at API rates — a relative gauge, not a bill. Your real limits are the plan windows below.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+            sectionLabel("cost for this project")
+
+            if modes.isEmpty {
+                Text("No turns recorded yet with the current accounting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(modes, id: \.self) { key in
+                modeBlock(key)
             }
 
-            VStack(spacing: 4) {
-                row("today", currency: summary.today)
-                row("7 days", currency: summary.week)
-                row("lifetime", currency: summary.lifetime)
-                MarvinDivider()
-                    .padding(.vertical, 2)
-                row("turns", text: summary.turns.formatted())
-                row("in / out tokens",
-                    text: "\(summary.inputTokens.formatted()) / \(summary.outputTokens.formatted())")
-            }
-            .font(.callout.monospaced())
-
-            if let or = summary.openRouter {
-                VStack(alignment: .leading, spacing: 4) {
-                    Divider()
-                        .padding(.vertical, 2)
-                    Text("openrouter account")
-                        .font(.caption.monospaced())
-                        .tracking(2)
-                        .textCase(.uppercase)
-                        .foregroundStyle(.tertiary)
-                    row("total credits", currency: or.totalCredits)
-                    row("total usage", currency: or.totalUsage)
-                }
-                .font(.callout.monospaced())
+            if let legacy = summary.legacy {
+                legacyNote(legacy)
             }
 
-            if !summary.claudeWindows.isEmpty {
+            tokenBlock
+
+            if !summary.modelsToday.isEmpty || !summary.modelsWeek.isEmpty {
+                modelBlock
+            }
+
+            if summary.openRouter != nil || summary.openRouterKey != nil {
+                openRouterBlock
+            }
+
+            if !visibleWindows.isEmpty {
                 claudePlanUsage
             }
 
@@ -834,26 +838,149 @@ import SwiftUI
             }
         }
         .padding(16)
-        .frame(width: 340)
+        .frame(width: 360)
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospaced())
+            .tracking(2)
+            .textCase(.uppercase)
+            .foregroundStyle(.tertiary)
+    }
+
+    @ViewBuilder
+    private func modeBlock(_ key: String) -> some View {
+        let mode = CostModeDisplay(key: key, plan: summary.account?.subscriptionType)
+        let today = summary.todayPeriod.byAuthMode[key] ?? CostSummary.Aggregate()
+        let week = summary.weekPeriod.byAuthMode[key] ?? CostSummary.Aggregate()
+        let lifetime = summary.lifetimePeriod.byAuthMode[key] ?? CostSummary.Aggregate()
+        let unpriced = lifetime.unpricedTurns ?? 0
+        VStack(alignment: .leading, spacing: 4) {
+            Text(mode.title)
+                .font(.callout.weight(.semibold))
+            Text(mode.caption)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 3) {
+                row("today", text: mode.chip(today.costUsd))
+                row("7 days", text: mode.chip(week.costUsd))
+                row("since accounting fix", text: mode.chip(lifetime.costUsd))
+                if unpriced > 0 {
+                    row("turns with no price", text: unpriced.formatted())
+                }
+            }
+            .font(.callout.monospaced())
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func legacyNote(_ legacy: CostSummary.Legacy) -> some View {
+        Text("\(String(legacy.from.prefix(10))) to \(String(legacy.to.prefix(10))): \(legacy.turns.formatted()) turns recorded \(fmtUsd(legacy.costUsd)). Those entries counted each resumed session's running total as one turn's cost, so the figure overstates spend. It is not added to the totals above.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var tokenBlock: some View {
+        let w = summary.weekPeriod.total
+        let t = TokenBreakdown(uncached: w.inputTokens, cacheRead: w.cacheReadTokens ?? 0,
+                               cacheWrite: w.cacheCreationTokens ?? 0, output: w.outputTokens)
+        VStack(alignment: .leading, spacing: 3) {
+            MarvinDivider().padding(.vertical, 2)
+            sectionLabel("tokens · 7 days · main thread")
+            row("turns", text: w.turns.formatted())
+            row("input", text: TokenBreakdown.compact(t.totalInput))
+            Text(t.inputParts)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            row("output", text: TokenBreakdown.compact(t.output))
+        }
+        .font(.callout.monospaced())
+    }
+
+    @ViewBuilder
+    private var modelBlock: some View {
+        let rows = modelPeriod == .today ? summary.modelsToday : summary.modelsWeek
+        VStack(alignment: .leading, spacing: 4) {
+            MarvinDivider().padding(.vertical, 2)
+            HStack {
+                sectionLabel("by model")
+                Spacer()
+                Picker("Period", selection: $modelPeriod) {
+                    ForEach(ModelPeriod.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.small)
+            }
+            if rows.isEmpty {
+                Text("No turns \(modelPeriod == .today ? "today" : "in the last 7 days").")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(rows) { r in
+                let mode = CostModeDisplay(key: r.authMode)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack {
+                        Text(r.model)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        // An estimated row at $0 had no price at all — say so, not "~$0.00".
+                        Text(r.estimated && r.costUsd == 0 ? "no price"
+                             : r.estimated && mode.isBill ? "~" + fmtUsd(r.costUsd) : mode.chip(r.costUsd))
+                    }
+                    // The mode is named only when several are present — the
+                    // row's figure is already marked ≈ / ~ / plain.
+                    Text((modes.count > 1 ? "\(mode.title) · " : "") + "\(r.turns.formatted()) \(r.turns == 1 ? "turn" : "turns") · \(TokenBreakdown.compact(r.inputTokens + r.cacheReadTokens + r.cacheCreationTokens)) in · \(TokenBreakdown.compact(r.outputTokens)) out")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .font(.callout.monospaced())
+    }
+
+    @ViewBuilder
+    private var openRouterBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            MarvinDivider().padding(.vertical, 2)
+            sectionLabel("openrouter's own billing")
+            Text("For the whole key — every app that uses it, not only MARVIN.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if let k = summary.openRouterKey {
+                if let d = k.usageDaily { row("today", currency: d) }
+                if let w = k.usageWeekly { row("this week", currency: w) }
+                if let m = k.usageMonthly { row("this month", currency: m) }
+                row("all time", currency: k.usage)
+            }
+            if let or = summary.openRouter {
+                row("credits bought", currency: or.totalCredits)
+                row("credits used", currency: or.totalUsage)
+            }
+        }
+        .font(.callout.monospaced())
     }
 
     /// ADR-0082 — the Claude-subscription analogue of the OpenRouter credits
-    /// block. The SDK reports each rate-limit window on every turn; this shows
-    /// the newest snapshot per window as a bar, with the refill time. A window
-    /// the API has not sized (`utilization` absent) shows its status only —
-    /// never a fabricated number.
+    /// block. Windows come from the server and nothing else: a type it has
+    /// stopped sending shows dimmed with when it was last reported, and one
+    /// whose refill time has passed with no report since is not shown.
     @ViewBuilder
     private var claudePlanUsage: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Divider()
-                .padding(.vertical, 2)
-            Text("claude plan usage limits")
-                .font(.caption.monospaced())
-                .tracking(2)
-                .textCase(.uppercase)
-                .foregroundStyle(.tertiary)
-            ForEach(summary.claudeWindows) { w in
-                ClaudeWindowRow(window: w)
+            MarvinDivider().padding(.vertical, 2)
+            sectionLabel("claude plan usage limits")
+            ForEach(visibleWindows) { w in
+                ClaudeWindowRow(window: w, now: now)
             }
         }
         .font(.callout.monospaced())
@@ -964,11 +1091,16 @@ import SwiftUI
 /// One Claude plan window: label, percentage, bar, refill time (ADR-0082).
 @MainActor private struct ClaudeWindowRow: View {
     let window: CostSummary.ClaudeWindow
+    var now: Date = Date()
+
+    /// The server's newest sized report left this window out — what is shown
+    /// is the last value it sent, not the current one.
+    private var absent: Bool { window.inLatestReport == false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text(window.label)
+                Text(window.displayLabel)
                 Spacer()
                 if let u = window.utilization {
                     Text("\(percentLabel(u)) used")
@@ -1007,8 +1139,16 @@ import SwiftUI
             }
             .font(.caption2.monospaced())
             .foregroundStyle(.tertiary)
+            if let at = window.lastReportedAt {
+                Text(absent
+                     ? "not in the latest report · \(PlanWindowClock.lastReported(at, now: now))"
+                     : PlanWindowClock.lastReported(at, now: now))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(absent ? Color.orange : Color.secondary)
+            }
         }
         .font(.callout.monospaced())
+        .accessibilityElement(children: .combine)
     }
 
     private func percentLabel(_ u: Double) -> String {
@@ -1016,6 +1156,7 @@ import SwiftUI
     }
 
     private func tint(_ u: Double) -> Color {
+        if absent { return .secondary }
         if window.status == "rejected" || u >= 0.9 { return .red }
         if window.status == "allowed_warning" || u >= 0.7 { return .orange }
         return .green
@@ -1023,7 +1164,7 @@ import SwiftUI
 
     private func resetLabel(epoch: Double) -> String {
         let date = Date(timeIntervalSince1970: epoch)
-        let remaining = date.timeIntervalSinceNow
+        let remaining = date.timeIntervalSince(now)
         let clock = date.formatted(date: .omitted, time: .shortened)
         if remaining <= 0 { return "now" }
         let h = Int(remaining) / 3600
