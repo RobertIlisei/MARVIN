@@ -85,12 +85,14 @@ repository wins.*
 > Files and Practice roots give up their height claim (`minHeight: 0`);
 > `MARVIN_SNAPSHOT_VIEW=window-left-pane` measures the rail. **Sessions feed**
 > — `announce.attached` decodes to `SessionFeedEvent.attached`. **ADR-0128,
-> the supervisor conversation** (milestone 7): a pinned Supervisor tab; the
+> the supervisor conversation** (milestone 7): the conversation; the
 > message wake and reply gating; a reply's cards *are* inbox items, settled
 > once by a click and never by text; `follow` / `unfollow` over a 0600
 > `follows.jsonl` (≤5 per project), reports admitted only in a wake the
 > followed tab's own triggers started, the merge card raised at `ready`;
-> server-resolved `refs`. **Close** recovers a lost worktree record from the
+> server-resolved `refs`; images in the message wake (ADR-0129); one
+> Supervisor workspace (conversation centre, re-targeted Brain plus a Tabs ·
+> Log · Settings inspector right) opened from the activity rail. **Close** recovers a lost worktree record from the
 > tab's meta or answers 409 `worktree-lost`, and the async reconcile re-reads
 > before it writes. **Gate**: `vcs-command.ts` strips git / gh / glab global
 > options before the push / CI / force-push checks; unreadable forms are

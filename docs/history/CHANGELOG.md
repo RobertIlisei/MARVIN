@@ -120,8 +120,22 @@ For the live picture of what's active, deferred, or not planned, see [`docs/road
   a message whose text looks like a key or token — a client-side check, so a
   holder of the token can skip it (accepted in ADR-0129). An attachment is
   never consent: an image reading "approve" settles nothing, pinned by two
-  tests. Open: whether the CLI expands `@path` in a supervisor prompt by itself
-  (parked to verify).
+  tests. Checked before release: the CLI does not expand `@path` in a prompt
+  by itself — with tools off, a nonce file named by `@` stayed invisible in
+  both `-p` and stream-json input — so a mention cannot bypass the
+  supervisor's read refusal.
+
+  *The Supervisor workspace* (`a619c13`, `8c27ebc`; brief §13, ADR-0128
+  placement amendment). The supervisor lived in three places — a settings box
+  in the Sessions pane, a pinned tab in the narrow right column, and a Brain
+  that described only the selected tab. It is now one workspace opened from
+  its rail item (or ⌃⌥⌘S): the conversation wide in the centre, the Brain orb
+  re-targeted to the supervisor's own state above a Tabs · Log · Settings
+  inspector, and every setting from the old box in Settings. The Sessions pane
+  keeps one supervisor line, and *Needs you* stays the one inbox. The pinned
+  tab is retired; authority is unchanged. Designed with Impeccable (shape,
+  comps, critique, polish); 15 states rendered at 960 / 1440 / 1920 pt in light
+  and dark; 1,534 Swift assertions.
 
   *The supervisor in the activity rail, and a banner that waits* (`2bc5cfa`).
   A binoculars rail item, shown while the supervisor is enabled, brings it to
