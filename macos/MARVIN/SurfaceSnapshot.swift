@@ -100,7 +100,8 @@ enum SurfaceSnapshot {
 
         var label: String {
             switch self {
-            case .fixture, .populated: return "populated"
+            case .fixture: return "fixture"
+            case .populated: return "populated"
             case .empty: return "empty"
             case .notCovered: return "not covered"
             }

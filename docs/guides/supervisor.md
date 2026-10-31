@@ -4,7 +4,7 @@ The supervisor is a MARVIN session that watches the other tabs of one project fo
 
 The decision behind it is [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md). The build plan is [`docs/plans/supervisor.md`](../plans/supervisor.md).
 
-> **Status.** The engine, the routes and the verbs are built, and so is the native surface (milestones 1–6). It lives in the Sessions pane: the supervisor strip, **Set up…** to start one, and the **…** menu for Charter, Settings and Show log. The routes stay available for driving it from a Claude Code session in your terminal.
+> **Status.** The engine, the routes and the verbs are built, and so is the native surface (milestones 1–7). It lives in the Sessions pane: the supervisor strip, **Set up…** to start one, and the **…** menu for Charter, Settings and Show log. While it is enabled, a pinned **Supervisor** tab, first in the chat tab strip, is where you talk to it ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md), below). The routes stay available for driving it from a Claude Code session in your terminal.
 
 ## Starting it
 
@@ -73,7 +73,24 @@ Your click on the act is the consent. `POST /api/supervisor/inbox {id, actionId}
 
 **A new tab** is the one topology act the supervisor may propose, and only when you asked for one. You write to it with `POST /api/supervisor/message`; it can cite that message, and only that, as the request. The item shows the first message, the base it would be cut from, and the posture, marking what is wider than your latest tab. On your click the tab opens in a fresh worktree, never the shared checkout, and with no fallback if the worktree cannot be made. You may edit the message and narrow the posture first; you cannot widen it there. The first turn is recorded as the supervisor's and is touched. One request opens one tab.
 
-Telling the supervisor "approve X" in its conversation approves nothing. At most it escalates X, and you consent on the act itself.
+## Talking to the supervisor
+
+The pinned **Supervisor** tab is a conversation with the supervisor. Ask it how a tab is doing, why it escalated something, or for a tab to be opened. Return sends; ⇧Return starts a new line. It answers in text, and a message you send while it is working waits for the next wake: nothing you type is dropped, and a paused supervisor answers once you resume.
+
+**Consent is a click.** Nothing you type in this tab is consent. "Yes, merge it", "approve", "I consent": none of them performs anything or settles any card. When your request needs an act the supervisor may not perform on its own, its reply carries a card, and your click on the act named on that card is the consent. The card shows the raw act first. A merge shows its preview, and an act that leaves this Mac or destroys work shows its consent chip only after you have opened the full act. There is no "Approve all", no chip is a default button, and Return in the composer only ever sends your message; it never reaches a chip.
+
+**The chat card is the inbox item.** It is not a copy. The same item is in *Needs you* in the Sessions pane, and settling it in either place settles both: the card collapses to one line ("Done — you merged …", or that it was settled elsewhere), and a second click is refused. A card that sends a message into a tab can be edited first, and what arrives is still the supervisor's message, marked as edited by you. A tab at `observe` gets a card instead of a refusal, and the card names the level. A tab you set to `off` gets nothing; the reply says so.
+
+**Follow.** Ask for a tab to be opened "and merged when it's done", and the new-tab card opens it at the posture and delegation you confirm, then **follows** it. While it follows, the supervisor reports in the chat when the tab hits its scope-met handoff, with links to the tab and the card, and for a merge, raises the merge card when the tab is ready. Nothing merges before your click. A chip above the composer lists each open follow with **Stop following**. At most five run at once, and a follow ends when its merge is settled or dismissed, its tab closes, or you stop it.
+
+**What is never consent:**
+
+- anything you type, in this tab or any other;
+- anything the supervisor writes, including a message it sends into a tab: a tab reads it as the supervisor's, never as yours;
+- a recommendation on a card;
+- a link in a reply. A reply's own text carries no links: a URL in it is inert text, and only the links the server resolved (a tab, a log line, a card) are clickable.
+
+Everything the conversation starts counts against the same daily cap. At the cap the supervisor pauses, and the budget card with **Raise cap…** appears at the bottom of the conversation.
 
 ## The ledger and the audit
 

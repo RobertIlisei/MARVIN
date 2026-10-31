@@ -2,7 +2,7 @@
 
 - **Decision:** [ADR-0127](../decisions/0127-a-supervisor-session-oversees-the-tabs.md); milestone [7]: [ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)
 - **Written:** 2026-10-30 (Phase A).
-- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6], the native surface, built 2026-10-30 (see "What milestone 6 changed"). Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below). Milestone [7], the conversation ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)), planned 2026-10-31; not built.
+- **Status:** milestones [1]–[5] built 2026-10-30 (see "What milestone 1 changed" through "What milestone 5 changed" below). [1]–[3] are shadow only; [4] lets the user switch questions, nudges and posture to autonomous; [5] adds confirms autonomy, the escalation inbox, the remaining verbs and the auditor's review. Milestone [6], the native surface, built 2026-10-30 (see "What milestone 6 changed"). Milestones [3]–[6] reconciled with the UI design brief on 2026-10-30 (see "The UI's shapes" below). Milestone [7], the conversation ([ADR-0128](../decisions/0128-the-user-talks-to-the-supervisor.md)), planned and **shipped 2026-10-31**: [7.1]–[7.4] built, the last of them finishing the native surface (see "What [7.4] changed" under [7.4]).
 - **Design brief:** [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md). Its §10 is the contract milestones [3]–[5] produce and milestone [6] consumes.
 - **Branch discipline:** each milestone lands on a tab branch; the user merges.
 
@@ -689,6 +689,14 @@ All ten replied, 7–14 s each, $3.23 in total ($0.32 mean) at the planned 40 % 
 - **Critique, then polish.** Critique findings are fixed or recorded with a reason; polish ran afterwards, and the renders were re-captured.
 - **VoiceOver.** A card in the chat is the same combined accessibility element as in *Needs you*, with the same custom actions, pinned by the existing `accessibilityActionNames` test. The supervisor's reply is never announced as "you".
 - **The guide explains consent in one paragraph,** with the anti-goals intact: no "Approve all", and no Return on a consent chip.
+
+**What [7.4] changed (2026-10-31).**
+
+- **Fixtures.** `SurfaceSnapshotSupervisor.chatStates` holds one fixture per state in the list above, plus the couldn't-answer state and the send card's Edit… sheet; the report-with-refs and the open-follow states, one fixture in [7.3], are now two. `COVERAGE.md` labels in-process fixtures `fixture` (it said `populated` for both kinds).
+- **Rendered and read.** All `sup-*` surfaces at 260 and 420 pt, light and dark (38 surfaces, 148 PNGs; the 15 Supervisor-tab surfaces are 58 of them). Every Supervisor-tab PNG was opened; the Sessions-pane ones were spot-checked, since the shared card changed.
+- **Built where the renders showed a gap:** the budget `guardrail` inline at the foot of the conversation (ADR-0128 §7 — it was not drawn); a sending bubble at once (§12.6 — it appeared only after the route answered); *Resume* under the paused notice (§12.4); a new-tab or guardrail item in the chat drawn by its own component, not as an escalation card.
+- **Critique 31/40, then polish.** Findings fixed or recorded in the brief's §11, departures 14–22. The backlog item for the composer's opaque block and the hyphenated gutter label is resolved.
+- **VoiceOver.** A chat card is `SupervisorItemCard`, the same component, combined element and custom actions as in *Needs you* (`SupervisorActChips.accessibilityActionNames`, pinned). The labels moved to `SupervisorChat.accessibilityLabel`, and a test pins that a supervisor line starts "Supervisor", never "You".
 
 ## Not in this plan
 

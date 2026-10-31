@@ -167,6 +167,38 @@ public enum SupervisorChat {
         return r.state == "failed" ? .failed : .retrying(attempt: r.attempts)
     }
 
+    // MARK: - [7.4] The rest of the brief's states
+
+    /// ADR-0128 §7 — at the cap the conversation ends with the budget guardrail item itself,
+    /// with its Raise cap… chip; nothing else in the inbox is drawn there.
+    public static func budgetGuardrail(_ inbox: [SupervisorInboxItem]) -> SupervisorInboxItem? {
+        inbox.first { $0.kind == "guardrail" && $0.isOpen && ($0.guardrail?.kind == "budget" || $0.escalatedBecause.code == "budget") }
+    }
+
+    /// Brief §12.4 — the paused notice above the composer, and whether it carries the
+    /// strip's Resume. At the cap the guardrail's Raise cap… is the verb, so no Resume;
+    /// and while that card is drawn it *is* the notice, so there is no second one.
+    public static func pausedNotice(_ status: SupervisorStatus?, budgetCard: Bool) -> (headline: String, resume: Bool)? {
+        guard status?.run == "paused" else { return nil }
+        if status?.pause?.reason == "budget" {
+            return budgetCard ? nil : ("Paused at today's cap — your message waits until you raise it", false)
+        }
+        return ("Paused — your message waits until you resume", true)
+    }
+
+    /// Brief §12.4 — under a message no wake has carried yet.
+    public static func waitingLine(paused: Bool) -> String {
+        paused ? "Waiting — the supervisor is paused" : "Waiting for the next wake"
+    }
+
+    /// Brief §12.7 — what VoiceOver reads for one line. The user's is "You"; the
+    /// supervisor's always names the supervisor and is never read as the user's.
+    public static func accessibilityLabel(_ m: SupervisorChatMessage, reportTab: String?) -> String {
+        guard m.isReply else { return "You: \(m.text)" }
+        if m.isReport { return "Supervisor report\(reportTab.map { " on \($0)" } ?? ""), not from you: \(m.text)" }
+        return "Supervisor reply, not from you: \(m.text)"
+    }
+
     /// The feed says which conversation line moved; the app re-reads the token-gated GET.
     public static func needsReload(after event: SupervisorFeedEvent) -> Bool {
         if case .message = event { return true }

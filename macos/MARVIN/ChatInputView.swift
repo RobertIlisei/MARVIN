@@ -77,10 +77,17 @@ import UniformTypeIdentifiers
     /// the FileMentionPicker; the `@` itself doesn't get inserted
     /// because picking a file becomes a chip, not literal text).
     var onAtTrigger: () -> Bool = { false }
+    /// Draw no fill of its own, so the container's shows through (the Supervisor
+    /// tab's composer). Off by default: the chat composer is unchanged.
+    var transparent = false
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ChatNSTextView.scrollableTextView()
         let textView = scrollView.documentView as! ChatNSTextView
+        if transparent {
+            scrollView.drawsBackground = false
+            textView.drawsBackground = false
+        }
         textView.delegate = context.coordinator
         textView.onSubmit = { onSubmit() }
         textView.onImagePaste = { image in onImagePaste(image) }

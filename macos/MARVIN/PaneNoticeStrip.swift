@@ -24,7 +24,9 @@ import SwiftUI
     /// failure, "Undo" after something reversible. One verb, never a row.
     var actionTitle: String = "Retry"
     var onAction: (() -> Void)? = nil
-    let onDismiss: () -> Void
+    /// nil → no ✕: a notice that goes by itself (the Supervisor tab's paused
+    /// notice leaves on resume) must not offer a dismiss that does nothing.
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -49,16 +51,18 @@ import SwiftUI
             if let onAction {
                 Button(actionTitle, action: onAction).rowChip(.neutral)
             }
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .semibold))
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .semibold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.tertiary)
-            .help("Dismiss")
-            .accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

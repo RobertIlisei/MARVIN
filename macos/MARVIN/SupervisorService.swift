@@ -246,6 +246,8 @@ final class SupervisorModel {
     /// The conversation, oldest first, as the GET returns it.
     var chat: [SupervisorChatMessage] = []
     var chatSending = false
+    /// Brief §12.6 — the message being sent, drawn as its bubble until the route answers.
+    var chatPending: String?
     /// The server's reason for a refused send; the text stays in the composer.
     var chatError: String?
     /// The pinned tab is selected in place of the chat body.
@@ -335,7 +337,8 @@ final class SupervisorModel {
     func sendChat(_ raw: String) async -> Bool {
         guard let pid = projectId, let text = SupervisorChat.sendable(raw), !chatSending else { return false }
         chatSending = true
-        defer { chatSending = false }
+        chatPending = text
+        defer { chatSending = false; chatPending = nil }
         do {
             try await SupervisorService.shared.sendMessage(projectId: pid, text: text)
             chatError = nil
