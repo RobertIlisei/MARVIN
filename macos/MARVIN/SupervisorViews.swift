@@ -224,6 +224,7 @@ enum SupervisorMark {
                     .accessibilityLabel("Daily cap")
             }
             modelPicker(s)
+            effortPicker(s)
             HStack(spacing: 6) {
                 Text("Personality").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
                 Spacer(minLength: 0)
@@ -273,6 +274,47 @@ enum SupervisorMark {
             if open {
                 SupervisorModelList(model: model, status: s)
                 Text(SupervisorModelPicker.help)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(MarvinTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: Effort (beside the model; the same rule — the user's own click)
+
+    private func effortPicker(_ s: SupervisorStatus?) -> some View {
+        let open = model.effortPickerOpen
+        let effort = s?.model?.effort
+        let current = SupervisorEffortPicker.chipTitle(effort)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("Effort").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(MarvinTheme.textMuted)
+                Spacer(minLength: 0)
+                Button {
+                    if open { model.effortPickerOpen = false } else { model.openEffortPicker() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(current).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+                        Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .accessibilityHidden(true)
+                    }
+                }
+                .rowChip(.neutral)
+                .help(SupervisorEffortPicker.help)
+                .accessibilityLabel(SupervisorEffortPicker.accessibilityLabel)
+                .accessibilityValue(SupervisorEffortPicker.fallbackNotice(effort).map { "\(current). \($0)" } ?? current)
+                .accessibilityHint(open ? "Closes the list" : "Opens the list of efforts")
+            }
+            if let notice = SupervisorEffortPicker.fallbackNotice(effort) {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if open {
+                SupervisorEffortList(model: model, effort: effort)
+                Text(SupervisorEffortPicker.help)
                     .font(.system(size: 10.5))
                     .foregroundStyle(MarvinTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -367,10 +409,45 @@ enum SupervisorMark {
     }
 }
 
+/// The open effort list: Default, then the rungs this model can run. The same
+/// keys as the model list; the cursor starts on the current choice, so a stray
+/// Return re-picks what is already set and changes nothing.
+@MainActor struct SupervisorEffortList: View {
+    let model: SupervisorModel
+    let effort: SupervisorStatus.Model.Effort?
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let choice = SupervisorEffortPicker.selection(effort)
+        let keys = SupervisorEffortPicker.keys(effort)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(keys, id: \.self) { key in
+                SupervisorModelOption(title: SupervisorEffortPicker.title(forKey: key), selected: SupervisorEffortPicker.effort(forKey: key) == choice,
+                                      cursor: model.effortCursor == key, hint: "Sets the supervisor's effort from the next wake") {
+                    Task { await model.setEffort(SupervisorEffortPicker.effort(forKey: key)) }
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous).fill(MarvinTheme.panel))
+        .overlay(RoundedRectangle(cornerRadius: MarvinTheme.Radius.card, style: .continuous).stroke(MarvinTheme.border, lineWidth: 1))
+        .focusable()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.upArrow) { model.effortCursor = SupervisorEffortPicker.step(from: model.effortCursor, by: -1, in: keys); return .handled }
+        .onKeyPress(.downArrow) { model.effortCursor = SupervisorEffortPicker.step(from: model.effortCursor, by: 1, in: keys); return .handled }
+        .onKeyPress(.return) { let rung = SupervisorEffortPicker.effort(forKey: model.effortCursor); Task { await model.setEffort(rung) }; return .handled }
+        .onKeyPress(.escape) { model.effortPickerOpen = false; return .handled }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Supervisor efforts")
+    }
+}
+
 @MainActor private struct SupervisorModelOption: View {
     let title: String
     let selected: Bool
     let cursor: Bool
+    var hint = "Sets the supervisor's model from the next wake"
     let action: () -> Void
     @State private var hovering = false
 
@@ -394,7 +471,7 @@ enum SupervisorMark {
         .onHover { hovering = $0 }
         .accessibilityLabel(title)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint("Sets the supervisor's model from the next wake")
+        .accessibilityHint(hint)
     }
 }
 
