@@ -584,6 +584,19 @@ Built from [`docs/design/supervisor-brief.md`](../design/supervisor-brief.md), o
 - **It builds.** The recipe in `macos/MARVIN/SurfaceSnapshot.swift`'s header builds, and the brief's §12 exists before the Swift does.
 - **The cap is measured.** Ten real conversation wakes are measured for tokens and cost, and the default cap is set from that. Both are recorded here.
 
+**Measured 2026-10-31** (`sidecar/scripts/supervisor-measure.ts`, ten user messages through the real loop, dispatch and supervisor-role model, against this repo, one SDK session resumed until it rotated):
+
+| Wake | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 (rotated) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Context at end (tokens) | 35,218 | 51,636 | 55,675 | 59,463 | 63,079 | 67,094 | 73,058 | 77,138 | 80,622 | 38,892 |
+| Cost (USD) | 0.073 | 0.180 | 0.234 | 0.290 | 0.335 | 0.396 | 0.485 | 0.552 | 0.602 | 0.085 |
+
+All ten replied, 7–14 s each, $3.23 in total ($0.32 mean) at the planned 40 % threshold.
+
+- **The measure was wrong first.** The `result` event's usage sums every model call of a wake (97K reported for a ~35K context), so `lastInputTokens` now reads the last `assistant` call's input. Measured that way, the planned 40 % would have rotated almost every wake.
+- **Rotation: 22.5 % of the window (45K on 200K), not 40 %.** A resumed wake never cost less than a fresh one past the first resume, so the session rotates just above a fresh session's context. At 45K the mean conversation wake is about $0.13 (one fresh at ~$0.08, one resumed at ~$0.18). A rotated packet carries the last 20 messages, so this costs nothing in correctness (ADR-0128 §6).
+- **Default cap: $20** (was $10). Fifty messages at ~$0.13 is ~$6.50 of conversation alone, before watching and the tab turns the supervisor starts, which the same cap counts. Existing supervisors keep the cap they have.
+
 #### [7.2] In-chat cards are inbox items
 
 **Touchpoints.**

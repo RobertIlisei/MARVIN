@@ -59,7 +59,7 @@ enum SupervisorMark {
     let onClose: () -> Void
 
     @State private var charter = ""
-    @State private var capUsd: Double = 10
+    @State private var capUsd: Double = 20  // the server's DEFAULT_CAPS, measured in plan [7.1]
     @State private var levels: [String: SupervisorDelegation] = [:]
     @State private var included: Set<String> = []
     @State private var starting = false

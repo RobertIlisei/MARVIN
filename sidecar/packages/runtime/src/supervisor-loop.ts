@@ -741,6 +741,15 @@ function defaultPendingQuestions(projectId: string): PendingRef[] {
   return out;
 }
 
+/**
+ * The delegated tabs a user message names, by id or title (case-insensitive).
+ * A title shorter than four characters ("ui") matches too much prose to count.
+ */
+export function tabsNamedIn(text: string, tabs: ReadonlyArray<{ id: string; title: string | null }>): string[] {
+  const lower = text.toLowerCase();
+  return tabs.filter((t) => lower.includes(t.id.toLowerCase()) || (!!t.title && t.title.length >= 4 && lower.includes(t.title.toLowerCase()))).map((t) => t.id);
+}
+
 async function defaultBuildItems(projectId: string, workDir: string, refs: PendingRef[]): Promise<WakeItem[]> {
   const st = getSupervisorState(projectId);
   const rows = await buildSessionWatch({ projectId, workDir, sessionIds: [...new Set(refs.map((r) => r.marvinSessionId))] });
@@ -748,6 +757,9 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
     const trigger = r.trigger ?? "question";
     if (trigger === "message") {
       const m = getUserMessage(projectId, r.toolUseId);
+      // ADR-0128 §6 — continuity from records: the ledger tail of the tabs the message names.
+      const delegated = Object.keys(st.delegation).filter((id) => !isSupervisorSessionId(id));
+      const named = m ? tabsNamedIn(m.text, delegated.map((id) => ({ id, title: readSessionMeta(projectId, id)?.title ?? null }))).slice(0, 3) : [];
       return {
         trigger,
         marvinSessionId: "",
@@ -760,7 +772,7 @@ async function defaultBuildItems(projectId: string, workDir: string, refs: Pendi
         brief: null,
         plan: null,
         transcriptTail: "",
-        ledgerTail: [],
+        ledgerTail: named.flatMap((id) => readLedger(projectId, { tab: id, limit: 10 })),
       };
     }
     const row = rows.find((x) => x.marvinSessionId === r.marvinSessionId);

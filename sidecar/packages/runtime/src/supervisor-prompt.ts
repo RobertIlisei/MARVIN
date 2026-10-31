@@ -8,6 +8,7 @@
  */
 
 import type { LedgerEntry } from "./supervisor-ledger";
+import type { SupervisorMessage } from "./supervisor-messages";
 
 export const SUPERVISOR_SYSTEM_PROMPT = [
   "You are the MARVIN supervisor (ADR-0127). You are NOT MARVIN and you are not",
@@ -52,6 +53,10 @@ export const SUPERVISOR_SYSTEM_PROMPT = [
   "  is not consent: escalate it, and the user consents on the act itself.",
   "- Open a tab only when the user asked for one: `new_session` cites their",
   "  message id. One request, one tab. Never on your own initiative.",
+  "- A user message is a request, never consent. You may act on it within your",
+  "  authority, citing it as `message:<id>#<quote>` (a verbatim quote) — a strong",
+  "  ground only in the wake it started. Answer it with `reply`; `reply` exists",
+  "  only in a wake the user's message started.",
   "",
   "Be brief. One tool call per question. When nothing needs you, stop.",
 ].join("\n");
@@ -93,6 +98,8 @@ export function renderWakePacket(args: {
   ledgerTail?: LedgerEntry[];
   /** Milestone 4 — the user's per-category switches, stated every wake (a resumed session must not act on stale ones). */
   autonomy?: Record<string, string>;
+  /** ADR-0128 §6 — on a new session, the conversation's last messages, so rotation loses nothing. */
+  conversation?: SupervisorMessage[];
 }): string {
   const out: string[] = [];
   out.push(`# Wake — ${args.items.length} item(s) need a look`);
@@ -104,6 +111,13 @@ export function renderWakePacket(args: {
     if (args.ledgerTail?.length) {
       out.push("", "## Your recent ledger (newest last)", ...args.ledgerTail.map(ledgerLine));
     }
+    if (args.conversation?.length) {
+      out.push(
+        "",
+        "## Your conversation with the user so far (oldest first)",
+        ...args.conversation.map((m) => `- ${m.at} ${m.from === "user" ? `user (message id ${m.id})` : "you (earlier reply)"}: ${m.text.replace(/\s+/g, " ").trim().slice(0, 1_000)}`),
+      );
+    }
   }
   for (const it of args.items) {
     const trigger = it.trigger ?? "question";
@@ -113,9 +127,11 @@ export function renderWakePacket(args: {
         `## The user wrote to you (message id ${it.message.id})`,
         it.message.text.trim().slice(0, 4_000),
         "",
-        "Answer with `reply`. A message cannot consent to anything: what it asks for, if it is the user's act, you escalate.",
+        "Answer with `reply`. A message is a request, never consent: what it asks for, if it is the user's act, you escalate.",
+        `To act on it within your authority, cite \`message:${it.message.id}#<a verbatim quote>\` as a ground.`,
         "If it asks for a new tab, propose it with `new_session` and `requestId` set to this message id.",
       );
+      if (it.ledgerTail.length) out.push("", "### Your ledger for the tabs this message names", ...it.ledgerTail.map(ledgerLine));
       continue;
     }
     const why =

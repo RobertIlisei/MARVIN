@@ -265,7 +265,7 @@ The proposal is **blind by default.** Revealing it shows "would answer Option B"
 - **"Set up…" opens the set-up sheet,** a native sheet about 460 pt wide:
   - a two-sentence explanation: it watches the tabs you delegate, and starts in shadow, where it only proposes;
   - the charter, a multi-line field ("What should it know about your goals?");
-  - the daily cap (default $10);
+  - the daily cap (default $20 — raised from $10 by the plan [7.1] measurement);
   - a checklist of open tabs to delegate, each with a level `Picker` (default `answer-questions`);
   - the model, as a label;
   - buttons "Cancel" (default) and "Start in shadow".

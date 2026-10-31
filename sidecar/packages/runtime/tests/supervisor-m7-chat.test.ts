@@ -343,3 +343,169 @@ describe("a message arriving mid-wake", () => {
     expect(listInbox("proj").find((i) => i.id === line?.inboxItemId)?.state).toBe("open");
   });
 });
+
+// ── [5] Rotation, the rotated packet and the spend split ────────────────────
+
+describe("a conversation wake's session", () => {
+  const events = (sessionId: string, cost: number, input: number) => [
+    { type: "system", subtype: "init", session_id: sessionId },
+    { type: "result", subtype: "success", session_id: sessionId, total_cost_usd: cost, usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  ];
+  function stubQuery(evs: unknown[], calls: Array<{ prompt: unknown; options: Record<string, unknown> }>) {
+    return ((args: { prompt: unknown; options: Record<string, unknown> }) => {
+      calls.push(args);
+      return (async function* () {
+        for (const e of evs) yield e;
+      })();
+    }) as never;
+  }
+  const emptyDeps = (): VerbDeps => ({
+    listRows: async () => [],
+    getPending: () => null,
+    sendRefusal: () => null,
+    scopeMet: () => false,
+    perform: SHADOW_PERFORM,
+    readTranscriptTail: () => "",
+    readBrief: () => null,
+    tabStartedAt: () => null,
+    readPlanText: () => "",
+    modelLookup: async () => () => null,
+  });
+  const messageItem = (id: string, text: string): WakeItem => ({
+    trigger: "message",
+    marvinSessionId: "",
+    title: null,
+    delegation: "",
+    turnId: "",
+    toolUseId: id,
+    question: null,
+    message: { id, text },
+    brief: null,
+    plan: null,
+    transcriptTail: "",
+    ledgerTail: [],
+  });
+
+  it("rotates at 22.5 % of the model's window (measured) — not at a fixed figure", async () => {
+    const { runSupervisorWake, rotateAtTokens } = await import("../src/supervisor-dispatch");
+    const { updateSupervisorRuntime } = await import("../src/supervisor-state");
+    expect(rotateAtTokens(200_000)).toBe(45_000);
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    const wake = (window: number) =>
+      runSupervisorWake(
+        { projectId: "proj", workDir: "/tmp", items: [], verbCtx: ctxFor(emptyDeps()) },
+        { query: stubQuery(events("sdk-x", 0, 10), calls), resolveModel: async () => "m", contextWindow: async () => window },
+      );
+    updateSupervisorRuntime("proj", { sdkSessionId: "sdk-old", sdkSessionStartedAt: new Date().toISOString(), lastInputTokens: 100_000 });
+    await wake(1_000_000); // 100K of 1M: resume
+    expect(calls[0]?.options.resume).toBe("sdk-old");
+    updateSupervisorRuntime("proj", { sdkSessionId: "sdk-old", lastInputTokens: 45_001 });
+    await wake(200_000); // past 22.5 % of 200K: rotate
+    expect(calls[1]?.options.resume).toBeUndefined();
+    expect(readLedger("proj").find((e) => e.kind === "rotation")?.reason).toContain("45000");
+    const { DEFAULT_CAPS } = await import("../src/supervisor-state");
+    expect(DEFAULT_CAPS.dailyBudgetUsd).toBe(20); // measured: plan [7.1]
+  });
+
+  it("a rotated session's message packet carries the last 20 messages; a resumed one does not", async () => {
+    const { runSupervisorWake } = await import("../src/supervisor-dispatch");
+    const { updateSupervisorRuntime } = await import("../src/supervisor-state");
+    for (let i = 1; i <= 25; i++) addUserMessage("proj", `conversation line number ${i}`);
+    const last = listMessages("proj").at(-1) as { id: string; text: string };
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    const wake = () =>
+      runSupervisorWake(
+        { projectId: "proj", workDir: "/tmp", items: [messageItem(last.id, last.text)], verbCtx: ctxFor(emptyDeps(), { messageIds: [last.id] }) },
+        { query: stubQuery(events("sdk-c", 0, 10), calls), resolveModel: async () => undefined },
+      );
+    await wake(); // fresh
+    const fresh = String(calls[0]?.prompt);
+    expect(fresh).toContain("conversation line number 6\n");
+    expect(fresh).not.toContain("conversation line number 5\n");
+    updateSupervisorRuntime("proj", { lastInputTokens: 10 });
+    await wake(); // resumed
+    expect(String(calls[1]?.prompt)).not.toContain("conversation line number 6\n");
+  });
+
+  it("splits the supervisor's own spend into watching and conversation, under one cap", async () => {
+    const { runSupervisorWake } = await import("../src/supervisor-dispatch");
+    const m = addUserMessage("proj", "how are the tabs");
+    const run = (items: WakeItem[], cost: number) =>
+      runSupervisorWake(
+        { projectId: "proj", workDir: "/tmp", items, verbCtx: ctxFor(emptyDeps(), items.length ? { messageIds: [m.id] } : null) },
+        { query: stubQuery(events("sdk-s", cost, 10), []), resolveModel: async () => undefined },
+      );
+    await run([messageItem(m.id, m.text)], 0.3);
+    await run([], 0.2);
+    const s = getSupervisorState("proj").spend;
+    expect(s.usd).toBeCloseTo(0.5);
+    expect(s.ownUsd).toBeCloseTo(0.5);
+    expect(s.conversationUsd).toBeCloseTo(0.3);
+  });
+});
+
+describe("the message packet names the tabs the user named", () => {
+  it("finds delegated tabs by title or id, case-insensitively, and ignores short titles", async () => {
+    const { tabsNamedIn } = await import("../src/supervisor-loop");
+    const tabs = [
+      { id: "tab-1", title: "fix-flags" },
+      { id: "tab-2", title: "Billing page" },
+      { id: "tab-3", title: "ui" },
+    ];
+    expect(tabsNamedIn("How is FIX-FLAGS doing, and tab-2?", tabs)).toEqual(["tab-1", "tab-2"]);
+    expect(tabsNamedIn("build the ui for it", tabs)).toEqual([]);
+  });
+
+  it("renders that ledger tail under the message", async () => {
+    const { renderWakePacket } = await import("../src/supervisor-prompt");
+    const line = appendLedgerEntry("proj", { kind: "verb", verb: "send", tab: "tab-1", wakeId: "w0", decision: "propose", reason: "nudged at step 2" });
+    const out = renderWakePacket({
+      items: [{ trigger: "message", marvinSessionId: "", title: null, delegation: "", turnId: "", toolUseId: "m1", question: null, message: { id: "m1", text: "how is fix-flags" }, brief: null, plan: null, transcriptTail: "", ledgerTail: [line] }],
+      charter: "",
+      freshSession: false,
+    });
+    expect(out).toContain("nudged at step 2");
+  });
+});
+
+describe("the context a wake ends at", () => {
+  it("is the last model call's input, not the result's sum over every call", async () => {
+    const { runSupervisorWake } = await import("../src/supervisor-dispatch");
+    const u = (input: number) => ({ input_tokens: 10, cache_read_input_tokens: input - 10, cache_creation_input_tokens: 0 });
+    const evs = [
+      { type: "system", subtype: "init", session_id: "s" },
+      { type: "assistant", session_id: "s", message: { usage: u(30_000), content: [] } },
+      { type: "assistant", session_id: "s", message: { usage: u(32_000), content: [] } },
+      { type: "assistant", session_id: "s", message: { usage: u(35_000), content: [] } },
+      { type: "result", subtype: "success", session_id: "s", total_cost_usd: 0.1, usage: { input_tokens: 30, cache_read_input_tokens: 96_970, cache_creation_input_tokens: 0 } },
+    ];
+    const q = (() =>
+      (async function* () {
+        for (const e of evs) yield e;
+      })()) as never;
+    const deps: VerbDeps = {
+      listRows: async () => [],
+      getPending: () => null,
+      sendRefusal: () => null,
+      scopeMet: () => false,
+      perform: SHADOW_PERFORM,
+      readTranscriptTail: () => "",
+      readBrief: () => null,
+      tabStartedAt: () => null,
+      readPlanText: () => "",
+      modelLookup: async () => () => null,
+    };
+    await runSupervisorWake({ projectId: "proj", workDir: "/tmp", items: [], verbCtx: ctxFor(deps) }, { query: q, resolveModel: async () => undefined });
+    expect(getSupervisorState("proj").lastInputTokens).toBe(35_000);
+  });
+});
+
+describe("spend.conversationUsd persists", () => {
+  it("round-trips through state.json across a boot", async () => {
+    const { updateSupervisorRuntime } = await import("../src/supervisor-state");
+    updateSupervisorRuntime("proj", { addSpendUsd: 0.4, spendKind: "conversation" });
+    updateSupervisorRuntime("proj", { addSpendUsd: 0.1 });
+    bootSupervisor();
+    expect(getSupervisorState("proj").spend).toMatchObject({ ownUsd: 0.5, conversationUsd: 0.4 });
+  });
+});
