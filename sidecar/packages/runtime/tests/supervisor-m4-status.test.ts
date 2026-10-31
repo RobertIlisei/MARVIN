@@ -172,7 +172,7 @@ describe("stats", () => {
 });
 
 describe("the status projection — brief §10.1", () => {
-  const MODEL = { role: "supervisor" as const, resolved: "claude-sonnet-5-5", label: "Sonnet 5.5" };
+  const MODEL = { role: "supervisor" as const, resolved: "claude-sonnet-5-5", label: "Sonnet 5.5", choice: null };
   const idleLoop: LoopSnapshot = { currentWake: null, queuedEvents: 0, oldestQueuedAt: null };
   const status = (loop = idleLoop, now = Date.now()) =>
     buildSupervisorStatus(getSupervisorState("proj"), loop, readLedger("proj"), MODEL, now) as unknown as Record<string, unknown>;

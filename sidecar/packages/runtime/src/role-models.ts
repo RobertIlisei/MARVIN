@@ -175,6 +175,21 @@ export function writeRoleModels(roles: RoleModels): void {
 }
 
 /**
+ * Change ONE role and leave every other choice as it is. `null` puts the role
+ * back on its default. Throws on what `validateRoleModels` refuses, so a caller
+ * that has not already checked gets a reason, not a corrupt file.
+ */
+export function setRoleModel(role: Role, model: string | null): RoleModels {
+  const v = validateRoleModels({ [role]: model });
+  if (!v.ok) throw new Error(v.errors.join("; "));
+  const next: RoleModels = { ...readRoleModels() };
+  if (v.roles[role] === undefined) delete next[role];
+  else next[role] = v.roles[role];
+  writeRoleModels(next);
+  return next;
+}
+
+/**
  * The model a role runs on right now, against the active provider.
  * `"inherit"` = use the session's own model (the caller decides what that
  * means); `null` = the role is off, or has nothing it can run on.

@@ -333,7 +333,15 @@ export async function runSupervisorWake(
   }
   const images = collectWakeImages(projectId, args.items);
   const imageSummary = images.blocks.length ? `, ${images.blocks.length} image${images.blocks.length === 1 ? "" : "s"} (${Math.round(images.bytes / 1024)} KB)` : "";
-  appendLedgerEntry(projectId, { kind: "wake", verb: "start", tab: null, wakeId, mode: st.mode, reason: `${args.items.length} item(s)${imageSummary}` });
+  appendLedgerEntry(projectId, {
+    kind: "wake",
+    verb: "start",
+    tab: null,
+    wakeId,
+    mode: st.mode,
+    reason: `${args.items.length} item(s)${imageSummary}${model ? ` · ${model}` : ""}`,
+    ...(model ? { model } : {}),
+  });
 
   // A conversation wake's spend is counted apart from watching (ADR-0128 §7) — one cap still stops both.
   const conversation = args.items.some((i) => i.trigger === "message");
