@@ -34,7 +34,7 @@ import { resolveRoleModel } from "./role-models";
 import { appendLedgerEntry, readLedger, supervisorRoot } from "./supervisor-ledger";
 import { createSupervisorMcpServer, SUPERVISE_SERVER_NAME, type VerbContext } from "./supervisor-mcp";
 import { getUserMessage, listMessages, MAX_IMAGES_PER_WAKE, readAttachment } from "./supervisor-messages";
-import { renderWakePacket, SUPERVISOR_SYSTEM_PROMPT, type WakeItem } from "./supervisor-prompt";
+import { buildSupervisorSystemPrompt, renderWakePacket, type WakeItem } from "./supervisor-prompt";
 import { getSupervisorState, pauseSupervisorForFault, updateSupervisorRuntime } from "./supervisor-state";
 import { type TurnContentBlock, TurnInputChannel } from "./turn-input";
 
@@ -228,7 +228,7 @@ export interface SupervisorQueryArgs {
 }
 
 export function buildSupervisorQueryOptions(args: SupervisorQueryArgs): { prompt: string; options: Options } {
-  const caps = getSupervisorState(args.projectId).caps;
+  const { caps, personality } = getSupervisorState(args.projectId);
   return {
     prompt: args.prompt,
     options: {
@@ -249,7 +249,8 @@ export function buildSupervisorQueryOptions(args: SupervisorQueryArgs): { prompt
         ...(args.onProvenanceRefusal ? { onProvenanceRefusal: args.onProvenanceRefusal } : {}),
       }),
       hooks: { PreToolUse: [{ hooks: [makeSupervisorPreToolUseHook(args.workDir)] }] },
-      systemPrompt: SUPERVISOR_SYSTEM_PROMPT,
+      // One prompt per session: the persona is fixed per session (a change ends the session), never per wake.
+      systemPrompt: buildSupervisorSystemPrompt(personality),
       maxTurns: caps.maxTurnsPerWake,
       includePartialMessages: false,
     },
@@ -411,8 +412,10 @@ export async function runSupervisorWake(
     return { ok: false, error, costUsd };
   }
 
+  // The user changed the persona during this wake: its session speaks in the old voice, so it is not kept.
+  const keepSession = !!sessionId && getSupervisorState(projectId).personality === st.personality;
   updateSupervisorRuntime(projectId, {
-    ...(sessionId ? { sdkSessionId: sessionId } : {}),
+    ...(keepSession ? { sdkSessionId: sessionId } : {}),
     ...(fresh ? { sdkSessionStartedAt: new Date().toISOString() } : {}),
     lastInputTokens: inputTokens,
     addSpendUsd: costUsd,

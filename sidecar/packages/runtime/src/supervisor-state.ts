@@ -21,6 +21,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { DEFAULT_PERSONALITY, isPersonalityMode, PERSONALITY_MODES, type PersonalityMode } from "./personality";
 import { addInboxItem, supersedeInbox } from "./supervisor-inbox";
 import {
   appendLedgerEntry,
@@ -109,6 +110,8 @@ export interface SupervisorState {
   delegation: Record<string, Delegation>;
   charter: string;
   charterUpdatedAt: string | null;
+  /** The voice the supervisor speaks in — a style layer only. The user's setting; no verb changes it. */
+  personality: PersonalityMode;
   caps: SupervisorCaps;
   /** The last wake's outcome, for the status projection's health. */
   lastWake: SupervisorLastWake | null;
@@ -163,6 +166,7 @@ function defaultState(projectId: string): SupervisorState {
     delegation: {},
     charter: "",
     charterUpdatedAt: null,
+    personality: DEFAULT_PERSONALITY,
     caps: { ...DEFAULT_CAPS },
     lastWake: null,
     supervisorSessionId: null,
@@ -275,6 +279,7 @@ function sanitize(raw: unknown, projectId: string): SupervisorState {
     }
   }
   if (typeof r.charter === "string") base.charter = r.charter.slice(0, MAX_CHARTER_CHARS);
+  if (isPersonalityMode(r.personality)) base.personality = r.personality;
   if (typeof r.supervisorSessionId === "string" && /^[0-9a-f-]{36}$/.test(r.supervisorSessionId)) {
     base.supervisorSessionId = r.supervisorSessionId;
   }
@@ -387,6 +392,7 @@ export type SupervisorAction =
   | { projectId: string; action: "mode"; mode: string }
   | { projectId: string; action: "delegate"; marvinSessionId: string; level: string }
   | { projectId: string; action: "charter"; text: string }
+  | { projectId: string; action: "personality"; personality: string }
   | { projectId: string; action: "cap"; capUsd: number }
   | { projectId: string; action: "autonomy"; category: string; value: string }
   | { projectId: string; action: "wakeNow" };
@@ -508,6 +514,18 @@ export function applySupervisorAction(input: unknown, presentedToken: string | n
       if (typeof a.text !== "string") return fail(400, "text required");
       s.charter = a.text.slice(0, MAX_CHARTER_CHARS);
       s.charterUpdatedAt = new Date().toISOString();
+      break;
+    }
+    case "personality": {
+      if (!isPersonalityMode(a.personality)) return fail(400, `personality must be one of ${PERSONALITY_MODES.join(", ")}`);
+      if (a.personality !== s.personality) {
+        // One prompt per session (the prompt cache): the new voice starts with the next wake's fresh session.
+        s.sdkSessionId = null;
+        s.sdkSessionStartedAt = null;
+        s.lastInputTokens = 0;
+      }
+      s.personality = a.personality;
+      detail = a.personality;
       break;
     }
     default:

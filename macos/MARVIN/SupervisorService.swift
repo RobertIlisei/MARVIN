@@ -634,6 +634,7 @@ final class SupervisorModel {
     func disable() async { await control("disable", failureVerb: "Disable") }
     func setCap(_ usd: Double) async { await control("cap", extra: ["capUsd": usd], failureVerb: "Raising the cap") }
     func setCharter(_ text: String) async { await control("charter", extra: ["text": text], failureVerb: "Saving the charter") }
+    func setPersonality(_ personality: String) async { await control("personality", extra: ["personality": personality], failureVerb: "Changing the personality") }
     func setAutonomy(_ category: String, autonomous: Bool) async {
         await control("autonomy", extra: ["category": category, "value": autonomous ? "autonomous" : "shadow"],
                       failureVerb: "Switching \(category)")

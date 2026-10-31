@@ -15,7 +15,7 @@ import {
 } from "../src/supervisor-dispatch";
 import { readLedger } from "../src/supervisor-ledger";
 import { ActionLimiter } from "../src/supervisor-policy";
-import { SUPERVISOR_SYSTEM_PROMPT } from "../src/supervisor-prompt";
+import { buildSupervisorSystemPrompt } from "../src/supervisor-prompt";
 import {
   applySupervisorAction,
   bootSupervisor,
@@ -88,7 +88,7 @@ describe("containment — the supervisor's tool set", () => {
     expect(options.cwd).toBe(workDir);
     expect(options.maxTurns).toBe(getSupervisorState("proj").caps.maxTurnsPerWake);
     expect(options.settingSources).toEqual([]);
-    expect(options.systemPrompt).toBe(SUPERVISOR_SYSTEM_PROMPT);
+    expect(options.systemPrompt).toBe(buildSupervisorSystemPrompt(getSupervisorState("proj").personality));
     expect(typeof options.canUseTool).toBe("function");
     const token = readFileSync(supervisorTokenPath(), "utf8").trim();
     expect(Object.values(options.env ?? {})).not.toContain(token);
@@ -241,6 +241,27 @@ describe("runSupervisorWake — one bounded turn, its cost, its session", () => 
     expect(calls[1]?.options.resume).toBeUndefined();
     expect(getSupervisorState("proj").sdkSessionId).toBe("sdk-new");
     expect(readLedger("proj").filter((e) => e.kind === "rotation")).toHaveLength(1);
+  });
+
+  it("a persona changed during a wake is not undone by it: the next wake starts fresh, in the new voice", async () => {
+    updateSupervisorRuntime("proj", { sdkSessionId: "sdk-old", sdkSessionStartedAt: new Date().toISOString(), lastInputTokens: 10 });
+    const calls: Array<{ prompt: unknown; options: Record<string, unknown> }> = [];
+    const changesMidWake = ((args: { prompt: unknown; options: Record<string, unknown> }) => {
+      calls.push(args);
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sdk-old" };
+        applySupervisorAction({ projectId: "proj", action: "personality", personality: "neutral" }, currentSupervisorToken() as string);
+        yield { type: "result", subtype: "success", session_id: "sdk-old", total_cost_usd: 0, usage: { input_tokens: 10 } };
+      })();
+    }) as never;
+    await runSupervisorWake({ projectId: "proj", workDir, items: [], verbCtx: verbCtx() }, { query: changesMidWake, resolveModel: async () => undefined });
+    expect(calls[0]?.options.resume).toBe("sdk-old");
+    expect(getSupervisorState("proj").sdkSessionId).toBeNull();
+
+    await runSupervisorWake({ projectId: "proj", workDir, items: [], verbCtx: verbCtx() }, { query: stubQuery(events("sdk-new", 0, 10), calls), resolveModel: async () => undefined });
+    expect(calls[1]?.options.resume).toBeUndefined();
+    expect(calls[1]?.options.systemPrompt).toBe(buildSupervisorSystemPrompt("neutral"));
+    expect(getSupervisorState("proj").sdkSessionId).toBe("sdk-new");
   });
 
   it("a failed wake is reported, ledgered and does not throw", async () => {
